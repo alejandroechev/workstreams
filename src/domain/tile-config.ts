@@ -64,9 +64,15 @@ export function parseCopilotSessionConfig(configJson: string): CopilotSessionCon
 /**
  * Build the shell command to launch a copilot session.
  * On first create: uses --name to name the session.
- * On resume: uses --resume to reconnect to the named session.
+ * On resume by name: uses --resume "name"
+ * On resume by ID: uses --resume=<id>
  */
 export function buildCopilotCommand(config: CopilotSessionConfig, isResume: boolean): string {
+  // If we have a specific session ID to resume, use that (most reliable)
+  const configAny = config as unknown as Record<string, unknown>;
+  if (isResume && configAny.resume_by_id) {
+    return `${config.command_template} --resume=${configAny.resume_by_id}`;
+  }
   const flag = isResume ? `--resume "${config.session_name}"` : `--name "${config.session_name}"`;
   return `${config.command_template} ${flag}`;
 }

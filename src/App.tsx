@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import WorkstreamSidebar from "./workstream/WorkstreamSidebar";
 import TileGrid from "./tiling/TileGrid";
 import StatusBar from "./tiling/StatusBar";
+import SessionPicker, { type CopilotSession } from "./tiles/SessionPicker";
 import { navigateFocus } from "./domain/layout";
 import { parseKeyAction } from "./domain/keyboard";
 import { createTerminalConfig, createCopilotSessionConfig } from "./domain/tile-config";
@@ -16,6 +17,7 @@ export default function App() {
   const [tileOrder, setTileOrder] = useState<string[]>([]);
   const [focusedIndex, setFocusedIndex] = useState(0);
   const [fullscreenTileId, setFullscreenTileId] = useState<string | null>(null);
+  const [showSessionPicker, setShowSessionPicker] = useState(false);
   // Track which tile IDs have active PTYs to avoid double-spawning
   const spawnedPtys = useRef<Set<string>>(new Set());
   const previousWsTiles = useRef<Map<string, { tiles: Tile[]; order: string[] }>>(new Map());
@@ -178,6 +180,38 @@ export default function App() {
     [activeWsId, fullscreenTileId, backend]
   );
 
+  // Resume an existing Copilot session by creating a copilot_session tile with --resume
+  const resumeExistingSession = useCallback(async (session: CopilotSession) => {
+    if (!activeWsId) return;
+    const ws = workstreams.find((w) => w.id === activeWsId);
+    const cwd = session.cwd || ws?.directory || "C:\\";
+    const sessionName = session.summary || session.session_id.slice(0, 8);
+
+    // Build config that uses --resume with the session ID
+    const config = JSON.stringify({
+      session_name: sessionName,
+      copilot_session_id: session.session_id,
+      command_template: "agency copilot --yolo",
+      cwd,
+      is_resumed: true,
+      resume_by_id: session.session_id,
+      created_at: session.created_at || new Date().toISOString(),
+    });
+
+    const tile = await backend.createTile(activeWsId, "copilot_session", sessionName, config);
+
+    setTiles((prev) => [...prev, tile]);
+    setTileOrder((prev) => {
+      const next = [...prev, tile.id];
+      backend.updateLayout(activeWsId, { tile_order_json: JSON.stringify(next) });
+      return next;
+    });
+
+    spawnedPtys.current.add(tile.id);
+    await backend.spawnTerminal(tile.id, cwd, undefined, 30, 120);
+    setFocusedIndex(tileOrder.length);
+  }, [activeWsId, workstreams, tileOrder.length, backend]);
+
   // Keyboard shortcuts
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -211,7 +245,11 @@ export default function App() {
           setFocusedIndex((i) => navigateFocus(action.direction, i, count));
           break;
         case "addTile":
-          addTile(action.tileType);
+          if (action.tileType === "copilot_session") {
+            setShowSessionPicker(true);
+          } else {
+            addTile(action.tileType);
+          }
           break;
         case "closeTile":
           if (count > 0 && orderedTiles[focusedIndex]) {
@@ -312,6 +350,21 @@ export default function App() {
           }
         />
       </div>
+
+      {/* Session picker modal */}
+      {showSessionPicker && (
+        <SessionPicker
+          onSelect={(session) => {
+            setShowSessionPicker(false);
+            resumeExistingSession(session);
+          }}
+          onCreateNew={() => {
+            setShowSessionPicker(false);
+            addTile("copilot_session");
+          }}
+          onCancel={() => setShowSessionPicker(false)}
+        />
+      )}
     </div>
   );
 }
