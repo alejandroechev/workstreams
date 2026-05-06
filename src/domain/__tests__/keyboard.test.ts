@@ -61,18 +61,22 @@ describe("parseKeyAction", () => {
     }
   });
 
-  it("returns navigate for h/j/k/l keys", () => {
-    expect(parseKeyAction({ key: "h", ...noFocus })).toEqual({ type: "navigate", direction: "left" });
-    expect(parseKeyAction({ key: "l", ...noFocus })).toEqual({ type: "navigate", direction: "right" });
-    expect(parseKeyAction({ key: "k", ...noFocus })).toEqual({ type: "navigate", direction: "up" });
-    expect(parseKeyAction({ key: "j", ...noFocus })).toEqual({ type: "navigate", direction: "down" });
+  it("returns navigate for Ctrl+Arrow keys", () => {
+    expect(parseKeyAction({ key: "ArrowLeft", ctrlKey: true, activeElement: null })).toEqual({ type: "navigate", direction: "left" });
+    expect(parseKeyAction({ key: "ArrowRight", ctrlKey: true, activeElement: null })).toEqual({ type: "navigate", direction: "right" });
+    expect(parseKeyAction({ key: "ArrowUp", ctrlKey: true, activeElement: null })).toEqual({ type: "navigate", direction: "up" });
+    expect(parseKeyAction({ key: "ArrowDown", ctrlKey: true, activeElement: null })).toEqual({ type: "navigate", direction: "down" });
   });
 
-  it("returns navigate for arrow keys", () => {
-    expect(parseKeyAction({ key: "ArrowLeft", ...noFocus })).toEqual({ type: "navigate", direction: "left" });
-    expect(parseKeyAction({ key: "ArrowRight", ...noFocus })).toEqual({ type: "navigate", direction: "right" });
-    expect(parseKeyAction({ key: "ArrowUp", ...noFocus })).toEqual({ type: "navigate", direction: "up" });
-    expect(parseKeyAction({ key: "ArrowDown", ...noFocus })).toEqual({ type: "navigate", direction: "down" });
+  it("does not navigate on bare arrow keys or hjkl", () => {
+    expect(parseKeyAction({ key: "ArrowLeft", ...noFocus })).toBeNull();
+    expect(parseKeyAction({ key: "h", ...noFocus })).toBeNull();
+    expect(parseKeyAction({ key: "j", ...noFocus })).toBeNull();
+  });
+
+  it("Ctrl+Arrow navigates even when input is focused", () => {
+    const input = { tagName: "INPUT" } as Element;
+    expect(parseKeyAction({ key: "ArrowLeft", ctrlKey: true, activeElement: input })).toEqual({ type: "navigate", direction: "left" });
   });
 
   it("returns addTile for n, v, e keys", () => {

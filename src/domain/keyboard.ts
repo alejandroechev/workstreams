@@ -45,24 +45,26 @@ export function parseKeyAction(opts: ParseKeyActionOpts): KeyAction | null {
     return { type: "switchWorkstream", index: parseInt(key) - 1 };
   }
 
+  // Ctrl+Arrow navigates between tiles (works even when input/terminal is focused)
+  if (ctrlKey) {
+    switch (key) {
+      case "ArrowLeft":
+        return { type: "navigate", direction: "left" };
+      case "ArrowRight":
+        return { type: "navigate", direction: "right" };
+      case "ArrowUp":
+        return { type: "navigate", direction: "up" };
+      case "ArrowDown":
+        return { type: "navigate", direction: "down" };
+    }
+  }
+
   // All remaining shortcuts are suppressed when an input or terminal is focused
   if (shouldSwallowKeyEvent(activeElement)) {
     return null;
   }
 
   switch (key) {
-    case "h":
-    case "ArrowLeft":
-      return { type: "navigate", direction: "left" };
-    case "l":
-    case "ArrowRight":
-      return { type: "navigate", direction: "right" };
-    case "k":
-    case "ArrowUp":
-      return { type: "navigate", direction: "up" };
-    case "j":
-    case "ArrowDown":
-      return { type: "navigate", direction: "down" };
     case "n":
       return { type: "addTile", tileType: "terminal" };
     case "v":
