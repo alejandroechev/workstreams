@@ -1,6 +1,7 @@
 import { useState, useCallback } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { open } from "@tauri-apps/plugin-dialog";
 import { useBackend } from "../backend/context";
 
 interface Props {
@@ -46,7 +47,33 @@ export default function DocViewerTile({ tileId, isFocused }: Props) {
         }}
       >
         <div style={{ fontSize: 24 }}>📝</div>
-        <div>Enter a markdown file path</div>
+        <div>Open a markdown file</div>
+        <button
+          type="button"
+          onClick={async (e) => {
+            e.stopPropagation();
+            const file = await open({
+              title: "Open markdown file",
+              multiple: false,
+              directory: false,
+              filters: [{ name: "Markdown", extensions: ["md", "mdx", "txt"] }],
+            });
+            if (file) openFile(file as string);
+          }}
+          style={{
+            background: "#a6e3a1",
+            color: "#1e1e2e",
+            border: "none",
+            borderRadius: 4,
+            padding: "8px 20px",
+            fontSize: 13,
+            cursor: "pointer",
+            fontWeight: 600,
+          }}
+        >
+          📁 Browse...
+        </button>
+        <div style={{ fontSize: 11, color: "#45475a", marginTop: 4 }}>or type a path below</div>
         <form
           onSubmit={(e) => {
             e.preventDefault();
@@ -80,14 +107,13 @@ export default function DocViewerTile({ tileId, isFocused }: Props) {
               openFile(inputPath);
             }}
             style={{
-              background: "#a6e3a1",
-              color: "#1e1e2e",
-              border: "none",
+              background: "#313244",
+              color: "#cdd6f4",
+              border: "1px solid #45475a",
               borderRadius: 4,
               padding: "6px 14px",
               fontSize: 12,
               cursor: "pointer",
-              fontWeight: 600,
             }}
           >
             Open

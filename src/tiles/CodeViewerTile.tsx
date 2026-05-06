@@ -1,5 +1,6 @@
 import { useState, useCallback } from "react";
 import Editor from "@monaco-editor/react";
+import { open } from "@tauri-apps/plugin-dialog";
 import { useBackend } from "../backend/context";
 import { detectLanguage } from "../domain/tile-config";
 
@@ -16,13 +17,20 @@ export default function CodeViewerTile({ tileId, isFocused }: Props) {
   const [inputPath, setInputPath] = useState("");
 
   const openFile = useCallback(async (path: string) => {
-    if (!path.trim()) return;
+    console.log("[CodeViewer] openFile called with:", path);
+    if (!path.trim()) {
+      console.log("[CodeViewer] path is empty, aborting");
+      return;
+    }
     setError(null);
     try {
+      console.log("[CodeViewer] calling backend.readFile...");
       const data = await backend.readFile(path.trim());
+      console.log("[CodeViewer] got data, length:", data.length);
       setContent(data);
       setFilePath(path.trim());
     } catch (e) {
+      console.error("[CodeViewer] readFile error:", e);
       setError(String(e));
       setContent(null);
     }
@@ -46,7 +54,32 @@ export default function CodeViewerTile({ tileId, isFocused }: Props) {
         }}
       >
         <div style={{ fontSize: 24 }}>📄</div>
-        <div>Enter a file path to view</div>
+        <div>Open a file to view</div>
+        <button
+          type="button"
+          onClick={async (e) => {
+            e.stopPropagation();
+            const file = await open({
+              title: "Open file",
+              multiple: false,
+              directory: false,
+            });
+            if (file) openFile(file as string);
+          }}
+          style={{
+            background: "#89b4fa",
+            color: "#1e1e2e",
+            border: "none",
+            borderRadius: 4,
+            padding: "8px 20px",
+            fontSize: 13,
+            cursor: "pointer",
+            fontWeight: 600,
+          }}
+        >
+          📁 Browse...
+        </button>
+        <div style={{ fontSize: 11, color: "#45475a", marginTop: 4 }}>or type a path below</div>
         <form
           onSubmit={(e) => {
             e.preventDefault();
@@ -80,14 +113,13 @@ export default function CodeViewerTile({ tileId, isFocused }: Props) {
               openFile(inputPath);
             }}
             style={{
-              background: "#89b4fa",
-              color: "#1e1e2e",
-              border: "none",
+              background: "#313244",
+              color: "#cdd6f4",
+              border: "1px solid #45475a",
               borderRadius: 4,
               padding: "6px 14px",
               fontSize: 12,
               cursor: "pointer",
-              fontWeight: 600,
             }}
           >
             Open
