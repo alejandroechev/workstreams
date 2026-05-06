@@ -1,24 +1,11 @@
 import { useState, useCallback } from "react";
 import Editor from "@monaco-editor/react";
 import { invoke } from "@tauri-apps/api/core";
+import { detectLanguage } from "../domain/tile-config";
 
 interface Props {
   tileId: string;
   isFocused: boolean;
-}
-
-function detectLanguage(path: string): string {
-  const ext = path.split(".").pop()?.toLowerCase() || "";
-  const map: Record<string, string> = {
-    ts: "typescript", tsx: "typescriptreact",
-    js: "javascript", jsx: "javascriptreact",
-    rs: "rust", py: "python", go: "go",
-    json: "json", toml: "toml", yaml: "yaml", yml: "yaml",
-    md: "markdown", css: "css", html: "html",
-    sql: "sql", sh: "shell", ps1: "powershell",
-    xml: "xml", csv: "plaintext", txt: "plaintext",
-  };
-  return map[ext] || "plaintext";
 }
 
 export default function CodeViewerTile({ tileId, isFocused }: Props) {
