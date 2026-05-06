@@ -82,6 +82,9 @@ export default function CopilotSessionTile({
     term.open(containerRef.current);
     fitAddon.fit();
 
+    // Register with the session stats poller
+    invoke("watch_session", { tileId, sessionName: config.session_name }).catch(() => {});
+
     // Restore scrollback if resuming
     invoke<string | null>("load_scrollback", { tileId }).then((data) => {
       if (data) {
@@ -143,6 +146,7 @@ export default function CopilotSessionTile({
     return () => {
       clearInterval(saveInterval);
       saveScrollback();
+      invoke("unwatch_session", { tileId }).catch(() => {});
       resizeObserver.disconnect();
       unlistenOutput.then((u) => u());
       unlistenExit.then((u) => u());

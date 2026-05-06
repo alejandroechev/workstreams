@@ -159,4 +159,12 @@ export class MemoryBackend implements Backend {
   async loadScrollback(tileId: string): Promise<string | null> {
     return this.scrollbacks.get(tileId) ?? null;
   }
+
+  async watchSession(_tileId: string, _sessionName: string): Promise<void> {
+    // no-op in memory backend
+  }
+
+  async unwatchSession(_tileId: string): Promise<void> {
+    // no-op in memory backend
+  }
 }

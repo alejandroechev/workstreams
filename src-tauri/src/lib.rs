@@ -1,11 +1,13 @@
 mod db;
 mod pty;
+mod session_poller;
 
 use db::open_db;
 use pty::PtyManager;
+use session_poller::SessionPoller;
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, State};
 
 // ── Types ──────────────────────────────────────────────────────────────
@@ -47,6 +49,7 @@ pub struct WorkstreamLayout {
 struct AppState {
     db: Mutex<Connection>,
     pty: PtyManager,
+    session_poller: Arc<SessionPoller>,
 }
 
 fn now() -> String {
@@ -542,6 +545,22 @@ fn get_copilot_link(state: State<'_, AppState>, tile_id: String) -> Result<Optio
     }
 }
 
+// ── Session Poller Commands ────────────────────────────────────────────
+
+/// Register a copilot session tile for stats polling
+#[tauri::command]
+fn watch_session(state: State<'_, AppState>, tile_id: String, session_name: String) -> Result<(), String> {
+    state.session_poller.watch(&tile_id, &session_name);
+    Ok(())
+}
+
+/// Stop watching a copilot session tile
+#[tauri::command]
+fn unwatch_session(state: State<'_, AppState>, tile_id: String) -> Result<(), String> {
+    state.session_poller.unwatch(&tile_id);
+    Ok(())
+}
+
 // ── File System Commands ───────────────────────────────────────────────
 
 /// Read a file's content for the code viewer
@@ -621,15 +640,23 @@ pub fn run() {
 
     let conn = open_db(&db_path).expect("Failed to initialize database");
 
+    let poller = Arc::new(SessionPoller::new());
+
     let app_state = AppState {
         db: Mutex::new(conn),
         pty: PtyManager::new(),
+        session_poller: poller.clone(),
     };
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(app_state)
+        .setup(move |app| {
+            // Start the session stats poller background thread
+            session_poller::start_poller(app.handle().clone(), poller);
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             // Workstream
             create_workstream,
@@ -655,6 +682,9 @@ pub fn run() {
             get_copilot_sessions,
             link_copilot_session,
             get_copilot_link,
+            // Session poller
+            watch_session,
+            unwatch_session,
             // File system
             read_file,
             list_directory,

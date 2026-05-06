@@ -25,4 +25,7 @@ export interface Backend {
   // Scrollback
   saveScrollback(tileId: string, data: string): Promise<void>;
   loadScrollback(tileId: string): Promise<string | null>;
+  // Session poller
+  watchSession(tileId: string, sessionName: string): Promise<void>;
+  unwatchSession(tileId: string): Promise<void>;
 }

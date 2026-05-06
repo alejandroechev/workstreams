@@ -87,4 +87,12 @@ export class TauriBackend implements Backend {
   async loadScrollback(tileId: string): Promise<string | null> {
     return invoke<string | null>("load_scrollback", { tileId });
   }
+
+  async watchSession(tileId: string, sessionName: string): Promise<void> {
+    await invoke("watch_session", { tileId, sessionName });
+  }
+
+  async unwatchSession(tileId: string): Promise<void> {
+    await invoke("unwatch_session", { tileId });
+  }
 }
