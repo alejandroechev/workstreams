@@ -1,8 +1,10 @@
 import { ReactNode, useState } from "react";
 import TerminalTile from "../tiles/TerminalTile";
+import CopilotSessionTile from "../tiles/CopilotSessionTile";
 import FileViewerTile from "../tiles/FileViewerTile";
 import FileExplorerTile from "../tiles/FileExplorerTile";
 import type { Tile } from "../workstream/types";
+import type { CopilotSessionStats } from "../domain/types";
 import { invoke } from "@tauri-apps/api/core";
 
 interface TileProps {
@@ -25,9 +27,21 @@ export default function TileWrapper({
   workstreamDir,
 }: TileProps) {
   const [termStatus, setTermStatus] = useState<string>("running");
+  const [sessionStats, setSessionStats] = useState<CopilotSessionStats | null>(null);
+
+  const isSessionTile = tile.tile_type === "copilot_session";
+  const isTermLike = tile.tile_type === "terminal" || isSessionTile;
 
   const statusColor = () => {
-    if (tile.tile_type !== "terminal") return "#89b4fa";
+    if (!isTermLike) return "#89b4fa";
+    if (isSessionTile) {
+      switch (termStatus) {
+        case "running": return "#a6e3a1";
+        case "starting": case "resuming": return "#f9e2af";
+        case "exited": return "#6c7086";
+        default: return "#a6e3a1";
+      }
+    }
     switch (termStatus) {
       case "running": return "#a6e3a1";
       case "spawning": return "#f9e2af";
@@ -38,8 +52,15 @@ export default function TileWrapper({
   };
 
   const statusLabel = () => {
-    if (tile.tile_type !== "terminal") return tile.tile_type.replace("_", " ");
-    return termStatus;
+    if (isSessionTile) {
+      const cfg = JSON.parse(tile.config_json || "{}");
+      const name = cfg.session_name || "session";
+      const ctx = sessionStats?.context_percent != null ? ` · ${Math.round(sessionStats.context_percent)}%` : "";
+      const turns = sessionStats?.turn_count != null ? ` · ${sessionStats.turn_count}t` : "";
+      return `${name}${ctx}${turns}`;
+    }
+    if (tile.tile_type === "terminal") return termStatus;
+    return tile.tile_type.replace("_", " ");
   };
 
   const handleRestart = async (e: React.MouseEvent) => {
@@ -77,6 +98,20 @@ export default function TileWrapper({
         />
       );
       break;
+    case "copilot_session": {
+      const cfg = JSON.parse(tile.config_json || "{}");
+      content = (
+        <CopilotSessionTile
+          tileId={tile.id}
+          configJson={tile.config_json}
+          isFocused={isFocused}
+          isResuming={cfg.is_resumed === true}
+          onStatusChange={setTermStatus}
+          onStatsUpdate={setSessionStats}
+        />
+      );
+      break;
+    }
     case "code_viewer":
     case "doc_viewer":
     case "file_viewer": {
@@ -155,7 +190,7 @@ export default function TileWrapper({
           </span>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-          {tile.tile_type === "terminal" && (
+          {isTermLike && (
             <>
               <button
                 onClick={handleRestart}

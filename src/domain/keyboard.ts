@@ -67,6 +67,8 @@ export function parseKeyAction(opts: ParseKeyActionOpts): KeyAction | null {
   switch (key) {
     case "n":
       return { type: "addTile", tileType: "terminal" };
+    case "s":
+      return { type: "addTile", tileType: "copilot_session" };
     case "v":
       return { type: "addTile", tileType: "file_viewer" };
     case "e":

@@ -20,7 +20,7 @@ export interface Tile {
   updated_at: string;
 }
 
-export type TileType = "terminal" | "file_viewer" | "file_explorer" | "code_viewer" | "doc_viewer";
+export type TileType = "terminal" | "copilot_session" | "file_viewer" | "file_explorer" | "code_viewer" | "doc_viewer";
 
 export interface TerminalConfig {
   command?: string;
@@ -29,6 +29,23 @@ export interface TerminalConfig {
   process_pid?: number | null;
   process_status?: "spawning" | "running" | "exited" | "failed";
   exit_code?: number | null;
+}
+
+export interface CopilotSessionConfig {
+  session_name: string;
+  copilot_session_id?: string | null;
+  command_template: string;
+  cwd: string;
+  is_resumed: boolean;
+  created_at: string;
+}
+
+export interface CopilotSessionStats {
+  context_percent?: number | null;
+  turn_count?: number | null;
+  summary?: string | null;
+  last_activity?: string | null;
+  duration_minutes?: number | null;
 }
 
 export interface WorkstreamLayout {

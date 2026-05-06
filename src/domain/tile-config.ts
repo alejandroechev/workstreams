@@ -1,4 +1,4 @@
-import type { TerminalConfig } from "./types";
+import type { TerminalConfig, CopilotSessionConfig } from "./types";
 
 /**
  * Create a JSON config string for a terminal tile.
@@ -14,7 +14,6 @@ export function createTerminalConfig(cwd: string, command?: string): string {
 
 /**
  * Parse a JSON config string into a TerminalConfig object.
- * Returns a default config if the string is empty or invalid.
  */
 export function parseTerminalConfig(configJson: string): TerminalConfig {
   if (!configJson || configJson.trim() === "") {
@@ -25,6 +24,51 @@ export function parseTerminalConfig(configJson: string): TerminalConfig {
   } catch {
     return { cwd: "C:\\", command: "pwsh.exe" };
   }
+}
+
+/**
+ * Create a JSON config string for a copilot session tile.
+ */
+export function createCopilotSessionConfig(
+  sessionName: string,
+  cwd: string,
+  commandTemplate: string = "agency copilot --yolo",
+): string {
+  const config: CopilotSessionConfig = {
+    session_name: sessionName,
+    command_template: commandTemplate,
+    cwd,
+    is_resumed: false,
+    created_at: new Date().toISOString(),
+  };
+  return JSON.stringify(config);
+}
+
+/**
+ * Parse a copilot session config from JSON.
+ */
+export function parseCopilotSessionConfig(configJson: string): CopilotSessionConfig {
+  try {
+    return JSON.parse(configJson) as CopilotSessionConfig;
+  } catch {
+    return {
+      session_name: "unknown",
+      command_template: "agency copilot --yolo",
+      cwd: "C:\\",
+      is_resumed: false,
+      created_at: new Date().toISOString(),
+    };
+  }
+}
+
+/**
+ * Build the shell command to launch a copilot session.
+ * On first create: uses --name to name the session.
+ * On resume: uses --resume to reconnect to the named session.
+ */
+export function buildCopilotCommand(config: CopilotSessionConfig, isResume: boolean): string {
+  const flag = isResume ? `--resume "${config.session_name}"` : `--name "${config.session_name}"`;
+  return `${config.command_template} ${flag}`;
 }
 
 const LANGUAGE_MAP: Record<string, string> = {

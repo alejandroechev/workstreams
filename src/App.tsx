@@ -4,7 +4,7 @@ import TileGrid from "./tiling/TileGrid";
 import StatusBar from "./tiling/StatusBar";
 import { navigateFocus } from "./domain/layout";
 import { parseKeyAction } from "./domain/keyboard";
-import { createTerminalConfig, parseTerminalConfig } from "./domain/tile-config";
+import { createTerminalConfig, createCopilotSessionConfig } from "./domain/tile-config";
 import { useBackend } from "./backend/context";
 import type { Workstream, Tile, TileType } from "./domain/types";
 
@@ -45,15 +45,31 @@ export default function App() {
       setFocusedIndex(0);
       setFullscreenTileId(layout.fullscreen_tile_id || null);
 
-      // Spawn terminal tiles only if not already spawned
+      // Spawn terminal/copilot tiles only if not already spawned
       for (const tile of t) {
-        if (tile.tile_type === "terminal" && !spawnedPtys.current.has(tile.id)) {
-          const config = parseTerminalConfig(tile.config_json);
-          const cwd = config.cwd || "C:\\";
-          spawnedPtys.current.add(tile.id);
-          backend.spawnTerminal(tile.id, cwd, config.command || undefined, 30, 120).catch(() => {
-            spawnedPtys.current.delete(tile.id);
-          });
+        if (!spawnedPtys.current.has(tile.id)) {
+          if (tile.tile_type === "terminal") {
+            const config = JSON.parse(tile.config_json || "{}");
+            const cwd = config.cwd || "C:\\";
+            spawnedPtys.current.add(tile.id);
+            backend.spawnTerminal(tile.id, cwd, config.command || undefined, 30, 120).catch(() => {
+              spawnedPtys.current.delete(tile.id);
+            });
+          } else if (tile.tile_type === "copilot_session") {
+            // Copilot sessions spawn a shell — the CopilotSessionTile component
+            // sends the copilot command with --resume after the shell is ready
+            const config = JSON.parse(tile.config_json || "{}");
+            const cwd = config.cwd || "C:\\";
+            spawnedPtys.current.add(tile.id);
+            // Mark as resumed so the tile component uses --resume
+            if (!config.is_resumed) {
+              config.is_resumed = true;
+              backend.updateLayout(activeWsId, {}).catch(() => {}); // trigger refresh
+            }
+            backend.spawnTerminal(tile.id, cwd, undefined, 30, 120).catch(() => {
+              spawnedPtys.current.delete(tile.id);
+            });
+          }
         }
       }
     });
@@ -96,6 +112,7 @@ export default function App() {
 
     const typeLabels: Record<TileType, string> = {
       terminal: "Terminal",
+      copilot_session: "Copilot",
       file_viewer: "Viewer",
       file_explorer: "Files",
       code_viewer: "Code",
@@ -103,17 +120,25 @@ export default function App() {
     };
     const tileCount = tiles.filter((t) => t.tile_type === tileType).length;
     let config: string;
+    let title: string;
+
     if (tileType === "terminal") {
       config = createTerminalConfig(cwd, command);
+      title = `${typeLabels[tileType]} ${tileCount + 1}`;
+    } else if (tileType === "copilot_session") {
+      const wsName = ws?.name || "ws";
+      const sessionName = `${wsName}/${tileCount + 1}`;
+      config = createCopilotSessionConfig(sessionName, cwd);
+      title = sessionName;
     } else if (extraConfig) {
       config = JSON.stringify(extraConfig);
+      title = extraConfig.filePath
+        ? extraConfig.filePath.split("\\").pop() || `${typeLabels[tileType]} ${tileCount + 1}`
+        : `${typeLabels[tileType]} ${tileCount + 1}`;
     } else {
       config = "{}";
+      title = `${typeLabels[tileType]} ${tileCount + 1}`;
     }
-
-    const title = extraConfig?.filePath
-      ? extraConfig.filePath.split("\\").pop() || `${typeLabels[tileType]} ${tileCount + 1}`
-      : `${typeLabels[tileType]} ${tileCount + 1}`;
 
     const tile = await backend.createTile(activeWsId, tileType, title, config);
 
@@ -124,10 +149,10 @@ export default function App() {
       return next;
     });
 
-    // Only spawn PTY for terminal tiles
-    if (tileType === "terminal") {
+    // Spawn PTY for terminal and copilot_session tiles
+    if (tileType === "terminal" || tileType === "copilot_session") {
       spawnedPtys.current.add(tile.id);
-      await backend.spawnTerminal(tile.id, cwd, command !== "pwsh.exe" ? command : undefined, 30, 120);
+      await backend.spawnTerminal(tile.id, cwd, undefined, 30, 120);
     }
 
     setFocusedIndex(tileOrder.length);
