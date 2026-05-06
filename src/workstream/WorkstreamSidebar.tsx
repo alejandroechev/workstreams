@@ -8,6 +8,7 @@ interface Props {
   activeId: string | null;
   onSelect: (id: string) => void;
   onCreate: (name: string, directory: string, command?: string) => void;
+  onDelete: (id: string) => void;
 }
 
 export default function WorkstreamSidebar({
@@ -15,6 +16,7 @@ export default function WorkstreamSidebar({
   activeId,
   onSelect,
   onCreate,
+  onDelete,
 }: Props) {
   const [showCreate, setShowCreate] = useState(false);
   const [newName, setNewName] = useState("");
@@ -112,24 +114,48 @@ export default function WorkstreamSidebar({
               style={{
                 display: "flex",
                 alignItems: "center",
-                gap: 8,
+                justifyContent: "space-between",
+                gap: 4,
                 fontSize: 13,
                 color: ws.id === activeId ? "#cdd6f4" : "#a6adc8",
                 fontWeight: ws.id === activeId ? 500 : 400,
               }}
             >
-              <span style={{ color: statusColor(ws.status), fontSize: 10 }}>
-                {statusIcon(ws.status)}
-              </span>
-              <span
-                style={{
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  whiteSpace: "nowrap",
+              <div style={{ display: "flex", alignItems: "center", gap: 8, overflow: "hidden" }}>
+                <span style={{ color: statusColor(ws.status), fontSize: 10, flexShrink: 0 }}>
+                  {statusIcon(ws.status)}
+                </span>
+                <span
+                  style={{
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {ws.name}
+                </span>
+              </div>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onDelete(ws.id);
                 }}
+                style={{
+                  background: "none",
+                  border: "none",
+                  color: "#45475a",
+                  cursor: "pointer",
+                  fontSize: 12,
+                  padding: "0 2px",
+                  lineHeight: 1,
+                  flexShrink: 0,
+                  opacity: ws.id === activeId ? 1 : 0,
+                  transition: "opacity 0.1s",
+                }}
+                title="Delete workstream"
               >
-                {ws.name}
-              </span>
+                ✕
+              </button>
             </div>
             {(ws.git_repo || ws.directory) && (
               <div

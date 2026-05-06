@@ -221,6 +221,22 @@ export default function App() {
         activeId={activeWsId}
         onSelect={setActiveWsId}
         onCreate={createWorkstream}
+        onDelete={async (id) => {
+          // Close PTYs for tiles in this workstream
+          const wsTiles = tiles.filter((t) => t.workstream_id === id);
+          for (const t of wsTiles) {
+            spawnedPtys.current.delete(t.id);
+            await backend.closeTerminal(t.id).catch(() => {});
+          }
+          await backend.deleteWorkstream(id);
+          setWorkstreams((prev) => prev.filter((w) => w.id !== id));
+          if (activeWsId === id) {
+            const remaining = workstreams.filter((w) => w.id !== id);
+            setActiveWsId(remaining.length > 0 ? remaining[0].id : null);
+            setTiles([]);
+            setTileOrder([]);
+          }
+        }}
       />
 
       <div
