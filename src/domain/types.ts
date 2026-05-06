@@ -20,7 +20,7 @@ export interface Tile {
   updated_at: string;
 }
 
-export type TileType = "terminal" | "code_viewer" | "doc_viewer";
+export type TileType = "terminal" | "file_viewer" | "file_explorer" | "code_viewer" | "doc_viewer";
 
 export interface TerminalConfig {
   command?: string;

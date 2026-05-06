@@ -9,6 +9,8 @@ interface Props {
   fullscreenTileId: string | null;
   onFocusTile: (index: number) => void;
   onCloseTile: (tileId: string) => void;
+  onOpenFile?: (path: string) => void;
+  workstreamDir?: string;
 }
 
 export default function TileGrid({
@@ -18,6 +20,8 @@ export default function TileGrid({
   fullscreenTileId,
   onFocusTile,
   onCloseTile,
+  onOpenFile,
+  workstreamDir,
 }: Props) {
   // Order tiles according to tileOrder
   const orderedTiles = tileOrder
@@ -79,6 +83,8 @@ export default function TileGrid({
             isFocused={realIndex === focusedIndex}
             onFocus={() => onFocusTile(realIndex)}
             onClose={() => onCloseTile(tile.id)}
+            onOpenFile={onOpenFile}
+            workstreamDir={workstreamDir}
           />
         );
       })}

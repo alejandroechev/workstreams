@@ -65,10 +65,10 @@ export function parseKeyAction(opts: ParseKeyActionOpts): KeyAction | null {
       return { type: "navigate", direction: "down" };
     case "n":
       return { type: "addTile", tileType: "terminal" };
-    case "c":
-      return { type: "addTile", tileType: "code_viewer" };
-    case "d":
-      return { type: "addTile", tileType: "doc_viewer" };
+    case "v":
+      return { type: "addTile", tileType: "file_viewer" };
+    case "e":
+      return { type: "addTile", tileType: "file_explorer" };
     case "x":
       return { type: "closeTile" };
     case "f":

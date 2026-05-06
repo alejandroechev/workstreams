@@ -49,6 +49,10 @@ export class TauriBackend implements Backend {
     return invoke<string>("read_file", { path });
   }
 
+  async listDirectory(path: string): Promise<string[]> {
+    return invoke<string[]>("list_directory", { path });
+  }
+
   async detectGitInfo(directory: string): Promise<{ repo: string | null; branch: string | null }> {
     const [repo, branch] = await invoke<[string | null, string | null]>("detect_git_info", { directory });
     return { repo, branch };

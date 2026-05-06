@@ -128,6 +128,10 @@ export class MemoryBackend implements Backend {
     return content;
   }
 
+  async listDirectory(_path: string): Promise<string[]> {
+    return Array.from(this.files.keys()).map((k) => `   ${k.split("/").pop() || k}`);
+  }
+
   async detectGitInfo(_directory: string): Promise<{ repo: string | null; branch: string | null }> {
     return { repo: null, branch: null };
   }

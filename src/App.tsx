@@ -94,7 +94,13 @@ export default function App() {
     const cwd = ws?.directory || "C:\\";
     const command = wsCommands.current.get(activeWsId) || "pwsh.exe";
 
-    const typeLabels: Record<TileType, string> = { terminal: "Terminal", code_viewer: "Code", doc_viewer: "Doc" };
+    const typeLabels: Record<TileType, string> = {
+      terminal: "Terminal",
+      file_viewer: "Viewer",
+      file_explorer: "Files",
+      code_viewer: "Code",
+      doc_viewer: "Doc",
+    };
     const tileCount = tiles.filter((t) => t.tile_type === tileType).length;
     const config = tileType === "terminal"
       ? createTerminalConfig(cwd, command)
@@ -254,6 +260,8 @@ export default function App() {
           fullscreenTileId={fullscreenTileId}
           onFocusTile={setFocusedIndex}
           onCloseTile={closeTile}
+          workstreamDir={workstreams.find((w) => w.id === activeWsId)?.directory || undefined}
+          onOpenFile={(path) => addTile("file_viewer")}
         />
 
         <StatusBar

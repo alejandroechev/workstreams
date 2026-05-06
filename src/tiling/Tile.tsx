@@ -1,7 +1,7 @@
 import { ReactNode, useState } from "react";
 import TerminalTile from "../tiles/TerminalTile";
-import CodeViewerTile from "../tiles/CodeViewerTile";
-import DocViewerTile from "../tiles/DocViewerTile";
+import FileViewerTile from "../tiles/FileViewerTile";
+import FileExplorerTile from "../tiles/FileExplorerTile";
 import type { Tile } from "../workstream/types";
 import { invoke } from "@tauri-apps/api/core";
 
@@ -11,6 +11,8 @@ interface TileProps {
   isFocused: boolean;
   onFocus: () => void;
   onClose: () => void;
+  onOpenFile?: (path: string) => void;
+  workstreamDir?: string;
 }
 
 export default function TileWrapper({
@@ -19,6 +21,8 @@ export default function TileWrapper({
   isFocused,
   onFocus,
   onClose,
+  onOpenFile,
+  workstreamDir,
 }: TileProps) {
   const [termStatus, setTermStatus] = useState<string>("running");
 
@@ -74,10 +78,21 @@ export default function TileWrapper({
       );
       break;
     case "code_viewer":
-      content = <CodeViewerTile tileId={tile.id} isFocused={isFocused} />;
+    case "file_viewer":
+      content = <FileViewerTile tileId={tile.id} isFocused={isFocused} />;
       break;
     case "doc_viewer":
-      content = <DocViewerTile tileId={tile.id} isFocused={isFocused} />;
+      content = <FileViewerTile tileId={tile.id} isFocused={isFocused} />;
+      break;
+    case "file_explorer":
+      content = (
+        <FileExplorerTile
+          tileId={tile.id}
+          isFocused={isFocused}
+          rootDir={workstreamDir || "C:\\"}
+          onOpenFile={onOpenFile}
+        />
+      );
       break;
     default:
       content = <div>Unknown tile type: {tile.tile_type}</div>;

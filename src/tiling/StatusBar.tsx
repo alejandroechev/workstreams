@@ -39,8 +39,8 @@ export default function StatusBar({
       </div>
       <div style={{ display: "flex", gap: 10, color: "#585b70" }}>
         <span>n:term</span>
-        <span>c:code</span>
-        <span>d:doc</span>
+        <span>v:viewer</span>
+        <span>e:files</span>
         <span>x:close</span>
         <span>f:full</span>
         <span>Ctrl+1-9:ws</span>

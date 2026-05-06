@@ -75,10 +75,10 @@ describe("parseKeyAction", () => {
     expect(parseKeyAction({ key: "ArrowDown", ...noFocus })).toEqual({ type: "navigate", direction: "down" });
   });
 
-  it("returns addTile for n, c, d keys", () => {
+  it("returns addTile for n, v, e keys", () => {
     expect(parseKeyAction({ key: "n", ...noFocus })).toEqual({ type: "addTile", tileType: "terminal" });
-    expect(parseKeyAction({ key: "c", ...noFocus })).toEqual({ type: "addTile", tileType: "code_viewer" });
-    expect(parseKeyAction({ key: "d", ...noFocus })).toEqual({ type: "addTile", tileType: "doc_viewer" });
+    expect(parseKeyAction({ key: "v", ...noFocus })).toEqual({ type: "addTile", tileType: "file_viewer" });
+    expect(parseKeyAction({ key: "e", ...noFocus })).toEqual({ type: "addTile", tileType: "file_explorer" });
   });
 
   it("returns closeTile for x key", () => {
