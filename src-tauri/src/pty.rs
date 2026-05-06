@@ -145,6 +145,7 @@ impl PtyManager {
     }
 
     /// Check if a PTY is active
+    #[allow(dead_code)]
     pub fn is_active(&self, tile_id: &str) -> bool {
         let handles = self.handles.lock().unwrap();
         handles.contains_key(tile_id)
