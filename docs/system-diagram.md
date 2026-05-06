@@ -1,0 +1,52 @@
+# System Architecture — Agent Manager
+
+```mermaid
+graph TB
+    subgraph Tauri["Tauri v2 Desktop App"]
+        subgraph Frontend["React Frontend (WebView2)"]
+            App["App.tsx<br/>Root shell"]
+            Sidebar["WorkstreamSidebar<br/>List/create/switch"]
+            TileGrid["TileGrid<br/>Adaptive tiling layout"]
+            Terminal["TerminalTile<br/>xterm.js + FitAddon + SerializeAddon"]
+            CodeView["CodeViewerTile<br/>Monaco Editor (read-only)"]
+            DocView["DocViewerTile<br/>react-markdown + remark-gfm"]
+            StatusBar["StatusBar<br/>Shortcuts + metadata"]
+        end
+
+        subgraph Backend["Rust Backend"]
+            LibRS["lib.rs<br/>22 Tauri commands"]
+            PtyRS["pty.rs<br/>PtyManager: spawn, write, resize, close"]
+            DbRS["db.rs<br/>SQLite schema + WAL"]
+        end
+    end
+
+    subgraph Storage["Persistence"]
+        AppDB["copilot-desktop.db<br/>(SQLite — workstreams, tiles, layouts, scrollback)"]
+        CopilotDB["~/.copilot/session-store.db<br/>(read-only enrichment)"]
+    end
+
+    subgraph OS["Windows OS"]
+        ConPTY["ConPTY<br/>via portable-pty"]
+        Shell["pwsh.exe / agency copilot --yolo"]
+    end
+
+    App --> Sidebar
+    App --> TileGrid
+    TileGrid --> Terminal
+    TileGrid --> CodeView
+    TileGrid --> DocView
+    App --> StatusBar
+
+    Terminal -- "invoke: write_to_pty, resize_pty" --> LibRS
+    LibRS -- "emit: pty-output-{id}" --> Terminal
+    Sidebar -- "invoke: create/list workstreams" --> LibRS
+    CodeView -- "invoke: read_file" --> LibRS
+    DocView -- "invoke: read_file" --> LibRS
+
+    LibRS --> PtyRS
+    LibRS --> DbRS
+    PtyRS --> ConPTY
+    ConPTY --> Shell
+    DbRS --> AppDB
+    LibRS -- "read-only query" --> CopilotDB
+```

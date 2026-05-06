@@ -1,0 +1,35 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+target/
+
+# Environment
+.env
+.env.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Screenshots (generated)
+screenshots/*.png
+
+# Tauri
+src-tauri/target/
+src-tauri/gen/
+
+# Playwright MCP
+.playwright-mcp/

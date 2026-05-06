@@ -1,0 +1,72 @@
+# Agent Manager
+
+> **v0.1.0** — Desktop app
+
+Workstream manager with tiling compositor for Copilot CLI — manage projects, persist sessions, embed terminals with adaptive tiling layouts, code viewers, and doc viewers.
+
+## Features
+
+- **Workstream management** — Create, switch, and persist project workstreams with git repo detection
+- **Adaptive tiling** — Tiles auto-arrange: 1=fullscreen, 2=split, 3=focus+stack, 4=grid, 5+=focus+grid
+- **Terminal tiles** — Full interactive terminals via xterm.js + portable-pty (ConPTY on Windows)
+- **Code viewer tiles** — Monaco Editor read-only with syntax highlighting for 20+ languages
+- **Doc viewer tiles** — Markdown renderer with GFM support
+- **Session persistence** — Workstreams, tile layouts, and terminal scrollback survive app restarts
+- **Keyboard-driven** — hjkl navigation, n/c/d for new tiles, Ctrl+1-9 for workstream switching
+- **Copilot CLI enrichment** — Reads session-store.db for context %, turn count, summaries
+
+## Tech Stack
+
+| Component | Technology |
+|-----------|------------|
+| Framework | Tauri v2 (Rust backend + WebView2 frontend) |
+| Frontend | React 19 + Vite + TypeScript |
+| Terminal | xterm.js + portable-pty (ConPTY) |
+| Code Viewer | Monaco Editor (read-only) |
+| Doc Viewer | react-markdown + remark-gfm |
+| Persistence | SQLite (rusqlite) with WAL |
+| Theme | Catppuccin Mocha |
+
+## Requirements
+
+- Node.js 18+
+- Rust toolchain (cargo)
+- Tauri CLI v2 (`cargo install tauri-cli`)
+- Windows 10/11 (primary platform)
+
+## Setup
+
+1. Clone the repository
+2. `npm install`
+3. `cargo tauri dev` (first build ~5min, subsequent ~20s)
+
+## Commands
+
+```bash
+cargo tauri dev      # Development with hot reload
+cargo tauri build    # Production build
+npm run test         # Unit tests
+npx tsc --noEmit     # Type check
+```
+
+## Keyboard Shortcuts
+
+| Key | Action |
+|-----|--------|
+| `n` | New terminal tile |
+| `c` | New code viewer tile |
+| `d` | New doc viewer tile |
+| `x` | Close focused tile |
+| `f` | Toggle fullscreen |
+| `hjkl` / arrows | Navigate tiles |
+| `Esc` | Unfocus terminal |
+| `1-9` | Jump to tile by number |
+| `Ctrl+1-9` | Switch workstream |
+
+## Architecture
+
+See `docs/system-diagram.md` for the full architecture diagram and `docs/adrs/` for design decisions.
+
+## License
+
+Private use.
