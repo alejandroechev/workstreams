@@ -88,7 +88,7 @@ export default function App() {
     setActiveWsId(ws.id);
   }, [backend]);
 
-  const addTile = useCallback(async (tileType: TileType) => {
+  const addTile = useCallback(async (tileType: TileType, extraConfig?: Record<string, string>) => {
     if (!activeWsId) return;
     const ws = workstreams.find((w) => w.id === activeWsId);
     const cwd = ws?.directory || "C:\\";
@@ -102,11 +102,20 @@ export default function App() {
       doc_viewer: "Doc",
     };
     const tileCount = tiles.filter((t) => t.tile_type === tileType).length;
-    const config = tileType === "terminal"
-      ? createTerminalConfig(cwd, command)
-      : "{}";
+    let config: string;
+    if (tileType === "terminal") {
+      config = createTerminalConfig(cwd, command);
+    } else if (extraConfig) {
+      config = JSON.stringify(extraConfig);
+    } else {
+      config = "{}";
+    }
 
-    const tile = await backend.createTile(activeWsId, tileType, `${typeLabels[tileType]} ${tileCount + 1}`, config);
+    const title = extraConfig?.filePath
+      ? extraConfig.filePath.split("\\").pop() || `${typeLabels[tileType]} ${tileCount + 1}`
+      : `${typeLabels[tileType]} ${tileCount + 1}`;
+
+    const tile = await backend.createTile(activeWsId, tileType, title, config);
 
     setTiles((prev) => [...prev, tile]);
     setTileOrder((prev) => {
@@ -251,18 +260,21 @@ export default function App() {
           display: "flex",
           flexDirection: "column",
           overflow: "hidden",
+          minHeight: 0,
         }}
       >
-        <TileGrid
-          tiles={tiles}
-          tileOrder={tileOrder}
-          focusedIndex={focusedIndex}
-          fullscreenTileId={fullscreenTileId}
-          onFocusTile={setFocusedIndex}
-          onCloseTile={closeTile}
-          workstreamDir={workstreams.find((w) => w.id === activeWsId)?.directory || undefined}
-          onOpenFile={(path) => addTile("file_viewer")}
-        />
+        <div style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
+          <TileGrid
+            tiles={tiles}
+            tileOrder={tileOrder}
+            focusedIndex={focusedIndex}
+            fullscreenTileId={fullscreenTileId}
+            onFocusTile={setFocusedIndex}
+            onCloseTile={closeTile}
+            workstreamDir={workstreams.find((w) => w.id === activeWsId)?.directory || undefined}
+            onOpenFile={(path) => addTile("file_viewer", { filePath: path })}
+          />
+        </div>
 
         <StatusBar
           tileCount={orderedTiles.length}

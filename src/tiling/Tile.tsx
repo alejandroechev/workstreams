@@ -78,12 +78,12 @@ export default function TileWrapper({
       );
       break;
     case "code_viewer":
-    case "file_viewer":
-      content = <FileViewerTile tileId={tile.id} isFocused={isFocused} />;
-      break;
     case "doc_viewer":
-      content = <FileViewerTile tileId={tile.id} isFocused={isFocused} />;
+    case "file_viewer": {
+      const cfg = JSON.parse(tile.config_json || "{}");
+      content = <FileViewerTile tileId={tile.id} isFocused={isFocused} initialPath={cfg.filePath} />;
       break;
+    }
     case "file_explorer":
       content = (
         <FileExplorerTile
