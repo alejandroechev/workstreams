@@ -16,7 +16,8 @@
         "width": 1400,
         "height": 900,
         "minWidth": 800,
-        "minHeight": 500
+        "minHeight": 500,
+        "additionalBrowserArgs": "--remote-debugging-port=9222"
       }
     ],
     "security": {

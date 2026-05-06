@@ -1,7 +1,7 @@
 import { useState, useCallback } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { invoke } from "@tauri-apps/api/core";
+import { useBackend } from "../backend/context";
 
 interface Props {
   tileId: string;
@@ -9,6 +9,7 @@ interface Props {
 }
 
 export default function DocViewerTile({ tileId, isFocused }: Props) {
+  const backend = useBackend();
   const [filePath, setFilePath] = useState("");
   const [content, setContent] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -18,14 +19,14 @@ export default function DocViewerTile({ tileId, isFocused }: Props) {
     if (!path.trim()) return;
     setError(null);
     try {
-      const data = await invoke<string>("read_file", { path: path.trim() });
+      const data = await backend.readFile(path.trim());
       setContent(data);
       setFilePath(path.trim());
     } catch (e) {
       setError(String(e));
       setContent(null);
     }
-  }, []);
+  }, [backend]);
 
   if (content === null) {
     return (
@@ -52,13 +53,13 @@ export default function DocViewerTile({ tileId, isFocused }: Props) {
             e.stopPropagation();
             openFile(inputPath);
           }}
-          onClick={(e) => e.stopPropagation()}
           style={{ display: "flex", gap: 6, width: "100%", maxWidth: 400 }}
         >
           <input
             type="text"
             value={inputPath}
             onChange={(e) => setInputPath(e.target.value)}
+            onKeyDown={(e) => e.stopPropagation()}
             placeholder="C:\path\to\README.md"
             style={{
               flex: 1,
@@ -73,7 +74,11 @@ export default function DocViewerTile({ tileId, isFocused }: Props) {
             }}
           />
           <button
-            type="submit"
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              openFile(inputPath);
+            }}
             style={{
               background: "#a6e3a1",
               color: "#1e1e2e",
