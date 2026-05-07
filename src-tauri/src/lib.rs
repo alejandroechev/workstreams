@@ -896,8 +896,6 @@ fn detect_worktree_info(directory: String) -> Result<WorktreeInfo, String> {
                             .and_then(|n| n.to_str())
                             .map(|s| s.to_string());
                         let remote = detect_git_remote(&root.to_string_lossy());
-                        // Get branch from HEAD
-                        let head_path = dir.join(".git");
                         let branch = std::process::Command::new("git")
                             .args(["branch", "--show-current"])
                             .current_dir(&directory)
