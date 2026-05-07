@@ -122,12 +122,22 @@ export default function CopilotSessionTile({
       invoke("write_to_pty", { tileId, data }).catch(() => {});
     });
 
-    // Handle Shift+Enter and Ctrl+Enter
+    // Handle special key combos
     term.attachCustomKeyEventHandler((ev) => {
-      if (ev.type === "keydown" && ev.key === "Enter" && (ev.shiftKey || ev.ctrlKey)) {
+      if (ev.type !== "keydown") return true;
+
+      if (ev.key === "Enter" && (ev.shiftKey || ev.ctrlKey)) {
         invoke("write_to_pty", { tileId, data: "\n" }).catch(() => {});
         return false;
       }
+
+      if (ev.key === "v" && ev.ctrlKey && !ev.shiftKey) {
+        navigator.clipboard.readText().then((text) => {
+          if (text) invoke("write_to_pty", { tileId, data: text }).catch(() => {});
+        }).catch(() => {});
+        return false;
+      }
+
       return true;
     });
 

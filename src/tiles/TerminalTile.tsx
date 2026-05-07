@@ -111,13 +111,25 @@ export default function TerminalTile({ tileId, isFocused, onStatusChange }: Prop
       invoke("write_to_pty", { tileId, data }).catch(() => {});
     });
 
-    // Handle Shift+Enter and Ctrl+Enter (xterm onData doesn't emit these)
+    // Handle special key combos that xterm.js doesn't handle natively
     term.attachCustomKeyEventHandler((ev) => {
-      if (ev.type === "keydown" && ev.key === "Enter" && (ev.shiftKey || ev.ctrlKey)) {
-        // Send newline character to PTY
+      if (ev.type !== "keydown") return true;
+
+      // Shift+Enter / Ctrl+Enter: send newline
+      if (ev.key === "Enter" && (ev.shiftKey || ev.ctrlKey)) {
         invoke("write_to_pty", { tileId, data: "\n" }).catch(() => {});
-        return false; // prevent default xterm handling
+        return false;
       }
+
+      // Ctrl+V: paste from clipboard
+      if (ev.key === "v" && ev.ctrlKey && !ev.shiftKey) {
+        navigator.clipboard.readText().then((text) => {
+          if (text) invoke("write_to_pty", { tileId, data: text }).catch(() => {});
+        }).catch(() => {});
+        return false;
+      }
+
+      // Ctrl+C: let xterm handle it (sends SIGINT via onData)
       return true;
     });
 
