@@ -17,6 +17,7 @@
         "height": 900,
         "minWidth": 800,
         "minHeight": 500,
+        "maximized": true,
         "additionalBrowserArgs": "--remote-debugging-port=9222"
       }
     ],
