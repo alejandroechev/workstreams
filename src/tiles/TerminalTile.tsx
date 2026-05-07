@@ -91,20 +91,34 @@ export default function TerminalTile({ tileId, isFocused, onStatusChange }: Prop
     term.open(containerRef.current);
     fitAddon.fit();
 
-    // Try to restore scrollback first
-    invoke<string | null>("load_scrollback", { tileId }).then((data) => {
-      if (data) {
-        term.write(data);
-        term.write("\r\n\x1b[90m--- restored scrollback ---\x1b[0m\r\n");
-      }
+    // Only restore scrollback on first mount (not when re-mounting due to workstream switch)
+    if (!onStatusChange) {
+      // Regular terminal — try restore
+      invoke<string | null>("load_scrollback", { tileId }).then((data) => {
+        if (data) {
+          term.write(data);
+        }
+        updateStatus("running");
+      }).catch(() => {
+        updateStatus("running");
+      });
+    } else {
       updateStatus("running");
-    }).catch(() => {
-      updateStatus("running");
-    });
+    }
 
     // Forward keystrokes to PTY
     term.onData((data) => {
       invoke("write_to_pty", { tileId, data }).catch(() => {});
+    });
+
+    // Handle Shift+Enter and Ctrl+Enter (xterm onData doesn't emit these)
+    term.attachCustomKeyEventHandler((ev) => {
+      if (ev.type === "keydown" && ev.key === "Enter" && (ev.shiftKey || ev.ctrlKey)) {
+        // Send newline character to PTY
+        invoke("write_to_pty", { tileId, data: "\n" }).catch(() => {});
+        return false; // prevent default xterm handling
+      }
+      return true;
     });
 
     // Listen for PTY output

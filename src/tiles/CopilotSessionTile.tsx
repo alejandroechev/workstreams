@@ -87,13 +87,14 @@ export default function CopilotSessionTile({
     // Register with the session stats poller
     invoke("watch_session", { tileId, sessionName: config.session_name }).catch(() => {});
 
-    // Restore scrollback if resuming
-    invoke<string | null>("load_scrollback", { tileId }).then((data) => {
-      if (data) {
-        term.write(data);
-        term.write("\r\n\x1b[90m--- restored scrollback ---\x1b[0m\r\n");
-      }
-    }).catch(() => {});
+    // Only restore scrollback if not already running (avoid duplicate restore messages)
+    if (!alreadyRunning) {
+      invoke<string | null>("load_scrollback", { tileId }).then((data) => {
+        if (data) {
+          term.write(data);
+        }
+      }).catch(() => {});
+    }
 
     // Build the copilot command — only send if PTY doesn't already have copilot running
     const command = buildCopilotCommand(config, isResuming);
@@ -119,6 +120,15 @@ export default function CopilotSessionTile({
     // Forward keystrokes to PTY
     term.onData((data) => {
       invoke("write_to_pty", { tileId, data }).catch(() => {});
+    });
+
+    // Handle Shift+Enter and Ctrl+Enter
+    term.attachCustomKeyEventHandler((ev) => {
+      if (ev.type === "keydown" && ev.key === "Enter" && (ev.shiftKey || ev.ctrlKey)) {
+        invoke("write_to_pty", { tileId, data: "\n" }).catch(() => {});
+        return false;
+      }
+      return true;
     });
 
     // Listen for PTY output — send command after first output (shell ready)
