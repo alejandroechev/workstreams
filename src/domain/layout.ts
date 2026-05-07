@@ -2,7 +2,7 @@ import type { GridConfig, Direction } from "./types";
 
 /**
  * Compute adaptive grid layout based on tile count.
- * Returns CSS grid properties for the container.
+ * Rules: always split 50/50 horizontally when adding columns.
  */
 export function computeLayout(tileCount: number): GridConfig {
   if (tileCount <= 0) {
@@ -12,6 +12,7 @@ export function computeLayout(tileCount: number): GridConfig {
     return { columns: "1fr", rows: "1fr", areas: '"t0"' };
   }
   if (tileCount === 2) {
+    // 50/50 horizontal split
     return {
       columns: "1fr 1fr",
       rows: "1fr",
@@ -19,37 +20,54 @@ export function computeLayout(tileCount: number): GridConfig {
     };
   }
   if (tileCount === 3) {
+    // Left 50%, right 50% split vertically
     return {
-      columns: "3fr 2fr",
+      columns: "1fr 1fr",
       rows: "1fr 1fr",
       areas: '"t0 t1" "t0 t2"',
     };
   }
   if (tileCount === 4) {
+    // 2x2 grid, equal
     return {
       columns: "1fr 1fr",
       rows: "1fr 1fr",
       areas: '"t0 t1" "t2 t3"',
     };
   }
-  // 5+: focused tile large on left, rest stacked on right
-  const rightCount = tileCount - 1;
-  const rightRows = Math.ceil(rightCount / 2);
-  const rowTemplate = Array(rightRows).fill("1fr").join(" ");
+  if (tileCount === 5) {
+    // Left column: 2 stacked, Right column: 3 stacked
+    return {
+      columns: "1fr 1fr",
+      rows: "1fr 1fr 1fr",
+      areas: '"t0 t2" "t0 t3" "t1 t4"',
+    };
+  }
+  if (tileCount === 6) {
+    // 3x2 grid
+    return {
+      columns: "1fr 1fr",
+      rows: "1fr 1fr 1fr",
+      areas: '"t0 t1" "t2 t3" "t4 t5"',
+    };
+  }
+  // 7+: 2 columns, distribute rows
+  const rows = Math.ceil(tileCount / 2);
+  const rowTemplate = Array(rows).fill("1fr").join(" ");
   let areas = "";
-  let idx = 1;
-  for (let r = 0; r < rightRows; r++) {
-    const cols = r === rightRows - 1 && rightCount % 2 !== 0 ? 1 : 2;
-    if (cols === 1) {
-      areas += `"t0 t${idx} t${idx}" `;
+  let idx = 0;
+  for (let r = 0; r < rows; r++) {
+    if (idx + 1 >= tileCount) {
+      // Last tile alone spans both columns
+      areas += `"t${idx} t${idx}" `;
       idx++;
     } else {
-      areas += `"t0 t${idx} t${idx + 1}" `;
+      areas += `"t${idx} t${idx + 1}" `;
       idx += 2;
     }
   }
   return {
-    columns: "2fr 1fr 1fr",
+    columns: "1fr 1fr",
     rows: rowTemplate,
     areas: areas.trim(),
   };

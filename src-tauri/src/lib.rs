@@ -772,7 +772,20 @@ fn git_diff_files(directory: String, mode: String) -> Result<Vec<String>, String
     let args: Vec<&str> = match mode.as_str() {
         "unstaged" => vec!["diff", "--name-only"],
         "last_commit" => vec!["diff", "HEAD~1", "--name-only"],
-        "branch_vs_master" => vec!["diff", "master...HEAD", "--name-only"],
+        "branch_vs_master" => {
+            // Try master first, fall back to main
+            let output = std::process::Command::new("git")
+                .args(["diff", "master...HEAD", "--name-only"])
+                .current_dir(&directory)
+                .output()
+                .map_err(|e| format!("Failed to run git: {e}"))?;
+            if output.status.success() {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                return Ok(stdout.lines().filter(|l| !l.is_empty()).map(|l| l.to_string()).collect());
+            }
+            // Fallback to main
+            vec!["diff", "main...HEAD", "--name-only"]
+        }
         _ => return Err(format!("Unknown diff mode: {mode}")),
     };
 
@@ -798,12 +811,31 @@ fn git_diff_files(directory: String, mode: String) -> Result<Vec<String>, String
 /// Get diff content for a specific file
 #[tauri::command]
 fn git_diff_file(directory: String, file_path: String, mode: String) -> Result<String, String> {
-    let mut args: Vec<&str> = match mode.as_str() {
+    let base_args: Vec<&str> = match mode.as_str() {
         "unstaged" => vec!["diff"],
         "last_commit" => vec!["diff", "HEAD~1"],
-        "branch_vs_master" => vec!["diff", "master...HEAD"],
+        "branch_vs_master" => {
+            // Try master, fallback to main
+            let mut args = vec!["diff", "master...HEAD", "--", &file_path];
+            let output = std::process::Command::new("git")
+                .args(&args)
+                .current_dir(&directory)
+                .output()
+                .map_err(|e| format!("Failed to run git: {e}"))?;
+            if output.status.success() {
+                return Ok(String::from_utf8_lossy(&output.stdout).to_string());
+            }
+            args = vec!["diff", "main...HEAD", "--", &file_path];
+            let output2 = std::process::Command::new("git")
+                .args(&args)
+                .current_dir(&directory)
+                .output()
+                .map_err(|e| format!("Failed to run git: {e}"))?;
+            return Ok(String::from_utf8_lossy(&output2.stdout).to_string());
+        }
         _ => return Err(format!("Unknown diff mode: {mode}")),
     };
+    let mut args = base_args;
     args.push("--");
     args.push(&file_path);
 

@@ -28,9 +28,9 @@ describe("computeLayout", () => {
     expect(result.areas).toBe('"t0 t1"');
   });
 
-  it("returns master-stack layout for 3 tiles", () => {
+  it("returns 50/50 split for 3 tiles (left spans 2 rows)", () => {
     const result = computeLayout(3);
-    expect(result.columns).toBe("3fr 2fr");
+    expect(result.columns).toBe("1fr 1fr");
     expect(result.rows).toBe("1fr 1fr");
     expect(result.areas).toBe('"t0 t1" "t0 t2"');
   });
@@ -42,19 +42,15 @@ describe("computeLayout", () => {
     expect(result.areas).toBe('"t0 t1" "t2 t3"');
   });
 
-  it("returns focus+stack layout for 5 tiles", () => {
+  it("returns 2-column layout for 5 tiles", () => {
     const result = computeLayout(5);
-    expect(result.columns).toBe("2fr 1fr 1fr");
-    expect(result.rows).toBe("1fr 1fr");
-    expect(result.areas).toBe('"t0 t1 t2" "t0 t3 t4"');
+    expect(result.columns).toBe("1fr 1fr");
+    expect(result.areas).toContain("t4");
   });
 
-  it("returns focus+stack layout for 8 tiles", () => {
+  it("returns 2-column layout for 8 tiles", () => {
     const result = computeLayout(8);
-    expect(result.columns).toBe("2fr 1fr 1fr");
-    // 7 right tiles → 4 rows
-    expect(result.rows).toBe("1fr 1fr 1fr 1fr");
-    expect(result.areas).toContain("t0");
+    expect(result.columns).toBe("1fr 1fr");
     expect(result.areas).toContain("t7");
   });
 });

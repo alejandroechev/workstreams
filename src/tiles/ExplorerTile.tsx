@@ -248,6 +248,9 @@ export default function ExplorerTile({ tileId, isFocused, rootDir, initialPath }
     if (file) openFile(file as string);
   };
 
+  // Git root directory for diff commands (use rootDir, not browsed currentDir)
+  const gitRoot = rootDir || currentDir;
+
   // Diff mode handlers
   const activateDiffMode = useCallback(async (diffMode: DiffMode) => {
     setActiveDiffMode(diffMode);
@@ -255,34 +258,35 @@ export default function ExplorerTile({ tileId, isFocused, rootDir, initialPath }
     setDiffContent("");
     setDiffFilePath("");
     try {
-      const files = await backend.gitDiffFiles(currentDir, diffMode);
+      const files = await backend.gitDiffFiles(gitRoot, diffMode);
       setDiffFiles(files);
       if (files.length > 0) {
         const firstFile = files[0];
         setDiffFilePath(firstFile);
-        const diff = await backend.gitDiffFile(currentDir, firstFile, diffMode);
+        const diff = await backend.gitDiffFile(gitRoot, firstFile, diffMode);
         setDiffContent(diff);
       }
-    } catch {
+    } catch (e) {
+      console.error("[Explorer] diff error:", e);
       setDiffFiles([]);
     } finally {
       setDiffLoading(false);
     }
-  }, [backend, currentDir]);
+  }, [backend, gitRoot]);
 
   const selectDiffFile = useCallback(async (file: string) => {
     if (!activeDiffMode) return;
     setDiffFilePath(file);
     setDiffLoading(true);
     try {
-      const diff = await backend.gitDiffFile(currentDir, file, activeDiffMode);
+      const diff = await backend.gitDiffFile(gitRoot, file, activeDiffMode);
       setDiffContent(diff);
     } catch {
       setDiffContent("");
     } finally {
       setDiffLoading(false);
     }
-  }, [backend, currentDir, activeDiffMode]);
+  }, [backend, gitRoot, activeDiffMode]);
 
   const exitDiffMode = useCallback(() => {
     setActiveDiffMode(null);
