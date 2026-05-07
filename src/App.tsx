@@ -398,6 +398,20 @@ export default function App() {
           workstreamName={
             workstreams.find((w) => w.id === activeWsId)?.name || ""
           }
+          onAddSession={() => setShowSessionPicker(true)}
+          onAddTerminal={() => addTile("terminal")}
+          onAddExplorer={() => addTile("file_explorer")}
+          onToggleFullscreen={() => {
+            if (orderedTiles.length > 0 && orderedTiles[focusedIndex]) {
+              const tid = orderedTiles[focusedIndex]!.id;
+              setFullscreenTileId((prev) => (prev === tid ? null : tid));
+            }
+          }}
+          onCloseTitle={() => {
+            if (orderedTiles.length > 0 && orderedTiles[focusedIndex]) {
+              closeTile(orderedTiles[focusedIndex]!.id);
+            }
+          }}
         />
       </div>
 
