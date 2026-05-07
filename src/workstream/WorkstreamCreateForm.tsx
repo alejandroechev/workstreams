@@ -1,12 +1,26 @@
 import { useState, useEffect } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
+import { invoke } from "@tauri-apps/api/core";
 import type { Project } from "../domain/types";
 
-type WorkstreamType = "worktree" | "base_repo" | "standalone";
+type WorkstreamType = "worktree" | "base_repo" | "standalone" | "import_worktree";
+
+interface WorktreeInfo {
+  is_worktree: boolean;
+  parent_repo_path: string | null;
+  parent_repo_name: string | null;
+  branch: string | null;
+  git_remote: string | null;
+}
 
 interface Props {
   project?: Project;
-  onSubmit: (name: string, directory: string, opts: { projectId?: string; workstreamType: string; worktreeBranch?: string }) => void;
+  onSubmit: (name: string, directory: string, opts: {
+    projectId?: string;
+    workstreamType: string;
+    worktreeBranch?: string;
+    showSessionPicker?: boolean;
+  }) => void;
   onCancel: () => void;
 }
 
@@ -20,15 +34,14 @@ export default function WorkstreamCreateForm({ project, onSubmit, onCancel }: Pr
   const [wsType, setWsType] = useState<WorkstreamType>(hasProject ? "worktree" : "standalone");
   const [directory, setDirectory] = useState(project?.directory || "");
   const [branchName, setBranchName] = useState("");
+  const [worktreeInfo, setWorktreeInfo] = useState<WorktreeInfo | null>(null);
 
-  // Auto-update branch name from workstream name
   useEffect(() => {
     if (wsType === "worktree" && name.trim()) {
       setBranchName(`ws-${slugify(name)}`);
     }
   }, [name, wsType]);
 
-  // Auto-set directory when switching to base_repo or worktree with a project
   useEffect(() => {
     if (hasProject && (wsType === "worktree" || wsType === "base_repo")) {
       setDirectory(project.directory);
@@ -36,22 +49,40 @@ export default function WorkstreamCreateForm({ project, onSubmit, onCancel }: Pr
   }, [wsType, hasProject, project?.directory]);
 
   const pickDirectory = async () => {
-    const dir = await open({ directory: true, title: "Select workstream directory" });
-    if (dir) setDirectory(dir as string);
+    const dir = await open({ directory: true, title: "Select worktree directory" });
+    if (dir) {
+      setDirectory(dir as string);
+      if (wsType === "import_worktree") {
+        // Auto-detect worktree info
+        try {
+          const info = await invoke<WorktreeInfo>("detect_worktree_info", { directory: dir });
+          setWorktreeInfo(info);
+          if (info.parent_repo_name && !name) {
+            setName(info.branch || info.parent_repo_name);
+          }
+        } catch {
+          setWorktreeInfo(null);
+        }
+      }
+    }
   };
 
   const handleSubmit = () => {
     if (!name.trim()) return;
     const dir = directory || (project?.directory ?? "");
     if (!dir) return;
+
+    const isImport = wsType === "import_worktree";
     onSubmit(name.trim(), dir, {
       projectId: project?.id,
-      workstreamType: wsType,
-      worktreeBranch: wsType === "worktree" ? branchName : undefined,
+      workstreamType: isImport ? "worktree" : wsType,
+      worktreeBranch: wsType === "worktree" ? branchName : (isImport ? worktreeInfo?.branch || undefined : undefined),
+      showSessionPicker: isImport,
     });
   };
 
   const typeOptions: { value: WorkstreamType; label: string; desc: string }[] = [
+    { value: "import_worktree", label: "Import Existing Worktree", desc: "Point to an existing worktree + link a Copilot session" },
     { value: "worktree", label: "New Worktree", desc: "Creates a git worktree branch" },
     { value: "base_repo", label: "Base Repo", desc: "Works in project directory" },
     { value: "standalone", label: "Standalone", desc: "Pick any directory" },
@@ -179,17 +210,19 @@ export default function WorkstreamCreateForm({ project, onSubmit, onCancel }: Pr
           </>
         )}
 
-        {/* Directory (standalone or manual override) */}
-        {wsType === "standalone" && (
+        {/* Directory (standalone or import_worktree) */}
+        {(wsType === "standalone" || wsType === "import_worktree") && (
           <>
-            <label style={{ fontSize: 11, color: "#a6adc8", display: "block", marginBottom: 4 }}>Directory</label>
-            <div style={{ display: "flex", gap: 4, marginBottom: 14 }}>
+            <label style={{ fontSize: 11, color: "#a6adc8", display: "block", marginBottom: 4 }}>
+              {wsType === "import_worktree" ? "Existing Worktree Directory" : "Directory"}
+            </label>
+            <div style={{ display: "flex", gap: 4, marginBottom: 8 }}>
               <input
                 type="text"
                 value={directory}
                 onChange={(e) => setDirectory(e.target.value)}
                 onKeyDown={(e) => e.stopPropagation()}
-                placeholder="C:\\Projects\\..."
+                placeholder={wsType === "import_worktree" ? "C:\\repos\\project-worktree" : "C:\\Projects\\..."}
                 style={{
                   flex: 1,
                   background: "#313244",
@@ -218,6 +251,32 @@ export default function WorkstreamCreateForm({ project, onSubmit, onCancel }: Pr
                 📁
               </button>
             </div>
+            {/* Detected worktree info */}
+            {wsType === "import_worktree" && worktreeInfo && (
+              <div style={{ fontSize: 11, color: "#6c7086", marginBottom: 14, padding: "6px 8px", background: "#181825", borderRadius: 4 }}>
+                {worktreeInfo.is_worktree ? (
+                  <>
+                    <div style={{ color: "#a6e3a1", marginBottom: 2 }}>✓ Git worktree detected</div>
+                    {worktreeInfo.parent_repo_name && <div>Parent repo: <span style={{ color: "#cdd6f4" }}>{worktreeInfo.parent_repo_name}</span></div>}
+                    {worktreeInfo.parent_repo_path && <div>Repo path: <span style={{ color: "#585b70" }}>{worktreeInfo.parent_repo_path}</span></div>}
+                    {worktreeInfo.branch && <div>Branch: <span style={{ color: "#89b4fa" }}>{worktreeInfo.branch}</span></div>}
+                    {worktreeInfo.git_remote && <div>Remote: <span style={{ color: "#585b70" }}>{worktreeInfo.git_remote}</span></div>}
+                  </>
+                ) : worktreeInfo.parent_repo_path ? (
+                  <>
+                    <div style={{ color: "#f9e2af", marginBottom: 2 }}>Regular git repo (not a worktree)</div>
+                    {worktreeInfo.branch && <div>Branch: <span style={{ color: "#89b4fa" }}>{worktreeInfo.branch}</span></div>}
+                  </>
+                ) : (
+                  <div style={{ color: "#f38ba8" }}>Not a git repository</div>
+                )}
+              </div>
+            )}
+            {wsType === "import_worktree" && !worktreeInfo && directory && (
+              <div style={{ fontSize: 11, color: "#585b70", marginBottom: 14 }}>
+                Pick a directory to detect worktree info
+              </div>
+            )}
           </>
         )}
 
@@ -228,7 +287,12 @@ export default function WorkstreamCreateForm({ project, onSubmit, onCancel }: Pr
           </div>
         )}
 
-        {/* TODO: For worktree type, run `git worktree add` with branchName at directory */}
+        {/* Note about session linking for import */}
+        {wsType === "import_worktree" && (
+          <div style={{ fontSize: 11, color: "#89b4fa", marginBottom: 14, paddingLeft: 2 }}>
+            After creating, you'll be prompted to link an existing Copilot session.
+          </div>
+        )}
 
         {/* Actions */}
         <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
@@ -260,7 +324,7 @@ export default function WorkstreamCreateForm({ project, onSubmit, onCancel }: Pr
               fontWeight: 600,
             }}
           >
-            Create Workstream
+            {wsType === "import_worktree" ? "Import & Link Session" : "Create Workstream"}
           </button>
         </div>
       </div>

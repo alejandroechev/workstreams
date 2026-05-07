@@ -109,7 +109,7 @@ export default function App() {
   const handleCreateWorkstream = useCallback(async (
     name: string,
     directory: string,
-    opts: { projectId?: string; workstreamType: string; worktreeBranch?: string },
+    opts: { projectId?: string; workstreamType: string; worktreeBranch?: string; showSessionPicker?: boolean },
   ) => {
     const ws = await backend.createWorkstream(name, directory, {
       projectId: opts.projectId,
@@ -128,6 +128,11 @@ export default function App() {
     setWorkstreams((prev) => [ws, ...prev]);
     setActiveWsId(ws.id);
     setShowWsCreate({ show: false });
+
+    // If import worktree, show session picker to link a Copilot session
+    if (opts.showSessionPicker) {
+      setShowSessionPicker(true);
+    }
   }, [backend]);
 
   const handleArchiveWorkstream = useCallback(async (id: string) => {

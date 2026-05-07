@@ -862,6 +862,98 @@ fn detect_git_info(directory: String) -> Result<(Option<String>, Option<String>)
     Ok((repo_name, branch))
 }
 
+/// Detect if a directory is a git worktree and return parent repo info
+#[derive(Debug, Serialize, Deserialize)]
+struct WorktreeInfo {
+    is_worktree: bool,
+    parent_repo_path: Option<String>,
+    parent_repo_name: Option<String>,
+    branch: Option<String>,
+    git_remote: Option<String>,
+}
+
+#[tauri::command]
+fn detect_worktree_info(directory: String) -> Result<WorktreeInfo, String> {
+    let dir = std::path::Path::new(&directory);
+    let git_path = dir.join(".git");
+
+    // In a worktree, .git is a FILE containing "gitdir: /path/to/main/.git/worktrees/<name>"
+    // In a normal repo, .git is a DIRECTORY
+    if git_path.is_file() {
+        let content = std::fs::read_to_string(&git_path)
+            .map_err(|e| format!("Cannot read .git: {e}"))?;
+        if let Some(gitdir) = content.trim().strip_prefix("gitdir: ") {
+            // Parse parent repo from gitdir path
+            // e.g., "C:/repos/myproject/.git/worktrees/my-worktree"
+            let gitdir_path = std::path::Path::new(gitdir);
+            // Walk up to find the .git directory (parent of "worktrees/<name>")
+            let mut parent = gitdir_path;
+            while let Some(p) = parent.parent() {
+                if p.file_name().map(|n| n == ".git").unwrap_or(false) {
+                    let repo_root = p.parent();
+                    if let Some(root) = repo_root {
+                        let repo_name = root.file_name()
+                            .and_then(|n| n.to_str())
+                            .map(|s| s.to_string());
+                        let remote = detect_git_remote(&root.to_string_lossy());
+                        // Get branch from HEAD
+                        let head_path = dir.join(".git");
+                        let branch = std::process::Command::new("git")
+                            .args(["branch", "--show-current"])
+                            .current_dir(&directory)
+                            .output()
+                            .ok()
+                            .and_then(|o| String::from_utf8(o.stdout).ok())
+                            .map(|s| s.trim().to_string())
+                            .filter(|s| !s.is_empty());
+
+                        return Ok(WorktreeInfo {
+                            is_worktree: true,
+                            parent_repo_path: Some(root.to_string_lossy().to_string()),
+                            parent_repo_name: repo_name,
+                            branch,
+                            git_remote: remote,
+                        });
+                    }
+                }
+                parent = p;
+            }
+        }
+    }
+
+    // Not a worktree — check if it's a normal git repo
+    if git_path.is_dir() {
+        let repo_name = dir.file_name()
+            .and_then(|n| n.to_str())
+            .map(|s| s.to_string());
+        let branch = std::process::Command::new("git")
+            .args(["branch", "--show-current"])
+            .current_dir(&directory)
+            .output()
+            .ok()
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        let remote = detect_git_remote(&directory);
+
+        return Ok(WorktreeInfo {
+            is_worktree: false,
+            parent_repo_path: Some(directory),
+            parent_repo_name: repo_name,
+            branch,
+            git_remote: remote,
+        });
+    }
+
+    Ok(WorktreeInfo {
+        is_worktree: false,
+        parent_repo_path: None,
+        parent_repo_name: None,
+        branch: None,
+        git_remote: None,
+    })
+}
+
 // ── App Setup ──────────────────────────────────────────────────────────
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -927,6 +1019,7 @@ pub fn run() {
             read_file,
             list_directory,
             detect_git_info,
+            detect_worktree_info,
             search_files,
             // Git diff
             git_diff_files,
