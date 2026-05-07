@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback } from "react";
-import Editor from "@monaco-editor/react";
+import { useState, useEffect, useCallback, useRef } from "react";
+import Editor, { DiffEditor } from "@monaco-editor/react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -20,6 +20,7 @@ interface DirEntry {
 }
 
 type Mode = "browse" | "view";
+type DiffMode = "unstaged" | "last_commit" | "branch_vs_master";
 
 const MARKDOWN_EXTS = new Set(["md", "mdx", "markdown"]);
 
@@ -55,6 +56,38 @@ function fileIcon(name: string, isDir: boolean): string {
   }
 }
 
+/**
+ * Parse a unified diff to extract old (original) and new (modified) content.
+ */
+export function parseDiffToSides(diffText: string): { original: string; modified: string } {
+  if (!diffText.trim()) return { original: "", modified: "" };
+
+  const lines = diffText.split("\n");
+  const originalLines: string[] = [];
+  const modifiedLines: string[] = [];
+  let inHunk = false;
+
+  for (const line of lines) {
+    if (line.startsWith("@@")) {
+      inHunk = true;
+      continue;
+    }
+    if (!inHunk) continue;
+
+    if (line.startsWith("-")) {
+      originalLines.push(line.slice(1));
+    } else if (line.startsWith("+")) {
+      modifiedLines.push(line.slice(1));
+    } else if (line.startsWith(" ") || line === "") {
+      const content = line.startsWith(" ") ? line.slice(1) : line;
+      originalLines.push(content);
+      modifiedLines.push(content);
+    }
+  }
+
+  return { original: originalLines.join("\n"), modified: modifiedLines.join("\n") };
+}
+
 export default function ExplorerTile({ tileId, isFocused, rootDir, initialPath }: Props) {
   const backend = useBackend();
 
@@ -70,6 +103,20 @@ export default function ExplorerTile({ tileId, isFocused, rootDir, initialPath }
   const [content, setContent] = useState<string | null>(null);
   const [fileError, setFileError] = useState<string | null>(null);
   const [fileLoading, setFileLoading] = useState(false);
+  // Ctrl+P search overlay
+  const [showFileSearch, setShowFileSearch] = useState(false);
+  const [fileSearchQuery, setFileSearchQuery] = useState("");
+  const [fileSearchResults, setFileSearchResults] = useState<string[]>([]);
+  const [fileSearchLoading, setFileSearchLoading] = useState(false);
+  const fileSearchInputRef = useRef<HTMLInputElement>(null);
+  // Diff mode state
+  const [activeDiffMode, setActiveDiffMode] = useState<DiffMode | null>(null);
+  const [diffFiles, setDiffFiles] = useState<string[]>([]);
+  const [diffContent, setDiffContent] = useState<string>("");
+  const [diffFilePath, setDiffFilePath] = useState<string>("");
+  const [diffLoading, setDiffLoading] = useState(false);
+
+  const containerRef = useRef<HTMLDivElement>(null);
 
   const loadDir = useCallback(async (dir: string) => {
     setDirLoading(true);
@@ -94,6 +141,9 @@ export default function ExplorerTile({ tileId, isFocused, rootDir, initialPath }
       setContent(data);
       setFilePath(path.trim());
       setMode("view");
+      setActiveDiffMode(null);
+      setDiffContent("");
+      setDiffFilePath("");
     } catch (e) {
       setFileError(String(e));
       setContent(null);
@@ -113,6 +163,55 @@ export default function ExplorerTile({ tileId, isFocused, rootDir, initialPath }
   useEffect(() => {
     if (initialPath) openFile(initialPath);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Ctrl+P handler
+  useEffect(() => {
+    if (!isFocused) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.ctrlKey && e.key === "p") {
+        e.preventDefault();
+        e.stopPropagation();
+        setShowFileSearch(true);
+        setFileSearchQuery("");
+        setFileSearchResults([]);
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [isFocused]);
+
+  // Focus search input when overlay opens
+  useEffect(() => {
+    if (showFileSearch) {
+      setTimeout(() => fileSearchInputRef.current?.focus(), 50);
+    }
+  }, [showFileSearch]);
+
+  // Debounced file search
+  useEffect(() => {
+    if (!showFileSearch || !fileSearchQuery.trim()) {
+      setFileSearchResults([]);
+      return;
+    }
+    const timer = setTimeout(async () => {
+      setFileSearchLoading(true);
+      try {
+        const results = await backend.searchFiles(currentDir, fileSearchQuery.trim());
+        setFileSearchResults(results);
+      } catch {
+        setFileSearchResults([]);
+      } finally {
+        setFileSearchLoading(false);
+      }
+    }, 200);
+    return () => clearTimeout(timer);
+  }, [fileSearchQuery, showFileSearch, backend, currentDir]);
+
+  const closeFileSearch = useCallback(() => {
+    setShowFileSearch(false);
+    setFileSearchQuery("");
+    setFileSearchResults([]);
+  }, []);
 
   const navigateUp = () => {
     const parent = currentDir.replace(/\\[^\\]+\\?$/, "");
@@ -135,7 +234,10 @@ export default function ExplorerTile({ tileId, isFocused, rootDir, initialPath }
     setContent(null);
     setFilePath("");
     setFileError(null);
-    // Reload the directory listing if we haven't loaded yet
+    setActiveDiffMode(null);
+    setDiffContent("");
+    setDiffFiles([]);
+    setDiffFilePath("");
     if (entries.length === 0) {
       loadDir(currentDir);
     }
@@ -146,31 +248,143 @@ export default function ExplorerTile({ tileId, isFocused, rootDir, initialPath }
     if (file) openFile(file as string);
   };
 
+  // Diff mode handlers
+  const activateDiffMode = useCallback(async (diffMode: DiffMode) => {
+    setActiveDiffMode(diffMode);
+    setDiffLoading(true);
+    setDiffContent("");
+    setDiffFilePath("");
+    try {
+      const files = await backend.gitDiffFiles(currentDir, diffMode);
+      setDiffFiles(files);
+      if (files.length > 0) {
+        const firstFile = files[0];
+        setDiffFilePath(firstFile);
+        const diff = await backend.gitDiffFile(currentDir, firstFile, diffMode);
+        setDiffContent(diff);
+      }
+    } catch {
+      setDiffFiles([]);
+    } finally {
+      setDiffLoading(false);
+    }
+  }, [backend, currentDir]);
+
+  const selectDiffFile = useCallback(async (file: string) => {
+    if (!activeDiffMode) return;
+    setDiffFilePath(file);
+    setDiffLoading(true);
+    try {
+      const diff = await backend.gitDiffFile(currentDir, file, activeDiffMode);
+      setDiffContent(diff);
+    } catch {
+      setDiffContent("");
+    } finally {
+      setDiffLoading(false);
+    }
+  }, [backend, currentDir, activeDiffMode]);
+
+  const exitDiffMode = useCallback(() => {
+    setActiveDiffMode(null);
+    setDiffContent("");
+    setDiffFiles([]);
+    setDiffFilePath("");
+  }, []);
+
   // Filter entries by search
   const filteredEntries = searchFilter
     ? entries.filter((e) => e.name.toLowerCase().includes(searchFilter.toLowerCase()))
     : entries;
 
+  // ─── Ctrl+P Search Overlay ───
+  const fileSearchOverlay = showFileSearch ? (
+    <div style={searchOverlayStyle} data-testid="file-search-overlay">
+      <div style={searchModalStyle}>
+        <input
+          ref={fileSearchInputRef}
+          type="text"
+          value={fileSearchQuery}
+          onChange={(e) => setFileSearchQuery(e.target.value)}
+          onKeyDown={(e) => {
+            e.stopPropagation();
+            if (e.key === "Escape") closeFileSearch();
+          }}
+          placeholder="Search files by name..."
+          style={searchInputStyle}
+          data-testid="file-search-input"
+        />
+        <div style={searchResultsStyle}>
+          {fileSearchLoading && (
+            <div style={{ padding: "8px 12px", color: "#585b70" }}>Searching...</div>
+          )}
+          {!fileSearchLoading && fileSearchQuery && fileSearchResults.length === 0 && (
+            <div style={{ padding: "8px 12px", color: "#585b70" }}>No files found</div>
+          )}
+          {fileSearchResults.map((path) => (
+            <div
+              key={path}
+              onClick={() => { closeFileSearch(); openFile(path); }}
+              style={searchResultItemStyle}
+              onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "#313244"; }}
+              onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "transparent"; }}
+            >
+              <span style={{ fontSize: 12, width: 16, textAlign: "center", flexShrink: 0 }}>
+                {fileIcon(path.split("\\").pop() || path, false)}
+              </span>
+              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 12 }}>
+                {path}
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  ) : null;
+
   // ─── View mode ───
   if (mode === "view") {
     if (fileLoading) {
       return (
-        <div style={{ ...containerStyle, alignItems: "center", justifyContent: "center" }}>
+        <div ref={containerRef} style={{ ...containerStyle, alignItems: "center", justifyContent: "center" }}>
           <div style={{ color: "#585b70" }}>Loading...</div>
+          {fileSearchOverlay}
         </div>
       );
     }
 
     if (content === null && !fileLoading) {
-      // No content loaded yet — shouldn't normally happen, but handle gracefully
       return (
-        <div style={{ ...containerStyle, alignItems: "center", justifyContent: "center" }}>
+        <div ref={containerRef} style={{ ...containerStyle, alignItems: "center", justifyContent: "center" }}>
           <div style={{ color: "#585b70" }}>No file loaded</div>
           <button onClick={goBackToBrowse} style={backButtonStyle}>← Back</button>
           {fileError && <div style={errorTextStyle}>{fileError}</div>}
+          {fileSearchOverlay}
         </div>
       );
     }
+
+    // Diff toolbar buttons
+    const diffToolbar = (
+      <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+        {(["unstaged", "last_commit", "branch_vs_master"] as DiffMode[]).map((dm) => (
+          <button
+            key={dm}
+            onClick={() => activeDiffMode === dm ? exitDiffMode() : activateDiffMode(dm)}
+            style={{
+              ...toolbarButtonStyle,
+              fontSize: 10,
+              padding: "2px 6px",
+              borderRadius: 3,
+              background: activeDiffMode === dm ? "#45475a" : "transparent",
+              color: activeDiffMode === dm ? "#cdd6f4" : "#89b4fa",
+            }}
+            data-testid={`diff-btn-${dm}`}
+          >
+            {dm === "unstaged" ? "Unstaged" : dm === "last_commit" ? "Last Commit" : "vs Master"}
+          </button>
+        ))}
+      </div>
+    );
 
     const viewToolbar = (
       <div style={toolbarStyle}>
@@ -179,16 +393,76 @@ export default function ExplorerTile({ tileId, isFocused, rootDir, initialPath }
             ← Back
           </button>
           <span style={pathTextStyle}>
-            {isMarkdown(filePath) ? "📝" : "📄"} {filePath}
+            {isMarkdown(filePath) ? "📝" : "📄"} {activeDiffMode && diffFilePath ? diffFilePath : filePath}
           </span>
         </div>
+        {diffToolbar}
       </div>
     );
+
+    // Diff view mode
+    if (activeDiffMode) {
+      const { original, modified } = parseDiffToSides(diffContent);
+      return (
+        <div ref={containerRef} style={containerStyle}>
+          {viewToolbar}
+          <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
+            {/* Diff file list panel */}
+            <div style={diffFilePanelStyle} data-testid="diff-file-list">
+              {diffLoading && <div style={{ padding: "6px 8px", color: "#585b70", fontSize: 11 }}>Loading...</div>}
+              {!diffLoading && diffFiles.length === 0 && (
+                <div style={{ padding: "6px 8px", color: "#585b70", fontSize: 11 }}>No changes</div>
+              )}
+              {diffFiles.map((f) => (
+                <div
+                  key={f}
+                  onClick={() => selectDiffFile(f)}
+                  style={{
+                    padding: "3px 8px",
+                    cursor: "pointer",
+                    fontSize: 11,
+                    color: f === diffFilePath ? "#cdd6f4" : "#a6adc8",
+                    background: f === diffFilePath ? "#313244" : "transparent",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}
+                  onMouseEnter={(e) => { if (f !== diffFilePath) (e.currentTarget as HTMLElement).style.background = "#1e1e2e"; }}
+                  onMouseLeave={(e) => { if (f !== diffFilePath) (e.currentTarget as HTMLElement).style.background = "transparent"; }}
+                >
+                  {f.split("/").pop() || f}
+                </div>
+              ))}
+            </div>
+            {/* Diff editor */}
+            <div style={{ flex: 1 }}>
+              <DiffEditor
+                height="100%"
+                language={detectLanguage(diffFilePath || filePath)}
+                original={original}
+                modified={modified}
+                theme="vs-dark"
+                options={{
+                  readOnly: true,
+                  minimap: { enabled: false },
+                  fontSize: 13,
+                  fontFamily: "'Cascadia Code', 'Consolas', monospace",
+                  scrollBeyondLastLine: false,
+                  renderSideBySide: false,
+                  overviewRulerBorder: false,
+                }}
+              />
+            </div>
+          </div>
+          {fileSearchOverlay}
+        </div>
+      );
+    }
 
     // Markdown rendering
     if (isMarkdown(filePath)) {
       return (
-        <div style={containerStyle}>
+        <div ref={containerRef} style={containerStyle}>
           {viewToolbar}
           <div style={markdownContainerStyle}>
             <Markdown
@@ -198,13 +472,14 @@ export default function ExplorerTile({ tileId, isFocused, rootDir, initialPath }
               {content}
             </Markdown>
           </div>
+          {fileSearchOverlay}
         </div>
       );
     }
 
     // Code rendering (Monaco)
     return (
-      <div style={containerStyle}>
+      <div ref={containerRef} style={containerStyle}>
         {viewToolbar}
         <div style={{ flex: 1 }}>
           <Editor
@@ -225,13 +500,14 @@ export default function ExplorerTile({ tileId, isFocused, rootDir, initialPath }
             }}
           />
         </div>
+        {fileSearchOverlay}
       </div>
     );
   }
 
   // ─── Browse mode ───
   return (
-    <div style={containerStyle}>
+    <div ref={containerRef} style={containerStyle}>
       {/* Path bar */}
       <div style={toolbarStyle}>
         <button onClick={navigateUp} style={{ ...toolbarButtonStyle, fontSize: 14 }} title="Go up">
@@ -325,6 +601,7 @@ export default function ExplorerTile({ tileId, isFocused, rootDir, initialPath }
           </div>
         ))}
       </div>
+      {fileSearchOverlay}
     </div>
   );
 }
@@ -425,4 +702,61 @@ const markdownComponents = {
   table: ({ children }: { children?: React.ReactNode }) => <table style={{ borderCollapse: "collapse", width: "100%", margin: "12px 0" }}>{children}</table>,
   th: ({ children }: { children?: React.ReactNode }) => <th style={{ border: "1px solid #45475a", padding: "6px 10px", background: "#181825", textAlign: "left" }}>{children}</th>,
   td: ({ children }: { children?: React.ReactNode }) => <td style={{ border: "1px solid #313244", padding: "6px 10px" }}>{children}</td>,
+};
+
+const searchOverlayStyle: React.CSSProperties = {
+  position: "absolute",
+  inset: 0,
+  background: "rgba(0, 0, 0, 0.5)",
+  display: "flex",
+  alignItems: "flex-start",
+  justifyContent: "center",
+  paddingTop: 40,
+  zIndex: 100,
+};
+
+const searchModalStyle: React.CSSProperties = {
+  width: "80%",
+  maxWidth: 500,
+  background: "#1e1e2e",
+  border: "1px solid #45475a",
+  borderRadius: 6,
+  overflow: "hidden",
+  boxShadow: "0 8px 32px rgba(0,0,0,0.5)",
+};
+
+const searchInputStyle: React.CSSProperties = {
+  width: "100%",
+  background: "#181825",
+  border: "none",
+  borderBottom: "1px solid #313244",
+  color: "#cdd6f4",
+  padding: "10px 14px",
+  fontSize: 13,
+  fontFamily: "monospace",
+  outline: "none",
+  boxSizing: "border-box",
+};
+
+const searchResultsStyle: React.CSSProperties = {
+  maxHeight: 300,
+  overflowY: "auto",
+};
+
+const searchResultItemStyle: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 8,
+  padding: "5px 14px",
+  cursor: "pointer",
+  color: "#cdd6f4",
+};
+
+const diffFilePanelStyle: React.CSSProperties = {
+  width: 180,
+  minWidth: 120,
+  borderRight: "1px solid #313244",
+  background: "#181825",
+  overflowY: "auto",
+  flexShrink: 0,
 };

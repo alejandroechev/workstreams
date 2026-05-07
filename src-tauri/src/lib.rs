@@ -13,6 +13,17 @@ use tauri::{AppHandle, State};
 // ── Types ──────────────────────────────────────────────────────────────
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct Project {
+    pub id: String,
+    pub name: String,
+    pub directory: String,
+    pub git_remote: Option<String>,
+    pub color: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Workstream {
     pub id: String,
     pub name: String,
@@ -21,6 +32,9 @@ pub struct Workstream {
     pub git_repo: Option<String>,
     pub git_branch: Option<String>,
     pub status: String,
+    pub project_id: Option<String>,
+    pub workstream_type: String,
+    pub worktree_branch: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -61,6 +75,118 @@ fn now() -> String {
     format!("{t}")
 }
 
+// ── Project Commands ──────────────────────────────────────────────────
+
+#[tauri::command]
+fn create_project(
+    state: State<'_, AppState>,
+    name: String,
+    directory: String,
+    color: Option<String>,
+) -> Result<Project, String> {
+    let id = uuid::Uuid::new_v4().to_string();
+    let ts = now();
+    let c = color.unwrap_or_else(|| "#89b4fa".into());
+    let db = state.db.lock().unwrap();
+
+    // Auto-detect git remote
+    let git_remote = detect_git_remote(&directory);
+
+    db.execute(
+        "INSERT INTO projects (id, name, directory, git_remote, color, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
+        (&id, &name, &directory, &git_remote, &c, &ts),
+    )
+    .map_err(|e| format!("DB error: {e}"))?;
+
+    Ok(Project {
+        id,
+        name,
+        directory,
+        git_remote,
+        color: c,
+        created_at: ts.clone(),
+        updated_at: ts,
+    })
+}
+
+#[tauri::command]
+fn list_projects(state: State<'_, AppState>) -> Result<Vec<Project>, String> {
+    let db = state.db.lock().unwrap();
+    let mut stmt = db
+        .prepare("SELECT id, name, directory, git_remote, color, created_at, updated_at FROM projects ORDER BY name")
+        .map_err(|e| format!("DB error: {e}"))?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(Project {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                directory: row.get(2)?,
+                git_remote: row.get(3)?,
+                color: row.get(4)?,
+                created_at: row.get(5)?,
+                updated_at: row.get(6)?,
+            })
+        })
+        .map_err(|e| format!("DB error: {e}"))?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("DB error: {e}"))
+}
+
+#[tauri::command]
+fn update_project(
+    state: State<'_, AppState>,
+    id: String,
+    name: Option<String>,
+    color: Option<String>,
+) -> Result<(), String> {
+    let db = state.db.lock().unwrap();
+    let ts = now();
+    if let Some(n) = name {
+        db.execute("UPDATE projects SET name = ?1, updated_at = ?2 WHERE id = ?3", (&n, &ts, &id))
+            .map_err(|e| format!("DB error: {e}"))?;
+    }
+    if let Some(c) = color {
+        db.execute("UPDATE projects SET color = ?1, updated_at = ?2 WHERE id = ?3", (&c, &ts, &id))
+            .map_err(|e| format!("DB error: {e}"))?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn delete_project(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    let db = state.db.lock().unwrap();
+    // Unlink workstreams first (don't delete them)
+    db.execute("UPDATE workstreams SET project_id = NULL WHERE project_id = ?1", [&id])
+        .map_err(|e| format!("DB error: {e}"))?;
+    db.execute("DELETE FROM projects WHERE id = ?1", [&id])
+        .map_err(|e| format!("DB error: {e}"))?;
+    Ok(())
+}
+
+/// Detect git remote URL from a directory
+fn detect_git_remote(directory: &str) -> Option<String> {
+    let git_config = std::path::Path::new(directory).join(".git").join("config");
+    let content = std::fs::read_to_string(git_config).ok()?;
+    // Simple parse: find [remote "origin"] section and extract url
+    let mut in_origin = false;
+    for line in content.lines() {
+        if line.trim() == "[remote \"origin\"]" {
+            in_origin = true;
+            continue;
+        }
+        if in_origin {
+            if line.starts_with('[') {
+                break;
+            }
+            if let Some(url) = line.trim().strip_prefix("url = ") {
+                return Some(url.to_string());
+            }
+        }
+    }
+    None
+}
+
 // ── Workstream Commands ────────────────────────────────────────────────
 
 #[tauri::command]
@@ -69,15 +195,19 @@ fn create_workstream(
     name: String,
     directory: Option<String>,
     description: Option<String>,
+    project_id: Option<String>,
+    workstream_type: Option<String>,
+    worktree_branch: Option<String>,
 ) -> Result<Workstream, String> {
     let id = uuid::Uuid::new_v4().to_string();
     let ts = now();
+    let ws_type = workstream_type.unwrap_or_else(|| "standalone".into());
     let db = state.db.lock().unwrap();
 
     db.execute(
-        "INSERT INTO workstreams (id, name, description, directory, status, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, 'active', ?5, ?5)",
-        (&id, &name, &description, &directory, &ts),
+        "INSERT INTO workstreams (id, name, description, directory, status, project_id, workstream_type, worktree_branch, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, 'active', ?5, ?6, ?7, ?8, ?8)",
+        (&id, &name, &description, &directory, &project_id, &ws_type, &worktree_branch, &ts),
     )
     .map_err(|e| format!("DB error: {e}"))?;
 
@@ -97,6 +227,9 @@ fn create_workstream(
         git_repo: None,
         git_branch: None,
         status: "active".into(),
+        project_id,
+        workstream_type: ws_type,
+        worktree_branch,
         created_at: ts.clone(),
         updated_at: ts,
     })
@@ -107,8 +240,9 @@ fn list_workstreams(state: State<'_, AppState>) -> Result<Vec<Workstream>, Strin
     let db = state.db.lock().unwrap();
     let mut stmt = db
         .prepare(
-            "SELECT id, name, description, directory, git_repo, git_branch, status, created_at, updated_at
-             FROM workstreams ORDER BY created_at DESC",
+            "SELECT id, name, description, directory, git_repo, git_branch, status,
+                    project_id, workstream_type, worktree_branch, created_at, updated_at
+             FROM workstreams WHERE status != 'archived' ORDER BY created_at DESC",
         )
         .map_err(|e| format!("DB error: {e}"))?;
 
@@ -122,8 +256,11 @@ fn list_workstreams(state: State<'_, AppState>) -> Result<Vec<Workstream>, Strin
                 git_repo: row.get(4)?,
                 git_branch: row.get(5)?,
                 status: row.get(6)?,
-                created_at: row.get(7)?,
-                updated_at: row.get(8)?,
+                project_id: row.get(7)?,
+                workstream_type: row.get(8)?,
+                worktree_branch: row.get(9)?,
+                created_at: row.get(10)?,
+                updated_at: row.get(11)?,
             })
         })
         .map_err(|e| format!("DB error: {e}"))?;
@@ -588,6 +725,102 @@ fn list_directory(path: String) -> Result<Vec<String>, String> {
     Ok(files)
 }
 
+/// Recursively search for files matching a query (case-insensitive filename match)
+#[tauri::command]
+fn search_files(directory: String, query: String, limit: Option<u32>) -> Result<Vec<String>, String> {
+    use std::collections::VecDeque;
+
+    let max = limit.unwrap_or(50) as usize;
+    let query_lower = query.to_lowercase();
+    let skip_dirs: std::collections::HashSet<&str> =
+        ["node_modules", "target", ".git", "dist", ".next", "__pycache__"].into();
+
+    let mut results = Vec::new();
+    let mut queue = VecDeque::new();
+    queue.push_back(std::path::PathBuf::from(&directory));
+
+    while let Some(dir) = queue.pop_front() {
+        if results.len() >= max {
+            break;
+        }
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        for entry in entries.flatten() {
+            if results.len() >= max {
+                break;
+            }
+            let path = entry.path();
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+            if path.is_dir() {
+                if !skip_dirs.contains(name_str.as_ref()) {
+                    queue.push_back(path);
+                }
+            } else if name_str.to_lowercase().contains(&query_lower) {
+                results.push(path.to_string_lossy().to_string());
+            }
+        }
+    }
+    Ok(results)
+}
+
+/// Get list of changed files for a diff mode
+#[tauri::command]
+fn git_diff_files(directory: String, mode: String) -> Result<Vec<String>, String> {
+    let args: Vec<&str> = match mode.as_str() {
+        "unstaged" => vec!["diff", "--name-only"],
+        "last_commit" => vec!["diff", "HEAD~1", "--name-only"],
+        "branch_vs_master" => vec!["diff", "master...HEAD", "--name-only"],
+        _ => return Err(format!("Unknown diff mode: {mode}")),
+    };
+
+    let output = std::process::Command::new("git")
+        .args(&args)
+        .current_dir(&directory)
+        .output()
+        .map_err(|e| format!("Failed to run git: {e}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("git error: {stderr}"));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    Ok(stdout
+        .lines()
+        .filter(|l| !l.is_empty())
+        .map(|l| l.to_string())
+        .collect())
+}
+
+/// Get diff content for a specific file
+#[tauri::command]
+fn git_diff_file(directory: String, file_path: String, mode: String) -> Result<String, String> {
+    let mut args: Vec<&str> = match mode.as_str() {
+        "unstaged" => vec!["diff"],
+        "last_commit" => vec!["diff", "HEAD~1"],
+        "branch_vs_master" => vec!["diff", "master...HEAD"],
+        _ => return Err(format!("Unknown diff mode: {mode}")),
+    };
+    args.push("--");
+    args.push(&file_path);
+
+    let output = std::process::Command::new("git")
+        .args(&args)
+        .current_dir(&directory)
+        .output()
+        .map_err(|e| format!("Failed to run git: {e}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("git error: {stderr}"));
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
 /// Detect git repo info from a directory
 #[tauri::command]
 fn detect_git_info(directory: String) -> Result<(Option<String>, Option<String>), String> {
@@ -658,6 +891,11 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            // Projects
+            create_project,
+            list_projects,
+            update_project,
+            delete_project,
             // Workstream
             create_workstream,
             list_workstreams,
@@ -689,6 +927,10 @@ pub fn run() {
             read_file,
             list_directory,
             detect_git_info,
+            search_files,
+            // Git diff
+            git_diff_files,
+            git_diff_file,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

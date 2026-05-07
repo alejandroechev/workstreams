@@ -1,3 +1,13 @@
+export interface Project {
+  id: string;
+  name: string;
+  directory: string;
+  git_remote: string | null;
+  color: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface Workstream {
   id: string;
   name: string;
@@ -6,6 +16,9 @@ export interface Workstream {
   git_repo: string | null;
   git_branch: string | null;
   status: string;
+  project_id: string | null;
+  workstream_type: string;
+  worktree_branch: string | null;
   created_at: string;
   updated_at: string;
 }

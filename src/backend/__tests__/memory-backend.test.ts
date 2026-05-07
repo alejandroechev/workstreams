@@ -173,4 +173,39 @@ describe("MemoryBackend", () => {
       expect(info.branch).toBeNull();
     });
   });
+
+  describe("searchFiles", () => {
+    it("returns matching files by name", async () => {
+      backend.seedFile("/project/src/main.ts", "");
+      backend.seedFile("/project/src/utils.ts", "");
+      backend.seedFile("/project/readme.md", "");
+
+      const results = await backend.searchFiles("/project", "main");
+      expect(results).toEqual(["/project/src/main.ts"]);
+    });
+
+    it("is case-insensitive", async () => {
+      backend.seedFile("/project/App.tsx", "");
+      const results = await backend.searchFiles("/project", "app");
+      expect(results).toEqual(["/project/App.tsx"]);
+    });
+
+    it("returns empty for no matches", async () => {
+      backend.seedFile("/project/index.ts", "");
+      const results = await backend.searchFiles("/project", "zzz");
+      expect(results).toEqual([]);
+    });
+  });
+
+  describe("gitDiff", () => {
+    it("gitDiffFiles returns empty array", async () => {
+      const files = await backend.gitDiffFiles("C:\\project", "unstaged");
+      expect(files).toEqual([]);
+    });
+
+    it("gitDiffFile returns empty string", async () => {
+      const diff = await backend.gitDiffFile("C:\\project", "file.ts", "unstaged");
+      expect(diff).toBe("");
+    });
+  });
 });

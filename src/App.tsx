@@ -1,5 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import WorkstreamSidebar from "./workstream/WorkstreamSidebar";
+import ProjectCreateForm from "./workstream/ProjectCreateForm";
+import WorkstreamCreateForm from "./workstream/WorkstreamCreateForm";
 import TileGrid from "./tiling/TileGrid";
 import StatusBar from "./tiling/StatusBar";
 import SessionPicker, { type CopilotSession } from "./tiles/SessionPicker";
@@ -7,10 +9,11 @@ import { navigateFocus } from "./domain/layout";
 import { parseKeyAction } from "./domain/keyboard";
 import { createTerminalConfig, createCopilotSessionConfig } from "./domain/tile-config";
 import { useBackend } from "./backend/context";
-import type { Workstream, Tile, TileType } from "./domain/types";
+import type { Project, Workstream, Tile, TileType } from "./domain/types";
 
 export default function App() {
   const backend = useBackend();
+  const [projects, setProjects] = useState<Project[]>([]);
   const [workstreams, setWorkstreams] = useState<Workstream[]>([]);
   const [activeWsId, setActiveWsId] = useState<string | null>(null);
   const [tiles, setTiles] = useState<Tile[]>([]);
@@ -18,13 +21,16 @@ export default function App() {
   const [focusedIndex, setFocusedIndex] = useState(0);
   const [fullscreenTileId, setFullscreenTileId] = useState<string | null>(null);
   const [showSessionPicker, setShowSessionPicker] = useState(false);
+  const [showProjectCreate, setShowProjectCreate] = useState(false);
+  const [showWsCreate, setShowWsCreate] = useState<{ show: boolean; projectId?: string }>({ show: false });
   // Track which tile IDs have active PTYs to avoid double-spawning
   const spawnedPtys = useRef<Set<string>>(new Set());
   const previousWsTiles = useRef<Map<string, { tiles: Tile[]; order: string[] }>>(new Map());
 
-  // Load workstreams on mount + restore
+  // Load projects and workstreams on mount
   useEffect(() => {
-    backend.listWorkstreams().then((ws) => {
+    Promise.all([backend.listProjects(), backend.listWorkstreams()]).then(([p, ws]) => {
+      setProjects(p);
       setWorkstreams(ws);
       if (ws.length > 0 && !activeWsId) {
         setActiveWsId(ws[0].id);
@@ -90,8 +96,26 @@ export default function App() {
   // Workstream commands stored per-workstream for terminal spawning
   const wsCommands = useRef<Map<string, string>>(new Map());
 
-  const createWorkstream = useCallback(async (name: string, directory: string, command?: string) => {
-    const ws = await backend.createWorkstream(name, directory);
+  const handleCreateProject = useCallback(async (name: string, directory: string, color: string, gitRemote: string | null) => {
+    const proj = await backend.createProject(name, directory, color);
+    if (gitRemote) {
+      await backend.updateProject(proj.id, { git_remote: gitRemote });
+      proj.git_remote = gitRemote;
+    }
+    setProjects((prev) => [...prev, proj]);
+    setShowProjectCreate(false);
+  }, [backend]);
+
+  const handleCreateWorkstream = useCallback(async (
+    name: string,
+    directory: string,
+    opts: { projectId?: string; workstreamType: string; worktreeBranch?: string },
+  ) => {
+    const ws = await backend.createWorkstream(name, directory, {
+      projectId: opts.projectId,
+      workstreamType: opts.workstreamType,
+      worktreeBranch: opts.worktreeBranch,
+    });
     // Detect git info and update
     try {
       const { repo, branch } = await backend.detectGitInfo(directory);
@@ -101,10 +125,36 @@ export default function App() {
         ws.git_branch = branch;
       }
     } catch { /* ignore */ }
-    if (command) wsCommands.current.set(ws.id, command);
     setWorkstreams((prev) => [ws, ...prev]);
     setActiveWsId(ws.id);
+    setShowWsCreate({ show: false });
   }, [backend]);
+
+  const handleArchiveWorkstream = useCallback(async (id: string) => {
+    const ws = workstreams.find((w) => w.id === id);
+    if (!ws) return;
+
+    if (ws.status === "archived") {
+      // Unarchive
+      await backend.updateWorkstream(id, { status: "active" });
+      setWorkstreams((prev) => prev.map((w) => w.id === id ? { ...w, status: "active" } : w));
+    } else {
+      // Archive: close PTYs for tiles in this workstream
+      const wsTiles = tiles.filter((t) => t.workstream_id === id);
+      for (const t of wsTiles) {
+        spawnedPtys.current.delete(t.id);
+        await backend.closeTerminal(t.id).catch(() => {});
+      }
+      await backend.updateWorkstream(id, { status: "archived" });
+      setWorkstreams((prev) => prev.map((w) => w.id === id ? { ...w, status: "archived" } : w));
+      if (activeWsId === id) {
+        const remaining = workstreams.filter((w) => w.id !== id && w.status !== "archived");
+        setActiveWsId(remaining.length > 0 ? remaining[0].id : null);
+        setTiles([]);
+        setTileOrder([]);
+      }
+    }
+  }, [workstreams, activeWsId, tiles, backend]);
 
   const addTile = useCallback(async (tileType: TileType, extraConfig?: Record<string, string>) => {
     if (!activeWsId) return;
@@ -303,26 +353,13 @@ export default function App() {
       }}
     >
       <WorkstreamSidebar
+        projects={projects}
         workstreams={workstreams}
-        activeId={activeWsId}
-        onSelect={setActiveWsId}
-        onCreate={createWorkstream}
-        onDelete={async (id) => {
-          // Close PTYs for tiles in this workstream
-          const wsTiles = tiles.filter((t) => t.workstream_id === id);
-          for (const t of wsTiles) {
-            spawnedPtys.current.delete(t.id);
-            await backend.closeTerminal(t.id).catch(() => {});
-          }
-          await backend.deleteWorkstream(id);
-          setWorkstreams((prev) => prev.filter((w) => w.id !== id));
-          if (activeWsId === id) {
-            const remaining = workstreams.filter((w) => w.id !== id);
-            setActiveWsId(remaining.length > 0 ? remaining[0].id : null);
-            setTiles([]);
-            setTileOrder([]);
-          }
-        }}
+        activeWsId={activeWsId}
+        onSelectWorkstream={setActiveWsId}
+        onCreateProject={() => setShowProjectCreate(true)}
+        onCreateWorkstream={(projectId) => setShowWsCreate({ show: true, projectId })}
+        onArchiveWorkstream={handleArchiveWorkstream}
       />
 
       <div
@@ -371,6 +408,23 @@ export default function App() {
             addTile("copilot_session");
           }}
           onCancel={() => setShowSessionPicker(false)}
+        />
+      )}
+
+      {/* Project creation modal */}
+      {showProjectCreate && (
+        <ProjectCreateForm
+          onSubmit={handleCreateProject}
+          onCancel={() => setShowProjectCreate(false)}
+        />
+      )}
+
+      {/* Workstream creation modal */}
+      {showWsCreate.show && (
+        <WorkstreamCreateForm
+          project={showWsCreate.projectId ? projects.find((p) => p.id === showWsCreate.projectId) : undefined}
+          onSubmit={handleCreateWorkstream}
+          onCancel={() => setShowWsCreate({ show: false })}
         />
       )}
     </div>

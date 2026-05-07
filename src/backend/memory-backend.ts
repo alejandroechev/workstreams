@@ -1,4 +1,4 @@
-import type { Workstream, Tile, TileType, WorkstreamLayout } from "../domain/types";
+import type { Project, Workstream, Tile, TileType, WorkstreamLayout } from "../domain/types";
 import type { Backend } from "./types";
 
 function generateId(): string {
@@ -11,9 +11,9 @@ function now(): string {
 
 /**
  * In-memory Backend implementation for tests and offline development.
- * Stores all data in Maps — no Tauri dependency.
  */
 export class MemoryBackend implements Backend {
+  private projects = new Map<string, Project>();
   private workstreams = new Map<string, Workstream>();
   private tiles = new Map<string, Tile>();
   private layouts = new Map<string, WorkstreamLayout>();
@@ -21,16 +21,43 @@ export class MemoryBackend implements Backend {
   private files = new Map<string, string>();
   private terminals = new Set<string>();
 
-  // Helper to seed file content for tests
   seedFile(path: string, content: string): void {
     this.files.set(path, content);
+  }
+
+  async listProjects(): Promise<Project[]> {
+    return Array.from(this.projects.values());
+  }
+
+  async createProject(name: string, directory: string, color?: string): Promise<Project> {
+    const p: Project = {
+      id: generateId(),
+      name,
+      directory,
+      git_remote: null,
+      color: color || "#89b4fa",
+      created_at: now(),
+      updated_at: now(),
+    };
+    this.projects.set(p.id, p);
+    return p;
+  }
+
+  async updateProject(id: string, updates: Partial<Project>): Promise<void> {
+    const p = this.projects.get(id);
+    if (!p) throw new Error(`Project not found: ${id}`);
+    Object.assign(p, updates, { updated_at: now() });
+  }
+
+  async deleteProject(id: string): Promise<void> {
+    this.projects.delete(id);
   }
 
   async listWorkstreams(): Promise<Workstream[]> {
     return Array.from(this.workstreams.values());
   }
 
-  async createWorkstream(name: string, directory: string): Promise<Workstream> {
+  async createWorkstream(name: string, directory: string, opts?: { projectId?: string; workstreamType?: string; worktreeBranch?: string }): Promise<Workstream> {
     const ws: Workstream = {
       id: generateId(),
       name,
@@ -39,6 +66,9 @@ export class MemoryBackend implements Backend {
       git_repo: null,
       git_branch: null,
       status: "active",
+      project_id: opts?.projectId || null,
+      workstream_type: opts?.workstreamType || "standalone",
+      worktree_branch: opts?.worktreeBranch || null,
       created_at: now(),
       updated_at: now(),
     };
@@ -166,5 +196,22 @@ export class MemoryBackend implements Backend {
 
   async unwatchSession(_tileId: string): Promise<void> {
     // no-op in memory backend
+  }
+
+  async searchFiles(_directory: string, query: string): Promise<string[]> {
+    // Search seeded files by filename match
+    const q = query.toLowerCase();
+    return Array.from(this.files.keys()).filter((path) => {
+      const name = path.split("/").pop() || path;
+      return name.toLowerCase().includes(q);
+    });
+  }
+
+  async gitDiffFiles(_directory: string, _mode: string): Promise<string[]> {
+    return [];
+  }
+
+  async gitDiffFile(_directory: string, _filePath: string, _mode: string): Promise<string> {
+    return "";
   }
 }

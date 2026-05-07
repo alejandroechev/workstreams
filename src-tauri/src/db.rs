@@ -6,6 +6,16 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute_batch("PRAGMA journal_mode=WAL;")?;
     conn.execute_batch(
         "
+        CREATE TABLE IF NOT EXISTS projects (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            directory TEXT NOT NULL,
+            git_remote TEXT,
+            color TEXT NOT NULL DEFAULT '#89b4fa',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
         CREATE TABLE IF NOT EXISTS workstreams (
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL,
@@ -14,6 +24,9 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
             git_repo TEXT,
             git_branch TEXT,
             status TEXT NOT NULL DEFAULT 'active',
+            project_id TEXT REFERENCES projects(id),
+            workstream_type TEXT NOT NULL DEFAULT 'standalone',
+            worktree_branch TEXT,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         );

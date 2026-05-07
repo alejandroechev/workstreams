@@ -1,9 +1,14 @@
-import type { Workstream, Tile, TileType, WorkstreamLayout } from "../domain/types";
+import type { Project, Workstream, Tile, TileType, WorkstreamLayout } from "../domain/types";
 
 export interface Backend {
+  // Projects
+  listProjects(): Promise<Project[]>;
+  createProject(name: string, directory: string, color?: string): Promise<Project>;
+  updateProject(id: string, updates: Partial<Project>): Promise<void>;
+  deleteProject(id: string): Promise<void>;
   // Workstreams
   listWorkstreams(): Promise<Workstream[]>;
-  createWorkstream(name: string, directory: string): Promise<Workstream>;
+  createWorkstream(name: string, directory: string, opts?: { projectId?: string; workstreamType?: string; worktreeBranch?: string }): Promise<Workstream>;
   updateWorkstream(id: string, updates: Partial<Workstream>): Promise<void>;
   deleteWorkstream(id: string): Promise<void>;
   // Tiles
@@ -28,4 +33,9 @@ export interface Backend {
   // Session poller
   watchSession(tileId: string, sessionName: string): Promise<void>;
   unwatchSession(tileId: string): Promise<void>;
+  // File search
+  searchFiles(directory: string, query: string): Promise<string[]>;
+  // Git diff
+  gitDiffFiles(directory: string, mode: string): Promise<string[]>;
+  gitDiffFile(directory: string, filePath: string, mode: string): Promise<string>;
 }

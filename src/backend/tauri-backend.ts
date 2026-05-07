@@ -1,14 +1,36 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { Workstream, Tile, TileType, WorkstreamLayout } from "../domain/types";
+import type { Project, Workstream, Tile, TileType, WorkstreamLayout } from "../domain/types";
 import type { Backend } from "./types";
 
 export class TauriBackend implements Backend {
+  async listProjects(): Promise<Project[]> {
+    return invoke<Project[]>("list_projects");
+  }
+
+  async createProject(name: string, directory: string, color?: string): Promise<Project> {
+    return invoke<Project>("create_project", { name, directory, color });
+  }
+
+  async updateProject(id: string, updates: Partial<Project>): Promise<void> {
+    await invoke("update_project", { id, ...updates });
+  }
+
+  async deleteProject(id: string): Promise<void> {
+    await invoke("delete_project", { id });
+  }
+
   async listWorkstreams(): Promise<Workstream[]> {
     return invoke<Workstream[]>("list_workstreams");
   }
 
-  async createWorkstream(name: string, directory: string): Promise<Workstream> {
-    return invoke<Workstream>("create_workstream", { name, directory });
+  async createWorkstream(name: string, directory: string, opts?: { projectId?: string; workstreamType?: string; worktreeBranch?: string }): Promise<Workstream> {
+    return invoke<Workstream>("create_workstream", {
+      name,
+      directory,
+      projectId: opts?.projectId,
+      workstreamType: opts?.workstreamType,
+      worktreeBranch: opts?.worktreeBranch,
+    });
   }
 
   async updateWorkstream(id: string, updates: Partial<Workstream>): Promise<void> {
@@ -94,5 +116,17 @@ export class TauriBackend implements Backend {
 
   async unwatchSession(tileId: string): Promise<void> {
     await invoke("unwatch_session", { tileId });
+  }
+
+  async searchFiles(directory: string, query: string): Promise<string[]> {
+    return invoke<string[]>("search_files", { directory, query });
+  }
+
+  async gitDiffFiles(directory: string, mode: string): Promise<string[]> {
+    return invoke<string[]>("git_diff_files", { directory, mode });
+  }
+
+  async gitDiffFile(directory: string, filePath: string, mode: string): Promise<string> {
+    return invoke<string>("git_diff_file", { directory, filePath, mode });
   }
 }
