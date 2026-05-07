@@ -72,6 +72,18 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
         );
         ",
     )?;
+
+    // Migrations: add columns that may be missing from older schemas
+    let migrations = [
+        "ALTER TABLE workstreams ADD COLUMN project_id TEXT REFERENCES projects(id)",
+        "ALTER TABLE workstreams ADD COLUMN workstream_type TEXT NOT NULL DEFAULT 'standalone'",
+        "ALTER TABLE workstreams ADD COLUMN worktree_branch TEXT",
+    ];
+    for sql in &migrations {
+        // SQLite errors if column already exists — ignore that error
+        let _ = conn.execute_batch(sql);
+    }
+
     Ok(())
 }
 
