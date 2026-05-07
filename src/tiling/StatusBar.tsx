@@ -39,12 +39,12 @@ export default function StatusBar({
       </div>
       <div style={{ display: "flex", gap: 10, color: "#585b70" }}>
         <span>Ctrl+↑↓←→:nav</span>
-        <span>s:copilot</span>
-        <span>n:term</span>
-        <span>v:viewer</span>
-        <span>e:files</span>
-        <span>x:close</span>
-        <span>f:full</span>
+        <span>Ctrl+S:session</span>
+        <span>Ctrl+N:term</span>
+        <span>Ctrl+O:viewer</span>
+        <span>Ctrl+E:files</span>
+        <span>Ctrl+W:close</span>
+        <span>Ctrl+F:full</span>
         <span>Ctrl+1-9:ws</span>
       </div>
     </div>

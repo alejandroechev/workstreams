@@ -7,7 +7,8 @@ export type KeyAction =
   | { type: "addTile"; tileType: TileType }
   | { type: "closeTile" }
   | { type: "toggleFullscreen" }
-  | { type: "focusTile"; index: number };
+  | { type: "focusTile"; index: number }
+  | { type: "quickSearch" };
 
 /**
  * Returns true if the active element is an input, textarea, select, or xterm terminal.
@@ -45,7 +46,7 @@ export function parseKeyAction(opts: ParseKeyActionOpts): KeyAction | null {
     return { type: "switchWorkstream", index: parseInt(key) - 1 };
   }
 
-  // Ctrl+Arrow navigates between tiles (works even when input/terminal is focused)
+  // All Ctrl+ shortcuts work even when input/terminal is focused
   if (ctrlKey) {
     switch (key) {
       case "ArrowLeft":
@@ -56,31 +57,22 @@ export function parseKeyAction(opts: ParseKeyActionOpts): KeyAction | null {
         return { type: "navigate", direction: "up" };
       case "ArrowDown":
         return { type: "navigate", direction: "down" };
+      case "n":
+        return { type: "addTile", tileType: "terminal" };
+      case "s":
+        return { type: "addTile", tileType: "copilot_session" };
+      case "o":
+        return { type: "addTile", tileType: "file_viewer" };
+      case "e":
+        return { type: "addTile", tileType: "file_explorer" };
+      case "w":
+        return { type: "closeTile" };
+      case "f":
+        return { type: "toggleFullscreen" };
+      case "p":
+        return { type: "quickSearch" };
     }
   }
 
-  // All remaining shortcuts are suppressed when an input or terminal is focused
-  if (shouldSwallowKeyEvent(activeElement)) {
-    return null;
-  }
-
-  switch (key) {
-    case "n":
-      return { type: "addTile", tileType: "terminal" };
-    case "s":
-      return { type: "addTile", tileType: "copilot_session" };
-    case "v":
-      return { type: "addTile", tileType: "file_viewer" };
-    case "e":
-      return { type: "addTile", tileType: "file_explorer" };
-    case "x":
-      return { type: "closeTile" };
-    case "f":
-      return { type: "toggleFullscreen" };
-    default:
-      if (key >= "1" && key <= "9") {
-        return { type: "focusTile", index: parseInt(key) - 1 };
-      }
-      return null;
-  }
+  return null;
 }

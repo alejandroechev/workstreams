@@ -242,9 +242,11 @@ export default function App() {
           switchWorkstream(action.index);
           break;
         case "navigate":
+          e.preventDefault();
           setFocusedIndex((i) => navigateFocus(action.direction, i, count));
           break;
         case "addTile":
+          e.preventDefault();
           if (action.tileType === "copilot_session") {
             setShowSessionPicker(true);
           } else {
@@ -252,11 +254,13 @@ export default function App() {
           }
           break;
         case "closeTile":
+          e.preventDefault();
           if (count > 0 && orderedTiles[focusedIndex]) {
             closeTile(orderedTiles[focusedIndex]!.id);
           }
           break;
         case "toggleFullscreen":
+          e.preventDefault();
           if (count > 0 && orderedTiles[focusedIndex]) {
             const tid = orderedTiles[focusedIndex]!.id;
             setFullscreenTileId((prev) => (prev === tid ? null : tid));
@@ -269,6 +273,10 @@ export default function App() {
           break;
         case "focusTile":
           if (action.index < count) setFocusedIndex(action.index);
+          break;
+        case "quickSearch":
+          e.preventDefault();
+          console.log("[quickSearch] Ctrl+P pressed — will wire to explorer later");
           break;
       }
     };

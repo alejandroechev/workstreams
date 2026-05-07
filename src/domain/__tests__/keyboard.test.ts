@@ -79,25 +79,40 @@ describe("parseKeyAction", () => {
     expect(parseKeyAction({ key: "ArrowLeft", ctrlKey: true, activeElement: input })).toEqual({ type: "navigate", direction: "left" });
   });
 
-  it("returns addTile for n, v, e keys", () => {
-    expect(parseKeyAction({ key: "n", ...noFocus })).toEqual({ type: "addTile", tileType: "terminal" });
-    expect(parseKeyAction({ key: "v", ...noFocus })).toEqual({ type: "addTile", tileType: "file_viewer" });
-    expect(parseKeyAction({ key: "e", ...noFocus })).toEqual({ type: "addTile", tileType: "file_explorer" });
+  it("returns addTile for Ctrl+N, Ctrl+S, Ctrl+O, Ctrl+E", () => {
+    const ctrl = { ctrlKey: true, activeElement: null };
+    expect(parseKeyAction({ key: "n", ...ctrl })).toEqual({ type: "addTile", tileType: "terminal" });
+    expect(parseKeyAction({ key: "s", ...ctrl })).toEqual({ type: "addTile", tileType: "copilot_session" });
+    expect(parseKeyAction({ key: "o", ...ctrl })).toEqual({ type: "addTile", tileType: "file_viewer" });
+    expect(parseKeyAction({ key: "e", ...ctrl })).toEqual({ type: "addTile", tileType: "file_explorer" });
   });
 
-  it("returns closeTile for x key", () => {
-    expect(parseKeyAction({ key: "x", ...noFocus })).toEqual({ type: "closeTile" });
+  it("returns closeTile for Ctrl+W", () => {
+    expect(parseKeyAction({ key: "w", ctrlKey: true, activeElement: null })).toEqual({ type: "closeTile" });
   });
 
-  it("returns toggleFullscreen for f key", () => {
-    expect(parseKeyAction({ key: "f", ...noFocus })).toEqual({ type: "toggleFullscreen" });
+  it("returns toggleFullscreen for Ctrl+F", () => {
+    expect(parseKeyAction({ key: "f", ctrlKey: true, activeElement: null })).toEqual({ type: "toggleFullscreen" });
   });
 
-  it("returns focusTile for digit keys 1-9", () => {
+  it("returns quickSearch for Ctrl+P", () => {
+    expect(parseKeyAction({ key: "p", ctrlKey: true, activeElement: null })).toEqual({ type: "quickSearch" });
+  });
+
+  it("bare keys n, s, e, v, x, f return null (no bare shortcuts)", () => {
+    expect(parseKeyAction({ key: "n", ...noFocus })).toBeNull();
+    expect(parseKeyAction({ key: "s", ...noFocus })).toBeNull();
+    expect(parseKeyAction({ key: "e", ...noFocus })).toBeNull();
+    expect(parseKeyAction({ key: "v", ...noFocus })).toBeNull();
+    expect(parseKeyAction({ key: "x", ...noFocus })).toBeNull();
+    expect(parseKeyAction({ key: "f", ...noFocus })).toBeNull();
+  });
+
+  it("bare digit keys 1-9 return null (no bare shortcuts)", () => {
     for (let i = 1; i <= 9; i++) {
       expect(
         parseKeyAction({ key: String(i), ctrlKey: false, activeElement: null })
-      ).toEqual({ type: "focusTile", index: i - 1 });
+      ).toBeNull();
     }
   });
 
@@ -106,10 +121,16 @@ describe("parseKeyAction", () => {
     expect(parseKeyAction({ key: "Enter", ...noFocus })).toBeNull();
   });
 
-  it("returns null when input is focused (swallowed)", () => {
+  it("returns null for bare keys when input is focused", () => {
     const input = mockElement("input");
     expect(parseKeyAction({ key: "n", ctrlKey: false, activeElement: input })).toBeNull();
     expect(parseKeyAction({ key: "h", ctrlKey: false, activeElement: input })).toBeNull();
+  });
+
+  it("Ctrl+ shortcuts work even when input is focused", () => {
+    const input = mockElement("input");
+    expect(parseKeyAction({ key: "n", ctrlKey: true, activeElement: input })).toEqual({ type: "addTile", tileType: "terminal" });
+    expect(parseKeyAction({ key: "w", ctrlKey: true, activeElement: input })).toEqual({ type: "closeTile" });
   });
 
   it("still returns Escape when input is focused", () => {
@@ -127,8 +148,13 @@ describe("parseKeyAction", () => {
     });
   });
 
-  it("returns null when xterm is focused for normal keys", () => {
+  it("returns null when xterm is focused for bare keys", () => {
     const el = mockElement("div", undefined, "xterm");
     expect(parseKeyAction({ key: "n", ctrlKey: false, activeElement: el })).toBeNull();
+  });
+
+  it("Ctrl+ shortcuts work even when xterm is focused", () => {
+    const el = mockElement("div", undefined, "xterm");
+    expect(parseKeyAction({ key: "n", ctrlKey: true, activeElement: el })).toEqual({ type: "addTile", tileType: "terminal" });
   });
 });
