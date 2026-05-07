@@ -386,6 +386,7 @@ export default function App() {
             onCloseTile={closeTile}
             workstreamDir={workstreams.find((w) => w.id === activeWsId)?.directory || undefined}
             onOpenFile={(path) => addTile("file_viewer", { filePath: path })}
+            spawnedPtyIds={spawnedPtys.current}
           />
         </div>
 

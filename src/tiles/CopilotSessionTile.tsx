@@ -12,6 +12,7 @@ interface Props {
   configJson: string;
   isFocused: boolean;
   isResuming: boolean;
+  alreadyRunning?: boolean;
   onStatusChange?: (status: string) => void;
   onStatsUpdate?: (stats: CopilotSessionStats) => void;
 }
@@ -21,6 +22,7 @@ export default function CopilotSessionTile({
   configJson,
   isFocused,
   isResuming,
+  alreadyRunning,
   onStatusChange,
   onStatsUpdate,
 }: Props) {
@@ -93,18 +95,21 @@ export default function CopilotSessionTile({
       }
     }).catch(() => {});
 
-    // Build the copilot command
+    // Build the copilot command — only send if PTY doesn't already have copilot running
     const command = buildCopilotCommand(config, isResuming);
-    term.write(`\x1b[36m$ ${command}\x1b[0m\r\n`);
-    updateStatus(isResuming ? "resuming" : "starting");
+    let commandSent = !!alreadyRunning;
 
-    // The PTY spawns pwsh.exe, then we send the copilot command to it
-    // We need to wait for the shell prompt before sending
-    let commandSent = false;
+    if (!alreadyRunning) {
+      term.write(`\x1b[36m$ ${command}\x1b[0m\r\n`);
+      updateStatus(isResuming ? "resuming" : "starting");
+    } else {
+      updateStatus("running");
+    }
+
+    // Send the copilot command after shell is ready (only if not already running)
     const sendCommand = () => {
       if (commandSent) return;
       commandSent = true;
-      // Small delay to let the shell initialize
       setTimeout(() => {
         invoke("write_to_pty", { tileId, data: command + "\r" }).catch(() => {});
         updateStatus("running");

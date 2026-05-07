@@ -11,6 +11,7 @@ interface Props {
   onCloseTile: (tileId: string) => void;
   onOpenFile?: (path: string) => void;
   workstreamDir?: string;
+  spawnedPtyIds?: Set<string>;
 }
 
 export default function TileGrid({
@@ -22,6 +23,7 @@ export default function TileGrid({
   onCloseTile,
   onOpenFile,
   workstreamDir,
+  spawnedPtyIds,
 }: Props) {
   // Order tiles according to tileOrder
   const orderedTiles = tileOrder
@@ -85,6 +87,7 @@ export default function TileGrid({
             onClose={() => onCloseTile(tile.id)}
             onOpenFile={onOpenFile}
             workstreamDir={workstreamDir}
+            alreadyRunning={spawnedPtyIds?.has(tile.id)}
           />
         );
       })}

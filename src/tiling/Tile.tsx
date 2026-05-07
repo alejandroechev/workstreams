@@ -14,6 +14,7 @@ interface TileProps {
   onClose: () => void;
   onOpenFile?: (path: string) => void;
   workstreamDir?: string;
+  alreadyRunning?: boolean;
 }
 
 export default function TileWrapper({
@@ -24,6 +25,7 @@ export default function TileWrapper({
   onClose,
   onOpenFile,
   workstreamDir,
+  alreadyRunning,
 }: TileProps) {
   const [termStatus, setTermStatus] = useState<string>("running");
   const [sessionStats, setSessionStats] = useState<CopilotSessionStats | null>(null);
@@ -105,6 +107,7 @@ export default function TileWrapper({
           configJson={tile.config_json}
           isFocused={isFocused}
           isResuming={cfg.is_resumed === true}
+          alreadyRunning={alreadyRunning}
           onStatusChange={setTermStatus}
           onStatsUpdate={setSessionStats}
         />

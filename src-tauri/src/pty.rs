@@ -144,6 +144,16 @@ impl PtyManager {
         // Dropping the handle closes the writer and master, which terminates the PTY
     }
 
+    /// Close all PTY sessions (used on app shutdown)
+    pub fn close_all(&self) {
+        let mut handles = self.handles.lock().unwrap();
+        let count = handles.len();
+        handles.clear();
+        if count > 0 {
+            eprintln!("[pty] Closed {} PTY sessions on shutdown", count);
+        }
+    }
+
     /// Check if a PTY is active
     #[allow(dead_code)]
     pub fn is_active(&self, tile_id: &str) -> bool {
