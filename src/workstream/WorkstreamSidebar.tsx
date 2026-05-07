@@ -29,18 +29,6 @@ const statusColor = (status: string) => {
   }
 };
 
-function hexToRgb(hex: string): { r: number; g: number; b: number } | null {
-  const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
-  if (!m) return null;
-  return { r: parseInt(m[1], 16), g: parseInt(m[2], 16), b: parseInt(m[3], 16) };
-}
-
-function tintBg(color: string, opacity = 0.1): string {
-  const rgb = hexToRgb(color);
-  if (!rgb) return "transparent";
-  return `rgba(${rgb.r},${rgb.g},${rgb.b},${opacity})`;
-}
-
 export default function WorkstreamSidebar({
   projects,
   workstreams,
@@ -50,155 +38,229 @@ export default function WorkstreamSidebar({
   onCreateWorkstream,
   onArchiveWorkstream,
 }: Props) {
-  const [collapsedProjects, setCollapsedProjects] = useState<Set<string>>(new Set());
   const [showArchived, setShowArchived] = useState(false);
   const [archiveConfirm, setArchiveConfirm] = useState<string | null>(null);
-
-  const toggleCollapse = (projectId: string) => {
-    setCollapsedProjects((prev) => {
-      const next = new Set(prev);
-      if (next.has(projectId)) next.delete(projectId);
-      else next.add(projectId);
-      return next;
-    });
-  };
 
   const activeWorkstreams = workstreams.filter((ws) => ws.status !== "archived");
   const archivedWorkstreams = workstreams.filter((ws) => ws.status === "archived");
 
-  const linkedWs = (projectId: string) =>
-    activeWorkstreams.filter((ws) => ws.project_id === projectId);
-  const unlinkedWs = activeWorkstreams.filter((ws) => ws.project_id === null);
+  const getProject = (projectId: string | null) =>
+    projectId ? projects.find((p) => p.id === projectId) : undefined;
 
-  const renderWorkstreamEntry = (ws: Workstream, indented = false) => {
-    const isActive = ws.id === activeWsId;
-    const isArchived = ws.status === "archived";
+  return (
+    <div style={{
+      width: 240,
+      minWidth: 240,
+      background: "#11111b",
+      borderRight: "1px solid #313244",
+      display: "flex",
+      flexDirection: "column",
+      overflow: "hidden",
+    }}>
 
-    return (
-      <div
-        key={ws.id}
-        onClick={() => !isArchived && onSelectWorkstream(ws.id)}
-        style={{
-          padding: "6px 10px",
-          marginBottom: 1,
-          marginLeft: indented ? 12 : 0,
-          borderRadius: 4,
-          cursor: isArchived ? "default" : "pointer",
-          background: isActive ? "#1e1e2e" : "transparent",
-          border: isActive ? "1px solid #313244" : "1px solid transparent",
-          opacity: isArchived ? 0.5 : 1,
-          transition: "background 0.1s",
-        }}
-      >
-        <div
+      {/* ── WORKSTREAMS (top section) ── */}
+      <div style={{
+        padding: "10px 10px 4px",
+        fontSize: 10,
+        fontWeight: 600,
+        color: "#585b70",
+        textTransform: "uppercase",
+        letterSpacing: 1,
+        display: "flex",
+        justifyContent: "space-between",
+        alignItems: "center",
+      }}>
+        <span>Workstreams</span>
+        <button
+          onClick={() => onCreateWorkstream()}
           style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            gap: 4,
-            fontSize: 12,
-            color: isArchived ? "#585b70" : isActive ? "#cdd6f4" : "#a6adc8",
-            fontWeight: isActive ? 500 : 400,
+            background: "none",
+            border: "none",
+            color: "#585b70",
+            cursor: "pointer",
+            fontSize: 14,
+            padding: 0,
+            lineHeight: 1,
           }}
+          title="New workstream"
         >
-          <div style={{ display: "flex", alignItems: "center", gap: 6, overflow: "hidden" }}>
-            <span style={{ color: statusColor(ws.status), fontSize: 8, flexShrink: 0 }}>
-              {statusIcon(ws.status)}
-            </span>
+          +
+        </button>
+      </div>
+
+      <div style={{ flex: 1, overflowY: "auto", padding: "0 4px" }}>
+        {activeWorkstreams.length === 0 && (
+          <div style={{ padding: "8px 8px", color: "#45475a", fontSize: 11 }}>
+            No workstreams yet
+          </div>
+        )}
+        {activeWorkstreams.map((ws) => {
+          const isActive = ws.id === activeWsId;
+          const project = getProject(ws.project_id);
+          return (
+            <div
+              key={ws.id}
+              onClick={() => onSelectWorkstream(ws.id)}
+              style={{
+                padding: "6px 8px",
+                marginBottom: 1,
+                borderRadius: 4,
+                cursor: "pointer",
+                background: isActive ? "#1e1e2e" : "transparent",
+                border: isActive ? "1px solid #313244" : "1px solid transparent",
+                transition: "background 0.1s",
+              }}
+            >
+              <div style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 4,
+              }}>
+                <div style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 6,
+                  overflow: "hidden",
+                  fontSize: 12,
+                  color: isActive ? "#cdd6f4" : "#a6adc8",
+                  fontWeight: isActive ? 500 : 400,
+                }}>
+                  <span style={{ color: statusColor(ws.status), fontSize: 9, flexShrink: 0 }}>
+                    {statusIcon(ws.status)}
+                  </span>
+                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {ws.name}
+                  </span>
+                </div>
+                {isActive && (
+                  <button
+                    onClick={(e) => { e.stopPropagation(); setArchiveConfirm(ws.id); }}
+                    style={{
+                      background: "none",
+                      border: "none",
+                      color: "#45475a",
+                      cursor: "pointer",
+                      fontSize: 11,
+                      padding: "0 2px",
+                      lineHeight: 1,
+                      flexShrink: 0,
+                    }}
+                    title="Archive workstream"
+                  >
+                    ✕
+                  </button>
+                )}
+              </div>
+              {/* Project badge */}
+              {project && (
+                <div style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 4,
+                  marginTop: 2,
+                  marginLeft: 15,
+                  fontSize: 10,
+                  color: "#585b70",
+                }}>
+                  <span style={{
+                    width: 6,
+                    height: 6,
+                    borderRadius: "50%",
+                    background: project.color,
+                    display: "inline-block",
+                    flexShrink: 0,
+                  }} />
+                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {project.name}
+                  </span>
+                </div>
+              )}
+              {!project && ws.directory && (
+                <div style={{
+                  fontSize: 10,
+                  color: "#45475a",
+                  marginTop: 2,
+                  marginLeft: 15,
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                }}>
+                  {ws.directory}
+                </div>
+              )}
+            </div>
+          );
+        })}
+
+        {/* Archived toggle */}
+        {archivedWorkstreams.length > 0 && (
+          <div
+            onClick={() => setShowArchived(!showArchived)}
+            style={{
+              padding: "4px 8px",
+              marginTop: 4,
+              fontSize: 10,
+              color: "#45475a",
+              cursor: "pointer",
+              userSelect: "none",
+            }}
+          >
+            {showArchived ? "▾" : "▸"} Archived ({archivedWorkstreams.length})
+          </div>
+        )}
+        {showArchived && archivedWorkstreams.map((ws) => (
+          <div
+            key={ws.id}
+            style={{
+              padding: "4px 8px",
+              marginBottom: 1,
+              borderRadius: 4,
+              opacity: 0.5,
+              fontSize: 11,
+              color: "#585b70",
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+            }}
+          >
             <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
               {ws.name}
             </span>
-          </div>
-          {!isArchived && (
             <button
-              onClick={(e) => {
-                e.stopPropagation();
-                setArchiveConfirm(ws.id);
-              }}
+              onClick={() => onArchiveWorkstream(ws.id)}
               style={{
                 background: "none",
                 border: "none",
-                color: "#45475a",
-                cursor: "pointer",
-                fontSize: 11,
-                padding: "0 2px",
-                lineHeight: 1,
-                flexShrink: 0,
-                opacity: isActive ? 1 : 0,
-                transition: "opacity 0.1s",
-              }}
-              title="Archive workstream"
-            >
-              ✕
-            </button>
-          )}
-          {isArchived && (
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                onArchiveWorkstream(ws.id);
-              }}
-              style={{
-                background: "none",
-                border: "none",
-                color: "#a6e3a1",
+                color: "#585b70",
                 cursor: "pointer",
                 fontSize: 10,
                 padding: "0 4px",
-                flexShrink: 0,
               }}
               title="Unarchive"
             >
               ↩
             </button>
-          )}
-        </div>
-        {(ws.git_repo || ws.directory) && (
-          <div style={{
-            fontSize: 10,
-            color: "#585b70",
-            marginTop: 1,
-            marginLeft: 14,
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-          }}>
-            {ws.git_repo ?? ""}{ws.git_branch ? ` → ${ws.git_branch}` : ""}
-            {!ws.git_repo && ws.directory ? ws.directory : ""}
           </div>
-        )}
+        ))}
       </div>
-    );
-  };
 
-  return (
-    <div
-      style={{
-        width: 240,
-        minWidth: 240,
-        background: "#11111b",
-        borderRight: "1px solid #313244",
-        display: "flex",
-        flexDirection: "column",
-        overflow: "hidden",
-      }}
-    >
-      {/* Header + New Project */}
+      {/* Divider */}
+      <div style={{ borderTop: "1px solid #313244", margin: "4px 8px" }} />
+
+      {/* ── PROJECTS (bottom section) ── */}
       <div style={{
-        padding: "10px 10px 6px",
+        padding: "4px 10px",
+        fontSize: 10,
+        fontWeight: 600,
+        color: "#585b70",
+        textTransform: "uppercase",
+        letterSpacing: 1,
         display: "flex",
         justifyContent: "space-between",
         alignItems: "center",
       }}>
-        <span style={{
-          fontSize: 11,
-          fontWeight: 600,
-          color: "#585b70",
-          textTransform: "uppercase",
-          letterSpacing: 1,
-        }}>
-          Projects
-        </span>
+        <span>Projects</span>
         <button
           onClick={onCreateProject}
           style={{
@@ -206,201 +268,94 @@ export default function WorkstreamSidebar({
             border: "none",
             color: "#585b70",
             cursor: "pointer",
-            fontSize: 11,
-            padding: "2px 6px",
+            fontSize: 14,
+            padding: 0,
+            lineHeight: 1,
           }}
-          title="New Project"
+          title="New project"
         >
-          + Project
+          +
         </button>
       </div>
 
-      {/* Scrollable project/workstream list */}
-      <div style={{ flex: 1, overflowY: "auto", padding: "0 6px" }}>
-        {/* Projects with nested workstreams */}
-        {projects.map((proj) => {
-          const pWs = linkedWs(proj.id);
-          const collapsed = collapsedProjects.has(proj.id);
-          const bg = tintBg(proj.color);
-
-          return (
-            <div key={proj.id} style={{ marginBottom: 4 }}>
-              {/* Project header */}
-              <div
-                onClick={() => toggleCollapse(proj.id)}
-                style={{
-                  padding: "6px 8px",
-                  borderRadius: 4,
-                  cursor: "pointer",
-                  background: bg,
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  gap: 4,
-                }}
-              >
-                <div style={{ display: "flex", alignItems: "center", gap: 6, overflow: "hidden" }}>
-                  <span style={{
-                    width: 8, height: 8, borderRadius: "50%",
-                    background: proj.color, flexShrink: 0,
-                  }} />
-                  <span style={{
-                    fontSize: 12, fontWeight: 500, color: "#cdd6f4",
-                    overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-                  }}>
-                    {proj.name}
-                  </span>
-                  <span style={{ fontSize: 10, color: "#585b70", flexShrink: 0 }}>
-                    {pWs.length}
-                  </span>
-                </div>
-                <span style={{ fontSize: 10, color: "#585b70", flexShrink: 0 }}>
-                  {collapsed ? "▸" : "▾"}
-                </span>
-              </div>
-
-              {/* Nested workstreams */}
-              {!collapsed && (
-                <div style={{ marginTop: 2 }}>
-                  {pWs.map((ws) => renderWorkstreamEntry(ws, true))}
-                  <button
-                    onClick={() => onCreateWorkstream(proj.id)}
-                    style={{
-                      width: "calc(100% - 12px)",
-                      marginLeft: 12,
-                      padding: "4px 0",
-                      background: "transparent",
-                      color: "#585b70",
-                      border: "1px dashed #313244",
-                      borderRadius: 4,
-                      cursor: "pointer",
-                      fontSize: 10,
-                      marginTop: 2,
-                      marginBottom: 2,
-                    }}
-                  >
-                    + Workstream
-                  </button>
-                </div>
-              )}
-            </div>
-          );
-        })}
-
-        {/* Unlinked workstreams */}
-        {(unlinkedWs.length > 0 || projects.length > 0) && (
-          <div style={{ marginTop: 6 }}>
-            <div style={{
-              padding: "6px 8px",
-              fontSize: 10,
-              fontWeight: 600,
-              color: "#585b70",
-              textTransform: "uppercase",
-              letterSpacing: 0.5,
-            }}>
-              Unlinked
-            </div>
-            {unlinkedWs.map((ws) => renderWorkstreamEntry(ws))}
-            <button
-              onClick={() => onCreateWorkstream()}
-              style={{
-                width: "100%",
-                padding: "4px 0",
-                background: "transparent",
-                color: "#585b70",
-                border: "1px dashed #313244",
-                borderRadius: 4,
-                cursor: "pointer",
-                fontSize: 10,
-                marginTop: 2,
-                marginBottom: 4,
-              }}
-            >
-              + Workstream
-            </button>
-          </div>
-        )}
-
-        {/* Empty state: no projects, show unlinked with create button */}
-        {projects.length === 0 && unlinkedWs.length === 0 && activeWorkstreams.length === 0 && (
-          <div style={{ padding: "16px 8px", textAlign: "center", color: "#585b70", fontSize: 11 }}>
+      <div style={{ overflowY: "auto", padding: "0 4px 8px", maxHeight: 200 }}>
+        {projects.length === 0 && (
+          <div style={{ padding: "4px 8px", color: "#45475a", fontSize: 11 }}>
             No projects yet
           </div>
         )}
-
-        {/* Archived toggle */}
-        {archivedWorkstreams.length > 0 && (
-          <div style={{ marginTop: 8, borderTop: "1px solid #313244", paddingTop: 6 }}>
-            <button
-              onClick={() => setShowArchived(!showArchived)}
-              style={{
-                width: "100%",
-                padding: "4px 8px",
-                background: "transparent",
-                color: "#585b70",
-                border: "none",
-                cursor: "pointer",
-                fontSize: 10,
-                textAlign: "left",
-              }}
-            >
-              {showArchived ? "▾" : "▸"} Archived ({archivedWorkstreams.length})
-            </button>
-            {showArchived && archivedWorkstreams.map((ws) => renderWorkstreamEntry(ws))}
+        {projects.map((p) => (
+          <div
+            key={p.id}
+            style={{
+              padding: "4px 8px",
+              marginBottom: 1,
+              borderRadius: 4,
+              fontSize: 11,
+              color: "#a6adc8",
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+            }}
+          >
+            <span style={{
+              width: 8,
+              height: 8,
+              borderRadius: "50%",
+              background: p.color,
+              flexShrink: 0,
+            }} />
+            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>
+              {p.name}
+            </span>
+            <span style={{ fontSize: 9, color: "#45475a" }}>
+              {activeWorkstreams.filter((ws) => ws.project_id === p.id).length}
+            </span>
           </div>
-        )}
+        ))}
       </div>
 
       {/* Archive confirmation dialog */}
-      {archiveConfirm && (() => {
-        const ws = workstreams.find((w) => w.id === archiveConfirm);
-        return (
-          <div style={{
-            padding: "8px 10px",
-            borderTop: "1px solid #313244",
+      {archiveConfirm && (
+        <div style={{
+          position: "fixed",
+          top: 0, left: 0, right: 0, bottom: 0,
+          background: "rgba(0,0,0,0.5)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          zIndex: 2000,
+        }} onClick={() => setArchiveConfirm(null)}>
+          <div onClick={(e) => e.stopPropagation()} style={{
             background: "#1e1e2e",
+            border: "1px solid #313244",
+            borderRadius: 8,
+            padding: "16px 20px",
+            width: 320,
           }}>
-            <div style={{ fontSize: 11, color: "#f9e2af", marginBottom: 6 }}>
-              Archive {ws?.name ?? "this workstream"}? Running processes will be stopped.
+            <div style={{ color: "#cdd6f4", fontSize: 13, marginBottom: 8 }}>
+              Archive "{workstreams.find((w) => w.id === archiveConfirm)?.name}"?
             </div>
-            <div style={{ display: "flex", gap: 4 }}>
-              <button
-                onClick={() => {
-                  onArchiveWorkstream(archiveConfirm);
-                  setArchiveConfirm(null);
-                }}
-                style={{
-                  flex: 1,
-                  padding: "5px 0",
-                  background: "#f38ba8",
-                  color: "#1e1e2e",
-                  border: "none",
-                  borderRadius: 4,
-                  cursor: "pointer",
-                  fontSize: 11,
-                  fontWeight: 600,
-                }}
-              >
-                Archive
-              </button>
+            <div style={{ color: "#6c7086", fontSize: 11, marginBottom: 14 }}>
+              Running processes will be stopped. State is preserved.
+            </div>
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
               <button
                 onClick={() => setArchiveConfirm(null)}
-                style={{
-                  padding: "5px 12px",
-                  background: "#313244",
-                  color: "#a6adc8",
-                  border: "none",
-                  borderRadius: 4,
-                  cursor: "pointer",
-                  fontSize: 11,
-                }}
+                style={{ padding: "6px 14px", background: "#313244", color: "#a6adc8", border: "none", borderRadius: 4, cursor: "pointer", fontSize: 12 }}
               >
                 Cancel
               </button>
+              <button
+                onClick={() => { onArchiveWorkstream(archiveConfirm); setArchiveConfirm(null); }}
+                style={{ padding: "6px 14px", background: "#f38ba8", color: "#1e1e2e", border: "none", borderRadius: 4, cursor: "pointer", fontSize: 12, fontWeight: 600 }}
+              >
+                Archive
+              </button>
             </div>
           </div>
-        );
-      })()}
+        </div>
+      )}
     </div>
   );
 }
