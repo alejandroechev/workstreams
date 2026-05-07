@@ -1,8 +1,8 @@
-# Agent Manager
+# Workstreams
 
-> **v0.1.0** — Desktop app
+> **v0.2.0** — Desktop app
 
-Workstream manager with tiling compositor for Copilot CLI — manage projects, persist sessions, embed terminals with adaptive tiling layouts, code viewers, and doc viewers.
+Project-aware workstream manager with tiling compositor for Copilot CLI — manage projects, persist sessions, embed terminals with adaptive tiling layouts, code viewers, and doc viewers.
 
 ## Features
 

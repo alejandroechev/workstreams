@@ -498,22 +498,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "copilot-desktop"
-version = "0.1.0"
-dependencies = [
- "dirs 5.0.1",
- "portable-pty",
- "rusqlite",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "tauri-plugin-dialog",
- "tauri-plugin-opener",
- "uuid",
-]
-
-[[package]]
 name = "core-foundation"
 version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5274,6 +5258,22 @@ dependencies = [
  "serde_json",
  "unicode-xid",
  "wasmparser",
+]
+
+[[package]]
+name = "workstreams"
+version = "0.2.0"
+dependencies = [
+ "dirs 5.0.1",
+ "portable-pty",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-dialog",
+ "tauri-plugin-opener",
+ "uuid",
 ]
 
 [[package]]

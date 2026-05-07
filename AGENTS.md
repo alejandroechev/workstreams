@@ -1,4 +1,4 @@
-# Agent Manager
+# Workstreams
 
 ## Description
 
@@ -21,7 +21,7 @@ Workstream manager with tiling compositor for Copilot CLI — manage projects, p
 ### Git Workflow
 - **Work directly on master** — solo developer, no branch overhead
 - **Commit after every completed unit of work** — never leave working code uncommitted
-- **Push after each work session** — remote backup is non-negotiable. Remote for this repo at https://github.com/alejandroechev/agent-manager.git
+- **Push after each work session** — remote backup is non-negotiable. Remote for this repo at https://github.com/alejandroechev/workstreams.git
 - **Tag milestones**: `git tag v0.1.0-mvp` when deploying or reaching a checkpoint
 - **Branch only for risky experiments** you might discard — delete after merge or abandon
 

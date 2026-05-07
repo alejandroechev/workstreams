@@ -1,12 +1,12 @@
 [package]
-name = "copilot-desktop"
-version = "0.1.0"
-description = "Workstream manager with tiling compositor for Copilot CLI"
+name = "workstreams"
+version = "0.2.0"
+description = "Project-aware workstream manager with tiling compositor for Copilot CLI"
 authors = ["alejandroe"]
 edition = "2021"
 
 [lib]
-name = "copilot_desktop_lib"
+name = "workstreams_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
