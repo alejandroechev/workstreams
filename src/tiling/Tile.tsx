@@ -1,8 +1,7 @@
 import { ReactNode, useState } from "react";
 import TerminalTile from "../tiles/TerminalTile";
 import CopilotSessionTile from "../tiles/CopilotSessionTile";
-import FileViewerTile from "../tiles/FileViewerTile";
-import FileExplorerTile from "../tiles/FileExplorerTile";
+import ExplorerTile from "../tiles/ExplorerTile";
 import type { Tile } from "../workstream/types";
 import type { CopilotSessionStats } from "../domain/types";
 import { invoke } from "@tauri-apps/api/core";
@@ -116,16 +115,22 @@ export default function TileWrapper({
     case "doc_viewer":
     case "file_viewer": {
       const cfg = JSON.parse(tile.config_json || "{}");
-      content = <FileViewerTile tileId={tile.id} isFocused={isFocused} initialPath={cfg.filePath} />;
+      content = (
+        <ExplorerTile
+          tileId={tile.id}
+          isFocused={isFocused}
+          rootDir={workstreamDir || "C:\\"}
+          initialPath={cfg.filePath}
+        />
+      );
       break;
     }
     case "file_explorer":
       content = (
-        <FileExplorerTile
+        <ExplorerTile
           tileId={tile.id}
           isFocused={isFocused}
           rootDir={workstreamDir || "C:\\"}
-          onOpenFile={onOpenFile}
         />
       );
       break;
