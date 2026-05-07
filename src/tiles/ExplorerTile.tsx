@@ -141,12 +141,9 @@ export default function ExplorerTile({ tileId, isFocused, rootDir, initialPath }
       setContent(data);
       setFilePath(path.trim());
       setMode("view");
-      setActiveDiffMode(null);
-      setDiffContent("");
-      setDiffFilePath("");
+      // Don't clear activeDiffMode here — it persists from browse diff selection
     } catch (e) {
       setFileError(String(e));
-      setContent(null);
     } finally {
       setFileLoading(false);
     }
@@ -225,6 +222,10 @@ export default function ExplorerTile({ tileId, isFocused, rootDir, initialPath }
       loadDir(entry.fullPath);
       setSearchFilter("");
     } else {
+      // Normal browse click clears diff mode
+      setActiveDiffMode(null);
+      setDiffContent("");
+      setDiffFilePath("");
       openFile(entry.fullPath);
     }
   };

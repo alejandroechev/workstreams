@@ -186,26 +186,52 @@ export default function CopilotSessionTile({
     }
   }, [isFocused]);
 
+  const startSession = useCallback(() => {
+    const command = buildCopilotCommand(config, isResuming);
+    invoke("write_to_pty", { tileId, data: command + "\r" }).catch(() => {});
+    setStatus("running");
+  }, [tileId, config, isResuming]);
+
   return (
     <div style={{ width: "100%", height: "100%", position: "relative", overflow: "hidden" }}>
-      {status === "resuming" && (
-        <div style={{
-          position: "absolute", top: 4, right: 4, zIndex: 10,
-          background: "#313244", borderRadius: 4, padding: "4px 10px",
-          fontSize: 11, color: "#f9e2af",
-        }}>
-          ⟳ Resuming session...
-        </div>
-      )}
-      {status === "starting" && (
-        <div style={{
-          position: "absolute", top: 4, right: 4, zIndex: 10,
-          background: "#313244", borderRadius: 4, padding: "4px 10px",
-          fontSize: 11, color: "#a6e3a1",
-        }}>
-          ◉ Starting session...
-        </div>
-      )}
+      {/* Start/Resume session button — always visible in top-right */}
+      <div style={{
+        position: "absolute", top: 4, right: 4, zIndex: 10,
+        display: "flex", gap: 4, alignItems: "center",
+      }}>
+        {status === "resuming" && (
+          <span style={{
+            background: "#313244", borderRadius: 4, padding: "4px 10px",
+            fontSize: 11, color: "#f9e2af",
+          }}>
+            ⟳ Resuming...
+          </span>
+        )}
+        {status === "starting" && (
+          <span style={{
+            background: "#313244", borderRadius: 4, padding: "4px 10px",
+            fontSize: 11, color: "#a6e3a1",
+          }}>
+            ◉ Starting...
+          </span>
+        )}
+        <button
+          onClick={startSession}
+          style={{
+            background: "#89b4fa",
+            color: "#1e1e2e",
+            border: "none",
+            borderRadius: 4,
+            padding: "4px 10px",
+            fontSize: 11,
+            cursor: "pointer",
+            fontWeight: 600,
+          }}
+          title={`Send: ${buildCopilotCommand(config, isResuming)}`}
+        >
+          ▶ {isResuming ? "Resume" : "Start"} Session
+        </button>
+      </div>
       <div ref={containerRef} style={{ width: "100%", height: "100%", overflow: "hidden" }} />
     </div>
   );
