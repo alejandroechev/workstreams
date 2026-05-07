@@ -510,100 +510,195 @@ export default function ExplorerTile({ tileId, isFocused, rootDir, initialPath }
   }
 
   // ─── Browse mode ───
+
+  // Diff mode toolbar for browse mode
+  const browseDiffToolbar = (
+    <div style={{
+      display: "flex",
+      alignItems: "center",
+      gap: 4,
+      padding: "3px 8px",
+      background: "#181825",
+      borderBottom: "1px solid #313244",
+      flexShrink: 0,
+    }}>
+      <span style={{ fontSize: 10, color: "#585b70", marginRight: 4 }}>Diff:</span>
+      {(["unstaged", "last_commit", "branch_vs_master"] as DiffMode[]).map((dm) => (
+        <button
+          key={dm}
+          onClick={() => activeDiffMode === dm ? exitDiffMode() : activateDiffMode(dm)}
+          style={{
+            background: activeDiffMode === dm ? "#45475a" : "transparent",
+            border: activeDiffMode === dm ? "1px solid #585b70" : "1px solid transparent",
+            borderRadius: 3,
+            color: activeDiffMode === dm ? "#cdd6f4" : "#6c7086",
+            cursor: "pointer",
+            fontSize: 10,
+            padding: "2px 6px",
+          }}
+        >
+          {dm === "unstaged" ? "Unstaged" : dm === "last_commit" ? "Last Commit" : "vs Master"}
+        </button>
+      ))}
+      {activeDiffMode && diffFiles.length > 0 && (
+        <span style={{ fontSize: 10, color: "#a6e3a1", marginLeft: 4 }}>
+          {diffFiles.length} file{diffFiles.length !== 1 ? "s" : ""} changed
+        </span>
+      )}
+    </div>
+  );
+
+  // When diff mode is active in browse, show diff files instead of directory entries
+  const browseFileList = activeDiffMode ? diffFiles : [];
+
   return (
     <div ref={containerRef} style={containerStyle}>
       {/* Path bar */}
       <div style={toolbarStyle}>
-        <button onClick={navigateUp} style={{ ...toolbarButtonStyle, fontSize: 14 }} title="Go up">
-          ⬆
-        </button>
-        <span style={{ ...pathTextStyle, flex: 1 }}>
-          {currentDir}
-        </span>
-        <button onClick={() => loadDir(currentDir)} style={toolbarButtonStyle} title="Refresh">
-          ↻
-        </button>
-        <button
-          onClick={async (e) => { e.stopPropagation(); await handleBrowseDialog(); }}
-          style={toolbarButtonStyle}
-          title="Browse file..."
-        >
-          📁
-        </button>
+        {activeDiffMode ? (
+          <>
+            <button onClick={exitDiffMode} style={{ ...toolbarButtonStyle, fontSize: 11 }} title="Exit diff mode">
+              ← Browse
+            </button>
+            <span style={{ ...pathTextStyle, flex: 1, color: "#f9e2af" }}>
+              {activeDiffMode === "unstaged" ? "Unstaged Changes" : activeDiffMode === "last_commit" ? "Last Commit" : "Branch vs Master"}
+            </span>
+          </>
+        ) : (
+          <>
+            <button onClick={navigateUp} style={{ ...toolbarButtonStyle, fontSize: 14 }} title="Go up">
+              ⬆
+            </button>
+            <span style={{ ...pathTextStyle, flex: 1 }}>
+              {currentDir}
+            </span>
+            <button onClick={() => loadDir(currentDir)} style={toolbarButtonStyle} title="Refresh">
+              ↻
+            </button>
+            <button
+              onClick={async (e) => { e.stopPropagation(); await handleBrowseDialog(); }}
+              style={toolbarButtonStyle}
+              title="Browse file..."
+            >
+              📁
+            </button>
+          </>
+        )}
       </div>
 
-      {/* Search bar */}
-      <div style={{
-        padding: "3px 8px",
-        background: "#181825",
-        borderBottom: "1px solid #313244",
-        flexShrink: 0,
-      }}>
-        <input
-          type="text"
-          value={searchFilter}
-          onChange={(e) => setSearchFilter(e.target.value)}
-          onKeyDown={(e) => e.stopPropagation()}
-          placeholder="Filter files..."
-          style={{
-            width: "100%",
-            background: "#313244",
-            border: "1px solid #45475a",
-            borderRadius: 3,
-            color: "#cdd6f4",
-            padding: "3px 8px",
-            fontSize: 11,
-            fontFamily: "monospace",
-            outline: "none",
-          }}
-        />
-      </div>
+      {/* Diff mode selector */}
+      {browseDiffToolbar}
+
+      {/* Search bar (only in normal browse, not diff mode) */}
+      {!activeDiffMode && (
+        <div style={{
+          padding: "3px 8px",
+          background: "#181825",
+          borderBottom: "1px solid #313244",
+          flexShrink: 0,
+        }}>
+          <input
+            type="text"
+            value={searchFilter}
+            onChange={(e) => setSearchFilter(e.target.value)}
+            onKeyDown={(e) => e.stopPropagation()}
+            placeholder="Filter files..."
+            style={{
+              width: "100%",
+              background: "#313244",
+              border: "1px solid #45475a",
+              borderRadius: 3,
+              color: "#cdd6f4",
+              padding: "3px 8px",
+              fontSize: 11,
+              fontFamily: "monospace",
+              outline: "none",
+            }}
+          />
+        </div>
+      )}
 
       {/* File list */}
       <div style={{ flex: 1, overflowY: "auto", padding: "4px 0" }}>
-        {dirLoading && (
-          <div style={{ padding: "8px 12px", color: "#585b70" }}>Loading...</div>
+        {activeDiffMode ? (
+          // Diff mode: show changed files
+          <>
+            {diffLoading && (
+              <div style={{ padding: "8px 12px", color: "#585b70" }}>Loading diff...</div>
+            )}
+            {!diffLoading && browseFileList.length === 0 && (
+              <div style={{ padding: "8px 12px", color: "#585b70" }}>No changes found</div>
+            )}
+            {browseFileList.map((file) => (
+              <div
+                key={file}
+                onClick={() => {
+                  // Open the file in view mode with diff active
+                  setDiffFilePath(file);
+                  const fullPath = (rootDir || currentDir).replace(/\\$/, "") + "\\" + file.replace(/\//g, "\\");
+                  openFile(fullPath);
+                  // Load diff content for this file
+                  selectDiffFile(file);
+                }}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  padding: "4px 12px",
+                  cursor: "pointer",
+                  color: "#f9e2af",
+                  fontSize: 12,
+                }}
+                onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "#313244"; }}
+                onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "transparent"; }}
+              >
+                <span style={{ fontSize: 12, color: "#f38ba8", flexShrink: 0 }}>M</span>
+                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {file}
+                </span>
+              </div>
+            ))}
+          </>
+        ) : (
+          // Normal browse mode
+          <>
+            {dirLoading && (
+              <div style={{ padding: "8px 12px", color: "#585b70" }}>Loading...</div>
+            )}
+            {dirError && (
+              <div style={{ padding: "8px 12px", color: "#f38ba8", fontSize: 11 }}>{dirError}</div>
+            )}
+            {!dirLoading && filteredEntries.length === 0 && !dirError && (
+              <div style={{ padding: "8px 12px", color: "#585b70" }}>
+                {searchFilter ? "No matches" : "Empty directory"}
+              </div>
+            )}
+            {filteredEntries.map((entry) => (
+              <div
+                key={entry.name}
+                onClick={() => handleEntryClick(entry)}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  padding: "3px 12px",
+                  cursor: "pointer",
+                  color: entry.isDir ? "#89b4fa" : "#cdd6f4",
+                  fontWeight: entry.isDir ? 500 : 400,
+                }}
+                onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "#313244"; }}
+                onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "transparent"; }}
+              >
+                <span style={{ fontSize: 13, width: 20, textAlign: "center", flexShrink: 0 }}>
+                  {fileIcon(entry.name, entry.isDir)}
+                </span>
+                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {entry.name}
+                </span>
+              </div>
+            ))}
+          </>
         )}
-        {dirError && (
-          <div style={{ padding: "8px 12px", color: "#f38ba8", fontSize: 11 }}>{dirError}</div>
-        )}
-        {!dirLoading && filteredEntries.length === 0 && !dirError && (
-          <div style={{ padding: "8px 12px", color: "#585b70" }}>
-            {searchFilter ? "No matches" : "Empty directory"}
-          </div>
-        )}
-        {filteredEntries.map((entry) => (
-          <div
-            key={entry.name}
-            onClick={() => handleEntryClick(entry)}
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 8,
-              padding: "3px 12px",
-              cursor: "pointer",
-              color: entry.isDir ? "#89b4fa" : "#cdd6f4",
-              fontWeight: entry.isDir ? 500 : 400,
-            }}
-            onMouseEnter={(e) => {
-              (e.currentTarget as HTMLElement).style.background = "#313244";
-            }}
-            onMouseLeave={(e) => {
-              (e.currentTarget as HTMLElement).style.background = "transparent";
-            }}
-          >
-            <span style={{ fontSize: 13, width: 20, textAlign: "center", flexShrink: 0 }}>
-              {fileIcon(entry.name, entry.isDir)}
-            </span>
-            <span style={{
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
-            }}>
-              {entry.name}
-            </span>
-          </div>
-        ))}
       </div>
       {fileSearchOverlay}
     </div>
