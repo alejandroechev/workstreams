@@ -445,6 +445,26 @@ fn delete_tile(state: State<'_, AppState>, tile_id: String) -> Result<(), String
     Ok(())
 }
 
+#[tauri::command]
+fn update_tile_config(
+    state: State<'_, AppState>,
+    tile_id: String,
+    config_json: String,
+    title: Option<String>,
+) -> Result<(), String> {
+    let db = state.db.lock().unwrap();
+    let ts = now();
+    db.execute(
+        "UPDATE tiles SET config_json = ?1, updated_at = ?2 WHERE id = ?3",
+        (&config_json, &ts, &tile_id),
+    ).map_err(|e| format!("DB error: {e}"))?;
+    if let Some(t) = title {
+        db.execute("UPDATE tiles SET title = ?1 WHERE id = ?2", (&t, &tile_id))
+            .map_err(|e| format!("DB error: {e}"))?;
+    }
+    Ok(())
+}
+
 // ── Layout Commands ────────────────────────────────────────────────────
 
 #[tauri::command]
@@ -1041,6 +1061,7 @@ pub fn run() {
             create_tile,
             list_tiles,
             delete_tile,
+            update_tile_config,
             // Layout
             get_layout,
             update_layout,

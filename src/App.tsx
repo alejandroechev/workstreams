@@ -488,16 +488,23 @@ export default function App() {
           onSelect={(session) => {
             setShowSessionPicker(false);
             if (linkingTileId) {
-              // Link session to existing tile — update its config_json
-              setTiles((prev) => prev.map((t) => {
-                if (t.id !== linkingTileId) return t;
-                const cfg = JSON.parse(t.config_json || "{}");
+              // Link session to existing tile — update config and persist to DB
+              const tile = tiles.find((t) => t.id === linkingTileId);
+              if (tile) {
+                const cfg = JSON.parse(tile.config_json || "{}");
                 cfg.copilot_session_id = session.session_id;
                 cfg.resume_by_id = session.session_id;
                 cfg.is_resumed = true;
                 cfg.session_name = session.summary || session.session_id.slice(0, 8);
-                return { ...t, config_json: JSON.stringify(cfg), title: session.summary || t.title };
-              }));
+                const newConfig = JSON.stringify(cfg);
+                const newTitle = session.summary || tile.title;
+                // Persist to DB
+                backend.updateTileConfig(linkingTileId, newConfig, newTitle || undefined);
+                // Update local state
+                setTiles((prev) => prev.map((t) =>
+                  t.id === linkingTileId ? { ...t, config_json: newConfig, title: newTitle } : t
+                ));
+              }
               setLinkingTileId(null);
             } else {
               resumeExistingSession(session);

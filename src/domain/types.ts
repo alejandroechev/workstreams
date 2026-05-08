@@ -59,6 +59,7 @@ export interface CopilotSessionStats {
   summary?: string | null;
   last_activity?: string | null;
   duration_minutes?: number | null;
+  activity_status?: "working" | "waiting" | "idle" | "stale";
 }
 
 export interface WorkstreamLayout {

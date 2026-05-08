@@ -125,6 +125,13 @@ export class MemoryBackend implements Backend {
     this.terminals.delete(id);
   }
 
+  async updateTileConfig(id: string, configJson: string, title?: string): Promise<void> {
+    const tile = this.tiles.get(id);
+    if (!tile) return;
+    tile.config_json = configJson;
+    if (title) tile.title = title;
+  }
+
   async getLayout(workstreamId: string): Promise<WorkstreamLayout> {
     const layout = this.layouts.get(workstreamId);
     if (layout) return layout;

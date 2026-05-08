@@ -13,6 +13,8 @@ pub struct SessionStats {
     pub summary: Option<String>,
     pub created_at: Option<String>,
     pub updated_at: Option<String>,
+    pub last_turn_at: Option<String>,
+    pub activity_status: String, // "working" | "waiting" | "idle" | "stale"
 }
 
 /// Active tile-to-session mappings tracked by the poller
@@ -114,7 +116,7 @@ fn query_session_stats(conn: &Connection, session_name: &str) -> Option<SessionS
         })
         .ok()?;
 
-    // Count turns for this session
+    // Count turns and get last turn timestamp
     let turn_count: i32 = conn
         .query_row(
             "SELECT COUNT(*) FROM turns WHERE session_id = ?1",
@@ -122,6 +124,35 @@ fn query_session_stats(conn: &Connection, session_name: &str) -> Option<SessionS
             |row| row.get(0),
         )
         .unwrap_or(0);
+
+    let last_turn_at: Option<String> = conn
+        .query_row(
+            "SELECT timestamp FROM turns WHERE session_id = ?1 ORDER BY turn_index DESC LIMIT 1",
+            [&result.0],
+            |row| row.get(0),
+        )
+        .ok();
+
+    // Compute activity status from last turn timestamp
+    let activity_status = match &last_turn_at {
+        Some(ts) => {
+            // Parse ISO timestamp and compare to now
+            if let Ok(parsed) = chrono_parse_rough(ts) {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs();
+                let age_secs = now.saturating_sub(parsed);
+                if age_secs < 60 { "working" }
+                else if age_secs < 300 { "waiting" }
+                else if age_secs < 3600 { "idle" }
+                else { "stale" }
+            } else {
+                "idle"
+            }
+        }
+        None => "idle",
+    };
 
     Some(SessionStats {
         session_id: result.0,
@@ -131,5 +162,37 @@ fn query_session_stats(conn: &Connection, session_name: &str) -> Option<SessionS
         summary: result.2,
         created_at: result.3,
         updated_at: result.4,
+        last_turn_at,
+        activity_status: activity_status.to_string(),
     })
+}
+
+/// Rough parse of ISO-ish timestamp to epoch seconds
+fn chrono_parse_rough(ts: &str) -> Result<u64, ()> {
+    // Parse "2026-05-08T20:04:10.144Z" roughly
+    let parts: Vec<&str> = ts.split('T').collect();
+    if parts.len() != 2 { return Err(()); }
+    let date_parts: Vec<u32> = parts[0].split('-').filter_map(|p| p.parse().ok()).collect();
+    let time_str = parts[1].trim_end_matches('Z');
+    let time_parts: Vec<&str> = time_str.split(':').collect();
+    if date_parts.len() < 3 || time_parts.len() < 3 { return Err(()); }
+
+    let year = date_parts[0] as u64;
+    let month = date_parts[1] as u64;
+    let day = date_parts[2] as u64;
+    let hour: u64 = time_parts[0].parse().map_err(|_| ())?;
+    let min: u64 = time_parts[1].parse().map_err(|_| ())?;
+    let sec: u64 = time_parts[2].split('.').next().unwrap_or("0").parse().map_err(|_| ())?;
+
+    // Rough epoch calculation (not accounting for leap years perfectly, but close enough for age comparison)
+    let days = (year - 1970) * 365 + (year - 1969) / 4 + month_days(month) + day - 1;
+    Ok(days * 86400 + hour * 3600 + min * 60 + sec)
+}
+
+fn month_days(month: u64) -> u64 {
+    match month {
+        1 => 0, 2 => 31, 3 => 59, 4 => 90, 5 => 120, 6 => 151,
+        7 => 181, 8 => 212, 9 => 243, 10 => 273, 11 => 304, 12 => 334,
+        _ => 0,
+    }
 }

@@ -53,6 +53,10 @@ export class TauriBackend implements Backend {
     await invoke("delete_tile", { tileId });
   }
 
+  async updateTileConfig(id: string, configJson: string, title?: string): Promise<void> {
+    await invoke("update_tile_config", { tileId: id, configJson, title });
+  }
+
   async getLayout(workstreamId: string): Promise<WorkstreamLayout> {
     return invoke<WorkstreamLayout>("get_layout", { workstreamId });
   }

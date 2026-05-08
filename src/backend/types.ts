@@ -15,6 +15,7 @@ export interface Backend {
   listTiles(workstreamId: string): Promise<Tile[]>;
   createTile(workstreamId: string, type: TileType, title: string, config: string): Promise<Tile>;
   deleteTile(id: string): Promise<void>;
+  updateTileConfig(id: string, configJson: string, title?: string): Promise<void>;
   // Layout
   getLayout(workstreamId: string): Promise<WorkstreamLayout>;
   updateLayout(workstreamId: string, updates: Partial<WorkstreamLayout>): Promise<void>;
