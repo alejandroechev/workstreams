@@ -723,9 +723,10 @@ fn list_directory(path: String) -> Result<Vec<DirEntry>, String> {
         if let Some(name) = entry.file_name().to_str() {
             let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
             let modified_epoch = entry.metadata()
-                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|m| m.modified().ok())
                 .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                .map(|d| d.as_secs())
+                .map(|d: std::time::Duration| d.as_secs())
                 .unwrap_or(0);
             let entry = DirEntry { name: name.to_string(), is_dir, modified_epoch };
             if is_dir { dirs.push(entry); } else { files.push(entry); }
