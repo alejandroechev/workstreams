@@ -155,14 +155,13 @@ export default function TileWrapper({
         background: "#1e1e2e",
         transition: "border-color 0.15s",
       }}
-      onMouseDown={(e) => {
-        // Only focus tile on direct clicks on the tile wrapper itself, not child content
-        if (e.target === e.currentTarget) onFocus();
+      onMouseDownCapture={() => {
+        // Focus this tile on any click within it (capture phase fires before children)
+        onFocus();
       }}
     >
       {/* Tile header */}
       <div
-        onClick={onFocus}
         style={{
           display: "flex",
           alignItems: "center",

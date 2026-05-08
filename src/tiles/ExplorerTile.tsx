@@ -527,7 +527,10 @@ export default function ExplorerTile({ tileId, isFocused, rootDir, initialPath }
       {(["unstaged", "last_commit", "branch_vs_master"] as DiffMode[]).map((dm) => (
         <button
           key={dm}
-          onClick={() => activeDiffMode === dm ? exitDiffMode() : activateDiffMode(dm)}
+          onClick={(e) => {
+            e.stopPropagation();
+            activeDiffMode === dm ? exitDiffMode() : activateDiffMode(dm);
+          }}
           style={{
             background: activeDiffMode === dm ? "#45475a" : "transparent",
             border: activeDiffMode === dm ? "1px solid #585b70" : "1px solid transparent",
