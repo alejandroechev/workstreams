@@ -124,19 +124,28 @@ export default function CopilotSessionTile({
 
     // Handle special key combos
     term.attachCustomKeyEventHandler((ev) => {
+      if (ev.type === "keyup") {
+        if (ev.key === "Enter" && (ev.shiftKey || ev.ctrlKey)) return false;
+        if (ev.key === "v" && ev.ctrlKey) return false;
+        return true;
+      }
       if (ev.type !== "keydown") return true;
 
       if (ev.key === "Enter" && (ev.shiftKey || ev.ctrlKey)) {
+        ev.preventDefault();
         invoke("write_to_pty", { tileId, data: "\n" }).catch(() => {});
         return false;
       }
 
       if (ev.key === "v" && ev.ctrlKey && !ev.shiftKey) {
+        ev.preventDefault();
         navigator.clipboard.readText().then((text) => {
           if (text) invoke("write_to_pty", { tileId, data: text }).catch(() => {});
         }).catch(() => {});
         return false;
       }
+
+      if (ev.altKey) return false;
 
       return true;
     });

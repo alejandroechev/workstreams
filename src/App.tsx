@@ -271,6 +271,7 @@ export default function App() {
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       const action = parseKeyAction({
+        altKey: e.altKey,
         ctrlKey: e.ctrlKey,
         key: e.key,
         activeElement: document.activeElement,

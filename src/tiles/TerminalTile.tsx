@@ -113,23 +113,33 @@ export default function TerminalTile({ tileId, isFocused, onStatusChange }: Prop
 
     // Handle special key combos that xterm.js doesn't handle natively
     term.attachCustomKeyEventHandler((ev) => {
+      // Block keyup for combos we handle on keydown (prevents double-fire)
+      if (ev.type === "keyup") {
+        if (ev.key === "Enter" && (ev.shiftKey || ev.ctrlKey)) return false;
+        if (ev.key === "v" && ev.ctrlKey) return false;
+        return true;
+      }
       if (ev.type !== "keydown") return true;
 
       // Shift+Enter / Ctrl+Enter: send newline
       if (ev.key === "Enter" && (ev.shiftKey || ev.ctrlKey)) {
+        ev.preventDefault();
         invoke("write_to_pty", { tileId, data: "\n" }).catch(() => {});
         return false;
       }
 
       // Ctrl+V: paste from clipboard
       if (ev.key === "v" && ev.ctrlKey && !ev.shiftKey) {
+        ev.preventDefault();
         navigator.clipboard.readText().then((text) => {
           if (text) invoke("write_to_pty", { tileId, data: text }).catch(() => {});
         }).catch(() => {});
         return false;
       }
 
-      // Ctrl+C: let xterm handle it (sends SIGINT via onData)
+      // Alt+ combos: let them bubble to the app-level handler
+      if (ev.altKey) return false;
+
       return true;
     });
 

@@ -12,7 +12,6 @@ export type KeyAction =
 
 /**
  * Returns true if the active element is an input, textarea, select, or xterm terminal.
- * When true, keyboard shortcuts should not be intercepted (except Escape and Ctrl combos).
  */
 export function shouldSwallowKeyEvent(activeElement: Element | null): boolean {
   if (!activeElement) return false;
@@ -23,6 +22,7 @@ export function shouldSwallowKeyEvent(activeElement: Element | null): boolean {
 }
 
 export interface ParseKeyActionOpts {
+  altKey: boolean;
   ctrlKey: boolean;
   key: string;
   activeElement: Element | null;
@@ -30,25 +30,21 @@ export interface ParseKeyActionOpts {
 
 /**
  * Maps a keyboard event to a semantic action.
- * Returns null if the key combination doesn't map to any action.
- * Pure function with no side effects.
+ * All app-level commands use Alt+ prefix to avoid conflicts with
+ * terminal (Ctrl+C/V/etc) and editor (Ctrl+F/P/etc) shortcuts.
  */
 export function parseKeyAction(opts: ParseKeyActionOpts): KeyAction | null {
-  const { ctrlKey, key, activeElement } = opts;
+  const { altKey, key } = opts;
 
-  // Escape always works — blurs terminal focus
+  // Escape always works
   if (key === "Escape") {
     return { type: "escape" };
   }
 
-  // Ctrl+1-9 switches workstreams (works even when input is focused)
-  if (ctrlKey && key >= "1" && key <= "9") {
-    return { type: "switchWorkstream", index: parseInt(key) - 1 };
-  }
-
-  // All Ctrl+ shortcuts work even when input/terminal is focused
-  if (ctrlKey) {
+  // All app commands use Alt+ — works even when terminal/input is focused
+  if (altKey) {
     switch (key) {
+      // Navigation
       case "ArrowLeft":
         return { type: "navigate", direction: "left" };
       case "ArrowRight":
@@ -57,20 +53,25 @@ export function parseKeyAction(opts: ParseKeyActionOpts): KeyAction | null {
         return { type: "navigate", direction: "up" };
       case "ArrowDown":
         return { type: "navigate", direction: "down" };
+      // Tile creation
       case "n":
         return { type: "addTile", tileType: "terminal" };
       case "s":
         return { type: "addTile", tileType: "copilot_session" };
-      case "o":
-        return { type: "addTile", tileType: "file_viewer" };
       case "e":
         return { type: "addTile", tileType: "file_explorer" };
+      // Tile management
       case "w":
         return { type: "closeTile" };
       case "f":
         return { type: "toggleFullscreen" };
       case "p":
         return { type: "quickSearch" };
+    }
+
+    // Alt+1-9 switches workstreams
+    if (key >= "1" && key <= "9") {
+      return { type: "switchWorkstream", index: parseInt(key) - 1 };
     }
   }
 
