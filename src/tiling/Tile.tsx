@@ -13,6 +13,7 @@ interface TileProps {
   onFocus: () => void;
   onClose: () => void;
   onOpenFile?: (path: string) => void;
+  onLinkSession?: (tileId: string) => void;
   workstreamDir?: string;
   alreadyRunning?: boolean;
 }
@@ -24,6 +25,7 @@ export default function TileWrapper({
   onFocus,
   onClose,
   onOpenFile,
+  onLinkSession,
   workstreamDir,
   alreadyRunning,
 }: TileProps) {
@@ -110,6 +112,7 @@ export default function TileWrapper({
           alreadyRunning={alreadyRunning}
           onStatusChange={setTermStatus}
           onStatsUpdate={setSessionStats}
+          onLinkSession={onLinkSession ? () => onLinkSession(tile.id) : undefined}
         />
       );
       break;

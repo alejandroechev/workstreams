@@ -15,6 +15,7 @@ interface Props {
   alreadyRunning?: boolean;
   onStatusChange?: (status: string) => void;
   onStatsUpdate?: (stats: CopilotSessionStats) => void;
+  onLinkSession?: () => void;
 }
 
 export default function CopilotSessionTile({
@@ -25,6 +26,7 @@ export default function CopilotSessionTile({
   alreadyRunning,
   onStatusChange,
   onStatsUpdate,
+  onLinkSession,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
@@ -195,15 +197,17 @@ export default function CopilotSessionTile({
     }
   }, [isFocused]);
 
+  const hasLinkedSession = !!(config.copilot_session_id || (config as unknown as Record<string, unknown>).resume_by_id);
+
   const startSession = useCallback(() => {
-    const command = buildCopilotCommand(config, isResuming);
+    const command = buildCopilotCommand(config, hasLinkedSession);
     invoke("write_to_pty", { tileId, data: command + "\r" }).catch(() => {});
     setStatus("running");
-  }, [tileId, config, isResuming]);
+  }, [tileId, config, hasLinkedSession]);
 
   return (
     <div style={{ width: "100%", height: "100%", position: "relative", overflow: "hidden" }}>
-      {/* Start/Resume session button — always visible in top-right */}
+      {/* Session controls — always visible in top-right */}
       <div style={{
         position: "absolute", top: 4, right: 4, zIndex: 10,
         display: "flex", gap: 4, alignItems: "center",
@@ -224,8 +228,26 @@ export default function CopilotSessionTile({
             ◉ Starting...
           </span>
         )}
+        {/* Link session button — shows session picker to link a session ID */}
+        {onLinkSession && (
+          <button
+            onClick={(e) => { e.stopPropagation(); onLinkSession(); }}
+            style={{
+              background: hasLinkedSession ? "#313244" : "#f9e2af",
+              color: hasLinkedSession ? "#585b70" : "#1e1e2e",
+              border: "none",
+              borderRadius: 4,
+              padding: "4px 10px",
+              fontSize: 11,
+              cursor: "pointer",
+            }}
+            title={hasLinkedSession ? `Linked: ${config.copilot_session_id || ""}` : "Link an existing Copilot session"}
+          >
+            {hasLinkedSession ? "🔗 Linked" : "🔗 Link Session"}
+          </button>
+        )}
         <button
-          onClick={startSession}
+          onClick={(e) => { e.stopPropagation(); startSession(); }}
           style={{
             background: "#89b4fa",
             color: "#1e1e2e",
@@ -236,9 +258,9 @@ export default function CopilotSessionTile({
             cursor: "pointer",
             fontWeight: 600,
           }}
-          title={`Send: ${buildCopilotCommand(config, isResuming)}`}
+          title={`Send: ${buildCopilotCommand(config, hasLinkedSession)}`}
         >
-          ▶ {isResuming ? "Resume" : "Start"} Session
+          ▶ {hasLinkedSession ? "Resume" : "Start"}
         </button>
       </div>
       <div ref={containerRef} style={{ width: "100%", height: "100%", overflow: "hidden" }} />

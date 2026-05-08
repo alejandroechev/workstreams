@@ -21,6 +21,7 @@ export default function App() {
   const [focusedIndex, setFocusedIndex] = useState(0);
   const [fullscreenTileId, setFullscreenTileId] = useState<string | null>(null);
   const [showSessionPicker, setShowSessionPicker] = useState(false);
+  const [linkingTileId, setLinkingTileId] = useState<string | null>(null);
   const [showProjectCreate, setShowProjectCreate] = useState(false);
   const [showWsCreate, setShowWsCreate] = useState<{ show: boolean; projectId?: string }>({ show: false });
   // Track which tile IDs have active PTYs to avoid double-spawning
@@ -418,6 +419,10 @@ export default function App() {
             onCloseTile={closeTile}
             workstreamDir={workstreams.find((w) => w.id === activeWsId)?.directory || undefined}
             onOpenFile={(path) => addTile("file_viewer", { filePath: path })}
+            onLinkSession={(tileId) => {
+              setLinkingTileId(tileId);
+              setShowSessionPicker(true);
+            }}
             spawnedPtyIds={spawnedPtys.current}
           />
         </div>
@@ -453,13 +458,28 @@ export default function App() {
         <SessionPicker
           onSelect={(session) => {
             setShowSessionPicker(false);
-            resumeExistingSession(session);
+            if (linkingTileId) {
+              // Link session to existing tile — update its config_json
+              setTiles((prev) => prev.map((t) => {
+                if (t.id !== linkingTileId) return t;
+                const cfg = JSON.parse(t.config_json || "{}");
+                cfg.copilot_session_id = session.session_id;
+                cfg.resume_by_id = session.session_id;
+                cfg.is_resumed = true;
+                cfg.session_name = session.summary || session.session_id.slice(0, 8);
+                return { ...t, config_json: JSON.stringify(cfg), title: session.summary || t.title };
+              }));
+              setLinkingTileId(null);
+            } else {
+              resumeExistingSession(session);
+            }
           }}
           onCreateNew={() => {
             setShowSessionPicker(false);
+            setLinkingTileId(null);
             addTile("copilot_session");
           }}
-          onCancel={() => setShowSessionPicker(false)}
+          onCancel={() => { setShowSessionPicker(false); setLinkingTileId(null); }}
         />
       )}
 

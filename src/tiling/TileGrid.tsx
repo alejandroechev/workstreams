@@ -10,6 +10,7 @@ interface Props {
   onFocusTile: (index: number) => void;
   onCloseTile: (tileId: string) => void;
   onOpenFile?: (path: string) => void;
+  onLinkSession?: (tileId: string) => void;
   workstreamDir?: string;
   spawnedPtyIds?: Set<string>;
 }
@@ -22,6 +23,7 @@ export default function TileGrid({
   onFocusTile,
   onCloseTile,
   onOpenFile,
+  onLinkSession,
   workstreamDir,
   spawnedPtyIds,
 }: Props) {
@@ -86,6 +88,7 @@ export default function TileGrid({
             onFocus={() => onFocusTile(realIndex)}
             onClose={() => onCloseTile(tile.id)}
             onOpenFile={onOpenFile}
+            onLinkSession={onLinkSession}
             workstreamDir={workstreamDir}
             alreadyRunning={spawnedPtyIds?.has(tile.id)}
           />
