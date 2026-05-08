@@ -707,22 +707,35 @@ fn read_file(path: String) -> Result<String, String> {
 }
 
 /// List files in a directory (non-recursive, for file picker)
+#[derive(Debug, Serialize, Deserialize)]
+struct DirEntry {
+    name: String,
+    is_dir: bool,
+    modified_epoch: u64,
+}
+
 #[tauri::command]
-fn list_directory(path: String) -> Result<Vec<String>, String> {
+fn list_directory(path: String) -> Result<Vec<DirEntry>, String> {
     let entries = std::fs::read_dir(&path).map_err(|e| format!("Cannot read dir: {e}"))?;
-    let mut files: Vec<String> = Vec::new();
+    let mut dirs: Vec<DirEntry> = Vec::new();
+    let mut files: Vec<DirEntry> = Vec::new();
     for entry in entries.flatten() {
         if let Some(name) = entry.file_name().to_str() {
-            let prefix = if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
-                "📁 "
-            } else {
-                "   "
-            };
-            files.push(format!("{prefix}{name}"));
+            let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+            let modified_epoch = entry.metadata()
+                .and_then(|m| m.modified())
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let entry = DirEntry { name: name.to_string(), is_dir, modified_epoch };
+            if is_dir { dirs.push(entry); } else { files.push(entry); }
         }
     }
-    files.sort();
-    Ok(files)
+    // Folders first (alpha), then files (by modified time desc)
+    dirs.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    files.sort_by(|a, b| b.modified_epoch.cmp(&a.modified_epoch));
+    dirs.extend(files);
+    Ok(dirs)
 }
 
 /// Recursively search for files matching a query (case-insensitive filename match)

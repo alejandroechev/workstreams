@@ -81,6 +81,20 @@ export default function App() {
           }
         }
       }
+      // After tiles load, focus the first terminal tile
+      const orderedLoaded = order
+        .map((id) => t.find((tile) => tile.id === id))
+        .filter(Boolean);
+      setTimeout(() => {
+        const firstTile = orderedLoaded[0];
+        if (firstTile) {
+          const tileEl = document.querySelector(`[data-tile-id="${firstTile.id}"]`);
+          if (tileEl) {
+            const xterm = tileEl.querySelector(".xterm-helper-textarea") as HTMLElement;
+            if (xterm) xterm.focus();
+          }
+        }
+      }, 100);
     });
   }, [activeWsId]);
 
@@ -398,6 +412,21 @@ export default function App() {
         onArchiveWorkstream={handleArchiveWorkstream}
         onRenameWorkstream={handleRenameWorkstream}
         onUpdateProject={handleUpdateProject}
+        onReorderWorkstream={(id, direction) => {
+          setWorkstreams((prev) => {
+            const idx = prev.findIndex((w) => w.id === id);
+            if (idx < 0) return prev;
+            const swapIdx = direction === "up" ? idx - 1 : idx + 1;
+            if (swapIdx < 0 || swapIdx >= prev.length) return prev;
+            const next = [...prev];
+            [next[idx], next[swapIdx]] = [next[swapIdx], next[idx]];
+            return next;
+          });
+        }}
+        onChangeStatus={async (id, status) => {
+          await backend.updateWorkstream(id, { status });
+          setWorkstreams((prev) => prev.map((w) => w.id === id ? { ...w, status } : w));
+        }}
       />
 
       <div

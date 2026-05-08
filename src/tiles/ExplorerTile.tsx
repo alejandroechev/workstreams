@@ -5,6 +5,16 @@ import remarkGfm from "remark-gfm";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useBackend } from "../backend/context";
 import { detectLanguage } from "../domain/tile-config";
+import {
+  FolderIcon,
+  DocumentIcon,
+  DocumentTextIcon,
+  CodeBracketIcon,
+  ChevronUpIcon,
+  ArrowPathIcon,
+  FolderOpenIcon,
+  ArrowLeftIcon,
+} from "@heroicons/react/24/outline";
 
 interface Props {
   tileId: string;
@@ -17,6 +27,7 @@ interface DirEntry {
   name: string;
   isDir: boolean;
   fullPath: string;
+  modifiedEpoch: number;
 }
 
 type Mode = "browse" | "view";
@@ -29,30 +40,16 @@ function isMarkdown(path: string): boolean {
   return MARKDOWN_EXTS.has(ext);
 }
 
-function parseEntries(raw: string[], currentDir: string): DirEntry[] {
-  return raw.map((entry) => {
-    const isDir = entry.startsWith("📁 ");
-    const name = entry.replace(/^📁 /, "").replace(/^ {3}/, "");
-    const sep = currentDir.endsWith("\\") ? "" : "\\";
-    return { name, isDir, fullPath: `${currentDir}${sep}${name}` };
-  });
-}
-
-function fileIcon(name: string, isDir: boolean): string {
-  if (isDir) return "📁";
+function FileIcon({ name, isDir }: { name: string; isDir: boolean }) {
+  if (isDir) return <FolderIcon style={{ width: 16, height: 16, color: "#89b4fa" }} />;
   const ext = name.split(".").pop()?.toLowerCase() || "";
   switch (ext) {
-    case "ts": case "tsx": return "🟦";
-    case "js": case "jsx": return "🟨";
-    case "rs": return "🦀";
-    case "json": return "📋";
-    case "md": case "mdx": return "📝";
-    case "toml": case "yaml": case "yml": return "⚙️";
-    case "css": return "🎨";
-    case "html": return "🌐";
-    case "png": case "jpg": case "ico": case "svg": return "🖼️";
-    case "lock": return "🔒";
-    default: return "📄";
+    case "ts": case "tsx": case "js": case "jsx": case "rs": case "py":
+      return <CodeBracketIcon style={{ width: 16, height: 16, color: "#a6adc8" }} />;
+    case "md": case "mdx": case "markdown":
+      return <DocumentTextIcon style={{ width: 16, height: 16, color: "#a6adc8" }} />;
+    default:
+      return <DocumentIcon style={{ width: 16, height: 16, color: "#6c7086" }} />;
   }
 }
 
@@ -123,7 +120,13 @@ export default function ExplorerTile({ tileId, isFocused, rootDir, initialPath }
     setDirError(null);
     try {
       const raw = await backend.listDirectory(dir);
-      setEntries(parseEntries(raw, dir));
+      const sep = dir.endsWith("\\") ? "" : "\\";
+      setEntries(raw.map((e) => ({
+        name: e.name,
+        isDir: e.is_dir,
+        fullPath: `${dir}${sep}${e.name}`,
+        modifiedEpoch: e.modified_epoch,
+      })));
       setCurrentDir(dir);
     } catch (e) {
       setDirError(String(e));
@@ -160,6 +163,29 @@ export default function ExplorerTile({ tileId, isFocused, rootDir, initialPath }
   useEffect(() => {
     if (initialPath) openFile(initialPath);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Auto-refresh directory every 3 seconds in browse mode (not diff mode)
+  useEffect(() => {
+    if (mode !== "browse" || activeDiffMode) return;
+    const interval = setInterval(async () => {
+      try {
+        const raw = await backend.listDirectory(currentDir);
+        const sep = currentDir.endsWith("\\") ? "" : "\\";
+        const fresh = raw.map((e) => ({
+          name: e.name,
+          isDir: e.is_dir,
+          fullPath: `${currentDir}${sep}${e.name}`,
+          modifiedEpoch: e.modified_epoch,
+        }));
+        setEntries((prev) => {
+          const prevKey = prev.map((e) => `${e.name}:${e.modifiedEpoch}`).join(",");
+          const freshKey = fresh.map((e) => `${e.name}:${e.modifiedEpoch}`).join(",");
+          return prevKey === freshKey ? prev : fresh;
+        });
+      } catch { /* ignore polling errors */ }
+    }, 3000);
+    return () => clearInterval(interval);
+  }, [mode, activeDiffMode, currentDir, backend]);
 
   // Ctrl+P handler
   useEffect(() => {
@@ -333,8 +359,8 @@ export default function ExplorerTile({ tileId, isFocused, rootDir, initialPath }
               onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "#313244"; }}
               onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "transparent"; }}
             >
-              <span style={{ fontSize: 12, width: 16, textAlign: "center", flexShrink: 0 }}>
-                {fileIcon(path.split("\\").pop() || path, false)}
+              <span style={{ width: 16, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                <FileIcon name={path.split("\\").pop() || path} isDir={false} />
               </span>
               <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 12 }}>
                 {path}
@@ -361,7 +387,9 @@ export default function ExplorerTile({ tileId, isFocused, rootDir, initialPath }
       return (
         <div ref={containerRef} style={{ ...containerStyle, alignItems: "center", justifyContent: "center" }}>
           <div style={{ color: "#585b70" }}>No file loaded</div>
-          <button onClick={goBackToBrowse} style={backButtonStyle}>← Back</button>
+          <button onClick={goBackToBrowse} style={{ ...backButtonStyle, display: "flex", alignItems: "center", gap: 4 }}>
+            <ArrowLeftIcon style={{ width: 14, height: 14 }} /> Back
+          </button>
           {fileError && <div style={errorTextStyle}>{fileError}</div>}
           {fileSearchOverlay}
         </div>
@@ -394,11 +422,15 @@ export default function ExplorerTile({ tileId, isFocused, rootDir, initialPath }
     const viewToolbar = (
       <div style={toolbarStyle}>
         <div style={{ display: "flex", alignItems: "center", gap: 6, overflow: "hidden", flex: 1 }}>
-          <button onClick={goBackToBrowse} style={toolbarButtonStyle} title="Back to browser">
-            ← Back
+          <button onClick={goBackToBrowse} style={{ ...toolbarButtonStyle, display: "flex", alignItems: "center", gap: 2 }} title="Back to browser">
+            <ArrowLeftIcon style={{ width: 14, height: 14 }} /> Back
           </button>
-          <span style={pathTextStyle}>
-            {isMarkdown(filePath) ? "📝" : "📄"} {activeDiffMode && diffFilePath ? diffFilePath : filePath}
+          <span style={{ ...pathTextStyle, display: "flex", alignItems: "center", gap: 4 }}>
+            {isMarkdown(filePath)
+              ? <DocumentTextIcon style={{ width: 14, height: 14, flexShrink: 0 }} />
+              : <DocumentIcon style={{ width: 14, height: 14, flexShrink: 0 }} />
+            }
+            {activeDiffMode && diffFilePath ? diffFilePath : filePath}
           </span>
         </div>
         {diffToolbar}
@@ -561,8 +593,8 @@ export default function ExplorerTile({ tileId, isFocused, rootDir, initialPath }
       <div style={toolbarStyle}>
         {activeDiffMode ? (
           <>
-            <button onClick={exitDiffMode} style={{ ...toolbarButtonStyle, fontSize: 11 }} title="Exit diff mode">
-              ← Browse
+            <button onClick={exitDiffMode} style={{ ...toolbarButtonStyle, fontSize: 11, display: "flex", alignItems: "center", gap: 2 }} title="Exit diff mode">
+              <ArrowLeftIcon style={{ width: 14, height: 14 }} /> Browse
             </button>
             <span style={{ ...pathTextStyle, flex: 1, color: "#f9e2af" }}>
               {activeDiffMode === "unstaged" ? "Unstaged Changes" : activeDiffMode === "last_commit" ? "Last Commit" : "Branch vs Master"}
@@ -570,21 +602,21 @@ export default function ExplorerTile({ tileId, isFocused, rootDir, initialPath }
           </>
         ) : (
           <>
-            <button onClick={navigateUp} style={{ ...toolbarButtonStyle, fontSize: 14 }} title="Go up">
-              ⬆
+            <button onClick={navigateUp} style={{ ...toolbarButtonStyle, display: "flex", alignItems: "center" }} title="Go up">
+              <ChevronUpIcon style={{ width: 16, height: 16 }} />
             </button>
             <span style={{ ...pathTextStyle, flex: 1 }}>
               {currentDir}
             </span>
-            <button onClick={() => loadDir(currentDir)} style={toolbarButtonStyle} title="Refresh">
-              ↻
+            <button onClick={() => loadDir(currentDir)} style={{ ...toolbarButtonStyle, display: "flex", alignItems: "center" }} title="Refresh">
+              <ArrowPathIcon style={{ width: 14, height: 14 }} />
             </button>
             <button
               onClick={async (e) => { e.stopPropagation(); await handleBrowseDialog(); }}
-              style={toolbarButtonStyle}
+              style={{ ...toolbarButtonStyle, display: "flex", alignItems: "center" }}
               title="Browse file..."
             >
-              📁
+              <FolderOpenIcon style={{ width: 16, height: 16 }} />
             </button>
           </>
         )}
@@ -693,8 +725,8 @@ export default function ExplorerTile({ tileId, isFocused, rootDir, initialPath }
                 onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "#313244"; }}
                 onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "transparent"; }}
               >
-                <span style={{ fontSize: 13, width: 20, textAlign: "center", flexShrink: 0 }}>
-                  {fileIcon(entry.name, entry.isDir)}
+                <span style={{ width: 20, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                  <FileIcon name={entry.name} isDir={entry.isDir} />
                 </span>
                 <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                   {entry.name}

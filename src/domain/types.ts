@@ -15,7 +15,7 @@ export interface Workstream {
   directory: string | null;
   git_repo: string | null;
   git_branch: string | null;
-  status: string;
+  status: 'active' | 'working' | 'blocked' | 'in_review' | 'archived';
   project_id: string | null;
   workstream_type: string;
   worktree_branch: string | null;

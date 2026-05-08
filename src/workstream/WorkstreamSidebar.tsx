@@ -1,5 +1,14 @@
 import { useState, useRef, useEffect } from "react";
 import type { Project, Workstream } from "../domain/types";
+import {
+  CheckCircleIcon,
+  Cog6ToothIcon,
+  ExclamationTriangleIcon,
+  EyeIcon,
+  ArchiveBoxIcon,
+  ChevronUpIcon,
+  ChevronDownIcon,
+} from "@heroicons/react/20/solid";
 
 const PRESET_COLORS = [
   { name: "Blue", hex: "#89b4fa" },
@@ -20,25 +29,31 @@ interface Props {
   onArchiveWorkstream: (id: string) => void;
   onRenameWorkstream: (id: string, newName: string) => void;
   onUpdateProject: (id: string, updates: { name: string; color: string }) => void;
+  onReorderWorkstream: (id: string, direction: 'up' | 'down') => void;
+  onChangeStatus: (id: string, status: Workstream['status']) => void;
 }
 
-const statusIcon = (status: string) => {
-  switch (status) {
-    case "active": return "●";
-    case "paused": return "◐";
-    case "blocked": return "◆";
-    default: return "○";
-  }
+type WorkstreamStatus = Workstream['status'];
+
+const STATUS_META: Record<WorkstreamStatus, { color: string; label: string }> = {
+  active:    { color: "#a6e3a1", label: "Active" },
+  working:   { color: "#89b4fa", label: "Working" },
+  blocked:   { color: "#f38ba8", label: "Blocked" },
+  in_review: { color: "#f9e2af", label: "In Review" },
+  archived:  { color: "#585b70", label: "Archived" },
 };
 
-const statusColor = (status: string) => {
+function StatusIcon({ status, size = 14 }: { status: WorkstreamStatus; size?: number }) {
+  const s = { width: size, height: size, color: STATUS_META[status]?.color ?? "#585b70" };
   switch (status) {
-    case "active": return "#a6e3a1";
-    case "paused": return "#f9e2af";
-    case "blocked": return "#f38ba8";
-    default: return "#585b70";
+    case "active":    return <CheckCircleIcon style={s} />;
+    case "working":   return <Cog6ToothIcon style={s} />;
+    case "blocked":   return <ExclamationTriangleIcon style={s} />;
+    case "in_review": return <EyeIcon style={s} />;
+    case "archived":  return <ArchiveBoxIcon style={s} />;
+    default:          return <CheckCircleIcon style={{ ...s, color: "#585b70" }} />;
   }
-};
+}
 
 export default function WorkstreamSidebar({
   projects,
@@ -50,6 +65,8 @@ export default function WorkstreamSidebar({
   onArchiveWorkstream,
   onRenameWorkstream,
   onUpdateProject,
+  onReorderWorkstream,
+  onChangeStatus,
 }: Props) {
   const [showArchived, setShowArchived] = useState(false);
   const [archiveConfirm, setArchiveConfirm] = useState<string | null>(null);
@@ -59,6 +76,8 @@ export default function WorkstreamSidebar({
   const [editingProject, setEditingProject] = useState<Project | null>(null);
   const [editProjectName, setEditProjectName] = useState("");
   const [editProjectColor, setEditProjectColor] = useState("");
+  const [statusDropdownWsId, setStatusDropdownWsId] = useState<string | null>(null);
+  const statusDropdownRef = useRef<HTMLDivElement>(null);
 
   // Auto-focus rename input
   useEffect(() => {
@@ -67,6 +86,18 @@ export default function WorkstreamSidebar({
       renameInputRef.current.select();
     }
   }, [renamingWsId]);
+
+  // Close status dropdown on outside click
+  useEffect(() => {
+    if (!statusDropdownWsId) return;
+    const handler = (e: MouseEvent) => {
+      if (statusDropdownRef.current && !statusDropdownRef.current.contains(e.target as Node)) {
+        setStatusDropdownWsId(null);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [statusDropdownWsId]);
 
   const activeWorkstreams = workstreams.filter((ws) => ws.status !== "archived");
   const archivedWorkstreams = workstreams.filter((ws) => ws.status === "archived");
@@ -121,7 +152,7 @@ export default function WorkstreamSidebar({
             No workstreams yet
           </div>
         )}
-        {activeWorkstreams.map((ws) => {
+        {activeWorkstreams.map((ws, wsIndex) => {
           const isActive = ws.id === activeWsId;
           const project = getProject(ws.project_id);
           return (
@@ -135,7 +166,9 @@ export default function WorkstreamSidebar({
                 cursor: "pointer",
                 background: isActive ? "#1e1e2e" : "transparent",
                 border: isActive ? "1px solid #313244" : "1px solid transparent",
+                borderLeft: project ? `3px solid ${project.color}` : isActive ? "1px solid #313244" : "1px solid transparent",
                 transition: "background 0.1s",
+                position: "relative",
               }}
             >
               <div style={{
@@ -155,8 +188,17 @@ export default function WorkstreamSidebar({
                   flex: 1,
                   minWidth: 0,
                 }}>
-                  <span style={{ color: statusColor(ws.status), fontSize: 9, flexShrink: 0 }}>
-                    {statusIcon(ws.status)}
+                  <span
+                    style={{ flexShrink: 0, cursor: isActive ? "pointer" : "default", display: "flex", alignItems: "center" }}
+                    onClick={(e) => {
+                      if (isActive) {
+                        e.stopPropagation();
+                        setStatusDropdownWsId(statusDropdownWsId === ws.id ? null : ws.id);
+                      }
+                    }}
+                    title={isActive ? "Change status" : STATUS_META[ws.status]?.label ?? ws.status}
+                  >
+                    <StatusIcon status={ws.status} size={14} />
                   </span>
                   {renamingWsId === ws.id ? (
                     <input
@@ -194,37 +236,37 @@ export default function WorkstreamSidebar({
                   )}
                 </div>
                 {isActive && renamingWsId !== ws.id && (
-                  <div style={{ display: "flex", gap: 2, flexShrink: 0 }}>
+                  <div style={{ display: "flex", gap: 2, flexShrink: 0, alignItems: "center" }}>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); onReorderWorkstream(ws.id, "up"); }}
+                      disabled={wsIndex === 0}
+                      style={{ ...sidebarBtnStyle, opacity: wsIndex === 0 ? 0.3 : 1 }}
+                      title="Move up"
+                    >
+                      <ChevronUpIcon style={{ width: 12, height: 12 }} />
+                    </button>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); onReorderWorkstream(ws.id, "down"); }}
+                      disabled={wsIndex === activeWorkstreams.length - 1}
+                      style={{ ...sidebarBtnStyle, opacity: wsIndex === activeWorkstreams.length - 1 ? 0.3 : 1 }}
+                      title="Move down"
+                    >
+                      <ChevronDownIcon style={{ width: 12, height: 12 }} />
+                    </button>
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
                         setRenameValue(ws.name);
                         setRenamingWsId(ws.id);
                       }}
-                      style={{
-                        background: "none",
-                        border: "none",
-                        color: "#45475a",
-                        cursor: "pointer",
-                        fontSize: 11,
-                        padding: "0 2px",
-                        lineHeight: 1,
-                      }}
+                      style={sidebarBtnStyle}
                       title="Rename workstream"
                     >
                       ✎
                     </button>
                     <button
                       onClick={(e) => { e.stopPropagation(); setArchiveConfirm(ws.id); }}
-                      style={{
-                        background: "none",
-                        border: "none",
-                        color: "#45475a",
-                        cursor: "pointer",
-                        fontSize: 11,
-                        padding: "0 2px",
-                        lineHeight: 1,
-                      }}
+                      style={sidebarBtnStyle}
                       title="Archive workstream"
                     >
                       ✕
@@ -232,6 +274,53 @@ export default function WorkstreamSidebar({
                   </div>
                 )}
               </div>
+
+              {/* Status dropdown */}
+              {statusDropdownWsId === ws.id && (
+                <div
+                  ref={statusDropdownRef}
+                  style={{
+                    position: "absolute",
+                    top: "100%",
+                    left: 8,
+                    zIndex: 1000,
+                    background: "#181825",
+                    border: "1px solid #45475a",
+                    borderRadius: 6,
+                    padding: 4,
+                    boxShadow: "0 4px 16px rgba(0,0,0,0.4)",
+                    minWidth: 130,
+                  }}
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  {(["active", "working", "blocked", "in_review"] as WorkstreamStatus[]).map((s) => (
+                    <div
+                      key={s}
+                      onClick={() => {
+                        onChangeStatus(ws.id, s);
+                        setStatusDropdownWsId(null);
+                      }}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 6,
+                        padding: "4px 8px",
+                        borderRadius: 4,
+                        cursor: "pointer",
+                        fontSize: 11,
+                        color: ws.status === s ? "#cdd6f4" : "#a6adc8",
+                        background: ws.status === s ? "#313244" : "transparent",
+                      }}
+                      onMouseEnter={(e) => { if (ws.status !== s) (e.currentTarget as HTMLElement).style.background = "#1e1e2e"; }}
+                      onMouseLeave={(e) => { if (ws.status !== s) (e.currentTarget as HTMLElement).style.background = "transparent"; }}
+                    >
+                      <StatusIcon status={s} size={14} />
+                      <span>{STATUS_META[s].label}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+
               {/* Project badge */}
               {project && (
                 <div style={{
@@ -551,3 +640,15 @@ export default function WorkstreamSidebar({
     </div>
   );
 }
+
+const sidebarBtnStyle: React.CSSProperties = {
+  background: "none",
+  border: "none",
+  color: "#45475a",
+  cursor: "pointer",
+  fontSize: 11,
+  padding: "0 2px",
+  lineHeight: 1,
+  display: "flex",
+  alignItems: "center",
+};
