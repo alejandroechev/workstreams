@@ -60,9 +60,11 @@ export default function TerminalTile({ tileId, isFocused, onStatusChange }: Prop
 
     const term = new Terminal({
       cursorBlink: true,
+      altClickMovesCursor: true,
       fontSize: 13,
       fontFamily: "'Cascadia Code', 'Consolas', monospace",
       scrollback: 999999,
+      scrollOnUserInput: true,
       theme: {
         background: "#1e1e2e",
         foreground: "#cdd6f4",
@@ -168,12 +170,25 @@ export default function TerminalTile({ tileId, isFocused, onStatusChange }: Prop
     });
     resizeObserver.observe(containerRef.current);
 
+    // Mouse wheel: when in alternate screen (TUI apps), send as arrow keys
+    const wheelHandler = (e: WheelEvent) => {
+      const buf = (term as unknown as { buffer: { active: { type: string } } }).buffer?.active;
+      if (buf && buf.type === "alternate") {
+        e.preventDefault();
+        const lines = Math.max(1, Math.round(Math.abs(e.deltaY) / 40));
+        const arrow = e.deltaY < 0 ? "\x1b[A" : "\x1b[B";
+        invoke("write_to_pty", { tileId, data: arrow.repeat(lines) }).catch(() => {});
+      }
+    };
+    containerRef.current.addEventListener("wheel", wheelHandler, { passive: false });
+
     // Periodic scrollback save (every 30s)
     const saveInterval = setInterval(saveScrollback, 30_000);
 
     return () => {
       clearInterval(saveInterval);
       saveScrollback();
+      containerRef.current?.removeEventListener("wheel", wheelHandler);
       resizeObserver.disconnect();
       unlistenOutput.then((u) => u());
       unlistenExit.then((u) => u());

@@ -55,9 +55,11 @@ export default function CopilotSessionTile({
 
     const term = new Terminal({
       cursorBlink: true,
+      altClickMovesCursor: true,
       fontSize: 13,
       fontFamily: "'Cascadia Code', 'Consolas', monospace",
       scrollback: 999999,
+      scrollOnUserInput: true,
       theme: {
         background: "#1e1e2e",
         foreground: "#cdd6f4",
@@ -177,10 +179,24 @@ export default function CopilotSessionTile({
     });
     resizeObserver.observe(containerRef.current);
 
+    // Mouse wheel handler: when alternate screen buffer is active (copilot TUI),
+    // send scroll as arrow up/down to the PTY for smoother scrolling
+    const wheelHandler = (e: WheelEvent) => {
+      const buf = (term as unknown as { buffer: { active: { type: string } } }).buffer?.active;
+      if (buf && buf.type === "alternate") {
+        e.preventDefault();
+        const lines = Math.max(1, Math.round(Math.abs(e.deltaY) / 40));
+        const arrow = e.deltaY < 0 ? "\x1b[A" : "\x1b[B"; // up : down
+        invoke("write_to_pty", { tileId, data: arrow.repeat(lines) }).catch(() => {});
+      }
+    };
+    containerRef.current.addEventListener("wheel", wheelHandler, { passive: false });
+
     const saveInterval = setInterval(saveScrollback, 30_000);
 
     return () => {
       clearInterval(saveInterval);
+      containerRef.current?.removeEventListener("wheel", wheelHandler);
       saveScrollback();
       invoke("unwatch_session", { tileId }).catch(() => {});
       resizeObserver.disconnect();
