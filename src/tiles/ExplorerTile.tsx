@@ -261,11 +261,14 @@ export default function ExplorerTile({ tileId, isFocused, rootDir, initialPath }
     setContent(null);
     setFilePath("");
     setFileError(null);
-    setActiveDiffMode(null);
-    setDiffContent("");
-    setDiffFiles([]);
-    setDiffFilePath("");
-    if (entries.length === 0) {
+    // Keep diff mode active so we return to the diff file list
+    // User can exit diff mode by clicking the diff button again
+    if (!activeDiffMode) {
+      setDiffContent("");
+      setDiffFiles([]);
+      setDiffFilePath("");
+    }
+    if (entries.length === 0 && !activeDiffMode) {
       loadDir(currentDir);
     }
   };
@@ -669,10 +672,10 @@ export default function ExplorerTile({ tileId, isFocused, rootDir, initialPath }
               <div
                 key={file}
                 onClick={() => {
-                  // Open the file in view mode with diff active
+                  // Switch to view mode showing only this file's diff
                   setDiffFilePath(file);
-                  const fullPath = (rootDir || currentDir).replace(/\\$/, "") + "\\" + file.replace(/\//g, "\\");
-                  openFile(fullPath);
+                  setFilePath(file);
+                  setMode("view");
                   // Load diff content for this file
                   selectDiffFile(file);
                 }}

@@ -67,12 +67,22 @@ struct AppState {
 }
 
 fn now() -> String {
-    // Simple ISO-ish timestamp
     let t = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_secs();
     format!("{t}")
+}
+
+/// Create a git Command that doesn't show a console window on Windows
+fn git_cmd() -> std::process::Command {
+    let mut cmd = git_cmd();
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+    cmd
 }
 
 // ── Project Commands ──────────────────────────────────────────────────
@@ -808,7 +818,7 @@ fn git_diff_files(directory: String, mode: String) -> Result<Vec<String>, String
         "last_commit" => vec!["diff", "HEAD~1", "--name-only"],
         "branch_vs_master" => {
             // Try master first, fall back to main
-            let output = std::process::Command::new("git")
+            let output = git_cmd()
                 .args(["diff", "master...HEAD", "--name-only"])
                 .current_dir(&directory)
                 .output()
@@ -823,7 +833,7 @@ fn git_diff_files(directory: String, mode: String) -> Result<Vec<String>, String
         _ => return Err(format!("Unknown diff mode: {mode}")),
     };
 
-    let output = std::process::Command::new("git")
+    let output = git_cmd()
         .args(&args)
         .current_dir(&directory)
         .output()
@@ -851,7 +861,7 @@ fn git_diff_file(directory: String, file_path: String, mode: String) -> Result<S
         "branch_vs_master" => {
             // Try master, fallback to main
             let mut args = vec!["diff", "master...HEAD", "--", &file_path];
-            let output = std::process::Command::new("git")
+            let output = git_cmd()
                 .args(&args)
                 .current_dir(&directory)
                 .output()
@@ -860,7 +870,7 @@ fn git_diff_file(directory: String, file_path: String, mode: String) -> Result<S
                 return Ok(String::from_utf8_lossy(&output.stdout).to_string());
             }
             args = vec!["diff", "main...HEAD", "--", &file_path];
-            let output2 = std::process::Command::new("git")
+            let output2 = git_cmd()
                 .args(&args)
                 .current_dir(&directory)
                 .output()
@@ -873,7 +883,7 @@ fn git_diff_file(directory: String, file_path: String, mode: String) -> Result<S
     args.push("--");
     args.push(&file_path);
 
-    let output = std::process::Command::new("git")
+    let output = git_cmd()
         .args(&args)
         .current_dir(&directory)
         .output()
@@ -962,7 +972,7 @@ fn detect_worktree_info(directory: String) -> Result<WorktreeInfo, String> {
                             .and_then(|n| n.to_str())
                             .map(|s| s.to_string());
                         let remote = detect_git_remote(&root.to_string_lossy());
-                        let branch = std::process::Command::new("git")
+                        let branch = git_cmd()
                             .args(["branch", "--show-current"])
                             .current_dir(&directory)
                             .output()
@@ -990,7 +1000,7 @@ fn detect_worktree_info(directory: String) -> Result<WorktreeInfo, String> {
         let repo_name = dir.file_name()
             .and_then(|n| n.to_str())
             .map(|s| s.to_string());
-        let branch = std::process::Command::new("git")
+        let branch = git_cmd()
             .args(["branch", "--show-current"])
             .current_dir(&directory)
             .output()

@@ -57,7 +57,7 @@ export default function CopilotSessionTile({
       cursorBlink: true,
       fontSize: 13,
       fontFamily: "'Cascadia Code', 'Consolas', monospace",
-      scrollback: 10000,
+      scrollback: 999999,
       theme: {
         background: "#1e1e2e",
         foreground: "#cdd6f4",
