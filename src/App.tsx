@@ -307,10 +307,29 @@ export default function App() {
           e.preventDefault();
           switchWorkstream(action.index);
           break;
-        case "navigate":
+        case "navigate": {
           e.preventDefault();
-          setFocusedIndex((i) => navigateFocus(action.direction, i, count));
+          // Blur current active element so focus moves to new tile
+          const active = document.activeElement as HTMLElement;
+          if (active && active.blur) active.blur();
+          const newIndex = navigateFocus(action.direction, focusedIndex, count);
+          setFocusedIndex(newIndex);
+          // Focus the new tile's content after React renders
+          setTimeout(() => {
+            const tileId = orderedTiles[newIndex]?.id;
+            if (!tileId) return;
+            // Try to focus xterm textarea inside the tile
+            const tileEl = document.querySelector(`[data-tile-id="${tileId}"]`);
+            if (tileEl) {
+              const xterm = tileEl.querySelector(".xterm-helper-textarea") as HTMLElement;
+              if (xterm) { xterm.focus(); return; }
+              // Or focus first focusable element
+              const focusable = tileEl.querySelector("input, textarea, [tabindex]") as HTMLElement;
+              if (focusable) focusable.focus();
+            }
+          }, 50);
           break;
+        }
         case "addTile":
           e.preventDefault();
           if (action.tileType === "copilot_session") {

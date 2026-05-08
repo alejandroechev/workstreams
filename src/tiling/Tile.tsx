@@ -143,6 +143,7 @@ export default function TileWrapper({
 
   return (
     <div
+      data-tile-id={tile.id}
       style={{
         gridArea: `t${index}`,
         display: "flex",
