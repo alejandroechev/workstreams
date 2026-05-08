@@ -135,6 +135,16 @@ export default function App() {
     }
   }, [backend]);
 
+  const handleRenameWorkstream = useCallback(async (id: string, newName: string) => {
+    await backend.updateWorkstream(id, { name: newName });
+    setWorkstreams((prev) => prev.map((w) => w.id === id ? { ...w, name: newName } : w));
+  }, [backend]);
+
+  const handleUpdateProject = useCallback(async (id: string, updates: { name: string; color: string }) => {
+    await backend.updateProject(id, updates);
+    setProjects((prev) => prev.map((p) => p.id === id ? { ...p, ...updates } : p));
+  }, [backend]);
+
   const handleArchiveWorkstream = useCallback(async (id: string) => {
     const ws = workstreams.find((w) => w.id === id);
     if (!ws) return;
@@ -366,6 +376,8 @@ export default function App() {
         onCreateProject={() => setShowProjectCreate(true)}
         onCreateWorkstream={(projectId) => setShowWsCreate({ show: true, projectId })}
         onArchiveWorkstream={handleArchiveWorkstream}
+        onRenameWorkstream={handleRenameWorkstream}
+        onUpdateProject={handleUpdateProject}
       />
 
       <div
@@ -444,6 +456,7 @@ export default function App() {
       {showWsCreate.show && (
         <WorkstreamCreateForm
           project={showWsCreate.projectId ? projects.find((p) => p.id === showWsCreate.projectId) : undefined}
+          projects={projects}
           onSubmit={handleCreateWorkstream}
           onCancel={() => setShowWsCreate({ show: false })}
         />

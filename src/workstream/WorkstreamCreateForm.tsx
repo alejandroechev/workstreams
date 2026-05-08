@@ -15,6 +15,7 @@ interface WorktreeInfo {
 
 interface Props {
   project?: Project;
+  projects: Project[];
   onSubmit: (name: string, directory: string, opts: {
     projectId?: string;
     workstreamType: string;
@@ -28,13 +29,29 @@ function slugify(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
 }
 
-export default function WorkstreamCreateForm({ project, onSubmit, onCancel }: Props) {
+export default function WorkstreamCreateForm({ project: initialProject, projects, onSubmit, onCancel }: Props) {
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(initialProject?.id || null);
+  const project = selectedProjectId ? projects.find((p) => p.id === selectedProjectId) : undefined;
   const hasProject = !!project;
   const [name, setName] = useState(hasProject ? `${project.name} - ` : "");
   const [wsType, setWsType] = useState<WorkstreamType>(hasProject ? "worktree" : "standalone");
   const [directory, setDirectory] = useState(project?.directory || "");
   const [branchName, setBranchName] = useState("");
   const [worktreeInfo, setWorktreeInfo] = useState<WorktreeInfo | null>(null);
+
+  // Update form when project selection changes
+  const handleProjectChange = (projectId: string | null) => {
+    setSelectedProjectId(projectId);
+    const p = projectId ? projects.find((pr) => pr.id === projectId) : undefined;
+    if (p) {
+      setDirectory(p.directory);
+      if (!name || name === `${project?.name} - `) setName(`${p.name} - `);
+      setWsType("worktree");
+    } else {
+      setDirectory("");
+      setWsType("standalone");
+    }
+  };
 
   useEffect(() => {
     if (wsType === "worktree" && name.trim()) {
@@ -112,13 +129,41 @@ export default function WorkstreamCreateForm({ project, onSubmit, onCancel }: Pr
           boxShadow: "0 8px 32px rgba(0,0,0,0.5)",
         }}
       >
-        <div style={{ color: "#cdd6f4", fontWeight: 600, fontSize: 14, marginBottom: 4 }}>
+        <div style={{ color: "#cdd6f4", fontWeight: 600, fontSize: 14, marginBottom: 14 }}>
           New Workstream
         </div>
+
+        {/* Project selector */}
+        <label style={{ fontSize: 11, color: "#a6adc8", display: "block", marginBottom: 4 }}>Project</label>
+        <select
+          value={selectedProjectId || ""}
+          onChange={(e) => handleProjectChange(e.target.value || null)}
+          onKeyDown={(e) => e.stopPropagation()}
+          style={{
+            width: "100%",
+            background: "#313244",
+            border: "1px solid #45475a",
+            borderRadius: 4,
+            color: "#cdd6f4",
+            padding: "8px 10px",
+            fontSize: 12,
+            outline: "none",
+            boxSizing: "border-box",
+            marginBottom: 14,
+            cursor: "pointer",
+          }}
+        >
+          <option value="">None</option>
+          {projects.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.name}
+            </option>
+          ))}
+        </select>
         {project && (
-          <div style={{ fontSize: 11, color: "#6c7086", marginBottom: 14 }}>
+          <div style={{ fontSize: 11, color: "#6c7086", marginBottom: 14, marginTop: -10 }}>
             <span style={{ display: "inline-block", width: 8, height: 8, borderRadius: "50%", background: project.color, marginRight: 6, verticalAlign: "middle" }} />
-            {project.name}
+            {project.directory}
           </div>
         )}
 
