@@ -76,7 +76,7 @@ fn now() -> String {
 
 /// Create a git Command that doesn't show a console window on Windows
 fn git_cmd() -> std::process::Command {
-    let mut cmd = git_cmd();
+    let mut cmd = std::process::Command::new("git");
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
