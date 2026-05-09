@@ -42,6 +42,16 @@ export default function TileWrapper({
   const statusColor = () => {
     if (!isTermLike) return "#89b4fa";
     if (isSessionTile) {
+      // Use activity_status from poller if available
+      const activity = sessionStats?.activity_status;
+      if (activity) {
+        switch (activity) {
+          case "working": return "#a6e3a1";  // green — actively responding
+          case "waiting": return "#89b4fa";   // blue — waiting for input
+          case "idle": return "#f9e2af";      // yellow — idle
+          case "stale": return "#6c7086";     // grey — stale
+        }
+      }
       switch (termStatus) {
         case "running": return "#a6e3a1";
         case "starting": case "resuming": return "#f9e2af";
@@ -62,9 +72,9 @@ export default function TileWrapper({
     if (isSessionTile) {
       const cfg = JSON.parse(tile.config_json || "{}");
       const name = cfg.session_name || "session";
-      const ctx = sessionStats?.context_percent != null ? ` · ${Math.round(sessionStats.context_percent)}%` : "";
+      const activity = sessionStats?.activity_status || termStatus;
       const turns = sessionStats?.turn_count != null ? ` · ${sessionStats.turn_count}t` : "";
-      return `${name}${ctx}${turns}`;
+      return `${name} · ${activity}${turns}`;
     }
     if (tile.tile_type === "terminal") return termStatus;
     return tile.tile_type.replace("_", " ");
