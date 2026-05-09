@@ -1,4 +1,4 @@
-import type { Project, Workstream, Tile, TileType, WorkstreamLayout } from "../domain/types";
+import type { Project, Workstream, Tile, TileType, WorkstreamLayout, CopilotConfigItem } from "../domain/types";
 
 export interface Backend {
   // Projects
@@ -39,4 +39,10 @@ export interface Backend {
   // Git diff
   gitDiffFiles(directory: string, mode: string): Promise<string[]>;
   gitDiffFile(directory: string, filePath: string, mode: string): Promise<string>;
+  // Git log & branch
+  gitLog(directory: string, limit?: number): Promise<Array<{ hash: string; short_hash: string; message: string; author: string; date: string }>>;
+  gitShowCommit(directory: string, hash: string): Promise<string>;
+  gitCurrentBranch(directory: string): Promise<string>;
+  // Copilot config discovery
+  discoverCopilotConfig(workstreamDir?: string): Promise<CopilotConfigItem[]>;
 }

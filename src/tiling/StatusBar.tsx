@@ -6,6 +6,8 @@ interface Props {
   onAddSession?: () => void;
   onAddTerminal?: () => void;
   onAddExplorer?: () => void;
+  onAddSessionMeta?: () => void;
+  onAddWorkbench?: () => void;
   onCloseTitle?: () => void;
   onToggleFullscreen?: () => void;
 }
@@ -29,6 +31,8 @@ export default function StatusBar({
   onAddSession,
   onAddTerminal,
   onAddExplorer,
+  onAddSessionMeta,
+  onAddWorkbench,
   onCloseTitle,
   onToggleFullscreen,
 }: Props) {
@@ -62,6 +66,8 @@ export default function StatusBar({
         <button style={btnStyle} onClick={onAddSession} title="New Copilot session">+ Session</button>
         <button style={btnStyle} onClick={onAddTerminal} title="New terminal">+ Terminal</button>
         <button style={btnStyle} onClick={onAddExplorer} title="New file explorer">+ Explorer</button>
+        <button style={btnStyle} onClick={onAddSessionMeta} title="Session meta (Alt+M)">+ Meta</button>
+        <button style={btnStyle} onClick={onAddWorkbench} title="Workbench (Alt+B)">+ Bench</button>
         <button style={{ ...btnStyle, color: "#585b70" }} onClick={onToggleFullscreen} title="Toggle fullscreen">⛶</button>
         <button style={{ ...btnStyle, color: "#585b70" }} onClick={onCloseTitle} title="Close focused tile">✕</button>
       </div>

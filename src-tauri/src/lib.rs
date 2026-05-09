@@ -810,6 +810,85 @@ fn search_files(directory: String, query: String, limit: Option<u32>) -> Result<
     Ok(results)
 }
 
+// ── Git log / branch commands ─────────────────────────────────────────
+
+#[derive(Debug, Serialize, Deserialize)]
+struct GitCommit {
+    hash: String,
+    short_hash: String,
+    message: String,
+    author: String,
+    date: String,
+}
+
+#[tauri::command]
+fn git_log(directory: String, limit: Option<u32>) -> Result<Vec<GitCommit>, String> {
+    let n = limit.unwrap_or(50);
+    let output = git_cmd()
+        .args(["log", &format!("--format=%H|%h|%s|%an|%ar"), "-n", &n.to_string()])
+        .current_dir(&directory)
+        .output()
+        .map_err(|e| format!("Failed to run git: {e}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("git error: {stderr}"));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let commits = stdout
+        .lines()
+        .filter(|l| !l.is_empty())
+        .filter_map(|line| {
+            let parts: Vec<&str> = line.splitn(5, '|').collect();
+            if parts.len() == 5 {
+                Some(GitCommit {
+                    hash: parts[0].to_string(),
+                    short_hash: parts[1].to_string(),
+                    message: parts[2].to_string(),
+                    author: parts[3].to_string(),
+                    date: parts[4].to_string(),
+                })
+            } else {
+                None
+            }
+        })
+        .collect();
+    Ok(commits)
+}
+
+#[tauri::command]
+fn git_show_commit(directory: String, hash: String) -> Result<String, String> {
+    let output = git_cmd()
+        .args(["show", &hash, "--stat", "--patch"])
+        .current_dir(&directory)
+        .output()
+        .map_err(|e| format!("Failed to run git: {e}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("git error: {stderr}"));
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+#[tauri::command]
+fn git_current_branch(directory: String) -> Result<String, String> {
+    let output = git_cmd()
+        .args(["branch", "--show-current"])
+        .current_dir(&directory)
+        .output()
+        .map_err(|e| format!("Failed to run git: {e}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("git error: {stderr}"));
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
 /// Get list of changed files for a diff mode
 #[tauri::command]
 fn git_diff_files(directory: String, mode: String) -> Result<Vec<String>, String> {
@@ -1028,6 +1107,245 @@ fn detect_worktree_info(directory: String) -> Result<WorktreeInfo, String> {
     })
 }
 
+// ── Copilot Config Discovery ───────────────────────────────────────────
+
+#[derive(Debug, Serialize, Deserialize)]
+struct CopilotConfigItem {
+    name: String,
+    category: String,
+    source: String,
+    path: String,
+    description: Option<String>,
+}
+
+/// Read the first non-frontmatter line from a SKILL.md as description
+fn read_skill_description(path: &std::path::Path) -> Option<String> {
+    let content = std::fs::read_to_string(path).ok()?;
+    let mut in_frontmatter = false;
+    let mut past_frontmatter = false;
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed == "---" {
+            if !in_frontmatter && !past_frontmatter {
+                in_frontmatter = true;
+                continue;
+            }
+            if in_frontmatter {
+                in_frontmatter = false;
+                past_frontmatter = true;
+                continue;
+            }
+        }
+        if in_frontmatter {
+            continue;
+        }
+        if past_frontmatter && !trimmed.is_empty() {
+            return Some(trimmed.to_string());
+        }
+    }
+    // No frontmatter — return first non-empty line
+    content.lines()
+        .map(|l| l.trim())
+        .find(|l| !l.is_empty())
+        .map(|s| s.to_string())
+}
+
+#[tauri::command]
+fn discover_copilot_config(workstream_dir: Option<String>) -> Result<Vec<CopilotConfigItem>, String> {
+    let mut items = Vec::new();
+    let home = dirs::home_dir().ok_or("No home directory")?;
+    let copilot_dir = home.join(".copilot");
+
+    // ── Global skills ──
+    let skills_dir = copilot_dir.join("skills");
+    if skills_dir.is_dir() {
+        if let Ok(entries) = std::fs::read_dir(&skills_dir) {
+            for entry in entries.flatten() {
+                if entry.path().is_dir() {
+                    let skill_md = entry.path().join("SKILL.md");
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    let desc = if skill_md.exists() {
+                        read_skill_description(&skill_md)
+                    } else {
+                        None
+                    };
+                    items.push(CopilotConfigItem {
+                        name,
+                        category: "skill".into(),
+                        source: "global".into(),
+                        path: entry.path().to_string_lossy().to_string(),
+                        description: desc,
+                    });
+                }
+            }
+        }
+    }
+
+    // ── Global extensions ──
+    let ext_dir = copilot_dir.join("extensions");
+    if ext_dir.is_dir() {
+        if let Ok(entries) = std::fs::read_dir(&ext_dir) {
+            for entry in entries.flatten() {
+                if entry.path().is_dir() {
+                    items.push(CopilotConfigItem {
+                        name: entry.file_name().to_string_lossy().to_string(),
+                        category: "extension".into(),
+                        source: "global".into(),
+                        path: entry.path().to_string_lossy().to_string(),
+                        description: None,
+                    });
+                }
+            }
+        }
+    }
+
+    // ── Global agents ──
+    let agents_dir = copilot_dir.join("agents");
+    if agents_dir.is_dir() {
+        if let Ok(entries) = std::fs::read_dir(&agents_dir) {
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().to_string();
+                if name.ends_with(".agent.md") {
+                    items.push(CopilotConfigItem {
+                        name: name.trim_end_matches(".agent.md").to_string(),
+                        category: "agent".into(),
+                        source: "global".into(),
+                        path: entry.path().to_string_lossy().to_string(),
+                        description: None,
+                    });
+                }
+            }
+        }
+    }
+
+    // ── Global MCP servers ──
+    let mcp_config = copilot_dir.join("mcp-config.json");
+    if mcp_config.is_file() {
+        if let Ok(content) = std::fs::read_to_string(&mcp_config) {
+            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
+                // Traverse mcpServers or servers key
+                let servers = json.get("mcpServers")
+                    .or_else(|| json.get("servers"));
+                if let Some(serde_json::Value::Object(map)) = servers {
+                    for key in map.keys() {
+                        items.push(CopilotConfigItem {
+                            name: key.clone(),
+                            category: "mcp_server".into(),
+                            source: "global".into(),
+                            path: mcp_config.to_string_lossy().to_string(),
+                            description: None,
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    // ── Global plugins ──
+    let plugins_dir = copilot_dir.join("installed-plugins");
+    if plugins_dir.is_dir() {
+        if let Ok(entries) = std::fs::read_dir(&plugins_dir) {
+            for entry in entries.flatten() {
+                items.push(CopilotConfigItem {
+                    name: entry.file_name().to_string_lossy().to_string(),
+                    category: "plugin".into(),
+                    source: "global".into(),
+                    path: entry.path().to_string_lossy().to_string(),
+                    description: None,
+                });
+            }
+        }
+    }
+
+    // ── Global instructions ──
+    let global_instructions = copilot_dir.join("copilot-instructions.md");
+    if global_instructions.is_file() {
+        items.push(CopilotConfigItem {
+            name: "copilot-instructions.md".into(),
+            category: "instruction".into(),
+            source: "global".into(),
+            path: global_instructions.to_string_lossy().to_string(),
+            description: None,
+        });
+    }
+
+    // ── Repo-level scanning ──
+    if let Some(ref ws_dir) = workstream_dir {
+        let ws_path = std::path::Path::new(ws_dir);
+
+        // .github/extensions/
+        let repo_ext = ws_path.join(".github").join("extensions");
+        if repo_ext.is_dir() {
+            if let Ok(entries) = std::fs::read_dir(&repo_ext) {
+                for entry in entries.flatten() {
+                    if entry.path().is_dir() {
+                        items.push(CopilotConfigItem {
+                            name: entry.file_name().to_string_lossy().to_string(),
+                            category: "extension".into(),
+                            source: "repo".into(),
+                            path: entry.path().to_string_lossy().to_string(),
+                            description: None,
+                        });
+                    }
+                }
+            }
+        }
+
+        // .github/copilot-instructions.md
+        let repo_instructions = ws_path.join(".github").join("copilot-instructions.md");
+        if repo_instructions.is_file() {
+            items.push(CopilotConfigItem {
+                name: "copilot-instructions.md".into(),
+                category: "instruction".into(),
+                source: "repo".into(),
+                path: repo_instructions.to_string_lossy().to_string(),
+                description: None,
+            });
+        }
+
+        // .github/instructions/**/*.instructions.md
+        let instructions_dir = ws_path.join(".github").join("instructions");
+        if instructions_dir.is_dir() {
+            fn walk_instructions(dir: &std::path::Path, items: &mut Vec<CopilotConfigItem>) {
+                if let Ok(entries) = std::fs::read_dir(dir) {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        if path.is_dir() {
+                            walk_instructions(&path, items);
+                        } else {
+                            let name = entry.file_name().to_string_lossy().to_string();
+                            if name.ends_with(".instructions.md") {
+                                items.push(CopilotConfigItem {
+                                    name: name.trim_end_matches(".instructions.md").to_string(),
+                                    category: "instruction".into(),
+                                    source: "repo".into(),
+                                    path: path.to_string_lossy().to_string(),
+                                    description: None,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+            walk_instructions(&instructions_dir, &mut items);
+        }
+
+        // AGENTS.md
+        let agents_md = ws_path.join("AGENTS.md");
+        if agents_md.is_file() {
+            items.push(CopilotConfigItem {
+                name: "AGENTS.md".into(),
+                category: "instruction".into(),
+                source: "repo".into(),
+                path: agents_md.to_string_lossy().to_string(),
+                description: None,
+            });
+        }
+    }
+
+    Ok(items)
+}
+
 // ── App Setup ──────────────────────────────────────────────────────────
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -1099,6 +1417,12 @@ pub fn run() {
             // Git diff
             git_diff_files,
             git_diff_file,
+            // Copilot config
+            discover_copilot_config,
+            // Git log & branch
+            git_log,
+            git_show_commit,
+            git_current_branch,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

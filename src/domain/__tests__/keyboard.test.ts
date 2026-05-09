@@ -54,6 +54,11 @@ describe("parseKeyAction", () => {
     expect(parseKeyAction({ key: "e", ...alt })).toEqual({ type: "addTile", tileType: "file_explorer" });
   });
 
+  it("returns addTile for Alt+M (session_meta) and Alt+B (workbench)", () => {
+    expect(parseKeyAction({ key: "m", ...alt })).toEqual({ type: "addTile", tileType: "session_meta" });
+    expect(parseKeyAction({ key: "b", ...alt })).toEqual({ type: "addTile", tileType: "workbench" });
+  });
+
   it("returns closeTile for Alt+W", () => {
     expect(parseKeyAction({ key: "w", ...alt })).toEqual({ type: "closeTile" });
   });

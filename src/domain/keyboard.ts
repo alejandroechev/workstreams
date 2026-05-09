@@ -60,6 +60,10 @@ export function parseKeyAction(opts: ParseKeyActionOpts): KeyAction | null {
         return { type: "addTile", tileType: "copilot_session" };
       case "e":
         return { type: "addTile", tileType: "file_explorer" };
+      case "m":
+        return { type: "addTile", tileType: "session_meta" };
+      case "b":
+        return { type: "addTile", tileType: "workbench" };
       // Tile management
       case "w":
         return { type: "closeTile" };

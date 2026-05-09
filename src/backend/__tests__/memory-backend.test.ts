@@ -208,4 +208,16 @@ describe("MemoryBackend", () => {
       expect(diff).toBe("");
     });
   });
+
+  describe("discoverCopilotConfig", () => {
+    it("returns empty array by default", async () => {
+      const items = await backend.discoverCopilotConfig();
+      expect(items).toEqual([]);
+    });
+
+    it("returns empty array with workstream dir", async () => {
+      const items = await backend.discoverCopilotConfig("C:\\project");
+      expect(items).toEqual([]);
+    });
+  });
 });

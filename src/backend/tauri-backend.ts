@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { Project, Workstream, Tile, TileType, WorkstreamLayout } from "../domain/types";
+import type { Project, Workstream, Tile, TileType, WorkstreamLayout, CopilotConfigItem } from "../domain/types";
 import type { Backend } from "./types";
 
 export class TauriBackend implements Backend {
@@ -132,5 +132,21 @@ export class TauriBackend implements Backend {
 
   async gitDiffFile(directory: string, filePath: string, mode: string): Promise<string> {
     return invoke<string>("git_diff_file", { directory, filePath, mode });
+  }
+
+  async gitLog(directory: string, limit?: number): Promise<Array<{ hash: string; short_hash: string; message: string; author: string; date: string }>> {
+    return invoke<Array<{ hash: string; short_hash: string; message: string; author: string; date: string }>>("git_log", { directory, limit: limit ?? null });
+  }
+
+  async gitShowCommit(directory: string, hash: string): Promise<string> {
+    return invoke<string>("git_show_commit", { directory, hash });
+  }
+
+  async gitCurrentBranch(directory: string): Promise<string> {
+    return invoke<string>("git_current_branch", { directory });
+  }
+
+  async discoverCopilotConfig(workstreamDir?: string): Promise<CopilotConfigItem[]> {
+    return invoke<CopilotConfigItem[]>("discover_copilot_config", { workstreamDir: workstreamDir ?? null });
   }
 }

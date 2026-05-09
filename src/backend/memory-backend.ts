@@ -1,4 +1,4 @@
-import type { Project, Workstream, Tile, TileType, WorkstreamLayout } from "../domain/types";
+import type { Project, Workstream, Tile, TileType, WorkstreamLayout, CopilotConfigItem } from "../domain/types";
 import type { Backend } from "./types";
 
 function generateId(): string {
@@ -224,5 +224,24 @@ export class MemoryBackend implements Backend {
 
   async gitDiffFile(_directory: string, _filePath: string, _mode: string): Promise<string> {
     return "";
+  }
+
+  async gitLog(_directory: string, _limit?: number): Promise<Array<{ hash: string; short_hash: string; message: string; author: string; date: string }>> {
+    return [
+      { hash: "abc1234567890", short_hash: "abc1234", message: "Initial commit", author: "Dev", date: "2 days ago" },
+      { hash: "def4567890123", short_hash: "def4567", message: "Add feature", author: "Dev", date: "1 day ago" },
+    ];
+  }
+
+  async gitShowCommit(_directory: string, _hash: string): Promise<string> {
+    return "commit abc1234567890\nAuthor: Dev <dev@example.com>\nDate: 2 days ago\n\n    Initial commit\n";
+  }
+
+  async gitCurrentBranch(_directory: string): Promise<string> {
+    return "main";
+  }
+
+  async discoverCopilotConfig(_workstreamDir?: string): Promise<CopilotConfigItem[]> {
+    return [];
   }
 }

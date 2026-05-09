@@ -2,6 +2,8 @@ import { ReactNode, useState } from "react";
 import TerminalTile from "../tiles/TerminalTile";
 import CopilotSessionTile from "../tiles/CopilotSessionTile";
 import ExplorerTile from "../tiles/ExplorerTile";
+import SessionMetaTile from "../tiles/SessionMetaTile";
+import WorkbenchTile from "../tiles/WorkbenchTile";
 import type { Tile } from "../workstream/types";
 import type { CopilotSessionStats } from "../domain/types";
 import { invoke } from "@tauri-apps/api/core";
@@ -14,6 +16,7 @@ interface TileProps {
   onClose: () => void;
   onOpenFile?: (path: string) => void;
   onLinkSession?: (tileId: string) => void;
+  onUpdateTileConfig?: (tileId: string, configJson: string) => void;
   workstreamDir?: string;
   alreadyRunning?: boolean;
 }
@@ -26,6 +29,7 @@ export default function TileWrapper({
   onClose,
   onOpenFile,
   onLinkSession,
+  onUpdateTileConfig,
   workstreamDir,
   alreadyRunning,
 }: TileProps) {
@@ -137,6 +141,25 @@ export default function TileWrapper({
           tileId={tile.id}
           isFocused={isFocused}
           rootDir={workstreamDir || "C:\\"}
+        />
+      );
+      break;
+    case "session_meta":
+      content = (
+        <SessionMetaTile
+          tileId={tile.id}
+          isFocused={isFocused}
+          workstreamDir={workstreamDir}
+        />
+      );
+      break;
+    case "workbench":
+      content = (
+        <WorkbenchTile
+          tileId={tile.id}
+          isFocused={isFocused}
+          configJson={tile.config_json}
+          onConfigChange={(cfg) => onUpdateTileConfig?.(tile.id, cfg)}
         />
       );
       break;

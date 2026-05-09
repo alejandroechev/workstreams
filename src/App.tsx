@@ -199,6 +199,8 @@ export default function App() {
       file_explorer: "Files",
       code_viewer: "Code",
       doc_viewer: "Doc",
+      session_meta: "Meta",
+      workbench: "Bench",
     };
     const tileCount = tiles.filter((t) => t.tile_type === tileType).length;
     let config: string;
@@ -452,6 +454,12 @@ export default function App() {
               setLinkingTileId(tileId);
               setShowSessionPicker(true);
             }}
+            onUpdateTileConfig={async (tileId, configJson) => {
+              await backend.updateTileConfig(tileId, configJson);
+              setTiles((prev) => prev.map((t) =>
+                t.id === tileId ? { ...t, config_json: configJson } : t
+              ));
+            }}
             spawnedPtyIds={spawnedPtys.current}
           />
         </div>
@@ -468,6 +476,8 @@ export default function App() {
           onAddSession={() => setShowSessionPicker(true)}
           onAddTerminal={() => addTile("terminal")}
           onAddExplorer={() => addTile("file_explorer")}
+          onAddSessionMeta={() => addTile("session_meta")}
+          onAddWorkbench={() => addTile("workbench")}
           onToggleFullscreen={() => {
             if (orderedTiles.length > 0 && orderedTiles[focusedIndex]) {
               const tid = orderedTiles[focusedIndex]!.id;
