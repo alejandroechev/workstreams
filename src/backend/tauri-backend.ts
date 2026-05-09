@@ -84,11 +84,12 @@ export class TauriBackend implements Backend {
     return { repo, branch };
   }
 
-  async spawnTerminal(tileId: string, cwd: string, command?: string, rows?: number, cols?: number): Promise<void> {
+  async spawnTerminal(tileId: string, cwd: string, command?: string, args?: string[], rows?: number, cols?: number): Promise<void> {
     await invoke("spawn_terminal", {
       tileId,
       cwd,
       command: command ?? null,
+      args: args ?? null,
       rows: rows ?? 30,
       cols: cols ?? 120,
     });

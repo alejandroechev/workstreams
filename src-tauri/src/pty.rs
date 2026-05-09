@@ -30,6 +30,7 @@ impl PtyManager {
         tile_id: &str,
         cwd: &str,
         command: Option<&str>,
+        args: Option<Vec<String>>,
         rows: u16,
         cols: u16,
     ) -> Result<Option<u32>, String> {
@@ -46,6 +47,11 @@ impl PtyManager {
         let shell = command.unwrap_or("pwsh.exe");
         let mut cmd = CommandBuilder::new(shell);
         cmd.cwd(cwd);
+        if let Some(ref a) = args {
+            for arg in a {
+                cmd.arg(arg);
+            }
+        }
 
         let child = pair
             .slave

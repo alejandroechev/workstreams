@@ -24,7 +24,7 @@ export interface Backend {
   listDirectory(path: string): Promise<Array<{ name: string; is_dir: boolean; modified_epoch: number }>>;
   detectGitInfo(directory: string): Promise<{ repo: string | null; branch: string | null }>;
   // PTY
-  spawnTerminal(tileId: string, cwd: string, command?: string, rows?: number, cols?: number): Promise<void>;
+  spawnTerminal(tileId: string, cwd: string, command?: string, args?: string[], rows?: number, cols?: number): Promise<void>;
   writeToTerminal(tileId: string, data: string): Promise<void>;
   resizeTerminal(tileId: string, rows: number, cols: number): Promise<void>;
   closeTerminal(tileId: string): Promise<void>;

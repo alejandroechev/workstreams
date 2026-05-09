@@ -100,26 +100,8 @@ export default function CopilotSessionTile({
       }).catch(() => {});
     }
 
-    // Build the copilot command — only send if PTY doesn't already have copilot running
-    const command = buildCopilotCommand(config, isResuming);
-    let commandSent = !!alreadyRunning;
-
-    if (!alreadyRunning) {
-      term.write(`\x1b[36m$ ${command}\x1b[0m\r\n`);
-      updateStatus(isResuming ? "resuming" : "starting");
-    } else {
-      updateStatus("running");
-    }
-
-    // Send the copilot command after shell is ready (only if not already running)
-    const sendCommand = () => {
-      if (commandSent) return;
-      commandSent = true;
-      setTimeout(() => {
-        invoke("write_to_pty", { tileId, data: command + "\r" }).catch(() => {});
-        updateStatus("running");
-      }, 2000);
-    };
+    // Agency.exe is spawned directly by App.tsx — no need to send commands to shell
+    updateStatus("running");
 
     // Forward keystrokes to PTY
     term.onData((data) => {
@@ -154,10 +136,9 @@ export default function CopilotSessionTile({
       return true;
     });
 
-    // Listen for PTY output — send command after first output (shell ready)
+    // Listen for PTY output
     const unlistenOutput = listen<string>(`pty-output-${tileId}`, (event) => {
       term.write(event.payload);
-      if (!commandSent) sendCommand();
     });
 
     const unlistenExit = listen(`pty-exit-${tileId}`, () => {

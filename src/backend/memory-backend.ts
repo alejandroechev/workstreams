@@ -177,7 +177,7 @@ export class MemoryBackend implements Backend {
     return { repo: null, branch: null };
   }
 
-  async spawnTerminal(tileId: string, _cwd: string, _command?: string, _rows?: number, _cols?: number): Promise<void> {
+  async spawnTerminal(tileId: string, _cwd: string, _command?: string, _args?: string[], _rows?: number, _cols?: number): Promise<void> {
     this.terminals.add(tileId);
   }
 

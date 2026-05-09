@@ -542,6 +542,7 @@ fn spawn_terminal(
     tile_id: String,
     cwd: String,
     command: Option<String>,
+    args: Option<Vec<String>>,
     rows: Option<u16>,
     cols: Option<u16>,
 ) -> Result<Option<u32>, String> {
@@ -550,6 +551,7 @@ fn spawn_terminal(
         &tile_id,
         &cwd,
         command.as_deref(),
+        args,
         rows.unwrap_or(30),
         cols.unwrap_or(120),
     )

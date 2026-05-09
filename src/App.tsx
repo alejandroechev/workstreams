@@ -61,21 +61,20 @@ export default function App() {
             const config = JSON.parse(tile.config_json || "{}");
             const cwd = config.cwd || "C:\\";
             spawnedPtys.current.add(tile.id);
-            backend.spawnTerminal(tile.id, cwd, config.command || undefined, 30, 120).catch(() => {
+            backend.spawnTerminal(tile.id, cwd, config.command || undefined, undefined, 30, 120).catch(() => {
               spawnedPtys.current.delete(tile.id);
             });
           } else if (tile.tile_type === "copilot_session") {
-            // Copilot sessions spawn a shell — the CopilotSessionTile component
-            // sends the copilot command with --resume after the shell is ready
+            // Spawn agency.exe directly with copilot args — no pwsh wrapper needed
             const config = JSON.parse(tile.config_json || "{}");
             const cwd = config.cwd || "C:\\";
             spawnedPtys.current.add(tile.id);
-            // Mark as resumed so the tile component uses --resume
-            if (!config.is_resumed) {
-              config.is_resumed = true;
-              backend.updateLayout(activeWsId, {}).catch(() => {}); // trigger refresh
+            const sessionId = config.copilot_session_id || config.resume_by_id;
+            const agencyArgs = ["copilot", "--yolo"];
+            if (sessionId) {
+              agencyArgs.push(`--resume=${sessionId}`);
             }
-            backend.spawnTerminal(tile.id, cwd, undefined, 30, 120).catch(() => {
+            backend.spawnTerminal(tile.id, cwd, "agency.exe", agencyArgs, 30, 120).catch(() => {
               spawnedPtys.current.delete(tile.id);
             });
           }
@@ -234,9 +233,13 @@ export default function App() {
     });
 
     // Spawn PTY for terminal and copilot_session tiles
-    if (tileType === "terminal" || tileType === "copilot_session") {
+    if (tileType === "terminal") {
       spawnedPtys.current.add(tile.id);
-      await backend.spawnTerminal(tile.id, cwd, undefined, 30, 120);
+      await backend.spawnTerminal(tile.id, cwd, command !== "pwsh.exe" ? command : undefined, undefined, 30, 120);
+    } else if (tileType === "copilot_session") {
+      spawnedPtys.current.add(tile.id);
+      // Spawn agency.exe directly — new session, no resume
+      await backend.spawnTerminal(tile.id, cwd, "agency.exe", ["copilot", "--yolo"], 30, 120);
     }
 
     setFocusedIndex(tileOrder.length);
@@ -290,7 +293,8 @@ export default function App() {
     });
 
     spawnedPtys.current.add(tile.id);
-    await backend.spawnTerminal(tile.id, cwd, undefined, 30, 120);
+    // Spawn agency.exe directly with --resume
+    await backend.spawnTerminal(tile.id, cwd, "agency.exe", ["copilot", "--yolo", `--resume=${session.session_id}`], 30, 120);
     setFocusedIndex(tileOrder.length);
   }, [activeWsId, workstreams, tileOrder.length, backend]);
 
