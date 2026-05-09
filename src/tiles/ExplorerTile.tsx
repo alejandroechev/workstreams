@@ -14,6 +14,8 @@ import {
   ArrowPathIcon,
   FolderOpenIcon,
   ArrowLeftIcon,
+  CodeBracketSquareIcon,
+  ClockIcon,
 } from "@heroicons/react/24/outline";
 
 interface Props {
@@ -30,7 +32,7 @@ interface DirEntry {
   modifiedEpoch: number;
 }
 
-type Mode = "browse" | "view";
+type Mode = "browse" | "view" | "log";
 type DiffMode = "unstaged" | "last_commit" | "branch_vs_master";
 
 const MARKDOWN_EXTS = new Set(["md", "mdx", "markdown"]);
@@ -112,6 +114,13 @@ export default function ExplorerTile({ tileId, isFocused, rootDir, initialPath }
   const [diffContent, setDiffContent] = useState<string>("");
   const [diffFilePath, setDiffFilePath] = useState<string>("");
   const [diffLoading, setDiffLoading] = useState(false);
+  // Git branch state
+  const [currentBranch, setCurrentBranch] = useState<string | null>(null);
+  // Git log state
+  const [logCommits, setLogCommits] = useState<Array<{ hash: string; short_hash: string; message: string; author: string; date: string }>>([]);
+  const [logLoading, setLogLoading] = useState(false);
+  const [commitDiff, setCommitDiff] = useState<string>("");
+  const [commitDiffHash, setCommitDiffHash] = useState<string>("");
 
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -187,6 +196,14 @@ export default function ExplorerTile({ tileId, isFocused, rootDir, initialPath }
     return () => clearInterval(interval);
   }, [mode, activeDiffMode, currentDir, backend]);
 
+  // Fetch current branch on mount and when directory changes
+  useEffect(() => {
+    const gitDir = rootDir || currentDir;
+    backend.gitCurrentBranch(gitDir)
+      .then((b) => setCurrentBranch(b || null))
+      .catch(() => setCurrentBranch(null));
+  }, [rootDir, currentDir, backend]);
+
   // Ctrl+P handler
   useEffect(() => {
     if (!isFocused) return;
@@ -257,6 +274,11 @@ export default function ExplorerTile({ tileId, isFocused, rootDir, initialPath }
   };
 
   const goBackToBrowse = () => {
+    // If viewing a commit diff, go back to log mode
+    if (commitDiffHash) {
+      goBackToLog();
+      return;
+    }
     setMode("browse");
     setContent(null);
     setFilePath("");
@@ -323,6 +345,46 @@ export default function ExplorerTile({ tileId, isFocused, rootDir, initialPath }
     setDiffContent("");
     setDiffFiles([]);
     setDiffFilePath("");
+  }, []);
+
+  // Git log handlers
+  const openGitLog = useCallback(async () => {
+    setMode("log");
+    setLogLoading(true);
+    setCommitDiff("");
+    setCommitDiffHash("");
+    try {
+      const commits = await backend.gitLog(gitRoot, 50);
+      setLogCommits(commits);
+    } catch {
+      setLogCommits([]);
+    } finally {
+      setLogLoading(false);
+    }
+  }, [backend, gitRoot]);
+
+  const viewCommitDiff = useCallback(async (hash: string) => {
+    setCommitDiffHash(hash);
+    setLogLoading(true);
+    try {
+      const diff = await backend.gitShowCommit(gitRoot, hash);
+      setCommitDiff(diff);
+      setMode("view");
+      setContent(diff);
+      setFilePath(`commit:${hash}`);
+    } catch {
+      setCommitDiff("");
+    } finally {
+      setLogLoading(false);
+    }
+  }, [backend, gitRoot]);
+
+  const goBackToLog = useCallback(() => {
+    setMode("log");
+    setContent(null);
+    setFilePath("");
+    setCommitDiff("");
+    setCommitDiffHash("");
   }, []);
 
   // Filter entries by search
@@ -524,7 +586,7 @@ export default function ExplorerTile({ tileId, isFocused, rootDir, initialPath }
         <div style={{ flex: 1 }}>
           <Editor
             height="100%"
-            language={detectLanguage(filePath)}
+            language={commitDiffHash ? "diff" : detectLanguage(filePath)}
             value={content ?? ""}
             theme="vs-dark"
             options={{
@@ -539,6 +601,68 @@ export default function ExplorerTile({ tileId, isFocused, rootDir, initialPath }
               overviewRulerBorder: false,
             }}
           />
+        </div>
+        {fileSearchOverlay}
+      </div>
+    );
+  }
+
+  // ─── Log mode ───
+  if (mode === "log") {
+    return (
+      <div ref={containerRef} style={containerStyle}>
+        <div style={toolbarStyle}>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, overflow: "hidden", flex: 1 }}>
+            <button
+              onClick={() => { setMode("browse"); setLogCommits([]); setCommitDiff(""); setCommitDiffHash(""); }}
+              style={{ ...toolbarButtonStyle, display: "flex", alignItems: "center", gap: 2 }}
+              title="Back to browser"
+              data-testid="log-back-btn"
+            >
+              <ArrowLeftIcon style={{ width: 14, height: 14 }} /> Browse
+            </button>
+            <span style={{ ...pathTextStyle, display: "flex", alignItems: "center", gap: 4, color: "#f9e2af" }}>
+              <ClockIcon style={{ width: 14, height: 14, flexShrink: 0 }} />
+              Git Log{currentBranch ? ` — ${currentBranch}` : ""}
+            </span>
+          </div>
+        </div>
+        <div style={{ flex: 1, overflowY: "auto", padding: "4px 0" }}>
+          {logLoading && (
+            <div style={{ padding: "8px 12px", color: "#585b70" }}>Loading log...</div>
+          )}
+          {!logLoading && logCommits.length === 0 && (
+            <div style={{ padding: "8px 12px", color: "#585b70" }}>No commits found</div>
+          )}
+          {logCommits.map((c) => (
+            <div
+              key={c.hash}
+              onClick={() => viewCommitDiff(c.hash)}
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                gap: 2,
+                padding: "6px 12px",
+                cursor: "pointer",
+                borderBottom: "1px solid #181825",
+              }}
+              onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "#313244"; }}
+              onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "transparent"; }}
+              data-testid={`log-commit-${c.short_hash}`}
+            >
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{ color: "#f9e2af", fontFamily: "monospace", fontSize: 11, flexShrink: 0 }}>
+                  {c.short_hash}
+                </span>
+                <span style={{ color: "#cdd6f4", fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {c.message}
+                </span>
+              </div>
+              <div style={{ color: "#585b70", fontSize: 10 }}>
+                {c.author} · {c.date}
+              </div>
+            </div>
+          ))}
         </div>
         {fileSearchOverlay}
       </div>
@@ -611,6 +735,34 @@ export default function ExplorerTile({ tileId, isFocused, rootDir, initialPath }
             <span style={{ ...pathTextStyle, flex: 1 }}>
               {currentDir}
             </span>
+            {currentBranch && (
+              <span
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 3,
+                  fontSize: 10,
+                  color: "#a6e3a1",
+                  background: "#1e1e2e",
+                  border: "1px solid #313244",
+                  borderRadius: 4,
+                  padding: "1px 6px",
+                  flexShrink: 0,
+                }}
+                data-testid="branch-badge"
+              >
+                <CodeBracketSquareIcon style={{ width: 12, height: 12 }} />
+                {currentBranch}
+              </span>
+            )}
+            <button
+              onClick={openGitLog}
+              style={{ ...toolbarButtonStyle, display: "flex", alignItems: "center", gap: 2 }}
+              title="Git log"
+              data-testid="log-btn"
+            >
+              <ClockIcon style={{ width: 14, height: 14 }} /> Log
+            </button>
             <button onClick={() => loadDir(currentDir)} style={{ ...toolbarButtonStyle, display: "flex", alignItems: "center" }} title="Refresh">
               <ArrowPathIcon style={{ width: 14, height: 14 }} />
             </button>
