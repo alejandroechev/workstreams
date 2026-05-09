@@ -177,16 +177,19 @@ export default function TileWrapper({
       content = <div>Unknown tile type: {tile.tile_type}</div>;
   }
 
+  const isWorking = isSessionTile && sessionStats?.activity_status === "working";
+
   return (
     <div
       data-tile-id={tile.id}
+      className={isWorking ? "tile-working" : undefined}
       style={{
         gridArea: `t${index}`,
         display: "flex",
         flexDirection: "column",
         border: isFocused
-          ? "2px solid #89b4fa"
-          : "1px solid #313244",
+          ? `2px solid ${isWorking ? "#a6e3a1" : "#89b4fa"}`
+          : `1px solid ${isWorking ? "#a6e3a1" : "#313244"}`,
         borderRadius: 6,
         overflow: "hidden",
         background: "#1e1e2e",
@@ -215,6 +218,7 @@ export default function TileWrapper({
       >
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
           <span
+            className={isWorking ? "status-dot-working" : undefined}
             style={{
               width: 8,
               height: 8,
