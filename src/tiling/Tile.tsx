@@ -16,6 +16,8 @@ interface TileProps {
   onClose: () => void;
   onOpenFile?: (path: string) => void;
   onLinkSession?: (tileId: string) => void;
+  onAutoLink?: (tileId: string, sessionId: string, summary?: string) => void;
+  onRestart?: (tileId: string) => void;
   onUpdateTileConfig?: (tileId: string, configJson: string) => void;
   workstreamDir?: string;
   alreadyRunning?: boolean;
@@ -29,6 +31,8 @@ export default function TileWrapper({
   onClose,
   onOpenFile,
   onLinkSession,
+  onAutoLink,
+  onRestart,
   onUpdateTileConfig,
   workstreamDir,
   alreadyRunning,
@@ -127,6 +131,8 @@ export default function TileWrapper({
           onStatusChange={setTermStatus}
           onStatsUpdate={setSessionStats}
           onLinkSession={onLinkSession ? () => onLinkSession(tile.id) : undefined}
+          onAutoLink={onAutoLink ? (sid, summary) => onAutoLink(tile.id, sid, summary) : undefined}
+          onRestart={onRestart ? () => onRestart(tile.id) : undefined}
         />
       );
       break;

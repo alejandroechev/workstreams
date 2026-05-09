@@ -62,6 +62,7 @@ export interface CopilotSessionConfig {
 }
 
 export interface CopilotSessionStats {
+  session_id?: string | null;
   context_percent?: number | null;
   turn_count?: number | null;
   summary?: string | null;

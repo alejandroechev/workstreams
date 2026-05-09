@@ -458,6 +458,36 @@ export default function App() {
               setLinkingTileId(tileId);
               setShowSessionPicker(true);
             }}
+            onAutoLink={async (tileId, sessionId, summary) => {
+              // Auto-link: session poller found a session for this tile
+              const tile = tiles.find((t) => t.id === tileId);
+              if (!tile) return;
+              const cfg = JSON.parse(tile.config_json || "{}");
+              if (cfg.copilot_session_id) return; // already linked
+              cfg.copilot_session_id = sessionId;
+              cfg.resume_by_id = sessionId;
+              cfg.is_resumed = true;
+              if (summary) cfg.session_name = summary;
+              const newConfig = JSON.stringify(cfg);
+              const newTitle = summary || tile.title;
+              await backend.updateTileConfig(tileId, newConfig, newTitle || undefined);
+              setTiles((prev) => prev.map((t) =>
+                t.id === tileId ? { ...t, config_json: newConfig, title: newTitle } : t
+              ));
+            }}
+            onRestart={async (tileId) => {
+              // Restart: close old PTY, spawn a new one
+              const tile = tiles.find((t) => t.id === tileId);
+              if (!tile) return;
+              const cfg = JSON.parse(tile.config_json || "{}");
+              const cwd = cfg.cwd || workstreams.find((w) => w.id === activeWsId)?.directory || "C:\\";
+              await backend.closeTerminal(tileId).catch(() => {});
+              spawnedPtys.current.add(tileId);
+              const agencyArgs = ["copilot", "--yolo"];
+              const sessionId = cfg.copilot_session_id || cfg.resume_by_id;
+              if (sessionId) agencyArgs.push(`--resume=${sessionId}`);
+              await backend.spawnTerminal(tileId, cwd, "agency.exe", agencyArgs, 30, 120);
+            }}
             onUpdateTileConfig={async (tileId, configJson) => {
               await backend.updateTileConfig(tileId, configJson);
               setTiles((prev) => prev.map((t) =>

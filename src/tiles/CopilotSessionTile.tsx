@@ -4,7 +4,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { SerializeAddon } from "@xterm/addon-serialize";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { parseCopilotSessionConfig, buildCopilotCommand } from "../domain/tile-config";
+import { parseCopilotSessionConfig } from "../domain/tile-config";
 import type { CopilotSessionStats } from "../domain/types";
 
 interface Props {
@@ -16,6 +16,8 @@ interface Props {
   onStatusChange?: (status: string) => void;
   onStatsUpdate?: (stats: CopilotSessionStats) => void;
   onLinkSession?: () => void;
+  onAutoLink?: (sessionId: string, summary?: string) => void;
+  onRestart?: () => void;
 }
 
 export default function CopilotSessionTile({
@@ -27,6 +29,8 @@ export default function CopilotSessionTile({
   onStatusChange,
   onStatsUpdate,
   onLinkSession,
+  onAutoLink,
+  onRestart,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
@@ -146,9 +150,18 @@ export default function CopilotSessionTile({
       updateStatus("exited");
     });
 
-    // Listen for session stats updates
+    // Listen for session stats updates — auto-link if we detect a session
+    const autoLinked = { done: false };
     const unlistenStats = listen<CopilotSessionStats>(`copilot-stats-${tileId}`, (event) => {
       onStatsUpdate?.(event.payload);
+      // Auto-link: if tile has no linked session and poller found one, link it
+      if (!autoLinked.done && event.payload.session_id && onAutoLink) {
+        const currentConfig = parseCopilotSessionConfig(configJson);
+        if (!currentConfig.copilot_session_id) {
+          autoLinked.done = true;
+          onAutoLink(event.payload.session_id, event.payload.summary || undefined);
+        }
+      }
     });
 
     const resizeObserver = new ResizeObserver(() => {
@@ -196,15 +209,9 @@ export default function CopilotSessionTile({
 
   const hasLinkedSession = !!(config.copilot_session_id || (config as unknown as Record<string, unknown>).resume_by_id);
 
-  const startSession = useCallback(() => {
-    const command = buildCopilotCommand(config, hasLinkedSession);
-    invoke("write_to_pty", { tileId, data: command + "\r" }).catch(() => {});
-    setStatus("running");
-  }, [tileId, config, hasLinkedSession]);
-
   return (
     <div style={{ width: "100%", height: "100%", position: "relative", overflow: "hidden" }}>
-      {/* Session controls — always visible in top-right */}
+      {/* Session controls — top-right overlay */}
       <div style={{
         position: "absolute", top: 4, right: 4, zIndex: 10,
         display: "flex", gap: 4, alignItems: "center",
@@ -225,13 +232,32 @@ export default function CopilotSessionTile({
             ◉ Starting...
           </span>
         )}
-        {/* Link session button — shows session picker to link a session ID */}
+        {/* Restart button — only when session has exited */}
+        {status === "exited" && onRestart && (
+          <button
+            onClick={(e) => { e.stopPropagation(); onRestart(); }}
+            style={{
+              background: "#a6e3a1",
+              color: "#1e1e2e",
+              border: "none",
+              borderRadius: 4,
+              padding: "4px 10px",
+              fontSize: 11,
+              cursor: "pointer",
+              fontWeight: 600,
+            }}
+            title="Restart the copilot session"
+          >
+            ▶ Restart
+          </button>
+        )}
+        {/* Link session button — manual override for auto-link */}
         {onLinkSession && (
           <button
             onClick={(e) => { e.stopPropagation(); onLinkSession(); }}
             style={{
-              background: hasLinkedSession ? "#313244" : "#f9e2af",
-              color: hasLinkedSession ? "#585b70" : "#1e1e2e",
+              background: "#313244",
+              color: hasLinkedSession ? "#a6e3a1" : "#585b70",
               border: "none",
               borderRadius: 4,
               padding: "4px 10px",
@@ -240,25 +266,9 @@ export default function CopilotSessionTile({
             }}
             title={hasLinkedSession ? `Linked: ${config.copilot_session_id || ""}` : "Link an existing Copilot session"}
           >
-            {hasLinkedSession ? "🔗 Linked" : "🔗 Link Session"}
+            {hasLinkedSession ? "🔗 Linked" : "🔗 Link"}
           </button>
         )}
-        <button
-          onClick={(e) => { e.stopPropagation(); startSession(); }}
-          style={{
-            background: "#89b4fa",
-            color: "#1e1e2e",
-            border: "none",
-            borderRadius: 4,
-            padding: "4px 10px",
-            fontSize: 11,
-            cursor: "pointer",
-            fontWeight: 600,
-          }}
-          title={`Send: ${buildCopilotCommand(config, hasLinkedSession)}`}
-        >
-          ▶ {hasLinkedSession ? "Resume" : "Start"}
-        </button>
       </div>
       <div ref={containerRef} style={{ width: "100%", height: "100%", overflow: "hidden" }} />
     </div>

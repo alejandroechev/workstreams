@@ -11,6 +11,8 @@ interface Props {
   onCloseTile: (tileId: string) => void;
   onOpenFile?: (path: string) => void;
   onLinkSession?: (tileId: string) => void;
+  onAutoLink?: (tileId: string, sessionId: string, summary?: string) => void;
+  onRestart?: (tileId: string) => void;
   onUpdateTileConfig?: (tileId: string, configJson: string) => void;
   workstreamDir?: string;
   spawnedPtyIds?: Set<string>;
@@ -25,6 +27,8 @@ export default function TileGrid({
   onCloseTile,
   onOpenFile,
   onLinkSession,
+  onAutoLink,
+  onRestart,
   onUpdateTileConfig,
   workstreamDir,
   spawnedPtyIds,
@@ -91,6 +95,8 @@ export default function TileGrid({
             onClose={() => onCloseTile(tile.id)}
             onOpenFile={onOpenFile}
             onLinkSession={onLinkSession}
+            onAutoLink={onAutoLink}
+            onRestart={onRestart}
             onUpdateTileConfig={onUpdateTileConfig}
             workstreamDir={workstreamDir}
             alreadyRunning={spawnedPtyIds?.has(tile.id)}
