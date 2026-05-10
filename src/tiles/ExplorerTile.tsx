@@ -448,7 +448,7 @@ export default function ExplorerTile({ tileId, isFocused, rootDir, initialPath }
       );
     }
 
-    if (content === null && !fileLoading) {
+    if (content === null && !fileLoading && !activeDiffMode) {
       return (
         <div ref={containerRef} style={{ ...containerStyle, alignItems: "center", justifyContent: "center" }}>
           <div style={{ color: "#585b70" }}>No file loaded</div>
