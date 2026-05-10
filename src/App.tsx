@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import WorkstreamSidebar from "./workstream/WorkstreamSidebar";
 import ProjectCreateForm from "./workstream/ProjectCreateForm";
 import WorkstreamCreateForm from "./workstream/WorkstreamCreateForm";
@@ -298,6 +298,19 @@ export default function App() {
     setFocusedIndex(tileOrder.length);
   }, [activeWsId, workstreams, tileOrder.length, backend]);
 
+  // Compute linked session IDs from copilot_session tiles
+  const linkedSessionIds = useMemo(() => {
+    return tiles
+      .filter((t) => t.tile_type === "copilot_session")
+      .map((t) => {
+        try {
+          const cfg = JSON.parse(t.config_json || "{}");
+          return (cfg.copilot_session_id || cfg.resume_by_id || null) as string | null;
+        } catch { return null; }
+      })
+      .filter((id): id is string => !!id);
+  }, [tiles]);
+
   // Keyboard shortcuts
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -495,6 +508,7 @@ export default function App() {
               ));
             }}
             spawnedPtyIds={spawnedPtys.current}
+            linkedSessionIds={linkedSessionIds}
           />
         </div>
 

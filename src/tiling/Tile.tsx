@@ -21,6 +21,7 @@ interface TileProps {
   onUpdateTileConfig?: (tileId: string, configJson: string) => void;
   workstreamDir?: string;
   alreadyRunning?: boolean;
+  linkedSessionIds?: string[];
 }
 
 export default function TileWrapper({
@@ -36,6 +37,7 @@ export default function TileWrapper({
   onUpdateTileConfig,
   workstreamDir,
   alreadyRunning,
+  linkedSessionIds,
 }: TileProps) {
   const [termStatus, setTermStatus] = useState<string>("running");
   const [sessionStats, setSessionStats] = useState<CopilotSessionStats | null>(null);
@@ -166,6 +168,7 @@ export default function TileWrapper({
           tileId={tile.id}
           isFocused={isFocused}
           workstreamDir={workstreamDir}
+          linkedSessionIds={linkedSessionIds}
         />
       );
       break;

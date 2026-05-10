@@ -16,6 +16,7 @@ interface Props {
   onUpdateTileConfig?: (tileId: string, configJson: string) => void;
   workstreamDir?: string;
   spawnedPtyIds?: Set<string>;
+  linkedSessionIds?: string[];
 }
 
 export default function TileGrid({
@@ -32,6 +33,7 @@ export default function TileGrid({
   onUpdateTileConfig,
   workstreamDir,
   spawnedPtyIds,
+  linkedSessionIds,
 }: Props) {
   // Order tiles according to tileOrder
   const orderedTiles = tileOrder
@@ -100,6 +102,7 @@ export default function TileGrid({
             onUpdateTileConfig={onUpdateTileConfig}
             workstreamDir={workstreamDir}
             alreadyRunning={spawnedPtyIds?.has(tile.id)}
+            linkedSessionIds={linkedSessionIds}
           />
         );
       })}

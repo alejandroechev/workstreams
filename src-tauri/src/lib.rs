@@ -1348,6 +1348,123 @@ fn discover_copilot_config(workstream_dir: Option<String>) -> Result<Vec<Copilot
     Ok(items)
 }
 
+// ── Session Files & Todos from session-store.db ────────────────────────
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SessionFileEntry {
+    pub file_path: String,
+    pub tool_name: Option<String>,
+    pub turn_index: Option<i32>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SessionTodoEntry {
+    pub id: String,
+    pub title: String,
+    pub description: Option<String>,
+    pub status: String,
+}
+
+fn open_session_store_readonly() -> Result<Connection, String> {
+    let home = dirs::home_dir().ok_or("No home directory")?;
+    let db_path = home.join(".copilot").join("session-store.db");
+    if !db_path.exists() {
+        return Err("session-store.db not found".into());
+    }
+    Connection::open_with_flags(
+        &db_path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn query_session_files(session_id: String) -> Result<Vec<SessionFileEntry>, String> {
+    let conn = open_session_store_readonly()?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT file_path, tool_name, turn_index FROM session_files
+             WHERE session_id = ?1
+             ORDER BY first_seen_at DESC",
+        )
+        .map_err(|e| e.to_string())?;
+
+    let rows = stmt
+        .query_map([&session_id], |row| {
+            Ok(SessionFileEntry {
+                file_path: row.get(0)?,
+                tool_name: row.get(1)?,
+                turn_index: row.get(2)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+
+    let mut entries = Vec::new();
+    for row in rows {
+        if let Ok(entry) = row {
+            entries.push(entry);
+        }
+    }
+    Ok(entries)
+}
+
+#[tauri::command]
+fn query_session_todos(session_id: String) -> Result<Vec<SessionTodoEntry>, String> {
+    // The per-session SQLite DB is at ~/.copilot/session-state/<session_id>/session.db
+    let home = dirs::home_dir().ok_or("No home directory")?;
+    let session_db_path = home
+        .join(".copilot")
+        .join("session-state")
+        .join(&session_id)
+        .join("session.db");
+
+    if !session_db_path.exists() {
+        return Ok(Vec::new()); // No session.db = no todos
+    }
+
+    let conn = Connection::open_with_flags(
+        &session_db_path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .map_err(|e| e.to_string())?;
+
+    // Check if todos table exists
+    let table_exists: bool = conn
+        .query_row(
+            "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='todos'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(false);
+
+    if !table_exists {
+        return Ok(Vec::new());
+    }
+
+    let mut stmt = conn
+        .prepare("SELECT id, title, description, status FROM todos ORDER BY created_at DESC")
+        .map_err(|e| e.to_string())?;
+
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(SessionTodoEntry {
+                id: row.get(0)?,
+                title: row.get(1)?,
+                description: row.get(2)?,
+                status: row.get(3)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+
+    let mut entries = Vec::new();
+    for row in rows {
+        if let Ok(entry) = row {
+            entries.push(entry);
+        }
+    }
+    Ok(entries)
+}
+
 // ── App Setup ──────────────────────────────────────────────────────────
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -1421,6 +1538,9 @@ pub fn run() {
             git_diff_file,
             // Copilot config
             discover_copilot_config,
+            // Session files & todos
+            query_session_files,
+            query_session_todos,
             // Git log & branch
             git_log,
             git_show_commit,
