@@ -21,6 +21,7 @@ interface Props {
     workstreamType: string;
     worktreeBranch?: string;
     showSessionPicker?: boolean;
+    createSessionTile?: boolean;
   }) => void;
   onCancel: () => void;
 }
@@ -38,6 +39,7 @@ export default function WorkstreamCreateForm({ project: initialProject, projects
   const [directory, setDirectory] = useState(project?.directory || "");
   const [branchName, setBranchName] = useState("");
   const [worktreeInfo, setWorktreeInfo] = useState<WorktreeInfo | null>(null);
+  const [linkSession, setLinkSession] = useState(true); // default: create a copilot session tile
 
   // Update form when project selection changes
   const handleProjectChange = (projectId: string | null) => {
@@ -95,6 +97,7 @@ export default function WorkstreamCreateForm({ project: initialProject, projects
       workstreamType: isImport ? "worktree" : wsType,
       worktreeBranch: wsType === "worktree" ? branchName : (isImport ? worktreeInfo?.branch || undefined : undefined),
       showSessionPicker: isImport,
+      createSessionTile: linkSession,
     });
   };
 
@@ -116,7 +119,7 @@ export default function WorkstreamCreateForm({ project: initialProject, projects
         justifyContent: "center",
         zIndex: 1000,
       }}
-      onClick={onCancel}
+      onClick={(e) => e.stopPropagation()}
     >
       <div
         onClick={(e) => e.stopPropagation()}
@@ -129,8 +132,15 @@ export default function WorkstreamCreateForm({ project: initialProject, projects
           boxShadow: "0 8px 32px rgba(0,0,0,0.5)",
         }}
       >
-        <div style={{ color: "#cdd6f4", fontWeight: 600, fontSize: 14, marginBottom: 14 }}>
-          New Workstream
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
+          <div style={{ color: "#cdd6f4", fontWeight: 600, fontSize: 14 }}>
+            New Workstream
+          </div>
+          <button
+            onClick={onCancel}
+            style={{ background: "none", border: "none", color: "#585b70", cursor: "pointer", fontSize: 16, padding: "2px 6px", lineHeight: 1 }}
+            title="Close"
+          >✕</button>
         </div>
 
         {/* Project selector */}
@@ -332,12 +342,33 @@ export default function WorkstreamCreateForm({ project: initialProject, projects
           </div>
         )}
 
-        {/* Note about session linking for import */}
-        {wsType === "import_worktree" && (
-          <div style={{ fontSize: 11, color: "#89b4fa", marginBottom: 14, paddingLeft: 2 }}>
-            After creating, you'll be prompted to link an existing Copilot session.
+        {/* Link session checkbox */}
+        <label style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          padding: "8px 10px",
+          borderRadius: 4,
+          cursor: "pointer",
+          background: linkSession ? "#313244" : "transparent",
+          border: linkSession ? "1px solid #45475a" : "1px solid transparent",
+          marginBottom: 14,
+        }}>
+          <input
+            type="checkbox"
+            checked={linkSession}
+            onChange={(e) => setLinkSession(e.target.checked)}
+            style={{ accentColor: "#89b4fa" }}
+          />
+          <div>
+            <div style={{ fontSize: 12, color: "#cdd6f4" }}>Start with Copilot session</div>
+            <div style={{ fontSize: 10, color: "#6c7086" }}>
+              {wsType === "import_worktree"
+                ? "Creates a session tile and links an existing session"
+                : "Creates a Copilot session tile automatically"}
+            </div>
           </div>
-        )}
+        </label>
 
         {/* Actions */}
         <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>

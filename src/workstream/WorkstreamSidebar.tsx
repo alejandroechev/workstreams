@@ -505,7 +505,7 @@ export default function WorkstreamSidebar({
           alignItems: "center",
           justifyContent: "center",
           zIndex: 2000,
-        }} onClick={() => setEditingProject(null)}>
+        }} onClick={(e) => e.stopPropagation()}>
           <div onClick={(e) => e.stopPropagation()} style={{
             background: "#1e1e2e",
             border: "1px solid #313244",
@@ -513,8 +513,15 @@ export default function WorkstreamSidebar({
             padding: "16px 20px",
             width: 340,
           }}>
-            <div style={{ color: "#cdd6f4", fontWeight: 600, fontSize: 13, marginBottom: 12 }}>
-              Edit Project
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+              <div style={{ color: "#cdd6f4", fontWeight: 600, fontSize: 13 }}>
+                Edit Project
+              </div>
+              <button
+                onClick={() => setEditingProject(null)}
+                style={{ background: "none", border: "none", color: "#585b70", cursor: "pointer", fontSize: 16, padding: "2px 6px", lineHeight: 1 }}
+                title="Close"
+              >✕</button>
             </div>
             <label style={{ fontSize: 11, color: "#a6adc8", display: "block", marginBottom: 4 }}>Name</label>
             <input
@@ -608,7 +615,7 @@ export default function WorkstreamSidebar({
           alignItems: "center",
           justifyContent: "center",
           zIndex: 2000,
-        }} onClick={() => setArchiveConfirm(null)}>
+        }} onClick={(e) => e.stopPropagation()}>
           <div onClick={(e) => e.stopPropagation()} style={{
             background: "#1e1e2e",
             border: "1px solid #313244",

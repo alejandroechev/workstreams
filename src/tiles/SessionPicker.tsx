@@ -66,7 +66,7 @@ export default function SessionPicker({ onSelect, onCreateNew, onCancel }: Props
         justifyContent: "center",
         zIndex: 1000,
       }}
-      onClick={onCancel}
+      onClick={(e) => e.stopPropagation()}
     >
       <div
         onClick={(e) => e.stopPropagation()}
@@ -95,6 +95,7 @@ export default function SessionPicker({ onSelect, onCreateNew, onCancel }: Props
             <span style={{ color: "#cdd6f4", fontWeight: 600, fontSize: 14 }}>
               Open Copilot Session
             </span>
+            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
             <button
               onClick={onCreateNew}
               style={{
@@ -110,6 +111,12 @@ export default function SessionPicker({ onSelect, onCreateNew, onCancel }: Props
             >
               + New Session
             </button>
+            <button
+              onClick={onCancel}
+              style={{ background: "none", border: "none", color: "#585b70", cursor: "pointer", fontSize: 16, padding: "2px 6px", lineHeight: 1 }}
+              title="Close"
+            >✕</button>
+            </div>
           </div>
           <input
             type="text"

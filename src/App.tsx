@@ -123,7 +123,7 @@ export default function App() {
   const handleCreateWorkstream = useCallback(async (
     name: string,
     directory: string,
-    opts: { projectId?: string; workstreamType: string; worktreeBranch?: string; showSessionPicker?: boolean },
+    opts: { projectId?: string; workstreamType: string; worktreeBranch?: string; showSessionPicker?: boolean; createSessionTile?: boolean },
   ) => {
     const ws = await backend.createWorkstream(name, directory, {
       projectId: opts.projectId,
@@ -143,8 +143,32 @@ export default function App() {
     setActiveWsId(ws.id);
     setShowWsCreate({ show: false });
 
-    // If import worktree, show session picker to link a Copilot session
-    if (opts.showSessionPicker) {
+    // Auto-create a copilot_session tile if requested
+    if (opts.createSessionTile) {
+      const config = JSON.stringify({
+        session_name: name,
+        command_template: "agency copilot --yolo",
+        cwd: directory,
+        is_resumed: false,
+        created_at: new Date().toISOString(),
+      });
+      const tile = await backend.createTile(ws.id, "copilot_session", name, config);
+      setTiles([tile]);
+      setTileOrder([tile.id]);
+      await backend.updateLayout(ws.id, { tile_order_json: JSON.stringify([tile.id]) });
+
+      // If import worktree, show session picker to link an existing session
+      if (opts.showSessionPicker) {
+        setLinkingTileId(tile.id);
+        setShowSessionPicker(true);
+      } else {
+        // Spawn agency.exe for the new session
+        spawnedPtys.current.add(tile.id);
+        backend.spawnTerminal(tile.id, directory, "agency.exe", ["copilot", "--yolo"], 30, 120).catch(() => {
+          spawnedPtys.current.delete(tile.id);
+        });
+      }
+    } else if (opts.showSessionPicker) {
       setShowSessionPicker(true);
     }
   }, [backend]);

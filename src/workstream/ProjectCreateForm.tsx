@@ -55,7 +55,7 @@ export default function ProjectCreateForm({ onSubmit, onCancel }: Props) {
         justifyContent: "center",
         zIndex: 1000,
       }}
-      onClick={onCancel}
+      onClick={(e) => e.stopPropagation()}
     >
       <div
         onClick={(e) => e.stopPropagation()}
@@ -68,8 +68,15 @@ export default function ProjectCreateForm({ onSubmit, onCancel }: Props) {
           boxShadow: "0 8px 32px rgba(0,0,0,0.5)",
         }}
       >
-        <div style={{ color: "#cdd6f4", fontWeight: 600, fontSize: 14, marginBottom: 16 }}>
-          New Project
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+          <div style={{ color: "#cdd6f4", fontWeight: 600, fontSize: 14 }}>
+            New Project
+          </div>
+          <button
+            onClick={onCancel}
+            style={{ background: "none", border: "none", color: "#585b70", cursor: "pointer", fontSize: 16, padding: "2px 6px", lineHeight: 1 }}
+            title="Close"
+          >✕</button>
         </div>
 
         {/* Name */}
