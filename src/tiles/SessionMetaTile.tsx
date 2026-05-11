@@ -141,7 +141,7 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused: _isFocused
         allFiles.push(...f);
       } catch { /* ignore */ }
     }
-    setFiles(allFiles.filter((f) => isRelevantFile(f.file_path)));
+    setFiles(allFiles);
   }, [linkedSessionIds]);
 
   const loadDbTables = useCallback(async () => {
@@ -432,24 +432,12 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused: _isFocused
                   }}
                   title={f.file_path}
                 >
-                  <DocumentIcon style={{ width: 12, height: 12, color: f.tool_name === "create" ? "#a6e3a1" : "#89b4fa", flexShrink: 0 }} />
+                  <DocumentIcon style={{ width: 12, height: 12, color: "#89b4fa", flexShrink: 0 }} />
                   <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                     {fileName}
                   </span>
-                  <span style={{ color: "#585b70", fontSize: 10, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>
-                    {dirPath}
-                  </span>
                   {f.tool_name && (
-                    <span
-                      style={{
-                        fontSize: 9,
-                        padding: "1px 4px",
-                        borderRadius: 3,
-                        background: "#313244",
-                        color: f.tool_name === "create" ? "#a6e3a1" : "#89b4fa",
-                        flexShrink: 0,
-                      }}
-                    >
+                    <span style={{ color: "#585b70", fontSize: 10, flexShrink: 0 }}>
                       {f.tool_name}
                     </span>
                   )}

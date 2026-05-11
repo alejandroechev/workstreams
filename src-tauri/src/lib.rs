@@ -1566,32 +1566,47 @@ fn open_session_store_readonly() -> Result<Connection, String> {
 
 #[tauri::command]
 fn query_session_files(session_id: String) -> Result<Vec<SessionFileEntry>, String> {
-    let conn = open_session_store_readonly()?;
-    let mut stmt = conn
-        .prepare(
-            "SELECT file_path, tool_name, turn_index FROM session_files
-             WHERE session_id = ?1
-             ORDER BY first_seen_at DESC",
-        )
-        .map_err(|e| e.to_string())?;
+    let home = dirs::home_dir().ok_or("No home directory")?;
+    let files_dir = home
+        .join(".copilot")
+        .join("session-state")
+        .join(&session_id)
+        .join("files");
 
-    let rows = stmt
-        .query_map([&session_id], |row| {
-            Ok(SessionFileEntry {
-                file_path: row.get(0)?,
-                tool_name: row.get(1)?,
-                turn_index: row.get(2)?,
-            })
-        })
-        .map_err(|e| e.to_string())?;
+    if !files_dir.exists() || !files_dir.is_dir() {
+        return Ok(Vec::new());
+    }
 
     let mut entries = Vec::new();
-    for row in rows {
-        if let Ok(entry) = row {
-            entries.push(entry);
+    fn walk_files(dir: &std::path::Path, entries: &mut Vec<SessionFileEntry>) {
+        if let Ok(read) = std::fs::read_dir(dir) {
+            for entry in read.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    walk_files(&path, entries);
+                } else if path.is_file() {
+                    let size = path.metadata().map(|m| m.len()).unwrap_or(0);
+                    entries.push(SessionFileEntry {
+                        file_path: path.to_string_lossy().to_string(),
+                        tool_name: Some(format_file_size(size)),
+                        turn_index: None,
+                    });
+                }
+            }
         }
     }
+    walk_files(&files_dir, &mut entries);
     Ok(entries)
+}
+
+fn format_file_size(bytes: u64) -> String {
+    if bytes < 1024 {
+        format!("{bytes}B")
+    } else if bytes < 1024 * 1024 {
+        format!("{:.1}KB", bytes as f64 / 1024.0)
+    } else {
+        format!("{:.1}MB", bytes as f64 / (1024.0 * 1024.0))
+    }
 }
 
 #[tauri::command]
