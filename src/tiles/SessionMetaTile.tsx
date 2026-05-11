@@ -1,5 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import Markdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { useBackend } from "../backend/context";
 import type { CopilotConfigItem } from "../domain/types";
 import {
@@ -103,7 +105,14 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused: _isFocused
   // Plan content
   const [planContent, setPlanContent] = useState<string | null>(null);
   // Content viewer (for configs and files)
-  const [viewContent, setViewContent] = useState<{ title: string; content: string } | null>(null);
+  const [viewContent, setViewContent] = useState<{
+    title: string;
+    content: string;
+    type: "text" | "markdown" | "image" | "audio";
+    mimeType?: string;
+  } | null>(null);
+  // Toggle raw text for markdown
+  const [showRawMd, setShowRawMd] = useState(false);
 
   const loadConfig = useCallback(async () => {
     setLoading(true);
@@ -220,11 +229,65 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused: _isFocused
 
   // Open a file in the content viewer
   const viewFile = useCallback(async (path: string, title: string) => {
+    setShowRawMd(false);
+    const ext = path.split(".").pop()?.toLowerCase() || "";
+    const mdExts = new Set(["md", "mdx", "markdown"]);
+    const imgExts = new Set(["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "ico"]);
+    const audioExts = new Set(["mp3", "wav", "ogg", "m4a", "aac", "flac", "wma"]);
+    const mimeMap: Record<string, string> = {
+      png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif",
+      webp: "image/webp", svg: "image/svg+xml", bmp: "image/bmp", ico: "image/x-icon",
+      mp3: "audio/mpeg", wav: "audio/wav", ogg: "audio/ogg", m4a: "audio/mp4",
+      aac: "audio/aac", flac: "audio/flac", wma: "audio/x-ms-wma",
+    };
+
     try {
+      // Check if path is a directory — try to find a key file inside
+      const isDir = await backend.listDirectory(path).then(() => true).catch(() => false);
+      if (isDir) {
+        // Try common entry files in priority order
+        const candidates = ["SKILL.md", "extension.mjs", "extension.js", "README.md", "index.ts", "index.js", "plugin.json", "agency.json"];
+        for (const candidate of candidates) {
+          const candidatePath = path.endsWith("\\") || path.endsWith("/") ? `${path}${candidate}` : `${path}\\${candidate}`;
+          try {
+            const content = await backend.readFile(candidatePath);
+            const cExt = candidate.split(".").pop()?.toLowerCase() || "";
+            setViewContent({
+              title: `${title}/${candidate}`,
+              content,
+              type: mdExts.has(cExt) ? "markdown" : "text",
+            });
+            return;
+          } catch { /* try next */ }
+        }
+        // No key file found — list directory contents
+        const entries = await backend.listDirectory(path);
+        const listing = entries.map((e) => `${e.is_dir ? "📁" : "📄"} ${e.name}`).join("\n");
+        setViewContent({ title, content: listing || "(empty directory)", type: "text" });
+        return;
+      }
+
+      // Binary files: images and audio
+      if (imgExts.has(ext)) {
+        const b64 = await invoke<string>("read_file_base64", { path });
+        setViewContent({ title, content: b64, type: "image", mimeType: mimeMap[ext] || "image/png" });
+        return;
+      }
+      if (audioExts.has(ext)) {
+        const b64 = await invoke<string>("read_file_base64", { path });
+        setViewContent({ title, content: b64, type: "audio", mimeType: mimeMap[ext] || "audio/mpeg" });
+        return;
+      }
+
+      // Text files
       const content = await backend.readFile(path);
-      setViewContent({ title, content });
+      setViewContent({
+        title,
+        content,
+        type: mdExts.has(ext) ? "markdown" : "text",
+      });
     } catch (e) {
-      setViewContent({ title, content: `Error reading file: ${e}` });
+      setViewContent({ title, content: `Error: ${e}`, type: "text" });
     }
   }, [backend]);
 
@@ -588,18 +651,23 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused: _isFocused
               </div>
             )}
             {planContent && (
-              <pre style={{
-                padding: "8px 12px",
-                margin: 0,
-                whiteSpace: "pre-wrap",
-                wordBreak: "break-word",
-                fontSize: 11,
-                lineHeight: 1.5,
-                color: "#cdd6f4",
-                fontFamily: "monospace",
-              }}>
-                {planContent}
-              </pre>
+              <>
+                <div style={{ display: "flex", justifyContent: "flex-end", padding: "2px 8px", flexShrink: 0 }}>
+                  <button
+                    onClick={() => setShowRawMd((v) => !v)}
+                    style={{ background: "none", border: "none", color: "#585b70", cursor: "pointer", fontSize: 10, padding: "2px 6px" }}
+                  >{showRawMd ? "Rendered" : "Raw"}</button>
+                </div>
+                {showRawMd ? (
+                  <pre style={{ flex: 1, overflow: "auto", padding: "8px 12px", margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-word", fontSize: 11, lineHeight: 1.5, color: "#cdd6f4", fontFamily: "monospace" }}>
+                    {planContent}
+                  </pre>
+                ) : (
+                  <div style={{ flex: 1, overflow: "auto", padding: "8px 12px", fontSize: 12, lineHeight: 1.6, color: "#cdd6f4" }}>
+                    <Markdown remarkPlugins={[remarkGfm]}>{planContent}</Markdown>
+                  </div>
+                )}
+              </>
             )}
           </>
         )}
@@ -630,24 +698,61 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused: _isFocused
             >
               <ArrowLeftIcon style={{ width: 12, height: 12 }} /> Back
             </button>
-            <span style={{ color: "#cdd6f4", fontWeight: 600, fontSize: 11, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            <span style={{ color: "#cdd6f4", fontWeight: 600, fontSize: 11, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>
               {viewContent.title}
             </span>
+            {viewContent.type === "markdown" && (
+              <button
+                onClick={() => setShowRawMd((v) => !v)}
+                style={{ background: "#313244", border: "none", color: "#a6adc8", cursor: "pointer", fontSize: 10, padding: "2px 8px", borderRadius: 3, flexShrink: 0 }}
+              >{showRawMd ? "Rendered" : "Raw"}</button>
+            )}
           </div>
-          <pre style={{
-            flex: 1,
-            overflow: "auto",
-            padding: "8px 12px",
-            margin: 0,
-            whiteSpace: "pre-wrap",
-            wordBreak: "break-word",
-            fontSize: 11,
-            lineHeight: 1.5,
-            color: "#cdd6f4",
-            fontFamily: "monospace",
-          }}>
-            {viewContent.content}
-          </pre>
+          {viewContent.type === "text" && (
+            <pre style={{
+              flex: 1,
+              overflow: "auto",
+              padding: "8px 12px",
+              margin: 0,
+              whiteSpace: "pre-wrap",
+              wordBreak: "break-word",
+              fontSize: 11,
+              lineHeight: 1.5,
+              color: "#cdd6f4",
+              fontFamily: "monospace",
+            }}>
+              {viewContent.content}
+            </pre>
+          )}
+          {viewContent.type === "markdown" && (
+            showRawMd ? (
+              <pre style={{ flex: 1, overflow: "auto", padding: "8px 12px", margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-word", fontSize: 11, lineHeight: 1.5, color: "#cdd6f4", fontFamily: "monospace" }}>
+                {viewContent.content}
+              </pre>
+            ) : (
+              <div style={{ flex: 1, overflow: "auto", padding: "8px 12px", fontSize: 12, lineHeight: 1.6, color: "#cdd6f4" }}>
+                <Markdown remarkPlugins={[remarkGfm]}>{viewContent.content}</Markdown>
+              </div>
+            )
+          )}
+          {viewContent.type === "image" && (
+            <div style={{ flex: 1, overflow: "auto", display: "flex", alignItems: "center", justifyContent: "center", padding: 12 }}>
+              <img
+                src={`data:${viewContent.mimeType};base64,${viewContent.content}`}
+                alt={viewContent.title}
+                style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain", borderRadius: 4 }}
+              />
+            </div>
+          )}
+          {viewContent.type === "audio" && (
+            <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", padding: 12 }}>
+              <audio
+                controls
+                src={`data:${viewContent.mimeType};base64,${viewContent.content}`}
+                style={{ width: "90%" }}
+              />
+            </div>
+          )}
         </div>
       )}
     </div>

@@ -748,6 +748,14 @@ fn read_file(path: String) -> Result<String, String> {
     std::fs::read_to_string(&path).map_err(|e| format!("Cannot read file: {e}"))
 }
 
+/// Read a binary file and return as base64
+#[tauri::command]
+fn read_file_base64(path: String) -> Result<String, String> {
+    let bytes = std::fs::read(&path).map_err(|e| format!("Cannot read file: {e}"))?;
+    use base64::Engine;
+    Ok(base64::engine::general_purpose::STANDARD.encode(&bytes))
+}
+
 /// List files in a directory (non-recursive, for file picker)
 #[derive(Debug, Serialize, Deserialize)]
 struct DirEntry {
@@ -1845,6 +1853,7 @@ pub fn run() {
             unwatch_session,
             // File system
             read_file,
+            read_file_base64,
             list_directory,
             detect_git_info,
             detect_worktree_info,
