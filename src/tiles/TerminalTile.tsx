@@ -119,6 +119,7 @@ export default function TerminalTile({ tileId, isFocused, onStatusChange }: Prop
       if (ev.type === "keyup") {
         if (ev.key === "Enter" && (ev.shiftKey || ev.ctrlKey)) return false;
         if (ev.key === "v" && ev.ctrlKey) return false;
+        if (ev.key === "c" && ev.ctrlKey) return false;
         return true;
       }
       if (ev.type !== "keydown") return true;
@@ -128,6 +129,17 @@ export default function TerminalTile({ tileId, isFocused, onStatusChange }: Prop
         ev.preventDefault();
         invoke("write_to_pty", { tileId, data: "\n" }).catch(() => {});
         return false;
+      }
+
+      // Ctrl+C: copy selection if text selected, otherwise send to PTY
+      if (ev.key === "c" && ev.ctrlKey && !ev.shiftKey) {
+        const selection = term.getSelection();
+        if (selection) {
+          ev.preventDefault();
+          navigator.clipboard.writeText(selection).catch(() => {});
+          return false;
+        }
+        return true;
       }
 
       // Ctrl+V: paste from clipboard
