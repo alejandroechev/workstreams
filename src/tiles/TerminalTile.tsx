@@ -4,6 +4,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { SerializeAddon } from "@xterm/addon-serialize";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { playBell, flashWindow } from "../domain/notifications";
 
 interface Props {
   tileId: string;
@@ -155,6 +156,12 @@ export default function TerminalTile({ tileId, isFocused, onStatusChange }: Prop
       if (ev.altKey) return false;
 
       return true;
+    });
+
+    // Handle BEL character — play sound + flash taskbar
+    term.onBell(() => {
+      playBell();
+      flashWindow();
     });
 
     // Listen for PTY output

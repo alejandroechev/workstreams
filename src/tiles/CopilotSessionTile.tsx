@@ -5,6 +5,7 @@ import { SerializeAddon } from "@xterm/addon-serialize";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { parseCopilotSessionConfig } from "../domain/tile-config";
+import { playBell, notifySessionIdle } from "../domain/notifications";
 import type { CopilotSessionStats } from "../domain/types";
 
 interface Props {
@@ -38,6 +39,7 @@ export default function CopilotSessionTile({
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const serializeRef = useRef<SerializeAddon | null>(null);
+  const prevActivityRef = useRef<string>("idle");
   const [status, setStatus] = useState<string>(isResuming ? "resuming" : "starting");
 
   const config = parseCopilotSessionConfig(configJson);
@@ -161,6 +163,11 @@ export default function CopilotSessionTile({
       return true;
     });
 
+    // Handle BEL character — play notification sound + flash window
+    term.onBell(() => {
+      playBell();
+    });
+
     // Listen for PTY output
     const unlistenOutput = listen<string>(`pty-output-${tileId}`, (event) => {
       term.write(event.payload);
@@ -175,6 +182,17 @@ export default function CopilotSessionTile({
     const autoLinked = { done: false };
     const unlistenStats = listen<CopilotSessionStats>(`copilot-stats-${tileId}`, (event) => {
       onStatsUpdate?.(event.payload);
+
+      // Detect active→idle transition → notify user
+      const newActivity = event.payload.activity_status || "idle";
+      const wasActive = ["thinking", "tool_use", "responding"].includes(prevActivityRef.current);
+      const nowIdle = newActivity === "idle";
+      if (wasActive && nowIdle) {
+        const cfg = parseCopilotSessionConfig(configJson);
+        notifySessionIdle(cfg.session_name || "Session");
+      }
+      prevActivityRef.current = newActivity;
+
       // Auto-link: if tile has no linked session and poller found one, link it
       if (!autoLinked.done && event.payload.session_id && onAutoLink) {
         const currentConfig = parseCopilotSessionConfig(configJson);
