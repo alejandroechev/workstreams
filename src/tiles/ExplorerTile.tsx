@@ -3,6 +3,7 @@ import Editor, { DiffEditor } from "@monaco-editor/react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { open } from "@tauri-apps/plugin-dialog";
+import { invoke } from "@tauri-apps/api/core";
 import { useBackend } from "../backend/context";
 import { detectLanguage } from "../domain/tile-config";
 import {
@@ -16,6 +17,7 @@ import {
   ArrowLeftIcon,
   CodeBracketSquareIcon,
   ClockIcon,
+  BoltIcon,
 } from "@heroicons/react/24/outline";
 
 interface Props {
@@ -32,7 +34,7 @@ interface DirEntry {
   modifiedEpoch: number;
 }
 
-type Mode = "browse" | "view" | "log";
+type Mode = "browse" | "view" | "log" | "hooks";
 type DiffMode = "unstaged" | "last_commit" | "branch_vs_master";
 
 const MARKDOWN_EXTS = new Set(["md", "mdx", "markdown"]);
@@ -121,6 +123,10 @@ export default function ExplorerTile({ tileId, isFocused, rootDir, initialPath }
   const [logLoading, setLogLoading] = useState(false);
   const [commitDiff, setCommitDiff] = useState<string>("");
   const [commitDiffHash, setCommitDiffHash] = useState<string>("");
+  // Git hooks state
+  const [hooksList, setHooksList] = useState<Array<{ name: string; path: string; content_preview: string }>>([]);
+  const [hooksLoading, setHooksLoading] = useState(false);
+  const [hookContent, setHookContent] = useState<{ name: string; content: string } | null>(null);
 
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -386,6 +392,30 @@ export default function ExplorerTile({ tileId, isFocused, rootDir, initialPath }
     setCommitDiff("");
     setCommitDiffHash("");
   }, []);
+
+  // Git hooks handlers
+  const openGitHooks = useCallback(async () => {
+    setMode("hooks");
+    setHooksLoading(true);
+    setHookContent(null);
+    try {
+      const hooks = await invoke<Array<{ name: string; path: string; content_preview: string }>>("list_git_hooks", { directory: gitRoot });
+      setHooksList(hooks);
+    } catch {
+      setHooksList([]);
+    } finally {
+      setHooksLoading(false);
+    }
+  }, [gitRoot]);
+
+  const viewHookContent = useCallback(async (hook: { name: string; path: string }) => {
+    try {
+      const content = await backend.readFile(hook.path);
+      setHookContent({ name: hook.name, content });
+    } catch (e) {
+      setHookContent({ name: hook.name, content: `Error reading hook: ${e}` });
+    }
+  }, [backend]);
 
   // Filter entries by search
   const filteredEntries = searchFilter
@@ -669,6 +699,71 @@ export default function ExplorerTile({ tileId, isFocused, rootDir, initialPath }
     );
   }
 
+  // ─── Hooks mode ───
+  if (mode === "hooks") {
+    return (
+      <div ref={containerRef} style={containerStyle}>
+        <div style={toolbarStyle}>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, overflow: "hidden", flex: 1 }}>
+            <button
+              onClick={() => { setMode("browse"); setHookContent(null); }}
+              style={{ ...toolbarButtonStyle, display: "flex", alignItems: "center", gap: 2 }}
+              title="Back to browser"
+            >
+              <ArrowLeftIcon style={{ width: 14, height: 14 }} /> Browse
+            </button>
+            <span style={{ ...pathTextStyle, display: "flex", alignItems: "center", gap: 4, color: "#f5c2e7" }}>
+              <BoltIcon style={{ width: 14, height: 14, flexShrink: 0 }} />
+              Git Hooks
+            </span>
+          </div>
+        </div>
+        <div style={{ flex: 1, display: "flex", overflow: "hidden" }}>
+          {/* Hooks list */}
+          <div style={{ width: hookContent ? 200 : "100%", borderRight: hookContent ? "1px solid #313244" : "none", overflowY: "auto", flexShrink: 0 }}>
+            {hooksLoading && (
+              <div style={{ padding: "8px 12px", color: "#585b70" }}>Loading hooks...</div>
+            )}
+            {!hooksLoading && hooksList.length === 0 && (
+              <div style={{ padding: "8px 12px", color: "#585b70" }}>No active hooks found</div>
+            )}
+            {hooksList.map((hook) => (
+              <div
+                key={hook.path}
+                onClick={() => viewHookContent(hook)}
+                style={{
+                  padding: "6px 12px",
+                  cursor: "pointer",
+                  borderBottom: "1px solid #181825",
+                  background: hookContent?.name === hook.name ? "#313244" : "transparent",
+                }}
+                onMouseEnter={(e) => { if (hookContent?.name !== hook.name) (e.currentTarget as HTMLElement).style.background = "#1e1e2e"; }}
+                onMouseLeave={(e) => { if (hookContent?.name !== hook.name) (e.currentTarget as HTMLElement).style.background = "transparent"; }}
+              >
+                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <BoltIcon style={{ width: 12, height: 12, color: "#f5c2e7", flexShrink: 0 }} />
+                  <span style={{ color: "#cdd6f4", fontSize: 12, fontWeight: 500 }}>{hook.name}</span>
+                </div>
+                <div style={{ color: "#585b70", fontSize: 10, marginTop: 2, marginLeft: 18, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {hook.content_preview}
+                </div>
+              </div>
+            ))}
+          </div>
+          {/* Hook content viewer */}
+          {hookContent && (
+            <div style={{ flex: 1, overflow: "auto" }}>
+              <pre style={{ padding: "8px 12px", margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-word", fontSize: 11, lineHeight: 1.5, color: "#cdd6f4", fontFamily: "monospace" }}>
+                {hookContent.content}
+              </pre>
+            </div>
+          )}
+        </div>
+        {fileSearchOverlay}
+      </div>
+    );
+  }
+
   // ─── Browse mode ───
 
   // Diff mode toolbar for browse mode
@@ -762,6 +857,13 @@ export default function ExplorerTile({ tileId, isFocused, rootDir, initialPath }
               data-testid="log-btn"
             >
               <ClockIcon style={{ width: 14, height: 14 }} /> Log
+            </button>
+            <button
+              onClick={openGitHooks}
+              style={{ ...toolbarButtonStyle, display: "flex", alignItems: "center", gap: 2 }}
+              title="Git hooks"
+            >
+              <BoltIcon style={{ width: 14, height: 14 }} /> Hooks
             </button>
             <button onClick={() => loadDir(currentDir)} style={{ ...toolbarButtonStyle, display: "flex", alignItems: "center" }} title="Refresh">
               <ArrowPathIcon style={{ width: 14, height: 14 }} />

@@ -1347,30 +1347,66 @@ pub struct GitHookEntry {
 fn list_git_hooks(directory: String) -> Result<Vec<GitHookEntry>, String> {
     let dir = std::path::Path::new(&directory);
 
-    // Find .git directory (could be a worktree file)
+    // Check core.hooksPath first (e.g., husky v9 sets this)
+    let configured_hooks_dir = git_cmd()
+        .args(["config", "core.hooksPath"])
+        .current_dir(&directory)
+        .output()
+        .ok()
+        .and_then(|o| {
+            if o.status.success() {
+                let path_str = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                if !path_str.is_empty() {
+                    // Resolve relative paths against repo root
+                    let p = std::path::Path::new(&path_str);
+                    if p.is_absolute() {
+                        Some(p.to_path_buf())
+                    } else {
+                        Some(dir.join(&path_str))
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        });
+
+    // Find .git/hooks directory (fallback)
     let git_path = dir.join(".git");
-    let hooks_dir = if git_path.is_dir() {
-        git_path.join("hooks")
+    let default_hooks_dir = if git_path.is_dir() {
+        Some(git_path.join("hooks"))
     } else if git_path.is_file() {
-        // Worktree: .git file contains "gitdir: /path/to/.git/worktrees/<name>"
         let content =
             std::fs::read_to_string(&git_path).map_err(|e| format!("Cannot read .git: {e}"))?;
-        if let Some(gitdir) = content.trim().strip_prefix("gitdir: ") {
-            std::path::PathBuf::from(gitdir).join("hooks")
-        } else {
-            return Ok(Vec::new());
-        }
+        content
+            .trim()
+            .strip_prefix("gitdir: ")
+            .map(|gitdir| std::path::PathBuf::from(gitdir).join("hooks"))
     } else {
-        return Ok(Vec::new());
+        None
     };
 
     // Also check .husky directory (common hook manager)
     let husky_dir = dir.join(".husky");
 
+    // Collect all hook directories to scan (deduplicated)
+    let mut hook_dirs: Vec<(std::path::PathBuf, &str)> = Vec::new();
+    if let Some(ref cfg_dir) = configured_hooks_dir {
+        hook_dirs.push((cfg_dir.clone(), "active"));
+    }
+    if let Some(ref def_dir) = default_hooks_dir {
+        if configured_hooks_dir.as_ref() != Some(def_dir) {
+            hook_dirs.push((def_dir.clone(), "git"));
+        }
+    }
+    if configured_hooks_dir.as_ref() != Some(&husky_dir) {
+        hook_dirs.push((husky_dir, "husky"));
+    }
+
     let mut hooks = Vec::new();
 
-    // Scan standard git hooks
-    for hooks_path in [&hooks_dir, &husky_dir] {
+    for (hooks_path, source) in &hook_dirs {
         if !hooks_path.is_dir() {
             continue;
         }
@@ -1409,11 +1445,6 @@ fn list_git_hooks(directory: String) -> Result<Vec<GitHookEntry>, String> {
                         .collect::<Vec<_>>()
                         .join(" | ");
 
-                    let source = if hooks_path == &husky_dir {
-                        "husky"
-                    } else {
-                        "git"
-                    };
                     hooks.push(GitHookEntry {
                         name: format!("{} ({})", name, source),
                         path: path.to_string_lossy().to_string(),
