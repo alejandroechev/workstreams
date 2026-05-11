@@ -51,7 +51,13 @@ impl SessionPoller {
     }
 
     /// Register with session_id for direct events.jsonl reading
-    pub fn watch_with_id(&self, tile_id: &str, session_name: &str, session_id: &str, workstream_id: Option<&str>) {
+    pub fn watch_with_id(
+        &self,
+        tile_id: &str,
+        session_name: &str,
+        session_id: &str,
+        workstream_id: Option<&str>,
+    ) {
         let mut watched = self.watched.lock().unwrap();
         watched.retain(|e| e.tile_id != tile_id);
         watched.push(WatchEntry {
@@ -72,7 +78,14 @@ impl SessionPoller {
             .lock()
             .unwrap()
             .iter()
-            .map(|e| (e.tile_id.clone(), e.session_name.clone(), e.session_id.clone(), e.workstream_id.clone()))
+            .map(|e| {
+                (
+                    e.tile_id.clone(),
+                    e.session_name.clone(),
+                    e.session_id.clone(),
+                    e.workstream_id.clone(),
+                )
+            })
             .collect()
     }
 }
@@ -107,7 +120,8 @@ pub fn start_poller(app: AppHandle, poller: Arc<SessionPoller>) {
             };
 
             // Track workstream aggregate status: ws_id -> best_status
-            let mut ws_statuses: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+            let mut ws_statuses: std::collections::HashMap<String, String> =
+                std::collections::HashMap::new();
 
             for (tile_id, session_name, session_id_opt, ws_id_opt) in &watched {
                 // Try events.jsonl approach first if we have a session_id
@@ -139,11 +153,13 @@ pub fn start_poller(app: AppHandle, poller: Arc<SessionPoller>) {
                         })
                     } else {
                         // Fall back to DB-only approach
-                        conn.as_ref().and_then(|c| query_session_stats_legacy(c, session_name))
+                        conn.as_ref()
+                            .and_then(|c| query_session_stats_legacy(c, session_name))
                     }
                 } else {
                     // Legacy: no session_id, use DB pattern matching
-                    conn.as_ref().and_then(|c| query_session_stats_legacy(c, session_name))
+                    conn.as_ref()
+                        .and_then(|c| query_session_stats_legacy(c, session_name))
                 };
 
                 if let Some(s) = &stats {
@@ -213,7 +229,7 @@ fn read_events_status(session_dir: &std::path::Path) -> EventsStatus {
     let mut status = "idle".to_string();
     let mut current_tool: Option<String> = None;
     let mut last_event_at: Option<String> = None;
-    let mut has_open_turn = false;
+    let has_open_turn = false;
     let mut has_background = false;
 
     for line in lines.iter().rev() {
@@ -248,7 +264,6 @@ fn read_events_status(session_dir: &std::path::Path) -> EventsStatus {
                 break;
             }
             "assistant.turn_start" => {
-                has_open_turn = true;
                 status = "thinking".into();
                 break;
             }
@@ -389,7 +404,6 @@ fn check_process_alive(session_dir: &std::path::Path) -> bool {
 
 #[cfg(windows)]
 fn is_pid_alive(pid: u32) -> bool {
-    use std::os::windows::io::FromRawHandle;
     use std::ptr;
     const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
     const STILL_ACTIVE: u32 = 259;
@@ -451,7 +465,10 @@ fn query_session_meta(conn: &Connection, session_id: &str) -> Option<SessionMeta
         )
         .unwrap_or(0);
 
-    Some(SessionMeta { turn_count, ..result })
+    Some(SessionMeta {
+        turn_count,
+        ..result
+    })
 }
 
 /// Legacy: find session by name pattern (for tiles without session_id)
@@ -500,7 +517,11 @@ fn query_session_stats_legacy(conn: &Connection, session_name: &str) -> Option<S
     let events_status = if session_dir.exists() {
         let es = read_events_status(&session_dir);
         let alive = check_process_alive(&session_dir);
-        if !alive { "offline".to_string() } else { es.status }
+        if !alive {
+            "offline".to_string()
+        } else {
+            es.status
+        }
     } else {
         "idle".to_string()
     };
@@ -518,32 +539,4 @@ fn query_session_stats_legacy(conn: &Connection, session_name: &str) -> Option<S
         current_tool: None,
         process_alive: true,
     })
-}
-
-/// Rough parse of ISO-ish timestamp to epoch seconds
-pub fn chrono_parse_rough(ts: &str) -> Result<u64, ()> {
-    let parts: Vec<&str> = ts.split('T').collect();
-    if parts.len() != 2 { return Err(()); }
-    let date_parts: Vec<u32> = parts[0].split('-').filter_map(|p| p.parse().ok()).collect();
-    let time_str = parts[1].trim_end_matches('Z');
-    let time_parts: Vec<&str> = time_str.split(':').collect();
-    if date_parts.len() < 3 || time_parts.len() < 3 { return Err(()); }
-
-    let year = date_parts[0] as u64;
-    let month = date_parts[1] as u64;
-    let day = date_parts[2] as u64;
-    let hour: u64 = time_parts[0].parse().map_err(|_| ())?;
-    let min: u64 = time_parts[1].parse().map_err(|_| ())?;
-    let sec: u64 = time_parts[2].split('.').next().unwrap_or("0").parse().map_err(|_| ())?;
-
-    let days = (year - 1970) * 365 + (year - 1969) / 4 + month_days(month) + day - 1;
-    Ok(days * 86400 + hour * 3600 + min * 60 + sec)
-}
-
-fn month_days(month: u64) -> u64 {
-    match month {
-        1 => 0, 2 => 31, 3 => 59, 4 => 90, 5 => 120, 6 => 151,
-        7 => 181, 8 => 212, 9 => 243, 10 => 273, 11 => 304, 12 => 334,
-        _ => 0,
-    }
 }

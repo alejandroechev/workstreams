@@ -1,0 +1,14 @@
+#!/bin/sh
+
+echo "🔍 Pre-commit: TypeScript check..."
+npx tsc --noEmit || exit 1
+
+echo "🔍 Pre-commit: Rust check (warnings as errors)..."
+cd src-tauri
+cargo check 2>&1 | grep -q "warning:" && { echo "❌ Rust warnings found — fix before committing"; cargo check 2>&1 | grep "warning:"; exit 1; }
+
+echo "🔍 Pre-commit: Rust format check..."
+cargo fmt --check || { echo "❌ Run 'cargo fmt' to fix formatting"; exit 1; }
+cd ..
+
+echo "✅ Pre-commit checks passed"

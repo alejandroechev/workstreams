@@ -4,9 +4,9 @@ mod session_poller;
 
 use db::open_db;
 use pty::PtyManager;
-use session_poller::SessionPoller;
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
+use session_poller::SessionPoller;
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Manager, State};
 
@@ -153,12 +153,18 @@ fn update_project(
     let db = state.db.lock().unwrap();
     let ts = now();
     if let Some(n) = name {
-        db.execute("UPDATE projects SET name = ?1, updated_at = ?2 WHERE id = ?3", (&n, &ts, &id))
-            .map_err(|e| format!("DB error: {e}"))?;
+        db.execute(
+            "UPDATE projects SET name = ?1, updated_at = ?2 WHERE id = ?3",
+            (&n, &ts, &id),
+        )
+        .map_err(|e| format!("DB error: {e}"))?;
     }
     if let Some(c) = color {
-        db.execute("UPDATE projects SET color = ?1, updated_at = ?2 WHERE id = ?3", (&c, &ts, &id))
-            .map_err(|e| format!("DB error: {e}"))?;
+        db.execute(
+            "UPDATE projects SET color = ?1, updated_at = ?2 WHERE id = ?3",
+            (&c, &ts, &id),
+        )
+        .map_err(|e| format!("DB error: {e}"))?;
     }
     Ok(())
 }
@@ -167,8 +173,11 @@ fn update_project(
 fn delete_project(state: State<'_, AppState>, id: String) -> Result<(), String> {
     let db = state.db.lock().unwrap();
     // Unlink workstreams first (don't delete them)
-    db.execute("UPDATE workstreams SET project_id = NULL WHERE project_id = ?1", [&id])
-        .map_err(|e| format!("DB error: {e}"))?;
+    db.execute(
+        "UPDATE workstreams SET project_id = NULL WHERE project_id = ?1",
+        [&id],
+    )
+    .map_err(|e| format!("DB error: {e}"))?;
     db.execute("DELETE FROM projects WHERE id = ?1", [&id])
         .map_err(|e| format!("DB error: {e}"))?;
     Ok(())
@@ -467,7 +476,8 @@ fn update_tile_config(
     db.execute(
         "UPDATE tiles SET config_json = ?1, updated_at = ?2 WHERE id = ?3",
         (&config_json, &ts, &tile_id),
-    ).map_err(|e| format!("DB error: {e}"))?;
+    )
+    .map_err(|e| format!("DB error: {e}"))?;
     if let Some(t) = title {
         db.execute("UPDATE tiles SET title = ?1 WHERE id = ?2", (&t, &tile_id))
             .map_err(|e| format!("DB error: {e}"))?;
@@ -478,7 +488,10 @@ fn update_tile_config(
 // ── Layout Commands ────────────────────────────────────────────────────
 
 #[tauri::command]
-fn get_layout(state: State<'_, AppState>, workstream_id: String) -> Result<WorkstreamLayout, String> {
+fn get_layout(
+    state: State<'_, AppState>,
+    workstream_id: String,
+) -> Result<WorkstreamLayout, String> {
     let db = state.db.lock().unwrap();
     db.query_row(
         "SELECT workstream_id, layout_mode, focused_tile_id, fullscreen_tile_id, tile_order_json, updated_at
@@ -689,7 +702,10 @@ fn link_copilot_session(
 
 /// Get Copilot session link for a tile
 #[tauri::command]
-fn get_copilot_link(state: State<'_, AppState>, tile_id: String) -> Result<Option<CopilotSessionInfo>, String> {
+fn get_copilot_link(
+    state: State<'_, AppState>,
+    tile_id: String,
+) -> Result<Option<CopilotSessionInfo>, String> {
     let db = state.db.lock().unwrap();
     let result = db.query_row(
         "SELECT copilot_session_id, context_percent, turn_count, summary, linked_at
@@ -726,7 +742,9 @@ fn watch_session(
     workstream_id: Option<String>,
 ) -> Result<(), String> {
     if let Some(ref sid) = session_id {
-        state.session_poller.watch_with_id(&tile_id, &session_name, sid, workstream_id.as_deref());
+        state
+            .session_poller
+            .watch_with_id(&tile_id, &session_name, sid, workstream_id.as_deref());
     } else {
         state.session_poller.watch(&tile_id, &session_name);
     }
@@ -772,14 +790,23 @@ fn list_directory(path: String) -> Result<Vec<DirEntry>, String> {
     for entry in entries.flatten() {
         if let Some(name) = entry.file_name().to_str() {
             let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
-            let modified_epoch = entry.metadata()
+            let modified_epoch = entry
+                .metadata()
                 .ok()
                 .and_then(|m| m.modified().ok())
                 .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                 .map(|d: std::time::Duration| d.as_secs())
                 .unwrap_or(0);
-            let entry = DirEntry { name: name.to_string(), is_dir, modified_epoch };
-            if is_dir { dirs.push(entry); } else { files.push(entry); }
+            let entry = DirEntry {
+                name: name.to_string(),
+                is_dir,
+                modified_epoch,
+            };
+            if is_dir {
+                dirs.push(entry);
+            } else {
+                files.push(entry);
+            }
         }
     }
     // Folders first (alpha), then files (by modified time desc)
@@ -791,13 +818,24 @@ fn list_directory(path: String) -> Result<Vec<DirEntry>, String> {
 
 /// Recursively search for files matching a query (case-insensitive filename match)
 #[tauri::command]
-fn search_files(directory: String, query: String, limit: Option<u32>) -> Result<Vec<String>, String> {
+fn search_files(
+    directory: String,
+    query: String,
+    limit: Option<u32>,
+) -> Result<Vec<String>, String> {
     use std::collections::VecDeque;
 
     let max = limit.unwrap_or(50) as usize;
     let query_lower = query.to_lowercase();
-    let skip_dirs: std::collections::HashSet<&str> =
-        ["node_modules", "target", ".git", "dist", ".next", "__pycache__"].into();
+    let skip_dirs: std::collections::HashSet<&str> = [
+        "node_modules",
+        "target",
+        ".git",
+        "dist",
+        ".next",
+        "__pycache__",
+    ]
+    .into();
 
     let mut results = Vec::new();
     let mut queue = VecDeque::new();
@@ -845,7 +883,12 @@ struct GitCommit {
 fn git_log(directory: String, limit: Option<u32>) -> Result<Vec<GitCommit>, String> {
     let n = limit.unwrap_or(50);
     let output = git_cmd()
-        .args(["log", &format!("--format=%H|%h|%s|%an|%ar"), "-n", &n.to_string()])
+        .args([
+            "log",
+            &format!("--format=%H|%h|%s|%an|%ar"),
+            "-n",
+            &n.to_string(),
+        ])
         .current_dir(&directory)
         .output()
         .map_err(|e| format!("Failed to run git: {e}"))?;
@@ -920,7 +963,9 @@ fn create_worktree(
     let project_dir = std::path::Path::new(&project_directory);
 
     // Use the parent directory of the project to place the new worktree alongside
-    let parent = project_dir.parent().ok_or("Cannot determine parent directory")?;
+    let parent = project_dir
+        .parent()
+        .ok_or("Cannot determine parent directory")?;
     // Derive folder name from branch: alejandroe/feature-x → feature-x
     let folder_name = branch_name
         .rsplit('/')
@@ -930,7 +975,10 @@ fn create_worktree(
     let worktree_path = parent.join(&folder_name);
 
     if worktree_path.exists() {
-        return Err(format!("Directory already exists: {}", worktree_path.display()));
+        return Err(format!(
+            "Directory already exists: {}",
+            worktree_path.display()
+        ));
     }
 
     // Find the git root (for running worktree commands)
@@ -941,7 +989,9 @@ fn create_worktree(
         .map_err(|e| format!("git rev-parse failed: {e}"))?;
 
     let git_root = if git_root_output.status.success() {
-        String::from_utf8_lossy(&git_root_output.stdout).trim().to_string()
+        String::from_utf8_lossy(&git_root_output.stdout)
+            .trim()
+            .to_string()
     } else {
         project_directory.clone()
     };
@@ -1007,7 +1057,11 @@ fn git_diff_files(directory: String, mode: String) -> Result<Vec<String>, String
                 .map_err(|e| format!("Failed to run git: {e}"))?;
             if output.status.success() {
                 let stdout = String::from_utf8_lossy(&output.stdout);
-                return Ok(stdout.lines().filter(|l| !l.is_empty()).map(|l| l.to_string()).collect());
+                return Ok(stdout
+                    .lines()
+                    .filter(|l| !l.is_empty())
+                    .map(|l| l.to_string())
+                    .collect());
             }
             // Fallback to main
             vec!["diff", "main...HEAD", "--name-only"]
@@ -1109,13 +1163,11 @@ fn detect_git_info(directory: String) -> Result<(Option<String>, Option<String>)
 
     // Get branch from HEAD
     let head_path = repo_root.join(".git").join("HEAD");
-    let branch = std::fs::read_to_string(head_path)
-        .ok()
-        .and_then(|content| {
-            content
-                .strip_prefix("ref: refs/heads/")
-                .map(|b| b.trim().to_string())
-        });
+    let branch = std::fs::read_to_string(head_path).ok().and_then(|content| {
+        content
+            .strip_prefix("ref: refs/heads/")
+            .map(|b| b.trim().to_string())
+    });
 
     Ok((repo_name, branch))
 }
@@ -1138,8 +1190,8 @@ fn detect_worktree_info(directory: String) -> Result<WorktreeInfo, String> {
     // In a worktree, .git is a FILE containing "gitdir: /path/to/main/.git/worktrees/<name>"
     // In a normal repo, .git is a DIRECTORY
     if git_path.is_file() {
-        let content = std::fs::read_to_string(&git_path)
-            .map_err(|e| format!("Cannot read .git: {e}"))?;
+        let content =
+            std::fs::read_to_string(&git_path).map_err(|e| format!("Cannot read .git: {e}"))?;
         if let Some(gitdir) = content.trim().strip_prefix("gitdir: ") {
             // Parse parent repo from gitdir path
             // e.g., "C:/repos/myproject/.git/worktrees/my-worktree"
@@ -1150,7 +1202,8 @@ fn detect_worktree_info(directory: String) -> Result<WorktreeInfo, String> {
                 if p.file_name().map(|n| n == ".git").unwrap_or(false) {
                     let repo_root = p.parent();
                     if let Some(root) = repo_root {
-                        let repo_name = root.file_name()
+                        let repo_name = root
+                            .file_name()
                             .and_then(|n| n.to_str())
                             .map(|s| s.to_string());
                         let remote = detect_git_remote(&root.to_string_lossy());
@@ -1179,7 +1232,8 @@ fn detect_worktree_info(directory: String) -> Result<WorktreeInfo, String> {
 
     // Not a worktree — check if it's a normal git repo
     if git_path.is_dir() {
-        let repo_name = dir.file_name()
+        let repo_name = dir
+            .file_name()
             .and_then(|n| n.to_str())
             .map(|s| s.to_string());
         let branch = git_cmd()
@@ -1247,7 +1301,8 @@ fn read_skill_description(path: &std::path::Path) -> Option<String> {
         }
     }
     // No frontmatter — return first non-empty line
-    content.lines()
+    content
+        .lines()
         .map(|l| l.trim())
         .find(|l| !l.is_empty())
         .map(|s| s.to_string())
@@ -1258,11 +1313,9 @@ fn read_skill_description(path: &std::path::Path) -> Option<String> {
 #[tauri::command]
 fn get_setting(state: State<'_, AppState>, key: String) -> Result<Option<String>, String> {
     let db = state.db.lock().map_err(|e| e.to_string())?;
-    let result = db.query_row(
-        "SELECT value FROM settings WHERE key = ?1",
-        [&key],
-        |row| row.get::<_, Option<String>>(0),
-    );
+    let result = db.query_row("SELECT value FROM settings WHERE key = ?1", [&key], |row| {
+        row.get::<_, Option<String>>(0)
+    });
     match result {
         Ok(val) => Ok(val),
         Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
@@ -1300,8 +1353,8 @@ fn list_git_hooks(directory: String) -> Result<Vec<GitHookEntry>, String> {
         git_path.join("hooks")
     } else if git_path.is_file() {
         // Worktree: .git file contains "gitdir: /path/to/.git/worktrees/<name>"
-        let content = std::fs::read_to_string(&git_path)
-            .map_err(|e| format!("Cannot read .git: {e}"))?;
+        let content =
+            std::fs::read_to_string(&git_path).map_err(|e| format!("Cannot read .git: {e}"))?;
         if let Some(gitdir) = content.trim().strip_prefix("gitdir: ") {
             std::path::PathBuf::from(gitdir).join("hooks")
         } else {
@@ -1318,11 +1371,15 @@ fn list_git_hooks(directory: String) -> Result<Vec<GitHookEntry>, String> {
 
     // Scan standard git hooks
     for hooks_path in [&hooks_dir, &husky_dir] {
-        if !hooks_path.is_dir() { continue; }
+        if !hooks_path.is_dir() {
+            continue;
+        }
         if let Ok(entries) = std::fs::read_dir(hooks_path) {
             for entry in entries.flatten() {
                 let path = entry.path();
-                if !path.is_file() { continue; }
+                if !path.is_file() {
+                    continue;
+                }
                 let name = entry.file_name().to_string_lossy().to_string();
                 // Skip .sample files and underscore dirs
                 if name.ends_with(".sample") || name.starts_with('_') || name.starts_with('.') {
@@ -1337,7 +1394,9 @@ fn list_git_hooks(directory: String) -> Result<Vec<GitHookEntry>, String> {
                             && !trimmed.starts_with('#')
                             && !trimmed.starts_with("#!/")
                     });
-                    if !has_commands { continue; }
+                    if !has_commands {
+                        continue;
+                    }
 
                     // Get first few non-comment lines as preview
                     let preview: String = content
@@ -1350,7 +1409,11 @@ fn list_git_hooks(directory: String) -> Result<Vec<GitHookEntry>, String> {
                         .collect::<Vec<_>>()
                         .join(" | ");
 
-                    let source = if hooks_path == &husky_dir { "husky" } else { "git" };
+                    let source = if hooks_path == &husky_dir {
+                        "husky"
+                    } else {
+                        "git"
+                    };
                     hooks.push(GitHookEntry {
                         name: format!("{} ({})", name, source),
                         path: path.to_string_lossy().to_string(),
@@ -1370,7 +1433,9 @@ fn list_git_hooks(directory: String) -> Result<Vec<GitHookEntry>, String> {
 }
 
 #[tauri::command]
-fn discover_copilot_config(workstream_dir: Option<String>) -> Result<Vec<CopilotConfigItem>, String> {
+fn discover_copilot_config(
+    workstream_dir: Option<String>,
+) -> Result<Vec<CopilotConfigItem>, String> {
     let mut items = Vec::new();
     let home = dirs::home_dir().ok_or("No home directory")?;
     let copilot_dir = home.join(".copilot");
@@ -1383,7 +1448,9 @@ fn discover_copilot_config(workstream_dir: Option<String>) -> Result<Vec<Copilot
                 if entry.path().is_dir() {
                     let skill_md = entry.path().join("SKILL.md");
                     // Only show folders that actually contain a SKILL.md
-                    if !skill_md.exists() { continue; }
+                    if !skill_md.exists() {
+                        continue;
+                    }
                     let name = entry.file_name().to_string_lossy().to_string();
                     let desc = read_skill_description(&skill_md);
                     items.push(CopilotConfigItem {
@@ -1441,8 +1508,7 @@ fn discover_copilot_config(workstream_dir: Option<String>) -> Result<Vec<Copilot
         if let Ok(content) = std::fs::read_to_string(&mcp_config) {
             if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
                 // Traverse mcpServers or servers key
-                let servers = json.get("mcpServers")
-                    .or_else(|| json.get("servers"));
+                let servers = json.get("mcpServers").or_else(|| json.get("servers"));
                 if let Some(serde_json::Value::Object(map)) = servers {
                     for key in map.keys() {
                         items.push(CopilotConfigItem {
@@ -1466,7 +1532,9 @@ fn discover_copilot_config(workstream_dir: Option<String>) -> Result<Vec<Copilot
             if let Ok(entries) = std::fs::read_dir(dir) {
                 for entry in entries.flatten() {
                     let path = entry.path();
-                    if !path.is_dir() { continue; }
+                    if !path.is_dir() {
+                        continue;
+                    }
 
                     // Check for skills/ subdirectory
                     let skills_sub = path.join("skills");
@@ -1476,7 +1544,8 @@ fn discover_copilot_config(workstream_dir: Option<String>) -> Result<Vec<Copilot
                                 if skill_entry.path().is_dir() {
                                     let skill_md = skill_entry.path().join("SKILL.md");
                                     if skill_md.exists() {
-                                        let name = skill_entry.file_name().to_string_lossy().to_string();
+                                        let name =
+                                            skill_entry.file_name().to_string_lossy().to_string();
                                         let desc = read_skill_description(&skill_md);
                                         items.push(CopilotConfigItem {
                                             name,
@@ -1642,19 +1711,6 @@ pub struct SessionTodoEntry {
     pub status: String,
 }
 
-fn open_session_store_readonly() -> Result<Connection, String> {
-    let home = dirs::home_dir().ok_or("No home directory")?;
-    let db_path = home.join(".copilot").join("session-store.db");
-    if !db_path.exists() {
-        return Err("session-store.db not found".into());
-    }
-    Connection::open_with_flags(
-        &db_path,
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    )
-    .map_err(|e| e.to_string())
-}
-
 /// Read a file from within a session-state directory
 #[tauri::command]
 fn read_session_file(session_id: String, relative_path: String) -> Result<String, String> {
@@ -1669,8 +1725,7 @@ fn read_session_file(session_id: String, relative_path: String) -> Result<String
         return Err(format!("File not found: {}", relative_path));
     }
 
-    std::fs::read_to_string(&file_path)
-        .map_err(|e| format!("Cannot read {}: {}", relative_path, e))
+    std::fs::read_to_string(&file_path).map_err(|e| format!("Cannot read {}: {}", relative_path, e))
 }
 
 #[tauri::command]
@@ -1822,32 +1877,44 @@ fn list_session_db_tables(session_id: String) -> Result<Vec<SessionDbTable>, Str
     let mut tables = Vec::new();
     for name in table_names {
         let count: i64 = conn
-            .query_row(&format!("SELECT COUNT(*) FROM [{}]", name), [], |row| row.get(0))
+            .query_row(&format!("SELECT COUNT(*) FROM [{}]", name), [], |row| {
+                row.get(0)
+            })
             .unwrap_or(0);
-        tables.push(SessionDbTable { name, row_count: count });
+        tables.push(SessionDbTable {
+            name,
+            row_count: count,
+        });
     }
     Ok(tables)
 }
 
 #[tauri::command]
-fn query_session_db_table(session_id: String, table_name: String, limit: Option<i64>) -> Result<SessionDbTableData, String> {
+fn query_session_db_table(
+    session_id: String,
+    table_name: String,
+    limit: Option<i64>,
+) -> Result<SessionDbTableData, String> {
     let conn = open_session_db(&session_id)?;
     let limit_val = limit.unwrap_or(100);
 
     // Get column names
-    let mut stmt = conn
+    let col_stmt = conn
         .prepare(&format!("SELECT * FROM [{}] LIMIT 0", table_name))
         .map_err(|e| e.to_string())?;
-    let columns: Vec<String> = stmt
+    let columns: Vec<String> = col_stmt
         .column_names()
         .iter()
         .map(|s| s.to_string())
         .collect();
-    drop(stmt);
+    drop(col_stmt);
 
     // Get rows
     let mut stmt = conn
-        .prepare(&format!("SELECT * FROM [{}] LIMIT {}", table_name, limit_val))
+        .prepare(&format!(
+            "SELECT * FROM [{}] LIMIT {}",
+            table_name, limit_val
+        ))
         .map_err(|e| e.to_string())?;
     let col_count = columns.len();
     let mut rows_out = Vec::new();
@@ -1869,7 +1936,10 @@ fn query_session_db_table(session_id: String, table_name: String, limit: Option<
         rows_out.push(row_vals);
     }
 
-    Ok(SessionDbTableData { columns, rows: rows_out })
+    Ok(SessionDbTableData {
+        columns,
+        rows: rows_out,
+    })
 }
 
 // ── App Setup ──────────────────────────────────────────────────────────
