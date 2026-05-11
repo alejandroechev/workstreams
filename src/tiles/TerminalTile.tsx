@@ -194,12 +194,16 @@ export default function TerminalTile({ tileId, isFocused, onStatusChange }: Prop
       const buf = (term as unknown as { buffer: { active: { type: string } } }).buffer?.active;
       if (buf && buf.type === "alternate") {
         e.preventDefault();
+        e.stopPropagation();
         const lines = Math.max(1, Math.round(Math.abs(e.deltaY) / 40));
         const arrow = e.deltaY < 0 ? "\x1b[A" : "\x1b[B";
         invoke("write_to_pty", { tileId, data: arrow.repeat(lines) }).catch(() => {});
       }
     };
-    containerRef.current.addEventListener("wheel", wheelHandler, { passive: false });
+    // Attach to the xterm screen element for reliable capture
+    const xtermScreen = containerRef.current.querySelector(".xterm-screen") as HTMLElement;
+    const wheelTarget = xtermScreen || containerRef.current;
+    wheelTarget.addEventListener("wheel", wheelHandler, { passive: false });
 
     // Periodic scrollback save (every 30s)
     const saveInterval = setInterval(saveScrollback, 30_000);
@@ -208,6 +212,7 @@ export default function TerminalTile({ tileId, isFocused, onStatusChange }: Prop
       clearInterval(saveInterval);
       saveScrollback();
       containerRef.current?.removeEventListener("wheel", wheelHandler);
+      xtermScreen?.removeEventListener("wheel", wheelHandler);
       resizeObserver.disconnect();
       unlistenOutput.then((u) => u());
       unlistenExit.then((u) => u());
@@ -248,6 +253,7 @@ export default function TerminalTile({ tileId, isFocused, onStatusChange }: Prop
       )}
       <div
         ref={containerRef}
+        onMouseEnter={() => termRef.current?.focus()}
         style={{ width: "100%", height: "100%", overflow: "hidden" }}
       />
     </div>

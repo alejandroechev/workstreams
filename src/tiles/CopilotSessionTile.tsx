@@ -218,18 +218,22 @@ export default function CopilotSessionTile({
       const buf = (term as unknown as { buffer: { active: { type: string } } }).buffer?.active;
       if (buf && buf.type === "alternate") {
         e.preventDefault();
+        e.stopPropagation();
         const lines = Math.max(1, Math.round(Math.abs(e.deltaY) / 40));
         const arrow = e.deltaY < 0 ? "\x1b[A" : "\x1b[B"; // up : down
         invoke("write_to_pty", { tileId, data: arrow.repeat(lines) }).catch(() => {});
       }
     };
-    containerRef.current.addEventListener("wheel", wheelHandler, { passive: false });
+    const xtermScreen = containerRef.current.querySelector(".xterm-screen") as HTMLElement;
+    const wheelTarget = xtermScreen || containerRef.current;
+    wheelTarget.addEventListener("wheel", wheelHandler, { passive: false });
 
     const saveInterval = setInterval(saveScrollback, 30_000);
 
     return () => {
       clearInterval(saveInterval);
       containerRef.current?.removeEventListener("wheel", wheelHandler);
+      xtermScreen?.removeEventListener("wheel", wheelHandler);
       saveScrollback();
       invoke("unwatch_session", { tileId }).catch(() => {});
       resizeObserver.disconnect();
@@ -324,7 +328,7 @@ export default function CopilotSessionTile({
           </button>
         )}
       </div>
-      <div ref={containerRef} style={{ width: "100%", height: "100%", overflow: "hidden" }} />
+      <div ref={containerRef} onMouseEnter={() => termRef.current?.focus()} style={{ width: "100%", height: "100%", overflow: "hidden" }} />
     </div>
   );
 }
