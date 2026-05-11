@@ -32,6 +32,7 @@ interface Props {
   onUpdateProject: (id: string, updates: { name: string; color: string }) => void;
   onReorderWorkstream: (id: string, direction: 'up' | 'down') => void;
   onChangeStatus: (id: string, status: Workstream['status']) => void;
+  onForkWorkstream?: (id: string) => void;
 }
 
 type WorkstreamStatus = Workstream['status'];
@@ -68,6 +69,7 @@ export default function WorkstreamSidebar({
   onUpdateProject,
   onReorderWorkstream,
   onChangeStatus,
+  onForkWorkstream,
 }: Props) {
   const [showArchived, setShowArchived] = useState(false);
   const [archiveConfirm, setArchiveConfirm] = useState<string | null>(null);
@@ -311,6 +313,15 @@ export default function WorkstreamSidebar({
                     >
                       ✎
                     </button>
+                    {onForkWorkstream && (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); onForkWorkstream(ws.id); }}
+                        style={sidebarBtnStyle}
+                        title="Fork to new worktree"
+                      >
+                        ⑂
+                      </button>
+                    )}
                     <button
                       onClick={(e) => { e.stopPropagation(); setArchiveConfirm(ws.id); }}
                       style={sidebarBtnStyle}

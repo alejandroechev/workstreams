@@ -909,6 +909,89 @@ fn git_current_branch(directory: String) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
+/// Create a new git worktree with a new branch
+#[tauri::command]
+fn create_worktree(
+    project_directory: String,
+    branch_name: String,
+    base_branch: Option<String>,
+) -> Result<String, String> {
+    // Determine worktree path: sibling of existing worktrees
+    let project_dir = std::path::Path::new(&project_directory);
+
+    // Use the parent directory of the project to place the new worktree alongside
+    let parent = project_dir.parent().ok_or("Cannot determine parent directory")?;
+    // Derive folder name from branch: alejandroe/feature-x → feature-x
+    let folder_name = branch_name
+        .rsplit('/')
+        .next()
+        .unwrap_or(&branch_name)
+        .to_string();
+    let worktree_path = parent.join(&folder_name);
+
+    if worktree_path.exists() {
+        return Err(format!("Directory already exists: {}", worktree_path.display()));
+    }
+
+    // Find the git root (for running worktree commands)
+    let git_root_output = git_cmd()
+        .args(["rev-parse", "--show-toplevel"])
+        .current_dir(&project_directory)
+        .output()
+        .map_err(|e| format!("git rev-parse failed: {e}"))?;
+
+    let git_root = if git_root_output.status.success() {
+        String::from_utf8_lossy(&git_root_output.stdout).trim().to_string()
+    } else {
+        project_directory.clone()
+    };
+
+    // Build worktree add command
+    let mut args = vec![
+        "worktree".to_string(),
+        "add".to_string(),
+        worktree_path.to_string_lossy().to_string(),
+        "-b".to_string(),
+        branch_name.clone(),
+    ];
+    if let Some(base) = &base_branch {
+        args.push(base.clone());
+    }
+
+    let output = git_cmd()
+        .args(args.iter().map(|s| s.as_str()))
+        .current_dir(&git_root)
+        .output()
+        .map_err(|e| format!("git worktree add failed: {e}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("git worktree add failed: {stderr}"));
+    }
+
+    Ok(worktree_path.to_string_lossy().to_string())
+}
+
+/// List branches for a git repository
+#[tauri::command]
+fn git_list_branches(directory: String) -> Result<Vec<String>, String> {
+    let output = git_cmd()
+        .args(["branch", "--list", "--format=%(refname:short)"])
+        .current_dir(&directory)
+        .output()
+        .map_err(|e| format!("git branch failed: {e}"))?;
+
+    if !output.status.success() {
+        return Ok(Vec::new());
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter(|l| !l.is_empty())
+        .map(|l| l.to_string())
+        .collect())
+}
+
 /// Get list of changed files for a diff mode
 #[tauri::command]
 fn git_diff_files(directory: String, mode: String) -> Result<Vec<String>, String> {
@@ -1873,6 +1956,8 @@ pub fn run() {
             git_log,
             git_show_commit,
             git_current_branch,
+            create_worktree,
+            git_list_branches,
             // Settings
             get_setting,
             set_setting,

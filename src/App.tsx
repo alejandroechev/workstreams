@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import WorkstreamSidebar from "./workstream/WorkstreamSidebar";
 import ProjectCreateForm from "./workstream/ProjectCreateForm";
 import WorkstreamCreateForm from "./workstream/WorkstreamCreateForm";
+import ForkWorkstreamForm from "./workstream/ForkWorkstreamForm";
 import TileGrid from "./tiling/TileGrid";
 import StatusBar from "./tiling/StatusBar";
 import SessionPicker, { type CopilotSession } from "./tiles/SessionPicker";
@@ -25,6 +26,7 @@ export default function App() {
   const [linkingTileId, setLinkingTileId] = useState<string | null>(null);
   const [showProjectCreate, setShowProjectCreate] = useState(false);
   const [showWsCreate, setShowWsCreate] = useState<{ show: boolean; projectId?: string }>({ show: false });
+  const [showForkWs, setShowForkWs] = useState<{ show: boolean; wsId?: string }>({ show: false });
   // Track which tile IDs have active PTYs to avoid double-spawning
   const spawnedPtys = useRef<Set<string>>(new Set());
   const previousWsTiles = useRef<Map<string, { tiles: Tile[]; order: string[] }>>(new Map());
@@ -226,6 +228,83 @@ export default function App() {
       }
     }
   }, [workstreams, activeWsId, tiles, backend]);
+
+  const handleForkWorkstream = useCallback(async (
+    sourceWsId: string,
+    opts: { name: string; branchName: string; baseBranch: string; archiveOld: boolean },
+  ) => {
+    const sourceWs = workstreams.find((w) => w.id === sourceWsId);
+    if (!sourceWs) return;
+
+    // Find the copilot session ID from the source workstream's tiles
+    const sourceTiles = await backend.listTiles(sourceWsId);
+    const sessionTile = sourceTiles.find((t) => t.tile_type === "copilot_session");
+    let sessionId: string | null = null;
+    if (sessionTile) {
+      try {
+        const cfg = JSON.parse(sessionTile.config_json || "{}");
+        sessionId = cfg.copilot_session_id || cfg.resume_by_id || null;
+      } catch { /* ignore */ }
+    }
+
+    // Create the git worktree
+    let newDir: string;
+    try {
+      newDir = await invoke<string>("create_worktree", {
+        projectDirectory: sourceWs.directory,
+        branchName: opts.branchName,
+        baseBranch: opts.baseBranch,
+      });
+    } catch (e) {
+      console.error("Failed to create worktree:", e);
+      return;
+    }
+
+    // Create new workstream
+    const newWs = await backend.createWorkstream(opts.name, newDir, {
+      projectId: sourceWs.project_id || undefined,
+      workstreamType: "worktree",
+      worktreeBranch: opts.branchName,
+    });
+
+    // Create copilot_session tile with the same session ID (resume)
+    const config = JSON.stringify({
+      session_name: opts.name,
+      copilot_session_id: sessionId,
+      resume_by_id: sessionId,
+      command_template: "agency copilot --yolo",
+      cwd: newDir,
+      is_resumed: !!sessionId,
+      created_at: new Date().toISOString(),
+    });
+    const tile = await backend.createTile(newWs.id, "copilot_session", opts.name, config);
+    await backend.updateLayout(newWs.id, { tile_order_json: JSON.stringify([tile.id]) });
+
+    // Optionally archive old workstream
+    if (opts.archiveOld) {
+      for (const t of sourceTiles) {
+        spawnedPtys.current.delete(t.id);
+        await backend.closeTerminal(t.id).catch(() => {});
+      }
+      await backend.updateWorkstream(sourceWsId, { status: "archived" });
+      setWorkstreams((prev) => prev.map((w) => w.id === sourceWsId ? { ...w, status: "archived" } : w));
+    }
+
+    // Switch to new workstream
+    setWorkstreams((prev) => [newWs, ...prev]);
+    setActiveWsId(newWs.id);
+    setTiles([tile]);
+    setTileOrder([tile.id]);
+    setShowForkWs({ show: false });
+
+    // Spawn agency.exe with --resume
+    spawnedPtys.current.add(tile.id);
+    const agencyArgs = ["copilot", "--yolo"];
+    if (sessionId) agencyArgs.push(`--resume=${sessionId}`);
+    backend.spawnTerminal(tile.id, newDir, "agency.exe", agencyArgs, 30, 120).catch(() => {
+      spawnedPtys.current.delete(tile.id);
+    });
+  }, [workstreams, backend]);
 
   const addTile = useCallback(async (tileType: TileType, extraConfig?: Record<string, string>) => {
     if (!activeWsId) return;
@@ -490,6 +569,7 @@ export default function App() {
           await backend.updateWorkstream(id, { status });
           setWorkstreams((prev) => prev.map((w) => w.id === id ? { ...w, status } : w));
         }}
+        onForkWorkstream={(id) => setShowForkWs({ show: true, wsId: id })}
       />
 
       <div
@@ -639,6 +719,31 @@ export default function App() {
           onCancel={() => setShowWsCreate({ show: false })}
         />
       )}
+
+      {/* Fork workstream modal */}
+      {showForkWs.show && showForkWs.wsId && (() => {
+        const ws = workstreams.find((w) => w.id === showForkWs.wsId);
+        if (!ws) return null;
+        // Find linked session ID from copilot tiles
+        const sessionTile = tiles.find((t) => t.tile_type === "copilot_session" && t.workstream_id === ws.id);
+        let sessionId: string | null = null;
+        if (sessionTile) {
+          try {
+            const cfg = JSON.parse(sessionTile.config_json || "{}");
+            sessionId = cfg.copilot_session_id || cfg.resume_by_id || null;
+          } catch { /* */ }
+        }
+        return (
+          <ForkWorkstreamForm
+            workstreamName={ws.name}
+            workstreamDir={ws.directory || ""}
+            currentBranch={ws.git_branch || ws.worktree_branch || null}
+            sessionId={sessionId}
+            onSubmit={(opts) => handleForkWorkstream(ws.id, opts)}
+            onCancel={() => setShowForkWs({ show: false })}
+          />
+        );
+      })()}
     </div>
   );
 }
