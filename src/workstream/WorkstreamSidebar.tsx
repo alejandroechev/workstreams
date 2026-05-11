@@ -9,6 +9,7 @@ import {
   ArchiveBoxIcon,
   ChevronUpIcon,
   ChevronDownIcon,
+  BellAlertIcon,
 } from "@heroicons/react/20/solid";
 
 const PRESET_COLORS = [
@@ -84,6 +85,20 @@ export default function WorkstreamSidebar({
 
   // Live activity status per workstream (from session poller)
   const [wsActivity, setWsActivity] = useState<Record<string, string>>({});
+  const prevActivityRef = useRef<Record<string, string>>({});
+  // Workstreams with pending bell notification (agent finished)
+  const [wsBell, setWsBell] = useState<Set<string>>(new Set());
+
+  // Clear bell when workstream is focused
+  useEffect(() => {
+    if (activeWsId && wsBell.has(activeWsId)) {
+      setWsBell((prev) => {
+        const next = new Set(prev);
+        next.delete(activeWsId);
+        return next;
+      });
+    }
+  }, [activeWsId]);
 
   // Listen for workstream activity events
   useEffect(() => {
@@ -91,14 +106,24 @@ export default function WorkstreamSidebar({
     for (const ws of workstreams) {
       unlistens.push(
         listen<string>(`workstream-activity-${ws.id}`, (event) => {
-          setWsActivity((prev) => ({ ...prev, [ws.id]: event.payload }));
+          const newStatus = event.payload;
+          const prevStatus = prevActivityRef.current[ws.id];
+          setWsActivity((prev) => ({ ...prev, [ws.id]: newStatus }));
+          prevActivityRef.current[ws.id] = newStatus;
+
+          // Detect active→idle transition: show bell if not focused
+          const wasActive = prevStatus && ["thinking", "tool_use", "responding"].includes(prevStatus);
+          const nowIdle = newStatus === "idle";
+          if (wasActive && nowIdle && ws.id !== activeWsId) {
+            setWsBell((prev) => new Set(prev).add(ws.id));
+          }
         })
       );
     }
     return () => {
       unlistens.forEach((u) => u.then((fn) => fn()));
     };
-  }, [workstreams.map((w) => w.id).join(",")]);
+  }, [workstreams.map((w) => w.id).join(","), activeWsId]);
 
   // Auto-focus rename input
   useEffect(() => {
@@ -221,7 +246,11 @@ export default function WorkstreamSidebar({
                     }}
                     title={isActive ? "Change status" : STATUS_META[ws.status]?.label ?? ws.status}
                   >
-                    <StatusIcon status={ws.status} size={14} />
+                    {wsBell.has(ws.id) ? (
+                      <BellAlertIcon style={{ width: 14, height: 14, color: "#f9e2af", animation: "pulse-dot 1s ease-in-out 3" }} />
+                    ) : (
+                      <StatusIcon status={ws.status} size={14} />
+                    )}
                   </span>
                   {/* Live activity indicator from session poller */}
                   {(() => {
@@ -390,14 +419,6 @@ export default function WorkstreamSidebar({
                   fontSize: 10,
                   color: "#585b70",
                 }}>
-                  <span style={{
-                    width: 6,
-                    height: 6,
-                    borderRadius: "50%",
-                    background: project.color,
-                    display: "inline-block",
-                    flexShrink: 0,
-                  }} />
                   <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                     {project.name}
                   </span>
