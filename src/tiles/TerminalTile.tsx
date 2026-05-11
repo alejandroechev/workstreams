@@ -194,11 +194,11 @@ export default function TerminalTile({ tileId, isFocused, onStatusChange }: Prop
       const buf = (term as unknown as { buffer: { active: { type: string } } }).buffer?.active;
       if (buf && buf.type === "alternate") {
         e.preventDefault();
-        e.stopPropagation();
         const lines = Math.max(1, Math.round(Math.abs(e.deltaY) / 40));
         const arrow = e.deltaY < 0 ? "\x1b[A" : "\x1b[B";
         invoke("write_to_pty", { tileId, data: arrow.repeat(lines) }).catch(() => {});
       }
+      // In normal mode, xterm.js handles scrollback natively — don't interfere
     };
     // Attach to the xterm screen element for reliable capture
     const xtermScreen = containerRef.current.querySelector(".xterm-screen") as HTMLElement;
