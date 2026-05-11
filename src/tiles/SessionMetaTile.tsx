@@ -16,6 +16,8 @@ import {
   FolderIcon,
   TableCellsIcon,
   BoltIcon,
+  ArrowLeftIcon,
+  ClipboardDocumentListIcon,
 } from "@heroicons/react/24/outline";
 
 interface Props {
@@ -55,7 +57,7 @@ const CATEGORY_META: Record<string, CategoryMeta> = {
 
 const CATEGORY_ORDER = ["skill", "extension", "agent", "mcp_server", "instruction", "git_hook"];
 
-type TabId = "config" | "files" | "database";
+type TabId = "config" | "files" | "database" | "plan";
 
 interface SessionDbTable {
   name: string;
@@ -98,6 +100,10 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused: _isFocused
   const [selectedTable, setSelectedTable] = useState<string | null>(null);
   const [tableData, setTableData] = useState<SessionDbTableData | null>(null);
   const [dbLoading, setDbLoading] = useState(false);
+  // Plan content
+  const [planContent, setPlanContent] = useState<string | null>(null);
+  // Content viewer (for configs and files)
+  const [viewContent, setViewContent] = useState<{ title: string; content: string } | null>(null);
 
   const loadConfig = useCallback(async () => {
     setLoading(true);
@@ -190,11 +196,44 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused: _isFocused
     if (activeTab === "database") loadDbTables();
   }, [activeTab, loadDbTables]);
 
+  // Load plan.md when plan tab is selected
+  const loadPlan = useCallback(async () => {
+    if (!linkedSessionIds || linkedSessionIds.length === 0) {
+      setPlanContent(null);
+      return;
+    }
+    for (const sid of linkedSessionIds) {
+      try {
+        const content = await invoke<string>("read_session_file", { sessionId: sid, relativePath: "plan.md" });
+        if (content) {
+          setPlanContent(content);
+          return;
+        }
+      } catch { /* ignore */ }
+    }
+    setPlanContent(null);
+  }, [linkedSessionIds]);
+
+  useEffect(() => {
+    if (activeTab === "plan") loadPlan();
+  }, [activeTab, loadPlan]);
+
+  // Open a file in the content viewer
+  const viewFile = useCallback(async (path: string, title: string) => {
+    try {
+      const content = await backend.readFile(path);
+      setViewContent({ title, content });
+    } catch (e) {
+      setViewContent({ title, content: `Error reading file: ${e}` });
+    }
+  }, [backend]);
+
   const refresh = useCallback(() => {
     loadConfig();
     loadSessionData();
     if (activeTab === "database") loadDbTables();
-  }, [loadConfig, loadSessionData, loadDbTables, activeTab]);
+    if (activeTab === "plan") loadPlan();
+  }, [loadConfig, loadSessionData, loadDbTables, loadPlan, activeTab]);
 
   const toggleCategory = (cat: string) => {
     setCollapsed((prev) => {
@@ -219,7 +258,8 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused: _isFocused
   const tabs: { id: TabId; label: string; icon: React.ComponentType<React.SVGProps<SVGSVGElement>>; count: number }[] = [
     { id: "config", label: "Config", icon: SparklesIcon, count: items.length },
     { id: "files", label: "Files", icon: FolderIcon, count: uniqueFiles.length },
-    { id: "database", label: "Database", icon: TableCellsIcon, count: dbTables.reduce((s, t) => s + t.row_count, 0) },
+    { id: "database", label: "DB", icon: TableCellsIcon, count: dbTables.reduce((s, t) => s + t.row_count, 0) },
+    { id: "plan", label: "Plan", icon: ClipboardDocumentListIcon, count: 0 },
   ];
 
   return (
@@ -232,6 +272,7 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused: _isFocused
         color: "#cdd6f4",
         fontFamily: "monospace",
         fontSize: 12,
+        position: "relative",
       }}
     >
       {/* Toolbar with tabs */}
@@ -356,14 +397,18 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused: _isFocused
                   catItems.map((item, idx) => (
                     <div
                       key={`${item.name}-${idx}`}
+                      onClick={() => viewFile(item.path, item.name)}
                       style={{
                         display: "flex",
                         alignItems: "center",
                         gap: 6,
                         padding: "3px 8px 3px 28px",
                         color: "#cdd6f4",
+                        cursor: "pointer",
                       }}
-                      title={item.path}
+                      title={`Click to view · ${item.path}`}
+                      onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "#313244"; }}
+                      onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "transparent"; }}
                     >
                       <Icon style={{ width: 12, height: 12, color: "#585b70", flexShrink: 0 }} />
                       <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
@@ -419,18 +464,21 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused: _isFocused
             )}
             {uniqueFiles.map((f, i) => {
               const fileName = f.file_path.split(/[/\\]/).pop() || f.file_path;
-              const dirPath = f.file_path.substring(0, f.file_path.length - fileName.length);
               return (
                 <div
                   key={`${f.file_path}-${i}`}
+                  onClick={() => viewFile(f.file_path, fileName)}
                   style={{
                     display: "flex",
                     alignItems: "center",
                     gap: 6,
                     padding: "3px 8px",
                     color: "#cdd6f4",
+                    cursor: "pointer",
                   }}
-                  title={f.file_path}
+                  title={`Click to view · ${f.file_path}`}
+                  onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "#313244"; }}
+                  onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "transparent"; }}
                 >
                   <DocumentIcon style={{ width: 12, height: 12, color: "#89b4fa", flexShrink: 0 }} />
                   <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
@@ -525,7 +573,83 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused: _isFocused
             )}
           </>
         )}
+
+        {/* Plan tab */}
+        {activeTab === "plan" && (
+          <>
+            {(!linkedSessionIds || linkedSessionIds.length === 0) && (
+              <div style={{ padding: 12, color: "#585b70", textAlign: "center" }}>
+                No linked sessions
+              </div>
+            )}
+            {linkedSessionIds && linkedSessionIds.length > 0 && planContent === null && (
+              <div style={{ padding: 12, color: "#585b70", textAlign: "center" }}>
+                No plan.md found in session
+              </div>
+            )}
+            {planContent && (
+              <pre style={{
+                padding: "8px 12px",
+                margin: 0,
+                whiteSpace: "pre-wrap",
+                wordBreak: "break-word",
+                fontSize: 11,
+                lineHeight: 1.5,
+                color: "#cdd6f4",
+                fontFamily: "monospace",
+              }}>
+                {planContent}
+              </pre>
+            )}
+          </>
+        )}
       </div>
+
+      {/* Content viewer overlay */}
+      {viewContent && (
+        <div style={{
+          position: "absolute",
+          top: 0, left: 0, right: 0, bottom: 0,
+          background: "#1e1e2e",
+          display: "flex",
+          flexDirection: "column",
+          zIndex: 10,
+        }}>
+          <div style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+            padding: "6px 8px",
+            background: "#181825",
+            borderBottom: "1px solid #313244",
+            flexShrink: 0,
+          }}>
+            <button
+              onClick={() => setViewContent(null)}
+              style={{ background: "none", border: "none", color: "#89b4fa", cursor: "pointer", fontSize: 11, padding: "2px 4px", display: "flex", alignItems: "center", gap: 2 }}
+            >
+              <ArrowLeftIcon style={{ width: 12, height: 12 }} /> Back
+            </button>
+            <span style={{ color: "#cdd6f4", fontWeight: 600, fontSize: 11, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {viewContent.title}
+            </span>
+          </div>
+          <pre style={{
+            flex: 1,
+            overflow: "auto",
+            padding: "8px 12px",
+            margin: 0,
+            whiteSpace: "pre-wrap",
+            wordBreak: "break-word",
+            fontSize: 11,
+            lineHeight: 1.5,
+            color: "#cdd6f4",
+            fontFamily: "monospace",
+          }}>
+            {viewContent.content}
+          </pre>
+        </div>
+      )}
     </div>
   );
 }

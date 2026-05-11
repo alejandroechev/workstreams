@@ -1564,6 +1564,24 @@ fn open_session_store_readonly() -> Result<Connection, String> {
     .map_err(|e| e.to_string())
 }
 
+/// Read a file from within a session-state directory
+#[tauri::command]
+fn read_session_file(session_id: String, relative_path: String) -> Result<String, String> {
+    let home = dirs::home_dir().ok_or("No home directory")?;
+    let file_path = home
+        .join(".copilot")
+        .join("session-state")
+        .join(&session_id)
+        .join(&relative_path);
+
+    if !file_path.exists() {
+        return Err(format!("File not found: {}", relative_path));
+    }
+
+    std::fs::read_to_string(&file_path)
+        .map_err(|e| format!("Cannot read {}: {}", relative_path, e))
+}
+
 #[tauri::command]
 fn query_session_files(session_id: String) -> Result<Vec<SessionFileEntry>, String> {
     let home = dirs::home_dir().ok_or("No home directory")?;
@@ -1837,6 +1855,7 @@ pub fn run() {
             // Copilot config
             discover_copilot_config,
             // Session files & todos & DB
+            read_session_file,
             query_session_files,
             query_session_todos,
             list_session_db_tables,
