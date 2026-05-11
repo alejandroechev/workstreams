@@ -93,7 +93,7 @@ export default function App() {
             if (xterm) xterm.focus();
           }
         }
-      }, 100);
+      }, 250);
     });
   }, [activeWsId]);
 

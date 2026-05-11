@@ -203,7 +203,10 @@ export default function CopilotSessionTile({
 
   useEffect(() => {
     if (isFocused && fitRef.current) {
-      setTimeout(() => fitRef.current?.fit(), 50);
+      setTimeout(() => {
+        fitRef.current?.fit();
+        termRef.current?.focus();
+      }, 50);
     }
   }, [isFocused]);
 

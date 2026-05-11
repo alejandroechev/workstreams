@@ -33,7 +33,7 @@ export default function WorkstreamCreateForm({ project: initialProject, projects
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(initialProject?.id || null);
   const project = selectedProjectId ? projects.find((p) => p.id === selectedProjectId) : undefined;
   const hasProject = !!project;
-  const [name, setName] = useState(hasProject ? `${project.name} - ` : "");
+  const [name, setName] = useState(hasProject ? project.name : "");
   const [wsType, setWsType] = useState<WorkstreamType>(hasProject ? "worktree" : "standalone");
   const [directory, setDirectory] = useState(project?.directory || "");
   const [branchName, setBranchName] = useState("");
@@ -45,7 +45,7 @@ export default function WorkstreamCreateForm({ project: initialProject, projects
     const p = projectId ? projects.find((pr) => pr.id === projectId) : undefined;
     if (p) {
       setDirectory(p.directory);
-      if (!name || name === `${project?.name} - `) setName(`${p.name} - `);
+      if (!name || name === project?.name) setName(p.name);
       setWsType("worktree");
     } else {
       setDirectory("");
@@ -55,7 +55,7 @@ export default function WorkstreamCreateForm({ project: initialProject, projects
 
   useEffect(() => {
     if (wsType === "worktree" && name.trim()) {
-      setBranchName(`ws-${slugify(name)}`);
+      setBranchName(`alejandroe/${slugify(name)}`);
     }
   }, [name, wsType]);
 
@@ -237,7 +237,7 @@ export default function WorkstreamCreateForm({ project: initialProject, projects
               value={branchName}
               onChange={(e) => setBranchName(e.target.value)}
               onKeyDown={(e) => e.stopPropagation()}
-              placeholder="ws-feature-name"
+              placeholder="alejandroe/feature-name"
               style={{
                 width: "100%",
                 background: "#313244",
