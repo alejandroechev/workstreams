@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from "react";
+import { listen } from "@tauri-apps/api/event";
 import type { Project, Workstream } from "../domain/types";
 import {
   CheckCircleIcon,
@@ -78,6 +79,24 @@ export default function WorkstreamSidebar({
   const [editProjectColor, setEditProjectColor] = useState("");
   const [statusDropdownWsId, setStatusDropdownWsId] = useState<string | null>(null);
   const statusDropdownRef = useRef<HTMLDivElement>(null);
+
+  // Live activity status per workstream (from session poller)
+  const [wsActivity, setWsActivity] = useState<Record<string, string>>({});
+
+  // Listen for workstream activity events
+  useEffect(() => {
+    const unlistens: Promise<() => void>[] = [];
+    for (const ws of workstreams) {
+      unlistens.push(
+        listen<string>(`workstream-activity-${ws.id}`, (event) => {
+          setWsActivity((prev) => ({ ...prev, [ws.id]: event.payload }));
+        })
+      );
+    }
+    return () => {
+      unlistens.forEach((u) => u.then((fn) => fn()));
+    };
+  }, [workstreams.map((w) => w.id).join(",")]);
 
   // Auto-focus rename input
   useEffect(() => {
@@ -202,6 +221,32 @@ export default function WorkstreamSidebar({
                   >
                     <StatusIcon status={ws.status} size={14} />
                   </span>
+                  {/* Live activity indicator from session poller */}
+                  {(() => {
+                    const activity = wsActivity[ws.id];
+                    if (!activity || activity === "idle" || activity === "offline") return null;
+                    const activityColors: Record<string, string> = {
+                      thinking: "#a6e3a1",
+                      tool_use: "#89b4fa",
+                      responding: "#a6e3a1",
+                      background_task: "#cba6f7",
+                    };
+                    const color = activityColors[activity] || "#a6e3a1";
+                    return (
+                      <span
+                        style={{
+                          width: 8,
+                          height: 8,
+                          borderRadius: "50%",
+                          background: color,
+                          flexShrink: 0,
+                          animation: "pulse-dot 1.5s ease-in-out infinite",
+                          boxShadow: `0 0 6px ${color}`,
+                        }}
+                        title={activity === "tool_use" ? "Running tool" : activity === "thinking" ? "Thinking" : activity === "background_task" ? "Background task" : "Active"}
+                      />
+                    );
+                  })()}
                   {renamingWsId === ws.id ? (
                     <input
                       ref={renameInputRef}

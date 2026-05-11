@@ -15,6 +15,7 @@ interface Props {
   onRestart?: (tileId: string) => void;
   onUpdateTileConfig?: (tileId: string, configJson: string) => void;
   workstreamDir?: string;
+  workstreamId?: string;
   spawnedPtyIds?: Set<string>;
   linkedSessionIds?: string[];
 }
@@ -32,6 +33,7 @@ export default function TileGrid({
   onRestart,
   onUpdateTileConfig,
   workstreamDir,
+  workstreamId,
   spawnedPtyIds,
   linkedSessionIds,
 }: Props) {
@@ -101,6 +103,7 @@ export default function TileGrid({
             onRestart={onRestart}
             onUpdateTileConfig={onUpdateTileConfig}
             workstreamDir={workstreamDir}
+            workstreamId={workstreamId}
             alreadyRunning={spawnedPtyIds?.has(tile.id)}
             linkedSessionIds={linkedSessionIds}
           />

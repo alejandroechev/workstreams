@@ -68,7 +68,9 @@ export interface CopilotSessionStats {
   summary?: string | null;
   last_activity?: string | null;
   duration_minutes?: number | null;
-  activity_status?: "working" | "waiting" | "idle" | "stale";
+  activity_status?: "thinking" | "tool_use" | "responding" | "idle" | "offline" | "background_task";
+  current_tool?: string | null;
+  process_alive?: boolean;
 }
 
 export interface WorkstreamLayout {

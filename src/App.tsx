@@ -510,6 +510,7 @@ export default function App() {
             onFocusTile={setFocusedIndex}
             onCloseTile={closeTile}
             workstreamDir={workstreams.find((w) => w.id === activeWsId)?.directory || undefined}
+            workstreamId={activeWsId || undefined}
             onOpenFile={(path) => addTile("file_viewer", { filePath: path })}
             onLinkSession={(tileId) => {
               setLinkingTileId(tileId);

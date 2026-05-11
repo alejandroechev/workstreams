@@ -20,6 +20,7 @@ interface TileProps {
   onRestart?: (tileId: string) => void;
   onUpdateTileConfig?: (tileId: string, configJson: string) => void;
   workstreamDir?: string;
+  workstreamId?: string;
   alreadyRunning?: boolean;
   linkedSessionIds?: string[];
 }
@@ -36,6 +37,7 @@ export default function TileWrapper({
   onRestart,
   onUpdateTileConfig,
   workstreamDir,
+  workstreamId,
   alreadyRunning,
   linkedSessionIds,
 }: TileProps) {
@@ -48,14 +50,15 @@ export default function TileWrapper({
   const statusColor = () => {
     if (!isTermLike) return "#89b4fa";
     if (isSessionTile) {
-      // Use activity_status from poller if available
       const activity = sessionStats?.activity_status;
       if (activity) {
         switch (activity) {
-          case "working": return "#a6e3a1";  // green — actively responding
-          case "waiting": return "#89b4fa";   // blue — waiting for input
-          case "idle": return "#f9e2af";      // yellow — idle
-          case "stale": return "#6c7086";     // grey — stale
+          case "thinking": return "#a6e3a1";     // green — thinking
+          case "tool_use": return "#89b4fa";      // blue — running tool
+          case "responding": return "#a6e3a1";    // green — generating response
+          case "background_task": return "#cba6f7"; // purple — sub-agent
+          case "idle": return "#f9e2af";          // yellow — waiting for input
+          case "offline": return "#6c7086";       // grey — process not running
         }
       }
       switch (termStatus) {
@@ -79,8 +82,9 @@ export default function TileWrapper({
       const cfg = JSON.parse(tile.config_json || "{}");
       const name = cfg.session_name || "session";
       const activity = sessionStats?.activity_status || termStatus;
+      const toolInfo = sessionStats?.current_tool ? ` (${sessionStats.current_tool})` : "";
       const turns = sessionStats?.turn_count != null ? ` · ${sessionStats.turn_count}t` : "";
-      return `${name} · ${activity}${turns}`;
+      return `${name} · ${activity}${toolInfo}${turns}`;
     }
     if (tile.tile_type === "terminal") return termStatus;
     return tile.tile_type.replace("_", " ");
@@ -130,6 +134,7 @@ export default function TileWrapper({
           isFocused={isFocused}
           isResuming={cfg.is_resumed === true}
           alreadyRunning={alreadyRunning}
+          workstreamId={workstreamId}
           onStatusChange={setTermStatus}
           onStatsUpdate={setSessionStats}
           onLinkSession={onLinkSession ? () => onLinkSession(tile.id) : undefined}
@@ -186,7 +191,12 @@ export default function TileWrapper({
       content = <div>Unknown tile type: {tile.tile_type}</div>;
   }
 
-  const isWorking = isSessionTile && sessionStats?.activity_status === "working";
+  const isWorking = isSessionTile && (
+    sessionStats?.activity_status === "thinking" ||
+    sessionStats?.activity_status === "tool_use" ||
+    sessionStats?.activity_status === "responding" ||
+    sessionStats?.activity_status === "background_task"
+  );
 
   return (
     <div

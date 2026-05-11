@@ -718,8 +718,18 @@ fn get_copilot_link(state: State<'_, AppState>, tile_id: String) -> Result<Optio
 
 /// Register a copilot session tile for stats polling
 #[tauri::command]
-fn watch_session(state: State<'_, AppState>, tile_id: String, session_name: String) -> Result<(), String> {
-    state.session_poller.watch(&tile_id, &session_name);
+fn watch_session(
+    state: State<'_, AppState>,
+    tile_id: String,
+    session_name: String,
+    session_id: Option<String>,
+    workstream_id: Option<String>,
+) -> Result<(), String> {
+    if let Some(ref sid) = session_id {
+        state.session_poller.watch_with_id(&tile_id, &session_name, sid, workstream_id.as_deref());
+    } else {
+        state.session_poller.watch(&tile_id, &session_name);
+    }
     Ok(())
 }
 

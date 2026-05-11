@@ -59,6 +59,12 @@ button:hover {
   }
 }
 
+/* Pulsing dot animation for sidebar activity indicator */
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.7); }
+}
+
 .status-dot-working {
   animation: pulse-working 1.5s ease-in-out infinite;
 }

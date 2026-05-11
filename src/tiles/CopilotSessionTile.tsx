@@ -13,6 +13,7 @@ interface Props {
   isFocused: boolean;
   isResuming: boolean;
   alreadyRunning?: boolean;
+  workstreamId?: string;
   onStatusChange?: (status: string) => void;
   onStatsUpdate?: (stats: CopilotSessionStats) => void;
   onLinkSession?: () => void;
@@ -26,6 +27,7 @@ export default function CopilotSessionTile({
   isFocused,
   isResuming,
   alreadyRunning,
+  workstreamId,
   onStatusChange,
   onStatsUpdate,
   onLinkSession,
@@ -92,8 +94,14 @@ export default function CopilotSessionTile({
     term.open(containerRef.current);
     fitAddon.fit();
 
-    // Register with the session stats poller
-    invoke("watch_session", { tileId, sessionName: config.session_name }).catch(() => {});
+    // Register with the session stats poller — pass session_id if available
+    const sessionId = config.copilot_session_id || null;
+    invoke("watch_session", {
+      tileId,
+      sessionName: config.session_name,
+      sessionId,
+      workstreamId: workstreamId || null,
+    }).catch(() => {});
 
     // Only restore scrollback if not already running (avoid duplicate restore messages)
     if (!alreadyRunning) {
