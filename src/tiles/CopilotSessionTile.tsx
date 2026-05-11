@@ -209,6 +209,18 @@ export default function CopilotSessionTile({
     };
   }, [tileId]);
 
+  // Re-register with poller when config changes (e.g., after auto-link sets copilot_session_id)
+  useEffect(() => {
+    const cfg = parseCopilotSessionConfig(configJson);
+    const sessionId = cfg.copilot_session_id || null;
+    invoke("watch_session", {
+      tileId,
+      sessionName: cfg.session_name,
+      sessionId,
+      workstreamId: workstreamId || null,
+    }).catch(() => {});
+  }, [tileId, configJson, workstreamId]);
+
   useEffect(() => {
     if (isFocused && fitRef.current) {
       setTimeout(() => {
