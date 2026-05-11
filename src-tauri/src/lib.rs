@@ -1291,12 +1291,10 @@ fn discover_copilot_config(workstream_dir: Option<String>) -> Result<Vec<Copilot
             for entry in entries.flatten() {
                 if entry.path().is_dir() {
                     let skill_md = entry.path().join("SKILL.md");
+                    // Only show folders that actually contain a SKILL.md
+                    if !skill_md.exists() { continue; }
                     let name = entry.file_name().to_string_lossy().to_string();
-                    let desc = if skill_md.exists() {
-                        read_skill_description(&skill_md)
-                    } else {
-                        None
-                    };
+                    let desc = read_skill_description(&skill_md);
                     items.push(CopilotConfigItem {
                         name,
                         category: "skill".into(),
@@ -1369,20 +1367,82 @@ fn discover_copilot_config(workstream_dir: Option<String>) -> Result<Vec<Copilot
         }
     }
 
-    // ── Global plugins ──
+    // ── Global plugins (expand into skills/extensions/agents) ──
     let plugins_dir = copilot_dir.join("installed-plugins");
     if plugins_dir.is_dir() {
-        if let Ok(entries) = std::fs::read_dir(&plugins_dir) {
-            for entry in entries.flatten() {
-                items.push(CopilotConfigItem {
-                    name: entry.file_name().to_string_lossy().to_string(),
-                    category: "plugin".into(),
-                    source: "global".into(),
-                    path: entry.path().to_string_lossy().to_string(),
-                    description: None,
-                });
+        // Walk into each plugin provider (e.g., copilot-plugins, rtmspi-marketplace)
+        fn scan_plugin_dir(dir: &std::path::Path, items: &mut Vec<CopilotConfigItem>) {
+            if let Ok(entries) = std::fs::read_dir(dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if !path.is_dir() { continue; }
+
+                    // Check for skills/ subdirectory
+                    let skills_sub = path.join("skills");
+                    if skills_sub.is_dir() {
+                        if let Ok(skill_entries) = std::fs::read_dir(&skills_sub) {
+                            for skill_entry in skill_entries.flatten() {
+                                if skill_entry.path().is_dir() {
+                                    let skill_md = skill_entry.path().join("SKILL.md");
+                                    if skill_md.exists() {
+                                        let name = skill_entry.file_name().to_string_lossy().to_string();
+                                        let desc = read_skill_description(&skill_md);
+                                        items.push(CopilotConfigItem {
+                                            name,
+                                            category: "skill".into(),
+                                            source: "plugin".into(),
+                                            path: skill_entry.path().to_string_lossy().to_string(),
+                                            description: desc,
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Check for extensions/ subdirectory
+                    let ext_sub = path.join("extensions");
+                    if ext_sub.is_dir() {
+                        if let Ok(ext_entries) = std::fs::read_dir(&ext_sub) {
+                            for ext_entry in ext_entries.flatten() {
+                                if ext_entry.path().is_dir() {
+                                    items.push(CopilotConfigItem {
+                                        name: ext_entry.file_name().to_string_lossy().to_string(),
+                                        category: "extension".into(),
+                                        source: "plugin".into(),
+                                        path: ext_entry.path().to_string_lossy().to_string(),
+                                        description: None,
+                                    });
+                                }
+                            }
+                        }
+                    }
+
+                    // Check for agents/ subdirectory
+                    let agents_sub = path.join("agents");
+                    if agents_sub.is_dir() {
+                        if let Ok(agent_entries) = std::fs::read_dir(&agents_sub) {
+                            for agent_entry in agent_entries.flatten() {
+                                let aname = agent_entry.file_name().to_string_lossy().to_string();
+                                if aname.ends_with(".agent.md") {
+                                    items.push(CopilotConfigItem {
+                                        name: aname.trim_end_matches(".agent.md").to_string(),
+                                        category: "agent".into(),
+                                        source: "plugin".into(),
+                                        path: agent_entry.path().to_string_lossy().to_string(),
+                                        description: None,
+                                    });
+                                }
+                            }
+                        }
+                    }
+
+                    // Recurse into subdirectories (providers contain multiple plugins)
+                    scan_plugin_dir(&path, items);
+                }
             }
         }
+        scan_plugin_dir(&plugins_dir, &mut items);
     }
 
     // ── Global instructions ──
@@ -1536,7 +1596,6 @@ fn query_session_files(session_id: String) -> Result<Vec<SessionFileEntry>, Stri
 
 #[tauri::command]
 fn query_session_todos(session_id: String) -> Result<Vec<SessionTodoEntry>, String> {
-    // The per-session SQLite DB is at ~/.copilot/session-state/<session_id>/session.db
     let home = dirs::home_dir().ok_or("No home directory")?;
     let session_db_path = home
         .join(".copilot")
@@ -1545,7 +1604,7 @@ fn query_session_todos(session_id: String) -> Result<Vec<SessionTodoEntry>, Stri
         .join("session.db");
 
     if !session_db_path.exists() {
-        return Ok(Vec::new()); // No session.db = no todos
+        return Ok(Vec::new());
     }
 
     let conn = Connection::open_with_flags(
@@ -1554,7 +1613,6 @@ fn query_session_todos(session_id: String) -> Result<Vec<SessionTodoEntry>, Stri
     )
     .map_err(|e| e.to_string())?;
 
-    // Check if todos table exists
     let table_exists: bool = conn
         .query_row(
             "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='todos'",
@@ -1589,6 +1647,105 @@ fn query_session_todos(session_id: String) -> Result<Vec<SessionTodoEntry>, Stri
         }
     }
     Ok(entries)
+}
+
+// ── Session DB Explorer ────────────────────────────────────────────────
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SessionDbTable {
+    pub name: String,
+    pub row_count: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SessionDbTableData {
+    pub columns: Vec<String>,
+    pub rows: Vec<Vec<serde_json::Value>>,
+}
+
+fn open_session_db(session_id: &str) -> Result<Connection, String> {
+    let home = dirs::home_dir().ok_or("No home directory")?;
+    let session_db_path = home
+        .join(".copilot")
+        .join("session-state")
+        .join(session_id)
+        .join("session.db");
+
+    if !session_db_path.exists() {
+        return Err("No session.db found".into());
+    }
+
+    Connection::open_with_flags(
+        &session_db_path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn list_session_db_tables(session_id: String) -> Result<Vec<SessionDbTable>, String> {
+    let conn = open_session_db(&session_id)?;
+    let mut stmt = conn
+        .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
+        .map_err(|e| e.to_string())?;
+
+    let table_names: Vec<String> = stmt
+        .query_map([], |row| row.get(0))
+        .map_err(|e| e.to_string())?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    let mut tables = Vec::new();
+    for name in table_names {
+        let count: i64 = conn
+            .query_row(&format!("SELECT COUNT(*) FROM [{}]", name), [], |row| row.get(0))
+            .unwrap_or(0);
+        tables.push(SessionDbTable { name, row_count: count });
+    }
+    Ok(tables)
+}
+
+#[tauri::command]
+fn query_session_db_table(session_id: String, table_name: String, limit: Option<i64>) -> Result<SessionDbTableData, String> {
+    let conn = open_session_db(&session_id)?;
+    let limit_val = limit.unwrap_or(100);
+
+    // Get column names
+    let mut stmt = conn
+        .prepare(&format!("SELECT * FROM [{}] LIMIT 0", table_name))
+        .map_err(|e| e.to_string())?;
+    let columns: Vec<String> = stmt
+        .column_names()
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    drop(stmt);
+
+    // Get rows
+    let mut stmt = conn
+        .prepare(&format!("SELECT * FROM [{}] LIMIT {}", table_name, limit_val))
+        .map_err(|e| e.to_string())?;
+    let col_count = columns.len();
+    let mut rows_out = Vec::new();
+
+    let mut db_rows = stmt.query([]).map_err(|e| e.to_string())?;
+    while let Some(row) = db_rows.next().map_err(|e| e.to_string())? {
+        let mut row_vals = Vec::new();
+        for i in 0..col_count {
+            let val: rusqlite::types::Value = row.get_unwrap(i);
+            let json_val = match val {
+                rusqlite::types::Value::Null => serde_json::Value::Null,
+                rusqlite::types::Value::Integer(n) => serde_json::Value::Number(n.into()),
+                rusqlite::types::Value::Real(f) => serde_json::json!(f),
+                rusqlite::types::Value::Text(s) => serde_json::Value::String(s),
+                rusqlite::types::Value::Blob(_) => serde_json::Value::String("[blob]".into()),
+            };
+            row_vals.push(json_val);
+        }
+        rows_out.push(row_vals);
+    }
+
+    Ok(SessionDbTableData { columns, rows: rows_out })
 }
 
 // ── App Setup ──────────────────────────────────────────────────────────
@@ -1664,9 +1821,11 @@ pub fn run() {
             git_diff_file,
             // Copilot config
             discover_copilot_config,
-            // Session files & todos
+            // Session files & todos & DB
             query_session_files,
             query_session_todos,
+            list_session_db_tables,
+            query_session_db_table,
             // Git log & branch
             git_log,
             git_show_commit,

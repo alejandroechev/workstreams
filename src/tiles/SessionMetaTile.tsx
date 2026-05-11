@@ -13,8 +13,6 @@ import {
   ChevronDownIcon,
   ChevronRightIcon,
   DocumentIcon,
-  CheckCircleIcon,
-  ClockIcon,
   FolderIcon,
   TableCellsIcon,
   BoltIcon,
@@ -39,13 +37,6 @@ interface SessionFileEntry {
   turn_index: number | null;
 }
 
-interface SessionTodoEntry {
-  id: string;
-  title: string;
-  description: string | null;
-  status: string;
-}
-
 interface GitHookEntry {
   name: string;
   path: string;
@@ -62,16 +53,19 @@ const CATEGORY_META: Record<string, CategoryMeta> = {
   git_hook: { label: "Git Hooks", icon: BoltIcon, color: "#f5c2e7" },
 };
 
-const CATEGORY_ORDER = ["skill", "extension", "agent", "mcp_server", "instruction", "plugin", "git_hook"];
+const CATEGORY_ORDER = ["skill", "extension", "agent", "mcp_server", "instruction", "git_hook"];
 
-type TabId = "config" | "files" | "todos";
+type TabId = "config" | "files" | "database";
 
-const STATUS_COLORS: Record<string, string> = {
-  done: "#a6e3a1",
-  in_progress: "#89b4fa",
-  pending: "#585b70",
-  blocked: "#f38ba8",
-};
+interface SessionDbTable {
+  name: string;
+  row_count: number;
+}
+
+interface SessionDbTableData {
+  columns: string[];
+  rows: unknown[][];
+}
 
 const SKIP_PREFIXES = [".git/", ".git\\", "node_modules/", "node_modules\\"];
 const SKIP_PATTERNS = [/[/\\]\.git[/\\]/, /[/\\]node_modules[/\\]/];
@@ -83,7 +77,6 @@ function isRelevantFile(filePath: string): boolean {
   for (const pattern of SKIP_PATTERNS) {
     if (pattern.test(filePath)) return false;
   }
-  // Skip session-state internal files
   if (filePath.includes(".copilot/session-state/") || filePath.includes(".copilot\\session-state\\")) return false;
   return true;
 }
@@ -92,11 +85,19 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused: _isFocused
   const backend = useBackend();
   const [items, setItems] = useState<CopilotConfigItem[]>([]);
   const [files, setFiles] = useState<SessionFileEntry[]>([]);
-  const [todos, setTodos] = useState<SessionTodoEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [activeTab, setActiveTab] = useState<TabId>("config");
+  // Config content viewer
+  const [viewingContent, setViewingContent] = useState<{ name: string; content: string } | null>(null);
+  // File viewer
+  const [viewingFile, setViewingFile] = useState<{ path: string; content: string } | null>(null);
+  // Database explorer
+  const [dbTables, setDbTables] = useState<SessionDbTable[]>([]);
+  const [selectedTable, setSelectedTable] = useState<string | null>(null);
+  const [tableData, setTableData] = useState<SessionDbTableData | null>(null);
+  const [dbLoading, setDbLoading] = useState(false);
 
   const loadConfig = useCallback(async () => {
     setLoading(true);
@@ -131,24 +132,50 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused: _isFocused
   const loadSessionData = useCallback(async () => {
     if (!linkedSessionIds || linkedSessionIds.length === 0) {
       setFiles([]);
-      setTodos([]);
       return;
     }
-    // Aggregate files and todos from all linked sessions
     const allFiles: SessionFileEntry[] = [];
-    const allTodos: SessionTodoEntry[] = [];
     for (const sid of linkedSessionIds) {
       try {
         const f = await invoke<SessionFileEntry[]>("query_session_files", { sessionId: sid });
         allFiles.push(...f);
       } catch { /* ignore */ }
-      try {
-        const t = await invoke<SessionTodoEntry[]>("query_session_todos", { sessionId: sid });
-        allTodos.push(...t);
-      } catch { /* ignore */ }
     }
     setFiles(allFiles.filter((f) => isRelevantFile(f.file_path)));
-    setTodos(allTodos);
+  }, [linkedSessionIds]);
+
+  const loadDbTables = useCallback(async () => {
+    if (!linkedSessionIds || linkedSessionIds.length === 0) {
+      setDbTables([]);
+      return;
+    }
+    setDbLoading(true);
+    const allTables: SessionDbTable[] = [];
+    for (const sid of linkedSessionIds) {
+      try {
+        const tables = await invoke<SessionDbTable[]>("list_session_db_tables", { sessionId: sid });
+        allTables.push(...tables);
+      } catch { /* ignore */ }
+    }
+    setDbTables(allTables);
+    setDbLoading(false);
+  }, [linkedSessionIds]);
+
+  const loadTableData = useCallback(async (tableName: string) => {
+    if (!linkedSessionIds || linkedSessionIds.length === 0) return;
+    setDbLoading(true);
+    setSelectedTable(tableName);
+    // Use first linked session that has this table
+    for (const sid of linkedSessionIds) {
+      try {
+        const data = await invoke<SessionDbTableData>("query_session_db_table", { sessionId: sid, tableName, limit: 200 });
+        setTableData(data);
+        setDbLoading(false);
+        return;
+      } catch { /* ignore */ }
+    }
+    setTableData(null);
+    setDbLoading(false);
   }, [linkedSessionIds]);
 
   useEffect(() => {
@@ -159,10 +186,15 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused: _isFocused
     loadSessionData();
   }, [loadSessionData]);
 
+  useEffect(() => {
+    if (activeTab === "database") loadDbTables();
+  }, [activeTab, loadDbTables]);
+
   const refresh = useCallback(() => {
     loadConfig();
     loadSessionData();
-  }, [loadConfig, loadSessionData]);
+    if (activeTab === "database") loadDbTables();
+  }, [loadConfig, loadSessionData, loadDbTables, activeTab]);
 
   const toggleCategory = (cat: string) => {
     setCollapsed((prev) => {
@@ -187,7 +219,7 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused: _isFocused
   const tabs: { id: TabId; label: string; icon: React.ComponentType<React.SVGProps<SVGSVGElement>>; count: number }[] = [
     { id: "config", label: "Config", icon: SparklesIcon, count: items.length },
     { id: "files", label: "Files", icon: FolderIcon, count: uniqueFiles.length },
-    { id: "todos", label: "Todos", icon: TableCellsIcon, count: todos.length },
+    { id: "database", label: "Database", icon: TableCellsIcon, count: dbTables.reduce((s, t) => s + t.row_count, 0) },
   ];
 
   return (
@@ -427,72 +459,82 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused: _isFocused
           </>
         )}
 
-        {/* Todos tab */}
-        {activeTab === "todos" && (
+        {/* Database tab */}
+        {activeTab === "database" && (
           <>
             {(!linkedSessionIds || linkedSessionIds.length === 0) && (
               <div style={{ padding: 12, color: "#585b70", textAlign: "center" }}>
-                No linked sessions — link a copilot session to see its todos
+                No linked sessions — link a copilot session to explore its database
               </div>
             )}
-            {linkedSessionIds && linkedSessionIds.length > 0 && todos.length === 0 && (
-              <div style={{ padding: 12, color: "#585b70", textAlign: "center" }}>
-                No todos found in linked sessions
-              </div>
+            {dbLoading && (
+              <div style={{ padding: 12, color: "#585b70", textAlign: "center" }}>Loading…</div>
             )}
-            {todos.map((t) => {
-              const statusColor = STATUS_COLORS[t.status] || "#585b70";
-              const StatusIcon = t.status === "done" ? CheckCircleIcon : ClockIcon;
-              return (
-                <div
-                  key={t.id}
-                  style={{
-                    display: "flex",
-                    alignItems: "flex-start",
-                    gap: 6,
-                    padding: "4px 8px",
-                    color: "#cdd6f4",
-                  }}
-                  title={t.description || undefined}
-                >
-                  <StatusIcon style={{ width: 14, height: 14, color: statusColor, flexShrink: 0, marginTop: 1 }} />
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                      whiteSpace: "nowrap",
-                      color: t.status === "done" ? "#585b70" : "#cdd6f4",
-                      textDecoration: t.status === "done" ? "line-through" : "none",
-                    }}>
-                      {t.title}
-                    </div>
-                    {t.description && (
-                      <div style={{
-                        fontSize: 10,
-                        color: "#585b70",
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                        whiteSpace: "nowrap",
-                      }}>
-                        {t.description}
-                      </div>
-                    )}
+            {!dbLoading && !selectedTable && linkedSessionIds && linkedSessionIds.length > 0 && (
+              <>
+                {dbTables.length === 0 && (
+                  <div style={{ padding: 12, color: "#585b70", textAlign: "center" }}>
+                    No session database found
                   </div>
-                  <span
+                )}
+                {dbTables.map((t) => (
+                  <div
+                    key={t.name}
+                    onClick={() => loadTableData(t.name)}
                     style={{
-                      fontSize: 9,
-                      padding: "1px 4px",
-                      borderRadius: 3,
-                      background: "#313244",
-                      color: statusColor,
-                      flexShrink: 0,
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8,
+                      padding: "6px 12px",
+                      cursor: "pointer",
+                      color: "#cdd6f4",
                     }}
+                    onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "#313244"; }}
+                    onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "transparent"; }}
                   >
-                    {t.status}
-                  </span>
+                    <TableCellsIcon style={{ width: 14, height: 14, color: "#89b4fa", flexShrink: 0 }} />
+                    <span style={{ flex: 1 }}>{t.name}</span>
+                    <span style={{ fontSize: 10, color: "#585b70" }}>{t.row_count} rows</span>
+                  </div>
+                ))}
+              </>
+            )}
+            {!dbLoading && selectedTable && tableData && (
+              <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "4px 8px", borderBottom: "1px solid #313244", flexShrink: 0 }}>
+                  <button
+                    onClick={() => { setSelectedTable(null); setTableData(null); }}
+                    style={{ background: "none", border: "none", color: "#89b4fa", cursor: "pointer", fontSize: 11, padding: "2px 4px" }}
+                  >← Tables</button>
+                  <span style={{ color: "#cdd6f4", fontWeight: 600, fontSize: 11 }}>{selectedTable}</span>
+                  <span style={{ color: "#585b70", fontSize: 10 }}>({tableData.rows.length} rows)</span>
                 </div>
-              );
-            })}
+                <div style={{ flex: 1, overflow: "auto" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 10, fontFamily: "monospace" }}>
+                    <thead>
+                      <tr>
+                        {tableData.columns.map((col) => (
+                          <th key={col} style={{ padding: "4px 6px", borderBottom: "1px solid #313244", color: "#89b4fa", textAlign: "left", fontWeight: 600, whiteSpace: "nowrap", position: "sticky", top: 0, background: "#181825" }}>
+                            {col}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {tableData.rows.map((row, ri) => (
+                        <tr key={ri} style={{ borderBottom: "1px solid #1e1e2e" }}>
+                          {row.map((val, ci) => (
+                            <td key={ci} style={{ padding: "3px 6px", color: "#cdd6f4", maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={val != null ? String(val) : ""}>
+                              {val === null ? <span style={{ color: "#585b70" }}>null</span> : String(val)}
+                            </td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
           </>
         )}
       </div>
