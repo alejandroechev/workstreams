@@ -5,6 +5,7 @@ interface Props {
   workstreamName?: string;
   onAddSession?: () => void;
   onAddTerminal?: () => void;
+  onAddWslTerminal?: () => void;
   onAddExplorer?: () => void;
   onAddSessionMeta?: () => void;
   onAddWorkbench?: () => void;
@@ -30,6 +31,7 @@ export default function StatusBar({
   workstreamName,
   onAddSession,
   onAddTerminal,
+  onAddWslTerminal,
   onAddExplorer,
   onAddSessionMeta,
   onAddWorkbench,
@@ -65,6 +67,7 @@ export default function StatusBar({
       <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
         <button style={btnStyle} onClick={onAddSession} title="New Copilot session">+ Session</button>
         <button style={btnStyle} onClick={onAddTerminal} title="New terminal">+ Terminal</button>
+        <button style={btnStyle} onClick={onAddWslTerminal} title="New WSL terminal">+ WSL</button>
         <button style={btnStyle} onClick={onAddExplorer} title="New file explorer">+ Explorer</button>
         <button style={btnStyle} onClick={onAddSessionMeta} title="Session meta (Alt+M)">+ Meta</button>
         <button style={btnStyle} onClick={onAddWorkbench} title="Workbench (Alt+B)">+ Bench</button>

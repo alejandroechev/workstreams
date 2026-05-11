@@ -327,8 +327,10 @@ export default function App() {
     let title: string;
 
     if (tileType === "terminal") {
-      config = createTerminalConfig(cwd, command);
-      title = `${typeLabels[tileType]} ${tileCount + 1}`;
+      const isWsl = extraConfig?.shell === "wsl";
+      const shellCmd = isWsl ? "wsl.exe" : command;
+      config = createTerminalConfig(cwd, shellCmd);
+      title = isWsl ? `WSL ${tileCount + 1}` : `${typeLabels[tileType]} ${tileCount + 1}`;
     } else if (tileType === "copilot_session") {
       const wsName = ws?.name || "ws";
       const sessionName = `${wsName}/${tileCount + 1}`;
@@ -356,7 +358,8 @@ export default function App() {
     // Spawn PTY for terminal and copilot_session tiles
     if (tileType === "terminal") {
       spawnedPtys.current.add(tile.id);
-      await backend.spawnTerminal(tile.id, cwd, command !== "pwsh.exe" ? command : undefined, undefined, 30, 120);
+      const shellCmd = extraConfig?.shell === "wsl" ? "wsl.exe" : (command !== "pwsh.exe" ? command : undefined);
+      await backend.spawnTerminal(tile.id, cwd, shellCmd, undefined, 30, 120);
     } else if (tileType === "copilot_session") {
       spawnedPtys.current.add(tile.id);
       // Spawn agency.exe directly — new session, no resume
@@ -648,6 +651,7 @@ export default function App() {
           }
           onAddSession={() => setShowSessionPicker(true)}
           onAddTerminal={() => addTile("terminal")}
+          onAddWslTerminal={() => addTile("terminal", { shell: "wsl" })}
           onAddExplorer={() => addTile("file_explorer")}
           onAddSessionMeta={() => addTile("session_meta")}
           onAddWorkbench={() => addTile("workbench")}
