@@ -4,6 +4,7 @@ import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { open } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { useBackend } from "../backend/context";
 import { detectLanguage } from "../domain/tile-config";
 import {
@@ -179,28 +180,44 @@ export default function ExplorerTile({ tileId, isFocused, rootDir, initialPath }
     if (initialPath) openFile(initialPath);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Auto-refresh directory every 3 seconds in browse mode (not diff mode)
+  // Watch directory for filesystem changes (replaces 3s polling)
   useEffect(() => {
-    if (mode !== "browse" || activeDiffMode) return;
-    const interval = setInterval(async () => {
-      try {
-        const raw = await backend.listDirectory(currentDir);
-        const sep = currentDir.endsWith("\\") ? "" : "\\";
-        const fresh = raw.map((e) => ({
-          name: e.name,
-          isDir: e.is_dir,
-          fullPath: `${currentDir}${sep}${e.name}`,
-          modifiedEpoch: e.modified_epoch,
-        }));
-        setEntries((prev) => {
-          const prevKey = prev.map((e) => `${e.name}:${e.modifiedEpoch}`).join(",");
-          const freshKey = fresh.map((e) => `${e.name}:${e.modifiedEpoch}`).join(",");
-          return prevKey === freshKey ? prev : fresh;
-        });
-      } catch { /* ignore polling errors */ }
-    }, 3000);
-    return () => clearInterval(interval);
-  }, [mode, activeDiffMode, currentDir, backend]);
+    invoke("watch_directory", { path: currentDir }).catch(() => {});
+    const unlisten = listen<{ path: string; kind: string }>("fs-change", async (event) => {
+      // Check if the change is within our current directory
+      const changedPath = event.payload.path.replace(/\//g, "\\");
+      const normalDir = currentDir.replace(/\//g, "\\");
+      if (!changedPath.startsWith(normalDir)) return;
+
+      if (mode === "browse" && !activeDiffMode) {
+        // Refresh directory listing
+        try {
+          const raw = await backend.listDirectory(currentDir);
+          const sep = currentDir.endsWith("\\") ? "" : "\\";
+          const fresh = raw.map((e) => ({
+            name: e.name,
+            isDir: e.is_dir,
+            fullPath: `${currentDir}${sep}${e.name}`,
+            modifiedEpoch: e.modified_epoch,
+          }));
+          setEntries(fresh);
+        } catch { /* ignore */ }
+      } else if (mode === "view" && filePath) {
+        // Refresh file content if the changed file matches
+        const normalFile = filePath.replace(/\//g, "\\");
+        if (changedPath === normalFile || changedPath.startsWith(normalDir)) {
+          try {
+            const newContent = await backend.readFile(filePath);
+            setContent((prev) => prev === newContent ? prev : newContent);
+          } catch { /* ignore */ }
+        }
+      }
+    });
+    return () => {
+      invoke("unwatch_directory", { path: currentDir }).catch(() => {});
+      unlisten.then((u) => u());
+    };
+  }, [currentDir, mode, activeDiffMode, filePath, backend]);
 
   // Fetch current branch on mount and when directory changes
   useEffect(() => {

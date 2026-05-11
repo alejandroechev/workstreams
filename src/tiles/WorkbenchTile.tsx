@@ -1,7 +1,9 @@
-import { useState, useCallback, useMemo } from "react";
+import { useState, useCallback, useMemo, useEffect } from "react";
 import Editor from "@monaco-editor/react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { useBackend } from "../backend/context";
 import { detectLanguage } from "../domain/tile-config";
 import {
@@ -105,6 +107,39 @@ export default function WorkbenchTile({ tileId: _tileId, isFocused: _isFocused, 
     setViewingPath(null);
     setFileContent("");
   }, []);
+
+  // Watch files for live updates
+  useEffect(() => {
+    // Watch parent directories of all files in the workbench
+    const dirs = new Set<string>();
+    for (const f of files) {
+      const parts = f.replace(/\//g, "\\").split("\\");
+      parts.pop();
+      if (parts.length > 0) dirs.add(parts.join("\\"));
+    }
+    for (const d of dirs) {
+      invoke("watch_directory", { path: d }).catch(() => {});
+    }
+    const unlisten = listen<{ path: string }>("fs-change", async (event) => {
+      const changedPath = event.payload.path.replace(/\//g, "\\");
+      // If viewing a file that changed, refresh content
+      if (mode === "view" && viewingPath) {
+        const normalPath = viewingPath.replace(/\//g, "\\");
+        if (changedPath === normalPath) {
+          try {
+            const content = await backend.readFile(viewingPath);
+            setFileContent((prev) => prev === content ? prev : content);
+          } catch { /* ignore */ }
+        }
+      }
+    });
+    return () => {
+      for (const d of dirs) {
+        invoke("unwatch_directory", { path: d }).catch(() => {});
+      }
+      unlisten.then((u) => u());
+    };
+  }, [files, mode, viewingPath, backend]);
 
   const fileName = (path: string) => path.split(/[\\/]/).pop() || path;
 

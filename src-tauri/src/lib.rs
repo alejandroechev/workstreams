@@ -1,8 +1,10 @@
 mod db;
+mod fs_watcher;
 mod pty;
 mod session_poller;
 
 use db::open_db;
+use fs_watcher::FsWatcher;
 use pty::PtyManager;
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
@@ -64,6 +66,7 @@ struct AppState {
     db: Mutex<Connection>,
     pty: PtyManager,
     session_poller: Arc<SessionPoller>,
+    fs_watcher: Arc<FsWatcher>,
 }
 
 fn now() -> String {
@@ -728,6 +731,18 @@ fn get_copilot_link(
         Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
         Err(e) => Err(format!("DB error: {e}")),
     }
+}
+
+// ── Filesystem Watcher Commands ────────────────────────────────────────
+
+#[tauri::command]
+fn watch_directory(state: State<'_, AppState>, path: String) -> Result<(), String> {
+    state.fs_watcher.watch(&path)
+}
+
+#[tauri::command]
+fn unwatch_directory(state: State<'_, AppState>, path: String) -> Result<(), String> {
+    state.fs_watcher.unwatch(&path)
 }
 
 // ── Session Poller Commands ────────────────────────────────────────────
@@ -1985,11 +2000,14 @@ pub fn run() {
     let conn = open_db(&db_path).expect("Failed to initialize database");
 
     let poller = Arc::new(SessionPoller::new());
+    let fs_watcher = Arc::new(FsWatcher::new());
+    let fs_watcher_clone = fs_watcher.clone();
 
     let app_state = AppState {
         db: Mutex::new(conn),
         pty: PtyManager::new(),
         session_poller: poller.clone(),
+        fs_watcher,
     };
 
     tauri::Builder::default()
@@ -1999,6 +2017,8 @@ pub fn run() {
         .setup(move |app| {
             // Start the session stats poller background thread
             session_poller::start_poller(app.handle().clone(), poller);
+            // Start the filesystem watcher
+            fs_watcher_clone.start(app.handle().clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -2064,6 +2084,9 @@ pub fn run() {
             set_setting,
             // Git hooks
             list_git_hooks,
+            // Filesystem watcher
+            watch_directory,
+            unwatch_directory,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

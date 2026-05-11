@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useBackend } from "../backend/context";
@@ -226,6 +227,36 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused: _isFocused
   useEffect(() => {
     if (activeTab === "plan") loadPlan();
   }, [activeTab, loadPlan]);
+
+  // Watch filesystem for live updates
+  useEffect(() => {
+    const watchPaths: string[] = [];
+    // Watch workstream directory for config changes
+    if (workstreamDir) watchPaths.push(workstreamDir);
+    // Watch session-state directories for file/plan changes
+    if (linkedSessionIds) {
+      const home = "C:\\Users\\alejandroe"; // best effort, works for this user
+      for (const sid of linkedSessionIds) {
+        watchPaths.push(`${home}\\.copilot\\session-state\\${sid}`);
+      }
+    }
+    for (const p of watchPaths) {
+      invoke("watch_directory", { path: p }).catch(() => {});
+    }
+    const unlisten = listen<{ path: string }>("fs-change", () => {
+      // Refresh all data on any change in watched dirs
+      loadConfig();
+      loadSessionData();
+      if (activeTab === "plan") loadPlan();
+      if (activeTab === "database") loadDbTables();
+    });
+    return () => {
+      for (const p of watchPaths) {
+        invoke("unwatch_directory", { path: p }).catch(() => {});
+      }
+      unlisten.then((u) => u());
+    };
+  }, [workstreamDir, linkedSessionIds, activeTab, loadConfig, loadSessionData, loadPlan, loadDbTables]);
 
   // Open a file in the content viewer
   const viewFile = useCallback(async (path: string, title: string) => {
