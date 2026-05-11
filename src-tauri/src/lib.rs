@@ -1152,6 +1152,122 @@ fn read_skill_description(path: &std::path::Path) -> Option<String> {
         .map(|s| s.to_string())
 }
 
+// ── Settings ───────────────────────────────────────────────────────────
+
+#[tauri::command]
+fn get_setting(state: State<'_, AppState>, key: String) -> Result<Option<String>, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    let result = db.query_row(
+        "SELECT value FROM settings WHERE key = ?1",
+        [&key],
+        |row| row.get::<_, Option<String>>(0),
+    );
+    match result {
+        Ok(val) => Ok(val),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+#[tauri::command]
+fn set_setting(state: State<'_, AppState>, key: String, value: String) -> Result<(), String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    db.execute(
+        "INSERT INTO settings (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = ?2",
+        [&key, &value],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+// ── Git Hooks Discovery ────────────────────────────────────────────────
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct GitHookEntry {
+    pub name: String,
+    pub path: String,
+    pub content_preview: String,
+}
+
+#[tauri::command]
+fn list_git_hooks(directory: String) -> Result<Vec<GitHookEntry>, String> {
+    let dir = std::path::Path::new(&directory);
+
+    // Find .git directory (could be a worktree file)
+    let git_path = dir.join(".git");
+    let hooks_dir = if git_path.is_dir() {
+        git_path.join("hooks")
+    } else if git_path.is_file() {
+        // Worktree: .git file contains "gitdir: /path/to/.git/worktrees/<name>"
+        let content = std::fs::read_to_string(&git_path)
+            .map_err(|e| format!("Cannot read .git: {e}"))?;
+        if let Some(gitdir) = content.trim().strip_prefix("gitdir: ") {
+            std::path::PathBuf::from(gitdir).join("hooks")
+        } else {
+            return Ok(Vec::new());
+        }
+    } else {
+        return Ok(Vec::new());
+    };
+
+    // Also check .husky directory (common hook manager)
+    let husky_dir = dir.join(".husky");
+
+    let mut hooks = Vec::new();
+
+    // Scan standard git hooks
+    for hooks_path in [&hooks_dir, &husky_dir] {
+        if !hooks_path.is_dir() { continue; }
+        if let Ok(entries) = std::fs::read_dir(hooks_path) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if !path.is_file() { continue; }
+                let name = entry.file_name().to_string_lossy().to_string();
+                // Skip .sample files and underscore dirs
+                if name.ends_with(".sample") || name.starts_with('_') || name.starts_with('.') {
+                    continue;
+                }
+
+                // Read content and check if it has actual commands (not just comments)
+                if let Ok(content) = std::fs::read_to_string(&path) {
+                    let has_commands = content.lines().any(|line| {
+                        let trimmed = line.trim();
+                        !trimmed.is_empty()
+                            && !trimmed.starts_with('#')
+                            && !trimmed.starts_with("#!/")
+                    });
+                    if !has_commands { continue; }
+
+                    // Get first few non-comment lines as preview
+                    let preview: String = content
+                        .lines()
+                        .filter(|l| {
+                            let t = l.trim();
+                            !t.is_empty() && !t.starts_with('#') && !t.starts_with("#!/")
+                        })
+                        .take(3)
+                        .collect::<Vec<_>>()
+                        .join(" | ");
+
+                    let source = if hooks_path == &husky_dir { "husky" } else { "git" };
+                    hooks.push(GitHookEntry {
+                        name: format!("{} ({})", name, source),
+                        path: path.to_string_lossy().to_string(),
+                        content_preview: if preview.len() > 120 {
+                            format!("{}…", &preview[..120])
+                        } else {
+                            preview
+                        },
+                    });
+                }
+            }
+        }
+    }
+
+    hooks.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(hooks)
+}
+
 #[tauri::command]
 fn discover_copilot_config(workstream_dir: Option<String>) -> Result<Vec<CopilotConfigItem>, String> {
     let mut items = Vec::new();
@@ -1545,6 +1661,11 @@ pub fn run() {
             git_log,
             git_show_commit,
             git_current_branch,
+            // Settings
+            get_setting,
+            set_setting,
+            // Git hooks
+            list_git_hooks,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

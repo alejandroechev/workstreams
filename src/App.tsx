@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import WorkstreamSidebar from "./workstream/WorkstreamSidebar";
 import ProjectCreateForm from "./workstream/ProjectCreateForm";
 import WorkstreamCreateForm from "./workstream/WorkstreamCreateForm";
@@ -28,10 +29,27 @@ export default function App() {
   const spawnedPtys = useRef<Set<string>>(new Set());
   const previousWsTiles = useRef<Map<string, { tiles: Tile[]; order: string[] }>>(new Map());
 
-  // Load projects and workstreams on mount
+  // Load projects and workstreams on mount (with saved order)
   useEffect(() => {
-    Promise.all([backend.listProjects(), backend.listWorkstreams()]).then(([p, ws]) => {
+    Promise.all([backend.listProjects(), backend.listWorkstreams()]).then(async ([p, ws]) => {
       setProjects(p);
+      // Apply saved order
+      try {
+        const savedOrder = await invoke<string | null>("get_setting", { key: "workstream_order" });
+        if (savedOrder) {
+          const orderIds: string[] = JSON.parse(savedOrder);
+          const ordered: typeof ws = [];
+          for (const id of orderIds) {
+            const found = ws.find((w) => w.id === id);
+            if (found) ordered.push(found);
+          }
+          // Append any new workstreams not in saved order
+          for (const w of ws) {
+            if (!ordered.some((o) => o.id === w.id)) ordered.push(w);
+          }
+          ws = ordered;
+        }
+      } catch { /* ignore */ }
       setWorkstreams(ws);
       if (ws.length > 0 && !activeWsId) {
         setActiveWsId(ws[0].id);
@@ -463,6 +481,8 @@ export default function App() {
             if (swapIdx < 0 || swapIdx >= prev.length) return prev;
             const next = [...prev];
             [next[idx], next[swapIdx]] = [next[swapIdx], next[idx]];
+            // Persist order
+            invoke("set_setting", { key: "workstream_order", value: JSON.stringify(next.map((w) => w.id)) }).catch(() => {});
             return next;
           });
         }}

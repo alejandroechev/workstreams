@@ -17,6 +17,7 @@ import {
   ClockIcon,
   FolderIcon,
   TableCellsIcon,
+  BoltIcon,
 } from "@heroicons/react/24/outline";
 
 interface Props {
@@ -45,6 +46,12 @@ interface SessionTodoEntry {
   status: string;
 }
 
+interface GitHookEntry {
+  name: string;
+  path: string;
+  content_preview: string;
+}
+
 const CATEGORY_META: Record<string, CategoryMeta> = {
   skill: { label: "Skills", icon: SparklesIcon, color: "#f9e2af" },
   extension: { label: "Extensions", icon: PuzzlePieceIcon, color: "#89b4fa" },
@@ -52,9 +59,10 @@ const CATEGORY_META: Record<string, CategoryMeta> = {
   mcp_server: { label: "MCP Servers", icon: ServerIcon, color: "#cba6f7" },
   instruction: { label: "Instructions", icon: DocumentTextIcon, color: "#fab387" },
   plugin: { label: "Plugins", icon: CubeIcon, color: "#94e2d5" },
+  git_hook: { label: "Git Hooks", icon: BoltIcon, color: "#f5c2e7" },
 };
 
-const CATEGORY_ORDER = ["skill", "extension", "agent", "mcp_server", "instruction", "plugin"];
+const CATEGORY_ORDER = ["skill", "extension", "agent", "mcp_server", "instruction", "plugin", "git_hook"];
 
 type TabId = "config" | "files" | "todos";
 
@@ -95,7 +103,24 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused: _isFocused
     setError(null);
     try {
       const result = await backend.discoverCopilotConfig(workstreamDir);
-      setItems(result);
+      // Also load git hooks if we have a workstream directory
+      if (workstreamDir) {
+        try {
+          const hooks = await invoke<GitHookEntry[]>("list_git_hooks", { directory: workstreamDir });
+          const hookItems: CopilotConfigItem[] = hooks.map((h) => ({
+            name: h.name,
+            category: "git_hook",
+            source: "repo",
+            path: h.path,
+            description: h.content_preview,
+          }));
+          setItems([...result, ...hookItems]);
+        } catch {
+          setItems(result);
+        }
+      } else {
+        setItems(result);
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
