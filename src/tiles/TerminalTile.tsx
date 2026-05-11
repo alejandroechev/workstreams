@@ -94,6 +94,9 @@ export default function TerminalTile({ tileId, isFocused, onStatusChange }: Prop
     term.open(containerRef.current);
     fitAddon.fit();
 
+    // Focus terminal after initialization
+    setTimeout(() => term.focus(), 150);
+
     // Only restore scrollback on first mount (not when re-mounting due to workstream switch)
     if (!onStatusChange) {
       // Regular terminal — try restore
@@ -226,7 +229,7 @@ export default function TerminalTile({ tileId, isFocused, onStatusChange }: Prop
       setTimeout(() => {
         fitRef.current?.fit();
         termRef.current?.focus();
-      }, 50);
+      }, 150);
     }
   }, [isFocused]);
 

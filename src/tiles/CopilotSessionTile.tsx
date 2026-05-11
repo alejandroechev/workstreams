@@ -96,6 +96,9 @@ export default function CopilotSessionTile({
     term.open(containerRef.current);
     fitAddon.fit();
 
+    // Focus terminal after initialization (with delay for DOM readiness)
+    setTimeout(() => term.focus(), 150);
+
     // Register with the session stats poller — pass session_id if available
     const sessionId = config.copilot_session_id || null;
     invoke("watch_session", {
@@ -261,7 +264,7 @@ export default function CopilotSessionTile({
       setTimeout(() => {
         fitRef.current?.fit();
         termRef.current?.focus();
-      }, 50);
+      }, 150);
     }
   }, [isFocused]);
 

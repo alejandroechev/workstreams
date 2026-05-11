@@ -100,20 +100,31 @@ export default function App() {
           }
         }
       }
-      // After tiles load, focus the first terminal tile
+      // After tiles load, focus the first terminal/copilot tile
       const orderedLoaded = order
         .map((id) => t.find((tile) => tile.id === id))
         .filter(Boolean);
-      setTimeout(() => {
+
+      // Robust focus: retry until xterm textarea is available (up to 1s)
+      let attempts = 0;
+      const tryFocus = () => {
         const firstTile = orderedLoaded[0];
-        if (firstTile) {
-          const tileEl = document.querySelector(`[data-tile-id="${firstTile.id}"]`);
-          if (tileEl) {
-            const xterm = tileEl.querySelector(".xterm-helper-textarea") as HTMLElement;
-            if (xterm) xterm.focus();
+        if (!firstTile) return;
+        const tileEl = document.querySelector(`[data-tile-id="${firstTile.id}"]`);
+        if (tileEl) {
+          const xterm = tileEl.querySelector(".xterm-helper-textarea") as HTMLElement;
+          if (xterm) {
+            xterm.focus();
+            return;
           }
         }
-      }, 250);
+        attempts++;
+        if (attempts < 10) {
+          requestAnimationFrame(tryFocus);
+        }
+      };
+      // Start after a short delay to let React render
+      setTimeout(() => requestAnimationFrame(tryFocus), 100);
     });
   }, [activeWsId]);
 
