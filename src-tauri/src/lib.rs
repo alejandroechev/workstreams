@@ -2470,7 +2470,7 @@ Body here.
             .map(|f| {
                 f.file_path
                     .split(['\\', '/'])
-                    .last()
+                    .next_back()
                     .unwrap_or("")
                     .to_string()
             })
