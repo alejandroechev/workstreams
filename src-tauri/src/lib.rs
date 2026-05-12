@@ -1774,6 +1774,164 @@ fn read_session_file(session_id: String, relative_path: String) -> Result<String
     std::fs::read_to_string(&file_path).map_err(|e| format!("Cannot read {}: {}", relative_path, e))
 }
 
+/// List checkpoints for a session
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct CheckpointEntry {
+    pub number: i32,
+    pub title: String,
+    pub file_name: String,
+}
+
+#[tauri::command]
+fn list_session_checkpoints(session_id: String) -> Result<Vec<CheckpointEntry>, String> {
+    let home = dirs::home_dir().ok_or("No home directory")?;
+    let cp_dir = home
+        .join(".copilot")
+        .join("session-state")
+        .join(&session_id)
+        .join("checkpoints");
+
+    if !cp_dir.exists() {
+        return Ok(Vec::new());
+    }
+
+    // Parse index.md for checkpoint list
+    let index_path = cp_dir.join("index.md");
+    if !index_path.exists() {
+        return Ok(Vec::new());
+    }
+
+    let content =
+        std::fs::read_to_string(&index_path).map_err(|e| format!("Cannot read index.md: {e}"))?;
+
+    let mut entries = Vec::new();
+    for line in content.lines() {
+        // Parse table rows: "| 1 | Title | filename.md |"
+        let parts: Vec<&str> = line.split('|').map(|s| s.trim()).collect();
+        if parts.len() >= 4 {
+            if let Ok(num) = parts[1].parse::<i32>() {
+                entries.push(CheckpointEntry {
+                    number: num,
+                    title: parts[2].to_string(),
+                    file_name: parts[3].to_string(),
+                });
+            }
+        }
+    }
+    Ok(entries)
+}
+
+/// Read recent events from events.jsonl
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct EventEntry {
+    pub event_type: String,
+    pub timestamp: String,
+    pub tool: Option<String>,
+    pub summary: Option<String>,
+}
+
+#[tauri::command]
+fn list_session_events(
+    session_id: String,
+    limit: Option<usize>,
+) -> Result<Vec<EventEntry>, String> {
+    let home = dirs::home_dir().ok_or("No home directory")?;
+    let events_path = home
+        .join(".copilot")
+        .join("session-state")
+        .join(&session_id)
+        .join("events.jsonl");
+
+    if !events_path.exists() {
+        return Ok(Vec::new());
+    }
+
+    let lines = crate::session_poller::tail_file(&events_path, limit.unwrap_or(200));
+    let mut entries = Vec::new();
+
+    for line in &lines {
+        let event: serde_json::Value = match serde_json::from_str(line) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+
+        let event_type = event
+            .get("type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let timestamp = event
+            .get("timestamp")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        // Skip hook events (too noisy)
+        if event_type.starts_with("hook.") {
+            continue;
+        }
+
+        let tool = event
+            .get("data")
+            .and_then(|d| d.get("toolName"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
+        let summary = match event_type.as_str() {
+            "tool.execution_start" => tool.as_ref().map(|t| format!("Running {t}")),
+            "tool.execution_complete" => {
+                let success = event
+                    .get("data")
+                    .and_then(|d| d.get("success"))
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(true);
+                Some(if success {
+                    "✓ Done".into()
+                } else {
+                    "✗ Failed".into()
+                })
+            }
+            "assistant.message" => {
+                let tools = event
+                    .get("data")
+                    .and_then(|d| d.get("toolRequests"))
+                    .and_then(|v| v.as_array())
+                    .map(|a| a.len())
+                    .unwrap_or(0);
+                if tools > 0 {
+                    Some(format!(
+                        "{tools} tool call{}",
+                        if tools > 1 { "s" } else { "" }
+                    ))
+                } else {
+                    Some("Response".into())
+                }
+            }
+            "user.message" => Some("User prompt".into()),
+            "subagent.started" => Some("Background agent started".into()),
+            "subagent.completed" => Some("Background agent done".into()),
+            "session.start" | "session.resume" => Some("Session started".into()),
+            "skill.invoked" => event
+                .get("data")
+                .and_then(|d| d.get("skillName"))
+                .and_then(|v| v.as_str())
+                .map(|s| format!("Skill: {s}")),
+            _ => None,
+        };
+
+        entries.push(EventEntry {
+            event_type,
+            timestamp,
+            tool,
+            summary,
+        });
+    }
+
+    // Reverse so newest first
+    entries.reverse();
+    Ok(entries)
+}
+
 #[tauri::command]
 fn query_session_files(session_id: String) -> Result<Vec<SessionFileEntry>, String> {
     let home = dirs::home_dir().ok_or("No home directory")?;
@@ -2069,6 +2227,8 @@ pub fn run() {
             discover_copilot_config,
             // Session files & todos & DB
             read_session_file,
+            list_session_checkpoints,
+            list_session_events,
             query_session_files,
             query_session_todos,
             list_session_db_tables,

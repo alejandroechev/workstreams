@@ -330,7 +330,7 @@ export default function App() {
       file_explorer: "Files",
       code_viewer: "Code",
       doc_viewer: "Doc",
-      session_meta: "Meta",
+      session_meta: "Meta-session",
       workbench: "Bench",
     };
     const tileCount = tiles.filter((t) => t.tile_type === tileType).length;

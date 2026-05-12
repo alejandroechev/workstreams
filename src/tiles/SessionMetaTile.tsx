@@ -21,6 +21,8 @@ import {
   BoltIcon,
   ArrowLeftIcon,
   ClipboardDocumentListIcon,
+  FlagIcon,
+  SignalIcon,
 } from "@heroicons/react/24/outline";
 
 interface Props {
@@ -60,7 +62,20 @@ const CATEGORY_META: Record<string, CategoryMeta> = {
 
 const CATEGORY_ORDER = ["skill", "extension", "agent", "mcp_server", "instruction", "git_hook"];
 
-type TabId = "config" | "files" | "database" | "plan";
+type TabId = "config" | "files" | "database" | "plan" | "checkpoints" | "events";
+
+interface SessionCheckpoint {
+  number: number;
+  title: string;
+  fileName: string;
+}
+
+interface SessionEvent {
+  type: string;
+  timestamp: string;
+  tool?: string;
+  summary?: string;
+}
 
 interface SessionDbTable {
   name: string;
@@ -105,6 +120,12 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused: _isFocused
   const [dbLoading, setDbLoading] = useState(false);
   // Plan content
   const [planContent, setPlanContent] = useState<string | null>(null);
+  // Checkpoints
+  const [checkpoints, setCheckpoints] = useState<SessionCheckpoint[]>([]);
+  const [checkpointContent, setCheckpointContent] = useState<{ title: string; content: string } | null>(null);
+  // Events
+  const [events, setEvents] = useState<SessionEvent[]>([]);
+  const [eventsLoading, setEventsLoading] = useState(false);
   // Content viewer (for configs and files)
   const [viewContent, setViewContent] = useState<{
     title: string;
@@ -228,14 +249,57 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused: _isFocused
     if (activeTab === "plan") loadPlan();
   }, [activeTab, loadPlan]);
 
-  // Watch filesystem for live updates
+  const loadCheckpoints = useCallback(async () => {
+    if (!linkedSessionIds || linkedSessionIds.length === 0) {
+      setCheckpoints([]);
+      return;
+    }
+    const all: SessionCheckpoint[] = [];
+    for (const sid of linkedSessionIds) {
+      try {
+        const cps = await invoke<Array<{ number: number; title: string; file_name: string }>>("list_session_checkpoints", { sessionId: sid });
+        all.push(...cps.map((c) => ({ number: c.number, title: c.title, fileName: c.file_name })));
+      } catch { /* ignore */ }
+    }
+    setCheckpoints(all);
+  }, [linkedSessionIds]);
+
+  useEffect(() => {
+    if (activeTab === "checkpoints") loadCheckpoints();
+  }, [activeTab, loadCheckpoints]);
+
+  const loadEvents = useCallback(async () => {
+    if (!linkedSessionIds || linkedSessionIds.length === 0) {
+      setEvents([]);
+      return;
+    }
+    setEventsLoading(true);
+    const all: SessionEvent[] = [];
+    for (const sid of linkedSessionIds) {
+      try {
+        const evts = await invoke<Array<{ event_type: string; timestamp: string; tool: string | null; summary: string | null }>>("list_session_events", { sessionId: sid, limit: 200 });
+        all.push(...evts.map((e) => ({
+          type: e.event_type,
+          timestamp: e.timestamp,
+          tool: e.tool || undefined,
+          summary: e.summary || undefined,
+        })));
+      } catch { /* ignore */ }
+    }
+    setEvents(all);
+    setEventsLoading(false);
+  }, [linkedSessionIds]);
+
+  useEffect(() => {
+    if (activeTab === "events") loadEvents();
+  }, [activeTab, loadEvents]);
+
+  // Watch filesystem for live updates (debounced to prevent flicker)
   useEffect(() => {
     const watchPaths: string[] = [];
-    // Watch workstream directory for config changes
     if (workstreamDir) watchPaths.push(workstreamDir);
-    // Watch session-state directories for file/plan changes
     if (linkedSessionIds) {
-      const home = "C:\\Users\\alejandroe"; // best effort, works for this user
+      const home = "C:\\Users\\alejandroe";
       for (const sid of linkedSessionIds) {
         watchPaths.push(`${home}\\.copilot\\session-state\\${sid}`);
       }
@@ -243,14 +307,23 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused: _isFocused
     for (const p of watchPaths) {
       invoke("watch_directory", { path: p }).catch(() => {});
     }
-    const unlisten = listen<{ path: string }>("fs-change", () => {
-      // Refresh all data on any change in watched dirs
-      loadConfig();
-      loadSessionData();
-      if (activeTab === "plan") loadPlan();
-      if (activeTab === "database") loadDbTables();
+
+    let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+    const unlisten = listen<{ path: string }>("fs-change", (event) => {
+      const changedPath = event.payload.path.replace(/\//g, "\\").toLowerCase();
+      // Skip events.jsonl changes (too frequent, handled by session poller)
+      if (changedPath.endsWith("events.jsonl")) return;
+      // Debounce: wait 1s after last change before refreshing
+      if (debounceTimer) clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => {
+        if (activeTab === "config") loadConfig();
+        if (activeTab === "files") loadSessionData();
+        if (activeTab === "plan") loadPlan();
+        if (activeTab === "database") loadDbTables();
+      }, 1000);
     });
     return () => {
+      if (debounceTimer) clearTimeout(debounceTimer);
       for (const p of watchPaths) {
         invoke("unwatch_directory", { path: p }).catch(() => {});
       }
@@ -352,8 +425,10 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused: _isFocused
   const tabs: { id: TabId; label: string; icon: React.ComponentType<React.SVGProps<SVGSVGElement>>; count: number }[] = [
     { id: "config", label: "Config", icon: SparklesIcon, count: items.length },
     { id: "files", label: "Files", icon: FolderIcon, count: uniqueFiles.length },
-    { id: "database", label: "DB", icon: TableCellsIcon, count: dbTables.reduce((s, t) => s + t.row_count, 0) },
     { id: "plan", label: "Plan", icon: ClipboardDocumentListIcon, count: 0 },
+    { id: "checkpoints", label: "CP", icon: FlagIcon, count: checkpoints.length },
+    { id: "events", label: "Events", icon: SignalIcon, count: events.length },
+    { id: "database", label: "DB", icon: TableCellsIcon, count: dbTables.reduce((s, t) => s + t.row_count, 0) },
   ];
 
   return (
@@ -583,6 +658,108 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused: _isFocused
                       {f.tool_name}
                     </span>
                   )}
+                </div>
+              );
+            })}
+          </>
+        )}
+
+        {/* Checkpoints tab */}
+        {activeTab === "checkpoints" && (
+          <>
+            {(!linkedSessionIds || linkedSessionIds.length === 0) && (
+              <div style={{ padding: 12, color: "#585b70", textAlign: "center" }}>
+                No linked sessions
+              </div>
+            )}
+            {linkedSessionIds && linkedSessionIds.length > 0 && checkpoints.length === 0 && (
+              <div style={{ padding: 12, color: "#585b70", textAlign: "center" }}>
+                No checkpoints found
+              </div>
+            )}
+            {checkpointContent ? (
+              <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "4px 8px", borderBottom: "1px solid #313244", flexShrink: 0 }}>
+                  <button
+                    onClick={() => setCheckpointContent(null)}
+                    style={{ background: "none", border: "none", color: "#89b4fa", cursor: "pointer", fontSize: 11, padding: "2px 4px", display: "flex", alignItems: "center", gap: 2 }}
+                  >
+                    <ArrowLeftIcon style={{ width: 12, height: 12 }} /> Back
+                  </button>
+                  <span style={{ color: "#cdd6f4", fontWeight: 600, fontSize: 11 }}>{checkpointContent.title}</span>
+                </div>
+                <div style={{ flex: 1, overflow: "auto", padding: "8px 12px", fontSize: 12, lineHeight: 1.6, color: "#cdd6f4" }}>
+                  <Markdown remarkPlugins={[remarkGfm]}>{checkpointContent.content}</Markdown>
+                </div>
+              </div>
+            ) : (
+              checkpoints.map((cp) => (
+                <div
+                  key={cp.number}
+                  onClick={async () => {
+                    if (!linkedSessionIds) return;
+                    for (const sid of linkedSessionIds) {
+                      try {
+                        const content = await invoke<string>("read_session_file", { sessionId: sid, relativePath: `checkpoints/${cp.fileName}` });
+                        setCheckpointContent({ title: `#${cp.number} — ${cp.title}`, content });
+                        return;
+                      } catch { /* try next */ }
+                    }
+                  }}
+                  style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 12px", cursor: "pointer", borderBottom: "1px solid #181825" }}
+                  onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "#313244"; }}
+                  onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "transparent"; }}
+                >
+                  <FlagIcon style={{ width: 14, height: 14, color: "#f9e2af", flexShrink: 0 }} />
+                  <span style={{ color: "#585b70", fontSize: 11, flexShrink: 0 }}>#{cp.number}</span>
+                  <span style={{ color: "#cdd6f4", fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{cp.title}</span>
+                </div>
+              ))
+            )}
+          </>
+        )}
+
+        {/* Events tab */}
+        {activeTab === "events" && (
+          <>
+            {(!linkedSessionIds || linkedSessionIds.length === 0) && (
+              <div style={{ padding: 12, color: "#585b70", textAlign: "center" }}>
+                No linked sessions
+              </div>
+            )}
+            {eventsLoading && (
+              <div style={{ padding: 12, color: "#585b70", textAlign: "center" }}>Loading events…</div>
+            )}
+            {!eventsLoading && events.length === 0 && linkedSessionIds && linkedSessionIds.length > 0 && (
+              <div style={{ padding: 12, color: "#585b70", textAlign: "center" }}>
+                No events found
+              </div>
+            )}
+            {!eventsLoading && events.map((evt, i) => {
+              const typeColors: Record<string, string> = {
+                "user.message": "#89b4fa",
+                "assistant.message": "#a6e3a1",
+                "assistant.turn_start": "#a6e3a1",
+                "assistant.turn_end": "#585b70",
+                "tool.execution_start": "#f9e2af",
+                "tool.execution_complete": "#f9e2af",
+                "session.start": "#cba6f7",
+                "session.resume": "#cba6f7",
+                "subagent.started": "#f5c2e7",
+                "subagent.completed": "#f5c2e7",
+                "skill.invoked": "#94e2d5",
+              };
+              const color = typeColors[evt.type] || "#585b70";
+              const time = evt.timestamp.split("T")[1]?.split(".")[0] || evt.timestamp;
+              return (
+                <div
+                  key={`${evt.timestamp}-${i}`}
+                  style={{ display: "flex", alignItems: "center", gap: 6, padding: "2px 8px", fontSize: 10, fontFamily: "monospace" }}
+                >
+                  <span style={{ color: "#45475a", flexShrink: 0, width: 55 }}>{time}</span>
+                  <span style={{ color, flexShrink: 0, width: 140, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{evt.type}</span>
+                  {evt.tool && <span style={{ color: "#f9e2af", flexShrink: 0 }}>[{evt.tool}]</span>}
+                  {evt.summary && <span style={{ color: "#6c7086", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{evt.summary}</span>}
                 </div>
               );
             })}

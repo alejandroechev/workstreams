@@ -340,7 +340,7 @@ fn read_events_status(session_dir: &std::path::Path) -> EventsStatus {
 }
 
 /// Read last N lines from a file efficiently
-fn tail_file(path: &std::path::Path, n: usize) -> Vec<String> {
+pub fn tail_file(path: &std::path::Path, n: usize) -> Vec<String> {
     let file = match std::fs::File::open(path) {
         Ok(f) => f,
         Err(_) => return Vec::new(),
