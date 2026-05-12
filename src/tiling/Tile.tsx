@@ -1,3 +1,4 @@
+// @test-skip: Thin React wrapper; pure border logic in tile-border.ts is tested
 import { ReactNode, useState } from "react";
 import TerminalTile from "../tiles/TerminalTile";
 import CopilotSessionTile from "../tiles/CopilotSessionTile";
@@ -7,11 +8,13 @@ import WorkbenchTile from "../tiles/WorkbenchTile";
 import type { Tile } from "../workstream/types";
 import type { CopilotSessionStats } from "../domain/types";
 import { invoke } from "@tauri-apps/api/core";
+import { computeTileBorder } from "./tile-border";
 
 interface TileProps {
   tile: Tile;
   index: number;
   isFocused: boolean;
+  isFullscreen?: boolean;
   onFocus: () => void;
   onClose: () => void;
   onOpenFile?: (path: string) => void;
@@ -29,6 +32,7 @@ export default function TileWrapper({
   tile,
   index,
   isFocused,
+  isFullscreen = false,
   onFocus,
   onClose,
   onOpenFile,
@@ -206,9 +210,7 @@ export default function TileWrapper({
         gridArea: `t${index}`,
         display: "flex",
         flexDirection: "column",
-        border: isFocused
-          ? `2px solid ${isWorking ? "#a6e3a1" : "#89b4fa"}`
-          : `1px solid ${isWorking ? "#a6e3a1" : "#313244"}`,
+        border: computeTileBorder({ isFullscreen, isFocused, isWorking }),
         borderRadius: 6,
         overflow: "hidden",
         background: "#1e1e2e",

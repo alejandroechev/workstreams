@@ -53,17 +53,41 @@ For every user-facing feature, before considering it complete:
 └─────────────────────────────┘
 ```
 
-### Validation — Automated Enforcement
+### Validation — Automated Enforcement (5-Layer Defense)
 
-Validation is enforced automatically by two layers:
+See `docs/adrs/002-discipline-enforcement.md` for the full design rationale.
 
-1. **Git Hooks** (`.git/hooks/pre-commit` and `.git/hooks/pre-push`) — Native git hooks (no husky):
-   - Pre-commit (fast): `tsc --noEmit` + `eslint` + `vitest run --coverage` (90% threshold) + `cargo check` (warnings=errors) + `cargo fmt --check` + test-file-exists check
-   - Pre-push (slow): `cargo clippy` + Playwright E2E (if suite exists)
+1. **CDP visual validation** — `scripts/cdp-validate.mjs` connects to Tauri via port 9222, screenshots, fails on console errors. Used by pre-push and as `npm run validate-feature <name>`.
 
-2. **Copilot CLI Extension** (`.github/extensions/`) — Intercepts agent actions in real time.
+2. **Git hooks** (`.git/hooks/`):
+   - **Pre-commit (fast)**: `tsc --noEmit` + `eslint` + `vitest run --coverage` (90% threshold) + `cargo check` (warnings=errors) + `cargo fmt --check` + test-file-exists
+   - **Pre-push (slow)**: `cargo clippy` + smart doc gate (>200 lines source → require doc touch or `[no-docs: reason]` bypass) + CDP visual validation for UI changes (require Tauri running + clean console, or `[no-cdp: reason]` bypass) + Playwright E2E
+
+3. **Discipline Guardian extension** (`.github/extensions/discipline-guardian/`):
+   - `onSessionStart`: Installs SQLite triggers + runs `scripts/discipline-audit.mjs` and injects results
+   - `onPostToolUse` (edit/create): Tracks source/test/doc edit ratios, injects warnings when ratio degrades
+   - `onUserPromptSubmitted`: Intercepts done/complete/finished keywords, injects Definition of Done checklist
+   - `onPostToolUse` (git commit): Reminds to run CDP validation after UI commits
+
+4. **SQLite triggers** (auto-installed by extension):
+   - `auto_inject_feature_todos`: Inserting a todo with `category='feature'` auto-creates test/visual/docs sub-todos + dependencies
+   - `block_done_with_pending_children`: Marking a parent `done` is blocked while child deps are not all done
+
+5. **Session-start audit**: Same extension runs `scripts/discipline-audit.mjs` at every session start. Reports missing tests, missing docs, stale screenshots, pending feature children.
 
 **Test file requirement**: Every changed source file must have a corresponding test (`__tests__/X.test.ts(x)` for TS, `#[cfg(test)]` block for Rust). Skip exceptions: type-only files, configs, CSS, `__tests__/` themselves, `main.rs`, or `// @test-skip: <reason>` marker in first 5 lines.
+
+**Feature todo convention**: When planning new feature work, insert the todo with `category='feature'`. The SQLite trigger automatically creates 3 sub-todos:
+- `<id>-test` — TDD: write failing test first
+- `<id>-visual` — CDP screenshot + clean console
+- `<id>-docs` — README / system-diagram / ADR if applicable
+
+The trigger also blocks marking the parent `done` until all 3 sub-todos are done.
+
+**Bypass mechanisms** (use sparingly):
+- `[no-docs: <reason>]` in a commit message → skips smart doc gate
+- `[no-cdp: <reason>]` in a commit message → skips CDP visual validation
+- `// @test-skip: <reason>` in first 5 lines of source → skips test-file-exists check
 
 ### Documentation
 - **Docs hierarchy**: ADRs are the source of truth for architecture decisions, README is the public summary that links back to ADRs, and AGENTS.md contains process rules only.

@@ -1,3 +1,4 @@
+// @test-skip: Thin React rendering wrapper; layout logic tested in layout.test.ts
 import type { Tile } from "../workstream/types";
 import { computeLayout } from "./layout";
 import TileWrapper from "./Tile";
@@ -95,6 +96,7 @@ export default function TileGrid({
             tile={tile}
             index={fullscreenTileId ? 0 : i}
             isFocused={realIndex === focusedIndex}
+            isFullscreen={fullscreenTileId === tile.id}
             onFocus={() => onFocusTile(realIndex)}
             onClose={() => onCloseTile(tile.id)}
             onOpenFile={onOpenFile}

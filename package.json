@@ -11,7 +11,9 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "lint": "eslint src"
+    "lint": "eslint src",
+    "validate-feature": "node scripts/cdp-validate.mjs",
+    "discipline-audit": "node scripts/discipline-audit.mjs"
   },
   "dependencies": {
     "@heroicons/react": "^2.2.0",
