@@ -1,3 +1,4 @@
+// @test-skip: PTY native wrapper (portable-pty) — covered by E2E
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -24,6 +25,7 @@ impl PtyManager {
 
     /// Spawn a new PTY session. Returns the process PID (if available).
     /// The PTY reader runs in a background thread and emits events to the frontend.
+    #[allow(clippy::too_many_arguments)]
     pub fn spawn(
         &self,
         app: &AppHandle,

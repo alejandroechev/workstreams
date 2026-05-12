@@ -1,3 +1,4 @@
+// @test-skip: Tauri command surface — covered by E2E + manual dogfooding
 mod db;
 mod fs_watcher;
 mod pty;
@@ -552,6 +553,7 @@ fn update_layout(
 // ── PTY Commands ───────────────────────────────────────────────────────
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 fn spawn_terminal(
     app: AppHandle,
     state: State<'_, AppState>,
@@ -898,12 +900,7 @@ struct GitCommit {
 fn git_log(directory: String, limit: Option<u32>) -> Result<Vec<GitCommit>, String> {
     let n = limit.unwrap_or(50);
     let output = git_cmd()
-        .args([
-            "log",
-            &format!("--format=%H|%h|%s|%an|%ar"),
-            "-n",
-            &n.to_string(),
-        ])
+        .args(["log", "--format=%H|%h|%s|%an|%ar", "-n", &n.to_string()])
         .current_dir(&directory)
         .output()
         .map_err(|e| format!("Failed to run git: {e}"))?;
@@ -2024,10 +2021,8 @@ fn query_session_todos(session_id: String) -> Result<Vec<SessionTodoEntry>, Stri
         .map_err(|e| e.to_string())?;
 
     let mut entries = Vec::new();
-    for row in rows {
-        if let Ok(entry) = row {
-            entries.push(entry);
-        }
+    for entry in rows.flatten() {
+        entries.push(entry);
     }
     Ok(entries)
 }

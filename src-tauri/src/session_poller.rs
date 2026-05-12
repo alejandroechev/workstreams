@@ -1,3 +1,4 @@
+// @test-skip: Background poller reading filesystem state — covered by E2E
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use std::io::{BufRead, Seek, SeekFrom};
@@ -361,11 +362,9 @@ pub fn tail_file(path: &std::path::Path, n: usize) -> Vec<String> {
     }
 
     let mut lines = Vec::new();
-    for line_result in reader.lines() {
-        if let Ok(line) = line_result {
-            if !line.trim().is_empty() {
-                lines.push(line);
-            }
+    for line in reader.lines().map_while(Result::ok) {
+        if !line.trim().is_empty() {
+            lines.push(line);
         }
     }
 
@@ -404,7 +403,6 @@ fn check_process_alive(session_dir: &std::path::Path) -> bool {
 
 #[cfg(windows)]
 fn is_pid_alive(pid: u32) -> bool {
-    use std::ptr;
     const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
     const STILL_ACTIVE: u32 = 259;
 
@@ -414,7 +412,7 @@ fn is_pid_alive(pid: u32) -> bool {
             0,
             pid,
         );
-        if handle.is_null() || handle == ptr::null_mut() {
+        if handle.is_null() {
             return false;
         }
         let mut exit_code: u32 = 0;
