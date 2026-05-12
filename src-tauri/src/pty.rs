@@ -1,4 +1,3 @@
-// @test-skip: PTY native wrapper (portable-pty) — covered by E2E
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -167,5 +166,45 @@ impl PtyManager {
     pub fn is_active(&self, tile_id: &str) -> bool {
         let handles = self.handles.lock().unwrap();
         handles.contains_key(tile_id)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pty_manager_starts_empty() {
+        let mgr = PtyManager::new();
+        assert!(!mgr.is_active("nonexistent"));
+    }
+
+    #[test]
+    fn pty_manager_close_all_on_empty_is_safe() {
+        let mgr = PtyManager::new();
+        mgr.close_all();
+        assert!(!mgr.is_active("any-tile"));
+    }
+
+    #[test]
+    fn pty_manager_write_to_missing_pty_errors() {
+        let mgr = PtyManager::new();
+        let result = mgr.write("nonexistent-tile", b"data");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn pty_manager_resize_missing_pty_errors() {
+        let mgr = PtyManager::new();
+        let result = mgr.resize("nonexistent-tile", 24, 80);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn pty_manager_close_missing_pty_is_idempotent() {
+        let mgr = PtyManager::new();
+        mgr.close("nonexistent-tile");
+        // Should not panic
+        assert!(!mgr.is_active("nonexistent-tile"));
     }
 }

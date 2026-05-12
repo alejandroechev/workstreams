@@ -99,3 +99,41 @@ impl FsWatcher {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fs_watcher_new_starts_with_empty_watched_paths() {
+        let watcher = FsWatcher::new();
+        assert_eq!(watcher.watched_paths.lock().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn fs_watcher_watch_fails_when_not_started() {
+        let watcher = FsWatcher::new();
+        let result = watcher.watch("/tmp");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("not started"));
+    }
+
+    #[test]
+    fn fs_watcher_unwatch_fails_when_not_started() {
+        let watcher = FsWatcher::new();
+        let result = watcher.unwatch("/tmp");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn fs_change_event_serializes_and_deserializes() {
+        let event = FsChangeEvent {
+            path: "/tmp/test.txt".to_string(),
+            kind: "any".to_string(),
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        let parsed: FsChangeEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.path, "/tmp/test.txt");
+        assert_eq!(parsed.kind, "any");
+    }
+}

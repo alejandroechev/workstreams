@@ -1,4 +1,3 @@
-// @test-skip: Tauri command surface — covered by E2E + manual dogfooding
 mod db;
 mod fs_watcher;
 mod pty;
@@ -2251,4 +2250,246 @@ pub fn run() {
                 state.pty.close_all();
             }
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    #[test]
+    fn now_returns_non_empty_string() {
+        let n = now();
+        assert!(!n.is_empty());
+        // Should parse as a u64 (epoch seconds)
+        assert!(n.parse::<u64>().is_ok());
+    }
+
+    #[test]
+    fn now_is_recent() {
+        let n: u64 = now().parse().unwrap();
+        let actual = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        // Within 5 seconds
+        assert!((actual as i64 - n as i64).abs() < 5);
+    }
+
+    #[test]
+    fn format_file_size_bytes() {
+        assert_eq!(format_file_size(0), "0B");
+        assert_eq!(format_file_size(500), "500B");
+        assert_eq!(format_file_size(1023), "1023B");
+    }
+
+    #[test]
+    fn format_file_size_kilobytes() {
+        assert_eq!(format_file_size(1024), "1.0KB");
+        assert_eq!(format_file_size(2048), "2.0KB");
+        assert_eq!(format_file_size(1024 * 1024 - 1), "1024.0KB");
+    }
+
+    #[test]
+    fn format_file_size_megabytes() {
+        assert_eq!(format_file_size(1024 * 1024), "1.0MB");
+        assert_eq!(format_file_size(5 * 1024 * 1024), "5.0MB");
+    }
+
+    #[test]
+    fn detect_git_remote_returns_none_for_missing_dir() {
+        let result = detect_git_remote("/nonexistent/path/to/repo");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn detect_git_remote_parses_origin_url() {
+        let tmp = std::env::temp_dir().join(format!("ws_git_test_{}", std::process::id()));
+        let git_dir = tmp.join(".git");
+        std::fs::create_dir_all(&git_dir).ok();
+        let config_content = r#"[remote "origin"]
+    url = https://github.com/user/repo.git
+    fetch = +refs/heads/*:refs/remotes/origin/*
+"#;
+        std::fs::write(git_dir.join("config"), config_content).ok();
+        let result = detect_git_remote(tmp.to_str().unwrap());
+        assert_eq!(result, Some("https://github.com/user/repo.git".to_string()));
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn detect_git_remote_returns_none_for_no_origin() {
+        let tmp = std::env::temp_dir().join(format!("ws_git_no_origin_{}", std::process::id()));
+        let git_dir = tmp.join(".git");
+        std::fs::create_dir_all(&git_dir).ok();
+        std::fs::write(git_dir.join("config"), "[core]\n").ok();
+        let result = detect_git_remote(tmp.to_str().unwrap());
+        assert!(result.is_none());
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn read_skill_description_extracts_from_frontmatter() {
+        let tmp = std::env::temp_dir().join(format!("ws_skill_{}.md", std::process::id()));
+        let content = r#"---
+name: test-skill
+description: A test skill for unit tests
+---
+# Test Skill
+Body here.
+"#;
+        std::fs::write(&tmp, content).ok();
+        let desc = read_skill_description(&tmp);
+        // Frontmatter parsing returns the first line after the closing ---
+        assert!(desc.is_some());
+        std::fs::remove_file(&tmp).ok();
+    }
+
+    #[test]
+    fn read_skill_description_returns_none_for_missing_file() {
+        let desc = read_skill_description(std::path::Path::new("/nonexistent/skill.md"));
+        assert!(desc.is_none());
+    }
+
+    #[test]
+    fn read_skill_description_falls_back_to_first_line() {
+        let tmp = std::env::temp_dir().join(format!("ws_skill_no_fm_{}.md", std::process::id()));
+        std::fs::write(&tmp, "# My Skill\nThis is the body").ok();
+        let desc = read_skill_description(&tmp);
+        assert_eq!(desc, Some("# My Skill".to_string()));
+        std::fs::remove_file(&tmp).ok();
+    }
+
+    #[test]
+    fn git_cmd_returns_git_command() {
+        let cmd = git_cmd();
+        assert_eq!(cmd.get_program(), "git");
+    }
+
+    #[test]
+    fn list_session_checkpoints_returns_empty_for_missing_dir() {
+        let result = list_session_checkpoints("nonexistent-session-id-12345".to_string());
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().len(), 0);
+    }
+
+    #[test]
+    fn list_session_checkpoints_parses_index_md() {
+        let session_id = format!("ws_cp_test_{}", std::process::id());
+        let home = dirs::home_dir().expect("home dir");
+        let cp_dir = home
+            .join(".copilot")
+            .join("session-state")
+            .join(&session_id)
+            .join("checkpoints");
+        std::fs::create_dir_all(&cp_dir).ok();
+        let content = r#"# Checkpoint History
+
+| # | Title | File |
+|---|-------|------|
+| 1 | First checkpoint | 001-first.md |
+| 2 | Second checkpoint | 002-second.md |
+"#;
+        std::fs::write(cp_dir.join("index.md"), content).ok();
+        let result = list_session_checkpoints(session_id.clone()).unwrap();
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].number, 1);
+        assert_eq!(result[0].title, "First checkpoint");
+        assert_eq!(result[0].file_name, "001-first.md");
+        assert_eq!(result[1].number, 2);
+        // Cleanup
+        std::fs::remove_dir_all(
+            home.join(".copilot")
+                .join("session-state")
+                .join(&session_id),
+        )
+        .ok();
+    }
+
+    #[test]
+    fn list_session_events_returns_empty_for_missing_file() {
+        let result = list_session_events("nonexistent-session-id-12345".to_string(), Some(10));
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().len(), 0);
+    }
+
+    #[test]
+    fn list_session_events_parses_jsonl() {
+        let session_id = format!("ws_events_test_{}", std::process::id());
+        let home = dirs::home_dir().expect("home dir");
+        let session_dir = home
+            .join(".copilot")
+            .join("session-state")
+            .join(&session_id);
+        std::fs::create_dir_all(&session_dir).ok();
+        let events_path = session_dir.join("events.jsonl");
+        let mut f = std::fs::File::create(&events_path).unwrap();
+        writeln!(
+            f,
+            r#"{{"type":"user.message","timestamp":"2026-01-01T00:00:00Z"}}"#
+        )
+        .unwrap();
+        writeln!(f, r#"{{"type":"tool.execution_start","timestamp":"2026-01-01T00:00:01Z","data":{{"toolName":"powershell"}}}}"#).unwrap();
+        writeln!(
+            f,
+            r#"{{"type":"hook.start","timestamp":"2026-01-01T00:00:02Z"}}"#
+        )
+        .unwrap();
+        drop(f);
+
+        let events = list_session_events(session_id.clone(), Some(100)).unwrap();
+        // Hook events filtered out
+        assert!(events.iter().all(|e| !e.event_type.starts_with("hook.")));
+        // Should have user.message and tool.execution_start
+        assert!(events.iter().any(|e| e.event_type == "user.message"));
+        let tool_evt = events
+            .iter()
+            .find(|e| e.event_type == "tool.execution_start");
+        assert!(tool_evt.is_some());
+        assert_eq!(tool_evt.unwrap().tool, Some("powershell".to_string()));
+        std::fs::remove_dir_all(session_dir).ok();
+    }
+
+    #[test]
+    fn query_session_files_lists_files_dir() {
+        let session_id = format!("ws_files_test_{}", std::process::id());
+        let home = dirs::home_dir().expect("home dir");
+        let files_dir = home
+            .join(".copilot")
+            .join("session-state")
+            .join(&session_id)
+            .join("files");
+        std::fs::create_dir_all(&files_dir).ok();
+        std::fs::write(files_dir.join("notes.md"), "test content").ok();
+        std::fs::write(files_dir.join("data.json"), "{}").ok();
+
+        let files = query_session_files(session_id.clone()).unwrap();
+        assert_eq!(files.len(), 2);
+        let names: Vec<String> = files
+            .iter()
+            .map(|f| {
+                f.file_path
+                    .split(['\\', '/'])
+                    .last()
+                    .unwrap_or("")
+                    .to_string()
+            })
+            .collect();
+        assert!(names.contains(&"notes.md".to_string()));
+        assert!(names.contains(&"data.json".to_string()));
+
+        std::fs::remove_dir_all(
+            home.join(".copilot")
+                .join("session-state")
+                .join(&session_id),
+        )
+        .ok();
+    }
+
+    #[test]
+    fn query_session_files_returns_empty_for_missing_dir() {
+        let result = query_session_files("nonexistent-session-id-67890".to_string());
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().len(), 0);
+    }
 }

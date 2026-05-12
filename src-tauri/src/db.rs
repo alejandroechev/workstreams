@@ -96,3 +96,116 @@ pub fn open_db(path: &Path) -> rusqlite::Result<Connection> {
     init_db(&conn)?;
     Ok(conn)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn open_in_memory() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        conn
+    }
+
+    #[test]
+    fn init_db_creates_all_tables() {
+        let conn = open_in_memory();
+        let expected = [
+            "projects",
+            "workstreams",
+            "workstream_layouts",
+            "tiles",
+            "terminal_scrollback",
+            "copilot_session_links",
+            "settings",
+        ];
+        for table in &expected {
+            let count: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name = ?1",
+                    [*table],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(count, 1, "table {table} missing");
+        }
+    }
+
+    #[test]
+    fn init_db_is_idempotent() {
+        let conn = open_in_memory();
+        // Run init again — should not error
+        init_db(&conn).unwrap();
+        init_db(&conn).unwrap();
+    }
+
+    #[test]
+    fn open_db_creates_file_and_schema() {
+        let tmp = std::env::temp_dir().join(format!("ws_db_test_{}.db", std::process::id()));
+        std::fs::remove_file(&tmp).ok();
+        let conn = open_db(&tmp).unwrap();
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='projects'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+        drop(conn);
+        std::fs::remove_file(&tmp).ok();
+    }
+
+    #[test]
+    fn projects_table_can_insert_and_select() {
+        let conn = open_in_memory();
+        conn.execute(
+            "INSERT INTO projects (id, name, directory, color, created_at, updated_at) VALUES ('p1', 'Test', '/tmp', '#fff', 't1', 't1')",
+            [],
+        )
+        .unwrap();
+        let name: String = conn
+            .query_row("SELECT name FROM projects WHERE id = 'p1'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(name, "Test");
+    }
+
+    #[test]
+    fn tiles_cascade_delete_with_workstream() {
+        let conn = open_in_memory();
+        conn.execute_batch(
+            "INSERT INTO workstreams (id, name, status, workstream_type, created_at, updated_at) VALUES ('w1', 'WS', 'active', 'standalone', 't', 't');
+             INSERT INTO tiles (id, workstream_id, tile_type, created_at, updated_at) VALUES ('t1', 'w1', 'terminal', 't', 't');"
+        ).unwrap();
+        conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
+        conn.execute("DELETE FROM workstreams WHERE id = 'w1'", [])
+            .unwrap();
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM tiles", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn settings_table_supports_upsert() {
+        let conn = open_in_memory();
+        conn.execute(
+            "INSERT INTO settings (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = ?2",
+            ["k1", "v1"],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO settings (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = ?2",
+            ["k1", "v2"],
+        )
+        .unwrap();
+        let val: String = conn
+            .query_row("SELECT value FROM settings WHERE key = 'k1'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(val, "v2");
+    }
+}

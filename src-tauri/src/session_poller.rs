@@ -1,4 +1,3 @@
-// @test-skip: Background poller reading filesystem state — covered by E2E
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use std::io::{BufRead, Seek, SeekFrom};
@@ -537,4 +536,242 @@ fn query_session_stats_legacy(conn: &Connection, session_name: &str) -> Option<S
         current_tool: None,
         process_alive: true,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    #[test]
+    fn status_priority_ranks_active_above_idle() {
+        assert!(status_priority("thinking") > status_priority("idle"));
+        assert!(status_priority("tool_use") > status_priority("idle"));
+        assert!(status_priority("responding") > status_priority("background_task"));
+        assert!(status_priority("background_task") > status_priority("idle"));
+        assert!(status_priority("idle") > status_priority("offline"));
+        assert_eq!(status_priority("unknown"), 0);
+    }
+
+    #[test]
+    fn status_priority_thinking_and_tool_use_tied() {
+        assert_eq!(status_priority("thinking"), status_priority("tool_use"));
+    }
+
+    #[test]
+    fn tail_file_reads_last_n_lines() {
+        let tmp = std::env::temp_dir().join(format!("ws_tail_test_{}.txt", std::process::id()));
+        {
+            let mut f = std::fs::File::create(&tmp).unwrap();
+            for i in 0..50 {
+                writeln!(f, "line {i}").unwrap();
+            }
+        }
+        let lines = tail_file(&tmp, 5);
+        assert_eq!(lines.len(), 5);
+        assert_eq!(lines[4], "line 49");
+        assert_eq!(lines[0], "line 45");
+        std::fs::remove_file(&tmp).ok();
+    }
+
+    #[test]
+    fn tail_file_returns_empty_for_missing_file() {
+        let lines = tail_file(std::path::Path::new("/nonexistent/path/file.txt"), 10);
+        assert_eq!(lines.len(), 0);
+    }
+
+    #[test]
+    fn tail_file_handles_small_file_with_large_n() {
+        let tmp = std::env::temp_dir().join(format!("ws_tail_small_{}.txt", std::process::id()));
+        {
+            let mut f = std::fs::File::create(&tmp).unwrap();
+            writeln!(f, "only line").unwrap();
+        }
+        let lines = tail_file(&tmp, 100);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0], "only line");
+        std::fs::remove_file(&tmp).ok();
+    }
+
+    #[test]
+    fn read_events_status_returns_idle_for_missing_file() {
+        let tmp = std::env::temp_dir().join(format!("ws_events_empty_{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).ok();
+        let status = read_events_status(&tmp);
+        assert_eq!(status.status, "idle");
+        assert!(status.current_tool.is_none());
+        assert!(status.last_event_at.is_none());
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn read_events_status_detects_tool_use() {
+        let tmp = std::env::temp_dir().join(format!("ws_events_tool_{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).ok();
+        let events_path = tmp.join("events.jsonl");
+        let mut f = std::fs::File::create(&events_path).unwrap();
+        writeln!(
+            f,
+            r#"{{"type":"assistant.turn_start","timestamp":"2026-01-01T00:00:00Z"}}"#
+        )
+        .unwrap();
+        writeln!(f, r#"{{"type":"tool.execution_start","timestamp":"2026-01-01T00:00:01Z","data":{{"toolName":"powershell"}}}}"#).unwrap();
+        drop(f);
+        let status = read_events_status(&tmp);
+        assert_eq!(status.status, "tool_use");
+        assert_eq!(status.current_tool, Some("powershell".to_string()));
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn read_events_status_detects_idle_on_turn_end() {
+        let tmp = std::env::temp_dir().join(format!("ws_events_idle_{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).ok();
+        let events_path = tmp.join("events.jsonl");
+        let mut f = std::fs::File::create(&events_path).unwrap();
+        writeln!(
+            f,
+            r#"{{"type":"assistant.turn_end","timestamp":"2026-01-01T00:00:00Z"}}"#
+        )
+        .unwrap();
+        drop(f);
+        let status = read_events_status(&tmp);
+        assert_eq!(status.status, "idle");
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn read_events_status_detects_responding() {
+        let tmp = std::env::temp_dir().join(format!("ws_events_resp_{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).ok();
+        let events_path = tmp.join("events.jsonl");
+        let mut f = std::fs::File::create(&events_path).unwrap();
+        writeln!(
+            f,
+            r#"{{"type":"assistant.message","timestamp":"2026-01-01T00:00:00Z","data":{{}}}}"#
+        )
+        .unwrap();
+        drop(f);
+        let status = read_events_status(&tmp);
+        assert_eq!(status.status, "responding");
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn read_events_status_detects_thinking_from_user_message() {
+        let tmp = std::env::temp_dir().join(format!("ws_events_user_{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).ok();
+        let events_path = tmp.join("events.jsonl");
+        let mut f = std::fs::File::create(&events_path).unwrap();
+        writeln!(
+            f,
+            r#"{{"type":"user.message","timestamp":"2026-01-01T00:00:00Z"}}"#
+        )
+        .unwrap();
+        drop(f);
+        let status = read_events_status(&tmp);
+        assert_eq!(status.status, "thinking");
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn read_events_status_detects_background_task() {
+        let tmp = std::env::temp_dir().join(format!("ws_events_bg_{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).ok();
+        let events_path = tmp.join("events.jsonl");
+        let mut f = std::fs::File::create(&events_path).unwrap();
+        writeln!(
+            f,
+            r#"{{"type":"subagent.started","timestamp":"2026-01-01T00:00:00Z"}}"#
+        )
+        .unwrap();
+        drop(f);
+        let status = read_events_status(&tmp);
+        assert_eq!(status.status, "background_task");
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn read_events_status_skips_hook_events() {
+        let tmp = std::env::temp_dir().join(format!("ws_events_hook_{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).ok();
+        let events_path = tmp.join("events.jsonl");
+        let mut f = std::fs::File::create(&events_path).unwrap();
+        writeln!(f, r#"{{"type":"tool.execution_start","timestamp":"2026-01-01T00:00:00Z","data":{{"toolName":"grep"}}}}"#).unwrap();
+        writeln!(
+            f,
+            r#"{{"type":"hook.start","timestamp":"2026-01-01T00:00:01Z"}}"#
+        )
+        .unwrap();
+        writeln!(
+            f,
+            r#"{{"type":"hook.end","timestamp":"2026-01-01T00:00:02Z"}}"#
+        )
+        .unwrap();
+        drop(f);
+        let status = read_events_status(&tmp);
+        // Should find tool_use (skipping hooks)
+        assert_eq!(status.status, "tool_use");
+        assert_eq!(status.current_tool, Some("grep".to_string()));
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn check_process_alive_returns_false_for_no_lock_files() {
+        let tmp = std::env::temp_dir().join(format!("ws_lock_empty_{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).ok();
+        assert!(!check_process_alive(&tmp));
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn check_process_alive_returns_false_for_dead_pid() {
+        let tmp = std::env::temp_dir().join(format!("ws_lock_dead_{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).ok();
+        // PID 1 is unlikely to be a running copilot process on Windows
+        // PID 99999999 is definitely dead
+        std::fs::write(tmp.join("inuse.99999999.lock"), "").ok();
+        assert!(!check_process_alive(&tmp));
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn check_process_alive_detects_running_process() {
+        let tmp = std::env::temp_dir().join(format!("ws_lock_alive_{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).ok();
+        let my_pid = std::process::id();
+        std::fs::write(tmp.join(format!("inuse.{my_pid}.lock")), "").ok();
+        assert!(check_process_alive(&tmp));
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn session_poller_watch_and_unwatch() {
+        let poller = SessionPoller::new();
+        poller.watch("tile1", "session1");
+        let watched = poller.get_watched();
+        assert_eq!(watched.len(), 1);
+        assert_eq!(watched[0].0, "tile1");
+        poller.unwatch("tile1");
+        assert_eq!(poller.get_watched().len(), 0);
+    }
+
+    #[test]
+    fn session_poller_watch_with_id_includes_ids() {
+        let poller = SessionPoller::new();
+        poller.watch_with_id("tile1", "session1", "sid-abc", Some("ws-123"));
+        let watched = poller.get_watched();
+        assert_eq!(watched[0].2, Some("sid-abc".to_string()));
+        assert_eq!(watched[0].3, Some("ws-123".to_string()));
+    }
+
+    #[test]
+    fn session_poller_watch_replaces_existing_tile() {
+        let poller = SessionPoller::new();
+        poller.watch("tile1", "session1");
+        poller.watch("tile1", "session2"); // replaces
+        let watched = poller.get_watched();
+        assert_eq!(watched.len(), 1);
+        assert_eq!(watched[0].1, "session2");
+    }
 }

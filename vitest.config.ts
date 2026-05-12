@@ -12,10 +12,8 @@ export default defineConfig({
       exclude: [
         "src/domain/types.ts",
         "src/backend/types.ts",
-        "src/backend/tauri-backend.ts",
-        "src/backend/context.tsx",
-        "src/domain/notifications.ts",
         "**/*.test.ts",
+        "**/*.test.tsx",
         "**/__tests__/**",
       ],
       thresholds: {

@@ -1,4 +1,3 @@
-// @test-skip: Thin wrapper over Tauri invoke; integration-tested via E2E
 import { invoke } from "@tauri-apps/api/core";
 import type { Project, Workstream, Tile, TileType, WorkstreamLayout, CopilotConfigItem } from "../domain/types";
 import type { Backend } from "./types";
