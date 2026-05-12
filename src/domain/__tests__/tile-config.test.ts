@@ -1,5 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { createTerminalConfig, parseTerminalConfig, detectLanguage } from "../tile-config";
+import {
+  createTerminalConfig,
+  parseTerminalConfig,
+  detectLanguage,
+  createCopilotSessionConfig,
+  parseCopilotSessionConfig,
+  buildCopilotCommand,
+} from "../tile-config";
 
 describe("createTerminalConfig", () => {
   it("creates config with cwd and default command", () => {
@@ -100,5 +107,61 @@ describe("detectLanguage", () => {
 
   it("handles paths with multiple dots", () => {
     expect(detectLanguage("my.component.test.tsx")).toBe("typescriptreact");
+  });
+});
+
+describe("createCopilotSessionConfig", () => {
+  it("creates config with session name and cwd", () => {
+    const json = createCopilotSessionConfig("session1", "C:\\repo");
+    const parsed = JSON.parse(json);
+    expect(parsed.session_name).toBe("session1");
+    expect(parsed.cwd).toBe("C:\\repo");
+    expect(parsed.command_template).toBe("agency copilot --yolo");
+    expect(parsed.is_resumed).toBe(false);
+    expect(parsed.created_at).toBeTruthy();
+  });
+
+  it("accepts custom command template", () => {
+    const json = createCopilotSessionConfig("s", "/", "custom cmd");
+    const parsed = JSON.parse(json);
+    expect(parsed.command_template).toBe("custom cmd");
+  });
+});
+
+describe("parseCopilotSessionConfig", () => {
+  it("parses valid config", () => {
+    const json = createCopilotSessionConfig("test", "/cwd");
+    const cfg = parseCopilotSessionConfig(json);
+    expect(cfg.session_name).toBe("test");
+    expect(cfg.cwd).toBe("/cwd");
+  });
+
+  it("returns default for invalid JSON", () => {
+    const cfg = parseCopilotSessionConfig("not-json");
+    expect(cfg.session_name).toBe("unknown");
+    expect(cfg.command_template).toBe("agency copilot --yolo");
+    expect(cfg.is_resumed).toBe(false);
+  });
+});
+
+describe("buildCopilotCommand", () => {
+  it("returns command_template for new session", () => {
+    const cfg = { session_name: "s", command_template: "agency copilot --yolo", cwd: "/", is_resumed: false, created_at: "" };
+    expect(buildCopilotCommand(cfg, false)).toBe("agency copilot --yolo");
+  });
+
+  it("uses --resume with copilot_session_id", () => {
+    const cfg = { session_name: "s", command_template: "agency copilot --yolo", cwd: "/", is_resumed: true, created_at: "", copilot_session_id: "abc-123" };
+    expect(buildCopilotCommand(cfg, true)).toBe("agency copilot --yolo --resume=abc-123");
+  });
+
+  it("prefers resume_by_id over copilot_session_id", () => {
+    const cfg = { session_name: "s", command_template: "agency copilot --yolo", cwd: "/", is_resumed: true, created_at: "", copilot_session_id: "id-1", resume_by_id: "id-2" } as Parameters<typeof buildCopilotCommand>[0];
+    expect(buildCopilotCommand(cfg, true)).toBe("agency copilot --yolo --resume=id-2");
+  });
+
+  it("returns base command when isResume false even with session_id", () => {
+    const cfg = { session_name: "s", command_template: "agency copilot --yolo", cwd: "/", is_resumed: false, created_at: "", copilot_session_id: "abc" };
+    expect(buildCopilotCommand(cfg, false)).toBe("agency copilot --yolo");
   });
 });

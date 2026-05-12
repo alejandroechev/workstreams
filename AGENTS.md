@@ -57,11 +57,13 @@ For every user-facing feature, before considering it complete:
 
 Validation is enforced automatically by two layers:
 
-1. **Git Hooks** (`.husky/pre-commit` and `.husky/pre-push`) — Runs actual validation commands:
-   - Pre-commit: `tsc -b` + `vitest run --coverage` + `eslint`
-   - Pre-push: E2E tests + CDP visual validation on real Tauri app
+1. **Git Hooks** (`.git/hooks/pre-commit` and `.git/hooks/pre-push`) — Native git hooks (no husky):
+   - Pre-commit (fast): `tsc --noEmit` + `eslint` + `vitest run --coverage` (90% threshold) + `cargo check` (warnings=errors) + `cargo fmt --check` + test-file-exists check
+   - Pre-push (slow): `cargo clippy` + Playwright E2E (if suite exists)
 
 2. **Copilot CLI Extension** (`.github/extensions/`) — Intercepts agent actions in real time.
+
+**Test file requirement**: Every changed source file must have a corresponding test (`__tests__/X.test.ts(x)` for TS, `#[cfg(test)]` block for Rust). Skip exceptions: type-only files, configs, CSS, `__tests__/` themselves, `main.rs`, or `// @test-skip: <reason>` marker in first 5 lines.
 
 ### Documentation
 - **Docs hierarchy**: ADRs are the source of truth for architecture decisions, README is the public summary that links back to ADRs, and AGENTS.md contains process rules only.

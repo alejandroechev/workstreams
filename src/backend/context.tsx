@@ -1,3 +1,4 @@
+// @test-skip: Trivial React context wrapper, no business logic
 import { createContext, useContext } from "react";
 import type { Backend } from "./types";
 

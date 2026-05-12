@@ -1,3 +1,4 @@
+// @test-skip: Browser APIs (Notification, AudioContext) — covered by E2E
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 let audioCtx: AudioContext | null = null;

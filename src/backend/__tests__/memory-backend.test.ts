@@ -220,4 +220,101 @@ describe("MemoryBackend", () => {
       expect(items).toEqual([]);
     });
   });
+
+  describe("terminals", () => {
+    it("spawns and tracks a terminal", async () => {
+      await backend.spawnTerminal("tile-1", "/", "bash");
+      await backend.writeToTerminal("tile-1", "echo hi");
+      await backend.resizeTerminal("tile-1", 24, 80);
+      await backend.closeTerminal("tile-1");
+      // After close, writing should throw
+      await expect(backend.writeToTerminal("tile-1", "x")).rejects.toThrow();
+    });
+
+    it("throws when writing to non-existent terminal", async () => {
+      await expect(backend.writeToTerminal("ghost", "x")).rejects.toThrow();
+      await expect(backend.resizeTerminal("ghost", 1, 1)).rejects.toThrow();
+    });
+  });
+
+  describe("scrollback + sessions", () => {
+    it("saves and loads scrollback", async () => {
+      await backend.saveScrollback("t1", "hello");
+      expect(await backend.loadScrollback("t1")).toBe("hello");
+    });
+
+    it("returns null for unknown scrollback", async () => {
+      expect(await backend.loadScrollback("none")).toBeNull();
+    });
+
+    it("watchSession/unwatchSession are no-ops", async () => {
+      await expect(backend.watchSession("t1", "name")).resolves.toBeUndefined();
+      await expect(backend.unwatchSession("t1")).resolves.toBeUndefined();
+    });
+  });
+
+  describe("readFile + detectGitInfo", () => {
+    it("reads seeded file", async () => {
+      backend.seedFile("/a.txt", "hello");
+      expect(await backend.readFile("/a.txt")).toBe("hello");
+    });
+
+    it("throws on missing file", async () => {
+      await expect(backend.readFile("/missing")).rejects.toThrow();
+    });
+
+    it("detectGitInfo returns nulls", async () => {
+      expect(await backend.detectGitInfo("/")).toEqual({ repo: null, branch: null });
+    });
+
+    it("listDirectory returns seeded files", async () => {
+      backend.seedFile("/x/a.ts", "");
+      backend.seedFile("/x/b.ts", "");
+      const list = await backend.listDirectory("/x");
+      expect(list.length).toBe(2);
+    });
+  });
+
+  describe("layout + git stubs", () => {
+    it("getLayout returns default for unknown workstream", async () => {
+      const layout = await backend.getLayout("unknown");
+      expect(layout.workstream_id).toBe("unknown");
+      expect(layout.layout_mode).toBe("auto");
+      expect(layout.tile_order_json).toBe("[]");
+    });
+
+    it("updateLayout creates and updates", async () => {
+      await backend.updateLayout("ws1", { layout_mode: "vertical" });
+      const layout = await backend.getLayout("ws1");
+      expect(layout.layout_mode).toBe("vertical");
+    });
+
+    it("gitLog returns stub commits", async () => {
+      const log = await backend.gitLog("/");
+      expect(log.length).toBeGreaterThan(0);
+      expect(log[0].hash).toBeTruthy();
+    });
+
+    it("gitShowCommit returns stub diff", async () => {
+      const diff = await backend.gitShowCommit("/", "abc");
+      expect(diff).toContain("commit");
+    });
+
+    it("gitCurrentBranch returns 'main'", async () => {
+      expect(await backend.gitCurrentBranch("/")).toBe("main");
+    });
+
+    it("updateTileConfig updates config and title", async () => {
+      const ws = await backend.createWorkstream("ws", "/");
+      const tile = await backend.createTile(ws.id, "terminal", "t1", "{}");
+      await backend.updateTileConfig(tile.id, '{"x":1}', "renamed");
+      const tiles = await backend.listTiles(ws.id);
+      expect(tiles[0].config_json).toBe('{"x":1}');
+      expect(tiles[0].title).toBe("renamed");
+    });
+
+    it("updateTileConfig handles missing tile gracefully", async () => {
+      await expect(backend.updateTileConfig("missing", "{}")).resolves.toBeUndefined();
+    });
+  });
 });
