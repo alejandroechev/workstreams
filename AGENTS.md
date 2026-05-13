@@ -72,6 +72,10 @@ See `docs/adrs/002-discipline-enforcement.md` for the full design rationale.
 4. **SQLite triggers** (auto-installed by extension):
    - `auto_inject_feature_todos`: Inserting a todo with `category='feature'` auto-creates test/visual/docs sub-todos + dependencies
    - `block_done_with_pending_children`: Marking a parent `done` is blocked while child deps are not all done
+   - `auto_tag_plan_id`: Every new todo automatically gets the current `plan_id` from `current_plan`
+   - `maybe_rollover_plan`: Detects plan boundaries from activity patterns (>15min gap + completed work in old plan). Auto-supersedes the old plan and archives its pending todos.
+
+**Plan tracking model**: The `plans` and `current_plan` tables track which todos belong to which plan. Use `INSERT INTO todos (...)` as normal — `plan_id` is auto-populated. When you start a meaningfully new plan after a work gap, the rollover trigger fires automatically. Plan.md snapshots are archived to `~/.copilot/session-state/<id>/plan-history/` by the extension when it detects `[[PLAN]]` in your prompt.
 
 5. **Session-start audit**: Same extension runs `scripts/discipline-audit.mjs` at every session start. Reports missing tests, missing docs, stale screenshots, pending feature children.
 

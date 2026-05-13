@@ -97,6 +97,49 @@ END
 
 **Constraint**: The MCP `sql` tool splits multi-statement SQL on `;`, so triggers cannot be created via that interface. The extension installs them via `python -c` which has no such limitation. This is the reason for `install-triggers.py`.
 
+### Layer 4b: Plan tracking schema + auto-rollover (added 2026-05-13)
+
+Building on Layer 4's triggers, we added first-class plan tracking. Previously, todos accumulated as a flat list without grouping. The model now has:
+
+**Schema additions** (in `install-triggers.py`, idempotent):
+
+```sql
+CREATE TABLE plans (
+  id TEXT PRIMARY KEY,                 -- e.g., "plan-2026-05-13 15:48:44"
+  title TEXT,
+  status TEXT CHECK(status IN ('active', 'superseded', 'completed', 'abandoned')),
+  created_at TEXT,
+  superseded_at TEXT,
+  superseded_by TEXT REFERENCES plans(id),
+  plan_md_snapshot TEXT
+);
+
+CREATE TABLE current_plan (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  plan_id TEXT NOT NULL REFERENCES plans(id)
+);
+
+ALTER TABLE todos ADD COLUMN plan_id TEXT REFERENCES plans(id);
+-- Status CHECK constraint updated to include 'archived'
+```
+
+**Trigger 3: auto_tag_plan_id** — Every INSERT into todos gets its `plan_id` automatically set to whatever `current_plan` points to (if not specified by the caller).
+
+**Trigger 4: maybe_rollover_plan** — Detects plan boundaries from activity patterns instead of relying on external signals. Fires AFTER INSERT when:
+1. The current plan has at least one `done` todo (i.e., real work happened), AND
+2. The last activity in the current plan was >15 minutes before the new INSERT's `created_at`
+
+When both conditions hold, the trigger:
+- Marks the current plan as `superseded`
+- Archives the old plan's pending/in_progress todos (`status='archived'`)
+- Creates a new plan with id derived from `NEW.created_at`
+- Updates `current_plan` pointer
+- Tags the just-inserted todo with the new plan
+
+**Why activity-gap heuristic over `[[PLAN]]` detection**: The DB has no access to user prompts. Activity patterns are reliable signals. After the first rollover in a batch, the new current_plan has no `done` todos, so the WHEN clause goes false and subsequent INSERTs in the same batch don't trigger duplicate rollovers.
+
+**Plan.md archival** is handled separately by the extension's `start-plan.py` script when it detects the `[[PLAN]]` prefix. The two systems are deliberately decoupled — DB handles structural data, extension handles prose files.
+
 ### Layer 5: Session-Start Audit
 
 Same `onSessionStart` hook in the extension. Runs `scripts/discipline-audit.mjs` and injects its output as `additionalContext`. The audit reports:

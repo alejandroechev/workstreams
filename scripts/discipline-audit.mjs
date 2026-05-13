@@ -73,9 +73,35 @@ if (existsSync(screenshotDir)) {
   }
 }
 
-// 5. Print report
+// 5. Plan status (optional — requires SESSION_DB env var set by the extension)
+let planStatus = null;
+try {
+  const dbPath = process.env.SESSION_DB;
+  if (dbPath && existsSync(dbPath)) {
+    // Use Node's built-in or sqlite3 if available — fall back to a python child for safety
+    const { execSync } = await import("node:child_process");
+    const out = execSync(
+      `python -c "import sqlite3,json; c=sqlite3.connect('${dbPath.replace(/\\/g, "\\\\")}'); c.row_factory=sqlite3.Row; rows=[dict(r) for r in c.execute('SELECT status, COUNT(*) as count FROM plans GROUP BY status').fetchall()]; current=c.execute('SELECT p.id, p.title FROM current_plan cp JOIN plans p ON p.id=cp.plan_id WHERE cp.id=1').fetchone(); stale=c.execute(\\"SELECT COUNT(*) FROM todos t JOIN plans p ON p.id=t.plan_id WHERE p.status='superseded' AND t.status IN ('pending','in_progress')\\").fetchone()[0]; print(json.dumps({'plans': rows, 'current': dict(current) if current else None, 'stale': stale}))"`,
+      { encoding: "utf8" }
+    );
+    planStatus = JSON.parse(out.trim());
+  }
+} catch { /* optional, ignore */ }
+
+// 6. Print report
 console.log("📋 DISCIPLINE AUDIT");
 console.log("═══════════════════════════════════════════════════");
+
+if (planStatus && planStatus.current) {
+  console.log(`\n📋 Active plan: ${planStatus.current.title || planStatus.current.id}`);
+  if (planStatus.plans.length > 0) {
+    const summary = planStatus.plans.map((p) => `${p.status}=${p.count}`).join(", ");
+    console.log(`   Plans by status: ${summary}`);
+  }
+  if (planStatus.stale > 0) {
+    console.log(`   ⚠️  ${planStatus.stale} pending todos in superseded plans (stale work)`);
+  }
+}
 
 if (recentSource.length === 0 && allUncommitted.length === 0) {
   console.log("✅ No recent source changes. Discipline state is neutral.");

@@ -70,9 +70,9 @@ function runPython(args) {
   });
 }
 
-function runNode(args, cwd) {
+function runNode(args, cwd, env) {
   return new Promise((resolve) => {
-    execFile("node", args, { cwd, timeout: 15000 }, (err, stdout, stderr) => {
+    execFile("node", args, { cwd, timeout: 15000, env: { ...process.env, ...(env || {}) } }, (err, stdout, stderr) => {
       resolve({
         ok: !err,
         stdout: stdout?.toString() || "",
@@ -99,10 +99,14 @@ const session = await joinSession({
         await session.log(`⚠️ Trigger install failed: ${triggerResult.stderr.trim()}`, { level: "warning" });
       }
 
-      // 2) Run discipline audit
+      // 2) Run discipline audit (pass session.db path for plan info)
       const auditScript = path.join(cwd, "scripts", "discipline-audit.mjs");
+      const sessionDbPath = path.join(
+        process.env.USERPROFILE || process.env.HOME || "",
+        ".copilot", "session-state", sessionId, "session.db"
+      );
       try {
-        const auditResult = await runNode([auditScript], cwd);
+        const auditResult = await runNode([auditScript], cwd, { SESSION_DB: sessionDbPath });
         if (auditResult.ok && auditResult.stdout) {
           // Inject as context so agent sees it at session start
           return {
@@ -170,8 +174,22 @@ const session = await joinSession({
       }
     },
 
-    onUserPromptSubmitted: async (input) => {
-      const prompt = (input.prompt || "").toLowerCase();
+    onUserPromptSubmitted: async (input, invocation) => {
+      const promptRaw = input.prompt || "";
+      const prompt = promptRaw.toLowerCase();
+
+      // [[PLAN]] detection — archive plan.md to history when entering plan mode
+      // The DB trigger handles rollover; this just does the prose archival.
+      if (promptRaw.startsWith("[[PLAN]]")) {
+        const sessionId = invocation.sessionId;
+        const startPlanScript = path.join(extensionDir, "start-plan.py");
+        const result = await runPython([startPlanScript, sessionId]);
+        if (result.ok && result.stdout.trim()) {
+          await session.log(`📋 Plan mode: archived prior plan.md to ${result.stdout.trim()}`, { ephemeral: false });
+        }
+        // No additionalContext injection here — we already do session-start audit + done-keyword
+      }
+
       const doneWords = /\b(done|complete[d]?|finished|ready to commit|all set)\b/;
       if (doneWords.test(prompt)) {
         return {
