@@ -11,7 +11,7 @@
 declare global {
   interface Window {
     mermaid?: any;
-    panzoom?: any;
+    Panzoom?: any;
   }
 }
 
@@ -64,11 +64,11 @@ export async function loadMermaid(): Promise<any> {
 }
 
 export async function loadPanzoom(): Promise<any> {
-  if (window.panzoom) return window.panzoom;
+  if (window.Panzoom) return window.Panzoom;
   if (!panzoomPromise) {
     panzoomPromise = loadScript("/libs/panzoom.min.js").then(() => {
-      const pz = window.panzoom;
-      if (!pz) throw new Error("panzoom global not found after load");
+      const pz = window.Panzoom;
+      if (!pz) throw new Error("Panzoom global not found after load");
       return pz;
     });
   }

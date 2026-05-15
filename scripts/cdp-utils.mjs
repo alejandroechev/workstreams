@@ -55,12 +55,29 @@ export async function connect() {
 export function captureErrors(page) {
   const errors = [];
   page.on("console", (msg) => {
-    if (msg.type() === "error") errors.push({ kind: "console", text: msg.text() });
+    if (msg.type() !== "error") return;
+    const text = msg.text();
+    if (isKnownNoise(text)) return;
+    errors.push({ kind: "console", text });
   });
   page.on("pageerror", (err) => {
+    if (isKnownNoise(err.message)) return;
     errors.push({ kind: "pageerror", text: err.message });
   });
   return errors;
+}
+
+// Errors we know are unrelated to feature correctness — they come from the
+// app's session-store enrichment polling (no copilot session exists yet for a
+// freshly-created workstream) or from the WebView trying to load /favicon.ico.
+const KNOWN_NOISE = [
+  /Query returned no rows/i,
+  /favicon\.ico.*404/i,
+  /404.*favicon/i,
+];
+
+function isKnownNoise(text) {
+  return KNOWN_NOISE.some((re) => re.test(text));
 }
 
 export function screenshotPath(featureId, screenshotsDir = "screenshots") {

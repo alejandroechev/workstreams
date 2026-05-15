@@ -34,10 +34,13 @@ const DEV_DB = path.join(DEV_DIR, "workstreams-dev.db");
 const SCREENSHOTS_DIR = path.join(REPO_ROOT, "screenshots");
 
 function parseArgs(argv) {
-  const out = { cold: false, seed: true, featureId: null, todoId: null };
+  // Default: always cold-spawn an isolated dev instance, so we never accidentally
+  // operate against a running prod app. Pass --reuse to attach to a live CDP.
+  const out = { cold: true, seed: true, featureId: null, todoId: null };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--cold") out.cold = true;
+    else if (a === "--reuse") out.cold = false;
     else if (a === "--no-seed") out.seed = false;
     else if (a === "--todo-id") out.todoId = argv[++i];
     else if (!out.featureId) out.featureId = a;
@@ -54,14 +57,23 @@ async function ensureDevTauri({ cold }) {
   }
   if (cold && (await isCdpAlive())) {
     throw new Error(
-      `Cannot cold-spawn: port :${CDP_PORT} already in use. Close the prod app first (search for workstreams.exe in target/release).`,
+      `Cannot cold-spawn: CDP :${CDP_PORT} already in use. Close the prod/dev app first, or pass --reuse to attach to it (only do this if you're sure it's a dev instance).`,
     );
   }
   console.log(`[cdp] starting cargo tauri dev with WORKSTREAMS_DB_PATH=${DEV_DB} (first build can take ~5 min)...`);
   fs.mkdirSync(DEV_DIR, { recursive: true });
-  const env = { ...process.env, WORKSTREAMS_DB_PATH: DEV_DB };
-  const devConf = path.join(REPO_ROOT, "src-tauri", "tauri.conf.dev.json");
-  const child = spawn("cargo", ["tauri", "dev", "--config", devConf], {
+  // Isolate the WebView2 user-data-folder from prod. Prod and dev share the
+  // same Tauri identifier, so by default they'd share the WebView2 environment
+  // — and a prod instance started without CDP would prevent dev from exposing
+  // it on the shared browser process.
+  const wv2DataDir = path.join(DEV_DIR, "webview2-userdata");
+  fs.mkdirSync(wv2DataDir, { recursive: true });
+  const env = {
+    ...process.env,
+    WORKSTREAMS_DB_PATH: DEV_DB,
+    WEBVIEW2_USER_DATA_FOLDER: wv2DataDir,
+  };
+  const child = spawn("cargo", ["tauri", "dev"], {
     cwd: REPO_ROOT,
     env,
     stdio: ["ignore", "inherit", "inherit"],
