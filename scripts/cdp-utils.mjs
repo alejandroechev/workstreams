@@ -4,9 +4,10 @@ import { chromium } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
 
-// Default dev port is 9223 so a running prod app on :9222 never conflicts.
-// Override via the CDP_PORT env var.
-export const CDP_PORT = Number(process.env.CDP_PORT) || 9223;
+// Default to port 9222 (matches tauri.conf.dev.json — dev-only).
+// Prod releases ship without CDP enabled at all, so prod and dev cannot
+// conflict on this port. Override via CDP_PORT env if needed.
+export const CDP_PORT = Number(process.env.CDP_PORT) || 9222;
 export const CDP_URL = `http://127.0.0.1:${CDP_PORT}`;
 
 export async function isCdpAlive(timeoutMs = 1500) {

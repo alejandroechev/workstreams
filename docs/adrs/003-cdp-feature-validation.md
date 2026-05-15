@@ -23,30 +23,42 @@ required the user to close their working session.
    - Otherwise, in debug builds → `./.dev/workstreams-dev.db` (gitignored).
    - Otherwise, release builds → `<data_local_dir>/copilot-desktop/copilot-desktop.db`.
 
-2. **Dev fixtures via `scripts/dev-seed.mjs`.** Idempotently creates a "Showcase"
+2. **CDP is dev-only.** `src-tauri/tauri.conf.json` does **not** include
+   `additionalBrowserArgs`, so the production-shipped binary has no remote
+   debugging port. CDP gets enabled by passing
+   `--config src-tauri/tauri.conf.dev.json` when running `cargo tauri dev`.
+   This means:
+   - Released `workstreams.exe` cannot be inspected via CDP (security +
+     no accidental conflicts with dev sessions).
+   - Dev runs via `npm run tauri:dev` (alias) or via the cdp runner get CDP.
+
+3. **Dev fixtures via `scripts/dev-seed.mjs`.** Idempotently creates a "Showcase"
    workstream and `.dev/showcase/README.md` with markdown content exercising
    every supported feature (headings, lists, tables, code, blockquotes, mermaid).
    Runs only if no workstreams exist yet.
 
-3. **CDP runner — `scripts/cdp-feature.mjs <feature-id>`.** Reuses an existing
+4. **CDP runner — `scripts/cdp-feature.mjs <feature-id>`.** Reuses an existing
    `cargo tauri dev` on CDP :9222 when present; otherwise cold-spawns it with
-   `WORKSTREAMS_DB_PATH=.dev/workstreams-dev.db`. Connects Playwright via
+   `WORKSTREAMS_DB_PATH=.dev/workstreams-dev.db` and
+   `--config tauri.conf.dev.json`. Connects Playwright via
    `chromium.connectOverCDP`, runs a protocol, captures console + page errors,
    and writes a screenshot to `screenshots/<feature-id>/<timestamp>.png`
    (gitignored).
 
-4. **Per-feature protocols.** `e2e/features/<feature-id>.mjs` exports
-   `run({ page, screenshot })`. If absent, the generic `_generic.mjs` is used
-   (screenshot current view). Protocols address elements via `data-testid`
-   attributes adopted across tiles and the shared `MarkdownView`/`MermaidDiagram`.
+5. **Per-feature protocols.** `e2e/features/<feature-id>.mjs` exports
+   `run({ page, screenshot })`. If absent, the generic `_generic.mjs` is used.
+   Protocols address elements via `data-testid` attributes adopted across
+   tiles and the shared `MarkdownView`/`MermaidDiagram`.
 
-5. **Visual proof recording.** Successful runs insert into the dev DB's
-   `visual_proofs(todo_id, feature_id, screenshot_path, console_error_count,
-   captured_at)` table. The discipline-guardian extension blocks
-   `UPDATE todos SET status='done'` on `*-visual` rows unless a matching
-   `visual_proofs` row exists with a screenshot file on disk.
+6. **Visual proof recording (better-sqlite3).** Successful runs insert into
+   the dev DB's `visual_proofs(todo_id, feature_id, screenshot_path,
+   console_error_count, captured_at)` table via the bundled `better-sqlite3`
+   npm package — no external `sqlite3` CLI required. The discipline-guardian
+   extension blocks `UPDATE todos SET status='done'` on `*-visual` rows
+   unless a matching `visual_proofs` row exists and its screenshot file is
+   on disk.
 
-6. **Invocable `cdp-validate` skill.** The agent invokes it autonomously per
+7. **Invocable `cdp-validate` skill.** The agent invokes it autonomously per
    feature to close the loop — no manual user step required.
 
 ## Consequences

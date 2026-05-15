@@ -47,29 +47,21 @@ function parseArgs(argv) {
 
 async function ensureDevTauri({ cold }) {
   if (!cold && (await isCdpAlive())) {
-    console.log(`[cdp] reusing running dev instance on :${CDP_PORT}`);
+    console.log(`[cdp] CDP :${CDP_PORT} is alive — reusing existing instance`);
+    console.log(`[cdp] NOTE: if this is your prod app, the runner will operate against the prod DB.`);
+    console.log(`[cdp]       Close the prod app and rerun with --cold to start an isolated dev session.`);
     return { spawned: null };
   }
   if (cold && (await isCdpAlive())) {
-    console.log(`[cdp] --cold given but a process is already on :${CDP_PORT} — bailing`);
     throw new Error(
-      `Cannot cold-spawn: port :${CDP_PORT} already in use. Close existing instance first.`,
+      `Cannot cold-spawn: port :${CDP_PORT} already in use. Close the prod app first (search for workstreams.exe in target/release).`,
     );
   }
-  console.log(`[cdp] starting cargo tauri dev on port ${CDP_PORT} (first build may take ~5 min)...`);
+  console.log(`[cdp] starting cargo tauri dev with WORKSTREAMS_DB_PATH=${DEV_DB} (first build can take ~5 min)...`);
   fs.mkdirSync(DEV_DIR, { recursive: true });
   const env = { ...process.env, WORKSTREAMS_DB_PATH: DEV_DB };
-  // Override the WebView CDP port via tauri's --config flag so we don't collide
-  // with a running prod app on :9222.
-  const configOverride = JSON.stringify({
-    app: {
-      windows: [
-        { additionalBrowserArgs: `--remote-debugging-port=${CDP_PORT}` },
-      ],
-    },
-  });
-  const args = ["tauri", "dev", "--config", configOverride];
-  const child = spawn("cargo", args, {
+  const devConf = path.join(REPO_ROOT, "src-tauri", "tauri.conf.dev.json");
+  const child = spawn("cargo", ["tauri", "dev", "--config", devConf], {
     cwd: REPO_ROOT,
     env,
     stdio: ["ignore", "inherit", "inherit"],
@@ -79,7 +71,7 @@ async function ensureDevTauri({ cold }) {
   child.on("exit", (code) => {
     console.log(`[cdp] cargo tauri dev exited with ${code}`);
   });
-  await waitForCdp({ timeoutMs: 360_000, intervalMs: 2000 });
+  await waitForCdp({ timeoutMs: 480_000, intervalMs: 2000 });
   console.log(`[cdp] dev instance is ready on :${CDP_PORT}`);
   return { spawned: child };
 }

@@ -43,23 +43,29 @@ Project-aware workstream manager with tiling compositor for Copilot CLI — mana
 ## Commands
 
 ```bash
-cargo tauri dev      # Development with hot reload (auto-uses ./.dev/workstreams-dev.db)
-cargo tauri build    # Production build
+cargo tauri dev      # Development (NO CDP)
+npm run tauri:dev    # Development WITH CDP enabled (for visual validation)
+cargo tauri build    # Production build (CDP disabled — never shipped)
 npm run test         # Unit tests
 npx tsc --noEmit     # Type check
-npm run cdp:feature -- <feature-id>   # Per-feature visual validation (see ADR-003)
+npm run cdp:feature -- <feature-id>   # Per-feature visual validation (ADR-003)
 npm run cdp:seed     # Seed dev DB + showcase markdown
 npm run dev:reset    # Reset dev state (.dev/ folder)
 ```
 
 ## Per-Feature Visual Validation
 
-Every UI feature is validated by running it against the real Tauri app via
-CDP. The runner reuses a live `cargo tauri dev` instance (or cold-spawns one
-with an isolated dev DB at `.dev/workstreams-dev.db`), navigates to the
-feature, captures console errors, and saves a screenshot under
-`screenshots/<feature-id>/`. A `visual_proofs` row gets written so the
-discipline system can confirm the validation happened.
+Every UI feature is validated by running it against a Tauri dev build via
+CDP. **CDP is dev-only** — `tauri.conf.json` ships with no remote-debugging
+port; it's enabled only via the `tauri.conf.dev.json` overlay passed to
+`tauri dev`. The release binary cannot be inspected via CDP, so dev runs
+never conflict with your working production session.
+
+Workflow:
+1. The runner uses an isolated dev DB at `.dev/workstreams-dev.db`.
+2. Connects Playwright over CDP, navigates, captures console + page errors.
+3. Saves a screenshot under `screenshots/<feature-id>/`.
+4. Writes a `visual_proofs` row so the discipline gate can verify the run.
 
 See `docs/adrs/003-cdp-feature-validation.md` for the design.
 
