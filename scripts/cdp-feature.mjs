@@ -14,15 +14,18 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import Database from "better-sqlite3";
 import {
   isCdpAlive,
   waitForCdp,
   connect,
   captureErrors,
   makeApi,
+  CDP_PORT,
 } from "./cdp-utils.mjs";
+import { ensureShowcaseFiles, seedDb } from "./dev-seed.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "..");
@@ -44,19 +47,29 @@ function parseArgs(argv) {
 
 async function ensureDevTauri({ cold }) {
   if (!cold && (await isCdpAlive())) {
-    console.log("[cdp] reusing running dev instance on :9222");
+    console.log(`[cdp] reusing running dev instance on :${CDP_PORT}`);
     return { spawned: null };
   }
   if (cold && (await isCdpAlive())) {
-    console.log("[cdp] --cold given but a process is already on :9222 — bailing");
+    console.log(`[cdp] --cold given but a process is already on :${CDP_PORT} — bailing`);
     throw new Error(
-      "Cannot cold-spawn: port :9222 already in use. Close existing instance first.",
+      `Cannot cold-spawn: port :${CDP_PORT} already in use. Close existing instance first.`,
     );
   }
-  console.log("[cdp] starting cargo tauri dev (this may take a while on first build)...");
+  console.log(`[cdp] starting cargo tauri dev on port ${CDP_PORT} (first build may take ~5 min)...`);
   fs.mkdirSync(DEV_DIR, { recursive: true });
   const env = { ...process.env, WORKSTREAMS_DB_PATH: DEV_DB };
-  const child = spawn("cargo", ["tauri", "dev"], {
+  // Override the WebView CDP port via tauri's --config flag so we don't collide
+  // with a running prod app on :9222.
+  const configOverride = JSON.stringify({
+    app: {
+      windows: [
+        { additionalBrowserArgs: `--remote-debugging-port=${CDP_PORT}` },
+      ],
+    },
+  });
+  const args = ["tauri", "dev", "--config", configOverride];
+  const child = spawn("cargo", args, {
     cwd: REPO_ROOT,
     env,
     stdio: ["ignore", "inherit", "inherit"],
@@ -67,19 +80,17 @@ async function ensureDevTauri({ cold }) {
     console.log(`[cdp] cargo tauri dev exited with ${code}`);
   });
   await waitForCdp({ timeoutMs: 360_000, intervalMs: 2000 });
-  console.log("[cdp] dev instance is ready");
+  console.log(`[cdp] dev instance is ready on :${CDP_PORT}`);
   return { spawned: child };
 }
 
 function runSeeder() {
   console.log("[cdp] seeding dev DB + showcase folder...");
-  const r = spawnSync("node", [path.join(__dirname, "dev-seed.mjs")], {
-    cwd: REPO_ROOT,
-    env: { ...process.env, WORKSTREAMS_DB_PATH: DEV_DB },
-    stdio: "inherit",
-  });
-  if (r.status !== 0) {
-    console.warn("[cdp] seeder exited non-zero (continuing anyway)");
+  try {
+    ensureShowcaseFiles();
+    seedDb();
+  } catch (err) {
+    console.warn(`[cdp] seeder warning: ${err.message}`);
   }
 }
 
@@ -97,15 +108,24 @@ async function importProtocol(featureId) {
 
 function recordProof({ todoId, featureId, screenshotPath, consoleErrors }) {
   if (!todoId) return;
-  if (!fs.existsSync(DEV_DB)) return;
-  const now = new Date().toISOString();
-  const escaped = screenshotPath.replace(/'/g, "''");
-  const sql = `INSERT OR REPLACE INTO visual_proofs (todo_id, feature_id, screenshot_path, console_error_count, captured_at) VALUES ('${todoId}', '${featureId}', '${escaped}', ${consoleErrors}, '${now}');`;
-  const r = spawnSync("sqlite3", [DEV_DB, sql], { encoding: "utf8" });
-  if (r.status !== 0) {
-    console.warn(`[cdp] failed to record visual_proofs row: ${r.stderr}`);
-  } else {
-    console.log(`[cdp] recorded visual_proofs row for todo=${todoId}`);
+  if (!fs.existsSync(DEV_DB)) {
+    console.warn(`[cdp] cannot record proof: dev DB missing at ${DEV_DB}`);
+    return;
+  }
+  try {
+    const db = new Database(DEV_DB);
+    try {
+      db.prepare(
+        `INSERT OR REPLACE INTO visual_proofs
+         (todo_id, feature_id, screenshot_path, console_error_count, captured_at)
+         VALUES (?, ?, ?, ?, ?)`,
+      ).run(todoId, featureId, screenshotPath, consoleErrors, new Date().toISOString());
+      console.log(`[cdp] recorded visual_proofs row for todo=${todoId}`);
+    } finally {
+      db.close();
+    }
+  } catch (err) {
+    console.warn(`[cdp] failed to record visual_proofs row: ${err.message}`);
   }
 }
 

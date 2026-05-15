@@ -94,37 +94,41 @@ const session = await joinSession({
       if (!m) return;
       const todoId = m[1];
 
-      // Check for matching visual_proofs row + screenshot file on disk.
-      // The dev DB lives at <cwd>/.dev/workstreams-dev.db.
       const cwd = input.cwd || process.cwd();
       const devDb = path.join(cwd, ".dev", "workstreams-dev.db");
       const fs = await import("node:fs");
       if (!fs.existsSync(devDb)) {
         return {
-          deny: `Cannot mark ${todoId} done: no visual proof recorded. Run 'node scripts/cdp-feature.mjs <feature-id> --todo-id ${todoId}' first to capture a screenshot.`,
+          deny: `Cannot mark ${todoId} done: no visual proof recorded. Run 'node scripts/cdp-feature.mjs <feature-id> --todo-id ${todoId}' first.`,
         };
       }
-      const result = await new Promise((resolve) => {
-        execFile(
-          "sqlite3",
-          [devDb, `SELECT screenshot_path FROM visual_proofs WHERE todo_id='${todoId}';`],
-          (err, stdout) => {
-            if (err) resolve(null);
-            else resolve(stdout.trim());
-          },
-        );
-      });
-      if (!result) {
+      let proofPath = null;
+      try {
+        const { default: Database } = await import("better-sqlite3");
+        const db = new Database(devDb, { readonly: true });
+        try {
+          const row = db
+            .prepare("SELECT screenshot_path FROM visual_proofs WHERE todo_id = ?")
+            .get(todoId);
+          proofPath = row?.screenshot_path ?? null;
+        } finally {
+          db.close();
+        }
+      } catch (err) {
+        return {
+          deny: `Cannot verify visual proof for ${todoId} (better-sqlite3 unavailable: ${err.message}). Run 'npm install' in the repo.`,
+        };
+      }
+      if (!proofPath) {
         return {
           deny: `Cannot mark ${todoId} done: no visual_proofs row found. Run 'node scripts/cdp-feature.mjs <feature-id> --todo-id ${todoId}' first.`,
         };
       }
-      if (!fs.existsSync(result)) {
+      if (!fs.existsSync(proofPath)) {
         return {
-          deny: `Cannot mark ${todoId} done: recorded screenshot ${result} no longer exists on disk. Re-run cdp-feature.mjs.`,
+          deny: `Cannot mark ${todoId} done: recorded screenshot ${proofPath} no longer exists on disk. Re-run cdp-feature.mjs.`,
         };
       }
-      // Proof valid — allow.
     },
 
     onSessionStart: async (input, invocation) => {

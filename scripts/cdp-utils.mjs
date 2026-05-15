@@ -1,40 +1,54 @@
 // Shared helpers for CDP feature validation.
-// Pure ESM, only depends on `playwright` (already a devDep via @playwright/test).
 
 import { chromium } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
 
-const CDP_URL = "http://localhost:9222";
+// Default dev port is 9223 so a running prod app on :9222 never conflicts.
+// Override via the CDP_PORT env var.
+export const CDP_PORT = Number(process.env.CDP_PORT) || 9223;
+export const CDP_URL = `http://127.0.0.1:${CDP_PORT}`;
 
 export async function isCdpAlive(timeoutMs = 1500) {
-  try {
-    const ac = new AbortController();
-    const t = setTimeout(() => ac.abort(), timeoutMs);
-    const res = await fetch(`${CDP_URL}/json/version`, { signal: ac.signal });
-    clearTimeout(t);
-    return res.ok;
-  } catch {
-    return false;
+  for (const host of ["127.0.0.1", "[::1]"]) {
+    try {
+      const ac = new AbortController();
+      const t = setTimeout(() => ac.abort(), timeoutMs);
+      const res = await fetch(`http://${host}:${CDP_PORT}/json/version`, { signal: ac.signal });
+      clearTimeout(t);
+      if (res.ok) return true;
+    } catch {
+      // try next host
+    }
   }
+  return false;
 }
 
-export async function waitForCdp({ timeoutMs = 120_000, intervalMs = 1000 } = {}) {
+export async function waitForCdp({ timeoutMs = 360_000, intervalMs = 2000 } = {}) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     if (await isCdpAlive()) return true;
     await new Promise((r) => setTimeout(r, intervalMs));
   }
-  throw new Error(`CDP did not become ready within ${timeoutMs}ms`);
+  throw new Error(`CDP did not become ready on port ${CDP_PORT} within ${timeoutMs}ms`);
 }
 
 export async function connect() {
-  const browser = await chromium.connectOverCDP(CDP_URL);
-  const contexts = browser.contexts();
-  const ctx = contexts[0] ?? (await browser.newContext());
-  const pages = ctx.pages();
-  const page = pages[0] ?? (await ctx.newPage());
-  return { browser, ctx, page };
+  // Try both IPv4 and IPv6 — WebView2 sometimes binds only one.
+  let lastErr;
+  for (const host of ["127.0.0.1", "[::1]"]) {
+    try {
+      const browser = await chromium.connectOverCDP(`http://${host}:${CDP_PORT}`);
+      const contexts = browser.contexts();
+      const ctx = contexts[0] ?? (await browser.newContext());
+      const pages = ctx.pages();
+      const page = pages[0] ?? (await ctx.newPage());
+      return { browser, ctx, page };
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  throw lastErr ?? new Error("Could not connect to CDP");
 }
 
 export function captureErrors(page) {

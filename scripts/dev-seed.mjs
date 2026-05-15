@@ -1,13 +1,9 @@
 // Idempotent seeder for the dev DB and showcase folder.
-// Creates a "Showcase" workstream pointing at .dev/showcase/ and populates
-// the folder with a markdown+mermaid sample, only if no workstreams exist yet.
-//
-// Uses better-sqlite3 if available; otherwise falls back to sqlite3 via raw
-// `sqlite3` CLI binary. Keeps the script tiny and dep-free.
+// Uses better-sqlite3 (zero PATH dependency).
 
 import fs from "node:fs";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
+import Database from "better-sqlite3";
 
 const DEV_DIR = path.resolve(".dev");
 const DB_PATH = process.env.WORKSTREAMS_DB_PATH || path.join(DEV_DIR, "workstreams-dev.db");
@@ -96,21 +92,20 @@ function ensureShowcaseFiles() {
   }
 }
 
-function runSqlite(sql) {
-  // Use the rusqlite-compatible "sqlite3" binary if available.
-  const r = spawnSync("sqlite3", [DB_PATH, sql], { encoding: "utf8" });
-  if (r.error) throw r.error;
-  if (r.status !== 0) {
-    throw new Error(`sqlite3 failed: ${r.stderr || r.stdout}`);
+function runSqlite(sql, params = []) {
+  const db = new Database(DB_PATH);
+  try {
+    return db.prepare(sql).all(...params);
+  } finally {
+    db.close();
   }
-  return r.stdout;
 }
 
 function dbHasWorkstreams() {
   if (!fs.existsSync(DB_PATH)) return false;
   try {
-    const out = runSqlite("SELECT COUNT(*) FROM workstreams;").trim();
-    return Number(out) > 0;
+    const rows = runSqlite("SELECT COUNT(*) AS n FROM workstreams");
+    return (rows[0]?.n ?? 0) > 0;
   } catch {
     return false;
   }
@@ -130,9 +125,15 @@ function seedDb() {
   }
   const id = `showcase-${Date.now()}`;
   const now = new Date().toISOString();
-  const directory = SHOWCASE_DIR.replace(/'/g, "''");
-  const sql = `INSERT INTO workstreams (id, name, description, directory, status, workstream_type, created_at, updated_at) VALUES ('${id}', 'Showcase', 'Markdown + mermaid fixture for CDP validation', '${directory}', 'active', 'standalone', '${now}', '${now}');`;
-  runSqlite(sql);
+  const db = new Database(DB_PATH);
+  try {
+    db.prepare(
+      `INSERT INTO workstreams (id, name, description, directory, status, workstream_type, created_at, updated_at)
+       VALUES (?, ?, ?, ?, 'active', 'standalone', ?, ?)`,
+    ).run(id, "Showcase", "Markdown + mermaid fixture for CDP validation", SHOWCASE_DIR, now, now);
+  } finally {
+    db.close();
+  }
   console.log(`[seed] inserted Showcase workstream id=${id}`);
   return true;
 }
@@ -146,7 +147,7 @@ function main() {
   }
 }
 
-if (import.meta.url === `file://${process.argv[1].replace(/\\/g, "/")}` || process.argv[1].endsWith("dev-seed.mjs")) {
+if (process.argv[1] && process.argv[1].endsWith("dev-seed.mjs")) {
   main();
 }
 
