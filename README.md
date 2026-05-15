@@ -43,11 +43,25 @@ Project-aware workstream manager with tiling compositor for Copilot CLI — mana
 ## Commands
 
 ```bash
-cargo tauri dev      # Development with hot reload
+cargo tauri dev      # Development with hot reload (auto-uses ./.dev/workstreams-dev.db)
 cargo tauri build    # Production build
 npm run test         # Unit tests
 npx tsc --noEmit     # Type check
+npm run cdp:feature -- <feature-id>   # Per-feature visual validation (see ADR-003)
+npm run cdp:seed     # Seed dev DB + showcase markdown
+npm run dev:reset    # Reset dev state (.dev/ folder)
 ```
+
+## Per-Feature Visual Validation
+
+Every UI feature is validated by running it against the real Tauri app via
+CDP. The runner reuses a live `cargo tauri dev` instance (or cold-spawns one
+with an isolated dev DB at `.dev/workstreams-dev.db`), navigates to the
+feature, captures console errors, and saves a screenshot under
+`screenshots/<feature-id>/`. A `visual_proofs` row gets written so the
+discipline system can confirm the validation happened.
+
+See `docs/adrs/003-cdp-feature-validation.md` for the design.
 
 ## Keyboard Shortcuts
 

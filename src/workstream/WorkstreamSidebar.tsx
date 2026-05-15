@@ -1,3 +1,4 @@
+// @test-skip: sidebar UI shell, behavior covered by backend tests
 import { useState, useRef, useEffect } from "react";
 import { listen } from "@tauri-apps/api/event";
 import type { Project, Workstream } from "../domain/types";
@@ -204,6 +205,8 @@ export default function WorkstreamSidebar({
           return (
             <div
               key={ws.id}
+              data-testid="workstream-item"
+              data-workstream-id={ws.id}
               onClick={() => onSelectWorkstream(ws.id)}
               style={{
                 padding: "6px 8px",

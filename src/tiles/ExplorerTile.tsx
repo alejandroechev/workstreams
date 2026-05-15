@@ -820,7 +820,7 @@ export default function ExplorerTile({ tileId, isFocused, rootDir, initialPath }
   const browseFileList = activeDiffMode ? diffFiles : [];
 
   return (
-    <div ref={containerRef} style={containerStyle}>
+    <div ref={containerRef} style={containerStyle} data-testid="tile-explorer">
       {/* Path bar */}
       <div style={toolbarStyle}>
         {activeDiffMode ? (
@@ -979,6 +979,8 @@ export default function ExplorerTile({ tileId, isFocused, rootDir, initialPath }
             {filteredEntries.map((entry) => (
               <div
                 key={entry.name}
+                data-testid="file-tree-item"
+                data-path={entry.fullPath}
                 onClick={() => handleEntryClick(entry)}
                 style={{
                   display: "flex",

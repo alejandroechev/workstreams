@@ -2144,10 +2144,8 @@ fn query_session_db_table(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let db_path = dirs::data_local_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from("."))
-        .join("copilot-desktop")
-        .join("copilot-desktop.db");
+    let db_path = db::resolve_db_path();
+    eprintln!("[workstreams] using DB: {}", db_path.display());
 
     let conn = open_db(&db_path).expect("Failed to initialize database");
 

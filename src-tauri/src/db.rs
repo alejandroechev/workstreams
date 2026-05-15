@@ -1,5 +1,29 @@
 use rusqlite::Connection;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+/// Resolves the workstreams DB path with the following precedence:
+/// 1. `WORKSTREAMS_DB_PATH` env var (absolute or relative path)
+/// 2. Debug builds → `<cwd>/.dev/workstreams-dev.db`
+/// 3. Release builds → `<data_local_dir>/copilot-desktop/copilot-desktop.db`
+///
+/// Always isolates dev work from the production database.
+pub fn resolve_db_path() -> PathBuf {
+    if let Ok(p) = std::env::var("WORKSTREAMS_DB_PATH") {
+        if !p.trim().is_empty() {
+            return PathBuf::from(p);
+        }
+    }
+    if cfg!(debug_assertions) {
+        return std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join(".dev")
+            .join("workstreams-dev.db");
+    }
+    dirs::data_local_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("copilot-desktop")
+        .join("copilot-desktop.db")
+}
 
 /// Initialize the database schema. Creates all tables if they don't exist.
 pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
@@ -70,6 +94,14 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
             key TEXT PRIMARY KEY,
             value TEXT
         );
+
+        CREATE TABLE IF NOT EXISTS visual_proofs (
+            todo_id TEXT PRIMARY KEY,
+            feature_id TEXT NOT NULL,
+            screenshot_path TEXT NOT NULL,
+            console_error_count INTEGER NOT NULL DEFAULT 0,
+            captured_at TEXT NOT NULL
+        );
         ",
     )?;
 
@@ -118,6 +150,7 @@ mod tests {
             "terminal_scrollback",
             "copilot_session_links",
             "settings",
+            "visual_proofs",
         ];
         for table in &expected {
             let count: i64 = conn
@@ -154,6 +187,64 @@ mod tests {
         assert_eq!(count, 1);
         drop(conn);
         std::fs::remove_file(&tmp).ok();
+    }
+
+    #[test]
+    fn resolve_db_path_respects_env_var() {
+        // Save and restore to avoid affecting other tests.
+        let prev = std::env::var("WORKSTREAMS_DB_PATH").ok();
+        std::env::set_var("WORKSTREAMS_DB_PATH", "/tmp/custom-test.db");
+        let path = resolve_db_path();
+        assert_eq!(path, PathBuf::from("/tmp/custom-test.db"));
+        match prev {
+            Some(v) => std::env::set_var("WORKSTREAMS_DB_PATH", v),
+            None => std::env::remove_var("WORKSTREAMS_DB_PATH"),
+        }
+    }
+
+    #[test]
+    fn resolve_db_path_ignores_empty_env_var() {
+        let prev = std::env::var("WORKSTREAMS_DB_PATH").ok();
+        std::env::set_var("WORKSTREAMS_DB_PATH", "   ");
+        let path = resolve_db_path();
+        // Should fall back, not return the empty/whitespace path.
+        assert_ne!(path, PathBuf::from("   "));
+        match prev {
+            Some(v) => std::env::set_var("WORKSTREAMS_DB_PATH", v),
+            None => std::env::remove_var("WORKSTREAMS_DB_PATH"),
+        }
+    }
+
+    #[test]
+    fn resolve_db_path_falls_back_to_dev_in_debug_builds() {
+        let prev = std::env::var("WORKSTREAMS_DB_PATH").ok();
+        std::env::remove_var("WORKSTREAMS_DB_PATH");
+        let path = resolve_db_path();
+        if cfg!(debug_assertions) {
+            assert!(path.ends_with("workstreams-dev.db"));
+            assert!(path.to_string_lossy().contains(".dev"));
+        }
+        if let Some(v) = prev {
+            std::env::set_var("WORKSTREAMS_DB_PATH", v);
+        }
+    }
+
+    #[test]
+    fn visual_proofs_table_can_insert_and_select() {
+        let conn = open_in_memory();
+        conn.execute(
+            "INSERT INTO visual_proofs (todo_id, feature_id, screenshot_path, console_error_count, captured_at) VALUES ('t1', 'feat1', '/path/x.png', 0, 't')",
+            [],
+        )
+        .unwrap();
+        let path: String = conn
+            .query_row(
+                "SELECT screenshot_path FROM visual_proofs WHERE todo_id = 't1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(path, "/path/x.png");
     }
 
     #[test]

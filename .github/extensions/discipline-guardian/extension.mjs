@@ -87,6 +87,46 @@ const installScript = path.join(extensionDir, "install-triggers.py");
 
 const session = await joinSession({
   hooks: {
+    onPreToolUse: async (input) => {
+      if (input.toolName !== "sql") return;
+      const query = String(input.toolArgs?.query || "");
+      const m = query.match(/UPDATE\s+todos\s+SET\s+status\s*=\s*'done'\s+WHERE\s+id\s*=\s*'([^']+-visual)'/i);
+      if (!m) return;
+      const todoId = m[1];
+
+      // Check for matching visual_proofs row + screenshot file on disk.
+      // The dev DB lives at <cwd>/.dev/workstreams-dev.db.
+      const cwd = input.cwd || process.cwd();
+      const devDb = path.join(cwd, ".dev", "workstreams-dev.db");
+      const fs = await import("node:fs");
+      if (!fs.existsSync(devDb)) {
+        return {
+          deny: `Cannot mark ${todoId} done: no visual proof recorded. Run 'node scripts/cdp-feature.mjs <feature-id> --todo-id ${todoId}' first to capture a screenshot.`,
+        };
+      }
+      const result = await new Promise((resolve) => {
+        execFile(
+          "sqlite3",
+          [devDb, `SELECT screenshot_path FROM visual_proofs WHERE todo_id='${todoId}';`],
+          (err, stdout) => {
+            if (err) resolve(null);
+            else resolve(stdout.trim());
+          },
+        );
+      });
+      if (!result) {
+        return {
+          deny: `Cannot mark ${todoId} done: no visual_proofs row found. Run 'node scripts/cdp-feature.mjs <feature-id> --todo-id ${todoId}' first.`,
+        };
+      }
+      if (!fs.existsSync(result)) {
+        return {
+          deny: `Cannot mark ${todoId} done: recorded screenshot ${result} no longer exists on disk. Re-run cdp-feature.mjs.`,
+        };
+      }
+      // Proof valid — allow.
+    },
+
     onSessionStart: async (input, invocation) => {
       const sessionId = invocation.sessionId;
       const cwd = input.cwd;
@@ -168,7 +208,7 @@ const session = await joinSession({
         const cmd = String(input.toolArgs?.command || "");
         if (/\bgit\s+commit\b/.test(cmd) && input.toolResult?.resultType !== "failure") {
           return {
-            additionalContext: `✅ Commit done. If this was a UI feature, run \`node scripts/cdp-validate.mjs <feature-name>\` to capture a screenshot and verify clean console.`,
+            additionalContext: `✅ Commit done. If this was a UI feature, run \`node scripts/cdp-feature.mjs <feature-id> --todo-id <feature-id>-visual\` to capture a screenshot and record a visual proof.`,
           };
         }
       }
@@ -197,7 +237,7 @@ const session = await joinSession({
 
 1. ✅ Tests written and passing (\`npm test\`)
 2. ✅ Coverage ≥ 90% (\`npm run test:coverage\`)
-3. ✅ Visual validation done (\`node scripts/cdp-validate.mjs <feature>\`)
+3. ✅ Visual validation done (\`node scripts/cdp-feature.mjs <feature-id> --todo-id <feature-id>-visual\`)
 4. ✅ Console clean in CDP screenshot
 5. ✅ Docs updated (README / system-diagram / ADR if applicable)
 6. ✅ All child todos done (if this is a feature with category='feature')

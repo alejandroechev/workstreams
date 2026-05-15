@@ -20,7 +20,7 @@ interface Props {
  */
 export function MarkdownView({ children, className, style }: Props) {
   return (
-    <div className={className} style={{ ...containerStyle, ...style }}>
+    <div className={className} style={{ ...containerStyle, ...style }} data-testid="markdown-content">
       <Markdown remarkPlugins={[remarkGfm]} components={components}>
         {children}
       </Markdown>

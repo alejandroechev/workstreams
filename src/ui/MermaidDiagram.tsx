@@ -111,7 +111,7 @@ export function MermaidDiagram({ source }: Props) {
   }
 
   const body = (
-    <div style={fullscreen ? fullscreenWrapperStyle : wrapperStyle}>
+    <div style={fullscreen ? fullscreenWrapperStyle : wrapperStyle} data-testid="mermaid-diagram">
       <div style={toolbarStyle}>
         <button title="Reset view" onClick={handleReset} style={toolbarBtnStyle}>
           <ArrowPathIcon style={iconStyle} />
