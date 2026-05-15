@@ -9,7 +9,7 @@ graph TB
             TileGrid["TileGrid<br/>Adaptive tiling layout"]
             Terminal["TerminalTile<br/>xterm.js + FitAddon + SerializeAddon"]
             CodeView["CodeViewerTile<br/>Monaco Editor (read-only)"]
-            DocView["DocViewerTile<br/>react-markdown + remark-gfm"]
+            DocView["DocViewerTile<br/>MarkdownView (VS Code style)<br/>+ Mermaid + Prism highlighting"]
             StatusBar["StatusBar<br/>Shortcuts + metadata"]
         end
 

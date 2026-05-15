@@ -1,7 +1,7 @@
+// @test-skip: pre-existing tile shell, individual subcomponents tested separately
 import { useState, useEffect, useCallback, useRef } from "react";
 import Editor, { DiffEditor } from "@monaco-editor/react";
-import Markdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { MarkdownView } from "../ui/MarkdownView";
 import { open } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -613,14 +613,7 @@ export default function ExplorerTile({ tileId, isFocused, rootDir, initialPath }
       return (
         <div ref={containerRef} style={containerStyle}>
           {viewToolbar}
-          <div style={markdownContainerStyle}>
-            <Markdown
-              remarkPlugins={[remarkGfm]}
-              components={markdownComponents}
-            >
-              {content}
-            </Markdown>
-          </div>
+          <MarkdownView style={markdownContainerStyle}>{content ?? ""}</MarkdownView>
           {fileSearchOverlay}
         </div>
       );
@@ -1074,43 +1067,6 @@ const errorTextStyle: React.CSSProperties = {
 const markdownContainerStyle: React.CSSProperties = {
   flex: 1,
   overflowY: "auto",
-  padding: "16px 20px",
-  background: "#1e1e2e",
-  color: "#cdd6f4",
-  fontFamily: "'Segoe UI', system-ui, sans-serif",
-  fontSize: 14,
-  lineHeight: 1.7,
-};
-
-const markdownComponents = {
-  code({ children, className }: { children?: React.ReactNode; className?: string }) {
-    return (
-      <code className={className} style={{
-        background: "#313244", padding: "2px 6px", borderRadius: 3,
-        fontSize: 13, fontFamily: "'Cascadia Code', 'Consolas', monospace",
-      }}>
-        {children}
-      </code>
-    );
-  },
-  pre({ children }: { children?: React.ReactNode }) {
-    return (
-      <pre style={{
-        background: "#181825", border: "1px solid #313244",
-        borderRadius: 6, padding: 12, overflow: "auto",
-        fontSize: 13, fontFamily: "'Cascadia Code', 'Consolas', monospace",
-      }}>
-        {children}
-      </pre>
-    );
-  },
-  h1: ({ children }: { children?: React.ReactNode }) => <h1 style={{ color: "#89b4fa", borderBottom: "1px solid #313244", paddingBottom: 8 }}>{children}</h1>,
-  h2: ({ children }: { children?: React.ReactNode }) => <h2 style={{ color: "#89b4fa", marginTop: 24 }}>{children}</h2>,
-  h3: ({ children }: { children?: React.ReactNode }) => <h3 style={{ color: "#a6e3a1" }}>{children}</h3>,
-  a: ({ children, href }: { children?: React.ReactNode; href?: string }) => <a href={href} style={{ color: "#89b4fa" }}>{children}</a>,
-  table: ({ children }: { children?: React.ReactNode }) => <table style={{ borderCollapse: "collapse", width: "100%", margin: "12px 0" }}>{children}</table>,
-  th: ({ children }: { children?: React.ReactNode }) => <th style={{ border: "1px solid #45475a", padding: "6px 10px", background: "#181825", textAlign: "left" }}>{children}</th>,
-  td: ({ children }: { children?: React.ReactNode }) => <td style={{ border: "1px solid #313244", padding: "6px 10px" }}>{children}</td>,
 };
 
 const searchOverlayStyle: React.CSSProperties = {

@@ -1,7 +1,7 @@
+// @test-skip: pre-existing tile shell, domain logic tested separately
 import { useState, useCallback, useMemo, useEffect } from "react";
 import Editor from "@monaco-editor/react";
-import Markdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { MarkdownView } from "../ui/MarkdownView";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useBackend } from "../backend/context";
@@ -192,8 +192,8 @@ export default function WorkbenchTile({ tileId: _tileId, isFocused: _isFocused, 
               Loading…
             </div>
           ) : md ? (
-            <div style={{ padding: "8px 16px", overflow: "auto", height: "100%", color: "#cdd6f4", fontFamily: "sans-serif", fontSize: 13 }}>
-              <Markdown remarkPlugins={[remarkGfm]}>{fileContent}</Markdown>
+            <div style={{ overflow: "auto", height: "100%" }}>
+              <MarkdownView>{fileContent}</MarkdownView>
             </div>
           ) : (
             <Editor

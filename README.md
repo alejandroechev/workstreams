@@ -10,7 +10,7 @@ Project-aware workstream manager with tiling compositor for Copilot CLI — mana
 - **Adaptive tiling** — Tiles auto-arrange: 1=fullscreen, 2=split, 3=focus+stack, 4=grid, 5+=focus+grid. The fullscreen tile has a distinct yellow border to make the mode obvious at a glance.
 - **Terminal tiles** — Full interactive terminals via xterm.js + portable-pty (ConPTY on Windows)
 - **Code viewer tiles** — Monaco Editor read-only with syntax highlighting for 20+ languages
-- **Doc viewer tiles** — Markdown renderer with GFM support
+- **Doc viewer tiles** — VS Code-style markdown renderer with GFM support, syntax-highlighted code blocks, and inline **Mermaid diagrams** with zoom/pan
 - **Session persistence** — Workstreams, tile layouts, and terminal scrollback survive app restarts
 - **Keyboard-driven** — hjkl navigation, n/c/d for new tiles, Ctrl+1-9 for workstream switching
 - **Copilot CLI enrichment** — Reads session-store.db for context %, turn count, summaries
@@ -23,7 +23,7 @@ Project-aware workstream manager with tiling compositor for Copilot CLI — mana
 | Frontend | React 19 + Vite + TypeScript |
 | Terminal | xterm.js + portable-pty (ConPTY) |
 | Code Viewer | Monaco Editor (read-only) |
-| Doc Viewer | react-markdown + remark-gfm |
+| Doc Viewer | react-markdown + remark-gfm + react-syntax-highlighter + Mermaid (vendored) |
 | Persistence | SQLite (rusqlite) with WAL |
 | Theme | Catppuccin Mocha |
 

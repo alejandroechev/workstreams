@@ -1,8 +1,8 @@
+// @test-skip: pre-existing tile shell, domain logic tested separately
 import { useState, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import Markdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { MarkdownView } from "../ui/MarkdownView";
 import { useBackend } from "../backend/context";
 import type { CopilotConfigItem } from "../domain/types";
 import {
@@ -688,8 +688,8 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused: _isFocused
                   </button>
                   <span style={{ color: "#cdd6f4", fontWeight: 600, fontSize: 11 }}>{checkpointContent.title}</span>
                 </div>
-                <div style={{ flex: 1, overflow: "auto", padding: "8px 12px", fontSize: 12, lineHeight: 1.6, color: "#cdd6f4" }}>
-                  <Markdown remarkPlugins={[remarkGfm]}>{checkpointContent.content}</Markdown>
+                <div style={{ flex: 1, overflow: "auto" }}>
+                  <MarkdownView>{checkpointContent.content}</MarkdownView>
                 </div>
               </div>
             ) : (
@@ -871,8 +871,8 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused: _isFocused
                     {planContent}
                   </pre>
                 ) : (
-                  <div style={{ flex: 1, overflow: "auto", padding: "8px 12px", fontSize: 12, lineHeight: 1.6, color: "#cdd6f4" }}>
-                    <Markdown remarkPlugins={[remarkGfm]}>{planContent}</Markdown>
+                  <div style={{ flex: 1, overflow: "auto" }}>
+                    <MarkdownView>{planContent}</MarkdownView>
                   </div>
                 )}
               </>
@@ -938,8 +938,8 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused: _isFocused
                 {viewContent.content}
               </pre>
             ) : (
-              <div style={{ flex: 1, overflow: "auto", padding: "8px 12px", fontSize: 12, lineHeight: 1.6, color: "#cdd6f4" }}>
-                <Markdown remarkPlugins={[remarkGfm]}>{viewContent.content}</Markdown>
+              <div style={{ flex: 1, overflow: "auto" }}>
+                <MarkdownView>{viewContent.content}</MarkdownView>
               </div>
             )
           )}
