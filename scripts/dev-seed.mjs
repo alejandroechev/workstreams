@@ -81,9 +81,9 @@ sequenceDiagram
 End of showcase.
 `;
 
-function ensureShowcaseFiles() {
-  fs.mkdirSync(SHOWCASE_DIR, { recursive: true });
-  const readme = path.join(SHOWCASE_DIR, "README.md");
+function ensureShowcaseFiles(dir = SHOWCASE_DIR) {
+  fs.mkdirSync(dir, { recursive: true });
+  const readme = path.join(dir, "README.md");
   if (!fs.existsSync(readme)) {
     fs.writeFileSync(readme, SAMPLE_MD, "utf8");
     console.log(`[seed] wrote ${readme}`);
@@ -119,23 +119,32 @@ function seedDb() {
     console.log("[seed] DB seeding skipped; showcase files written.");
     return false;
   }
-  if (dbHasWorkstreams()) {
-    console.log("[seed] DB already has workstreams — leaving as-is (idempotent).");
-    return false;
-  }
-  const id = `showcase-${Date.now()}`;
-  const now = new Date().toISOString();
   const db = new Database(DB_PATH);
   try {
-    db.prepare(
-      `INSERT INTO workstreams (id, name, description, directory, status, workstream_type, created_at, updated_at)
-       VALUES (?, ?, ?, ?, 'active', 'standalone', ?, ?)`,
-    ).run(id, "Showcase", "Markdown + mermaid fixture for CDP validation", SHOWCASE_DIR, now, now);
+    ensureWorkstream(db, "Showcase", SHOWCASE_DIR, "Markdown + mermaid fixture for CDP validation");
+    ensureWorkstream(db, "Sandbox", DEV_DIR, "Second workstream for focus/scroll repro");
   } finally {
     db.close();
   }
-  console.log(`[seed] inserted Showcase workstream id=${id}`);
   return true;
+}
+
+function ensureWorkstream(db, name, directory, description) {
+  const existing = db
+    .prepare("SELECT id FROM workstreams WHERE name = ?")
+    .get(name);
+  if (existing) {
+    console.log(`[seed] workstream '${name}' already exists (id=${existing.id})`);
+    return existing.id;
+  }
+  const id = `${name.toLowerCase()}-${Date.now()}`;
+  const now = new Date().toISOString();
+  db.prepare(
+    `INSERT INTO workstreams (id, name, description, directory, status, workstream_type, created_at, updated_at)
+     VALUES (?, ?, ?, ?, 'active', 'standalone', ?, ?)`,
+  ).run(id, name, description, directory, now, now);
+  console.log(`[seed] inserted workstream '${name}' id=${id}`);
+  return id;
 }
 
 function main() {

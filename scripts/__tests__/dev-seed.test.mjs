@@ -1,29 +1,33 @@
 import { describe, it, expect, beforeEach, afterAll } from "vitest";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
-import { ensureShowcaseFiles, SAMPLE_MD, SHOWCASE_DIR } from "../dev-seed.mjs";
+import { ensureShowcaseFiles, SAMPLE_MD } from "../dev-seed.mjs";
 
-const README = path.join(SHOWCASE_DIR, "README.md");
+// Isolated dir so tests never collide with a running dev pwsh holding
+// .dev/showcase as cwd (Windows locks dir until child process exits).
+const TEST_DIR = path.join(os.tmpdir(), `ws-seed-test-${process.pid}`);
+const README = path.join(TEST_DIR, "README.md");
 
 describe("dev-seed", () => {
   beforeEach(() => {
-    fs.rmSync(SHOWCASE_DIR, { recursive: true, force: true });
+    fs.rmSync(TEST_DIR, { recursive: true, force: true });
   });
 
   afterAll(() => {
-    fs.rmSync(SHOWCASE_DIR, { recursive: true, force: true });
+    fs.rmSync(TEST_DIR, { recursive: true, force: true });
   });
 
   it("creates the showcase folder and README.md when missing", () => {
-    ensureShowcaseFiles();
+    ensureShowcaseFiles(TEST_DIR);
     expect(fs.existsSync(README)).toBe(true);
     expect(fs.readFileSync(README, "utf8")).toContain("Mermaid diagram");
   });
 
   it("does not overwrite an existing README.md (idempotent)", () => {
-    fs.mkdirSync(SHOWCASE_DIR, { recursive: true });
+    fs.mkdirSync(TEST_DIR, { recursive: true });
     fs.writeFileSync(README, "user content");
-    ensureShowcaseFiles();
+    ensureShowcaseFiles(TEST_DIR);
     expect(fs.readFileSync(README, "utf8")).toBe("user content");
   });
 
