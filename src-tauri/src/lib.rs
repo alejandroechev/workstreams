@@ -524,6 +524,16 @@ fn update_layout(
 ) -> Result<(), String> {
     let db = state.db.lock().unwrap();
     let ts = now();
+    // Ensure a layout row exists for this workstream — protects against
+    // workstreams created outside create_workstream (e.g. seeded directly
+    // into the DB). Without this, all UPDATE statements below silently
+    // no-op and tile order is never persisted.
+    db.execute(
+        "INSERT OR IGNORE INTO workstream_layouts (workstream_id, layout_mode, tile_order_json, updated_at)
+         VALUES (?1, 'adaptive', '[]', ?2)",
+        (&workstream_id, &ts),
+    )
+    .map_err(|e| format!("DB error: {e}"))?;
     if let Some(f) = &focused_tile_id {
         db.execute(
             "UPDATE workstream_layouts SET focused_tile_id = ?1, updated_at = ?2 WHERE workstream_id = ?3",

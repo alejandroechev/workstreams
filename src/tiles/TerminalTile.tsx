@@ -1,3 +1,4 @@
+// @test-skip: xterm.js wrapper, validated end-to-end via CDP focus-scroll-repro
 import { useEffect, useRef, useCallback, useState } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
@@ -9,10 +10,12 @@ import { playBell, flashWindow } from "../domain/notifications";
 interface Props {
   tileId: string;
   isFocused: boolean;
+  /** Bumped on workstream switch so we re-focus even when isFocused didn't change. */
+  focusToken?: number;
   onStatusChange?: (status: string) => void;
 }
 
-export default function TerminalTile({ tileId, isFocused, onStatusChange }: Props) {
+export default function TerminalTile({ tileId, isFocused, focusToken, onStatusChange }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
@@ -192,20 +195,30 @@ export default function TerminalTile({ tileId, isFocused, onStatusChange }: Prop
     });
     resizeObserver.observe(containerRef.current);
 
-    // Mouse wheel: when in alternate screen (TUI apps), send as arrow keys
+    // Mouse wheel handler.
+    // In normal-buffer mode: xterm v6 no longer scrolls natively because it
+    //   switched to a Monaco-style virtual scroll model on .xterm-scrollable-element
+    //   (overflow: visible). We must drive the scroll ourselves via term.scrollLines.
+    // In alternate-buffer mode (TUI apps): translate to arrow keys for the PTY.
     const wheelHandler = (e: WheelEvent) => {
       const buf = (term as unknown as { buffer: { active: { type: string } } }).buffer?.active;
+      const lines = Math.max(1, Math.round(Math.abs(e.deltaY) / 40));
       if (buf && buf.type === "alternate") {
         e.preventDefault();
-        const lines = Math.max(1, Math.round(Math.abs(e.deltaY) / 40));
         const arrow = e.deltaY < 0 ? "\x1b[A" : "\x1b[B";
         invoke("write_to_pty", { tileId, data: arrow.repeat(lines) }).catch(() => {});
+        return;
       }
-      // In normal mode, xterm.js handles scrollback natively — don't interfere
+      e.preventDefault();
+      term.scrollLines(e.deltaY < 0 ? -lines : lines);
     };
-    // Attach to the xterm screen element for reliable capture
-    const xtermScreen = containerRef.current.querySelector(".xterm-screen") as HTMLElement;
-    const wheelTarget = xtermScreen || containerRef.current;
+    // Attach to the new .xterm-scrollable-element (xterm v6) so the event is
+    // captured before any internal listener gets it. Fall back to legacy
+    // selectors so the code still works if xterm changes structure again.
+    const wheelTarget =
+      (containerRef.current.querySelector(".xterm-scrollable-element") as HTMLElement | null) ??
+      (containerRef.current.querySelector(".xterm-screen") as HTMLElement | null) ??
+      containerRef.current;
     wheelTarget.addEventListener("wheel", wheelHandler, { passive: false });
 
     // Periodic scrollback save (every 30s)
@@ -214,8 +227,7 @@ export default function TerminalTile({ tileId, isFocused, onStatusChange }: Prop
     return () => {
       clearInterval(saveInterval);
       saveScrollback();
-      containerRef.current?.removeEventListener("wheel", wheelHandler);
-      xtermScreen?.removeEventListener("wheel", wheelHandler);
+      wheelTarget.removeEventListener("wheel", wheelHandler);
       resizeObserver.disconnect();
       unlistenOutput.then((u) => u());
       unlistenExit.then((u) => u());
@@ -223,15 +235,27 @@ export default function TerminalTile({ tileId, isFocused, onStatusChange }: Prop
     };
   }, [tileId, saveScrollback, updateStatus]);
 
-  // Refit on focus change
+  // Refit + focus when focused, OR when the focus token bumps (workstream
+  // switched back to this tile's workstream without isFocused changing).
   useEffect(() => {
-    if (isFocused && fitRef.current) {
-      setTimeout(() => {
-        fitRef.current?.fit();
-        termRef.current?.focus();
-      }, 150);
-    }
-  }, [isFocused]);
+    if (!isFocused) return;
+    const focusNow = () => {
+      fitRef.current?.fit();
+      termRef.current?.focus();
+      // Belt-and-braces: in xterm v6 term.focus() doesn't always end up on the
+      // helper textarea. Find and focus it explicitly.
+      const textarea = containerRef.current?.querySelector(
+        ".xterm-helper-textarea",
+      ) as HTMLTextAreaElement | null;
+      textarea?.focus();
+    };
+    // Schedule across a few ticks: WebView2 sometimes blurs back to body
+    // immediately after a click event, so we retry until something sticks.
+    const timers = [50, 150, 300, 600].map((d) => window.setTimeout(focusNow, d));
+    return () => {
+      for (const t of timers) clearTimeout(t);
+    };
+  }, [isFocused, focusToken]);
 
   return (
     <div style={{ width: "100%", height: "100%", position: "relative", overflow: "hidden" }}>

@@ -7,6 +7,7 @@ interface Props {
   tiles: Tile[];
   tileOrder: string[];
   focusedIndex: number;
+  focusToken?: number;
   fullscreenTileId: string | null;
   onFocusTile: (index: number) => void;
   onCloseTile: (tileId: string) => void;
@@ -25,6 +26,7 @@ export default function TileGrid({
   tiles,
   tileOrder,
   focusedIndex,
+  focusToken,
   fullscreenTileId,
   onFocusTile,
   onCloseTile,
@@ -96,6 +98,7 @@ export default function TileGrid({
             tile={tile}
             index={fullscreenTileId ? 0 : i}
             isFocused={realIndex === focusedIndex}
+            focusToken={focusToken}
             isFullscreen={fullscreenTileId === tile.id}
             onFocus={() => onFocusTile(realIndex)}
             onClose={() => onCloseTile(tile.id)}

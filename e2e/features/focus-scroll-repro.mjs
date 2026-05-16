@@ -44,18 +44,31 @@ function readTerminalContent(page, tileId) {
   }, tileId);
 }
 
-function getViewport(page, tileId) {
+// Read xterm's internal buffer scroll position via .xterm-rows content snapshot.
+// In v6 the .xterm-screen content REPLACES (not scrolls) so we sample what's
+// rendered before and after wheel to detect a real scroll.
+function readVisibleRows(page, tileId) {
   return page.evaluate((id) => {
     const tile = document.querySelector(`[data-tile-id="${id}"]`);
     if (!tile) return null;
-    const v = tile.querySelector('.xterm-viewport');
-    if (!v) return null;
-    return {
-      scrollTop: v.scrollTop,
-      scrollHeight: v.scrollHeight,
-      clientHeight: v.clientHeight,
-    };
+    const rows = Array.from(tile.querySelectorAll('.xterm-rows > div'));
+    const first = rows[0]?.textContent ?? '';
+    const last = rows[rows.length - 1]?.textContent ?? '';
+    return { count: rows.length, first, last };
   }, tileId);
+}
+
+async function clickWorkstreamByName(page, name) {
+  const coords = await page.evaluate((n) => {
+    const el = Array.from(document.querySelectorAll('[data-testid="workstream-item"]'))
+      .find((e) => new RegExp(n).test(e.textContent ?? ''));
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    return { x: r.x + 20, y: r.y + 20, id: el.getAttribute('data-workstream-id') };
+  }, name);
+  if (!coords) throw new Error(`Workstream '${name}' not found`);
+  await page.mouse.click(coords.x, coords.y);
+  return coords.id;
 }
 
 async function dispatchWheel(page, selector, deltaY) {
@@ -91,8 +104,8 @@ export async function run({ page, screenshot }) {
   await page.waitForTimeout(800);
 
   // STEP 1: Select Showcase, add terminal if none, wait for prompt.
-  await page.locator('[data-testid="workstream-item"]', { hasText: 'Showcase' }).first().click();
-  await page.waitForTimeout(400);
+  await clickWorkstreamByName(page, 'Showcase');
+  await page.waitForTimeout(800);
   let tileIds = await page.evaluate(() =>
     Array.from(document.querySelectorAll('[data-tile-id]')).map((t) => t.getAttribute('data-tile-id'))
   );
@@ -124,52 +137,48 @@ export async function run({ page, screenshot }) {
   await page.waitForTimeout(2500);
   await screenshot('03-scrollback-generated');
 
-  // STEP 3: Wheel diagnostics.
-  const vpBefore = await getViewport(page, showcaseTermId);
+  // STEP 3: Wheel diagnostics — measure by rendered-rows change, not by
+  // scrollHeight/scrollTop (xterm v6 uses virtual scroll so those are static).
+  const rowsBefore = await readVisibleRows(page, showcaseTermId);
   const wheelTargets = [
     `[data-tile-id="${showcaseTermId}"]`,
-    `[data-tile-id="${showcaseTermId}"] .xterm-viewport`,
+    `[data-tile-id="${showcaseTermId}"] .xterm-scrollable-element`,
     `[data-tile-id="${showcaseTermId}"] .xterm-screen`,
   ];
   const wheelResults = [];
   for (const sel of wheelTargets) {
-    const before = await getViewport(page, showcaseTermId);
+    const before = await readVisibleRows(page, showcaseTermId);
     await dispatchWheel(page, sel, -240);
-    await page.waitForTimeout(250);
-    const after = await getViewport(page, showcaseTermId);
-    wheelResults.push({ target: sel, scrollTopDelta: (after?.scrollTop ?? -1) - (before?.scrollTop ?? -1), before, after });
+    await page.waitForTimeout(300);
+    const after = await readVisibleRows(page, showcaseTermId);
+    wheelResults.push({
+      target: sel,
+      firstRowChanged: before?.first !== after?.first,
+      lastRowChanged: before?.last !== after?.last,
+      before, after,
+    });
   }
   const tileRect = await page.evaluate((id) => {
     const r = document.querySelector(`[data-tile-id="${id}"]`)?.getBoundingClientRect();
     return r ? { x: r.x, y: r.y, w: r.width, h: r.height } : null;
   }, showcaseTermId);
-  let mouseWheelDelta = null;
+  let mouseWheelChange = null;
   if (tileRect) {
-    const before = await getViewport(page, showcaseTermId);
+    const before = await readVisibleRows(page, showcaseTermId);
     await page.mouse.move(tileRect.x + tileRect.w / 2, tileRect.y + tileRect.h / 2);
     await page.mouse.wheel(0, -600);
     await page.waitForTimeout(400);
-    const after = await getViewport(page, showcaseTermId);
-    mouseWheelDelta = (after?.scrollTop ?? -1) - (before?.scrollTop ?? -1);
+    const after = await readVisibleRows(page, showcaseTermId);
+    mouseWheelChange = { firstRowChanged: before?.first !== after?.first, before, after };
   }
-  // xterm viewport sizer details
-  const viewportSizer = await page.evaluate((id) => {
-    const v = document.querySelector(`[data-tile-id="${id}"] .xterm-viewport`);
-    if (!v) return null;
-    const child = v.firstElementChild;
-    return child ? {
-      childTag: child.tagName,
-      childStyleHeight: child.style?.height ?? null,
-      childOffsetHeight: child.offsetHeight,
-    } : { childTag: null };
-  }, showcaseTermId);
-  log('wheel-results', { vpBefore, wheelResults, mouseWheelDelta, viewportSizer });
+  log('wheel-results', { rowsBefore, wheelResults, mouseWheelChange });
   await screenshot('04-after-wheel-tests');
 
   // STEP 4: Switch to Sandbox via sidebar click (matches user workflow).
-  await page.locator('[data-testid="workstream-item"]', { hasText: 'Sandbox' }).first().click();
+  const sandboxWsId = await clickWorkstreamByName(page, 'Sandbox');
   await page.waitForTimeout(1500);
-  log('after-click-sandbox', await probeFocusState(page));
+  const stateAfterSandbox = await probeFocusState(page);
+  log('after-click-sandbox', { sandboxWsId, ...stateAfterSandbox });
   await screenshot('05-after-click-sandbox');
 
   let sandboxTiles = await page.evaluate(() =>
@@ -192,8 +201,21 @@ export async function run({ page, screenshot }) {
   await page.waitForTimeout(600);
 
   // STEP 5: Switch back to Showcase via sidebar — THE BUG SCENARIO.
-  await page.locator('[data-testid="workstream-item"]', { hasText: 'Showcase' }).first().click();
-  await page.waitForTimeout(1500);
+  const showcaseBackId = await clickWorkstreamByName(page, 'Showcase');
+  log('clicked-showcase-back', { showcaseBackId });
+  // Poll focus state over the next second to see if/when focus lands on textarea.
+  const focusTimeline = [];
+  for (const ms of [50, 200, 500, 1000, 1500, 2000]) {
+    await page.waitForTimeout(ms - (focusTimeline.at(-1)?._ms ?? 0));
+    const snap = await page.evaluate(() => ({
+      tag: document.activeElement?.tagName,
+      cls: document.activeElement?.className?.toString?.(),
+      tileCount: document.querySelectorAll('[data-tile-id]').length,
+      txtCount: document.querySelectorAll('.xterm-helper-textarea').length,
+    }));
+    focusTimeline.push({ _ms: ms, ...snap });
+  }
+  log('focus-timeline-after-switch', focusTimeline);
   const stateAfterSwitch = await probeFocusState(page);
   log('after-click-showcase-back', stateAfterSwitch);
   await screenshot('07-after-click-back-to-showcase');
@@ -237,10 +259,8 @@ export async function run({ page, screenshot }) {
     issue1_baseline_typing_works: baselineEchoed,
     issue1_after_workstream_switch_typing_works: switchProbeEchoed,
     issue1_clicking_recovers: clickEchoed,
-    issue2_viewport_can_scroll: (vpBefore?.scrollHeight ?? 0) > (vpBefore?.clientHeight ?? 0),
-    issue2_viewport_metrics: vpBefore,
-    issue2_wheel_responding_target: wheelResults.find((r) => r.scrollTopDelta < 0)?.target ?? null,
-    issue2_mouse_wheel_api_delta: mouseWheelDelta,
+    issue2_wheel_changed_visible_rows: wheelResults.some((r) => r.firstRowChanged || r.lastRowChanged),
+    issue2_mouse_wheel_changed_rows: mouseWheelChange?.firstRowChanged ?? null,
   };
   log('summary', report.summary);
 

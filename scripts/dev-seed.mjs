@@ -135,6 +135,7 @@ function ensureWorkstream(db, name, directory, description) {
     .get(name);
   if (existing) {
     console.log(`[seed] workstream '${name}' already exists (id=${existing.id})`);
+    ensureLayout(db, existing.id);
     return existing.id;
   }
   const id = `${name.toLowerCase()}-${Date.now()}`;
@@ -143,8 +144,20 @@ function ensureWorkstream(db, name, directory, description) {
     `INSERT INTO workstreams (id, name, description, directory, status, workstream_type, created_at, updated_at)
      VALUES (?, ?, ?, ?, 'active', 'standalone', ?, ?)`,
   ).run(id, name, description, directory, now, now);
+  ensureLayout(db, id);
   console.log(`[seed] inserted workstream '${name}' id=${id}`);
   return id;
+}
+
+function ensureLayout(db, workstreamId) {
+  // Mirror what create_workstream does in lib.rs — without this row,
+  // update_layout (which uses UPDATE not UPSERT) silently no-ops and
+  // tile_order_json never gets persisted.
+  const now = new Date().toISOString();
+  db.prepare(
+    `INSERT OR IGNORE INTO workstream_layouts (workstream_id, layout_mode, tile_order_json, updated_at)
+     VALUES (?, 'adaptive', '[]', ?)`,
+  ).run(workstreamId, now);
 }
 
 function main() {

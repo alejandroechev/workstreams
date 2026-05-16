@@ -14,6 +14,7 @@ interface TileProps {
   tile: Tile;
   index: number;
   isFocused: boolean;
+  focusToken?: number;
   isFullscreen?: boolean;
   onFocus: () => void;
   onClose: () => void;
@@ -32,6 +33,7 @@ export default function TileWrapper({
   tile,
   index,
   isFocused,
+  focusToken,
   isFullscreen = false,
   onFocus,
   onClose,
@@ -125,6 +127,7 @@ export default function TileWrapper({
         <TerminalTile
           tileId={tile.id}
           isFocused={isFocused}
+          focusToken={focusToken}
           onStatusChange={setTermStatus}
         />
       );
@@ -136,6 +139,7 @@ export default function TileWrapper({
           tileId={tile.id}
           configJson={tile.config_json}
           isFocused={isFocused}
+          focusToken={focusToken}
           isResuming={cfg.is_resumed === true}
           alreadyRunning={alreadyRunning}
           workstreamId={workstreamId}

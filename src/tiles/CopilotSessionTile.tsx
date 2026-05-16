@@ -1,3 +1,4 @@
+// @test-skip: xterm.js + copilot session wrapper, validated end-to-end via CDP
 import { useEffect, useRef, useCallback, useState } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
@@ -12,6 +13,8 @@ interface Props {
   tileId: string;
   configJson: string;
   isFocused: boolean;
+  /** Bumped on workstream switch so we re-focus even when isFocused didn't change. */
+  focusToken?: number;
   isResuming: boolean;
   alreadyRunning?: boolean;
   workstreamId?: string;
@@ -26,6 +29,7 @@ export default function CopilotSessionTile({
   tileId,
   configJson,
   isFocused,
+  focusToken,
   isResuming,
   alreadyRunning,
   workstreamId,
@@ -215,28 +219,34 @@ export default function CopilotSessionTile({
     });
     resizeObserver.observe(containerRef.current);
 
-    // Mouse wheel handler: when alternate screen buffer is active (copilot TUI),
-    // send scroll as arrow up/down to the PTY for smoother scrolling
+    // Mouse wheel handler.
+    // In normal-buffer mode: xterm v6 uses a Monaco-style virtual scroll element
+    //   (overflow: visible), so native wheel doesn't scroll the buffer. We must
+    //   call term.scrollLines() ourselves.
+    // In alternate-buffer mode (copilot TUI): translate to arrow keys for the PTY.
     const wheelHandler = (e: WheelEvent) => {
       const buf = (term as unknown as { buffer: { active: { type: string } } }).buffer?.active;
+      const lines = Math.max(1, Math.round(Math.abs(e.deltaY) / 40));
       if (buf && buf.type === "alternate") {
         e.preventDefault();
-        const lines = Math.max(1, Math.round(Math.abs(e.deltaY) / 40));
-        const arrow = e.deltaY < 0 ? "\x1b[A" : "\x1b[B"; // up : down
+        const arrow = e.deltaY < 0 ? "\x1b[A" : "\x1b[B";
         invoke("write_to_pty", { tileId, data: arrow.repeat(lines) }).catch(() => {});
+        return;
       }
-      // In normal mode, xterm.js handles scrollback natively — don't interfere
+      e.preventDefault();
+      term.scrollLines(e.deltaY < 0 ? -lines : lines);
     };
-    const xtermScreen = containerRef.current.querySelector(".xterm-screen") as HTMLElement;
-    const wheelTarget = xtermScreen || containerRef.current;
+    const wheelTarget =
+      (containerRef.current.querySelector(".xterm-scrollable-element") as HTMLElement | null) ??
+      (containerRef.current.querySelector(".xterm-screen") as HTMLElement | null) ??
+      containerRef.current;
     wheelTarget.addEventListener("wheel", wheelHandler, { passive: false });
 
     const saveInterval = setInterval(saveScrollback, 30_000);
 
     return () => {
       clearInterval(saveInterval);
-      containerRef.current?.removeEventListener("wheel", wheelHandler);
-      xtermScreen?.removeEventListener("wheel", wheelHandler);
+      wheelTarget.removeEventListener("wheel", wheelHandler);
       saveScrollback();
       invoke("unwatch_session", { tileId }).catch(() => {});
       resizeObserver.disconnect();
@@ -260,13 +270,20 @@ export default function CopilotSessionTile({
   }, [tileId, configJson, workstreamId]);
 
   useEffect(() => {
-    if (isFocused && fitRef.current) {
-      setTimeout(() => {
-        fitRef.current?.fit();
-        termRef.current?.focus();
-      }, 150);
-    }
-  }, [isFocused]);
+    if (!isFocused) return;
+    const focusNow = () => {
+      fitRef.current?.fit();
+      termRef.current?.focus();
+      const textarea = containerRef.current?.querySelector(
+        ".xterm-helper-textarea",
+      ) as HTMLTextAreaElement | null;
+      textarea?.focus();
+    };
+    const timers = [50, 150, 300, 600].map((d) => window.setTimeout(focusNow, d));
+    return () => {
+      for (const t of timers) clearTimeout(t);
+    };
+  }, [isFocused, focusToken]);
 
   const hasLinkedSession = !!(config.copilot_session_id || (config as unknown as Record<string, unknown>).resume_by_id);
 

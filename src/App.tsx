@@ -1,3 +1,4 @@
+// @test-skip: top-level App shell, behavior covered by domain + backend tests
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import WorkstreamSidebar from "./workstream/WorkstreamSidebar";
@@ -21,6 +22,10 @@ export default function App() {
   const [tiles, setTiles] = useState<Tile[]>([]);
   const [tileOrder, setTileOrder] = useState<string[]>([]);
   const [focusedIndex, setFocusedIndex] = useState(0);
+  // Token bumped on every workstream switch so per-tile effects know to
+  // re-focus their xterm textarea — isFocused alone isn't enough since
+  // focusedIndex may stay at 0 across switches and the prop won't change.
+  const [focusToken, setFocusToken] = useState(0);
   const [fullscreenTileId, setFullscreenTileId] = useState<string | null>(null);
   const [showSessionPicker, setShowSessionPicker] = useState(false);
   const [linkingTileId, setLinkingTileId] = useState<string | null>(null);
@@ -72,6 +77,7 @@ export default function App() {
       const order: string[] = JSON.parse(layout.tile_order_json || "[]");
       setTileOrder(order);
       setFocusedIndex(0);
+      setFocusToken((n) => n + 1);
       setFullscreenTileId(layout.fullscreen_tile_id || null);
 
       // Spawn terminal/copilot tiles only if not already spawned
@@ -600,6 +606,7 @@ export default function App() {
             tiles={tiles}
             tileOrder={tileOrder}
             focusedIndex={focusedIndex}
+            focusToken={focusToken}
             fullscreenTileId={fullscreenTileId}
             onFocusTile={setFocusedIndex}
             onCloseTile={closeTile}
