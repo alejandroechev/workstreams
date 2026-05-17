@@ -60,12 +60,10 @@ async function ensureDevTauri({ cold }) {
       `Cannot cold-spawn: CDP :${CDP_PORT} already in use. Close the prod/dev app first, or pass --reuse to attach to it (only do this if you're sure it's a dev instance).`,
     );
   }
-  console.log(`[cdp] starting cargo tauri dev with WORKSTREAMS_DB_PATH=${DEV_DB} (first build can take ~5 min)...`);
+  console.log(`[cdp] starting cargo tauri dev on port ${CDP_PORT} (first build can take ~5 min)...`);
   fs.mkdirSync(DEV_DIR, { recursive: true });
-  // Isolate the WebView2 user-data-folder from prod. Prod and dev share the
-  // same Tauri identifier, so by default they'd share the WebView2 environment
-  // — and a prod instance started without CDP would prevent dev from exposing
-  // it on the shared browser process.
+  // Isolate WebView2 user data so prod (different port) and dev never share
+  // a browser process.
   const wv2DataDir = path.join(DEV_DIR, "webview2-userdata");
   fs.mkdirSync(wv2DataDir, { recursive: true });
   const env = {
@@ -73,7 +71,8 @@ async function ensureDevTauri({ cold }) {
     WORKSTREAMS_DB_PATH: DEV_DB,
     WEBVIEW2_USER_DATA_FOLDER: wv2DataDir,
   };
-  const child = spawn("cargo", ["tauri", "dev"], {
+  // Pass the dev overlay so additionalBrowserArgs points at the dev port.
+  const child = spawn("cargo", ["tauri", "dev", "--config", "src-tauri/tauri.conf.dev.json"], {
     cwd: REPO_ROOT,
     env,
     stdio: ["ignore", "inherit", "inherit"],

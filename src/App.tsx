@@ -19,14 +19,55 @@ export default function App() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [workstreams, setWorkstreams] = useState<Workstream[]>([]);
   const [activeWsId, setActiveWsId] = useState<string | null>(null);
-  const [tiles, setTiles] = useState<Tile[]>([]);
-  const [tileOrder, setTileOrder] = useState<string[]>([]);
-  const [focusedIndex, setFocusedIndex] = useState(0);
-  // Token bumped on every workstream switch so per-tile effects know to
-  // re-focus their xterm textarea — isFocused alone isn't enough since
-  // focusedIndex may stay at 0 across switches and the prop won't change.
+  // Per-workstream state lives in a single map keyed by wsId. This is the
+  // ONLY source of truth so each visited workstream has a stable position
+  // in the React tree and its xterm.js Terminal instances are never
+  // unmounted+remounted on workstream switches (which would desync the PTY).
+  type WsState = {
+    tiles: Tile[];
+    tileOrder: string[];
+    focusedIndex: number;
+    fullscreenTileId: string | null;
+  };
+  const EMPTY_STATE: WsState = { tiles: [], tileOrder: [], focusedIndex: 0, fullscreenTileId: null };
+  const [wsStates, setWsStates] = useState<Map<string, WsState>>(new Map());
+  // Focus token bumped on every workstream switch so per-tile effects know to
+  // re-focus their xterm textarea.
   const [focusToken, setFocusToken] = useState(0);
-  const [fullscreenTileId, setFullscreenTileId] = useState<string | null>(null);
+
+  // Derived helpers for the ACTIVE workstream's state
+  const activeState = (activeWsId && wsStates.get(activeWsId)) || EMPTY_STATE;
+  const tiles = activeState.tiles;
+  const tileOrder = activeState.tileOrder;
+  const focusedIndex = activeState.focusedIndex;
+  const fullscreenTileId = activeState.fullscreenTileId;
+
+  // Update helpers that act on the active workstream
+  const updateActiveState = useCallback((updater: (prev: WsState) => WsState) => {
+    setWsStates((prev) => {
+      if (!activeWsId) return prev;
+      const next = new Map(prev);
+      const current = next.get(activeWsId) ?? EMPTY_STATE;
+      next.set(activeWsId, updater(current));
+      return next;
+    });
+  }, [activeWsId]);
+  const setTiles = useCallback((v: Tile[] | ((prev: Tile[]) => Tile[])) =>
+    updateActiveState((s) => ({ ...s, tiles: typeof v === "function" ? v(s.tiles) : v })),
+    [updateActiveState],
+  );
+  const setTileOrder = useCallback((v: string[] | ((prev: string[]) => string[])) =>
+    updateActiveState((s) => ({ ...s, tileOrder: typeof v === "function" ? v(s.tileOrder) : v })),
+    [updateActiveState],
+  );
+  const setFocusedIndex = useCallback((v: number | ((prev: number) => number)) =>
+    updateActiveState((s) => ({ ...s, focusedIndex: typeof v === "function" ? v(s.focusedIndex) : v })),
+    [updateActiveState],
+  );
+  const setFullscreenTileId = useCallback((v: string | null | ((prev: string | null) => string | null)) =>
+    updateActiveState((s) => ({ ...s, fullscreenTileId: typeof v === "function" ? v(s.fullscreenTileId) : v })),
+    [updateActiveState],
+  );
   const [showSessionPicker, setShowSessionPicker] = useState(false);
   const [linkingTileId, setLinkingTileId] = useState<string | null>(null);
   const [showProjectCreate, setShowProjectCreate] = useState(false);
@@ -64,23 +105,37 @@ export default function App() {
     });
   }, []);
 
-  // Load tiles + layout when active workstream changes
-  // Save previous workstream's tiles before switching
+  // Load tiles + layout for a workstream on first visit. After loading,
+  // the state lives in wsStates and persists across switches. Components
+  // stay mounted (just hidden via CSS) so xterm/PTY state stays coherent.
   useEffect(() => {
     if (!activeWsId) return;
+
+    // Always bump focus token on switch so per-tile effects re-focus.
+    setFocusToken((n) => n + 1);
+
+    // If already loaded, nothing to do — the existing mounted tree just
+    // becomes visible.
+    if (wsStates.has(activeWsId)) return;
 
     Promise.all([
       backend.listTiles(activeWsId),
       backend.getLayout(activeWsId),
     ]).then(([t, layout]) => {
-      setTiles(t);
       const order: string[] = JSON.parse(layout.tile_order_json || "[]");
-      setTileOrder(order);
-      setFocusedIndex(0);
-      setFocusToken((n) => n + 1);
-      setFullscreenTileId(layout.fullscreen_tile_id || null);
+      setWsStates((prev) => {
+        if (prev.has(activeWsId)) return prev;
+        const next = new Map(prev);
+        next.set(activeWsId, {
+          tiles: t,
+          tileOrder: order,
+          focusedIndex: 0,
+          fullscreenTileId: layout.fullscreen_tile_id || null,
+        });
+        return next;
+      });
 
-      // Spawn terminal/copilot tiles only if not already spawned
+      // Spawn terminal/copilot tiles only if not already spawned.
       for (const tile of t) {
         if (!spawnedPtys.current.has(tile.id)) {
           if (tile.tile_type === "terminal") {
@@ -91,47 +146,20 @@ export default function App() {
               spawnedPtys.current.delete(tile.id);
             });
           } else if (tile.tile_type === "copilot_session") {
-            // Spawn agency.exe directly with copilot args — no pwsh wrapper needed
             const config = JSON.parse(tile.config_json || "{}");
             const cwd = config.cwd || "C:\\";
             spawnedPtys.current.add(tile.id);
             const sessionId = config.copilot_session_id || config.resume_by_id;
             const agencyArgs = ["copilot", "--yolo"];
-            if (sessionId) {
-              agencyArgs.push(`--resume=${sessionId}`);
-            }
+            if (sessionId) agencyArgs.push(`--resume=${sessionId}`);
             backend.spawnTerminal(tile.id, cwd, "agency.exe", agencyArgs, 30, 120).catch(() => {
               spawnedPtys.current.delete(tile.id);
             });
           }
         }
       }
-      // After tiles load, focus the first terminal/copilot tile
-      const orderedLoaded = order
-        .map((id) => t.find((tile) => tile.id === id))
-        .filter(Boolean);
-
-      // Robust focus: retry until xterm textarea is available (up to 1s)
-      let attempts = 0;
-      const tryFocus = () => {
-        const firstTile = orderedLoaded[0];
-        if (!firstTile) return;
-        const tileEl = document.querySelector(`[data-tile-id="${firstTile.id}"]`);
-        if (tileEl) {
-          const xterm = tileEl.querySelector(".xterm-helper-textarea") as HTMLElement;
-          if (xterm) {
-            xterm.focus();
-            return;
-          }
-        }
-        attempts++;
-        if (attempts < 10) {
-          requestAnimationFrame(tryFocus);
-        }
-      };
-      // Start after a short delay to let React render
-      setTimeout(() => requestAnimationFrame(tryFocus), 100);
     });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeWsId]);
 
   // Switch workstream by index (Ctrl+1-9)
@@ -601,61 +629,80 @@ export default function App() {
           minHeight: 0,
         }}
       >
-        <div style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
-          <TileGrid
-            tiles={tiles}
-            tileOrder={tileOrder}
-            focusedIndex={focusedIndex}
-            focusToken={focusToken}
-            fullscreenTileId={fullscreenTileId}
-            onFocusTile={setFocusedIndex}
-            onCloseTile={closeTile}
-            workstreamDir={workstreams.find((w) => w.id === activeWsId)?.directory || undefined}
-            workstreamId={activeWsId || undefined}
-            onOpenFile={(path) => addTile("file_viewer", { filePath: path })}
-            onLinkSession={(tileId) => {
-              setLinkingTileId(tileId);
-              setShowSessionPicker(true);
-            }}
-            onAutoLink={async (tileId, sessionId, summary) => {
-              // Auto-link: session poller found a session for this tile
-              const tile = tiles.find((t) => t.id === tileId);
-              if (!tile) return;
-              const cfg = JSON.parse(tile.config_json || "{}");
-              if (cfg.copilot_session_id) return; // already linked
-              cfg.copilot_session_id = sessionId;
-              cfg.resume_by_id = sessionId;
-              cfg.is_resumed = true;
-              if (summary) cfg.session_name = summary;
-              const newConfig = JSON.stringify(cfg);
-              const newTitle = summary || tile.title;
-              await backend.updateTileConfig(tileId, newConfig, newTitle || undefined);
-              setTiles((prev) => prev.map((t) =>
-                t.id === tileId ? { ...t, config_json: newConfig, title: newTitle } : t
-              ));
-            }}
-            onRestart={async (tileId) => {
-              // Restart: close old PTY, spawn a new one
-              const tile = tiles.find((t) => t.id === tileId);
-              if (!tile) return;
-              const cfg = JSON.parse(tile.config_json || "{}");
-              const cwd = cfg.cwd || workstreams.find((w) => w.id === activeWsId)?.directory || "C:\\";
-              await backend.closeTerminal(tileId).catch(() => {});
-              spawnedPtys.current.add(tileId);
-              const agencyArgs = ["copilot", "--yolo"];
-              const sessionId = cfg.copilot_session_id || cfg.resume_by_id;
-              if (sessionId) agencyArgs.push(`--resume=${sessionId}`);
-              await backend.spawnTerminal(tileId, cwd, "agency.exe", agencyArgs, 30, 120);
-            }}
-            onUpdateTileConfig={async (tileId, configJson) => {
-              await backend.updateTileConfig(tileId, configJson);
-              setTiles((prev) => prev.map((t) =>
-                t.id === tileId ? { ...t, config_json: configJson } : t
-              ));
-            }}
-            spawnedPtyIds={spawnedPtys.current}
-            linkedSessionIds={linkedSessionIds}
-          />
+        <div style={{ flex: 1, minHeight: 0, overflow: "hidden", position: "relative" }}>
+          {/*
+            Render every loaded workstream in a STABLE position. Only the
+            active one is visible. This keeps xterm.js Terminal instances
+            and PTYs in sync across switches — no unmount/remount churn.
+            Source of truth: wsStates map (one entry per loaded workstream).
+          */}
+          {Array.from(wsStates.entries()).map(([wsId, st]) => {
+            const isActive = wsId === activeWsId;
+            return (
+              <div
+                key={wsId}
+                style={{
+                  position: "absolute",
+                  inset: 0,
+                  display: isActive ? "flex" : "none",
+                  flexDirection: "column",
+                }}
+              >
+                <TileGrid
+                  tiles={st.tiles}
+                  tileOrder={st.tileOrder}
+                  focusedIndex={st.focusedIndex}
+                  focusToken={focusToken}
+                  fullscreenTileId={st.fullscreenTileId}
+                  onFocusTile={isActive ? setFocusedIndex : () => {}}
+                  onCloseTile={isActive ? closeTile : () => {}}
+                  workstreamDir={workstreams.find((w) => w.id === wsId)?.directory || undefined}
+                  workstreamId={wsId}
+                  onOpenFile={isActive ? (path) => addTile("file_viewer", { filePath: path }) : undefined}
+                  onLinkSession={isActive ? (tileId) => {
+                    setLinkingTileId(tileId);
+                    setShowSessionPicker(true);
+                  } : undefined}
+                  onAutoLink={isActive ? async (tileId, sessionId, summary) => {
+                    const tile = tiles.find((t) => t.id === tileId);
+                    if (!tile) return;
+                    const cfg = JSON.parse(tile.config_json || "{}");
+                    if (cfg.copilot_session_id) return;
+                    cfg.copilot_session_id = sessionId;
+                    cfg.resume_by_id = sessionId;
+                    cfg.is_resumed = true;
+                    if (summary) cfg.session_name = summary;
+                    const newConfig = JSON.stringify(cfg);
+                    const newTitle = summary || tile.title;
+                    await backend.updateTileConfig(tileId, newConfig, newTitle || undefined);
+                    setTiles((prev) => prev.map((t) =>
+                      t.id === tileId ? { ...t, config_json: newConfig, title: newTitle } : t
+                    ));
+                  } : undefined}
+                  onRestart={isActive ? async (tileId) => {
+                    const tile = tiles.find((t) => t.id === tileId);
+                    if (!tile) return;
+                    const cfg = JSON.parse(tile.config_json || "{}");
+                    const cwd = cfg.cwd || workstreams.find((w) => w.id === activeWsId)?.directory || "C:\\";
+                    await backend.closeTerminal(tileId).catch(() => {});
+                    spawnedPtys.current.add(tileId);
+                    const agencyArgs = ["copilot", "--yolo"];
+                    const sessionId = cfg.copilot_session_id || cfg.resume_by_id;
+                    if (sessionId) agencyArgs.push(`--resume=${sessionId}`);
+                    await backend.spawnTerminal(tileId, cwd, "agency.exe", agencyArgs, 30, 120);
+                  } : undefined}
+                  onUpdateTileConfig={isActive ? async (tileId, configJson) => {
+                    await backend.updateTileConfig(tileId, configJson);
+                    setTiles((prev) => prev.map((t) =>
+                      t.id === tileId ? { ...t, config_json: configJson } : t
+                    ));
+                  } : undefined}
+                  spawnedPtyIds={spawnedPtys.current}
+                  linkedSessionIds={linkedSessionIds}
+                />
+              </div>
+            );
+          })}
         </div>
 
         <StatusBar

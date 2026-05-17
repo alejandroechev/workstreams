@@ -223,14 +223,17 @@ export default function CopilotSessionTile({
     // In normal-buffer mode: xterm v6 uses a Monaco-style virtual scroll element
     //   (overflow: visible), so native wheel doesn't scroll the buffer. We must
     //   call term.scrollLines() ourselves.
-    // In alternate-buffer mode (copilot TUI): translate to arrow keys for the PTY.
+    // In alternate-buffer mode (copilot TUI): translate to PgUp/PgDn for the PTY.
+    //   Arrow keys move the cursor in agency's input box (not what we want);
+    //   PgUp/PgDn are what agency uses to scroll conversation history.
     const wheelHandler = (e: WheelEvent) => {
       const buf = (term as unknown as { buffer: { active: { type: string } } }).buffer?.active;
       const lines = Math.max(1, Math.round(Math.abs(e.deltaY) / 40));
       if (buf && buf.type === "alternate") {
         e.preventDefault();
-        const arrow = e.deltaY < 0 ? "\x1b[A" : "\x1b[B";
-        invoke("write_to_pty", { tileId, data: arrow.repeat(lines) }).catch(() => {});
+        // \x1b[5~ = PgUp, \x1b[6~ = PgDn
+        const seq = e.deltaY < 0 ? "\x1b[5~" : "\x1b[6~";
+        invoke("write_to_pty", { tileId, data: seq.repeat(lines) }).catch(() => {});
         return;
       }
       e.preventDefault();
