@@ -278,7 +278,7 @@ mod tests {
         .unwrap();
         // Exact query mirrored from lib.rs::list_workstreams — must include archived.
         let mut stmt = conn
-            .prepare("SELECT id, status FROM workstreams ORDER BY created_at DESC")
+            .prepare("SELECT id, status FROM workstreams ORDER BY created_at ASC")
             .unwrap();
         let rows: Vec<(String, String)> = stmt
             .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
