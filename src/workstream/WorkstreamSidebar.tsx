@@ -180,6 +180,7 @@ export default function WorkstreamSidebar({
       }}>
         <span>Workstreams</span>
         <button
+          data-testid="new-workstream-button"
           onClick={() => onCreateWorkstream()}
           style={{
             background: "none",

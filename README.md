@@ -46,12 +46,23 @@ Project-aware workstream manager with tiling compositor for Copilot CLI — mana
 cargo tauri dev      # Development (NO CDP)
 npm run tauri:dev    # Development WITH CDP enabled (for visual validation)
 cargo tauri build    # Production build (CDP disabled — never shipped)
-npm run test         # Unit tests
+npm run test         # Unit tests (vitest)
+npm run test:e2e     # Playwright E2E tests (Vite dev server + MemoryBackend)
 npx tsc --noEmit     # Type check
 npm run cdp:feature -- <feature-id>   # Per-feature visual validation (ADR-003)
 npm run cdp:seed     # Seed dev DB + showcase markdown
 npm run dev:reset    # Reset dev state (.dev/ folder)
 ```
+
+## E2E tests (Playwright)
+
+`npm run test:e2e` boots Vite with `VITE_E2E=1` (port 5177), which swaps the
+Tauri host for an in-memory backend and shimmed `@tauri-apps/api/*`
+modules. Tests in `e2e/tests/*.spec.ts` drive the React app via Playwright
+and can configure per-test `invoke()` handlers through
+`window.__WS_INVOKE_HANDLERS__`. Useful for validating multi-step UI flows
+(workstream creation, session linking, etc.) without needing the real Tauri
+runtime. See `e2e/tests/ws-create.spec.ts` for the canonical example.
 
 ## Per-Feature Visual Validation
 
