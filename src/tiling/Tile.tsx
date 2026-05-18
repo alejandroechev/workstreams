@@ -318,24 +318,36 @@ export default function TileWrapper({
               </button>
             </>
           )}
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onClose();
-            }}
-            style={{
-              background: "none",
-              border: "none",
-              color: "#585b70",
-              cursor: "pointer",
-              fontSize: 14,
-              padding: "0 4px",
-              lineHeight: 1,
-            }}
-            title="Close tile"
-          >
-            ✕
-          </button>
+          {!tileConfig.pinned && (
+            <button
+              data-testid={`tile-close-${tile.id}`}
+              onClick={(e) => {
+                e.stopPropagation();
+                onClose();
+              }}
+              style={{
+                background: "none",
+                border: "none",
+                color: "#585b70",
+                cursor: "pointer",
+                fontSize: 14,
+                padding: "0 4px",
+                lineHeight: 1,
+              }}
+              title="Close tile"
+            >
+              ✕
+            </button>
+          )}
+          {tileConfig.pinned && (
+            <span
+              data-testid={`tile-pinned-${tile.id}`}
+              title="Pinned to workstream"
+              style={{ color: "#585b70", fontSize: 11, padding: "0 4px" }}
+            >
+              📌
+            </span>
+          )}
         </div>
       </div>
 

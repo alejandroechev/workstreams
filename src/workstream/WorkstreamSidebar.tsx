@@ -26,6 +26,8 @@ interface Props {
   projects: Project[];
   workstreams: Workstream[];
   activeWsId: string | null;
+  /** Optional: map of wsId → linked-session summary (from pinned tile config). */
+  sessionInfoByWs?: Record<string, string | undefined>;
   onSelectWorkstream: (id: string) => void;
   onCreateProject: () => void;
   onCreateWorkstream: (projectId?: string) => void;
@@ -63,6 +65,7 @@ export default function WorkstreamSidebar({
   projects,
   workstreams,
   activeWsId,
+  sessionInfoByWs,
   onSelectWorkstream,
   onCreateProject,
   onCreateWorkstream,
@@ -438,6 +441,40 @@ export default function WorkstreamSidebar({
                   whiteSpace: "nowrap",
                 }}>
                   {ws.directory}
+                </div>
+              )}
+              {ws.worktree_branch && (
+                <div
+                  data-testid={`ws-branch-${ws.id}`}
+                  title={`Branch: ${ws.worktree_branch}`}
+                  style={{
+                    fontSize: 10,
+                    color: "#89b4fa",
+                    marginTop: 2,
+                    marginLeft: 15,
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  ⎇ {ws.worktree_branch}
+                </div>
+              )}
+              {sessionInfoByWs && sessionInfoByWs[ws.id] && (
+                <div
+                  data-testid={`ws-session-${ws.id}`}
+                  title={`Session: ${sessionInfoByWs[ws.id]}`}
+                  style={{
+                    fontSize: 10,
+                    color: "#a6e3a1",
+                    marginTop: 2,
+                    marginLeft: 15,
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  💬 {sessionInfoByWs[ws.id]}
                 </div>
               )}
             </div>

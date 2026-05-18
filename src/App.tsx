@@ -11,6 +11,7 @@ import SessionPicker, { type CopilotSession } from "./tiles/SessionPicker";
 import { navigateFocus } from "./domain/layout";
 import { parseKeyAction } from "./domain/keyboard";
 import { createTerminalConfig, createCopilotSessionConfig } from "./domain/tile-config";
+import { createWorkstreamFlow } from "./domain/workstream-create";
 import { useBackend } from "./backend/context";
 import type { Project, Workstream, Tile, TileType } from "./domain/types";
 
@@ -18,6 +19,8 @@ export default function App() {
   const backend = useBackend();
   const [projects, setProjects] = useState<Project[]>([]);
   const [workstreams, setWorkstreams] = useState<Workstream[]>([]);
+  // Map of wsId → linked session summary (pulled from the pinned session tile's config).
+  const [sessionInfoByWs, setSessionInfoByWs] = useState<Record<string, string | undefined>>({});
   const [activeWsId, setActiveWsId] = useState<string | null>(null);
   // Per-workstream state lives in a single map keyed by wsId. This is the
   // ONLY source of truth so each visited workstream has a stable position
@@ -102,6 +105,26 @@ export default function App() {
       if (ws.length > 0 && !activeWsId) {
         setActiveWsId(ws[0].id);
       }
+
+      // Populate session info from each workstream's pinned tile (background).
+      void (async () => {
+        const map: Record<string, string | undefined> = {};
+        for (const w of ws) {
+          try {
+            const wsTiles = await backend.listTiles(w.id);
+            const pinned = wsTiles.find((t) => {
+              try { return JSON.parse(t.config_json || "{}").pinned === true; } catch { return false; }
+            });
+            if (pinned) {
+              try {
+                const cfg = JSON.parse(pinned.config_json || "{}");
+                map[w.id] = cfg.session_summary || cfg.session_name || (cfg.copilot_session_id ? String(cfg.copilot_session_id).slice(0, 8) : undefined);
+              } catch { /* ignore */ }
+            }
+          } catch { /* ignore */ }
+        }
+        setSessionInfoByWs(map);
+      })();
     });
   }, []);
 
@@ -188,53 +211,58 @@ export default function App() {
   const handleCreateWorkstream = useCallback(async (
     name: string,
     directory: string,
-    opts: { projectId?: string; workstreamType: string; worktreeBranch?: string; showSessionPicker?: boolean; createSessionTile?: boolean },
+    opts: { projectId?: string; workstreamType: string; worktreeBranch?: string; sessionChoice?: "new" | "existing"; baseBranch?: string },
   ) => {
-    const ws = await backend.createWorkstream(name, directory, {
-      projectId: opts.projectId,
-      workstreamType: opts.workstreamType,
-      worktreeBranch: opts.worktreeBranch,
-    });
+    let result;
+    try {
+      result = await createWorkstreamFlow(
+        backend,
+        {
+          name,
+          directory,
+          projectId: opts.projectId,
+          workstreamType: opts.workstreamType as "import_worktree" | "base_repo" | "worktree",
+          worktreeBranch: opts.worktreeBranch,
+          baseBranch: opts.baseBranch,
+          sessionChoice: opts.sessionChoice ?? "new",
+        },
+        (projectDirectory, branchName, baseBranch) =>
+          invoke<string>("create_worktree", { projectDirectory, branchName, baseBranch }),
+      );
+    } catch (e) {
+      const msg = typeof e === "string" ? e : (e as Error)?.message || String(e);
+      alert(`Failed to create workstream: ${msg}`);
+      return;
+    }
+
+    const { workstream: ws, pinnedTile: tile, effectiveDirectory } = result;
+
     // Detect git info and update
     try {
-      const { repo, branch } = await backend.detectGitInfo(directory);
+      const { repo, branch } = await backend.detectGitInfo(effectiveDirectory);
       if (repo || branch) {
         await backend.updateWorkstream(ws.id, {});
         ws.git_repo = repo;
         ws.git_branch = branch;
       }
     } catch { /* ignore */ }
+
     setWorkstreams((prev) => [ws, ...prev]);
     setActiveWsId(ws.id);
     setShowWsCreate({ show: false });
 
-    // Auto-create a copilot_session tile if requested
-    if (opts.createSessionTile) {
-      const config = JSON.stringify({
-        session_name: name,
-        command_template: "agency copilot --yolo",
-        cwd: directory,
-        is_resumed: false,
-        created_at: new Date().toISOString(),
-      });
-      const tile = await backend.createTile(ws.id, "copilot_session", name, config);
-      setTiles([tile]);
-      setTileOrder([tile.id]);
-      await backend.updateLayout(ws.id, { tile_order_json: JSON.stringify([tile.id]) });
+    setTiles([tile]);
+    setTileOrder([tile.id]);
+    setSessionInfoByWs((prev) => ({ ...prev, [ws.id]: name }));
 
-      // If import worktree, show session picker to link an existing session
-      if (opts.showSessionPicker) {
-        setLinkingTileId(tile.id);
-        setShowSessionPicker(true);
-      } else {
-        // Spawn agency.exe for the new session
-        spawnedPtys.current.add(tile.id);
-        backend.spawnTerminal(tile.id, directory, "agency.exe", ["copilot", "--yolo"], 30, 120).catch(() => {
-          spawnedPtys.current.delete(tile.id);
-        });
-      }
-    } else if (opts.showSessionPicker) {
+    if (opts.sessionChoice === "existing") {
+      setLinkingTileId(tile.id);
       setShowSessionPicker(true);
+    } else {
+      spawnedPtys.current.add(tile.id);
+      backend.spawnTerminal(tile.id, effectiveDirectory, "agency.exe", ["copilot", "--yolo"], 30, 120).catch(() => {
+        spawnedPtys.current.delete(tile.id);
+      });
     }
   }, [backend]);
 
@@ -416,6 +444,14 @@ export default function App() {
 
   const closeTile = useCallback(
     async (tileId: string) => {
+      // Pinned tiles cannot be closed.
+      const t = tiles.find((x) => x.id === tileId);
+      if (t) {
+        try {
+          const cfg = JSON.parse(t.config_json || "{}");
+          if (cfg.pinned) return;
+        } catch { /* ignore */ }
+      }
       spawnedPtys.current.delete(tileId);
       await backend.closeTerminal(tileId).catch(() => {});
       await backend.deleteTile(tileId);
@@ -431,7 +467,7 @@ export default function App() {
         setFullscreenTileId(null);
       }
     },
-    [activeWsId, fullscreenTileId, backend]
+    [activeWsId, fullscreenTileId, backend, tiles]
   );
 
   // Resume an existing Copilot session by creating a copilot_session tile with --resume
@@ -594,6 +630,7 @@ export default function App() {
         projects={projects}
         workstreams={workstreams}
         activeWsId={activeWsId}
+        sessionInfoByWs={sessionInfoByWs}
         onSelectWorkstream={setActiveWsId}
         onCreateProject={() => setShowProjectCreate(true)}
         onCreateWorkstream={(projectId) => setShowWsCreate({ show: true, projectId })}
@@ -678,6 +715,10 @@ export default function App() {
                     setTiles((prev) => prev.map((t) =>
                       t.id === tileId ? { ...t, config_json: newConfig, title: newTitle } : t
                     ));
+                    // Update sidebar info if this is the pinned tile.
+                    if (cfg.pinned) {
+                      setSessionInfoByWs((prev) => ({ ...prev, [wsId]: summary || sessionId.slice(0, 8) }));
+                    }
                   } : undefined}
                   onRestart={isActive ? async (tileId) => {
                     const tile = tiles.find((t) => t.id === tileId);
@@ -756,6 +797,18 @@ export default function App() {
                 setTiles((prev) => prev.map((t) =>
                   t.id === linkingTileId ? { ...t, config_json: newConfig, title: newTitle } : t
                 ));
+                // Refresh sidebar info if this was the pinned tile.
+                if (cfg.pinned && activeWsId) {
+                  setSessionInfoByWs((prev) => ({ ...prev, [activeWsId]: session.summary || session.session_id.slice(0, 8) }));
+                }
+                // Spawn agency.exe with --resume so the picked session loads.
+                if (!spawnedPtys.current.has(linkingTileId)) {
+                  const cwd = cfg.cwd || workstreams.find((w) => w.id === activeWsId)?.directory || "C:\\";
+                  spawnedPtys.current.add(linkingTileId);
+                  backend.spawnTerminal(linkingTileId, cwd, "agency.exe", ["copilot", "--yolo", `--resume=${session.session_id}`], 30, 120).catch(() => {
+                    spawnedPtys.current.delete(linkingTileId);
+                  });
+                }
               }
               setLinkingTileId(null);
             } else {

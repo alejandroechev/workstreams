@@ -1,10 +1,11 @@
-// @test-skip: form component, behavior covered by backend create tests
+// @test-skip: Form layout tested via behavior in WorkstreamCreateForm.test.tsx
 import { useState, useEffect } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
 import type { Project } from "../domain/types";
 
-type WorkstreamType = "worktree" | "base_repo" | "standalone" | "import_worktree";
+export type RepoChoice = "import_worktree" | "base_repo" | "worktree";
+export type SessionChoice = "new" | "existing";
 
 interface WorktreeInfo {
   is_worktree: boolean;
@@ -21,8 +22,8 @@ interface Props {
     projectId?: string;
     workstreamType: string;
     worktreeBranch?: string;
-    showSessionPicker?: boolean;
-    createSessionTile?: boolean;
+    sessionChoice: SessionChoice;
+    baseBranch?: string;
   }) => void;
   onCancel: () => void;
 }
@@ -36,44 +37,46 @@ export default function WorkstreamCreateForm({ project: initialProject, projects
   const project = selectedProjectId ? projects.find((p) => p.id === selectedProjectId) : undefined;
   const hasProject = !!project;
   const [name, setName] = useState(hasProject ? project.name : "");
-  const [wsType, setWsType] = useState<WorkstreamType>(hasProject ? "worktree" : "standalone");
+  const [repoChoice, setRepoChoice] = useState<RepoChoice>(hasProject ? "worktree" : "base_repo");
   const [directory, setDirectory] = useState(project?.directory || "");
   const [branchName, setBranchName] = useState("");
   const [worktreeInfo, setWorktreeInfo] = useState<WorktreeInfo | null>(null);
-  const [linkSession, setLinkSession] = useState(true); // default: create a copilot session tile
+  // Import Worktree always uses an existing session; others default to "new".
+  const sessionChoice: SessionChoice = repoChoice === "import_worktree" ? "existing" : "new";
+  const [sessionPref, setSessionPref] = useState<SessionChoice>("new");
+  const effectiveSession: SessionChoice = repoChoice === "import_worktree" ? "existing" : sessionPref;
 
-  // Update form when project selection changes
+  // Project changed: reset defaults
   const handleProjectChange = (projectId: string | null) => {
     setSelectedProjectId(projectId);
     const p = projectId ? projects.find((pr) => pr.id === projectId) : undefined;
     if (p) {
       setDirectory(p.directory);
       if (!name || name === project?.name) setName(p.name);
-      setWsType("worktree");
+      setRepoChoice("worktree");
     } else {
       setDirectory("");
-      setWsType("standalone");
+      setRepoChoice("base_repo");
     }
   };
 
   useEffect(() => {
-    if (wsType === "worktree" && name.trim()) {
+    if (repoChoice === "worktree" && name.trim()) {
       setBranchName(`alejandroe/${slugify(name)}`);
     }
-  }, [name, wsType]);
+  }, [name, repoChoice]);
 
   useEffect(() => {
-    if (hasProject && (wsType === "worktree" || wsType === "base_repo")) {
+    if (hasProject && (repoChoice === "worktree" || repoChoice === "base_repo")) {
       setDirectory(project.directory);
     }
-  }, [wsType, hasProject, project?.directory]);
+  }, [repoChoice, hasProject, project?.directory]);
 
   const pickDirectory = async () => {
     const dir = await open({ directory: true, title: "Select worktree directory" });
     if (dir) {
       setDirectory(dir as string);
-      if (wsType === "import_worktree") {
-        // Auto-detect worktree info
+      if (repoChoice === "import_worktree") {
         try {
           const info = await invoke<WorktreeInfo>("detect_worktree_info", { directory: dir });
           setWorktreeInfo(info);
@@ -91,26 +94,33 @@ export default function WorkstreamCreateForm({ project: initialProject, projects
     if (!name.trim()) return;
     const dir = directory || (project?.directory ?? "");
     if (!dir) return;
-
-    const isImport = wsType === "import_worktree";
     onSubmit(name.trim(), dir, {
       projectId: project?.id,
-      workstreamType: isImport ? "worktree" : wsType,
-      worktreeBranch: wsType === "worktree" ? branchName : (isImport ? worktreeInfo?.branch || undefined : undefined),
-      showSessionPicker: isImport,
-      createSessionTile: linkSession,
+      workstreamType: repoChoice,
+      worktreeBranch:
+        repoChoice === "worktree" ? branchName :
+        repoChoice === "import_worktree" ? worktreeInfo?.branch || undefined :
+        undefined,
+      sessionChoice: effectiveSession,
     });
   };
 
-  const typeOptions: { value: WorkstreamType; label: string; desc: string }[] = [
-    { value: "import_worktree", label: "Import Existing Worktree", desc: "Point to an existing worktree + link a Copilot session" },
-    { value: "worktree", label: "New Worktree", desc: "Creates a git worktree branch" },
-    { value: "base_repo", label: "Base Repo", desc: "Works in repo directory" },
-    { value: "standalone", label: "Standalone", desc: "Pick any directory" },
+  const repoOptions: { value: RepoChoice; label: string; desc: string }[] = [
+    { value: "import_worktree", label: "Import Existing Worktree", desc: "Point to an existing worktree directory" },
+    { value: "base_repo", label: "Base Repo", desc: "Work directly in the repo root" },
+    { value: "worktree", label: "New Worktree", desc: "Create a new git worktree branch alongside the repo" },
   ];
+
+  const sessionOptions: { value: SessionChoice; label: string; desc: string }[] = [
+    { value: "new", label: "New Session", desc: "Spawn a fresh Copilot session" },
+    { value: "existing", label: "Existing Session", desc: "Pick one of your prior sessions" },
+  ];
+
+  const sessionLocked = repoChoice === "import_worktree";
 
   return (
     <div
+      data-testid="ws-create-form"
       style={{
         position: "fixed",
         top: 0, left: 0, right: 0, bottom: 0,
@@ -147,6 +157,7 @@ export default function WorkstreamCreateForm({ project: initialProject, projects
         {/* Repo selector */}
         <label style={{ fontSize: 11, color: "#a6adc8", display: "block", marginBottom: 4 }}>Repo</label>
         <select
+          data-testid="ws-create-project"
           value={selectedProjectId || ""}
           onChange={(e) => handleProjectChange(e.target.value || null)}
           onKeyDown={(e) => e.stopPropagation()}
@@ -181,6 +192,7 @@ export default function WorkstreamCreateForm({ project: initialProject, projects
         {/* Name */}
         <label style={{ fontSize: 11, color: "#a6adc8", display: "block", marginBottom: 4 }}>Name</label>
         <input
+          data-testid="ws-create-name"
           type="text"
           value={name}
           onChange={(e) => setName(e.target.value)}
@@ -206,12 +218,13 @@ export default function WorkstreamCreateForm({ project: initialProject, projects
           }}
         />
 
-        {/* Type */}
-        <label style={{ fontSize: 11, color: "#a6adc8", display: "block", marginBottom: 6 }}>Type</label>
+        {/* Repo type */}
+        <label style={{ fontSize: 11, color: "#a6adc8", display: "block", marginBottom: 6 }}>Repo source</label>
         <div style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 14 }}>
-          {typeOptions.map((opt) => (
+          {repoOptions.map((opt) => (
             <label
               key={opt.value}
+              data-testid={`ws-create-repo-${opt.value}`}
               style={{
                 display: "flex",
                 alignItems: "center",
@@ -219,16 +232,16 @@ export default function WorkstreamCreateForm({ project: initialProject, projects
                 padding: "6px 10px",
                 borderRadius: 4,
                 cursor: "pointer",
-                background: wsType === opt.value ? "#313244" : "transparent",
-                border: wsType === opt.value ? "1px solid #45475a" : "1px solid transparent",
+                background: repoChoice === opt.value ? "#313244" : "transparent",
+                border: repoChoice === opt.value ? "1px solid #45475a" : "1px solid transparent",
               }}
             >
               <input
                 type="radio"
-                name="wsType"
+                name="repoChoice"
                 value={opt.value}
-                checked={wsType === opt.value}
-                onChange={() => setWsType(opt.value)}
+                checked={repoChoice === opt.value}
+                onChange={() => setRepoChoice(opt.value)}
                 style={{ accentColor: "#89b4fa" }}
               />
               <div>
@@ -239,11 +252,12 @@ export default function WorkstreamCreateForm({ project: initialProject, projects
           ))}
         </div>
 
-        {/* Branch name (worktree only) */}
-        {wsType === "worktree" && (
+        {/* Branch name (new worktree only) */}
+        {repoChoice === "worktree" && (
           <>
             <label style={{ fontSize: 11, color: "#a6adc8", display: "block", marginBottom: 4 }}>Branch Name</label>
             <input
+              data-testid="ws-create-branch"
               type="text"
               value={branchName}
               onChange={(e) => setBranchName(e.target.value)}
@@ -266,19 +280,20 @@ export default function WorkstreamCreateForm({ project: initialProject, projects
           </>
         )}
 
-        {/* Directory (standalone or import_worktree) */}
-        {(wsType === "standalone" || wsType === "import_worktree") && (
+        {/* Directory (import_worktree only) */}
+        {repoChoice === "import_worktree" && (
           <>
             <label style={{ fontSize: 11, color: "#a6adc8", display: "block", marginBottom: 4 }}>
-              {wsType === "import_worktree" ? "Existing Worktree Directory" : "Directory"}
+              Existing Worktree Directory
             </label>
             <div style={{ display: "flex", gap: 4, marginBottom: 8 }}>
               <input
+                data-testid="ws-create-directory"
                 type="text"
                 value={directory}
                 onChange={(e) => setDirectory(e.target.value)}
                 onKeyDown={(e) => e.stopPropagation()}
-                placeholder={wsType === "import_worktree" ? "C:\\repos\\project-worktree" : "C:\\Repos\\..."}
+                placeholder="C:\\repos\\project-worktree"
                 style={{
                   flex: 1,
                   background: "#313244",
@@ -307,8 +322,7 @@ export default function WorkstreamCreateForm({ project: initialProject, projects
                 📁
               </button>
             </div>
-            {/* Detected worktree info */}
-            {wsType === "import_worktree" && worktreeInfo && (
+            {worktreeInfo && (
               <div style={{ fontSize: 11, color: "#6c7086", marginBottom: 14, padding: "6px 8px", background: "#181825", borderRadius: 4 }}>
                 {worktreeInfo.is_worktree ? (
                   <>
@@ -328,7 +342,7 @@ export default function WorkstreamCreateForm({ project: initialProject, projects
                 )}
               </div>
             )}
-            {wsType === "import_worktree" && !worktreeInfo && directory && (
+            {!worktreeInfo && directory && (
               <div style={{ fontSize: 11, color: "#585b70", marginBottom: 14 }}>
                 Pick a directory to detect worktree info
               </div>
@@ -336,40 +350,56 @@ export default function WorkstreamCreateForm({ project: initialProject, projects
           </>
         )}
 
-        {/* Show resolved directory for non-standalone */}
-        {wsType !== "standalone" && directory && (
+        {/* Show resolved directory for base_repo/worktree */}
+        {repoChoice !== "import_worktree" && directory && (
           <div style={{ fontSize: 11, color: "#6c7086", marginBottom: 14, paddingLeft: 2 }}>
             Directory: {directory}
           </div>
         )}
 
-        {/* Link session checkbox */}
-        <label style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 8,
-          padding: "8px 10px",
-          borderRadius: 4,
-          cursor: "pointer",
-          background: linkSession ? "#313244" : "transparent",
-          border: linkSession ? "1px solid #45475a" : "1px solid transparent",
-          marginBottom: 14,
-        }}>
-          <input
-            type="checkbox"
-            checked={linkSession}
-            onChange={(e) => setLinkSession(e.target.checked)}
-            style={{ accentColor: "#89b4fa" }}
-          />
-          <div>
-            <div style={{ fontSize: 12, color: "#cdd6f4" }}>Start with Copilot session</div>
-            <div style={{ fontSize: 10, color: "#6c7086" }}>
-              {wsType === "import_worktree"
-                ? "Creates a session tile and links an existing session"
-                : "Creates a Copilot session tile automatically"}
-            </div>
-          </div>
-        </label>
+        {/* Session choice */}
+        <label style={{ fontSize: 11, color: "#a6adc8", display: "block", marginBottom: 6 }}>Session</label>
+        <div style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 14 }}>
+          {sessionOptions.map((opt) => {
+            const isSelected = (sessionLocked ? sessionChoice : sessionPref) === opt.value;
+            return (
+              <label
+                key={opt.value}
+                data-testid={`ws-create-session-${opt.value}`}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  padding: "6px 10px",
+                  borderRadius: 4,
+                  cursor: sessionLocked ? "not-allowed" : "pointer",
+                  opacity: sessionLocked && !isSelected ? 0.5 : 1,
+                  background: isSelected ? "#313244" : "transparent",
+                  border: isSelected ? "1px solid #45475a" : "1px solid transparent",
+                }}
+              >
+                <input
+                  type="radio"
+                  name="sessionChoice"
+                  value={opt.value}
+                  checked={isSelected}
+                  disabled={sessionLocked}
+                  onChange={() => setSessionPref(opt.value)}
+                  style={{ accentColor: "#89b4fa" }}
+                />
+                <div>
+                  <div style={{ fontSize: 12, color: "#cdd6f4" }}>
+                    {opt.label}
+                    {sessionLocked && opt.value === "existing" && (
+                      <span style={{ marginLeft: 6, fontSize: 10, color: "#f9e2af" }}>(required for Import)</span>
+                    )}
+                  </div>
+                  <div style={{ fontSize: 10, color: "#6c7086" }}>{opt.desc}</div>
+                </div>
+              </label>
+            );
+          })}
+        </div>
 
         {/* Actions */}
         <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
@@ -388,8 +418,9 @@ export default function WorkstreamCreateForm({ project: initialProject, projects
             Cancel
           </button>
           <button
+            data-testid="ws-create-submit"
             onClick={handleSubmit}
-            disabled={!name.trim() || !directory}
+            disabled={!name.trim() || !directory || (repoChoice === "worktree" && !branchName.trim())}
             style={{
               padding: "8px 20px",
               background: !name.trim() || !directory ? "#45475a" : "#89b4fa",
@@ -401,7 +432,7 @@ export default function WorkstreamCreateForm({ project: initialProject, projects
               fontWeight: 600,
             }}
           >
-            {wsType === "import_worktree" ? "Import & Link Session" : "Create Workstream"}
+            {effectiveSession === "existing" ? "Create & Pick Session" : "Create Workstream"}
           </button>
         </div>
       </div>
