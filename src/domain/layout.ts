@@ -28,11 +28,14 @@ export function computeLayout(tileCount: number): GridConfig {
     };
   }
   if (tileCount === 4) {
-    // 2x2 grid, equal
+    // 2x2 grid. Layout keeps positions stable from the 3-tile layout:
+    //   3 tiles: "t0 t1" / "t0 t2"   (t0 spans full height of left column)
+    //   4 tiles: "t0 t1" / "t3 t2"   (t0 halves down, new t3 fills bottom-left)
+    // So t1 stays top-right and t2 stays bottom-right when adding the 4th tile.
     return {
       columns: "1fr 1fr",
       rows: "1fr 1fr",
-      areas: '"t0 t1" "t2 t3"',
+      areas: '"t0 t1" "t3 t2"',
     };
   }
   if (tileCount === 5) {

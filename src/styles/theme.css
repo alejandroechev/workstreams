@@ -68,13 +68,3 @@ button:hover {
 .status-dot-working {
   animation: pulse-working 1.5s ease-in-out infinite;
 }
-
-/* Tile border glow for working sessions */
-@keyframes border-glow-working {
-  0%, 100% { border-color: #a6e3a1; }
-  50% { border-color: #74c7a0; }
-}
-
-.tile-working {
-  animation: border-glow-working 2s ease-in-out infinite;
-}

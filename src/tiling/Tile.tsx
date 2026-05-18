@@ -199,6 +199,8 @@ export default function TileWrapper({
       content = <div>Unknown tile type: {tile.tile_type}</div>;
   }
 
+  // Activity is surfaced via the in-header status badge (pulsing dot + label),
+  // NOT via the tile border. Keep the per-tile working flag for the dot only.
   const isWorking = isSessionTile && (
     sessionStats?.activity_status === "thinking" ||
     sessionStats?.activity_status === "tool_use" ||
@@ -209,12 +211,11 @@ export default function TileWrapper({
   return (
     <div
       data-tile-id={tile.id}
-      className={isWorking ? "tile-working" : undefined}
       style={{
         gridArea: `t${index}`,
         display: "flex",
         flexDirection: "column",
-        border: computeTileBorder({ isFullscreen, isFocused, isWorking }),
+        border: computeTileBorder({ isFullscreen, isFocused }),
         borderRadius: 6,
         overflow: "hidden",
         background: "#1e1e2e",

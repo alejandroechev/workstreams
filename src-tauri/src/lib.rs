@@ -264,7 +264,7 @@ fn list_workstreams(state: State<'_, AppState>) -> Result<Vec<Workstream>, Strin
         .prepare(
             "SELECT id, name, description, directory, git_repo, git_branch, status,
                     project_id, workstream_type, worktree_branch, created_at, updated_at
-             FROM workstreams WHERE status != 'archived' ORDER BY created_at DESC",
+             FROM workstreams ORDER BY created_at DESC",
         )
         .map_err(|e| format!("DB error: {e}"))?;
 

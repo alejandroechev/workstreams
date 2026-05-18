@@ -499,7 +499,7 @@ export default function WorkstreamSidebar({
       {/* Divider */}
       <div style={{ borderTop: "1px solid #313244", margin: "4px 8px" }} />
 
-      {/* ── PROJECTS (bottom section) ── */}
+      {/* ── REPOS (bottom section) ── */}
       <div style={{
         padding: "4px 10px",
         fontSize: 10,
@@ -511,7 +511,7 @@ export default function WorkstreamSidebar({
         justifyContent: "space-between",
         alignItems: "center",
       }}>
-        <span>Projects</span>
+        <span>Repos</span>
         <button
           onClick={onCreateProject}
           style={{
@@ -523,16 +523,16 @@ export default function WorkstreamSidebar({
             padding: 0,
             lineHeight: 1,
           }}
-          title="New project"
+          title="New repo"
         >
           +
         </button>
       </div>
 
-      <div style={{ overflowY: "auto", padding: "0 4px 8px", maxHeight: 200 }}>
+      <div style={{ overflowY: "auto", padding: "0 4px 8px", maxHeight: "40vh", minHeight: 120 }}>
         {projects.length === 0 && (
           <div style={{ padding: "4px 8px", color: "#45475a", fontSize: 11 }}>
-            No projects yet
+            No repos yet
           </div>
         )}
         {projects.map((p) => (
@@ -575,7 +575,7 @@ export default function WorkstreamSidebar({
         ))}
       </div>
 
-      {/* Project edit modal */}
+      {/* Repo edit modal */}
       {editingProject && (
         <div style={{
           position: "fixed",
@@ -595,7 +595,7 @@ export default function WorkstreamSidebar({
           }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
               <div style={{ color: "#cdd6f4", fontWeight: 600, fontSize: 13 }}>
-                Edit Project
+                Edit Repo
               </div>
               <button
                 onClick={() => setEditingProject(null)}

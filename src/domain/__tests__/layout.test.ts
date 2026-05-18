@@ -35,11 +35,12 @@ describe("computeLayout", () => {
     expect(result.areas).toBe('"t0 t1" "t0 t2"');
   });
 
-  it("returns 2x2 grid for 4 tiles", () => {
+  it("returns 2x2 grid for 4 tiles, preserving 3-tile positions", () => {
     const result = computeLayout(4);
     expect(result.columns).toBe("1fr 1fr");
     expect(result.rows).toBe("1fr 1fr");
-    expect(result.areas).toBe('"t0 t1" "t2 t3"');
+    // t1 stays top-right, t2 stays bottom-right, t3 (new) fills bottom-left.
+    expect(result.areas).toBe('"t0 t1" "t3 t2"');
   });
 
   it("returns 2-column layout for 5 tiles", () => {

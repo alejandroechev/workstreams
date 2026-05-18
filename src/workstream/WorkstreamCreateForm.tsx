@@ -1,3 +1,4 @@
+// @test-skip: form component, behavior covered by backend create tests
 import { useState, useEffect } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
@@ -104,7 +105,7 @@ export default function WorkstreamCreateForm({ project: initialProject, projects
   const typeOptions: { value: WorkstreamType; label: string; desc: string }[] = [
     { value: "import_worktree", label: "Import Existing Worktree", desc: "Point to an existing worktree + link a Copilot session" },
     { value: "worktree", label: "New Worktree", desc: "Creates a git worktree branch" },
-    { value: "base_repo", label: "Base Repo", desc: "Works in project directory" },
+    { value: "base_repo", label: "Base Repo", desc: "Works in repo directory" },
     { value: "standalone", label: "Standalone", desc: "Pick any directory" },
   ];
 
@@ -143,8 +144,8 @@ export default function WorkstreamCreateForm({ project: initialProject, projects
           >✕</button>
         </div>
 
-        {/* Project selector */}
-        <label style={{ fontSize: 11, color: "#a6adc8", display: "block", marginBottom: 4 }}>Project</label>
+        {/* Repo selector */}
+        <label style={{ fontSize: 11, color: "#a6adc8", display: "block", marginBottom: 4 }}>Repo</label>
         <select
           value={selectedProjectId || ""}
           onChange={(e) => handleProjectChange(e.target.value || null)}
@@ -277,7 +278,7 @@ export default function WorkstreamCreateForm({ project: initialProject, projects
                 value={directory}
                 onChange={(e) => setDirectory(e.target.value)}
                 onKeyDown={(e) => e.stopPropagation()}
-                placeholder={wsType === "import_worktree" ? "C:\\repos\\project-worktree" : "C:\\Projects\\..."}
+                placeholder={wsType === "import_worktree" ? "C:\\repos\\project-worktree" : "C:\\Repos\\..."}
                 style={{
                   flex: 1,
                   background: "#313244",

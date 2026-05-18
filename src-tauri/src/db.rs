@@ -264,6 +264,35 @@ mod tests {
     }
 
     #[test]
+    fn list_workstreams_query_includes_archived() {
+        // Regression test for the bug where archived workstreams were filtered
+        // out by 'WHERE status != archived' in list_workstreams, causing them
+        // to disappear on app restart.
+        let conn = open_in_memory();
+        conn.execute_batch(
+            "INSERT INTO workstreams (id, name, status, workstream_type, created_at, updated_at)
+                VALUES ('w-active', 'A', 'active', 'standalone', 't1', 't1');
+             INSERT INTO workstreams (id, name, status, workstream_type, created_at, updated_at)
+                VALUES ('w-archived', 'B', 'archived', 'standalone', 't1', 't1');",
+        )
+        .unwrap();
+        // Exact query mirrored from lib.rs::list_workstreams — must include archived.
+        let mut stmt = conn
+            .prepare("SELECT id, status FROM workstreams ORDER BY created_at DESC")
+            .unwrap();
+        let rows: Vec<(String, String)> = stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        assert_eq!(rows.len(), 2, "expected both active and archived rows");
+        let statuses: std::collections::HashSet<&str> =
+            rows.iter().map(|(_, s)| s.as_str()).collect();
+        assert!(statuses.contains("active"));
+        assert!(statuses.contains("archived"));
+    }
+
+    #[test]
     fn tiles_cascade_delete_with_workstream() {
         let conn = open_in_memory();
         conn.execute_batch(

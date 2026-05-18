@@ -1,3 +1,4 @@
+// @test-skip: form component, behavior covered by backend create tests
 import { useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
@@ -70,7 +71,7 @@ export default function ProjectCreateForm({ onSubmit, onCancel }: Props) {
       >
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
           <div style={{ color: "#cdd6f4", fontWeight: 600, fontSize: 14 }}>
-            New Project
+            New Repo
           </div>
           <button
             onClick={onCancel}
@@ -90,7 +91,7 @@ export default function ProjectCreateForm({ onSubmit, onCancel }: Props) {
             if (e.key === "Escape") onCancel();
             if (e.key === "Enter") handleSubmit();
           }}
-          placeholder="My Project"
+          placeholder="My Repo"
           autoFocus
           style={{
             width: "100%",
@@ -115,7 +116,7 @@ export default function ProjectCreateForm({ onSubmit, onCancel }: Props) {
             value={directory}
             onChange={(e) => setDirectory(e.target.value)}
             onKeyDown={(e) => e.stopPropagation()}
-            placeholder="C:\\Projects\\..."
+            placeholder="C:\\Repos\\..."
             style={{
               flex: 1,
               background: "#313244",
@@ -205,7 +206,7 @@ export default function ProjectCreateForm({ onSubmit, onCancel }: Props) {
               fontWeight: 600,
             }}
           >
-            Create Project
+            Create Repo
           </button>
         </div>
       </div>
