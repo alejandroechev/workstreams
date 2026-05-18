@@ -138,6 +138,10 @@ export class TauriBackend implements Backend {
     return invoke<string[]>("search_files", { directory, query });
   }
 
+  async searchInFiles(directory: string, query: string, limit?: number): Promise<import("./types").FileSearchMatch[]> {
+    return invoke<import("./types").FileSearchMatch[]>("search_in_files", { directory, query, limit });
+  }
+
   async gitDiffFiles(directory: string, mode: string): Promise<string[]> {
     return invoke<string[]>("git_diff_files", { directory, mode });
   }

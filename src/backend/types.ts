@@ -1,6 +1,12 @@
 // @test-skip: Type-only interface; behaviour covered by MemoryBackend + TauriBackend tests.
 import type { Project, Workstream, Tile, TileType, WorkstreamLayout, CopilotConfigItem } from "../domain/types";
 
+export interface FileSearchMatch {
+  path: string;
+  line_number: number;
+  line_text: string;
+}
+
 export interface Backend {
   // Projects
   listProjects(): Promise<Project[]>;
@@ -44,6 +50,7 @@ export interface Backend {
   unwatchSession(tileId: string): Promise<void>;
   // File search
   searchFiles(directory: string, query: string): Promise<string[]>;
+  searchInFiles(directory: string, query: string, limit?: number): Promise<FileSearchMatch[]>;
   // Git diff
   gitDiffFiles(directory: string, mode: string): Promise<string[]>;
   gitDiffFile(directory: string, filePath: string, mode: string): Promise<string>;

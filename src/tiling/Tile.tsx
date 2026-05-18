@@ -2,7 +2,7 @@
 import { ReactNode, createElement, useEffect, useMemo, useRef, useState } from "react";
 import TerminalTile from "../tiles/TerminalTile";
 import CopilotSessionTile from "../tiles/CopilotSessionTile";
-import ExplorerTile from "../tiles/ExplorerTile";
+import RepoExplorerTile from "../tiles/RepoExplorerTile";
 import SessionMetaTile from "../tiles/SessionMetaTile";
 import WorkbenchTile from "../tiles/WorkbenchTile";
 import type { Tile } from "../workstream/types";
@@ -129,7 +129,7 @@ export default function TileWrapper({
     case "file_viewer": {
       const cfg = JSON.parse(tile.config_json || "{}");
       content = (
-        <ExplorerTile
+        <RepoExplorerTile
           tileId={tile.id}
           isFocused={isFocused}
           rootDir={workstreamDir || "C:\\"}
@@ -140,7 +140,7 @@ export default function TileWrapper({
     }
     case "file_explorer":
       content = (
-        <ExplorerTile
+        <RepoExplorerTile
           tileId={tile.id}
           isFocused={isFocused}
           rootDir={workstreamDir || "C:\\"}

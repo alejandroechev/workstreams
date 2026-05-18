@@ -232,6 +232,13 @@ describe("TauriBackend", () => {
     expect(invoke).toHaveBeenCalledWith("search_files", { directory: "/", query: "a" });
   });
 
+  it("searchInFiles passes directory, query, and limit", async () => {
+    invoke.mockResolvedValueOnce([{ path: "a.ts", line_number: 1, line_text: "foo" }]);
+    const result = await backend.searchInFiles("/", "foo", 25);
+    expect(result).toEqual([{ path: "a.ts", line_number: 1, line_text: "foo" }]);
+    expect(invoke).toHaveBeenCalledWith("search_in_files", { directory: "/", query: "foo", limit: 25 });
+  });
+
   it("getLayout passes workstreamId", async () => {
     invoke.mockResolvedValueOnce({ workstream_id: "w1" });
     await backend.getLayout("w1");

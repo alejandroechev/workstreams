@@ -873,9 +873,9 @@ fn list_directory(path: String) -> Result<Vec<DirEntry>, String> {
             }
         }
     }
-    // Folders first (alpha), then files (by modified time desc)
+    // Folders first (alpha), then files (alpha)
     dirs.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
-    files.sort_by(|a, b| b.modified_epoch.cmp(&a.modified_epoch));
+    files.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
     dirs.extend(files);
     Ok(dirs)
 }
@@ -926,6 +926,106 @@ fn search_files(
                 }
             } else if name_str.to_lowercase().contains(&query_lower) {
                 results.push(path.to_string_lossy().to_string());
+            }
+        }
+    }
+    Ok(results)
+}
+
+/// Result row for cross-file content search
+#[derive(Debug, Serialize, Deserialize)]
+struct FileSearchMatch {
+    path: String,
+    line_number: u32,
+    line_text: String,
+}
+
+/// Recursively search for content matches inside files (case-insensitive substring).
+/// Skips heavy/system dirs and files > 1 MB to stay responsive.
+#[tauri::command]
+fn search_in_files(
+    directory: String,
+    query: String,
+    limit: Option<u32>,
+) -> Result<Vec<FileSearchMatch>, String> {
+    use std::collections::VecDeque;
+    use std::io::{BufRead, BufReader};
+
+    if query.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    let max_total = limit.unwrap_or(200) as usize;
+    let max_per_file = 5usize;
+    let max_file_size = 1_048_576u64; // 1 MB
+    let query_lower = query.to_lowercase();
+    let skip_dirs: std::collections::HashSet<&str> = [
+        "node_modules",
+        "target",
+        ".git",
+        "dist",
+        ".next",
+        "__pycache__",
+        ".venv",
+        "venv",
+    ]
+    .into();
+
+    let mut results: Vec<FileSearchMatch> = Vec::new();
+    let mut queue = VecDeque::new();
+    queue.push_back(std::path::PathBuf::from(&directory));
+
+    while let Some(dir) = queue.pop_front() {
+        if results.len() >= max_total {
+            break;
+        }
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        for entry in entries.flatten() {
+            if results.len() >= max_total {
+                break;
+            }
+            let path = entry.path();
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+            if path.is_dir() {
+                if !skip_dirs.contains(name_str.as_ref()) {
+                    queue.push_back(path);
+                }
+                continue;
+            }
+            // Skip files that are too large
+            let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
+            if size > max_file_size {
+                continue;
+            }
+            let file = match std::fs::File::open(&path) {
+                Ok(f) => f,
+                Err(_) => continue,
+            };
+            let reader = BufReader::new(file);
+            let mut in_file_count = 0usize;
+            for (idx, line) in reader.lines().enumerate() {
+                let line = match line {
+                    Ok(l) => l,
+                    Err(_) => break, // likely binary
+                };
+                if line.to_lowercase().contains(&query_lower) {
+                    results.push(FileSearchMatch {
+                        path: path.to_string_lossy().to_string(),
+                        line_number: (idx + 1) as u32,
+                        line_text: if line.len() > 240 {
+                            line.chars().take(240).collect()
+                        } else {
+                            line
+                        },
+                    });
+                    in_file_count += 1;
+                    if in_file_count >= max_per_file || results.len() >= max_total {
+                        break;
+                    }
+                }
             }
         }
     }
@@ -2261,6 +2361,7 @@ pub fn run() {
             detect_git_info,
             detect_worktree_info,
             search_files,
+            search_in_files,
             // Git diff
             git_diff_files,
             git_diff_file,
@@ -2303,6 +2404,40 @@ pub fn run() {
 mod tests {
     use super::*;
     use std::io::Write;
+
+    #[test]
+    fn search_in_files_finds_matches_case_insensitive() {
+        let tmp = std::env::temp_dir().join(format!("rxs-search-{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let f1 = tmp.join("alpha.txt");
+        let f2 = tmp.join("beta.txt");
+        {
+            let mut h = std::fs::File::create(&f1).unwrap();
+            writeln!(h, "Hello World").unwrap();
+            writeln!(h, "another line").unwrap();
+        }
+        {
+            let mut h = std::fs::File::create(&f2).unwrap();
+            writeln!(h, "nothing here").unwrap();
+            writeln!(h, "wOrLd peace").unwrap();
+        }
+        let res =
+            search_in_files(tmp.to_string_lossy().to_string(), "world".to_string(), None).unwrap();
+        assert_eq!(res.len(), 2, "should find two matches (case-insensitive)");
+        assert!(res
+            .iter()
+            .any(|m| m.path.contains("alpha.txt") && m.line_number == 1));
+        assert!(res
+            .iter()
+            .any(|m| m.path.contains("beta.txt") && m.line_number == 2));
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn search_in_files_empty_query_returns_empty() {
+        let res = search_in_files(".".to_string(), "".to_string(), None).unwrap();
+        assert!(res.is_empty());
+    }
 
     #[test]
     fn now_returns_non_empty_string() {

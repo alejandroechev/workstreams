@@ -45,7 +45,7 @@ export default function StatusBar({
     { key: "session", label: "Copilot Session", icon: "session", shortcut: "Alt+S", onSelect: onAddSession },
     { key: "terminal", label: "Terminal", icon: "terminal", shortcut: "Alt+N", onSelect: onAddTerminal },
     { key: "wsl", label: "WSL Terminal", icon: "terminal", onSelect: onAddWslTerminal },
-    { key: "explorer", label: "File Explorer", icon: "folder", shortcut: "Alt+E", onSelect: onAddExplorer },
+    { key: "explorer", label: "Repo Explorer", icon: "folder", shortcut: "Alt+E", onSelect: onAddExplorer },
     { key: "meta", label: "Session Meta", icon: "info", shortcut: "Alt+M", onSelect: onAddSessionMeta },
     { key: "workbench", label: "Workbench", icon: "beaker", shortcut: "Alt+B", onSelect: onAddWorkbench },
   ];

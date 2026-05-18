@@ -227,6 +227,33 @@ describe("MemoryBackend", () => {
     });
   });
 
+  describe("searchInFiles", () => {
+    it("finds matches across files with line numbers (case-insensitive)", async () => {
+      backend.seedFile("/p/a.ts", "Hello World\nanother line\n");
+      backend.seedFile("/p/b.ts", "nothing here\nwOrLd peace\n");
+      const results = await backend.searchInFiles("/p", "world");
+      const sorted = [...results].sort((x, y) => x.path.localeCompare(y.path));
+      expect(sorted).toEqual([
+        { path: "/p/a.ts", line_number: 1, line_text: "Hello World" },
+        { path: "/p/b.ts", line_number: 2, line_text: "wOrLd peace" },
+      ]);
+    });
+
+    it("returns empty for blank query", async () => {
+      backend.seedFile("/p/a.ts", "anything");
+      const results = await backend.searchInFiles("/p", "   ");
+      expect(results).toEqual([]);
+    });
+
+    it("respects the limit argument", async () => {
+      for (let i = 0; i < 10; i++) {
+        backend.seedFile(`/p/f${i}.ts`, "needle\n");
+      }
+      const results = await backend.searchInFiles("/p", "needle", 3);
+      expect(results.length).toBe(3);
+    });
+  });
+
   describe("gitDiff", () => {
     it("gitDiffFiles returns empty array", async () => {
       const files = await backend.gitDiffFiles("C:\\project", "unstaged");

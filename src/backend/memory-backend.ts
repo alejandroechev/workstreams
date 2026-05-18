@@ -239,6 +239,27 @@ export class MemoryBackend implements Backend {
     });
   }
 
+  async searchInFiles(_directory: string, query: string, limit?: number): Promise<import("./types").FileSearchMatch[]> {
+    const q = query.toLowerCase();
+    if (!q.trim()) return [];
+    const max = limit ?? 200;
+    const maxPerFile = 5;
+    const results: import("./types").FileSearchMatch[] = [];
+    for (const [path, content] of this.files.entries()) {
+      if (results.length >= max) break;
+      const lines = content.split("\n");
+      let perFile = 0;
+      for (let i = 0; i < lines.length; i++) {
+        if (lines[i].toLowerCase().includes(q)) {
+          results.push({ path, line_number: i + 1, line_text: lines[i].slice(0, 240) });
+          perFile++;
+          if (perFile >= maxPerFile || results.length >= max) break;
+        }
+      }
+    }
+    return results;
+  }
+
   async gitDiffFiles(_directory: string, _mode: string): Promise<string[]> {
     return [];
   }

@@ -8,7 +8,7 @@ describe("AddTileMenu", () => {
   const makeItems = () => [
     { key: "session", label: "Copilot Session", icon: "session" as const, shortcut: "Alt+S", onSelect: vi.fn() },
     { key: "terminal", label: "Terminal", icon: "terminal" as const, onSelect: vi.fn() },
-    { key: "explorer", label: "File Explorer", icon: "folder" as const, onSelect: vi.fn() },
+    { key: "explorer", label: "Repo Explorer", icon: "folder" as const, onSelect: vi.fn() },
   ];
 
   it("renders the trigger button with label", () => {
@@ -23,7 +23,7 @@ describe("AddTileMenu", () => {
     expect(screen.getByTestId("add-tile-menu")).toBeTruthy();
     expect(screen.getByText("Copilot Session")).toBeTruthy();
     expect(screen.getByText("Terminal")).toBeTruthy();
-    expect(screen.getByText("File Explorer")).toBeTruthy();
+    expect(screen.getByText("Repo Explorer")).toBeTruthy();
   });
 
   it("calls onSelect and closes when an item is clicked", () => {

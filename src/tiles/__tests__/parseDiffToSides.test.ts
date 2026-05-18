@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseDiffToSides } from "../ExplorerTile";
+import { parseDiffToSides } from "../RepoExplorerTile";
 
 describe("parseDiffToSides", () => {
   it("returns empty strings for empty input", () => {

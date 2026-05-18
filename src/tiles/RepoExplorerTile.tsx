@@ -19,7 +19,11 @@ import {
   CodeBracketSquareIcon,
   ClockIcon,
   BoltIcon,
+  MagnifyingGlassIcon,
+  MinusIcon,
+  PlusIcon,
 } from "@heroicons/react/24/outline";
+import type { FileSearchMatch } from "../backend/types";
 
 interface Props {
   tileId: string;
@@ -90,7 +94,7 @@ export function parseDiffToSides(diffText: string): { original: string; modified
   return { original: originalLines.join("\n"), modified: modifiedLines.join("\n") };
 }
 
-export default function ExplorerTile({ tileId, isFocused, rootDir, initialPath }: Props) {
+export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPath }: Props) {
   const backend = useBackend();
 
   const [mode, setMode] = useState<Mode>(initialPath ? "view" : "browse");
@@ -128,6 +132,23 @@ export default function ExplorerTile({ tileId, isFocused, rootDir, initialPath }
   const [hooksList, setHooksList] = useState<Array<{ name: string; path: string; content_preview: string }>>([]);
   const [hooksLoading, setHooksLoading] = useState(false);
   const [hookContent, setHookContent] = useState<{ name: string; content: string } | null>(null);
+
+  // Font size (Ctrl+= / Ctrl+- and A-/A+ toolbar buttons)
+  const [fontSize, setFontSize] = useState<number>(13);
+
+  // Ctrl+P keyboard navigation
+  const [fileSearchSelectedIndex, setFileSearchSelectedIndex] = useState(0);
+
+  // Ctrl+Shift+F cross-file content search
+  const [showContentSearch, setShowContentSearch] = useState(false);
+  const [contentSearchQuery, setContentSearchQuery] = useState("");
+  const [contentSearchResults, setContentSearchResults] = useState<FileSearchMatch[]>([]);
+  const [contentSearchLoading, setContentSearchLoading] = useState(false);
+  const [contentSearchSelectedIndex, setContentSearchSelectedIndex] = useState(0);
+  const contentSearchInputRef = useRef<HTMLInputElement>(null);
+
+  // Monaco editor ref (to trigger find widget programmatically)
+  const editorRef = useRef<unknown>(null);
 
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -434,15 +455,180 @@ export default function ExplorerTile({ tileId, isFocused, rootDir, initialPath }
     }
   }, [backend]);
 
+  // ─── Tabs ────────────────────────────────────────────────────────────
+  type TabId = "files" | "diff" | "log" | "hooks";
+  const activeTab: TabId =
+    mode === "log" ? "log" :
+    mode === "hooks" ? "hooks" :
+    activeDiffMode ? "diff" :
+    "files";
+
+  const selectTab = useCallback((tab: TabId) => {
+    if (tab === activeTab) return;
+    switch (tab) {
+      case "files":
+        setActiveDiffMode(null);
+        setDiffContent("");
+        setDiffFiles([]);
+        setDiffFilePath("");
+        setMode("browse");
+        break;
+      case "diff":
+        setMode("browse");
+        setContent(null);
+        setFilePath("");
+        activateDiffMode("unstaged");
+        break;
+      case "log":
+        setActiveDiffMode(null);
+        setDiffContent("");
+        setDiffFiles([]);
+        setDiffFilePath("");
+        openGitLog();
+        break;
+      case "hooks":
+        setActiveDiffMode(null);
+        setDiffContent("");
+        setDiffFiles([]);
+        setDiffFilePath("");
+        openGitHooks();
+        break;
+    }
+  }, [activeTab, activateDiffMode, openGitLog, openGitHooks]);
+
+  // Reset Ctrl+P selection when results change
+  useEffect(() => { setFileSearchSelectedIndex(0); }, [fileSearchResults]);
+  useEffect(() => { setContentSearchSelectedIndex(0); }, [contentSearchResults]);
+
+  // Ctrl+Shift+F: open cross-file content search overlay
+  useEffect(() => {
+    if (!isFocused) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.ctrlKey && e.shiftKey && (e.key === "F" || e.key === "f")) {
+        e.preventDefault();
+        e.stopPropagation();
+        setShowContentSearch(true);
+        setContentSearchQuery("");
+        setContentSearchResults([]);
+        setTimeout(() => contentSearchInputRef.current?.focus(), 50);
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [isFocused]);
+
+  // Font-size shortcuts (Ctrl+= / Ctrl+- / Ctrl+0)
+  useEffect(() => {
+    if (!isFocused) return;
+    const handler = (e: KeyboardEvent) => {
+      if (!e.ctrlKey) return;
+      if (e.key === "=" || e.key === "+") {
+        e.preventDefault();
+        setFontSize((s) => Math.min(28, s + 1));
+      } else if (e.key === "-") {
+        e.preventDefault();
+        setFontSize((s) => Math.max(8, s - 1));
+      } else if (e.key === "0") {
+        e.preventDefault();
+        setFontSize(13);
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [isFocused]);
+
+  // Debounced cross-file content search
+  useEffect(() => {
+    if (!showContentSearch || !contentSearchQuery.trim()) {
+      setContentSearchResults([]);
+      return;
+    }
+    const timer = setTimeout(async () => {
+      setContentSearchLoading(true);
+      try {
+        const root = rootDir || currentDir;
+        const r = await backend.searchInFiles(root, contentSearchQuery.trim());
+        setContentSearchResults(r);
+      } catch {
+        setContentSearchResults([]);
+      } finally {
+        setContentSearchLoading(false);
+      }
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [contentSearchQuery, showContentSearch, backend, rootDir, currentDir]);
+
+  const closeContentSearch = useCallback(() => {
+    setShowContentSearch(false);
+    setContentSearchQuery("");
+    setContentSearchResults([]);
+  }, []);
+
+  const triggerEditorFind = useCallback(() => {
+    const ed = editorRef.current as { getAction?: (id: string) => { run?: () => void } | undefined } | null;
+    ed?.getAction?.("actions.find")?.run?.();
+  }, []);
+
   // Filter entries by search
   const filteredEntries = searchFilter
     ? entries.filter((e) => e.name.toLowerCase().includes(searchFilter.toLowerCase()))
     : entries;
 
-  // ─── Ctrl+P Search Overlay ───
+  // ─── Tab bar (rendered above every mode body) ───
+  const TABS: Array<{ id: TabId; label: string; icon: React.ComponentType<React.SVGProps<SVGSVGElement>> }> = [
+    { id: "files", label: "Files", icon: FolderIcon },
+    { id: "diff", label: "Diff", icon: CodeBracketSquareIcon },
+    { id: "log", label: "Log", icon: ClockIcon },
+    { id: "hooks", label: "Hooks", icon: BoltIcon },
+  ];
+  const tabBar = (
+    <div style={tabBarStyle} data-testid="repo-explorer-tabs">
+      {TABS.map((t) => {
+        const Icon = t.icon;
+        const active = activeTab === t.id;
+        return (
+          <button
+            key={t.id}
+            onClick={() => selectTab(t.id)}
+            style={{
+              ...tabButtonStyle,
+              color: active ? "#cdd6f4" : "#6c7086",
+              borderBottom: active ? "2px solid #89b4fa" : "2px solid transparent",
+              background: active ? "#1e1e2e" : "transparent",
+            }}
+            data-testid={`repo-explorer-tab-${t.id}`}
+            data-active={active ? "true" : "false"}
+          >
+            <Icon style={{ width: 12, height: 12 }} />
+            {t.label}
+          </button>
+        );
+      })}
+      <div style={{ flex: 1 }} />
+      <button
+        onClick={() => setFontSize((s) => Math.max(8, s - 1))}
+        style={tabIconButtonStyle}
+        title="Decrease font size (Ctrl+-)"
+        data-testid="repo-explorer-font-dec"
+      >
+        <MinusIcon style={{ width: 12, height: 12 }} />
+      </button>
+      <span style={{ fontSize: 10, color: "#6c7086", minWidth: 20, textAlign: "center" }} data-testid="repo-explorer-font-size">{fontSize}</span>
+      <button
+        onClick={() => setFontSize((s) => Math.min(28, s + 1))}
+        style={tabIconButtonStyle}
+        title="Increase font size (Ctrl+=)"
+        data-testid="repo-explorer-font-inc"
+      >
+        <PlusIcon style={{ width: 12, height: 12 }} />
+      </button>
+    </div>
+  );
+
+  // ─── Ctrl+P Search Overlay (filename search, scoped to tile) ───
   const fileSearchOverlay = showFileSearch ? (
-    <div style={searchOverlayStyle} data-testid="file-search-overlay">
-      <div style={searchModalStyle}>
+    <div style={searchOverlayStyle} data-testid="file-search-overlay" onClick={closeFileSearch}>
+      <div style={searchModalStyle} onClick={(e) => e.stopPropagation()}>
         <input
           ref={fileSearchInputRef}
           type="text"
@@ -451,6 +637,17 @@ export default function ExplorerTile({ tileId, isFocused, rootDir, initialPath }
           onKeyDown={(e) => {
             e.stopPropagation();
             if (e.key === "Escape") closeFileSearch();
+            else if (e.key === "ArrowDown") {
+              e.preventDefault();
+              setFileSearchSelectedIndex((i) => Math.min(fileSearchResults.length - 1, i + 1));
+            } else if (e.key === "ArrowUp") {
+              e.preventDefault();
+              setFileSearchSelectedIndex((i) => Math.max(0, i - 1));
+            } else if (e.key === "Enter") {
+              e.preventDefault();
+              const p = fileSearchResults[fileSearchSelectedIndex];
+              if (p) { closeFileSearch(); openFile(p); }
+            }
           }}
           placeholder="Search files by name..."
           style={searchInputStyle}
@@ -463,13 +660,19 @@ export default function ExplorerTile({ tileId, isFocused, rootDir, initialPath }
           {!fileSearchLoading && fileSearchQuery && fileSearchResults.length === 0 && (
             <div style={{ padding: "8px 12px", color: "#585b70" }}>No files found</div>
           )}
-          {fileSearchResults.map((path) => (
+          {fileSearchResults.map((path, idx) => {
+            const selected = idx === fileSearchSelectedIndex;
+            return (
             <div
               key={path}
               onClick={() => { closeFileSearch(); openFile(path); }}
-              style={searchResultItemStyle}
-              onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "#313244"; }}
-              onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "transparent"; }}
+              onMouseEnter={() => setFileSearchSelectedIndex(idx)}
+              style={{
+                ...searchResultItemStyle,
+                background: selected ? "#313244" : "transparent",
+              }}
+              data-testid={`file-search-result-${idx}`}
+              data-selected={selected ? "true" : "false"}
             >
               <span style={{ width: 16, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
                 <FileIcon name={path.split("\\").pop() || path} isDir={false} />
@@ -478,19 +681,118 @@ export default function ExplorerTile({ tileId, isFocused, rootDir, initialPath }
                 {path}
               </span>
             </div>
-          ))}
+            );
+          })}
         </div>
       </div>
     </div>
   ) : null;
+
+  // ─── Ctrl+Shift+F Content Search Overlay (cross-file, scoped to tile) ───
+  const contentSearchOverlay = showContentSearch ? (
+    <div style={searchOverlayStyle} data-testid="content-search-overlay" onClick={closeContentSearch}>
+      <div style={searchModalStyle} onClick={(e) => e.stopPropagation()}>
+        <input
+          ref={contentSearchInputRef}
+          type="text"
+          value={contentSearchQuery}
+          onChange={(e) => setContentSearchQuery(e.target.value)}
+          onKeyDown={(e) => {
+            e.stopPropagation();
+            if (e.key === "Escape") closeContentSearch();
+            else if (e.key === "ArrowDown") {
+              e.preventDefault();
+              setContentSearchSelectedIndex((i) => Math.min(contentSearchResults.length - 1, i + 1));
+            } else if (e.key === "ArrowUp") {
+              e.preventDefault();
+              setContentSearchSelectedIndex((i) => Math.max(0, i - 1));
+            } else if (e.key === "Enter") {
+              e.preventDefault();
+              const m = contentSearchResults[contentSearchSelectedIndex];
+              if (m) {
+                const q = contentSearchQuery.trim();
+                closeContentSearch();
+                openFile(m.path).then(() => {
+                  // After file loads, trigger Monaco find with the query
+                  setTimeout(() => {
+                    const ed = editorRef.current as
+                      | { getAction?: (id: string) => { run?: () => void } | undefined; trigger?: (s: string, id: string, p: unknown) => void }
+                      | null;
+                    try {
+                      ed?.trigger?.("repo-explorer", "actions.find", null);
+                      // Best-effort: set find input value via clipboard-like API isn't directly exposed,
+                      // so users will just see the find widget open; they can paste the query.
+                      // (We keep query for them to retype if needed.)
+                      void q;
+                    } catch { /* ignore */ }
+                  }, 200);
+                }).catch(() => {});
+              }
+            }
+          }}
+          placeholder="Search in files (content)…"
+          style={searchInputStyle}
+          data-testid="content-search-input"
+        />
+        <div style={searchResultsStyle}>
+          {contentSearchLoading && (
+            <div style={{ padding: "8px 12px", color: "#585b70" }}>Searching…</div>
+          )}
+          {!contentSearchLoading && contentSearchQuery && contentSearchResults.length === 0 && (
+            <div style={{ padding: "8px 12px", color: "#585b70" }}>No matches</div>
+          )}
+          {contentSearchResults.map((m, idx) => {
+            const selected = idx === contentSearchSelectedIndex;
+            const fileName = m.path.split(/[\\/]/).pop() || m.path;
+            return (
+              <div
+                key={`${m.path}:${m.line_number}:${idx}`}
+                onClick={() => { closeContentSearch(); openFile(m.path); }}
+                onMouseEnter={() => setContentSearchSelectedIndex(idx)}
+                style={{
+                  ...searchResultItemStyle,
+                  flexDirection: "column",
+                  alignItems: "stretch",
+                  background: selected ? "#313244" : "transparent",
+                  gap: 2,
+                }}
+                data-testid={`content-search-result-${idx}`}
+                data-selected={selected ? "true" : "false"}
+              >
+                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <FileIcon name={fileName} isDir={false} />
+                  <span style={{ fontSize: 11, color: "#cdd6f4" }}>{fileName}</span>
+                  <span style={{ fontSize: 10, color: "#6c7086" }}>:{m.line_number}</span>
+                  <span style={{ flex: 1, fontSize: 10, color: "#585b70", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {m.path}
+                  </span>
+                </div>
+                <div style={{ fontSize: 11, color: "#a6adc8", fontFamily: "monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", paddingLeft: 22 }}>
+                  {m.line_text}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  ) : null;
+
+  const overlays = (
+    <>
+      {fileSearchOverlay}
+      {contentSearchOverlay}
+    </>
+  );
 
   // ─── View mode ───
   if (mode === "view") {
     if (fileLoading) {
       return (
         <div ref={containerRef} style={{ ...containerStyle, alignItems: "center", justifyContent: "center" }}>
+          {tabBar}
           <div style={{ color: "#585b70" }}>Loading...</div>
-          {fileSearchOverlay}
+          {overlays}
         </div>
       );
     }
@@ -498,12 +800,13 @@ export default function ExplorerTile({ tileId, isFocused, rootDir, initialPath }
     if (content === null && !fileLoading && !activeDiffMode) {
       return (
         <div ref={containerRef} style={{ ...containerStyle, alignItems: "center", justifyContent: "center" }}>
+          {tabBar}
           <div style={{ color: "#585b70" }}>No file loaded</div>
           <button onClick={goBackToBrowse} style={{ ...backButtonStyle, display: "flex", alignItems: "center", gap: 4 }}>
             <ArrowLeftIcon style={{ width: 14, height: 14 }} /> Back
           </button>
           {fileError && <div style={errorTextStyle}>{fileError}</div>}
-          {fileSearchOverlay}
+          {overlays}
         </div>
       );
     }
@@ -545,6 +848,14 @@ export default function ExplorerTile({ tileId, isFocused, rootDir, initialPath }
             {activeDiffMode && diffFilePath ? diffFilePath : filePath}
           </span>
         </div>
+        <button
+          onClick={triggerEditorFind}
+          style={{ ...toolbarButtonStyle, display: "flex", alignItems: "center", gap: 2 }}
+          title="Find in file (Ctrl+F)"
+          data-testid="find-in-file-btn"
+        >
+          <MagnifyingGlassIcon style={{ width: 14, height: 14 }} />
+        </button>
         {diffToolbar}
       </div>
     );
@@ -554,6 +865,7 @@ export default function ExplorerTile({ tileId, isFocused, rootDir, initialPath }
       const { original, modified } = parseDiffToSides(diffContent);
       return (
         <div ref={containerRef} style={containerStyle}>
+      {tabBar}
           {viewToolbar}
           <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
             {/* Diff file list panel */}
@@ -591,10 +903,11 @@ export default function ExplorerTile({ tileId, isFocused, rootDir, initialPath }
                 original={original}
                 modified={modified}
                 theme="vs-dark"
+                onMount={(editor) => { editorRef.current = editor.getModifiedEditor(); }}
                 options={{
                   readOnly: true,
                   minimap: { enabled: false },
-                  fontSize: 13,
+                  fontSize,
                   fontFamily: "'Cascadia Code', 'Consolas', monospace",
                   scrollBeyondLastLine: false,
                   renderSideBySide: false,
@@ -603,7 +916,7 @@ export default function ExplorerTile({ tileId, isFocused, rootDir, initialPath }
               />
             </div>
           </div>
-          {fileSearchOverlay}
+          {overlays}
         </div>
       );
     }
@@ -612,9 +925,10 @@ export default function ExplorerTile({ tileId, isFocused, rootDir, initialPath }
     if (isMarkdown(filePath)) {
       return (
         <div ref={containerRef} style={containerStyle}>
+      {tabBar}
           {viewToolbar}
           <MarkdownView style={markdownContainerStyle}>{content ?? ""}</MarkdownView>
-          {fileSearchOverlay}
+          {overlays}
         </div>
       );
     }
@@ -622,6 +936,7 @@ export default function ExplorerTile({ tileId, isFocused, rootDir, initialPath }
     // Code rendering (Monaco)
     return (
       <div ref={containerRef} style={containerStyle}>
+      {tabBar}
         {viewToolbar}
         <div style={{ flex: 1 }}>
           <Editor
@@ -629,10 +944,11 @@ export default function ExplorerTile({ tileId, isFocused, rootDir, initialPath }
             language={commitDiffHash ? "diff" : detectLanguage(filePath)}
             value={content ?? ""}
             theme="vs-dark"
+            onMount={(editor) => { editorRef.current = editor; }}
             options={{
               readOnly: true,
               minimap: { enabled: false },
-              fontSize: 13,
+              fontSize,
               fontFamily: "'Cascadia Code', 'Consolas', monospace",
               scrollBeyondLastLine: false,
               wordWrap: "on",
@@ -642,7 +958,7 @@ export default function ExplorerTile({ tileId, isFocused, rootDir, initialPath }
             }}
           />
         </div>
-        {fileSearchOverlay}
+        {overlays}
       </div>
     );
   }
@@ -651,6 +967,7 @@ export default function ExplorerTile({ tileId, isFocused, rootDir, initialPath }
   if (mode === "log") {
     return (
       <div ref={containerRef} style={containerStyle}>
+      {tabBar}
         <div style={toolbarStyle}>
           <div style={{ display: "flex", alignItems: "center", gap: 6, overflow: "hidden", flex: 1 }}>
             <button
@@ -704,7 +1021,7 @@ export default function ExplorerTile({ tileId, isFocused, rootDir, initialPath }
             </div>
           ))}
         </div>
-        {fileSearchOverlay}
+        {overlays}
       </div>
     );
   }
@@ -713,6 +1030,7 @@ export default function ExplorerTile({ tileId, isFocused, rootDir, initialPath }
   if (mode === "hooks") {
     return (
       <div ref={containerRef} style={containerStyle}>
+      {tabBar}
         <div style={toolbarStyle}>
           <div style={{ display: "flex", alignItems: "center", gap: 6, overflow: "hidden", flex: 1 }}>
             <button
@@ -769,7 +1087,7 @@ export default function ExplorerTile({ tileId, isFocused, rootDir, initialPath }
             </div>
           )}
         </div>
-        {fileSearchOverlay}
+        {overlays}
       </div>
     );
   }
@@ -821,6 +1139,7 @@ export default function ExplorerTile({ tileId, isFocused, rootDir, initialPath }
 
   return (
     <div ref={containerRef} style={containerStyle} data-testid="tile-explorer">
+      {tabBar}
       {/* Path bar */}
       <div style={toolbarStyle}>
         {activeDiffMode ? (
@@ -860,21 +1179,6 @@ export default function ExplorerTile({ tileId, isFocused, rootDir, initialPath }
                 {currentBranch}
               </span>
             )}
-            <button
-              onClick={openGitLog}
-              style={{ ...toolbarButtonStyle, display: "flex", alignItems: "center", gap: 2 }}
-              title="Git log"
-              data-testid="log-btn"
-            >
-              <ClockIcon style={{ width: 14, height: 14 }} /> Log
-            </button>
-            <button
-              onClick={openGitHooks}
-              style={{ ...toolbarButtonStyle, display: "flex", alignItems: "center", gap: 2 }}
-              title="Git hooks"
-            >
-              <BoltIcon style={{ width: 14, height: 14 }} /> Hooks
-            </button>
             <button onClick={() => loadDir(currentDir)} style={{ ...toolbarButtonStyle, display: "flex", alignItems: "center" }} title="Refresh">
               <ArrowPathIcon style={{ width: 14, height: 14 }} />
             </button>
@@ -890,7 +1194,8 @@ export default function ExplorerTile({ tileId, isFocused, rootDir, initialPath }
       </div>
 
       {/* Diff mode selector */}
-      {browseDiffToolbar}
+      {/* Diff sub-mode selector (only shown in Diff tab) */}
+      {activeTab === "diff" && browseDiffToolbar}
 
       {/* Search bar (only in normal browse, not diff mode) */}
       {!activeDiffMode && (
@@ -990,6 +1295,7 @@ export default function ExplorerTile({ tileId, isFocused, rootDir, initialPath }
                   cursor: "pointer",
                   color: entry.isDir ? "#89b4fa" : "#cdd6f4",
                   fontWeight: entry.isDir ? 500 : 400,
+                  fontSize,
                 }}
                 onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "#313244"; }}
                 onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "transparent"; }}
@@ -1005,7 +1311,7 @@ export default function ExplorerTile({ tileId, isFocused, rootDir, initialPath }
           </>
         )}
       </div>
-      {fileSearchOverlay}
+      {overlays}
     </div>
   );
 }
@@ -1021,6 +1327,39 @@ const containerStyle: React.CSSProperties = {
   color: "#cdd6f4",
   fontFamily: "monospace",
   fontSize: 12,
+  position: "relative",
+};
+
+const tabBarStyle: React.CSSProperties = {
+  display: "flex",
+  alignItems: "stretch",
+  gap: 0,
+  background: "#11111b",
+  borderBottom: "1px solid #313244",
+  flexShrink: 0,
+  padding: "0 4px",
+};
+
+const tabButtonStyle: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 4,
+  background: "transparent",
+  border: "none",
+  padding: "5px 10px",
+  cursor: "pointer",
+  fontSize: 11,
+  fontFamily: "inherit",
+};
+
+const tabIconButtonStyle: React.CSSProperties = {
+  background: "transparent",
+  border: "none",
+  color: "#6c7086",
+  cursor: "pointer",
+  padding: "0 4px",
+  display: "flex",
+  alignItems: "center",
 };
 
 const toolbarStyle: React.CSSProperties = {

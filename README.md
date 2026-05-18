@@ -11,6 +11,7 @@ Project-aware workstream manager with tiling compositor for Copilot CLI — mana
 - **Terminal tiles** — Full interactive terminals via xterm.js + portable-pty (ConPTY on Windows)
 - **Code viewer tiles** — Monaco Editor read-only with syntax highlighting for 20+ languages
 - **Doc viewer tiles** — VS Code-style markdown renderer with GFM support, syntax-highlighted code blocks, and inline **Mermaid diagrams** with zoom/pan
+- **Repo Explorer tile** — Multi-tab repo browser (Files / Diff / Log / Hooks) with alphabetical sort (folders first), Ctrl+P filename search, Ctrl+Shift+F cross-file content search (native Rust walker, no ripgrep dep), Monaco find-in-file (Ctrl+F), and per-tile font-size zoom (Ctrl+= / Ctrl+- / A-/A+ buttons). Search overlays are scoped inside the tile and support arrow-key + Enter navigation.
 - **Session persistence** — Workstreams, tile layouts, and terminal scrollback survive app restarts
 - **Keyboard-driven** — hjkl navigation, n/c/d for new tiles, Ctrl+1-9 for workstream switching
 - **Copilot CLI enrichment** — Reads session-store.db for context %, turn count, summaries
