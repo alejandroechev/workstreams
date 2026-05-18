@@ -1,5 +1,5 @@
 // @test-skip: Thin React wrapper; pure border logic in tile-border.ts is tested
-import { ReactNode, useState } from "react";
+import { ReactNode, createElement, useEffect, useMemo, useRef, useState } from "react";
 import TerminalTile from "../tiles/TerminalTile";
 import CopilotSessionTile from "../tiles/CopilotSessionTile";
 import ExplorerTile from "../tiles/ExplorerTile";
@@ -9,6 +9,7 @@ import type { Tile } from "../workstream/types";
 import type { CopilotSessionStats } from "../domain/types";
 import { invoke } from "@tauri-apps/api/core";
 import { computeTileBorder } from "./tile-border";
+import { resolveTileIcon } from "./tile-icons";
 
 interface TileProps {
   tile: Tile;
@@ -22,7 +23,7 @@ interface TileProps {
   onLinkSession?: (tileId: string) => void;
   onAutoLink?: (tileId: string, sessionId: string, summary?: string) => void;
   onRestart?: (tileId: string) => void;
-  onUpdateTileConfig?: (tileId: string, configJson: string) => void;
+  onUpdateTileConfig?: (tileId: string, configJson: string, title?: string) => void;
   workstreamDir?: string;
   workstreamId?: string;
   alreadyRunning?: boolean;
@@ -52,36 +53,6 @@ export default function TileWrapper({
 
   const isSessionTile = tile.tile_type === "copilot_session";
   const isTermLike = tile.tile_type === "terminal" || isSessionTile;
-
-  const statusColor = () => {
-    if (!isTermLike) return "#89b4fa";
-    if (isSessionTile) {
-      const activity = sessionStats?.activity_status;
-      if (activity) {
-        switch (activity) {
-          case "thinking": return "#a6e3a1";     // green — thinking
-          case "tool_use": return "#89b4fa";      // blue — running tool
-          case "responding": return "#a6e3a1";    // green — generating response
-          case "background_task": return "#cba6f7"; // purple — sub-agent
-          case "idle": return "#f9e2af";          // yellow — waiting for input
-          case "offline": return "#6c7086";       // grey — process not running
-        }
-      }
-      switch (termStatus) {
-        case "running": return "#a6e3a1";
-        case "starting": case "resuming": return "#f9e2af";
-        case "exited": return "#6c7086";
-        default: return "#a6e3a1";
-      }
-    }
-    switch (termStatus) {
-      case "running": return "#a6e3a1";
-      case "spawning": return "#f9e2af";
-      case "exited": return "#6c7086";
-      case "failed": return "#f38ba8";
-      default: return "#a6e3a1";
-    }
-  };
 
   const statusLabel = () => {
     if (isSessionTile) {
@@ -199,14 +170,36 @@ export default function TileWrapper({
       content = <div>Unknown tile type: {tile.tile_type}</div>;
   }
 
-  // Activity is surfaced via the in-header status badge (pulsing dot + label),
-  // NOT via the tile border. Keep the per-tile working flag for the dot only.
-  const isWorking = isSessionTile && (
-    sessionStats?.activity_status === "thinking" ||
-    sessionStats?.activity_status === "tool_use" ||
-    sessionStats?.activity_status === "responding" ||
-    sessionStats?.activity_status === "background_task"
-  );
+  // Activity is surfaced via the status bar; no in-header dot anymore.
+
+  // Tile-type icon (replaces the old status dot). The icon key can be overridden
+  // via `config.icon`; otherwise defaults based on tile_type.
+  const tileConfig = useMemo(() => {
+    try { return JSON.parse(tile.config_json || "{}"); } catch { return {}; }
+  }, [tile.config_json]);
+  const TileIcon = useMemo(() => resolveTileIcon(tile.tile_type, tileConfig.icon), [tile.tile_type, tileConfig.icon]);
+
+  // Inline title editing
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [titleDraft, setTitleDraft] = useState(tile.title || "");
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  useEffect(() => {
+    if (editingTitle && inputRef.current) {
+      inputRef.current.focus();
+      inputRef.current.select();
+    }
+  }, [editingTitle]);
+  const commitTitle = () => {
+    const next = titleDraft.trim();
+    if (next && next !== (tile.title || "")) {
+      onUpdateTileConfig?.(tile.id, tile.config_json || "{}", next);
+    }
+    setEditingTitle(false);
+  };
+  const cancelTitle = () => {
+    setTitleDraft(tile.title || "");
+    setEditingTitle(false);
+  };
 
   return (
     <div
@@ -242,20 +235,47 @@ export default function TileWrapper({
           flexShrink: 0,
         }}
       >
-        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          <span
-            className={isWorking ? "status-dot-working" : undefined}
-            style={{
-              width: 8,
-              height: 8,
-              borderRadius: "50%",
-              background: statusColor(),
-              display: "inline-block",
-            }}
-          />
-          <span style={{ color: "#cdd6f4", fontWeight: 500 }}>
-            {tile.title || tile.tile_type}
-          </span>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0, flex: 1 }}>
+          {createElement(TileIcon, { style: { width: 14, height: 14, color: "#89b4fa", flexShrink: 0 } })}
+          {editingTitle ? (
+            <input
+              ref={inputRef}
+              value={titleDraft}
+              onChange={(e) => setTitleDraft(e.target.value)}
+              onBlur={commitTitle}
+              onKeyDown={(e) => {
+                e.stopPropagation();
+                if (e.key === "Enter") commitTitle();
+                else if (e.key === "Escape") cancelTitle();
+              }}
+              onClick={(e) => e.stopPropagation()}
+              data-testid={`tile-title-input-${tile.id}`}
+              style={{
+                background: "#1e1e2e",
+                border: "1px solid #45475a",
+                borderRadius: 3,
+                color: "#cdd6f4",
+                fontSize: 12,
+                fontWeight: 500,
+                padding: "1px 4px",
+                outline: "none",
+                minWidth: 80,
+                maxWidth: 240,
+              }}
+            />
+          ) : (
+            <span
+              style={{ color: "#cdd6f4", fontWeight: 500, cursor: "text" }}
+              title="Double-click to rename"
+              onDoubleClick={(e) => {
+                e.stopPropagation();
+                setTitleDraft(tile.title || "");
+                setEditingTitle(true);
+              }}
+            >
+              {tile.title || tile.tile_type}
+            </span>
+          )}
           <span style={{ color: "#585b70", fontSize: 10 }}>
             {statusLabel()}
           </span>

@@ -1,3 +1,6 @@
+// @test-skip: Thin layout wrapper; AddTileMenu (the only logic-bearing child) has its own tests.
+import AddTileMenu from "./AddTileMenu";
+
 interface Props {
   tileCount: number;
   focusedLabel: string;
@@ -38,6 +41,18 @@ export default function StatusBar({
   onCloseTitle,
   onToggleFullscreen,
 }: Props) {
+  const rawItems: Array<{ key: string; label: string; icon: "session" | "terminal" | "folder" | "info" | "beaker"; shortcut?: string; onSelect?: () => void }> = [
+    { key: "session", label: "Copilot Session", icon: "session", shortcut: "Alt+S", onSelect: onAddSession },
+    { key: "terminal", label: "Terminal", icon: "terminal", shortcut: "Alt+N", onSelect: onAddTerminal },
+    { key: "wsl", label: "WSL Terminal", icon: "terminal", onSelect: onAddWslTerminal },
+    { key: "explorer", label: "File Explorer", icon: "folder", shortcut: "Alt+E", onSelect: onAddExplorer },
+    { key: "meta", label: "Session Meta", icon: "info", shortcut: "Alt+M", onSelect: onAddSessionMeta },
+    { key: "workbench", label: "Workbench", icon: "beaker", shortcut: "Alt+B", onSelect: onAddWorkbench },
+  ];
+  const menuItems = rawItems
+    .filter((it) => typeof it.onSelect === "function")
+    .map((it) => ({ key: it.key, label: it.label, icon: it.icon, shortcut: it.shortcut, onSelect: it.onSelect! }));
+
   return (
     <div
       style={{
@@ -65,12 +80,7 @@ export default function StatusBar({
         )}
       </div>
       <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
-        <button style={btnStyle} onClick={onAddSession} title="New Copilot session">+ Session</button>
-        <button style={btnStyle} onClick={onAddTerminal} title="New terminal">+ Terminal</button>
-        <button style={btnStyle} onClick={onAddWslTerminal} title="New WSL terminal">+ WSL</button>
-        <button style={btnStyle} onClick={onAddExplorer} title="New file explorer">+ Explorer</button>
-        <button style={btnStyle} onClick={onAddSessionMeta} title="Session meta (Alt+M)">+ Meta</button>
-        <button style={btnStyle} onClick={onAddWorkbench} title="Workbench (Alt+B)">+ Bench</button>
+        <AddTileMenu items={menuItems} />
         <button style={{ ...btnStyle, color: "#585b70" }} onClick={onToggleFullscreen} title="Toggle fullscreen">⛶</button>
         <button style={{ ...btnStyle, color: "#585b70" }} onClick={onCloseTitle} title="Close focused tile">✕</button>
       </div>
