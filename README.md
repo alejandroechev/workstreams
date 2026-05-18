@@ -7,7 +7,7 @@ Project-aware workstream manager with tiling compositor for Copilot CLI — mana
 ## Features
 
 - **Workstream management** — Create, switch, and persist project workstreams with git repo detection
-- **Adaptive tiling** — Tiles auto-arrange: 1=fullscreen, 2=split, 3=focus+stack, 4=grid, 5+=focus+grid. The fullscreen tile has a distinct yellow border to make the mode obvious at a glance.
+- **Adaptive tiling** — Tiles auto-arrange: 1=fullscreen, 2=split, 3=focus+stack, 4=grid, 5+=focus+grid. The fullscreen tile has a distinct yellow border to make the mode obvious at a glance. Each tile shows a Heroicon in its header (per-type default, override via config) and a double-click on the title renames it inline.
 - **Terminal tiles** — Full interactive terminals via xterm.js + portable-pty (ConPTY on Windows)
 - **Code viewer tiles** — Monaco Editor read-only with syntax highlighting for 20+ languages
 - **Doc viewer tiles** — VS Code-style markdown renderer with GFM support, syntax-highlighted code blocks, and inline **Mermaid diagrams** with zoom/pan
