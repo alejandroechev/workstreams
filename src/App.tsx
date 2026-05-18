@@ -118,7 +118,11 @@ export default function App() {
             if (pinned) {
               try {
                 const cfg = JSON.parse(pinned.config_json || "{}");
-                map[w.id] = cfg.session_summary || cfg.session_name || (cfg.copilot_session_id ? String(cfg.copilot_session_id).slice(0, 8) : undefined);
+                // Only surface a session label when we actually have a linked
+                // session id; otherwise the sidebar should show "not linked".
+                if (cfg.copilot_session_id) {
+                  map[w.id] = cfg.session_summary || cfg.session_name || String(cfg.copilot_session_id).slice(0, 8);
+                }
               } catch { /* ignore */ }
             }
           } catch { /* ignore */ }
@@ -172,10 +176,8 @@ export default function App() {
             const config = JSON.parse(tile.config_json || "{}");
             const cwd = config.cwd || "C:\\";
             spawnedPtys.current.add(tile.id);
-            const sessionId = config.copilot_session_id || config.resume_by_id;
-            const agencyArgs = ["copilot", "--yolo"];
-            if (sessionId) agencyArgs.push(`--resume=${sessionId}`);
-            backend.spawnTerminal(tile.id, cwd, "agency.exe", agencyArgs, 30, 120).catch(() => {
+            const sessionId = config.copilot_session_id || config.resume_by_id || null;
+            backend.spawnCopilotSession(tile.id, cwd, sessionId, 30, 120).catch(() => {
               spawnedPtys.current.delete(tile.id);
             });
           }
@@ -208,23 +210,35 @@ export default function App() {
     setShowProjectCreate(false);
   }, [backend]);
 
-  const handleCreateWorkstream = useCallback(async (
-    name: string,
-    directory: string,
-    opts: { projectId?: string; workstreamType: string; worktreeBranch?: string; sessionChoice?: "new" | "existing"; baseBranch?: string },
-  ) => {
+  // When the user submits the WS create form with sessionChoice="existing",
+  // we stash the payload here, open the picker first, and only call
+  // createWorkstreamFlow after the user actually picks (or cancels).
+  type PendingCreate = {
+    name: string;
+    directory: string;
+    projectId?: string;
+    workstreamType: "import_worktree" | "base_repo" | "worktree";
+    worktreeBranch?: string;
+    baseBranch?: string;
+  };
+  const [pendingCreate, setPendingCreate] = useState<PendingCreate | null>(null);
+
+  const doCreateWorkstream = useCallback(async (
+    payload: PendingCreate,
+    presetSessionId: string | null,
+  ): Promise<{ ws: Workstream; tile: Tile; effectiveDirectory: string } | null> => {
     let result;
     try {
       result = await createWorkstreamFlow(
         backend,
         {
-          name,
-          directory,
-          projectId: opts.projectId,
-          workstreamType: opts.workstreamType as "import_worktree" | "base_repo" | "worktree",
-          worktreeBranch: opts.worktreeBranch,
-          baseBranch: opts.baseBranch,
-          sessionChoice: opts.sessionChoice ?? "new",
+          name: payload.name,
+          directory: payload.directory,
+          projectId: payload.projectId,
+          workstreamType: payload.workstreamType,
+          worktreeBranch: payload.worktreeBranch,
+          baseBranch: payload.baseBranch,
+          sessionChoice: presetSessionId ? "existing" : "new",
         },
         (projectDirectory, branchName, baseBranch) =>
           invoke<string>("create_worktree", { projectDirectory, branchName, baseBranch }),
@@ -232,12 +246,25 @@ export default function App() {
     } catch (e) {
       const msg = typeof e === "string" ? e : (e as Error)?.message || String(e);
       alert(`Failed to create workstream: ${msg}`);
-      return;
+      return null;
     }
 
     const { workstream: ws, pinnedTile: tile, effectiveDirectory } = result;
 
-    // Detect git info and update
+    // If a session was pre-selected, bake its id into the tile config now so
+    // the tile mounts already linked and the poller takes the fast path.
+    if (presetSessionId) {
+      try {
+        const cfg = JSON.parse(tile.config_json || "{}");
+        cfg.copilot_session_id = presetSessionId;
+        cfg.resume_by_id = presetSessionId;
+        cfg.is_resumed = true;
+        const newConfig = JSON.stringify(cfg);
+        tile.config_json = newConfig;
+        await backend.updateTileConfig(tile.id, newConfig);
+      } catch { /* ignore */ }
+    }
+
     try {
       const { repo, branch } = await backend.detectGitInfo(effectiveDirectory);
       if (repo || branch) {
@@ -249,22 +276,45 @@ export default function App() {
 
     setWorkstreams((prev) => [ws, ...prev]);
     setActiveWsId(ws.id);
-    setShowWsCreate({ show: false });
-
     setTiles([tile]);
     setTileOrder([tile.id]);
-    setSessionInfoByWs((prev) => ({ ...prev, [ws.id]: name }));
+    return { ws, tile, effectiveDirectory };
+  }, [backend]);
+
+  const handleCreateWorkstream = useCallback(async (
+    name: string,
+    directory: string,
+    opts: { projectId?: string; workstreamType: string; worktreeBranch?: string; sessionChoice?: "new" | "existing"; baseBranch?: string },
+  ) => {
+    const payload: PendingCreate = {
+      name,
+      directory,
+      projectId: opts.projectId,
+      workstreamType: opts.workstreamType as PendingCreate["workstreamType"],
+      worktreeBranch: opts.worktreeBranch,
+      baseBranch: opts.baseBranch,
+    };
 
     if (opts.sessionChoice === "existing") {
-      setLinkingTileId(tile.id);
+      // Defer WS creation until the user actually picks a session. This
+      // avoids registering a no-session tile with the poller and prevents
+      // the wrong-link race.
+      setPendingCreate(payload);
+      setShowWsCreate({ show: false });
       setShowSessionPicker(true);
-    } else {
-      spawnedPtys.current.add(tile.id);
-      backend.spawnTerminal(tile.id, effectiveDirectory, "agency.exe", ["copilot", "--yolo"], 30, 120).catch(() => {
-        spawnedPtys.current.delete(tile.id);
-      });
+      return;
     }
-  }, [backend]);
+
+    setShowWsCreate({ show: false });
+    const created = await doCreateWorkstream(payload, null);
+    if (!created) return;
+
+    // New session — spawn agency.exe and register PID correlation with the poller.
+    spawnedPtys.current.add(created.tile.id);
+    backend.spawnCopilotSession(created.tile.id, created.effectiveDirectory, null, 30, 120).catch(() => {
+      spawnedPtys.current.delete(created.tile.id);
+    });
+  }, [backend, doCreateWorkstream]);
 
   const handleRenameWorkstream = useCallback(async (id: string, newName: string) => {
     await backend.updateWorkstream(id, { name: newName });
@@ -372,9 +422,7 @@ export default function App() {
 
     // Spawn agency.exe with --resume
     spawnedPtys.current.add(tile.id);
-    const agencyArgs = ["copilot", "--yolo"];
-    if (sessionId) agencyArgs.push(`--resume=${sessionId}`);
-    backend.spawnTerminal(tile.id, newDir, "agency.exe", agencyArgs, 30, 120).catch(() => {
+    backend.spawnCopilotSession(tile.id, newDir, sessionId, 30, 120).catch(() => {
       spawnedPtys.current.delete(tile.id);
     });
   }, [workstreams, backend]);
@@ -436,7 +484,7 @@ export default function App() {
     } else if (tileType === "copilot_session") {
       spawnedPtys.current.add(tile.id);
       // Spawn agency.exe directly — new session, no resume
-      await backend.spawnTerminal(tile.id, cwd, "agency.exe", ["copilot", "--yolo"], 30, 120);
+      await backend.spawnCopilotSession(tile.id, cwd, null, 30, 120);
     }
 
     setFocusedIndex(tileOrder.length);
@@ -499,7 +547,7 @@ export default function App() {
 
     spawnedPtys.current.add(tile.id);
     // Spawn agency.exe directly with --resume
-    await backend.spawnTerminal(tile.id, cwd, "agency.exe", ["copilot", "--yolo", `--resume=${session.session_id}`], 30, 120);
+    await backend.spawnCopilotSession(tile.id, cwd, session.session_id, 30, 120);
     setFocusedIndex(tileOrder.length);
   }, [activeWsId, workstreams, tileOrder.length, backend]);
 
@@ -727,10 +775,8 @@ export default function App() {
                     const cwd = cfg.cwd || workstreams.find((w) => w.id === activeWsId)?.directory || "C:\\";
                     await backend.closeTerminal(tileId).catch(() => {});
                     spawnedPtys.current.add(tileId);
-                    const agencyArgs = ["copilot", "--yolo"];
-                    const sessionId = cfg.copilot_session_id || cfg.resume_by_id;
-                    if (sessionId) agencyArgs.push(`--resume=${sessionId}`);
-                    await backend.spawnTerminal(tileId, cwd, "agency.exe", agencyArgs, 30, 120);
+                    const sessionId = cfg.copilot_session_id || cfg.resume_by_id || null;
+                    await backend.spawnCopilotSession(tileId, cwd, sessionId, 30, 120);
                   } : undefined}
                   onUpdateTileConfig={isActive ? async (tileId, configJson) => {
                     await backend.updateTileConfig(tileId, configJson);
@@ -778,8 +824,26 @@ export default function App() {
       {/* Session picker modal */}
       {showSessionPicker && (
         <SessionPicker
-          onSelect={(session) => {
+          onSelect={async (session) => {
             setShowSessionPicker(false);
+            // Case A: user started "new WS + existing session" — create the
+            // WS now with the picked session id baked into the tile config.
+            if (pendingCreate) {
+              const payload = pendingCreate;
+              setPendingCreate(null);
+              const created = await doCreateWorkstream(payload, session.session_id);
+              if (!created) return;
+              // Update sidebar info now that we have a real session.
+              setSessionInfoByWs((prev) => ({
+                ...prev,
+                [created.ws.id]: session.summary || session.session_id.slice(0, 8),
+              }));
+              spawnedPtys.current.add(created.tile.id);
+              backend
+                .spawnCopilotSession(created.tile.id, created.effectiveDirectory, session.session_id, 30, 120)
+                .catch(() => spawnedPtys.current.delete(created.tile.id));
+              return;
+            }
             if (linkingTileId) {
               // Link session to existing tile — update config and persist to DB
               const tile = tiles.find((t) => t.id === linkingTileId);
@@ -791,21 +855,17 @@ export default function App() {
                 cfg.session_name = session.summary || session.session_id.slice(0, 8);
                 const newConfig = JSON.stringify(cfg);
                 const newTitle = session.summary || tile.title;
-                // Persist to DB
                 backend.updateTileConfig(linkingTileId, newConfig, newTitle || undefined);
-                // Update local state
                 setTiles((prev) => prev.map((t) =>
                   t.id === linkingTileId ? { ...t, config_json: newConfig, title: newTitle } : t
                 ));
-                // Refresh sidebar info if this was the pinned tile.
                 if (cfg.pinned && activeWsId) {
                   setSessionInfoByWs((prev) => ({ ...prev, [activeWsId]: session.summary || session.session_id.slice(0, 8) }));
                 }
-                // Spawn agency.exe with --resume so the picked session loads.
                 if (!spawnedPtys.current.has(linkingTileId)) {
                   const cwd = cfg.cwd || workstreams.find((w) => w.id === activeWsId)?.directory || "C:\\";
                   spawnedPtys.current.add(linkingTileId);
-                  backend.spawnTerminal(linkingTileId, cwd, "agency.exe", ["copilot", "--yolo", `--resume=${session.session_id}`], 30, 120).catch(() => {
+                  backend.spawnCopilotSession(linkingTileId, cwd, session.session_id, 30, 120).catch(() => {
                     spawnedPtys.current.delete(linkingTileId);
                   });
                 }
@@ -817,10 +877,34 @@ export default function App() {
           }}
           onCreateNew={() => {
             setShowSessionPicker(false);
+            // Case A: user wanted "existing session" but changes mind →
+            // create the WS now with a new session instead.
+            if (pendingCreate) {
+              const payload = pendingCreate;
+              setPendingCreate(null);
+              void (async () => {
+                const created = await doCreateWorkstream(payload, null);
+                if (!created) return;
+                spawnedPtys.current.add(created.tile.id);
+                backend
+                  .spawnCopilotSession(created.tile.id, created.effectiveDirectory, null, 30, 120)
+                  .catch(() => spawnedPtys.current.delete(created.tile.id));
+              })();
+              return;
+            }
             setLinkingTileId(null);
             addTile("copilot_session");
           }}
-          onCancel={() => { setShowSessionPicker(false); setLinkingTileId(null); }}
+          onCancel={() => {
+            setShowSessionPicker(false);
+            setLinkingTileId(null);
+            // If we were mid-create, reopen the create form so the user can
+            // adjust their choice instead of losing the entered data.
+            if (pendingCreate) {
+              setShowWsCreate({ show: true, projectId: pendingCreate.projectId });
+              setPendingCreate(null);
+            }
+          }}
         />
       )}
 

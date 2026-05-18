@@ -95,6 +95,17 @@ export class TauriBackend implements Backend {
     });
   }
 
+  async spawnCopilotSession(tileId: string, cwd: string, resumeSessionId?: string | null, rows?: number, cols?: number): Promise<number | null> {
+    const pid = await invoke<number | null>("spawn_copilot_session", {
+      tileId,
+      cwd,
+      resumeSessionId: resumeSessionId ?? null,
+      rows: rows ?? 30,
+      cols: cols ?? 120,
+    });
+    return pid ?? null;
+  }
+
   async writeToTerminal(tileId: string, data: string): Promise<void> {
     await invoke("write_to_pty", { tileId, data });
   }

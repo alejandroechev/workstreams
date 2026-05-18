@@ -1,8 +1,9 @@
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::io::{BufRead, Seek, SeekFrom};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -28,14 +29,28 @@ struct WatchEntry {
     workstream_id: Option<String>,
 }
 
+/// Pending correlation: a tile we spawned agency.exe for but haven't yet
+/// identified the session_id of. We match by scanning session-state dirs
+/// for an `inuse.<pid>.lock` file matching this PID.
+#[derive(Debug, Clone)]
+struct PendingCorrelation {
+    pid: u32,
+    cwd: String,
+    spawned_at: Instant,
+}
+
+const PENDING_CORRELATION_TIMEOUT: Duration = Duration::from_secs(60);
+
 pub struct SessionPoller {
     watched: Mutex<Vec<WatchEntry>>,
+    pending: Mutex<HashMap<String, PendingCorrelation>>,
 }
 
 impl SessionPoller {
     pub fn new() -> Self {
         Self {
             watched: Mutex::new(Vec::new()),
+            pending: Mutex::new(HashMap::new()),
         }
     }
 
@@ -66,11 +81,57 @@ impl SessionPoller {
             session_id: Some(session_id.to_string()),
             workstream_id: workstream_id.map(|s| s.to_string()),
         });
+        // If we promoted from pending to known, drop the pending entry.
+        self.pending.lock().unwrap().remove(tile_id);
     }
 
     pub fn unwatch(&self, tile_id: &str) {
         let mut watched = self.watched.lock().unwrap();
         watched.retain(|e| e.tile_id != tile_id);
+        self.pending.lock().unwrap().remove(tile_id);
+    }
+
+    /// Register that we just spawned a process for this tile and are waiting
+    /// to learn which `~/.copilot/session-state/<id>` directory it owns.
+    /// The PID is matched against `inuse.<pid>.lock` files emitted by agency.
+    pub fn register_pending(&self, tile_id: &str, pid: u32, cwd: &str) {
+        let mut pending = self.pending.lock().unwrap();
+        pending.insert(
+            tile_id.to_string(),
+            PendingCorrelation {
+                pid,
+                cwd: cwd.to_string(),
+                spawned_at: Instant::now(),
+            },
+        );
+    }
+
+    pub fn forget_pending(&self, tile_id: &str) {
+        self.pending.lock().unwrap().remove(tile_id);
+    }
+
+    fn get_pending(&self, tile_id: &str) -> Option<PendingCorrelation> {
+        self.pending.lock().unwrap().get(tile_id).cloned()
+    }
+
+    /// Sweep timed-out pending entries.
+    fn prune_pending(&self) -> Vec<String> {
+        let mut pending = self.pending.lock().unwrap();
+        let now = Instant::now();
+        let timed_out: Vec<String> = pending
+            .iter()
+            .filter_map(|(k, v)| {
+                if now.duration_since(v.spawned_at) > PENDING_CORRELATION_TIMEOUT {
+                    Some(k.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        for k in &timed_out {
+            pending.remove(k);
+        }
+        timed_out
     }
 
     fn get_watched(&self) -> Vec<(String, String, Option<String>, Option<String>)> {
@@ -123,6 +184,10 @@ pub fn start_poller(app: AppHandle, poller: Arc<SessionPoller>) {
             let mut ws_statuses: std::collections::HashMap<String, String> =
                 std::collections::HashMap::new();
 
+            // Sweep timed-out pending correlations and emit a no-session
+            // event for any of them that are still being watched.
+            let timed_out = poller.prune_pending();
+
             for (tile_id, session_name, session_id_opt, ws_id_opt) in &watched {
                 // Try events.jsonl approach first if we have a session_id
                 let stats = if let Some(sid) = session_id_opt {
@@ -152,14 +217,52 @@ pub fn start_poller(app: AppHandle, poller: Arc<SessionPoller>) {
                             process_alive,
                         })
                     } else {
-                        // Fall back to DB-only approach
-                        conn.as_ref()
-                            .and_then(|c| query_session_stats_legacy(c, session_name))
+                        // Session dir vanished — report no-session.
+                        Some(no_session_stats())
+                    }
+                } else if let Some(pending) = poller.get_pending(tile_id) {
+                    // We have a pending correlation: try to find the session
+                    // dir owned by our PID. On match, promote the tile to a
+                    // known session_id; otherwise emit no-session.
+                    match find_session_by_pid(&home, pending.pid) {
+                        Some(found_sid) => {
+                            poller.forget_pending(tile_id);
+                            // Promote: update the watch entry so subsequent
+                            // polls take the fast path.
+                            poller.watch_with_id(
+                                tile_id,
+                                session_name,
+                                &found_sid,
+                                ws_id_opt.as_deref(),
+                            );
+                            let session_dir =
+                                home.join(".copilot").join("session-state").join(&found_sid);
+                            let events_status = read_events_status(&session_dir);
+                            let db_meta =
+                                conn.as_ref().and_then(|c| query_session_meta(c, &found_sid));
+                            Some(SessionStats {
+                                session_id: found_sid.clone(),
+                                session_name: Some(session_name.clone()),
+                                cwd: db_meta
+                                    .as_ref()
+                                    .and_then(|m| m.cwd.clone())
+                                    .or_else(|| Some(pending.cwd.clone())),
+                                turn_count: db_meta.as_ref().map(|m| m.turn_count).unwrap_or(0),
+                                summary: db_meta.as_ref().and_then(|m| m.summary.clone()),
+                                created_at: db_meta.as_ref().and_then(|m| m.created_at.clone()),
+                                updated_at: db_meta.as_ref().and_then(|m| m.updated_at.clone()),
+                                last_turn_at: events_status.last_event_at,
+                                activity_status: events_status.status,
+                                current_tool: events_status.current_tool,
+                                process_alive: true,
+                            })
+                        }
+                        None => Some(no_session_stats_pending(&pending.cwd)),
                     }
                 } else {
-                    // Legacy: no session_id, use DB pattern matching
-                    conn.as_ref()
-                        .and_then(|c| query_session_stats_legacy(c, session_name))
+                    // No session_id and no pending correlation. Report no-session
+                    // so the UI can prompt the user to link manually.
+                    Some(no_session_stats())
                 };
 
                 if let Some(s) = &stats {
@@ -174,6 +277,11 @@ pub fn start_poller(app: AppHandle, poller: Arc<SessionPoller>) {
                         }
                     }
                 }
+            }
+
+            // Log any timed-out pending entries so future debugging is easier.
+            for t in &timed_out {
+                eprintln!("[poller] pending correlation timed out for tile_id={t}");
             }
 
             // Emit workstream-level status
@@ -427,6 +535,47 @@ fn is_pid_alive(pid: u32) -> bool {
     unsafe { libc::kill(pid as i32, 0) == 0 }
 }
 
+/// Scan `~/.copilot/session-state/*/` for a directory containing
+/// `inuse.<pid>.lock` matching the given PID. Returns the session id (dir name).
+fn find_session_by_pid(home: &std::path::Path, pid: u32) -> Option<String> {
+    let needle = format!("inuse.{pid}.lock");
+    let root = home.join(".copilot").join("session-state");
+    let entries = std::fs::read_dir(&root).ok()?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        if path.join(&needle).exists() {
+            return path.file_name().map(|n| n.to_string_lossy().to_string());
+        }
+    }
+    None
+}
+
+fn no_session_stats() -> SessionStats {
+    SessionStats {
+        session_id: String::new(),
+        session_name: None,
+        cwd: None,
+        turn_count: 0,
+        summary: None,
+        created_at: None,
+        updated_at: None,
+        last_turn_at: None,
+        activity_status: "no-session".to_string(),
+        current_tool: None,
+        process_alive: false,
+    }
+}
+
+fn no_session_stats_pending(cwd: &str) -> SessionStats {
+    let mut s = no_session_stats();
+    s.cwd = Some(cwd.to_string());
+    s.activity_status = "starting".to_string();
+    s
+}
+
 // ── Session metadata from session-store.db ─────────────────────────────
 
 struct SessionMeta {
@@ -465,76 +614,6 @@ fn query_session_meta(conn: &Connection, session_id: &str) -> Option<SessionMeta
     Some(SessionMeta {
         turn_count,
         ..result
-    })
-}
-
-/// Legacy: find session by name pattern (for tiles without session_id)
-fn query_session_stats_legacy(conn: &Connection, session_name: &str) -> Option<SessionStats> {
-    let mut stmt = conn
-        .prepare(
-            "SELECT id, cwd, summary, created_at, updated_at
-             FROM sessions
-             WHERE summary LIKE ?1 OR cwd LIKE ?2
-             ORDER BY updated_at DESC
-             LIMIT 1",
-        )
-        .ok()?;
-
-    let name_pattern = format!("%{session_name}%");
-    let result = stmt
-        .query_row([&name_pattern, &name_pattern], |row| {
-            let session_id: String = row.get(0)?;
-            let cwd: Option<String> = row.get(1)?;
-            let summary: Option<String> = row.get(2)?;
-            let created_at: Option<String> = row.get(3)?;
-            let updated_at: Option<String> = row.get(4)?;
-            Ok((session_id, cwd, summary, created_at, updated_at))
-        })
-        .ok()?;
-
-    let turn_count: i32 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM turns WHERE session_id = ?1",
-            [&result.0],
-            |row| row.get(0),
-        )
-        .unwrap_or(0);
-
-    let last_turn_at: Option<String> = conn
-        .query_row(
-            "SELECT timestamp FROM turns WHERE session_id = ?1 ORDER BY turn_index DESC LIMIT 1",
-            [&result.0],
-            |row| row.get(0),
-        )
-        .ok();
-
-    // Check events.jsonl for this session too
-    let home = dirs::home_dir()?;
-    let session_dir = home.join(".copilot").join("session-state").join(&result.0);
-    let events_status = if session_dir.exists() {
-        let es = read_events_status(&session_dir);
-        let alive = check_process_alive(&session_dir);
-        if !alive {
-            "offline".to_string()
-        } else {
-            es.status
-        }
-    } else {
-        "idle".to_string()
-    };
-
-    Some(SessionStats {
-        session_id: result.0,
-        session_name: Some(session_name.to_string()),
-        cwd: result.1,
-        turn_count,
-        summary: result.2,
-        created_at: result.3,
-        updated_at: result.4,
-        last_turn_at,
-        activity_status: events_status,
-        current_tool: None,
-        process_alive: true,
     })
 }
 
@@ -773,5 +852,97 @@ mod tests {
         let watched = poller.get_watched();
         assert_eq!(watched.len(), 1);
         assert_eq!(watched[0].1, "session2");
+    }
+
+    #[test]
+    fn find_session_by_pid_returns_matching_dir() {
+        let tmp = std::env::temp_dir().join(format!("ws_corr_match_{}", std::process::id()));
+        std::fs::create_dir_all(tmp.join(".copilot").join("session-state").join("sid-1")).ok();
+        std::fs::create_dir_all(tmp.join(".copilot").join("session-state").join("sid-2")).ok();
+        std::fs::write(
+            tmp.join(".copilot")
+                .join("session-state")
+                .join("sid-2")
+                .join("inuse.4242.lock"),
+            "",
+        )
+        .ok();
+        let found = find_session_by_pid(&tmp, 4242);
+        assert_eq!(found.as_deref(), Some("sid-2"));
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn find_session_by_pid_returns_none_when_no_match() {
+        let tmp = std::env::temp_dir().join(format!("ws_corr_none_{}", std::process::id()));
+        std::fs::create_dir_all(tmp.join(".copilot").join("session-state").join("sid-a")).ok();
+        std::fs::write(
+            tmp.join(".copilot")
+                .join("session-state")
+                .join("sid-a")
+                .join("inuse.1.lock"),
+            "",
+        )
+        .ok();
+        assert_eq!(find_session_by_pid(&tmp, 9999), None);
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn session_poller_register_and_forget_pending() {
+        let poller = SessionPoller::new();
+        poller.register_pending("tile-x", 1234, "C:\\repo");
+        assert!(poller.get_pending("tile-x").is_some());
+        poller.forget_pending("tile-x");
+        assert!(poller.get_pending("tile-x").is_none());
+    }
+
+    #[test]
+    fn session_poller_watch_with_id_drops_pending() {
+        let poller = SessionPoller::new();
+        poller.register_pending("tile-y", 1234, "C:\\repo");
+        assert!(poller.get_pending("tile-y").is_some());
+        poller.watch_with_id("tile-y", "n", "sid-new", None);
+        assert!(poller.get_pending("tile-y").is_none());
+    }
+
+    #[test]
+    fn session_poller_unwatch_clears_pending_too() {
+        let poller = SessionPoller::new();
+        poller.register_pending("tile-z", 1234, "C:\\repo");
+        poller.unwatch("tile-z");
+        assert!(poller.get_pending("tile-z").is_none());
+    }
+
+    #[test]
+    fn prune_pending_removes_expired_entries() {
+        let poller = SessionPoller::new();
+        poller.register_pending("tile-old", 1, "C:\\");
+        // Force the entry's spawned_at into the past by reaching in.
+        {
+            let mut pending = poller.pending.lock().unwrap();
+            let entry = pending.get_mut("tile-old").unwrap();
+            entry.spawned_at = Instant::now() - PENDING_CORRELATION_TIMEOUT - Duration::from_secs(1);
+        }
+        let pruned = poller.prune_pending();
+        assert_eq!(pruned, vec!["tile-old".to_string()]);
+        assert!(poller.get_pending("tile-old").is_none());
+    }
+
+    #[test]
+    fn prune_pending_keeps_recent_entries() {
+        let poller = SessionPoller::new();
+        poller.register_pending("tile-fresh", 1, "C:\\");
+        let pruned = poller.prune_pending();
+        assert!(pruned.is_empty());
+        assert!(poller.get_pending("tile-fresh").is_some());
+    }
+
+    #[test]
+    fn no_session_stats_uses_no_session_activity() {
+        let s = no_session_stats();
+        assert_eq!(s.activity_status, "no-session");
+        assert_eq!(s.session_id, "");
+        assert!(!s.process_alive);
     }
 }

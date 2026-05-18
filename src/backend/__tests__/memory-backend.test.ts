@@ -164,6 +164,36 @@ describe("MemoryBackend", () => {
     it("resizing non-existent terminal throws", async () => {
       await expect(backend.resizeTerminal("nope", 30, 120)).rejects.toThrow("No terminal");
     });
+
+    it("spawnCopilotSession records the call and registers the terminal", async () => {
+      // Clear the cross-test invoke log.
+      (window as unknown as { __WS_INVOKE_LOG__?: unknown[] }).__WS_INVOKE_LOG__ = [];
+      const pid = await backend.spawnCopilotSession("t-copilot", "C:\\repo", "abc-123", 30, 120);
+      expect(pid).toBeNull();
+      // Writing afterwards must work — terminal was registered.
+      await expect(backend.writeToTerminal("t-copilot", "x")).resolves.toBeUndefined();
+      const log = (window as unknown as { __WS_INVOKE_LOG__?: Array<{ cmd: string; args: Record<string, unknown> }> }).__WS_INVOKE_LOG__ ?? [];
+      const entry = log.find((e) => e.cmd === "spawn_copilot_session");
+      expect(entry).toBeTruthy();
+      expect(entry!.args.resumeSessionId).toBe("abc-123");
+      expect(entry!.args.tileId).toBe("t-copilot");
+    });
+
+    it("spawnCopilotSession defaults resumeSessionId to null", async () => {
+      (window as unknown as { __WS_INVOKE_LOG__?: unknown[] }).__WS_INVOKE_LOG__ = [];
+      await backend.spawnCopilotSession("t-fresh", "C:\\repo");
+      const log = (window as unknown as { __WS_INVOKE_LOG__?: Array<{ cmd: string; args: Record<string, unknown> }> }).__WS_INVOKE_LOG__ ?? [];
+      const entry = log.find((e) => e.cmd === "spawn_copilot_session");
+      expect(entry!.args.resumeSessionId).toBeNull();
+    });
+
+    it("spawnTerminal also records to the invoke log when a window is present", async () => {
+      (window as unknown as { __WS_INVOKE_LOG__?: unknown[] }).__WS_INVOKE_LOG__ = [];
+      await backend.spawnTerminal("t-term", "C:\\", "pwsh.exe", ["-NoLogo"]);
+      const log = (window as unknown as { __WS_INVOKE_LOG__?: Array<{ cmd: string; args: Record<string, unknown> }> }).__WS_INVOKE_LOG__ ?? [];
+      const entry = log.find((e) => e.cmd === "spawn_terminal");
+      expect(entry!.args.command).toBe("pwsh.exe");
+    });
   });
 
   describe("git info", () => {

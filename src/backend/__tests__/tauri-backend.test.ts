@@ -170,6 +170,30 @@ describe("TauriBackend", () => {
     }));
   });
 
+  it("spawnCopilotSession passes resumeSessionId when provided", async () => {
+    invoke.mockResolvedValueOnce(42);
+    const pid = await backend.spawnCopilotSession("t1", "/cwd", "sid-abc", 24, 80);
+    expect(pid).toBe(42);
+    expect(invoke).toHaveBeenCalledWith("spawn_copilot_session", {
+      tileId: "t1",
+      cwd: "/cwd",
+      resumeSessionId: "sid-abc",
+      rows: 24,
+      cols: 80,
+    });
+  });
+
+  it("spawnCopilotSession defaults resumeSessionId to null and pid to null", async () => {
+    invoke.mockResolvedValueOnce(null);
+    const pid = await backend.spawnCopilotSession("t1", "/cwd");
+    expect(pid).toBeNull();
+    expect(invoke).toHaveBeenCalledWith("spawn_copilot_session", expect.objectContaining({
+      resumeSessionId: null,
+      rows: 30,
+      cols: 120,
+    }));
+  });
+
   it("readFile passes path", async () => {
     invoke.mockResolvedValueOnce("content");
     const result = await backend.readFile("/some/path");

@@ -584,6 +584,44 @@ fn spawn_terminal(
     )
 }
 
+/// Spawn an agency.exe copilot session and register a pending PID-based
+/// correlation with the poller so it can find the resulting
+/// `~/.copilot/session-state/<id>` directory by scanning `inuse.<pid>.lock`.
+///
+/// If `resume_session_id` is Some, agency is invoked with `--resume=<id>`.
+#[tauri::command]
+fn spawn_copilot_session(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    tile_id: String,
+    cwd: String,
+    resume_session_id: Option<String>,
+    rows: Option<u16>,
+    cols: Option<u16>,
+) -> Result<Option<u32>, String> {
+    let mut args = vec!["copilot".to_string(), "--yolo".to_string()];
+    if let Some(sid) = &resume_session_id {
+        args.push(format!("--resume={sid}"));
+    }
+    let pid = state.pty.spawn(
+        &app,
+        &tile_id,
+        &cwd,
+        Some("agency.exe"),
+        Some(args),
+        rows.unwrap_or(30),
+        cols.unwrap_or(120),
+    )?;
+    // Only register pending if we don't already know the session_id (resume
+    // case has the id up front so the regular watch_with_id path is enough).
+    if resume_session_id.is_none() {
+        if let Some(p) = pid {
+            state.session_poller.register_pending(&tile_id, p, &cwd);
+        }
+    }
+    Ok(pid)
+}
+
 #[tauri::command]
 fn write_to_pty(state: State<'_, AppState>, tile_id: String, data: String) -> Result<(), String> {
     state.pty.write(&tile_id, data.as_bytes())
@@ -2202,6 +2240,7 @@ pub fn run() {
             update_layout,
             // PTY
             spawn_terminal,
+            spawn_copilot_session,
             write_to_pty,
             resize_pty,
             close_terminal,

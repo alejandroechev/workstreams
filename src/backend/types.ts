@@ -1,3 +1,4 @@
+// @test-skip: Type-only interface; behaviour covered by MemoryBackend + TauriBackend tests.
 import type { Project, Workstream, Tile, TileType, WorkstreamLayout, CopilotConfigItem } from "../domain/types";
 
 export interface Backend {
@@ -25,6 +26,13 @@ export interface Backend {
   detectGitInfo(directory: string): Promise<{ repo: string | null; branch: string | null }>;
   // PTY
   spawnTerminal(tileId: string, cwd: string, command?: string, args?: string[], rows?: number, cols?: number): Promise<void>;
+  /**
+   * Spawn agency.exe for a copilot session and register a pending PID
+   * correlation with the backend session poller so it can identify the
+   * resulting session-state directory without fuzzy matching.
+   * Returns the child PID (or null on memory backend).
+   */
+  spawnCopilotSession(tileId: string, cwd: string, resumeSessionId?: string | null, rows?: number, cols?: number): Promise<number | null>;
   writeToTerminal(tileId: string, data: string): Promise<void>;
   resizeTerminal(tileId: string, rows: number, cols: number): Promise<void>;
   closeTerminal(tileId: string): Promise<void>;

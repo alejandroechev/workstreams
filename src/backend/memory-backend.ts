@@ -177,8 +177,29 @@ export class MemoryBackend implements Backend {
     return { repo: null, branch: null };
   }
 
-  async spawnTerminal(tileId: string, _cwd: string, _command?: string, _args?: string[], _rows?: number, _cols?: number): Promise<void> {
+  async spawnTerminal(tileId: string, cwd: string, command?: string, args?: string[], rows?: number, cols?: number): Promise<void> {
     this.terminals.add(tileId);
+    if (typeof window !== "undefined") {
+      const w = window as unknown as { __WS_INVOKE_LOG__?: Array<{ cmd: string; args: Record<string, unknown> }> };
+      if (!w.__WS_INVOKE_LOG__) w.__WS_INVOKE_LOG__ = [];
+      w.__WS_INVOKE_LOG__.push({
+        cmd: "spawn_terminal",
+        args: { tileId, cwd, command: command ?? null, args: args ?? null, rows: rows ?? null, cols: cols ?? null },
+      });
+    }
+  }
+
+  async spawnCopilotSession(tileId: string, cwd: string, resumeSessionId?: string | null, rows?: number, cols?: number): Promise<number | null> {
+    this.terminals.add(tileId);
+    if (typeof window !== "undefined") {
+      const w = window as unknown as { __WS_INVOKE_LOG__?: Array<{ cmd: string; args: Record<string, unknown> }> };
+      if (!w.__WS_INVOKE_LOG__) w.__WS_INVOKE_LOG__ = [];
+      w.__WS_INVOKE_LOG__.push({
+        cmd: "spawn_copilot_session",
+        args: { tileId, cwd, resumeSessionId: resumeSessionId ?? null, rows: rows ?? null, cols: cols ?? null },
+      });
+    }
+    return null;
   }
 
   async writeToTerminal(tileId: string, _data: string): Promise<void> {

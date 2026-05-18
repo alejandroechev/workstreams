@@ -59,9 +59,10 @@ export default function TileWrapper({
       const cfg = JSON.parse(tile.config_json || "{}");
       const name = cfg.session_name || "session";
       const activity = sessionStats?.activity_status || termStatus;
+      const friendlyActivity = activity === "no-session" ? "not linked" : activity;
       const toolInfo = sessionStats?.current_tool ? ` (${sessionStats.current_tool})` : "";
-      const turns = sessionStats?.turn_count != null ? ` · ${sessionStats.turn_count}t` : "";
-      return `${name} · ${activity}${toolInfo}${turns}`;
+      const turns = sessionStats?.turn_count != null && sessionStats.turn_count > 0 ? ` · ${sessionStats.turn_count}t` : "";
+      return `${name} · ${friendlyActivity}${toolInfo}${turns}`;
     }
     if (tile.tile_type === "terminal") return termStatus;
     return tile.tile_type.replace("_", " ");
