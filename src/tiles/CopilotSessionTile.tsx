@@ -211,13 +211,37 @@ export default function CopilotSessionTile({
     });
 
     const resizeObserver = new ResizeObserver(() => {
-      fitAddon.fit();
-      const dims = fitAddon.proposeDimensions();
-      if (dims) {
-        invoke("resize_pty", { tileId, rows: dims.rows, cols: dims.cols }).catch(() => {});
+      // Only fit when container has non-zero dimensions; otherwise FitAddon
+      // computes a tiny cols/rows (~7 cols) which sticks until the next resize.
+      if (containerRef.current && containerRef.current.offsetWidth > 0) {
+        fitAddon.fit();
+        const dims = fitAddon.proposeDimensions();
+        if (dims) {
+          invoke("resize_pty", { tileId, rows: dims.rows, cols: dims.cols }).catch(() => {});
+        }
       }
     });
     resizeObserver.observe(containerRef.current);
+
+    // Persist-by-hide (display: none on inactive workstreams) leaves this
+    // container at 0 dimensions while hidden. ResizeObserver doesn't always
+    // fire when display flips none → flex. Watch visibility explicitly and
+    // re-fit when the tile becomes visible.
+    const visibilityObserver = new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        if (entry.isIntersecting && containerRef.current && containerRef.current.offsetWidth > 0) {
+          // RAF so the layout is settled before measuring.
+          requestAnimationFrame(() => {
+            fitAddon.fit();
+            const dims = fitAddon.proposeDimensions();
+            if (dims) {
+              invoke("resize_pty", { tileId, rows: dims.rows, cols: dims.cols }).catch(() => {});
+            }
+          });
+        }
+      }
+    }, { threshold: 0.01 });
+    visibilityObserver.observe(containerRef.current);
 
     // Mouse wheel handler.
     // In normal-buffer mode: xterm v6 uses a Monaco-style virtual scroll element
@@ -226,9 +250,11 @@ export default function CopilotSessionTile({
     // In alternate-buffer mode (copilot TUI): translate to PgUp/PgDn for the PTY.
     //   Arrow keys move the cursor in agency's input box (not what we want);
     //   PgUp/PgDn are what agency uses to scroll conversation history.
+    // Divisor 120 (was 40) — agency's TUI conversation is dense, scroll feels
+    // way too fast at 40. 120 gives a comfortable "page every ~3 ticks".
     const wheelHandler = (e: WheelEvent) => {
       const buf = (term as unknown as { buffer: { active: { type: string } } }).buffer?.active;
-      const lines = Math.max(1, Math.round(Math.abs(e.deltaY) / 40));
+      const lines = Math.max(1, Math.round(Math.abs(e.deltaY) / 120));
       if (buf && buf.type === "alternate") {
         e.preventDefault();
         // \x1b[5~ = PgUp, \x1b[6~ = PgDn
@@ -253,6 +279,7 @@ export default function CopilotSessionTile({
       saveScrollback();
       invoke("unwatch_session", { tileId }).catch(() => {});
       resizeObserver.disconnect();
+      visibilityObserver.disconnect();
       unlistenOutput.then((u) => u());
       unlistenExit.then((u) => u());
       unlistenStats.then((u) => u());

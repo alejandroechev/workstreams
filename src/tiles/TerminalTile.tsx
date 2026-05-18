@@ -181,28 +181,51 @@ export default function TerminalTile({ tileId, isFocused, focusToken, onStatusCh
       updateStatus("exited");
     });
 
-    // Handle resize
+    // Handle resize. Only fit when container has non-zero dimensions, so we
+    // never lock in the tiny cols/rows that FitAddon would compute against a
+    // display:none container (the persist-by-hide architecture leaves
+    // inactive workstreams' tile wrappers at 0 size).
     const resizeObserver = new ResizeObserver(() => {
-      fitAddon.fit();
-      const dims = fitAddon.proposeDimensions();
-      if (dims) {
-        invoke("resize_pty", {
-          tileId,
-          rows: dims.rows,
-          cols: dims.cols,
-        }).catch(() => {});
+      if (containerRef.current && containerRef.current.offsetWidth > 0) {
+        fitAddon.fit();
+        const dims = fitAddon.proposeDimensions();
+        if (dims) {
+          invoke("resize_pty", {
+            tileId,
+            rows: dims.rows,
+            cols: dims.cols,
+          }).catch(() => {});
+        }
       }
     });
     resizeObserver.observe(containerRef.current);
+
+    // ResizeObserver doesn't always fire when display flips none→flex on the
+    // parent wrapper, so observe visibility explicitly and re-fit then.
+    const visibilityObserver = new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        if (entry.isIntersecting && containerRef.current && containerRef.current.offsetWidth > 0) {
+          requestAnimationFrame(() => {
+            fitAddon.fit();
+            const dims = fitAddon.proposeDimensions();
+            if (dims) {
+              invoke("resize_pty", { tileId, rows: dims.rows, cols: dims.cols }).catch(() => {});
+            }
+          });
+        }
+      }
+    }, { threshold: 0.01 });
+    visibilityObserver.observe(containerRef.current);
 
     // Mouse wheel handler.
     // In normal-buffer mode: xterm v6 no longer scrolls natively because it
     //   switched to a Monaco-style virtual scroll model on .xterm-scrollable-element
     //   (overflow: visible). We must drive the scroll ourselves via term.scrollLines.
     // In alternate-buffer mode (TUI apps): translate to arrow keys for the PTY.
+    // Divisor 120 (was 40) — feels too fast at 40.
     const wheelHandler = (e: WheelEvent) => {
       const buf = (term as unknown as { buffer: { active: { type: string } } }).buffer?.active;
-      const lines = Math.max(1, Math.round(Math.abs(e.deltaY) / 40));
+      const lines = Math.max(1, Math.round(Math.abs(e.deltaY) / 120));
       if (buf && buf.type === "alternate") {
         e.preventDefault();
         const arrow = e.deltaY < 0 ? "\x1b[A" : "\x1b[B";
@@ -229,6 +252,7 @@ export default function TerminalTile({ tileId, isFocused, focusToken, onStatusCh
       saveScrollback();
       wheelTarget.removeEventListener("wheel", wheelHandler);
       resizeObserver.disconnect();
+      visibilityObserver.disconnect();
       unlistenOutput.then((u) => u());
       unlistenExit.then((u) => u());
       term.dispose();
