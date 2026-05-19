@@ -165,11 +165,12 @@ export class MemoryBackend implements Backend {
     return content;
   }
 
-  async listDirectory(_path: string): Promise<Array<{ name: string; is_dir: boolean; modified_epoch: number }>> {
-    return Array.from(this.files.keys()).map((k) => ({
+  async listDirectory(_path: string): Promise<Array<{ name: string; is_dir: boolean; modified_epoch: number; size: number }>> {
+    return Array.from(this.files.entries()).map(([k, content]) => ({
       name: k.split("/").pop() || k,
       is_dir: false,
       modified_epoch: 0,
+      size: content.length,
     }));
   }
 

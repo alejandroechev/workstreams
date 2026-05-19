@@ -330,6 +330,17 @@ describe("MemoryBackend", () => {
       const list = await backend.listDirectory("/x");
       expect(list.length).toBe(2);
     });
+
+    it("listDirectory reports file size", async () => {
+      backend.seedFile("/y/small.txt", "hi");
+      backend.seedFile("/y/big.txt", "x".repeat(2048));
+      const list = await backend.listDirectory("/y");
+      const small = list.find((e) => e.name === "small.txt");
+      const big = list.find((e) => e.name === "big.txt");
+      expect(small?.size).toBe(2);
+      expect(big?.size).toBe(2048);
+      expect(small?.is_dir).toBe(false);
+    });
   });
 
   describe("layout + git stubs", () => {

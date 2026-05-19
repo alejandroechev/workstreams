@@ -846,6 +846,8 @@ struct DirEntry {
     name: String,
     is_dir: bool,
     modified_epoch: u64,
+    /// Byte size for files; 0 for directories.
+    size: u64,
 }
 
 #[tauri::command]
@@ -855,18 +857,24 @@ fn list_directory(path: String) -> Result<Vec<DirEntry>, String> {
     let mut files: Vec<DirEntry> = Vec::new();
     for entry in entries.flatten() {
         if let Some(name) = entry.file_name().to_str() {
+            let metadata = entry.metadata().ok();
             let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
-            let modified_epoch = entry
-                .metadata()
-                .ok()
+            let modified_epoch = metadata
+                .as_ref()
                 .and_then(|m| m.modified().ok())
                 .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                 .map(|d: std::time::Duration| d.as_secs())
                 .unwrap_or(0);
+            let size = if is_dir {
+                0
+            } else {
+                metadata.as_ref().map(|m| m.len()).unwrap_or(0)
+            };
             let entry = DirEntry {
                 name: name.to_string(),
                 is_dir,
                 modified_epoch,
+                size,
             };
             if is_dir {
                 dirs.push(entry);

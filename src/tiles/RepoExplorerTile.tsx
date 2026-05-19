@@ -2,11 +2,13 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import Editor, { DiffEditor } from "@monaco-editor/react";
 import { MarkdownView } from "../ui/MarkdownView";
+import AudioPlayer from "./AudioPlayer";
 import { open } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useBackend } from "../backend/context";
 import { detectLanguage } from "../domain/tile-config";
+import { isAudioFile, mimeForAudio } from "../domain/file-types";
 import {
   FolderIcon,
   DocumentIcon,
@@ -21,7 +23,9 @@ import {
   MagnifyingGlassIcon,
   MinusIcon,
   PlusIcon,
+  MusicalNoteIcon,
 } from "@heroicons/react/24/outline";
+import { openPath } from "@tauri-apps/plugin-opener";
 import type { FileSearchMatch } from "../backend/types";
 
 interface Props {
@@ -36,16 +40,25 @@ interface DirEntry {
   isDir: boolean;
   fullPath: string;
   modifiedEpoch: number;
+  size: number;
 }
 
-type Mode = "browse" | "view" | "log" | "hooks";
+type Mode = "browse" | "view" | "audio" | "log" | "hooks";
 type DiffMode = "unstaged" | "last_commit" | "branch_vs_master";
 
 const MARKDOWN_EXTS = new Set(["md", "mdx", "markdown"]);
+const AUDIO_SIZE_LIMIT_BYTES = 100 * 1024 * 1024; // 100 MB
 
 function isMarkdown(path: string): boolean {
   const ext = path.split(".").pop()?.toLowerCase() || "";
   return MARKDOWN_EXTS.has(ext);
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
 }
 
 function FileIcon({ name, isDir }: { name: string; isDir: boolean }) {
@@ -56,6 +69,8 @@ function FileIcon({ name, isDir }: { name: string; isDir: boolean }) {
       return <CodeBracketIcon style={{ width: 16, height: 16, color: "#a6adc8" }} />;
     case "md": case "mdx": case "markdown":
       return <DocumentTextIcon style={{ width: 16, height: 16, color: "#a6adc8" }} />;
+    case "mp3": case "wav": case "ogg": case "flac": case "m4a": case "aac": case "opus": case "webm":
+      return <MusicalNoteIcon style={{ width: 16, height: 16, color: "#cba6f7" }} />;
     default:
       return <DocumentIcon style={{ width: 16, height: 16, color: "#6c7086" }} />;
   }
@@ -108,6 +123,13 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
   const [content, setContent] = useState<string | null>(null);
   const [fileError, setFileError] = useState<string | null>(null);
   const [fileLoading, setFileLoading] = useState(false);
+  // Audio state — populated when openFile detects an audio extension.
+  // We keep both the object URL (for `<audio src>`) and the raw bytes
+  // (so the waveform component can decode them).
+  const [audioUrl, setAudioUrl] = useState<string | null>(null);
+  const [audioBytes, setAudioBytes] = useState<ArrayBuffer | null>(null);
+  const [audioSizeBytes, setAudioSizeBytes] = useState(0);
+  const [audioTooLarge, setAudioTooLarge] = useState(false);
   // Ctrl+P search overlay
   const [showFileSearch, setShowFileSearch] = useState(false);
   const [fileSearchQuery, setFileSearchQuery] = useState("");
@@ -162,6 +184,7 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
         isDir: e.is_dir,
         fullPath: `${dir}${sep}${e.name}`,
         modifiedEpoch: e.modified_epoch,
+        size: e.size,
       })));
       setCurrentDir(dir);
     } catch (e) {
@@ -171,10 +194,74 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
     }
   }, [backend]);
 
+  // Helper for audio open path. Reads the file as base64, decodes to bytes,
+  // wraps in a Blob with the right MIME, and creates an object URL. Returns
+  // {url, bytes, size} on success or throws.
+  const loadAudioFile = useCallback(async (audioPath: string): Promise<{ url: string; bytes: ArrayBuffer; size: number }> => {
+    const b64 = await invoke<string>("read_file_base64", { path: audioPath });
+    // Base64 → Uint8Array (browser-native, no Buffer needed).
+    const binary = atob(b64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    const mime = mimeForAudio(audioPath) || "audio/mpeg";
+    const blob = new Blob([bytes], { type: mime });
+    const url = URL.createObjectURL(blob);
+    return { url, bytes: bytes.buffer, size: bytes.length };
+  }, []);
+
+  // Revoke any previously-created audio object URL when it changes or the
+  // tile unmounts. Without this we leak megabytes per file open.
+  useEffect(() => {
+    const prev = audioUrl;
+    return () => { if (prev) URL.revokeObjectURL(prev); };
+  }, [audioUrl]);
+
   const openFile = useCallback(async (path: string) => {
     if (!path.trim()) return;
     setFileError(null);
     setFileLoading(true);
+    setAudioTooLarge(false);
+
+    // Audio branch.
+    if (isAudioFile(path)) {
+      try {
+        // Peek at the size via the directory listing if we have it.
+        const found = entries.find((e) => e.fullPath === path);
+        if (found && found.size > AUDIO_SIZE_LIMIT_BYTES) {
+          setAudioUrl(null);
+          setAudioBytes(null);
+          setAudioSizeBytes(found.size);
+          setAudioTooLarge(true);
+          setFilePath(path.trim());
+          setMode("audio");
+          setFileLoading(false);
+          return;
+        }
+        const { url, bytes, size } = await loadAudioFile(path.trim());
+        // Defensive: if size came back larger than the limit anyway, abort.
+        if (size > AUDIO_SIZE_LIMIT_BYTES) {
+          URL.revokeObjectURL(url);
+          setAudioUrl(null);
+          setAudioBytes(null);
+          setAudioSizeBytes(size);
+          setAudioTooLarge(true);
+        } else {
+          setAudioUrl(url);
+          setAudioBytes(bytes);
+          setAudioSizeBytes(size);
+        }
+        setFilePath(path.trim());
+        setMode("audio");
+        return;
+      } catch (e) {
+        setFileError(String(e));
+        return;
+      } finally {
+        setFileLoading(false);
+      }
+    }
+
+    // Text/markdown branch (unchanged).
     try {
       const data = await backend.readFile(path.trim());
       setContent(data);
@@ -219,6 +306,7 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
             isDir: e.is_dir,
             fullPath: `${currentDir}${sep}${e.name}`,
             modifiedEpoch: e.modified_epoch,
+            size: e.size,
           }));
           setEntries(fresh);
         } catch { /* ignore */ }
@@ -950,6 +1038,64 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
             }}
           />
         </div>
+        {overlays}
+      </div>
+    );
+  }
+
+  // ─── Audio mode ───
+  if (mode === "audio") {
+    return (
+      <div ref={containerRef} style={containerStyle}>
+        {tabBar}
+        <div style={toolbarStyle}>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, overflow: "hidden", flex: 1 }}>
+            <span style={{ ...pathTextStyle, display: "flex", alignItems: "center", gap: 4 }}>
+              <MusicalNoteIcon style={{ width: 14, height: 14, color: "#cba6f7", flexShrink: 0 }} />
+              {filePath}
+            </span>
+          </div>
+        </div>
+        {audioTooLarge ? (
+          <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 24, gap: 12, color: "#cdd6f4" }}>
+            <MusicalNoteIcon style={{ width: 36, height: 36, color: "#cba6f7" }} />
+            <div data-testid="audio-too-large" style={{ fontSize: 13, color: "#f9e2af", textAlign: "center" }}>
+              File is too large to preview ({formatBytes(audioSizeBytes)} &gt; {formatBytes(AUDIO_SIZE_LIMIT_BYTES)}).
+            </div>
+            <div style={{ fontSize: 11, color: "#6c7086", wordBreak: "break-all", textAlign: "center", maxWidth: 480 }}>
+              {filePath}
+            </div>
+            <button
+              onClick={() => openPath(filePath).catch(() => {})}
+              data-testid="audio-open-system-large"
+              style={{
+                background: "#313244",
+                border: "1px solid #45475a",
+                borderRadius: 4,
+                color: "#cdd6f4",
+                cursor: "pointer",
+                fontSize: 12,
+                padding: "6px 14px",
+              }}
+            >
+              Open in system player
+            </button>
+          </div>
+        ) : audioUrl ? (
+          <div style={{ flex: 1, overflow: "hidden" }}>
+            <AudioPlayer
+              url={audioUrl}
+              path={filePath}
+              sizeBytes={audioSizeBytes}
+              audioBytes={audioBytes}
+              isFocused={isFocused}
+            />
+          </div>
+        ) : (
+          <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "#585b70" }}>
+            {fileLoading ? "Loading audio…" : fileError ? fileError : "No audio loaded"}
+          </div>
+        )}
         {overlays}
       </div>
     );

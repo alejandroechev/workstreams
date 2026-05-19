@@ -28,7 +28,7 @@ export interface Backend {
   updateLayout(workstreamId: string, updates: Partial<WorkstreamLayout>): Promise<void>;
   // Files
   readFile(path: string): Promise<string>;
-  listDirectory(path: string): Promise<Array<{ name: string; is_dir: boolean; modified_epoch: number }>>;
+  listDirectory(path: string): Promise<Array<{ name: string; is_dir: boolean; modified_epoch: number; size: number }>>;
   detectGitInfo(directory: string): Promise<{ repo: string | null; branch: string | null }>;
   // PTY
   spawnTerminal(tileId: string, cwd: string, command?: string, args?: string[], rows?: number, cols?: number): Promise<void>;
