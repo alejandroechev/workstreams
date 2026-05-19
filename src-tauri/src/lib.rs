@@ -947,6 +947,15 @@ fn cancel_searches(state: State<'_, AppState>) -> Result<u64, String> {
     Ok(new)
 }
 
+/// Trivial IPC ping for latency benchmarking. Returns the current epoch in ms.
+#[tauri::command]
+fn ping() -> Result<u64, String> {
+    Ok(std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0))
+}
+
 /// Recursively search for files matching a query (case-insensitive filename match).
 /// Cancels on epoch bump. Returns whatever it has found at the cancellation point.
 #[tauri::command]
@@ -2463,6 +2472,7 @@ pub fn run() {
             search_files,
             search_in_files,
             cancel_searches,
+            ping,
             // Git diff
             git_diff_files,
             git_diff_file,

@@ -1,0 +1,41 @@
+{
+  "baseline": {
+    "n": 10,
+    "mean": 33.8,
+    "p50": 4.5,
+    "p95": 5.7,
+    "max": 296.3
+  },
+  "during": {
+    "n": 38,
+    "mean": 197.5,
+    "p50": 7.8,
+    "p95": 1255.2,
+    "max": 3165.8
+  },
+  "total": {
+    "n": 48,
+    "mean": 163.4,
+    "p50": 5.7,
+    "p95": 346.2,
+    "max": 3165.8
+  },
+  "config": {
+    "searchRoot": "C:\\Local\\Code\\ai-tools\\workstreams",
+    "queries": [
+      "i",
+      "in",
+      "int",
+      "inte",
+      "inter",
+      "interf",
+      "interfa",
+      "interfac",
+      "interface"
+    ],
+    "pingIntervalMs": 50,
+    "keyIntervalMs": 80,
+    "postHoldMs": 2000,
+    "driveDurationMs": 7617
+  }
+}

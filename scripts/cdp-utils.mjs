@@ -89,11 +89,13 @@ export function screenshotPath(featureId, screenshotsDir = "screenshots") {
 /** Helper passed to feature protocols. */
 export function makeApi({ page, featureId, screenshotsDir }) {
   let lastPath = null;
+  const featureDir = path.join(screenshotsDir, featureId);
   return {
     page,
+    featureDir,
     async screenshot(name) {
       const file = name
-        ? path.join(screenshotsDir, featureId, `${name}.png`)
+        ? path.join(featureDir, `${name}.png`)
         : screenshotPath(featureId, screenshotsDir);
       fs.mkdirSync(path.dirname(file), { recursive: true });
       await page.screenshot({ path: file, fullPage: false });
