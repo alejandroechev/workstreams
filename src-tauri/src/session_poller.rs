@@ -238,8 +238,9 @@ pub fn start_poller(app: AppHandle, poller: Arc<SessionPoller>) {
                             let session_dir =
                                 home.join(".copilot").join("session-state").join(&found_sid);
                             let events_status = read_events_status(&session_dir);
-                            let db_meta =
-                                conn.as_ref().and_then(|c| query_session_meta(c, &found_sid));
+                            let db_meta = conn
+                                .as_ref()
+                                .and_then(|c| query_session_meta(c, &found_sid));
                             Some(SessionStats {
                                 session_id: found_sid.clone(),
                                 session_name: Some(session_name.clone()),
@@ -922,7 +923,8 @@ mod tests {
         {
             let mut pending = poller.pending.lock().unwrap();
             let entry = pending.get_mut("tile-old").unwrap();
-            entry.spawned_at = Instant::now() - PENDING_CORRELATION_TIMEOUT - Duration::from_secs(1);
+            entry.spawned_at =
+                Instant::now() - PENDING_CORRELATION_TIMEOUT - Duration::from_secs(1);
         }
         let pruned = poller.prune_pending();
         assert_eq!(pruned, vec!["tile-old".to_string()]);
