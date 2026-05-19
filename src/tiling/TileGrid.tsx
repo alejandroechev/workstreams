@@ -45,14 +45,13 @@ export default function TileGrid({
     .map((id) => tiles.find((t) => t.id === id))
     .filter((t): t is Tile => t !== undefined);
 
-  // If fullscreen, show only that tile
-  const visibleTiles = fullscreenTileId
-    ? orderedTiles.filter((t) => t.id === fullscreenTileId)
-    : orderedTiles;
+  // When fullscreen, the layout only allocates one cell. Non-fullscreen
+  // tiles are still rendered (so their xterm/audio/tab state is preserved
+  // by React) but hidden via display:none — they sit outside the grid.
+  const fullscreenActive = !!fullscreenTileId;
+  const layout = computeLayout(fullscreenActive ? 1 : orderedTiles.length);
 
-  const layout = computeLayout(visibleTiles.length);
-
-  if (visibleTiles.length === 0) {
+  if (orderedTiles.length === 0) {
     return (
       <div
         style={{
@@ -68,9 +67,6 @@ export default function TileGrid({
         <div style={{ textAlign: "center" }}>
           <div style={{ fontSize: 32, marginBottom: 12 }}>⊞</div>
           <div>No tiles yet</div>
-          <div style={{ fontSize: 12, marginTop: 4 }}>
-            Press <kbd>n</kbd> to add a terminal
-          </div>
         </div>
       </div>
     );
@@ -90,17 +86,22 @@ export default function TileGrid({
         boxSizing: "border-box",
       }}
     >
-      {visibleTiles.map((tile, i) => {
-        const realIndex = orderedTiles.findIndex((t) => t.id === tile.id);
+      {orderedTiles.map((tile, i) => {
+        const isFs = fullscreenTileId === tile.id;
+        const hidden = fullscreenActive && !isFs;
+        // When fullscreen, the visible tile occupies the single grid cell `t0`.
+        // When non-fullscreen, each tile gets its natural grid slot `t<i>`.
+        const renderIndex = fullscreenActive ? 0 : i;
         return (
           <TileWrapper
             key={tile.id}
             tile={tile}
-            index={fullscreenTileId ? 0 : i}
-            isFocused={realIndex === focusedIndex}
+            index={renderIndex}
+            isFocused={i === focusedIndex}
             focusToken={focusToken}
-            isFullscreen={fullscreenTileId === tile.id}
-            onFocus={() => onFocusTile(realIndex)}
+            isFullscreen={isFs}
+            hidden={hidden}
+            onFocus={() => onFocusTile(i)}
             onClose={() => onCloseTile(tile.id)}
             onOpenFile={onOpenFile}
             onLinkSession={onLinkSession}

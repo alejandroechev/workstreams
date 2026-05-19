@@ -7,6 +7,11 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { parseCopilotSessionConfig } from "../domain/tile-config";
 import { playBell, notifySessionIdle } from "../domain/notifications";
+import {
+  keyToZoomAction,
+  nextFontSize,
+  TERMINAL_DEFAULT_FONT_SIZE,
+} from "../domain/terminal-zoom";
 import type { CopilotSessionStats } from "../domain/types";
 
 interface Props {
@@ -45,6 +50,8 @@ export default function CopilotSessionTile({
   const serializeRef = useRef<SerializeAddon | null>(null);
   const prevActivityRef = useRef<string>("idle");
   const [status, setStatus] = useState<string>(isResuming ? "resuming" : "starting");
+  // Live font size, controlled by Ctrl+= / Ctrl+- / Ctrl+0 while focused.
+  const [fontSize, setFontSize] = useState<number>(TERMINAL_DEFAULT_FONT_SIZE);
 
   const config = parseCopilotSessionConfig(configJson);
 
@@ -68,7 +75,7 @@ export default function CopilotSessionTile({
     const term = new Terminal({
       cursorBlink: true,
       altClickMovesCursor: true,
-      fontSize: 13,
+      fontSize: TERMINAL_DEFAULT_FONT_SIZE,
       fontFamily: "'Cascadia Code', 'Consolas', monospace",
       scrollback: 999999,
       scrollOnUserInput: true,
@@ -314,6 +321,41 @@ export default function CopilotSessionTile({
       for (const t of timers) clearTimeout(t);
     };
   }, [isFocused, focusToken]);
+
+  // Apply font-size changes to xterm + re-fit + tell the PTY about the
+  // new cell grid.
+  useEffect(() => {
+    const term = termRef.current;
+    if (!term) return;
+    term.options.fontSize = fontSize;
+    const fit = fitRef.current;
+    if (fit && containerRef.current && containerRef.current.offsetWidth > 0) {
+      fit.fit();
+      const dims = fit.proposeDimensions();
+      if (dims) {
+        invoke("resize_pty", { tileId, rows: dims.rows, cols: dims.cols }).catch(() => {});
+      }
+    }
+  }, [fontSize, tileId]);
+
+  // Zoom shortcuts (Ctrl+= / Ctrl+- / Ctrl+0) — active only while focused.
+  useEffect(() => {
+    if (!isFocused) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (!e.ctrlKey || e.shiftKey || e.altKey || e.metaKey) return;
+      const action = keyToZoomAction(e.key);
+      if (!action) return;
+      const tgt = e.target as HTMLElement | null;
+      const tag = tgt?.tagName;
+      if (tag === "INPUT" || (tag === "TEXTAREA" && !tgt?.classList.contains("xterm-helper-textarea"))) {
+        return;
+      }
+      e.preventDefault();
+      setFontSize((s) => nextFontSize(s, action));
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [isFocused]);
 
   const hasLinkedSession = !!(config.copilot_session_id || (config as unknown as Record<string, unknown>).resume_by_id);
 

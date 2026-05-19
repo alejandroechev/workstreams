@@ -17,6 +17,8 @@ interface TileProps {
   isFocused: boolean;
   focusToken?: number;
   isFullscreen?: boolean;
+  /** When true the tile renders into the DOM but is invisible (display:none). */
+  hidden?: boolean;
   onFocus: () => void;
   onClose: () => void;
   onOpenFile?: (path: string) => void;
@@ -36,6 +38,7 @@ export default function TileWrapper({
   isFocused,
   focusToken,
   isFullscreen = false,
+  hidden = false,
   onFocus,
   onClose,
   onOpenFile,
@@ -205,9 +208,10 @@ export default function TileWrapper({
   return (
     <div
       data-tile-id={tile.id}
+      data-hidden={hidden ? "true" : "false"}
       style={{
-        gridArea: `t${index}`,
-        display: "flex",
+        gridArea: hidden ? undefined : `t${index}`,
+        display: hidden ? "none" : "flex",
         flexDirection: "column",
         border: computeTileBorder({ isFullscreen, isFocused }),
         borderRadius: 6,

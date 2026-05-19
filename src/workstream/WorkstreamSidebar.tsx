@@ -12,15 +12,7 @@ import {
   ChevronDownIcon,
   BellAlertIcon,
 } from "@heroicons/react/20/solid";
-
-const PRESET_COLORS = [
-  { name: "Blue", hex: "#89b4fa" },
-  { name: "Green", hex: "#a6e3a1" },
-  { name: "Red", hex: "#f38ba8" },
-  { name: "Yellow", hex: "#f9e2af" },
-  { name: "Pink", hex: "#f5c2e7" },
-  { name: "Teal", hex: "#94e2d5" },
-];
+import { PROJECT_PRESET_COLORS, isCustomProjectColor } from "../domain/colors";
 
 interface Props {
   projects: Project[];
@@ -670,8 +662,8 @@ export default function WorkstreamSidebar({
               }}
             />
             <label style={{ fontSize: 11, color: "#a6adc8", display: "block", marginBottom: 6 }}>Color</label>
-            <div style={{ display: "flex", gap: 6, marginBottom: 16 }}>
-              {PRESET_COLORS.map((c) => (
+            <div style={{ display: "flex", gap: 6, marginBottom: 16, flexWrap: "wrap", alignItems: "center" }}>
+              {PROJECT_PRESET_COLORS.map((c) => (
                 <button
                   key={c.hex}
                   onClick={() => setEditProjectColor(c.hex)}
@@ -689,6 +681,35 @@ export default function WorkstreamSidebar({
                   }}
                 />
               ))}
+              {/* Custom color: native picker. Shows the currently-selected
+                  custom color as a swatch with a small "+" hint. */}
+              <label
+                title="Pick a custom color"
+                style={{
+                  position: "relative",
+                  width: 24,
+                  height: 24,
+                  borderRadius: "50%",
+                  background: isCustomProjectColor(editProjectColor) ? editProjectColor : "transparent",
+                  border: isCustomProjectColor(editProjectColor)
+                    ? "2px solid #cdd6f4"
+                    : "2px dashed #585b70",
+                  cursor: "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  outline: isCustomProjectColor(editProjectColor) ? "2px solid #89b4fa" : "none",
+                  outlineOffset: 2,
+                }}
+              >
+                <span style={{ color: isCustomProjectColor(editProjectColor) ? "#1e1e2e" : "#585b70", fontSize: 14, lineHeight: 1, pointerEvents: "none" }}>+</span>
+                <input
+                  type="color"
+                  value={isCustomProjectColor(editProjectColor) ? editProjectColor : "#cdd6f4"}
+                  onChange={(e) => setEditProjectColor(e.target.value)}
+                  style={{ position: "absolute", inset: 0, opacity: 0, cursor: "pointer" }}
+                />
+              </label>
             </div>
             <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
               <button

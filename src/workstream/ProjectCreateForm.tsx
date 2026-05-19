@@ -2,15 +2,7 @@
 import { useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
-
-const PRESET_COLORS = [
-  { name: "Blue", hex: "#89b4fa" },
-  { name: "Green", hex: "#a6e3a1" },
-  { name: "Red", hex: "#f38ba8" },
-  { name: "Yellow", hex: "#f9e2af" },
-  { name: "Pink", hex: "#f5c2e7" },
-  { name: "Teal", hex: "#94e2d5" },
-];
+import { PROJECT_PRESET_COLORS, isCustomProjectColor } from "../domain/colors";
 
 interface Props {
   onSubmit: (name: string, directory: string, color: string, gitRemote: string | null) => void;
@@ -20,7 +12,7 @@ interface Props {
 export default function ProjectCreateForm({ onSubmit, onCancel }: Props) {
   const [name, setName] = useState("");
   const [directory, setDirectory] = useState("");
-  const [color, setColor] = useState(PRESET_COLORS[0].hex);
+  const [color, setColor] = useState(PROJECT_PRESET_COLORS[0].hex);
   const [gitRemote, setGitRemote] = useState<string | null>(null);
   const [gitBranch, setGitBranch] = useState<string | null>(null);
 
@@ -155,8 +147,8 @@ export default function ProjectCreateForm({ onSubmit, onCancel }: Props) {
 
         {/* Color */}
         <label style={{ fontSize: 11, color: "#a6adc8", display: "block", marginBottom: 6 }}>Color</label>
-        <div style={{ display: "flex", gap: 8, marginBottom: 20 }}>
-          {PRESET_COLORS.map((c) => (
+        <div style={{ display: "flex", gap: 8, marginBottom: 20, flexWrap: "wrap", alignItems: "center" }}>
+          {PROJECT_PRESET_COLORS.map((c) => (
             <button
               key={c.hex}
               onClick={() => setColor(c.hex)}
@@ -174,6 +166,31 @@ export default function ProjectCreateForm({ onSubmit, onCancel }: Props) {
               }}
             />
           ))}
+          <label
+            title="Pick a custom color"
+            style={{
+              position: "relative",
+              width: 28,
+              height: 28,
+              borderRadius: "50%",
+              background: isCustomProjectColor(color) ? color : "transparent",
+              border: isCustomProjectColor(color) ? "2px solid #cdd6f4" : "2px dashed #585b70",
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              outline: isCustomProjectColor(color) ? "2px solid #89b4fa" : "none",
+              outlineOffset: 2,
+            }}
+          >
+            <span style={{ color: isCustomProjectColor(color) ? "#1e1e2e" : "#585b70", fontSize: 16, lineHeight: 1, pointerEvents: "none" }}>+</span>
+            <input
+              type="color"
+              value={isCustomProjectColor(color) ? color : "#cdd6f4"}
+              onChange={(e) => setColor(e.target.value)}
+              style={{ position: "absolute", inset: 0, opacity: 0, cursor: "pointer" }}
+            />
+          </label>
         </div>
 
         {/* Actions */}
