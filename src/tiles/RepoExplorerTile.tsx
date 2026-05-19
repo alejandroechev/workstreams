@@ -533,15 +533,25 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
     "files";
 
   const selectTab = useCallback((tab: TabId) => {
+    // For the "files" tab, always reset to plain browse — even if the
+    // computed activeTab already says "files" (which happens when the
+    // user is in view/audio mode looking at a file). Without this the
+    // Files tab is unclickable from those modes, leaving the user stuck.
+    if (tab === "files") {
+      setActiveDiffMode(null);
+      setDiffContent("");
+      setDiffFiles([]);
+      setDiffFilePath("");
+      setContent(null);
+      setFilePath("");
+      setAudioUrl(null);
+      setAudioBytes(null);
+      setAudioTooLarge(false);
+      setMode("browse");
+      return;
+    }
     if (tab === activeTab) return;
     switch (tab) {
-      case "files":
-        setActiveDiffMode(null);
-        setDiffContent("");
-        setDiffFiles([]);
-        setDiffFilePath("");
-        setMode("browse");
-        break;
       case "diff":
         setMode("browse");
         setContent(null);
