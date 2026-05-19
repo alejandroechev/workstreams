@@ -260,6 +260,10 @@ export class MemoryBackend implements Backend {
     return results;
   }
 
+  async cancelSearches(): Promise<void> {
+    // No-op for memory backend; nothing to cancel.
+  }
+
   async gitDiffFiles(_directory: string, _mode: string): Promise<string[]> {
     return [];
   }

@@ -67,6 +67,8 @@ struct AppState {
     pty: PtyManager,
     session_poller: Arc<SessionPoller>,
     fs_watcher: Arc<FsWatcher>,
+    /// Monotonic counter shared by every search; bumping this cancels in-flight searches.
+    search_epoch: Arc<std::sync::atomic::AtomicU64>,
 }
 
 fn now() -> String {
@@ -880,33 +882,111 @@ fn list_directory(path: String) -> Result<Vec<DirEntry>, String> {
     Ok(dirs)
 }
 
-/// Recursively search for files matching a query (case-insensitive filename match)
+// ── File search ─────────────────────────────────────────────────────────
+//
+// Both `search_files` (filename match) and `search_in_files` (content match)
+// share:
+//   • a skip-dirs set (node_modules, target, .git, dist, .next, …),
+//   • cancellation via `AppState.search_epoch` — each new search bumps the
+//     atomic counter, and the running walker bails on its next iteration if
+//     its epoch is stale. This prevents a slow walk from blocking the IPC
+//     queue and freezing the UI.
+//   • for content search, an extension whitelist so we never `open()` a
+//     2 GB sqlite blob just to read 0 lines from it.
+
+const SEARCH_SKIP_DIRS: &[&str] = &[
+    "node_modules",
+    "target",
+    ".git",
+    "dist",
+    ".next",
+    "__pycache__",
+    ".venv",
+    "venv",
+    ".turbo",
+    ".cargo",
+    ".dev",
+    "build",
+    "out",
+    ".vite",
+    "coverage",
+];
+
+/// Extensions we consider safe (and worth) reading line-by-line. Anything
+/// else is treated as binary/noise and skipped by the content search.
+const CONTENT_SEARCH_EXTS: &[&str] = &[
+    "ts", "tsx", "mts", "cts", "js", "jsx", "mjs", "cjs", "rs", "go", "py", "rb", "php", "lua",
+    "java", "kt", "scala", "swift", "dart", "c", "h", "cpp", "cc", "cxx", "hpp", "hh", "hxx", "cs",
+    "csx", "json", "jsonc", "json5", "toml", "yaml", "yml", "xml", "html", "htm", "css", "scss",
+    "sass", "less", "md", "mdx", "markdown", "txt", "log", "sh", "bash", "zsh", "fish", "ps1",
+    "psm1", "bat", "cmd", "sql", "graphql", "gql", "proto", "ini", "conf", "env",
+];
+
+fn is_text_extension(name: &str) -> bool {
+    let lower = name.to_lowercase();
+    if let Some(dot) = lower.rfind('.') {
+        let ext = &lower[dot + 1..];
+        return CONTENT_SEARCH_EXTS.contains(&ext);
+    }
+    // Common extensionless config files
+    matches!(
+        lower.as_str(),
+        "dockerfile" | "makefile" | "readme" | "license" | "agents.md"
+    )
+}
+
+/// Cancel any in-flight searches. Call this before launching a new search
+/// so the previous walker bails on its next iteration. Cheap; the running
+/// walker just observes the bumped epoch and returns early.
+#[tauri::command]
+fn cancel_searches(state: State<'_, AppState>) -> Result<u64, String> {
+    let new = state
+        .search_epoch
+        .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+        + 1;
+    Ok(new)
+}
+
+/// Recursively search for files matching a query (case-insensitive filename match).
+/// Cancels on epoch bump. Returns whatever it has found at the cancellation point.
 #[tauri::command]
 fn search_files(
+    state: State<'_, AppState>,
     directory: String,
     query: String,
     limit: Option<u32>,
 ) -> Result<Vec<String>, String> {
-    use std::collections::VecDeque;
+    let my_epoch = state
+        .search_epoch
+        .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+        + 1;
+    let epoch_ref = state.search_epoch.clone();
+    let is_cancelled = move || epoch_ref.load(std::sync::atomic::Ordering::Relaxed) != my_epoch;
+    Ok(search_files_impl(
+        &directory,
+        &query,
+        limit.unwrap_or(200) as usize,
+        &is_cancelled,
+    ))
+}
 
-    let max = limit.unwrap_or(50) as usize;
+/// Pure helper for `search_files`. Tested directly; the tauri command is a thin wrapper.
+pub(crate) fn search_files_impl(
+    directory: &str,
+    query: &str,
+    max: usize,
+    is_cancelled: &dyn Fn() -> bool,
+) -> Vec<String> {
+    use std::collections::VecDeque;
     let query_lower = query.to_lowercase();
-    let skip_dirs: std::collections::HashSet<&str> = [
-        "node_modules",
-        "target",
-        ".git",
-        "dist",
-        ".next",
-        "__pycache__",
-    ]
-    .into();
+    let skip_dirs: std::collections::HashSet<&str> = SEARCH_SKIP_DIRS.iter().copied().collect();
 
     let mut results = Vec::new();
     let mut queue = VecDeque::new();
-    queue.push_back(std::path::PathBuf::from(&directory));
+    queue.push_back(std::path::PathBuf::from(directory));
 
     while let Some(dir) = queue.pop_front() {
-        if results.len() >= max {
+        if is_cancelled() || results.len() >= max {
             break;
         }
         let entries = match std::fs::read_dir(&dir) {
@@ -914,14 +994,14 @@ fn search_files(
             Err(_) => continue,
         };
         for entry in entries.flatten() {
-            if results.len() >= max {
+            if is_cancelled() || results.len() >= max {
                 break;
             }
             let path = entry.path();
             let name = entry.file_name();
             let name_str = name.to_string_lossy();
             if path.is_dir() {
-                if !skip_dirs.contains(name_str.as_ref()) {
+                if !skip_dirs.contains(name_str.as_ref()) && !name_str.starts_with('.') {
                     queue.push_back(path);
                 }
             } else if name_str.to_lowercase().contains(&query_lower) {
@@ -929,7 +1009,7 @@ fn search_files(
             }
         }
     }
-    Ok(results)
+    results
 }
 
 /// Result row for cross-file content search
@@ -941,41 +1021,55 @@ struct FileSearchMatch {
 }
 
 /// Recursively search for content matches inside files (case-insensitive substring).
-/// Skips heavy/system dirs and files > 1 MB to stay responsive.
+/// Restricted to a text-file extension whitelist. Cancels on epoch bump.
 #[tauri::command]
 fn search_in_files(
+    state: State<'_, AppState>,
     directory: String,
     query: String,
     limit: Option<u32>,
 ) -> Result<Vec<FileSearchMatch>, String> {
+    if query.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    let my_epoch = state
+        .search_epoch
+        .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+        + 1;
+    let epoch_ref = state.search_epoch.clone();
+    let is_cancelled = move || epoch_ref.load(std::sync::atomic::Ordering::Relaxed) != my_epoch;
+    Ok(search_in_files_impl(
+        &directory,
+        &query,
+        limit.unwrap_or(200) as usize,
+        &is_cancelled,
+    ))
+}
+
+/// Pure helper for `search_in_files`. Tested directly; the tauri command is a thin wrapper.
+pub(crate) fn search_in_files_impl(
+    directory: &str,
+    query: &str,
+    max_total: usize,
+    is_cancelled: &dyn Fn() -> bool,
+) -> Vec<FileSearchMatch> {
     use std::collections::VecDeque;
     use std::io::{BufRead, BufReader};
 
     if query.trim().is_empty() {
-        return Ok(Vec::new());
+        return Vec::new();
     }
-    let max_total = limit.unwrap_or(200) as usize;
     let max_per_file = 5usize;
     let max_file_size = 1_048_576u64; // 1 MB
     let query_lower = query.to_lowercase();
-    let skip_dirs: std::collections::HashSet<&str> = [
-        "node_modules",
-        "target",
-        ".git",
-        "dist",
-        ".next",
-        "__pycache__",
-        ".venv",
-        "venv",
-    ]
-    .into();
+    let skip_dirs: std::collections::HashSet<&str> = SEARCH_SKIP_DIRS.iter().copied().collect();
 
     let mut results: Vec<FileSearchMatch> = Vec::new();
     let mut queue = VecDeque::new();
-    queue.push_back(std::path::PathBuf::from(&directory));
+    queue.push_back(std::path::PathBuf::from(directory));
 
     while let Some(dir) = queue.pop_front() {
-        if results.len() >= max_total {
+        if is_cancelled() || results.len() >= max_total {
             break;
         }
         let entries = match std::fs::read_dir(&dir) {
@@ -983,19 +1077,21 @@ fn search_in_files(
             Err(_) => continue,
         };
         for entry in entries.flatten() {
-            if results.len() >= max_total {
+            if is_cancelled() || results.len() >= max_total {
                 break;
             }
             let path = entry.path();
             let name = entry.file_name();
             let name_str = name.to_string_lossy();
             if path.is_dir() {
-                if !skip_dirs.contains(name_str.as_ref()) {
+                if !skip_dirs.contains(name_str.as_ref()) && !name_str.starts_with('.') {
                     queue.push_back(path);
                 }
                 continue;
             }
-            // Skip files that are too large
+            if !is_text_extension(&name_str) {
+                continue;
+            }
             let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
             if size > max_file_size {
                 continue;
@@ -1007,9 +1103,12 @@ fn search_in_files(
             let reader = BufReader::new(file);
             let mut in_file_count = 0usize;
             for (idx, line) in reader.lines().enumerate() {
+                if is_cancelled() {
+                    return results;
+                }
                 let line = match line {
                     Ok(l) => l,
-                    Err(_) => break, // likely binary
+                    Err(_) => break,
                 };
                 if line.to_lowercase().contains(&query_lower) {
                     results.push(FileSearchMatch {
@@ -1029,7 +1128,7 @@ fn search_in_files(
             }
         }
     }
-    Ok(results)
+    results
 }
 
 // ── Git log / branch commands ─────────────────────────────────────────
@@ -2306,6 +2405,7 @@ pub fn run() {
         pty: PtyManager::new(),
         session_poller: poller.clone(),
         fs_watcher,
+        search_epoch: Arc::new(std::sync::atomic::AtomicU64::new(0)),
     };
 
     tauri::Builder::default()
@@ -2362,6 +2462,7 @@ pub fn run() {
             detect_worktree_info,
             search_files,
             search_in_files,
+            cancel_searches,
             // Git diff
             git_diff_files,
             git_diff_file,
@@ -2421,8 +2522,8 @@ mod tests {
             writeln!(h, "nothing here").unwrap();
             writeln!(h, "wOrLd peace").unwrap();
         }
-        let res =
-            search_in_files(tmp.to_string_lossy().to_string(), "world".to_string(), None).unwrap();
+        let never_cancel = || false;
+        let res = search_in_files_impl(tmp.to_str().unwrap(), "world", 200, &never_cancel);
         assert_eq!(res.len(), 2, "should find two matches (case-insensitive)");
         assert!(res
             .iter()
@@ -2435,8 +2536,75 @@ mod tests {
 
     #[test]
     fn search_in_files_empty_query_returns_empty() {
-        let res = search_in_files(".".to_string(), "".to_string(), None).unwrap();
+        let never_cancel = || false;
+        let res = search_in_files_impl(".", "", 200, &never_cancel);
         assert!(res.is_empty());
+    }
+
+    #[test]
+    fn search_in_files_respects_cancellation() {
+        let tmp = std::env::temp_dir().join(format!("rxs-cancel-{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let f = tmp.join("alpha.txt");
+        let mut h = std::fs::File::create(&f).unwrap();
+        for i in 0..1000 {
+            writeln!(h, "needle on line {i}").unwrap();
+        }
+        drop(h);
+        // Cancel immediately
+        let always_cancel = || true;
+        let res = search_in_files_impl(tmp.to_str().unwrap(), "needle", 200, &always_cancel);
+        assert!(res.is_empty(), "cancellation should yield empty results");
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn search_in_files_skips_binary_extensions() {
+        let tmp = std::env::temp_dir().join(format!("rxs-binskip-{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let txt = tmp.join("text.txt");
+        let bin = tmp.join("blob.bin");
+        std::fs::write(&txt, "hello needle world").unwrap();
+        std::fs::write(&bin, "hello needle world").unwrap();
+        let never_cancel = || false;
+        let res = search_in_files_impl(tmp.to_str().unwrap(), "needle", 200, &never_cancel);
+        assert_eq!(
+            res.len(),
+            1,
+            "only the .txt file should match; .bin is skipped"
+        );
+        assert!(res[0].path.contains("text.txt"));
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn search_files_skips_hidden_and_skip_dirs() {
+        let tmp = std::env::temp_dir().join(format!("rxs-skipdirs-{}", std::process::id()));
+        let nested = tmp.join("node_modules");
+        let hidden = tmp.join(".git");
+        let visible = tmp.join("src");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::create_dir_all(&hidden).unwrap();
+        std::fs::create_dir_all(&visible).unwrap();
+        std::fs::write(nested.join("needle.ts"), "").unwrap();
+        std::fs::write(hidden.join("needle.txt"), "").unwrap();
+        std::fs::write(visible.join("needle.rs"), "").unwrap();
+        let never_cancel = || false;
+        let res = search_files_impl(tmp.to_str().unwrap(), "needle", 50, &never_cancel);
+        assert_eq!(res.len(), 1, "only src/needle.rs should be found");
+        assert!(res[0].contains("needle.rs"));
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn is_text_extension_recognizes_common_code_files() {
+        assert!(is_text_extension("foo.ts"));
+        assert!(is_text_extension("Foo.CS"));
+        assert!(is_text_extension("script.py"));
+        assert!(is_text_extension("Dockerfile"));
+        assert!(!is_text_extension("blob.bin"));
+        assert!(!is_text_extension("image.png"));
+        assert!(!is_text_extension("compiled.exe"));
     }
 
     #[test]

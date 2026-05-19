@@ -66,12 +66,12 @@ describe("parseTerminalConfig", () => {
 describe("detectLanguage", () => {
   it("detects TypeScript", () => {
     expect(detectLanguage("src/app.ts")).toBe("typescript");
-    expect(detectLanguage("component.tsx")).toBe("typescriptreact");
+    expect(detectLanguage("component.tsx")).toBe("typescript");
   });
 
   it("detects JavaScript", () => {
     expect(detectLanguage("index.js")).toBe("javascript");
-    expect(detectLanguage("App.jsx")).toBe("javascriptreact");
+    expect(detectLanguage("App.jsx")).toBe("javascript");
   });
 
   it("detects Rust", () => {
@@ -89,10 +89,35 @@ describe("detectLanguage", () => {
 
   it("detects Markdown", () => {
     expect(detectLanguage("README.md")).toBe("markdown");
+    expect(detectLanguage("page.mdx")).toBe("markdown");
   });
 
   it("detects PowerShell", () => {
     expect(detectLanguage("script.ps1")).toBe("powershell");
+  });
+
+  it("detects C#", () => {
+    expect(detectLanguage("Program.cs")).toBe("csharp");
+  });
+
+  it("detects C and C++", () => {
+    expect(detectLanguage("main.c")).toBe("c");
+    expect(detectLanguage("util.h")).toBe("c");
+    expect(detectLanguage("widget.cpp")).toBe("cpp");
+    expect(detectLanguage("widget.hpp")).toBe("cpp");
+  });
+
+  it("detects Java and Kotlin", () => {
+    expect(detectLanguage("Main.java")).toBe("java");
+    expect(detectLanguage("App.kt")).toBe("kotlin");
+  });
+
+  it("detects Go, Ruby, PHP, Swift, Dart", () => {
+    expect(detectLanguage("main.go")).toBe("go");
+    expect(detectLanguage("app.rb")).toBe("ruby");
+    expect(detectLanguage("index.php")).toBe("php");
+    expect(detectLanguage("View.swift")).toBe("swift");
+    expect(detectLanguage("main.dart")).toBe("dart");
   });
 
   it("returns plaintext for unknown extensions", () => {
@@ -103,10 +128,11 @@ describe("detectLanguage", () => {
   it("is case-insensitive", () => {
     expect(detectLanguage("file.TS")).toBe("typescript");
     expect(detectLanguage("file.JSON")).toBe("json");
+    expect(detectLanguage("Program.CS")).toBe("csharp");
   });
 
   it("handles paths with multiple dots", () => {
-    expect(detectLanguage("my.component.test.tsx")).toBe("typescriptreact");
+    expect(detectLanguage("my.component.test.tsx")).toBe("typescript");
   });
 });
 

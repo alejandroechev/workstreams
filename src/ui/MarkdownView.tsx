@@ -9,6 +9,8 @@ interface Props {
   children: string;
   className?: string;
   style?: CSSProperties;
+  /** Base font size in px for the body. Headings/code scale proportionally. Default 14. */
+  baseFontSize?: number;
 }
 
 /**
@@ -17,10 +19,18 @@ interface Props {
  * Provides a VS Code-style dark theme: typography, headings with bottom border,
  * syntax-highlighted code blocks (vscDarkPlus), blockquotes with left border,
  * clean tables, and inline mermaid diagram rendering with zoom/pan.
+ *
+ * When `baseFontSize` is provided, all element sizes (headings, code blocks,
+ * blockquote, inline code, etc.) scale proportionally via em units.
  */
-export function MarkdownView({ children, className, style }: Props) {
+export function MarkdownView({ children, className, style, baseFontSize }: Props) {
+  const mergedContainer: CSSProperties = {
+    ...containerStyle,
+    ...(baseFontSize ? { fontSize: baseFontSize } : null),
+    ...style,
+  };
   return (
-    <div className={className} style={{ ...containerStyle, ...style }} data-testid="markdown-content">
+    <div className={className} style={mergedContainer} data-testid="markdown-content">
       <Markdown remarkPlugins={[remarkGfm]} components={components}>
         {children}
       </Markdown>
@@ -160,7 +170,7 @@ const components = {
 };
 
 const h1Style: CSSProperties = {
-  fontSize: 28,
+  fontSize: "2em",
   fontWeight: 600,
   color: "#cdd6f4",
   borderBottom: "1px solid #313244",
@@ -169,7 +179,7 @@ const h1Style: CSSProperties = {
   marginBottom: 16,
 };
 const h2Style: CSSProperties = {
-  fontSize: 22,
+  fontSize: "1.6em",
   fontWeight: 600,
   color: "#cdd6f4",
   borderBottom: "1px solid #313244",
@@ -178,28 +188,28 @@ const h2Style: CSSProperties = {
   marginBottom: 14,
 };
 const h3Style: CSSProperties = {
-  fontSize: 18,
+  fontSize: "1.3em",
   fontWeight: 600,
   color: "#cdd6f4",
   marginTop: 22,
   marginBottom: 10,
 };
 const h4Style: CSSProperties = {
-  fontSize: 16,
+  fontSize: "1.15em",
   fontWeight: 600,
   color: "#cdd6f4",
   marginTop: 18,
   marginBottom: 8,
 };
 const h5Style: CSSProperties = {
-  fontSize: 14,
+  fontSize: "1em",
   fontWeight: 600,
   color: "#bac2de",
   marginTop: 16,
   marginBottom: 6,
 };
 const h6Style: CSSProperties = {
-  fontSize: 13,
+  fontSize: "0.92em",
   fontWeight: 600,
   color: "#a6adc8",
   marginTop: 14,
@@ -238,7 +248,7 @@ const tableStyle: CSSProperties = {
   borderCollapse: "collapse",
   width: "100%",
   margin: "14px 0",
-  fontSize: 13,
+  fontSize: "0.95em",
 };
 const theadStyle: CSSProperties = { borderBottom: "2px solid #313244" };
 const trStyle: CSSProperties = { borderBottom: "1px solid #313244" };

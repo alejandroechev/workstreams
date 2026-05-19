@@ -15,7 +15,6 @@ import {
   ChevronUpIcon,
   ArrowPathIcon,
   FolderOpenIcon,
-  ArrowLeftIcon,
   CodeBracketSquareIcon,
   ClockIcon,
   BoltIcon,
@@ -271,24 +270,36 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
     }
   }, [showFileSearch]);
 
-  // Debounced file search
+  // Debounced file search (Ctrl+P).
+  // The cleanup function cancels the in-flight search via the Rust epoch
+  // counter so the backend bails out promptly when the user keeps typing
+  // (this is what prevented the IPC queue from blocking other tiles).
   useEffect(() => {
     if (!showFileSearch || !fileSearchQuery.trim()) {
       setFileSearchResults([]);
       return;
     }
+    let cancelled = false;
     const timer = setTimeout(async () => {
+      // Cancel any previous in-flight search before starting a new one.
+      try { await backend.cancelSearches(); } catch { /* ignore */ }
+      if (cancelled) return;
       setFileSearchLoading(true);
       try {
         const results = await backend.searchFiles(currentDir, fileSearchQuery.trim());
-        setFileSearchResults(results);
+        if (!cancelled) setFileSearchResults(results);
       } catch {
-        setFileSearchResults([]);
+        if (!cancelled) setFileSearchResults([]);
       } finally {
-        setFileSearchLoading(false);
+        if (!cancelled) setFileSearchLoading(false);
       }
-    }, 200);
-    return () => clearTimeout(timer);
+    }, 250);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+      // Bump the epoch immediately so any running search bails on its next iter.
+      void backend.cancelSearches();
+    };
   }, [fileSearchQuery, showFileSearch, backend, currentDir]);
 
   const closeFileSearch = useCallback(() => {
@@ -317,27 +328,8 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
     }
   };
 
-  const goBackToBrowse = () => {
-    // If viewing a commit diff, go back to log mode
-    if (commitDiffHash) {
-      goBackToLog();
-      return;
-    }
-    setMode("browse");
-    setContent(null);
-    setFilePath("");
-    setFileError(null);
-    // Keep diff mode active so we return to the diff file list
-    // User can exit diff mode by clicking the diff button again
-    if (!activeDiffMode) {
-      setDiffContent("");
-      setDiffFiles([]);
-      setDiffFilePath("");
-    }
-    if (entries.length === 0 && !activeDiffMode) {
-      loadDir(currentDir);
-    }
-  };
+  // Note: navigation back to the file list is handled by the tab bar.
+  // The standalone "Back to Browse" buttons were removed in favor of tabs.
 
   const handleBrowseDialog = async () => {
     const file = await open({ title: "Open file", multiple: false, directory: false });
@@ -423,13 +415,8 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
     }
   }, [backend, gitRoot]);
 
-  const goBackToLog = useCallback(() => {
-    setMode("log");
-    setContent(null);
-    setFilePath("");
-    setCommitDiff("");
-    setCommitDiffHash("");
-  }, []);
+  // Note: previously had goBackToLog (used by removed back button).
+  // Returning to the log is now handled by clicking the Log tab.
 
   // Git hooks handlers
   const openGitHooks = useCallback(async () => {
@@ -537,25 +524,34 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
     return () => window.removeEventListener("keydown", handler);
   }, [isFocused]);
 
-  // Debounced cross-file content search
+  // Debounced cross-file content search (Ctrl+Shift+F).
+  // Same cancellation pattern as Ctrl+P: bump the Rust epoch on cleanup so
+  // a slow walk doesn't keep the IPC queue full and freeze adjacent tiles.
   useEffect(() => {
     if (!showContentSearch || !contentSearchQuery.trim()) {
       setContentSearchResults([]);
       return;
     }
+    let cancelled = false;
     const timer = setTimeout(async () => {
+      try { await backend.cancelSearches(); } catch { /* ignore */ }
+      if (cancelled) return;
       setContentSearchLoading(true);
       try {
         const root = rootDir || currentDir;
         const r = await backend.searchInFiles(root, contentSearchQuery.trim());
-        setContentSearchResults(r);
+        if (!cancelled) setContentSearchResults(r);
       } catch {
-        setContentSearchResults([]);
+        if (!cancelled) setContentSearchResults([]);
       } finally {
-        setContentSearchLoading(false);
+        if (!cancelled) setContentSearchLoading(false);
       }
-    }, 250);
-    return () => clearTimeout(timer);
+    }, 300);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+      void backend.cancelSearches();
+    };
   }, [contentSearchQuery, showContentSearch, backend, rootDir, currentDir]);
 
   const closeContentSearch = useCallback(() => {
@@ -605,23 +601,25 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
         );
       })}
       <div style={{ flex: 1 }} />
-      <button
-        onClick={() => setFontSize((s) => Math.max(8, s - 1))}
-        style={tabIconButtonStyle}
-        title="Decrease font size (Ctrl+-)"
-        data-testid="repo-explorer-font-dec"
-      >
-        <MinusIcon style={{ width: 12, height: 12 }} />
-      </button>
-      <span style={{ fontSize: 10, color: "#6c7086", minWidth: 20, textAlign: "center" }} data-testid="repo-explorer-font-size">{fontSize}</span>
-      <button
-        onClick={() => setFontSize((s) => Math.min(28, s + 1))}
-        style={tabIconButtonStyle}
-        title="Increase font size (Ctrl+=)"
-        data-testid="repo-explorer-font-inc"
-      >
-        <PlusIcon style={{ width: 12, height: 12 }} />
-      </button>
+      <div style={{ display: "flex", alignItems: "center", gap: 2 }}>
+        <button
+          onClick={() => setFontSize((s) => Math.max(8, s - 1))}
+          style={tabIconButtonStyle}
+          title="Decrease font size (Ctrl+-)"
+          data-testid="repo-explorer-font-dec"
+        >
+          <MinusIcon style={{ width: 12, height: 12 }} />
+        </button>
+        <span style={{ fontSize: 10, color: "#6c7086", minWidth: 20, textAlign: "center" }} data-testid="repo-explorer-font-size">{fontSize}</span>
+        <button
+          onClick={() => setFontSize((s) => Math.min(28, s + 1))}
+          style={tabIconButtonStyle}
+          title="Increase font size (Ctrl+=)"
+          data-testid="repo-explorer-font-inc"
+        >
+          <PlusIcon style={{ width: 12, height: 12 }} />
+        </button>
+      </div>
     </div>
   );
 
@@ -801,10 +799,7 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
       return (
         <div ref={containerRef} style={{ ...containerStyle, alignItems: "center", justifyContent: "center" }}>
           {tabBar}
-          <div style={{ color: "#585b70" }}>No file loaded</div>
-          <button onClick={goBackToBrowse} style={{ ...backButtonStyle, display: "flex", alignItems: "center", gap: 4 }}>
-            <ArrowLeftIcon style={{ width: 14, height: 14 }} /> Back
-          </button>
+          <div style={{ color: "#585b70" }}>No file loaded — pick one from the Files tab</div>
           {fileError && <div style={errorTextStyle}>{fileError}</div>}
           {overlays}
         </div>
@@ -837,9 +832,6 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
     const viewToolbar = (
       <div style={toolbarStyle}>
         <div style={{ display: "flex", alignItems: "center", gap: 6, overflow: "hidden", flex: 1 }}>
-          <button onClick={goBackToBrowse} style={{ ...toolbarButtonStyle, display: "flex", alignItems: "center", gap: 2 }} title="Back to browser">
-            <ArrowLeftIcon style={{ width: 14, height: 14 }} /> Back
-          </button>
           <span style={{ ...pathTextStyle, display: "flex", alignItems: "center", gap: 4 }}>
             {isMarkdown(filePath)
               ? <DocumentTextIcon style={{ width: 14, height: 14, flexShrink: 0 }} />
@@ -927,7 +919,7 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
         <div ref={containerRef} style={containerStyle}>
       {tabBar}
           {viewToolbar}
-          <MarkdownView style={markdownContainerStyle}>{content ?? ""}</MarkdownView>
+          <MarkdownView style={markdownContainerStyle} baseFontSize={fontSize}>{content ?? ""}</MarkdownView>
           {overlays}
         </div>
       );
@@ -970,14 +962,6 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
       {tabBar}
         <div style={toolbarStyle}>
           <div style={{ display: "flex", alignItems: "center", gap: 6, overflow: "hidden", flex: 1 }}>
-            <button
-              onClick={() => { setMode("browse"); setLogCommits([]); setCommitDiff(""); setCommitDiffHash(""); }}
-              style={{ ...toolbarButtonStyle, display: "flex", alignItems: "center", gap: 2 }}
-              title="Back to browser"
-              data-testid="log-back-btn"
-            >
-              <ArrowLeftIcon style={{ width: 14, height: 14 }} /> Browse
-            </button>
             <span style={{ ...pathTextStyle, display: "flex", alignItems: "center", gap: 4, color: "#f9e2af" }}>
               <ClockIcon style={{ width: 14, height: 14, flexShrink: 0 }} />
               Git Log{currentBranch ? ` — ${currentBranch}` : ""}
@@ -1033,13 +1017,6 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
       {tabBar}
         <div style={toolbarStyle}>
           <div style={{ display: "flex", alignItems: "center", gap: 6, overflow: "hidden", flex: 1 }}>
-            <button
-              onClick={() => { setMode("browse"); setHookContent(null); }}
-              style={{ ...toolbarButtonStyle, display: "flex", alignItems: "center", gap: 2 }}
-              title="Back to browser"
-            >
-              <ArrowLeftIcon style={{ width: 14, height: 14 }} /> Browse
-            </button>
             <span style={{ ...pathTextStyle, display: "flex", alignItems: "center", gap: 4, color: "#f5c2e7" }}>
               <BoltIcon style={{ width: 14, height: 14, flexShrink: 0 }} />
               Git Hooks
@@ -1144,9 +1121,6 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
       <div style={toolbarStyle}>
         {activeDiffMode ? (
           <>
-            <button onClick={exitDiffMode} style={{ ...toolbarButtonStyle, fontSize: 11, display: "flex", alignItems: "center", gap: 2 }} title="Exit diff mode">
-              <ArrowLeftIcon style={{ width: 14, height: 14 }} /> Browse
-            </button>
             <span style={{ ...pathTextStyle, flex: 1, color: "#f9e2af" }}>
               {activeDiffMode === "unstaged" ? "Unstaged Changes" : activeDiffMode === "last_commit" ? "Last Commit" : "Branch vs Master"}
             </span>

@@ -51,6 +51,8 @@ export interface Backend {
   // File search
   searchFiles(directory: string, query: string): Promise<string[]>;
   searchInFiles(directory: string, query: string, limit?: number): Promise<FileSearchMatch[]>;
+  /** Bump the global search epoch so any in-flight search bails out on its next iteration. */
+  cancelSearches(): Promise<void>;
   // Git diff
   gitDiffFiles(directory: string, mode: string): Promise<string[]>;
   gitDiffFile(directory: string, filePath: string, mode: string): Promise<string>;
