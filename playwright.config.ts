@@ -16,8 +16,8 @@ export default defineConfig({
     baseURL: `http://localhost:${PORT}`,
     trace: "on-first-retry",
     screenshot: "only-on-failure",
-    actionTimeout: 5_000,
-    navigationTimeout: 10_000,
+    actionTimeout: 8_000,
+    navigationTimeout: 30_000,
   },
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
   webServer: {

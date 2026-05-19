@@ -4,11 +4,10 @@ export type KeyAction =
   | { type: "escape" }
   | { type: "switchWorkstream"; index: number }
   | { type: "navigate"; direction: Direction }
-  | { type: "addTile"; tileType: TileType }
+  | { type: "addTile"; tileType: TileType; extraConfig?: Record<string, string> }
   | { type: "closeTile" }
   | { type: "toggleFullscreen" }
-  | { type: "focusTile"; index: number }
-  | { type: "quickSearch" };
+  | { type: "focusTile"; index: number };
 
 /**
  * Returns true if the active element is an input, textarea, select, or xterm terminal.
@@ -32,6 +31,20 @@ export interface ParseKeyActionOpts {
  * Maps a keyboard event to a semantic action.
  * All app-level commands use Alt+ prefix to avoid conflicts with
  * terminal (Ctrl+C/V/etc) and editor (Ctrl+F/P/etc) shortcuts.
+ *
+ * Tile-creation shortcuts:
+ *   Alt+S  copilot_session
+ *   Alt+P  terminal (PowerShell)
+ *   Alt+W  terminal with shell=wsl
+ *   Alt+R  file_explorer (Repo Explorer)
+ *   Alt+M  session_meta
+ *   Alt+B  workbench
+ *
+ * Tile management:
+ *   Alt+Q  close focused tile
+ *   Alt+F  toggle fullscreen
+ *   Alt+ArrowKeys  navigate between tiles
+ *   Alt+1..9  switch workstream
  */
 export function parseKeyAction(opts: ParseKeyActionOpts): KeyAction | null {
   const { altKey, key } = opts;
@@ -54,23 +67,23 @@ export function parseKeyAction(opts: ParseKeyActionOpts): KeyAction | null {
       case "ArrowDown":
         return { type: "navigate", direction: "down" };
       // Tile creation
-      case "n":
+      case "p":
         return { type: "addTile", tileType: "terminal" };
+      case "w":
+        return { type: "addTile", tileType: "terminal", extraConfig: { shell: "wsl" } };
       case "s":
         return { type: "addTile", tileType: "copilot_session" };
-      case "e":
+      case "r":
         return { type: "addTile", tileType: "file_explorer" };
       case "m":
         return { type: "addTile", tileType: "session_meta" };
       case "b":
         return { type: "addTile", tileType: "workbench" };
       // Tile management
-      case "w":
+      case "q":
         return { type: "closeTile" };
       case "f":
         return { type: "toggleFullscreen" };
-      case "p":
-        return { type: "quickSearch" };
     }
 
     // Alt+1-9 switches workstreams

@@ -434,21 +434,37 @@ export default function App() {
     const command = wsCommands.current.get(activeWsId) || "pwsh.exe";
 
     const typeLabels: Record<TileType, string> = {
-      terminal: "Terminal",
+      terminal: "PowerShell",
       copilot_session: "Copilot",
       file_viewer: "Viewer",
-      file_explorer: "Files",
+      file_explorer: "Repo",
       code_viewer: "Code",
       doc_viewer: "Doc",
       session_meta: "Meta-session",
       workbench: "Bench",
     };
-    const tileCount = tiles.filter((t) => t.tile_type === tileType).length;
+    // Count by sub-shell (PowerShell vs WSL) so each gets its own
+    // numbered sequence.
+    const isWsl = tileType === "terminal" && extraConfig?.shell === "wsl";
+    let tileCount: number;
+    if (tileType === "terminal") {
+      tileCount = tiles.filter((t) => {
+        if (t.tile_type !== "terminal") return false;
+        try {
+          const c = JSON.parse(t.config_json || "{}");
+          const wsl = c.shell === "wsl" || (typeof c.command === "string" && c.command.toLowerCase().includes("wsl"));
+          return wsl === isWsl;
+        } catch {
+          return !isWsl;
+        }
+      }).length;
+    } else {
+      tileCount = tiles.filter((t) => t.tile_type === tileType).length;
+    }
     let config: string;
     let title: string;
 
     if (tileType === "terminal") {
-      const isWsl = extraConfig?.shell === "wsl";
       const shellCmd = isWsl ? "wsl.exe" : command;
       config = createTerminalConfig(cwd, shellCmd);
       title = isWsl ? `WSL ${tileCount + 1}` : `${typeLabels[tileType]} ${tileCount + 1}`;
@@ -622,7 +638,7 @@ export default function App() {
           if (action.tileType === "copilot_session") {
             setShowSessionPicker(true);
           } else {
-            addTile(action.tileType);
+            addTile(action.tileType, action.extraConfig);
           }
           break;
         case "closeTile":
@@ -645,10 +661,6 @@ export default function App() {
           break;
         case "focusTile":
           if (action.index < count) setFocusedIndex(action.index);
-          break;
-        case "quickSearch":
-          e.preventDefault();
-          console.log("[quickSearch] Ctrl+P pressed — will wire to explorer later");
           break;
       }
     };

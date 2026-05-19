@@ -68,6 +68,7 @@ export default function TileWrapper({
       return `${name} · ${friendlyActivity}${toolInfo}${turns}`;
     }
     if (tile.tile_type === "terminal") return termStatus;
+    if (tile.tile_type === "file_explorer") return "repo explorer";
     return tile.tile_type.replace("_", " ");
   };
 
