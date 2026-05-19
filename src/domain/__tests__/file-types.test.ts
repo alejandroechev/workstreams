@@ -1,5 +1,5 @@
-import { describe, it, expect } from "vitest";
-import { isAudioFile, mimeForAudio, SUPPORTED_AUDIO_EXTS } from "../file-types";
+import { describe, it, expect, vi, afterEach } from "vitest";
+import { isAudioFile, mimeForAudio, SUPPORTED_AUDIO_EXTS, base64ToBytes, makeAudioBlobUrl } from "../file-types";
 
 describe("file-types", () => {
   describe("isAudioFile", () => {
@@ -68,6 +68,32 @@ describe("file-types", () => {
       expect(new Set(SUPPORTED_AUDIO_EXTS)).toEqual(
         new Set(["mp3", "wav", "ogg", "flac", "m4a", "aac", "opus", "webm"]),
       );
+    });
+  });
+
+  describe("base64ToBytes", () => {
+    it("decodes a small ASCII payload byte-for-byte", () => {
+      // "hello" → "aGVsbG8="
+      const out = base64ToBytes("aGVsbG8=");
+      expect(Array.from(out)).toEqual([104, 101, 108, 108, 111]);
+    });
+
+    it("handles empty input", () => {
+      expect(base64ToBytes("").length).toBe(0);
+    });
+  });
+
+  describe("makeAudioBlobUrl", () => {
+    const realCreate = URL.createObjectURL;
+    afterEach(() => { URL.createObjectURL = realCreate; });
+
+    it("creates a blob URL with the right MIME and size", () => {
+      URL.createObjectURL = vi.fn(() => "blob:fake");
+      const r = makeAudioBlobUrl("song.mp3", "aGVsbG8=");
+      expect(r.url).toBe("blob:fake");
+      expect(r.size).toBe(5);
+      expect(r.mime).toBe("audio/mpeg");
+      expect(r.bytes.byteLength).toBe(5);
     });
   });
 });

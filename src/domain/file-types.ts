@@ -61,3 +61,27 @@ export function mimeForAudio(path: string): string | null {
 
 /** Exposed for tests / debugging. */
 export const SUPPORTED_AUDIO_EXTS: ReadonlyArray<string> = Array.from(AUDIO_EXTS);
+
+/**
+ * Decode a base64 string (as returned by Rust's `read_file_base64`) into
+ * a Uint8Array. Browser-native, no Buffer dependency. Exposed so tiles
+ * can reuse the same loader.
+ */
+export function base64ToBytes(b64: string): Uint8Array {
+  const binary = atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
+/**
+ * Build an object URL + raw bytes for an audio file path, given a
+ * base64-encoded payload. The caller is responsible for revoking the
+ * URL when the player unmounts.
+ */
+export function makeAudioBlobUrl(path: string, b64: string): { url: string; bytes: ArrayBuffer; size: number; mime: string } {
+  const bytes = base64ToBytes(b64);
+  const mime = mimeForAudio(path) || "audio/mpeg";
+  const blob = new Blob([bytes], { type: mime });
+  return { url: URL.createObjectURL(blob), bytes: bytes.buffer, size: bytes.length, mime };
+}

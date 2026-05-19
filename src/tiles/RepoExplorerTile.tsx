@@ -8,7 +8,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useBackend } from "../backend/context";
 import { detectLanguage } from "../domain/tile-config";
-import { isAudioFile, mimeForAudio } from "../domain/file-types";
+import { isAudioFile, makeAudioBlobUrl } from "../domain/file-types";
 import {
   FolderIcon,
   DocumentIcon,
@@ -194,19 +194,13 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
     }
   }, [backend]);
 
-  // Helper for audio open path. Reads the file as base64, decodes to bytes,
-  // wraps in a Blob with the right MIME, and creates an object URL. Returns
-  // {url, bytes, size} on success or throws.
+  // Helper for audio open path. Reads the file as base64, converts to a
+  // Blob with the right MIME, and creates an object URL. The shared
+  // makeAudioBlobUrl helper is also used by Meta and Workbench tiles.
   const loadAudioFile = useCallback(async (audioPath: string): Promise<{ url: string; bytes: ArrayBuffer; size: number }> => {
     const b64 = await invoke<string>("read_file_base64", { path: audioPath });
-    // Base64 → Uint8Array (browser-native, no Buffer needed).
-    const binary = atob(b64);
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-    const mime = mimeForAudio(audioPath) || "audio/mpeg";
-    const blob = new Blob([bytes], { type: mime });
-    const url = URL.createObjectURL(blob);
-    return { url, bytes: bytes.buffer, size: bytes.length };
+    const r = makeAudioBlobUrl(audioPath, b64);
+    return { url: r.url, bytes: r.bytes, size: r.size };
   }, []);
 
   // Revoke any previously-created audio object URL when it changes or the

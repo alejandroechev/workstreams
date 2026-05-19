@@ -6,6 +6,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useBackend } from "../backend/context";
 import { detectLanguage } from "../domain/tile-config";
+import { isAudioFile, makeAudioBlobUrl } from "../domain/file-types";
+import AudioPlayer from "./AudioPlayer";
 import {
   PlusIcon,
   XMarkIcon,
@@ -14,6 +16,7 @@ import {
   DocumentTextIcon,
   CodeBracketIcon,
   FolderOpenIcon,
+  MusicalNoteIcon,
 } from "@heroicons/react/24/outline";
 
 interface Props {
@@ -39,17 +42,24 @@ function FileItemIcon({ name }: { name: string }) {
       return <CodeBracketIcon style={{ width: 14, height: 14, color: "#a6adc8" }} />;
     case "md": case "mdx": case "markdown":
       return <DocumentTextIcon style={{ width: 14, height: 14, color: "#a6adc8" }} />;
+    case "mp3": case "wav": case "ogg": case "flac": case "m4a": case "aac": case "opus": case "webm":
+      return <MusicalNoteIcon style={{ width: 14, height: 14, color: "#cba6f7" }} />;
     default:
       return <DocumentIcon style={{ width: 14, height: 14, color: "#6c7086" }} />;
   }
 }
 
-export default function WorkbenchTile({ tileId: _tileId, isFocused: _isFocused, configJson, onConfigChange }: Props) {
+export default function WorkbenchTile({ tileId: _tileId, isFocused, configJson, onConfigChange }: Props) {
   const backend = useBackend();
   const [mode, setMode] = useState<Mode>("list");
   const [viewingPath, setViewingPath] = useState<string | null>(null);
   const [fileContent, setFileContent] = useState<string>("");
   const [loadingFile, setLoadingFile] = useState(false);
+  // Audio state: when viewingPath points at an audio file, we hold the
+  // Blob URL + raw bytes so <AudioPlayer> can render the waveform.
+  const [audioUrl, setAudioUrl] = useState<string | null>(null);
+  const [audioBytes, setAudioBytes] = useState<ArrayBuffer | null>(null);
+  const [audioSize, setAudioSize] = useState(0);
 
   const files: string[] = useMemo(() => {
     try {
@@ -92,21 +102,38 @@ export default function WorkbenchTile({ tileId: _tileId, isFocused: _isFocused, 
     setLoadingFile(true);
     setViewingPath(path);
     setMode("view");
+    // Reset prior audio state (and revoke any object URL we created).
+    if (audioUrl) URL.revokeObjectURL(audioUrl);
+    setAudioUrl(null);
+    setAudioBytes(null);
+    setAudioSize(0);
     try {
-      const content = await backend.readFile(path);
-      setFileContent(content);
+      if (isAudioFile(path)) {
+        const b64 = await invoke<string>("read_file_base64", { path });
+        const r = makeAudioBlobUrl(path, b64);
+        setAudioUrl(r.url);
+        setAudioBytes(r.bytes);
+        setAudioSize(r.size);
+        setFileContent("");
+      } else {
+        const content = await backend.readFile(path);
+        setFileContent(content);
+      }
     } catch (e) {
       setFileContent(`Error reading file: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setLoadingFile(false);
     }
-  }, [backend]);
+  }, [backend, audioUrl]);
 
   const handleBack = useCallback(() => {
+    if (audioUrl) URL.revokeObjectURL(audioUrl);
+    setAudioUrl(null);
+    setAudioBytes(null);
     setMode("list");
     setViewingPath(null);
     setFileContent("");
-  }, []);
+  }, [audioUrl]);
 
   // Watch files for live updates
   useEffect(() => {
@@ -122,8 +149,9 @@ export default function WorkbenchTile({ tileId: _tileId, isFocused: _isFocused, 
     }
     const unlisten = listen<{ path: string }>("fs-change", async (event) => {
       const changedPath = event.payload.path.replace(/\//g, "\\");
-      // If viewing a file that changed, refresh content
-      if (mode === "view" && viewingPath) {
+      // If viewing a file that changed, refresh content (text files only;
+      // audio playback is left alone — re-reading would mid-play swap).
+      if (mode === "view" && viewingPath && !isAudioFile(viewingPath)) {
         const normalPath = viewingPath.replace(/\//g, "\\");
         if (changedPath === normalPath) {
           try {
@@ -191,6 +219,14 @@ export default function WorkbenchTile({ tileId: _tileId, isFocused: _isFocused, 
             <div style={{ padding: 12, color: "#585b70", textAlign: "center", fontFamily: "monospace", fontSize: 12 }}>
               Loading…
             </div>
+          ) : audioUrl ? (
+            <AudioPlayer
+              url={audioUrl}
+              path={viewingPath}
+              sizeBytes={audioSize}
+              audioBytes={audioBytes}
+              isFocused={isFocused}
+            />
           ) : md ? (
             <div style={{ overflow: "auto", height: "100%" }}>
               <MarkdownView>{fileContent}</MarkdownView>

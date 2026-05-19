@@ -4,6 +4,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { MarkdownView } from "../ui/MarkdownView";
 import { useBackend } from "../backend/context";
+import { isAudioFile, makeAudioBlobUrl } from "../domain/file-types";
+import AudioPlayer from "./AudioPlayer";
 import type { CopilotConfigItem } from "../domain/types";
 import {
   SparklesIcon,
@@ -101,7 +103,7 @@ function isRelevantFile(filePath: string): boolean {
   return true;
 }
 
-export default function SessionMetaTile({ tileId: _tileId, isFocused: _isFocused, workstreamDir, linkedSessionIds }: Props) {
+export default function SessionMetaTile({ tileId: _tileId, isFocused, workstreamDir, linkedSessionIds }: Props) {
   const backend = useBackend();
   const [items, setItems] = useState<CopilotConfigItem[]>([]);
   const [files, setFiles] = useState<SessionFileEntry[]>([]);
@@ -126,15 +128,26 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused: _isFocused
   // Events
   const [events, setEvents] = useState<SessionEvent[]>([]);
   const [eventsLoading, setEventsLoading] = useState(false);
-  // Content viewer (for configs and files)
+  // Content viewer (for configs and files). For audio entries we store the
+  // Blob URL + raw bytes so <AudioPlayer> can drive playback + waveform.
   const [viewContent, setViewContent] = useState<{
     title: string;
     content: string;
     type: "text" | "markdown" | "image" | "audio";
     mimeType?: string;
+    audioUrl?: string;
+    audioBytes?: ArrayBuffer;
+    audioPath?: string;
+    audioSize?: number;
   } | null>(null);
   // Toggle raw text for markdown
   const [showRawMd, setShowRawMd] = useState(false);
+
+  // Revoke any object URL the previous audio entry created.
+  useEffect(() => {
+    const prev = viewContent?.audioUrl;
+    return () => { if (prev) URL.revokeObjectURL(prev); };
+  }, [viewContent?.audioUrl]);
 
   const loadConfig = useCallback(async () => {
     setLoading(true);
@@ -337,12 +350,10 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused: _isFocused
     const ext = path.split(".").pop()?.toLowerCase() || "";
     const mdExts = new Set(["md", "mdx", "markdown"]);
     const imgExts = new Set(["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "ico"]);
-    const audioExts = new Set(["mp3", "wav", "ogg", "m4a", "aac", "flac", "wma"]);
+    // Audio is handled via the shared file-types helpers — no per-tile set.
     const mimeMap: Record<string, string> = {
       png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif",
       webp: "image/webp", svg: "image/svg+xml", bmp: "image/bmp", ico: "image/x-icon",
-      mp3: "audio/mpeg", wav: "audio/wav", ogg: "audio/ogg", m4a: "audio/mp4",
-      aac: "audio/aac", flac: "audio/flac", wma: "audio/x-ms-wma",
     };
 
     try {
@@ -377,9 +388,18 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused: _isFocused
         setViewContent({ title, content: b64, type: "image", mimeType: mimeMap[ext] || "image/png" });
         return;
       }
-      if (audioExts.has(ext)) {
+      if (isAudioFile(path)) {
         const b64 = await invoke<string>("read_file_base64", { path });
-        setViewContent({ title, content: b64, type: "audio", mimeType: mimeMap[ext] || "audio/mpeg" });
+        const r = makeAudioBlobUrl(path, b64);
+        setViewContent({
+          title,
+          content: "",
+          type: "audio",
+          audioUrl: r.url,
+          audioBytes: r.bytes,
+          audioPath: path,
+          audioSize: r.size,
+        });
         return;
       }
 
@@ -952,12 +972,14 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused: _isFocused
               />
             </div>
           )}
-          {viewContent.type === "audio" && (
-            <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", padding: 12 }}>
-              <audio
-                controls
-                src={`data:${viewContent.mimeType};base64,${viewContent.content}`}
-                style={{ width: "90%" }}
+          {viewContent.type === "audio" && viewContent.audioUrl && (
+            <div style={{ flex: 1, display: "flex", overflow: "hidden" }}>
+              <AudioPlayer
+                url={viewContent.audioUrl}
+                path={viewContent.audioPath || viewContent.title}
+                sizeBytes={viewContent.audioSize ?? 0}
+                audioBytes={viewContent.audioBytes ?? null}
+                isFocused={isFocused}
               />
             </div>
           )}
