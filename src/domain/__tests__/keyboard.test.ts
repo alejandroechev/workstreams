@@ -49,12 +49,13 @@ describe("parseKeyAction", () => {
   });
 
   it("returns addTile for the new tile-creation shortcuts", () => {
-    expect(parseKeyAction({ key: "p", ...alt })).toEqual({ type: "addTile", tileType: "terminal" });
+    expect(parseKeyAction({ key: "t", ...alt })).toEqual({ type: "addTile", tileType: "terminal" });
     expect(parseKeyAction({ key: "w", ...alt })).toEqual({
       type: "addTile", tileType: "terminal", extraConfig: { shell: "wsl" },
     });
     expect(parseKeyAction({ key: "s", ...alt })).toEqual({ type: "addTile", tileType: "copilot_session" });
     expect(parseKeyAction({ key: "r", ...alt })).toEqual({ type: "addTile", tileType: "file_explorer" });
+    expect(parseKeyAction({ key: "p", ...alt })).toEqual({ type: "addTile", tileType: "plan" });
   });
 
   it("returns addTile for Alt+M (session_meta) and Alt+B (workbench)", () => {
@@ -82,12 +83,12 @@ describe("parseKeyAction", () => {
     const input = { tagName: "INPUT" } as Element;
     expect(parseKeyAction({ key: "ArrowLeft", altKey: true, ctrlKey: false, activeElement: input }))
       .toEqual({ type: "navigate", direction: "left" });
-    expect(parseKeyAction({ key: "p", altKey: true, ctrlKey: false, activeElement: input }))
+    expect(parseKeyAction({ key: "t", altKey: true, ctrlKey: false, activeElement: input }))
       .toEqual({ type: "addTile", tileType: "terminal" });
   });
 
   it("bare keys return null", () => {
-    expect(parseKeyAction({ key: "p", ...noMod })).toBeNull();
+    expect(parseKeyAction({ key: "t", ...noMod })).toBeNull();
     expect(parseKeyAction({ key: "s", ...noMod })).toBeNull();
     expect(parseKeyAction({ key: "ArrowLeft", ...noMod })).toBeNull();
     expect(parseKeyAction({ key: "1", ...noMod })).toBeNull();

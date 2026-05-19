@@ -5,6 +5,7 @@ import CopilotSessionTile from "../tiles/CopilotSessionTile";
 import RepoExplorerTile from "../tiles/RepoExplorerTile";
 import SessionMetaTile from "../tiles/SessionMetaTile";
 import WorkbenchTile from "../tiles/WorkbenchTile";
+import PlanTile from "../tiles/PlanTile";
 import type { Tile } from "../workstream/types";
 import type { CopilotSessionStats } from "../domain/types";
 import { invoke } from "@tauri-apps/api/core";
@@ -69,6 +70,7 @@ export default function TileWrapper({
     }
     if (tile.tile_type === "terminal") return termStatus;
     if (tile.tile_type === "file_explorer") return "repo explorer";
+    if (tile.tile_type === "plan") return "plan";
     return tile.tile_type.replace("_", " ");
   };
 
@@ -168,6 +170,15 @@ export default function TileWrapper({
           isFocused={isFocused}
           configJson={tile.config_json}
           onConfigChange={(cfg) => onUpdateTileConfig?.(tile.id, cfg)}
+        />
+      );
+      break;
+    case "plan":
+      content = (
+        <PlanTile
+          tileId={tile.id}
+          isFocused={isFocused}
+          linkedSessionIds={linkedSessionIds}
         />
       );
       break;

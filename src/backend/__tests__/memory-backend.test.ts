@@ -278,6 +278,15 @@ describe("MemoryBackend", () => {
     });
   });
 
+  describe("session plan/todo introspection", () => {
+    it("returns empty defaults", async () => {
+      expect(await backend.listSessionPlans("s")).toEqual([]);
+      expect(await backend.getCurrentSessionPlan("s")).toBeNull();
+      expect(await backend.listSessionTodoDeps("s")).toEqual([]);
+      expect(await backend.listSessionTodos("s")).toEqual([]);
+    });
+  });
+
   describe("terminals", () => {
     it("spawns and tracks a terminal", async () => {
       await backend.spawnTerminal("tile-1", "/", "bash");

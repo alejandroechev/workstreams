@@ -64,7 +64,7 @@ const CATEGORY_META: Record<string, CategoryMeta> = {
 
 const CATEGORY_ORDER = ["skill", "extension", "agent", "mcp_server", "instruction", "git_hook"];
 
-type TabId = "config" | "files" | "database" | "plan" | "checkpoints" | "events";
+type TabId = "config" | "files" | "database" | "checkpoints" | "events";
 
 interface SessionCheckpoint {
   number: number;
@@ -120,8 +120,7 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
   const [selectedTable, setSelectedTable] = useState<string | null>(null);
   const [tableData, setTableData] = useState<SessionDbTableData | null>(null);
   const [dbLoading, setDbLoading] = useState(false);
-  // Plan content
-  const [planContent, setPlanContent] = useState<string | null>(null);
+  // Plan content removed: see PlanTile.
   // Checkpoints
   const [checkpoints, setCheckpoints] = useState<SessionCheckpoint[]>([]);
   const [checkpointContent, setCheckpointContent] = useState<{ title: string; content: string } | null>(null);
@@ -240,27 +239,8 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
     if (activeTab === "database") loadDbTables();
   }, [activeTab, loadDbTables]);
 
-  // Load plan.md when plan tab is selected
-  const loadPlan = useCallback(async () => {
-    if (!linkedSessionIds || linkedSessionIds.length === 0) {
-      setPlanContent(null);
-      return;
-    }
-    for (const sid of linkedSessionIds) {
-      try {
-        const content = await invoke<string>("read_session_file", { sessionId: sid, relativePath: "plan.md" });
-        if (content) {
-          setPlanContent(content);
-          return;
-        }
-      } catch { /* ignore */ }
-    }
-    setPlanContent(null);
-  }, [linkedSessionIds]);
-
-  useEffect(() => {
-    if (activeTab === "plan") loadPlan();
-  }, [activeTab, loadPlan]);
+  // Load plan.md when plan tab is selected — removed (now in PlanTile).
+  const loadPlan = useCallback(async () => {}, []);
 
   const loadCheckpoints = useCallback(async () => {
     if (!linkedSessionIds || linkedSessionIds.length === 0) {
@@ -331,7 +311,6 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
       debounceTimer = setTimeout(() => {
         if (activeTab === "config") loadConfig();
         if (activeTab === "files") loadSessionData();
-        if (activeTab === "plan") loadPlan();
         if (activeTab === "database") loadDbTables();
       }, 1000);
     });
@@ -419,8 +398,7 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
     loadConfig();
     loadSessionData();
     if (activeTab === "database") loadDbTables();
-    if (activeTab === "plan") loadPlan();
-  }, [loadConfig, loadSessionData, loadDbTables, loadPlan, activeTab]);
+  }, [loadConfig, loadSessionData, loadDbTables, activeTab]);
 
   const toggleCategory = (cat: string) => {
     setCollapsed((prev) => {
@@ -445,7 +423,6 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
   const tabs: { id: TabId; label: string; icon: React.ComponentType<React.SVGProps<SVGSVGElement>>; count: number }[] = [
     { id: "config", label: "Config", icon: SparklesIcon, count: items.length },
     { id: "files", label: "Files", icon: FolderIcon, count: uniqueFiles.length },
-    { id: "plan", label: "Plan", icon: ClipboardDocumentListIcon, count: 0 },
     { id: "checkpoints", label: "CP", icon: FlagIcon, count: checkpoints.length },
     { id: "events", label: "Events", icon: SignalIcon, count: events.length },
     { id: "database", label: "DB", icon: TableCellsIcon, count: dbTables.reduce((s, t) => s + t.row_count, 0) },
@@ -865,40 +842,7 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
           </>
         )}
 
-        {/* Plan tab */}
-        {activeTab === "plan" && (
-          <>
-            {(!linkedSessionIds || linkedSessionIds.length === 0) && (
-              <div style={{ padding: 12, color: "#585b70", textAlign: "center" }}>
-                No linked sessions
-              </div>
-            )}
-            {linkedSessionIds && linkedSessionIds.length > 0 && planContent === null && (
-              <div style={{ padding: 12, color: "#585b70", textAlign: "center" }}>
-                No plan.md found in session
-              </div>
-            )}
-            {planContent && (
-              <>
-                <div style={{ display: "flex", justifyContent: "flex-end", padding: "2px 8px", flexShrink: 0 }}>
-                  <button
-                    onClick={() => setShowRawMd((v) => !v)}
-                    style={{ background: "none", border: "none", color: "#585b70", cursor: "pointer", fontSize: 10, padding: "2px 6px" }}
-                  >{showRawMd ? "Rendered" : "Raw"}</button>
-                </div>
-                {showRawMd ? (
-                  <pre style={{ flex: 1, overflow: "auto", padding: "8px 12px", margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-word", fontSize: 11, lineHeight: 1.5, color: "#cdd6f4", fontFamily: "monospace" }}>
-                    {planContent}
-                  </pre>
-                ) : (
-                  <div style={{ flex: 1, overflow: "auto" }}>
-                    <MarkdownView>{planContent}</MarkdownView>
-                  </div>
-                )}
-              </>
-            )}
-          </>
-        )}
+        {/* Plan tab removed — see PlanTile (Alt+P) */}
       </div>
 
       {/* Content viewer overlay */}

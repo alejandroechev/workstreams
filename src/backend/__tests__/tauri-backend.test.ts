@@ -309,4 +309,17 @@ describe("TauriBackend", () => {
     await backend.discoverCopilotConfig("/repo");
     expect(invoke).toHaveBeenCalledWith("discover_copilot_config", { workstreamDir: "/repo" });
   });
+
+  it("session plan/todo/dep commands invoke with sessionId", async () => {
+    invoke.mockResolvedValue([]);
+    await backend.listSessionPlans("s1");
+    expect(invoke).toHaveBeenCalledWith("query_session_plans", { sessionId: "s1" });
+    invoke.mockResolvedValueOnce(null);
+    await backend.getCurrentSessionPlan("s1");
+    expect(invoke).toHaveBeenCalledWith("query_session_current_plan", { sessionId: "s1" });
+    await backend.listSessionTodoDeps("s1");
+    expect(invoke).toHaveBeenCalledWith("query_session_todo_deps", { sessionId: "s1" });
+    await backend.listSessionTodos("s1");
+    expect(invoke).toHaveBeenCalledWith("query_session_todos", { sessionId: "s1" });
+  });
 });

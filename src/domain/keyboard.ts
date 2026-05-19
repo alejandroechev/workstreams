@@ -34,11 +34,12 @@ export interface ParseKeyActionOpts {
  *
  * Tile-creation shortcuts:
  *   Alt+S  copilot_session
- *   Alt+P  terminal (PowerShell)
+ *   Alt+T  terminal (PowerShell)
  *   Alt+W  terminal with shell=wsl
  *   Alt+R  file_explorer (Repo Explorer)
  *   Alt+M  session_meta
  *   Alt+B  workbench
+ *   Alt+P  plan
  *
  * Tile management:
  *   Alt+Q  close focused tile
@@ -67,7 +68,7 @@ export function parseKeyAction(opts: ParseKeyActionOpts): KeyAction | null {
       case "ArrowDown":
         return { type: "navigate", direction: "down" };
       // Tile creation
-      case "p":
+      case "t":
         return { type: "addTile", tileType: "terminal" };
       case "w":
         return { type: "addTile", tileType: "terminal", extraConfig: { shell: "wsl" } };
@@ -79,6 +80,8 @@ export function parseKeyAction(opts: ParseKeyActionOpts): KeyAction | null {
         return { type: "addTile", tileType: "session_meta" };
       case "b":
         return { type: "addTile", tileType: "workbench" };
+      case "p":
+        return { type: "addTile", tileType: "plan" };
       // Tile management
       case "q":
         return { type: "closeTile" };

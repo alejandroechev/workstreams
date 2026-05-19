@@ -62,4 +62,31 @@ export interface Backend {
   gitCurrentBranch(directory: string): Promise<string>;
   // Copilot config discovery
   discoverCopilotConfig(workstreamDir?: string): Promise<CopilotConfigItem[]>;
+  // Plan / todo introspection of a Copilot session's session.db
+  listSessionPlans(sessionId: string): Promise<SessionPlanEntry[]>;
+  getCurrentSessionPlan(sessionId: string): Promise<string | null>;
+  listSessionTodoDeps(sessionId: string): Promise<SessionTodoDep[]>;
+  listSessionTodos(sessionId: string): Promise<SessionTodo[]>;
+}
+
+export interface SessionPlanEntry {
+  id: string;
+  title: string | null;
+  status: string;
+  created_at: string;
+  superseded_at: string | null;
+  plan_md_snapshot: string | null;
+}
+
+export interface SessionTodoDep {
+  todo_id: string;
+  depends_on: string;
+}
+
+export interface SessionTodo {
+  id: string;
+  title: string;
+  description: string | null;
+  status: string;
+  plan_id: string | null;
 }

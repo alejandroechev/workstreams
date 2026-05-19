@@ -12,6 +12,7 @@ interface Props {
   onAddExplorer?: () => void;
   onAddSessionMeta?: () => void;
   onAddWorkbench?: () => void;
+  onAddPlan?: () => void;
   onCloseTitle?: () => void;
   onToggleFullscreen?: () => void;
 }
@@ -38,16 +39,18 @@ export default function StatusBar({
   onAddExplorer,
   onAddSessionMeta,
   onAddWorkbench,
+  onAddPlan,
   onCloseTitle,
   onToggleFullscreen,
 }: Props) {
-  const rawItems: Array<{ key: string; label: string; icon: "session" | "terminal" | "folder" | "info" | "beaker"; shortcut?: string; onSelect?: () => void }> = [
+  const rawItems: Array<{ key: string; label: string; icon: "session" | "terminal" | "folder" | "info" | "beaker" | "plan"; shortcut?: string; onSelect?: () => void }> = [
     { key: "session", label: "Copilot Session", icon: "session", shortcut: "Alt+S", onSelect: onAddSession },
-    { key: "terminal", label: "PowerShell", icon: "terminal", shortcut: "Alt+P", onSelect: onAddTerminal },
+    { key: "terminal", label: "PowerShell", icon: "terminal", shortcut: "Alt+T", onSelect: onAddTerminal },
     { key: "wsl", label: "WSL Terminal", icon: "terminal", shortcut: "Alt+W", onSelect: onAddWslTerminal },
     { key: "explorer", label: "Repo Explorer", icon: "folder", shortcut: "Alt+R", onSelect: onAddExplorer },
     { key: "meta", label: "Session Meta", icon: "info", shortcut: "Alt+M", onSelect: onAddSessionMeta },
     { key: "workbench", label: "Workbench", icon: "beaker", shortcut: "Alt+B", onSelect: onAddWorkbench },
+    { key: "plan", label: "Plan", icon: "plan", shortcut: "Alt+P", onSelect: onAddPlan },
   ];
   const menuItems = rawItems
     .filter((it) => typeof it.onSelect === "function")

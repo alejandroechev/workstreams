@@ -442,6 +442,7 @@ export default function App() {
       doc_viewer: "Doc",
       session_meta: "Meta-session",
       workbench: "Bench",
+      plan: "Plan",
     };
     // Count by sub-shell (PowerShell vs WSL) so each gets its own
     // numbered sequence.
@@ -819,6 +820,7 @@ export default function App() {
           onAddExplorer={() => addTile("file_explorer")}
           onAddSessionMeta={() => addTile("session_meta")}
           onAddWorkbench={() => addTile("workbench")}
+          onAddPlan={() => addTile("plan")}
           onToggleFullscreen={() => {
             if (orderedTiles.length > 0 && orderedTiles[focusedIndex]) {
               const tid = orderedTiles[focusedIndex]!.id;

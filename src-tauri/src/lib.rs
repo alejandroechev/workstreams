@@ -2015,6 +2015,11 @@ pub struct SessionTodoEntry {
     pub title: String,
     pub description: Option<String>,
     pub status: String,
+    /// Plan ownership (added for Plan tile). NULL on legacy DBs that
+    /// haven't run the discipline-extension migration yet — we coerce
+    /// to None on read so the frontend doesn't have to special-case
+    /// missing column.
+    pub plan_id: Option<String>,
 }
 
 /// Read a file from within a session-state directory
@@ -2268,9 +2273,23 @@ fn query_session_todos(session_id: String) -> Result<Vec<SessionTodoEntry>, Stri
         return Ok(Vec::new());
     }
 
-    let mut stmt = conn
-        .prepare("SELECT id, title, description, status FROM todos ORDER BY created_at DESC")
-        .map_err(|e| e.to_string())?;
+    // The `plan_id` column may or may not exist depending on whether
+    // the discipline-guardian migration has run. Probe sqlite_master and
+    // pick the right SELECT.
+    let has_plan_id: bool = conn
+        .query_row(
+            "SELECT COUNT(*) > 0 FROM pragma_table_info('todos') WHERE name='plan_id'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(false);
+    let sql = if has_plan_id {
+        "SELECT id, title, description, status, plan_id FROM todos ORDER BY created_at DESC"
+    } else {
+        "SELECT id, title, description, status, NULL AS plan_id FROM todos ORDER BY created_at DESC"
+    };
+
+    let mut stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
 
     let rows = stmt
         .query_map([], |row| {
@@ -2279,6 +2298,7 @@ fn query_session_todos(session_id: String) -> Result<Vec<SessionTodoEntry>, Stri
                 title: row.get(1)?,
                 description: row.get(2)?,
                 status: row.get(3)?,
+                plan_id: row.get(4)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -2286,6 +2306,152 @@ fn query_session_todos(session_id: String) -> Result<Vec<SessionTodoEntry>, Stri
     let mut entries = Vec::new();
     for entry in rows.flatten() {
         entries.push(entry);
+    }
+    Ok(entries)
+}
+
+// ── Plan tile commands ─────────────────────────────────────────────────
+//
+// These read the session DB (RO) for the data the Plan tile needs:
+//   - all plans (active + superseded) for the History tab
+//   - which plan_id is current (singleton row in current_plan)
+//   - todo dependency edges for the Graph tab
+//
+// They all gracefully return empty/None when the corresponding tables or
+// columns are missing — older session DBs predate the discipline
+// extension's migration.
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct PlanEntry {
+    pub id: String,
+    pub title: Option<String>,
+    pub status: String,
+    pub created_at: String,
+    pub superseded_at: Option<String>,
+    pub plan_md_snapshot: Option<String>,
+}
+
+fn open_session_db_ro(session_id: &str) -> Option<Connection> {
+    let home = dirs::home_dir()?;
+    let path = home
+        .join(".copilot")
+        .join("session-state")
+        .join(session_id)
+        .join("session.db");
+    if !path.exists() {
+        return None;
+    }
+    Connection::open_with_flags(
+        &path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .ok()
+}
+
+fn table_exists(conn: &Connection, name: &str) -> bool {
+    conn.query_row(
+        "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name = ?1",
+        [name],
+        |row| row.get(0),
+    )
+    .unwrap_or(false)
+}
+
+/// All plans (active + superseded), most recent first.
+#[tauri::command]
+fn query_session_plans(session_id: String) -> Result<Vec<PlanEntry>, String> {
+    let conn = match open_session_db_ro(&session_id) {
+        Some(c) => c,
+        None => return Ok(Vec::new()),
+    };
+    query_session_plans_impl(&conn)
+}
+
+fn query_session_plans_impl(conn: &Connection) -> Result<Vec<PlanEntry>, String> {
+    if !table_exists(conn, "plans") {
+        return Ok(Vec::new());
+    }
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, title, status, created_at, superseded_at, plan_md_snapshot
+             FROM plans ORDER BY created_at DESC",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(PlanEntry {
+                id: row.get(0)?,
+                title: row.get(1)?,
+                status: row.get(2)?,
+                created_at: row.get(3)?,
+                superseded_at: row.get(4)?,
+                plan_md_snapshot: row.get(5)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+    let mut entries = Vec::new();
+    for r in rows.flatten() {
+        entries.push(r);
+    }
+    Ok(entries)
+}
+
+/// The id of the plan referenced by `current_plan` (singleton row id=1),
+/// or None if the table is missing / empty.
+#[tauri::command]
+fn query_session_current_plan(session_id: String) -> Result<Option<String>, String> {
+    let conn = match open_session_db_ro(&session_id) {
+        Some(c) => c,
+        None => return Ok(None),
+    };
+    Ok(query_session_current_plan_impl(&conn))
+}
+
+fn query_session_current_plan_impl(conn: &Connection) -> Option<String> {
+    if !table_exists(conn, "current_plan") {
+        return None;
+    }
+    conn.query_row("SELECT plan_id FROM current_plan WHERE id = 1", [], |row| {
+        row.get(0)
+    })
+    .ok()
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct TodoDepEntry {
+    pub todo_id: String,
+    pub depends_on: String,
+}
+
+/// Edges in the todo dependency graph: `depends_on` must be done before
+/// `todo_id` can be started.
+#[tauri::command]
+fn query_session_todo_deps(session_id: String) -> Result<Vec<TodoDepEntry>, String> {
+    let conn = match open_session_db_ro(&session_id) {
+        Some(c) => c,
+        None => return Ok(Vec::new()),
+    };
+    query_session_todo_deps_impl(&conn)
+}
+
+fn query_session_todo_deps_impl(conn: &Connection) -> Result<Vec<TodoDepEntry>, String> {
+    if !table_exists(conn, "todo_deps") {
+        return Ok(Vec::new());
+    }
+    let mut stmt = conn
+        .prepare("SELECT todo_id, depends_on FROM todo_deps")
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(TodoDepEntry {
+                todo_id: row.get(0)?,
+                depends_on: row.get(1)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+    let mut entries = Vec::new();
+    for r in rows.flatten() {
+        entries.push(r);
     }
     Ok(entries)
 }
@@ -2492,6 +2658,9 @@ pub fn run() {
             list_session_events,
             query_session_files,
             query_session_todos,
+            query_session_plans,
+            query_session_current_plan,
+            query_session_todo_deps,
             list_session_db_tables,
             query_session_db_table,
             // Git log & branch
@@ -2859,5 +3028,97 @@ Body here.
         let result = query_session_files("nonexistent-session-id-67890".to_string());
         assert!(result.is_ok());
         assert_eq!(result.unwrap().len(), 0);
+    }
+
+    // ── Plan-tile backend tests ─────────────────────────────────────────
+    //
+    // We test the `_impl` helpers (which take a Connection directly) so
+    // we don't depend on dirs::home_dir(). The integration with the file
+    // path lives in the tauri command shells (untested here, exercised
+    // by CDP + Playwright instead).
+
+    fn fresh_mem_db() -> Connection {
+        Connection::open_in_memory().unwrap()
+    }
+
+    #[test]
+    fn query_session_plans_returns_rows_newest_first() {
+        let conn = fresh_mem_db();
+        conn.execute_batch(
+            "CREATE TABLE plans (id TEXT PRIMARY KEY, title TEXT, status TEXT NOT NULL,
+             created_at TEXT NOT NULL, superseded_at TEXT, plan_md_snapshot TEXT);
+             INSERT INTO plans VALUES ('plan-1','First','superseded','2026-01-01',NULL,'old md');
+             INSERT INTO plans VALUES ('plan-2','Second','active','2026-02-01',NULL,'new md');",
+        )
+        .unwrap();
+        let plans = query_session_plans_impl(&conn).unwrap();
+        assert_eq!(plans.len(), 2);
+        assert_eq!(plans[0].id, "plan-2"); // newest first
+        assert_eq!(plans[0].status, "active");
+        assert_eq!(plans[1].id, "plan-1");
+        assert_eq!(plans[1].plan_md_snapshot.as_deref(), Some("old md"));
+    }
+
+    #[test]
+    fn query_session_plans_returns_empty_when_table_missing() {
+        let conn = fresh_mem_db();
+        let plans = query_session_plans_impl(&conn).unwrap();
+        assert!(plans.is_empty());
+    }
+
+    #[test]
+    fn query_session_current_plan_returns_singleton_value() {
+        let conn = fresh_mem_db();
+        conn.execute_batch(
+            "CREATE TABLE current_plan (id INTEGER PRIMARY KEY, plan_id TEXT);
+             INSERT INTO current_plan (id, plan_id) VALUES (1, 'plan-abc');",
+        )
+        .unwrap();
+        assert_eq!(
+            query_session_current_plan_impl(&conn),
+            Some("plan-abc".to_string())
+        );
+    }
+
+    #[test]
+    fn query_session_current_plan_returns_none_when_table_missing() {
+        let conn = fresh_mem_db();
+        assert_eq!(query_session_current_plan_impl(&conn), None);
+    }
+
+    #[test]
+    fn query_session_current_plan_returns_none_when_table_empty() {
+        let conn = fresh_mem_db();
+        conn.execute_batch("CREATE TABLE current_plan (id INTEGER PRIMARY KEY, plan_id TEXT);")
+            .unwrap();
+        assert_eq!(query_session_current_plan_impl(&conn), None);
+    }
+
+    #[test]
+    fn query_session_todo_deps_returns_edges() {
+        let conn = fresh_mem_db();
+        conn.execute_batch(
+            "CREATE TABLE todo_deps (todo_id TEXT, depends_on TEXT);
+             INSERT INTO todo_deps VALUES ('a','b');
+             INSERT INTO todo_deps VALUES ('a','c');
+             INSERT INTO todo_deps VALUES ('b','d');",
+        )
+        .unwrap();
+        let deps = query_session_todo_deps_impl(&conn).unwrap();
+        assert_eq!(deps.len(), 3);
+        let edge_set: std::collections::HashSet<_> = deps
+            .iter()
+            .map(|d| (d.todo_id.clone(), d.depends_on.clone()))
+            .collect();
+        assert!(edge_set.contains(&("a".to_string(), "b".to_string())));
+        assert!(edge_set.contains(&("a".to_string(), "c".to_string())));
+        assert!(edge_set.contains(&("b".to_string(), "d".to_string())));
+    }
+
+    #[test]
+    fn query_session_todo_deps_returns_empty_when_table_missing() {
+        let conn = fresh_mem_db();
+        let deps = query_session_todo_deps_impl(&conn).unwrap();
+        assert!(deps.is_empty());
     }
 }

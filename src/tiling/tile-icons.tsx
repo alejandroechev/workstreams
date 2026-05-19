@@ -18,6 +18,7 @@ import {
   RocketLaunchIcon,
   BugAntIcon,
   CogIcon,
+  ClipboardDocumentListIcon,
 } from "@heroicons/react/24/outline";
 import type { ComponentType, SVGProps } from "react";
 import type { TileType } from "../domain/types";
@@ -34,7 +35,8 @@ export type TileIconKey =
   | "sparkles"
   | "rocket"
   | "bug"
-  | "cog";
+  | "cog"
+  | "plan";
 
 type IconComponent = ComponentType<SVGProps<SVGSVGElement>>;
 
@@ -51,6 +53,7 @@ export const TILE_ICONS: Record<TileIconKey, IconComponent> = {
   rocket: RocketLaunchIcon,
   bug: BugAntIcon,
   cog: CogIcon,
+  plan: ClipboardDocumentListIcon,
 };
 
 export const TILE_ICON_LABELS: Record<TileIconKey, string> = {
@@ -66,6 +69,7 @@ export const TILE_ICON_LABELS: Record<TileIconKey, string> = {
   rocket: "Rocket",
   bug: "Bug",
   cog: "Cog",
+  plan: "Plan",
 };
 
 export function defaultIconForType(tileType: TileType): TileIconKey {
@@ -85,6 +89,8 @@ export function defaultIconForType(tileType: TileType): TileIconKey {
       return "info";
     case "workbench":
       return "beaker";
+    case "plan":
+      return "plan";
     default:
       return "puzzle";
   }

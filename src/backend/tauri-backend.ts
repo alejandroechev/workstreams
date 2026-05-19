@@ -169,4 +169,20 @@ export class TauriBackend implements Backend {
   async discoverCopilotConfig(workstreamDir?: string): Promise<CopilotConfigItem[]> {
     return invoke<CopilotConfigItem[]>("discover_copilot_config", { workstreamDir: workstreamDir ?? null });
   }
+
+  async listSessionPlans(sessionId: string): Promise<import("./types").SessionPlanEntry[]> {
+    return invoke<import("./types").SessionPlanEntry[]>("query_session_plans", { sessionId });
+  }
+
+  async getCurrentSessionPlan(sessionId: string): Promise<string | null> {
+    return invoke<string | null>("query_session_current_plan", { sessionId });
+  }
+
+  async listSessionTodoDeps(sessionId: string): Promise<import("./types").SessionTodoDep[]> {
+    return invoke<import("./types").SessionTodoDep[]>("query_session_todo_deps", { sessionId });
+  }
+
+  async listSessionTodos(sessionId: string): Promise<import("./types").SessionTodo[]> {
+    return invoke<import("./types").SessionTodo[]>("query_session_todos", { sessionId });
+  }
 }

@@ -291,4 +291,20 @@ export class MemoryBackend implements Backend {
   async discoverCopilotConfig(_workstreamDir?: string): Promise<CopilotConfigItem[]> {
     return [];
   }
+
+  async listSessionPlans(_sessionId: string): Promise<import("./types").SessionPlanEntry[]> {
+    return [];
+  }
+
+  async getCurrentSessionPlan(_sessionId: string): Promise<string | null> {
+    return null;
+  }
+
+  async listSessionTodoDeps(_sessionId: string): Promise<import("./types").SessionTodoDep[]> {
+    return [];
+  }
+
+  async listSessionTodos(_sessionId: string): Promise<import("./types").SessionTodo[]> {
+    return [];
+  }
 }
