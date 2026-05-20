@@ -8,6 +8,7 @@ import ForkWorkstreamForm from "./workstream/ForkWorkstreamForm";
 import TileGrid from "./tiling/TileGrid";
 import StatusBar from "./tiling/StatusBar";
 import SessionPicker, { type CopilotSession } from "./tiles/SessionPicker";
+import SettingsModal from "./ui/SettingsModal";
 import { navigateFocus } from "./domain/layout";
 import { parseKeyAction } from "./domain/keyboard";
 import { createTerminalConfig, createCopilotSessionConfig } from "./domain/tile-config";
@@ -76,6 +77,7 @@ export default function App() {
   const [showProjectCreate, setShowProjectCreate] = useState(false);
   const [showWsCreate, setShowWsCreate] = useState<{ show: boolean; projectId?: string }>({ show: false });
   const [showForkWs, setShowForkWs] = useState<{ show: boolean; wsId?: string }>({ show: false });
+  const [showSettings, setShowSettings] = useState(false);
   // Track which tile IDs have active PTYs to avoid double-spawning
   const spawnedPtys = useRef<Set<string>>(new Set());
   const previousWsTiles = useRef<Map<string, { tiles: Tile[]; order: string[] }>>(new Map());
@@ -821,6 +823,7 @@ export default function App() {
           onAddSessionMeta={() => addTile("session_meta")}
           onAddWorkbench={() => addTile("workbench")}
           onAddPlan={() => addTile("plan")}
+          onOpenSettings={() => setShowSettings(true)}
           onToggleFullscreen={() => {
             if (orderedTiles.length > 0 && orderedTiles[focusedIndex]) {
               const tid = orderedTiles[focusedIndex]!.id;
@@ -834,6 +837,8 @@ export default function App() {
           }}
         />
       </div>
+
+      <SettingsModal open={showSettings} onClose={() => setShowSettings(false)} />
 
       {/* Session picker modal */}
       {showSessionPicker && (

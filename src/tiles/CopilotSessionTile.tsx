@@ -7,6 +7,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { parseCopilotSessionConfig } from "../domain/tile-config";
 import { createPtyFitController } from "./pty-fit";
+import { getAppSettings, wheelDeltaToLines } from "../domain/app-settings";
 import { playBell, notifySessionIdle } from "../domain/notifications";
 import {
   keyToZoomAction,
@@ -251,11 +252,11 @@ export default function CopilotSessionTile({
     // In alternate-buffer mode (copilot TUI): translate to PgUp/PgDn for the PTY.
     //   Arrow keys move the cursor in agency's input box (not what we want);
     //   PgUp/PgDn are what agency uses to scroll conversation history.
-    // Divisor 120 (was 40) — agency's TUI conversation is dense, scroll feels
-    // way too fast at 40. 120 gives a comfortable "page every ~3 ticks".
+    // Scroll speed is controlled by app setting `terminalScrollSpeed`.
     const wheelHandler = (e: WheelEvent) => {
       const buf = (term as unknown as { buffer: { active: { type: string } } }).buffer?.active;
-      const lines = Math.max(1, Math.round(Math.abs(e.deltaY) / 120));
+      const speed = getAppSettings().terminalScrollSpeed;
+      const lines = wheelDeltaToLines(e.deltaY, speed);
       if (buf && buf.type === "alternate") {
         e.preventDefault();
         // \x1b[5~ = PgUp, \x1b[6~ = PgDn

@@ -13,6 +13,7 @@ Project-aware workstream manager with tiling compositor for Copilot CLI — mana
 - **Doc viewer tiles** — VS Code-style markdown renderer with GFM support, syntax-highlighted code blocks, and inline **Mermaid diagrams** with zoom/pan
 - **Repo Explorer tile** — Multi-tab repo browser (Files / Diff / Log / Hooks) with alphabetical sort (folders first), Ctrl+P filename search, Ctrl+Shift+F cross-file content search (native Rust walker, no ripgrep dep), Monaco find-in-file (Ctrl+F), and per-tile font-size zoom (Ctrl+= / Ctrl+- / A-/A+ buttons). Search overlays are scoped inside the tile and support arrow-key + Enter navigation. A stand-alone CLI scenario (`node scripts/repo-explorer-cli.mjs <dir> <query>`) mirrors the same content/filename search logic without launching the desktop app.
 - **Plan tile** — Per-session viewer (Alt+P) of the linked Copilot session's plan: rendered `plan.md`, current-plan todos grouped by status, mermaid dependency graph of `todo_deps`, and plan/todo history sourced from the `plans` table snapshots.
+- **App settings** — Status-bar gear opens a Settings modal. Currently exposes terminal scroll speed (0.1× – 5×, default 0.5×) so wheel-driven scrolling in terminal and Copilot session tiles can be tuned to taste; persisted in localStorage.
 - **Session persistence** — Workstreams, tile layouts, and terminal scrollback survive app restarts
 - **Keyboard-driven** — hjkl navigation, n/c/d for new tiles, Ctrl+1-9 for workstream switching
 - **Copilot CLI enrichment** — Reads session-store.db for context %, turn count, summaries

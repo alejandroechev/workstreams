@@ -15,6 +15,7 @@ interface Props {
   onAddPlan?: () => void;
   onCloseTitle?: () => void;
   onToggleFullscreen?: () => void;
+  onOpenSettings?: () => void;
 }
 
 const btnStyle: React.CSSProperties = {
@@ -42,6 +43,7 @@ export default function StatusBar({
   onAddPlan,
   onCloseTitle,
   onToggleFullscreen,
+  onOpenSettings,
 }: Props) {
   const rawItems: Array<{ key: string; label: string; icon: "session" | "terminal" | "folder" | "info" | "beaker" | "plan"; shortcut?: string; onSelect?: () => void }> = [
     { key: "session", label: "Copilot Session", icon: "session", shortcut: "Alt+S", onSelect: onAddSession },
@@ -84,6 +86,16 @@ export default function StatusBar({
       </div>
       <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
         <AddTileMenu items={menuItems} />
+        {onOpenSettings && (
+          <button
+            data-testid="open-settings"
+            style={{ ...btnStyle, color: "#585b70" }}
+            onClick={onOpenSettings}
+            title="Settings"
+          >
+            ⚙
+          </button>
+        )}
         <button style={{ ...btnStyle, color: "#585b70" }} onClick={onToggleFullscreen} title="Toggle fullscreen">⛶</button>
         <button style={{ ...btnStyle, color: "#585b70" }} onClick={onCloseTitle} title="Close focused tile">✕</button>
       </div>

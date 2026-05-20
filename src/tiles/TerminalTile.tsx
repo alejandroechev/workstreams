@@ -7,6 +7,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { playBell, flashWindow } from "../domain/notifications";
 import { createPtyFitController } from "./pty-fit";
+import { getAppSettings, wheelDeltaToLines } from "../domain/app-settings";
 import {
   keyToZoomAction,
   nextFontSize,
@@ -221,10 +222,11 @@ export default function TerminalTile({ tileId, isFocused, focusToken, onStatusCh
     //   switched to a Monaco-style virtual scroll model on .xterm-scrollable-element
     //   (overflow: visible). We must drive the scroll ourselves via term.scrollLines.
     // In alternate-buffer mode (TUI apps): translate to arrow keys for the PTY.
-    // Divisor 120 (was 40) — feels too fast at 40.
+    // Scroll speed is controlled by app setting `terminalScrollSpeed`.
     const wheelHandler = (e: WheelEvent) => {
       const buf = (term as unknown as { buffer: { active: { type: string } } }).buffer?.active;
-      const lines = Math.max(1, Math.round(Math.abs(e.deltaY) / 120));
+      const speed = getAppSettings().terminalScrollSpeed;
+      const lines = wheelDeltaToLines(e.deltaY, speed);
       if (buf && buf.type === "alternate") {
         e.preventDefault();
         const arrow = e.deltaY < 0 ? "\x1b[A" : "\x1b[B";
