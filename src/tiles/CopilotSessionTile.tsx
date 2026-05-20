@@ -6,6 +6,7 @@ import { SerializeAddon } from "@xterm/addon-serialize";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { parseCopilotSessionConfig } from "../domain/tile-config";
+import { createPtyFitController } from "./pty-fit";
 import { playBell, notifySessionIdle } from "../domain/notifications";
 import {
   keyToZoomAction,
@@ -47,6 +48,7 @@ export default function CopilotSessionTile({
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
+  const ptyFitRef = useRef<ReturnType<typeof createPtyFitController> | null>(null);
   const serializeRef = useRef<SerializeAddon | null>(null);
   const prevActivityRef = useRef<string>("idle");
   const [status, setStatus] = useState<string>(isResuming ? "resuming" : "starting");
@@ -217,16 +219,15 @@ export default function CopilotSessionTile({
       }
     });
 
+    const ptyFit = createPtyFitController({
+      tileId,
+      fitAddon,
+      getContainer: () => containerRef.current,
+    });
+    ptyFitRef.current = ptyFit;
+
     const resizeObserver = new ResizeObserver(() => {
-      // Only fit when container has non-zero dimensions; otherwise FitAddon
-      // computes a tiny cols/rows (~7 cols) which sticks until the next resize.
-      if (containerRef.current && containerRef.current.offsetWidth > 0) {
-        fitAddon.fit();
-        const dims = fitAddon.proposeDimensions();
-        if (dims) {
-          invoke("resize_pty", { tileId, rows: dims.rows, cols: dims.cols }).catch(() => {});
-        }
-      }
+      ptyFit.request();
     });
     resizeObserver.observe(containerRef.current);
 
@@ -236,15 +237,8 @@ export default function CopilotSessionTile({
     // re-fit when the tile becomes visible.
     const visibilityObserver = new IntersectionObserver((entries) => {
       for (const entry of entries) {
-        if (entry.isIntersecting && containerRef.current && containerRef.current.offsetWidth > 0) {
-          // RAF so the layout is settled before measuring.
-          requestAnimationFrame(() => {
-            fitAddon.fit();
-            const dims = fitAddon.proposeDimensions();
-            if (dims) {
-              invoke("resize_pty", { tileId, rows: dims.rows, cols: dims.cols }).catch(() => {});
-            }
-          });
+        if (entry.isIntersecting) {
+          ptyFit.request();
         }
       }
     }, { threshold: 0.01 });
@@ -287,6 +281,8 @@ export default function CopilotSessionTile({
       invoke("unwatch_session", { tileId }).catch(() => {});
       resizeObserver.disconnect();
       visibilityObserver.disconnect();
+      ptyFit.dispose();
+      ptyFitRef.current = null;
       unlistenOutput.then((u) => u());
       unlistenExit.then((u) => u());
       unlistenStats.then((u) => u());
@@ -328,14 +324,10 @@ export default function CopilotSessionTile({
     const term = termRef.current;
     if (!term) return;
     term.options.fontSize = fontSize;
-    const fit = fitRef.current;
-    if (fit && containerRef.current && containerRef.current.offsetWidth > 0) {
-      fit.fit();
-      const dims = fit.proposeDimensions();
-      if (dims) {
-        invoke("resize_pty", { tileId, rows: dims.rows, cols: dims.cols }).catch(() => {});
-      }
-    }
+    // Force the controller to re-send dims (cell grid may have changed even if
+    // pixel size of the tile didn't).
+    ptyFitRef.current?.invalidate();
+    ptyFitRef.current?.request();
   }, [fontSize, tileId]);
 
   // Zoom shortcuts (Ctrl+= / Ctrl+- / Ctrl+0) — active only while focused.

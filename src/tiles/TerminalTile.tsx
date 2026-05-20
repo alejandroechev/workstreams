@@ -6,6 +6,7 @@ import { SerializeAddon } from "@xterm/addon-serialize";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { playBell, flashWindow } from "../domain/notifications";
+import { createPtyFitController } from "./pty-fit";
 import {
   keyToZoomAction,
   nextFontSize,
@@ -24,6 +25,7 @@ export default function TerminalTile({ tileId, isFocused, focusToken, onStatusCh
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
+  const ptyFitRef = useRef<ReturnType<typeof createPtyFitController> | null>(null);
   const serializeRef = useRef<SerializeAddon | null>(null);
   const [status, setStatus] = useState<"spawning" | "running" | "exited" | "failed">("spawning");
   // Live font size, controlled by Ctrl+= / Ctrl+- / Ctrl+0 while focused.
@@ -189,22 +191,17 @@ export default function TerminalTile({ tileId, isFocused, focusToken, onStatusCh
       updateStatus("exited");
     });
 
-    // Handle resize. Only fit when container has non-zero dimensions, so we
-    // never lock in the tiny cols/rows that FitAddon would compute against a
-    // display:none container (the persist-by-hide architecture leaves
-    // inactive workstreams' tile wrappers at 0 size).
+    // Handle resize. Coalesced + dedup'd via the shared PTY-fit controller:
+    // skips invoke when cols/rows haven't changed (a same-size SIGWINCH on
+    // visibility flips causes Copilot CLI to misplace its TUI spinner output).
+    const ptyFit = createPtyFitController({
+      tileId,
+      fitAddon,
+      getContainer: () => containerRef.current,
+    });
+    ptyFitRef.current = ptyFit;
     const resizeObserver = new ResizeObserver(() => {
-      if (containerRef.current && containerRef.current.offsetWidth > 0) {
-        fitAddon.fit();
-        const dims = fitAddon.proposeDimensions();
-        if (dims) {
-          invoke("resize_pty", {
-            tileId,
-            rows: dims.rows,
-            cols: dims.cols,
-          }).catch(() => {});
-        }
-      }
+      ptyFit.request();
     });
     resizeObserver.observe(containerRef.current);
 
@@ -212,14 +209,8 @@ export default function TerminalTile({ tileId, isFocused, focusToken, onStatusCh
     // parent wrapper, so observe visibility explicitly and re-fit then.
     const visibilityObserver = new IntersectionObserver((entries) => {
       for (const entry of entries) {
-        if (entry.isIntersecting && containerRef.current && containerRef.current.offsetWidth > 0) {
-          requestAnimationFrame(() => {
-            fitAddon.fit();
-            const dims = fitAddon.proposeDimensions();
-            if (dims) {
-              invoke("resize_pty", { tileId, rows: dims.rows, cols: dims.cols }).catch(() => {});
-            }
-          });
+        if (entry.isIntersecting) {
+          ptyFit.request();
         }
       }
     }, { threshold: 0.01 });
@@ -261,6 +252,8 @@ export default function TerminalTile({ tileId, isFocused, focusToken, onStatusCh
       wheelTarget.removeEventListener("wheel", wheelHandler);
       resizeObserver.disconnect();
       visibilityObserver.disconnect();
+      ptyFit.dispose();
+      ptyFitRef.current = null;
       unlistenOutput.then((u) => u());
       unlistenExit.then((u) => u());
       term.dispose();
@@ -296,14 +289,8 @@ export default function TerminalTile({ tileId, isFocused, focusToken, onStatusCh
     const term = termRef.current;
     if (!term) return;
     term.options.fontSize = fontSize;
-    const fit = fitRef.current;
-    if (fit && containerRef.current && containerRef.current.offsetWidth > 0) {
-      fit.fit();
-      const dims = fit.proposeDimensions();
-      if (dims) {
-        invoke("resize_pty", { tileId, rows: dims.rows, cols: dims.cols }).catch(() => {});
-      }
-    }
+    ptyFitRef.current?.invalidate();
+    ptyFitRef.current?.request();
   }, [fontSize, tileId]);
 
   // Zoom shortcuts. Only listen while focused so other tiles don't see
