@@ -236,10 +236,21 @@ export default function CopilotSessionTile({
     // container at 0 dimensions while hidden. ResizeObserver doesn't always
     // fire when display flips none → flex. Watch visibility explicitly and
     // re-fit when the tile becomes visible.
+    // After the fit, force a full buffer repaint — xterm's canvas renderer
+    // caches glyphs in a texture atlas that can go stale when the element
+    // was display:none. Without this, the user sees a blank or partially-
+    // drawn terminal until something else triggers a redraw (e.g. Enter).
     const visibilityObserver = new IntersectionObserver((entries) => {
       for (const entry of entries) {
         if (entry.isIntersecting) {
           ptyFit.request();
+          // Schedule repaint after the fit controller's debounce + rAF settles.
+          setTimeout(() => {
+            if (term.rows > 0) {
+              try { (term as unknown as { _core?: { _renderService?: { handleResize(c: number, r: number): void } } })._core?._renderService?.handleResize(term.cols, term.rows); } catch { /* best effort */ }
+              term.refresh(0, term.rows - 1);
+            }
+          }, 150);
         }
       }
     }, { threshold: 0.01 });
@@ -307,7 +318,13 @@ export default function CopilotSessionTile({
     if (!isFocused) return;
     const focusNow = () => {
       fitRef.current?.fit();
-      termRef.current?.focus();
+      const term = termRef.current;
+      if (term) {
+        term.focus();
+        // Force full buffer repaint on re-focus (covers app-switch / ws-switch
+        // where the canvas texture atlas may have gone stale).
+        if (term.rows > 0) term.refresh(0, term.rows - 1);
+      }
       const textarea = containerRef.current?.querySelector(
         ".xterm-helper-textarea",
       ) as HTMLTextAreaElement | null;

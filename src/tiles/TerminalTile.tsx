@@ -208,10 +208,20 @@ export default function TerminalTile({ tileId, isFocused, focusToken, onStatusCh
 
     // ResizeObserver doesn't always fire when display flips none→flex on the
     // parent wrapper, so observe visibility explicitly and re-fit then.
+    // After the fit, force a full buffer repaint — xterm's canvas renderer
+    // caches glyphs in a texture atlas that can go stale when the element
+    // was display:none. Without this, the user sees a blank or partially-
+    // drawn terminal until something else triggers a redraw (e.g. Enter).
     const visibilityObserver = new IntersectionObserver((entries) => {
       for (const entry of entries) {
         if (entry.isIntersecting) {
           ptyFit.request();
+          setTimeout(() => {
+            if (term.rows > 0) {
+              try { (term as unknown as { _core?: { _renderService?: { handleResize(c: number, r: number): void } } })._core?._renderService?.handleResize(term.cols, term.rows); } catch { /* best effort */ }
+              term.refresh(0, term.rows - 1);
+            }
+          }, 150);
         }
       }
     }, { threshold: 0.01 });
@@ -268,9 +278,11 @@ export default function TerminalTile({ tileId, isFocused, focusToken, onStatusCh
     if (!isFocused) return;
     const focusNow = () => {
       fitRef.current?.fit();
-      termRef.current?.focus();
-      // Belt-and-braces: in xterm v6 term.focus() doesn't always end up on the
-      // helper textarea. Find and focus it explicitly.
+      const term = termRef.current;
+      if (term) {
+        term.focus();
+        if (term.rows > 0) term.refresh(0, term.rows - 1);
+      }
       const textarea = containerRef.current?.querySelector(
         ".xterm-helper-textarea",
       ) as HTMLTextAreaElement | null;
