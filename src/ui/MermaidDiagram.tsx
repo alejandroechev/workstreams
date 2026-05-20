@@ -5,9 +5,18 @@ import {
   ArrowPathIcon,
   ClipboardDocumentIcon,
   XMarkIcon,
+  MinusIcon,
+  PlusIcon,
 } from "@heroicons/react/24/outline";
 import { loadMermaid, loadPanzoom } from "./mermaid-loader";
 import { preprocessMermaidCode } from "./preprocessMermaid";
+import {
+  getAppSettings,
+  setAppSettings,
+  subscribeAppSettings,
+  MERMAID_FONT_SIZE_MAX,
+  MERMAID_FONT_SIZE_MIN,
+} from "../domain/app-settings";
 
 interface Props {
   source: string;
@@ -17,10 +26,22 @@ let diagramCounter = 0;
 
 export function MermaidDiagram({ source }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const panzoomInstanceRef = useRef<{ dispose?: () => void; reset?: () => void; zoomIn?: (s: number, o?: object) => void; zoomOut?: (s: number, o?: object) => void } | null>(null);
+  const panzoomInstanceRef = useRef<{
+    dispose?: () => void;
+    reset?: () => void;
+    zoom?: (s: number, o?: object) => void;
+    zoomIn?: (s: number, o?: object) => void;
+    zoomOut?: (s: number, o?: object) => void;
+  } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [fullscreen, setFullscreen] = useState(false);
+  const [fontSize, setFontSize] = useState<number>(() => getAppSettings().mermaidFontSize);
   const idRef = useRef(`mermaid-${++diagramCounter}`);
+
+  useEffect(
+    () => subscribeAppSettings((s) => setFontSize(s.mermaidFontSize)),
+    [],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -30,12 +51,22 @@ export function MermaidDiagram({ source }: Props) {
       try {
         const mermaid = await loadMermaid();
         if (cancelled || !containerRef.current) return;
+        // Re-initialize with current font size before each render. Mermaid
+        // bakes the font-size into every <text> element it emits, so changing
+        // it requires a fresh render.
+        mermaid.initialize({
+          startOnLoad: false,
+          theme: "dark",
+          securityLevel: "loose",
+          fontFamily: "'Segoe UI', system-ui, sans-serif",
+          themeVariables: { fontSize: `${fontSize}px` },
+        });
         const code = preprocessMermaidCode(source);
         const { svg } = await mermaid.render(`${idRef.current}-svg`, code);
         if (cancelled || !containerRef.current) return;
         containerRef.current.innerHTML = svg;
 
-        const svgEl = containerRef.current.querySelector("svg");
+        const svgEl = containerRef.current.querySelector("svg") as SVGSVGElement | null;
         if (svgEl) {
           svgEl.style.maxWidth = "none";
           svgEl.style.height = "auto";
@@ -46,10 +77,32 @@ export function MermaidDiagram({ source }: Props) {
         const instance = panzoom(svgEl as unknown as HTMLElement, {
           canvas: true,
           step: 0.06,
-          minZoom: 0.2,
+          minZoom: 0.1,
           maxZoom: 8,
         });
         panzoomInstanceRef.current = instance;
+
+        // Fit-to-container: mermaid's default SVG often renders much larger
+        // than the available area, especially for long graphs. Measure the
+        // natural SVG bbox vs the container and apply an initial zoom that
+        // makes the entire diagram visible with a small padding.
+        requestAnimationFrame(() => {
+          if (cancelled || !containerRef.current || !svgEl) return;
+          const container = containerRef.current;
+          try {
+            const svgBox = svgEl.getBBox();
+            const cw = container.clientWidth;
+            const ch = container.clientHeight;
+            if (svgBox.width > 0 && svgBox.height > 0 && cw > 0 && ch > 0) {
+              const scale = Math.min(cw / svgBox.width, ch / svgBox.height) * 0.9;
+              if (scale > 0 && scale < 1) {
+                instance.zoom?.(scale, { animate: false });
+              }
+            }
+          } catch {
+            /* getBBox throws if not laid out yet; ignore */
+          }
+        });
 
         const onWheel = (e: WheelEvent) => {
           e.preventDefault();
@@ -81,10 +134,18 @@ export function MermaidDiagram({ source }: Props) {
       cleanup?.();
       panzoomInstanceRef.current = null;
     };
-  }, [source, fullscreen]);
+  }, [source, fullscreen, fontSize]);
 
   const handleReset = () => {
     panzoomInstanceRef.current?.reset?.();
+  };
+
+  const bumpFont = (delta: number) => {
+    const next = Math.max(
+      MERMAID_FONT_SIZE_MIN,
+      Math.min(MERMAID_FONT_SIZE_MAX, fontSize + delta),
+    );
+    setAppSettings({ mermaidFontSize: next });
   };
 
   const handleCopySvg = async () => {
@@ -113,6 +174,30 @@ export function MermaidDiagram({ source }: Props) {
   const body = (
     <div style={fullscreen ? fullscreenWrapperStyle : wrapperStyle} data-testid="mermaid-diagram">
       <div style={toolbarStyle}>
+        <button
+          title={`Smaller font (${fontSize}px)`}
+          onClick={() => bumpFont(-1)}
+          style={toolbarBtnStyle}
+          data-testid="mermaid-font-smaller"
+          disabled={fontSize <= MERMAID_FONT_SIZE_MIN}
+        >
+          <MinusIcon style={iconStyle} />
+        </button>
+        <span
+          style={{ fontSize: 10, color: "#cdd6f4", padding: "0 4px", alignSelf: "center" }}
+          data-testid="mermaid-font-size"
+        >
+          {fontSize}
+        </span>
+        <button
+          title={`Larger font (${fontSize}px)`}
+          onClick={() => bumpFont(1)}
+          style={toolbarBtnStyle}
+          data-testid="mermaid-font-larger"
+          disabled={fontSize >= MERMAID_FONT_SIZE_MAX}
+        >
+          <PlusIcon style={iconStyle} />
+        </button>
         <button title="Reset view" onClick={handleReset} style={toolbarBtnStyle}>
           <ArrowPathIcon style={iconStyle} />
         </button>

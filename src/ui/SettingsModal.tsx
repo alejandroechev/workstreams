@@ -6,6 +6,8 @@ import {
   subscribeAppSettings,
   SCROLL_SPEED_MIN,
   SCROLL_SPEED_MAX,
+  MERMAID_FONT_SIZE_MIN,
+  MERMAID_FONT_SIZE_MAX,
   DEFAULT_SETTINGS,
   type AppSettings,
 } from "../domain/app-settings";
@@ -121,6 +123,42 @@ export default function SettingsModal({ open, onClose }: Props) {
             Controls how many lines a single mouse-wheel tick scrolls in
             terminal and Copilot session tiles. Lower values give finer
             control; higher values move faster through long output.
+          </div>
+
+          <div style={{ height: 1, background: "#313244", margin: "18px 0 14px" }} />
+
+          <label htmlFor="mermaid-font" style={{ display: "block", marginBottom: 6 }}>
+            Mermaid font size:{" "}
+            <span style={{ color: "#a6e3a1" }}>{settings.mermaidFontSize}px</span>
+          </label>
+          <input
+            id="mermaid-font"
+            data-testid="settings-mermaid-font"
+            type="range"
+            min={MERMAID_FONT_SIZE_MIN}
+            max={MERMAID_FONT_SIZE_MAX}
+            step={1}
+            value={settings.mermaidFontSize}
+            onChange={(e) =>
+              setAppSettings({ mermaidFontSize: parseInt(e.target.value, 10) })
+            }
+            style={{ width: "100%" }}
+          />
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              fontSize: 10,
+              color: "#6c7086",
+              marginTop: 2,
+            }}
+          >
+            <span>{MERMAID_FONT_SIZE_MIN}px</span>
+            <span>{MERMAID_FONT_SIZE_MAX}px</span>
+          </div>
+          <div style={{ marginTop: 6, fontSize: 11, color: "#6c7086" }}>
+            Text size inside rendered mermaid diagrams. Diagrams also fit to
+            their container on initial render; you can still scroll-zoom.
           </div>
 
           <div style={{ marginTop: 14, textAlign: "right" }}>

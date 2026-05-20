@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import {
   DEFAULT_SETTINGS,
+  MERMAID_FONT_SIZE_MAX,
+  MERMAID_FONT_SIZE_MIN,
   SCROLL_SPEED_MAX,
   SCROLL_SPEED_MIN,
   _resetAppSettingsCacheForTests,
@@ -59,5 +61,12 @@ describe("app-settings", () => {
     expect(wheelDeltaToLines(480, 0.5)).toBe(2);
     expect(wheelDeltaToLines(-360, 0.5)).toBe(2);
     expect(wheelDeltaToLines(120, 2)).toBe(2);
+  });
+
+  it("sanitize clamps and rounds mermaid font size", () => {
+    expect(sanitize({ mermaidFontSize: 100 }).mermaidFontSize).toBe(MERMAID_FONT_SIZE_MAX);
+    expect(sanitize({ mermaidFontSize: 2 }).mermaidFontSize).toBe(MERMAID_FONT_SIZE_MIN);
+    expect(sanitize({ mermaidFontSize: 13.7 }).mermaidFontSize).toBe(14);
+    expect(sanitize({}).mermaidFontSize).toBe(DEFAULT_SETTINGS.mermaidFontSize);
   });
 });

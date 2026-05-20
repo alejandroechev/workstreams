@@ -11,27 +11,34 @@ const STORAGE_KEY = "ws.app-settings.v1";
 
 export interface AppSettings {
   terminalScrollSpeed: number;
+  mermaidFontSize: number;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
   terminalScrollSpeed: 0.5,
+  mermaidFontSize: 12,
 };
 
 export const SCROLL_SPEED_MIN = 0.1;
 export const SCROLL_SPEED_MAX = 5;
+export const MERMAID_FONT_SIZE_MIN = 8;
+export const MERMAID_FONT_SIZE_MAX = 24;
 
 function clamp(value: number, min: number, max: number): number {
-  if (!Number.isFinite(value)) return DEFAULT_SETTINGS.terminalScrollSpeed;
   return Math.min(max, Math.max(min, value));
 }
 
 export function sanitize(raw: Partial<AppSettings> | null | undefined): AppSettings {
   if (!raw || typeof raw !== "object") return { ...DEFAULT_SETTINGS };
   const speed =
-    typeof raw.terminalScrollSpeed === "number"
+    typeof raw.terminalScrollSpeed === "number" && Number.isFinite(raw.terminalScrollSpeed)
       ? clamp(raw.terminalScrollSpeed, SCROLL_SPEED_MIN, SCROLL_SPEED_MAX)
       : DEFAULT_SETTINGS.terminalScrollSpeed;
-  return { terminalScrollSpeed: speed };
+  const fontSize =
+    typeof raw.mermaidFontSize === "number" && Number.isFinite(raw.mermaidFontSize)
+      ? clamp(raw.mermaidFontSize, MERMAID_FONT_SIZE_MIN, MERMAID_FONT_SIZE_MAX)
+      : DEFAULT_SETTINGS.mermaidFontSize;
+  return { terminalScrollSpeed: speed, mermaidFontSize: Math.round(fontSize) };
 }
 
 type Listener = (s: AppSettings) => void;
