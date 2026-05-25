@@ -1,6 +1,7 @@
 mod db;
 mod fs_watcher;
 mod pty;
+mod repo_create;
 mod session_poller;
 
 use db::open_db;
@@ -1447,6 +1448,35 @@ fn detect_git_info(directory: String) -> Result<(Option<String>, Option<String>)
     Ok((repo_name, branch))
 }
 
+/// Create a new git repository on disk (optionally with a GitHub remote).
+#[allow(clippy::too_many_arguments)]
+#[tauri::command]
+fn create_git_repo(
+    parent: String,
+    name: String,
+    default_branch: String,
+    create_readme: bool,
+    create_gitignore: bool,
+    initial_commit: bool,
+    create_github_remote: bool,
+    github_owner: Option<String>,
+    github_visibility: Option<String>,
+) -> Result<repo_create::CreateRepoResult, String> {
+    let opts = repo_create::CreateRepoOptions {
+        parent,
+        name,
+        default_branch,
+        create_readme,
+        create_gitignore,
+        initial_commit,
+        create_github_remote,
+        github_owner,
+        github_visibility,
+    };
+    let provider = repo_create::GhCliRemoteProvider;
+    repo_create::create_git_repo_with(&opts, &provider)
+}
+
 /// Detect if a directory is a git worktree and return parent repo info
 #[derive(Debug, Serialize, Deserialize)]
 struct WorktreeInfo {
@@ -2642,6 +2672,7 @@ pub fn run() {
             read_file_base64,
             list_directory,
             detect_git_info,
+            create_git_repo,
             detect_worktree_info,
             search_files,
             search_in_files,

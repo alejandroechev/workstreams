@@ -63,7 +63,7 @@ export default function ProjectCreateForm({ onSubmit, onCancel }: Props) {
       >
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
           <div style={{ color: "#cdd6f4", fontWeight: 600, fontSize: 14 }}>
-            New Repo
+            Import Repo
           </div>
           <button
             onClick={onCancel}
@@ -223,7 +223,7 @@ export default function ProjectCreateForm({ onSubmit, onCancel }: Props) {
               fontWeight: 600,
             }}
           >
-            Create Repo
+            Import Repo
           </button>
         </div>
       </div>

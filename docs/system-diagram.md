@@ -28,6 +28,11 @@ graph TB
     subgraph OS["Windows OS"]
         ConPTY["ConPTY<br/>via portable-pty"]
         Shell["pwsh.exe / agency copilot --yolo"]
+        GhCli["gh CLI<br/>(optional, for repo create)"]
+    end
+
+    subgraph Providers["External-integration boundary"]
+        RemoteProv["RemoteRepoProvider trait<br/>GhCli / InMemory impls"]
     end
 
     App --> Sidebar
@@ -49,4 +54,6 @@ graph TB
     ConPTY --> Shell
     DbRS --> AppDB
     LibRS -- "read-only query" --> CopilotDB
+    LibRS -- "create_git_repo" --> RemoteProv
+    RemoteProv -- "gh repo create" --> GhCli
 ```

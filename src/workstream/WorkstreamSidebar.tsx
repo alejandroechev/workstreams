@@ -22,6 +22,7 @@ interface Props {
   sessionInfoByWs?: Record<string, string | undefined>;
   onSelectWorkstream: (id: string) => void;
   onCreateProject: () => void;
+  onImportProject: () => void;
   onCreateWorkstream: (projectId?: string) => void;
   onArchiveWorkstream: (id: string) => void;
   onRenameWorkstream: (id: string, newName: string) => void;
@@ -60,6 +61,7 @@ export default function WorkstreamSidebar({
   sessionInfoByWs,
   onSelectWorkstream,
   onCreateProject,
+  onImportProject,
   onCreateWorkstream,
   onArchiveWorkstream,
   onRenameWorkstream,
@@ -78,6 +80,19 @@ export default function WorkstreamSidebar({
   const [editProjectColor, setEditProjectColor] = useState("");
   const [statusDropdownWsId, setStatusDropdownWsId] = useState<string | null>(null);
   const statusDropdownRef = useRef<HTMLDivElement>(null);
+  const [showRepoMenu, setShowRepoMenu] = useState(false);
+  const repoMenuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!showRepoMenu) return;
+    function onClick(e: MouseEvent) {
+      if (repoMenuRef.current && !repoMenuRef.current.contains(e.target as Node)) {
+        setShowRepoMenu(false);
+      }
+    }
+    document.addEventListener("mousedown", onClick);
+    return () => document.removeEventListener("mousedown", onClick);
+  }, [showRepoMenu]);
 
   // Live activity status per workstream (from session poller)
   const [wsActivity, setWsActivity] = useState<Record<string, string>>({});
@@ -542,21 +557,77 @@ export default function WorkstreamSidebar({
         alignItems: "center",
       }}>
         <span>Repos</span>
-        <button
-          onClick={onCreateProject}
-          style={{
-            background: "none",
-            border: "none",
-            color: "#585b70",
-            cursor: "pointer",
-            fontSize: 14,
-            padding: 0,
-            lineHeight: 1,
-          }}
-          title="New repo"
-        >
-          +
-        </button>
+        <div ref={repoMenuRef} style={{ position: "relative" }}>
+          <button
+            onClick={() => setShowRepoMenu((v) => !v)}
+            style={{
+              background: "none",
+              border: "none",
+              color: "#585b70",
+              cursor: "pointer",
+              fontSize: 14,
+              padding: 0,
+              lineHeight: 1,
+            }}
+            title="Add repo"
+          >
+            +
+          </button>
+          {showRepoMenu && (
+            <div
+              style={{
+                position: "absolute",
+                top: "100%",
+                right: 0,
+                marginTop: 4,
+                background: "#181825",
+                border: "1px solid #313244",
+                borderRadius: 4,
+                boxShadow: "0 4px 12px rgba(0,0,0,0.4)",
+                zIndex: 200,
+                minWidth: 180,
+                padding: 4,
+              }}
+            >
+              <button
+                onClick={() => { setShowRepoMenu(false); onImportProject(); }}
+                style={{
+                  display: "block",
+                  width: "100%",
+                  textAlign: "left",
+                  background: "none",
+                  border: "none",
+                  color: "#cdd6f4",
+                  cursor: "pointer",
+                  fontSize: 12,
+                  padding: "6px 10px",
+                  textTransform: "none",
+                  letterSpacing: 0,
+                }}
+              >
+                Import existing repo
+              </button>
+              <button
+                onClick={() => { setShowRepoMenu(false); onCreateProject(); }}
+                style={{
+                  display: "block",
+                  width: "100%",
+                  textAlign: "left",
+                  background: "none",
+                  border: "none",
+                  color: "#cdd6f4",
+                  cursor: "pointer",
+                  fontSize: 12,
+                  padding: "6px 10px",
+                  textTransform: "none",
+                  letterSpacing: 0,
+                }}
+              >
+                Create new repo
+              </button>
+            </div>
+          )}
+        </div>
       </div>
 
       <div style={{ overflowY: "auto", padding: "0 4px 8px", maxHeight: "40vh", minHeight: 120 }}>

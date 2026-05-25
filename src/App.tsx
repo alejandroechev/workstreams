@@ -3,6 +3,7 @@ import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import WorkstreamSidebar from "./workstream/WorkstreamSidebar";
 import ProjectCreateForm from "./workstream/ProjectCreateForm";
+import RepoCreateForm from "./workstream/RepoCreateForm";
 import WorkstreamCreateForm from "./workstream/WorkstreamCreateForm";
 import ForkWorkstreamForm from "./workstream/ForkWorkstreamForm";
 import TileGrid from "./tiling/TileGrid";
@@ -75,6 +76,7 @@ export default function App() {
   const [showSessionPicker, setShowSessionPicker] = useState(false);
   const [linkingTileId, setLinkingTileId] = useState<string | null>(null);
   const [showProjectCreate, setShowProjectCreate] = useState(false);
+  const [showRepoCreate, setShowRepoCreate] = useState(false);
   const [showWsCreate, setShowWsCreate] = useState<{ show: boolean; projectId?: string }>({ show: false });
   const [showForkWs, setShowForkWs] = useState<{ show: boolean; wsId?: string }>({ show: false });
   const [showSettings, setShowSettings] = useState(false);
@@ -695,7 +697,8 @@ export default function App() {
         activeWsId={activeWsId}
         sessionInfoByWs={sessionInfoByWs}
         onSelectWorkstream={setActiveWsId}
-        onCreateProject={() => setShowProjectCreate(true)}
+        onCreateProject={() => setShowRepoCreate(true)}
+        onImportProject={() => setShowProjectCreate(true)}
         onCreateWorkstream={(projectId) => setShowWsCreate({ show: true, projectId })}
         onArchiveWorkstream={handleArchiveWorkstream}
         onRenameWorkstream={handleRenameWorkstream}
@@ -932,6 +935,17 @@ export default function App() {
         <ProjectCreateForm
           onSubmit={handleCreateProject}
           onCancel={() => setShowProjectCreate(false)}
+        />
+      )}
+
+      {/* Repo create-new modal */}
+      {showRepoCreate && (
+        <RepoCreateForm
+          onCreated={async (name, directory, color, gitRemote) => {
+            await handleCreateProject(name, directory, color, gitRemote);
+            setShowRepoCreate(false);
+          }}
+          onCancel={() => setShowRepoCreate(false)}
         />
       )}
 
