@@ -1,4 +1,5 @@
 mod db;
+mod file_io;
 mod fs_watcher;
 mod pty;
 mod repo_create;
