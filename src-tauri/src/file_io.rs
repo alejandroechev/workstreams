@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -24,6 +25,20 @@ pub trait FileSystemProvider: Send + Sync {
     fn canonicalize(&self, path: &Path) -> Result<PathBuf, FsError>;
     fn exists(&self, path: &Path) -> bool;
     fn is_dir(&self, path: &Path) -> bool;
+}
+
+const MAX_TEXT_FILE_BYTES: u64 = 1_048_576;
+const BINARY_SNIFF_BYTES: usize = 4_096;
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct ReadTextFileResult {
+    pub content: String,
+    pub mtime_unix_ms: i64,
+    pub hash_hex: String,
+    pub line_ending: String,
+    pub has_trailing_newline: bool,
+    pub sniffed_binary: bool,
+    pub size_bytes: u64,
 }
 
 pub struct OsFileSystemProvider;
@@ -124,6 +139,93 @@ fn system_time_to_unix_ms(time: SystemTime) -> i64 {
         .as_millis()
         .try_into()
         .unwrap_or(i64::MAX)
+}
+
+#[tauri::command]
+pub fn read_text_file(path: String) -> Result<ReadTextFileResult, String> {
+    read_text_file_with(&OsFileSystemProvider, Path::new(&path))
+}
+
+pub fn read_text_file_with(
+    provider: &dyn FileSystemProvider,
+    path: &Path,
+) -> Result<ReadTextFileResult, String> {
+    let meta = provider.metadata(path).map_err(fs_error_to_string)?;
+    if meta.size_bytes > MAX_TEXT_FILE_BYTES {
+        return Err("too_large".to_string());
+    }
+
+    let bytes = provider.read(path).map_err(fs_error_to_string)?;
+    let hash_hex = hash_bytes_hex(&bytes);
+    let sniff_len = bytes.len().min(BINARY_SNIFF_BYTES);
+    let sniff = &bytes[..sniff_len];
+    let sniffed_binary = sniff.contains(&0) || std::str::from_utf8(sniff).is_err();
+    if sniffed_binary {
+        return Ok(ReadTextFileResult {
+            content: String::new(),
+            mtime_unix_ms: meta.mtime_unix_ms,
+            hash_hex,
+            line_ending: "lf".to_string(),
+            has_trailing_newline: false,
+            sniffed_binary: true,
+            size_bytes: meta.size_bytes,
+        });
+    }
+
+    let content = String::from_utf8(bytes).map_err(|_| "binary".to_string())?;
+    let line_ending = detect_line_ending(&content);
+    let has_trailing_newline = content.ends_with('\n');
+
+    Ok(ReadTextFileResult {
+        content,
+        mtime_unix_ms: meta.mtime_unix_ms,
+        hash_hex,
+        line_ending,
+        has_trailing_newline,
+        sniffed_binary: false,
+        size_bytes: meta.size_bytes,
+    })
+}
+
+fn fs_error_to_string(error: FsError) -> String {
+    match error {
+        FsError::NotFound => "not_found".to_string(),
+        FsError::PermissionDenied => "permission_denied".to_string(),
+        FsError::IsADirectory => "is_directory".to_string(),
+        FsError::DiskFull => "disk_full".to_string(),
+        FsError::Io(message) => message,
+    }
+}
+
+fn hash_bytes_hex(bytes: &[u8]) -> String {
+    let digest = Sha256::digest(bytes);
+    format!("{digest:x}")
+}
+
+fn detect_line_ending(content: &str) -> String {
+    let bytes = content.as_bytes();
+    let mut crlf_count = 0;
+    let mut lone_lf_count = 0;
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'\r' && i + 1 < bytes.len() && bytes[i + 1] == b'\n' {
+            crlf_count += 1;
+            i += 2;
+        } else {
+            if bytes[i] == b'\n' {
+                lone_lf_count += 1;
+            }
+            i += 1;
+        }
+    }
+
+    if crlf_count > 0 && lone_lf_count > 0 {
+        "mixed".to_string()
+    } else if crlf_count > 0 {
+        "crlf".to_string()
+    } else {
+        "lf".to_string()
+    }
 }
 
 #[cfg(test)]
@@ -282,5 +384,53 @@ mod tests {
         let path = PathBuf::from("C:\\repo");
         fs.add_dir(path.clone());
         assert_eq!(fs.read(&path), Err(FsError::IsADirectory));
+    }
+
+    #[test]
+    fn read_text_file_rejects_files_over_size_cap() {
+        let fs = InMemoryFileSystemProvider::new();
+        let path = PathBuf::from("C:\\repo\\large.txt");
+        fs.write_atomic(&path, &vec![b'a'; (MAX_TEXT_FILE_BYTES + 1) as usize])
+            .unwrap();
+        assert_eq!(read_text_file_with(&fs, &path), Err("too_large".to_string()));
+    }
+
+    #[test]
+    fn read_text_file_sniffs_null_bytes_as_binary() {
+        let fs = InMemoryFileSystemProvider::new();
+        let path = PathBuf::from("C:\\repo\\bin.dat");
+        fs.write_atomic(&path, b"abc\0def").unwrap();
+        let result = read_text_file_with(&fs, &path).unwrap();
+        assert!(result.sniffed_binary);
+        assert_eq!(result.content, "");
+    }
+
+    #[test]
+    fn read_text_file_sniffs_invalid_utf8_as_binary() {
+        let fs = InMemoryFileSystemProvider::new();
+        let path = PathBuf::from("C:\\repo\\bin.dat");
+        fs.write_atomic(&path, &[0xff, 0xfe, b'a']).unwrap();
+        let result = read_text_file_with(&fs, &path).unwrap();
+        assert!(result.sniffed_binary);
+        assert_eq!(result.content, "");
+    }
+
+    #[test]
+    fn read_text_file_detects_line_endings() {
+        assert_eq!(detect_line_ending("a\nb\n"), "lf");
+        assert_eq!(detect_line_ending("a\r\nb\r\n"), "crlf");
+        assert_eq!(detect_line_ending("a\r\nb\n"), "mixed");
+        assert_eq!(detect_line_ending(""), "lf");
+    }
+
+    #[test]
+    fn read_text_file_reports_trailing_newline_and_stable_hash() {
+        let fs = InMemoryFileSystemProvider::new();
+        let path = PathBuf::from("C:\\repo\\note.txt");
+        fs.write_atomic(&path, b"hello\n").unwrap();
+        let result = read_text_file_with(&fs, &path).unwrap();
+        assert!(result.has_trailing_newline);
+        assert_eq!(result.hash_hex, hash_bytes_hex(b"hello\n"));
+        assert_eq!(result.size_bytes, 6);
     }
 }
