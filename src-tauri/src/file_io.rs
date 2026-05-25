@@ -41,6 +41,32 @@ pub struct ReadTextFileResult {
     pub size_bytes: u64,
 }
 
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct WriteTextFileArgs {
+    pub path: String,
+    pub content: String,
+    pub expected_hash_hex: Option<String>,
+    pub line_ending: String,
+    pub ensure_trailing_newline: bool,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct WriteTextFileResult {
+    pub mtime_unix_ms: i64,
+    pub hash_hex: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(tag = "kind")]
+pub enum WriteError {
+    ExternalModified { current_hash_hex: String },
+    NotFound,
+    PermissionDenied,
+    IsADirectory,
+    DiskFull,
+    Other { message: String },
+}
+
 pub struct OsFileSystemProvider;
 
 impl FileSystemProvider for OsFileSystemProvider {
@@ -225,6 +251,84 @@ fn detect_line_ending(content: &str) -> String {
         "crlf".to_string()
     } else {
         "lf".to_string()
+    }
+}
+
+#[tauri::command]
+pub fn write_text_file(args: WriteTextFileArgs) -> Result<WriteTextFileResult, WriteError> {
+    write_text_file_with(
+        &OsFileSystemProvider,
+        Path::new(&args.path),
+        &args.content,
+        args.expected_hash_hex,
+        &args.line_ending,
+        args.ensure_trailing_newline,
+    )
+}
+
+pub fn write_text_file_with(
+    provider: &dyn FileSystemProvider,
+    path: &Path,
+    content: &str,
+    expected_hash_hex: Option<String>,
+    line_ending: &str,
+    ensure_trailing_newline: bool,
+) -> Result<WriteTextFileResult, WriteError> {
+    if let Some(expected_hash_hex) = expected_hash_hex {
+        if !provider.exists(path) {
+            return Err(WriteError::NotFound);
+        }
+        let current = provider.read(path).map_err(write_error_from_fs_error)?;
+        let current_hash_hex = hash_bytes_hex(&current);
+        if current_hash_hex != expected_hash_hex {
+            return Err(WriteError::ExternalModified { current_hash_hex });
+        }
+    }
+
+    let bytes = prepare_text_bytes(content, line_ending, ensure_trailing_newline)?;
+    provider
+        .write_atomic(path, &bytes)
+        .map_err(write_error_from_fs_error)?;
+    let meta = provider.metadata(path).map_err(write_error_from_fs_error)?;
+    Ok(WriteTextFileResult {
+        mtime_unix_ms: meta.mtime_unix_ms,
+        hash_hex: hash_bytes_hex(&bytes),
+    })
+}
+
+fn prepare_text_bytes(
+    content: &str,
+    line_ending: &str,
+    ensure_trailing_newline: bool,
+) -> Result<Vec<u8>, WriteError> {
+    let ending = match line_ending {
+        "lf" => "\n",
+        "crlf" => "\r\n",
+        other => {
+            return Err(WriteError::Other {
+                message: format!("unsupported line ending: {other}"),
+            })
+        }
+    };
+
+    let mut normalized = content.replace("\r\n", "\n");
+    if ensure_trailing_newline && !normalized.ends_with('\n') {
+        normalized.push('\n');
+    }
+    Ok(if ending == "\n" {
+        normalized.into_bytes()
+    } else {
+        normalized.replace('\n', ending).into_bytes()
+    })
+}
+
+fn write_error_from_fs_error(error: FsError) -> WriteError {
+    match error {
+        FsError::NotFound => WriteError::NotFound,
+        FsError::PermissionDenied => WriteError::PermissionDenied,
+        FsError::IsADirectory => WriteError::IsADirectory,
+        FsError::DiskFull => WriteError::DiskFull,
+        FsError::Io(message) => WriteError::Other { message },
     }
 }
 
@@ -432,5 +536,46 @@ mod tests {
         assert!(result.has_trailing_newline);
         assert_eq!(result.hash_hex, hash_bytes_hex(b"hello\n"));
         assert_eq!(result.size_bytes, 6);
+    }
+
+    #[test]
+    fn write_text_file_matching_hash_succeeds() {
+        let fs = InMemoryFileSystemProvider::new();
+        let path = PathBuf::from("C:\\repo\\note.txt");
+        fs.write_atomic(&path, b"old\n").unwrap();
+        let expected_hash_hex = hash_bytes_hex(b"old\n");
+        let result = write_text_file_with(&fs, &path, "new", Some(expected_hash_hex), "lf", true).unwrap();
+        assert_eq!(fs.read(&path).unwrap(), b"new\n");
+        assert_eq!(result.hash_hex, hash_bytes_hex(b"new\n"));
+    }
+
+    #[test]
+    fn write_text_file_non_matching_hash_reports_external_modified() {
+        let fs = InMemoryFileSystemProvider::new();
+        let path = PathBuf::from("C:\\repo\\note.txt");
+        fs.write_atomic(&path, b"current\n").unwrap();
+        let result = write_text_file_with(&fs, &path, "new", Some(hash_bytes_hex(b"old\n")), "lf", true);
+        assert_eq!(
+            result,
+            Err(WriteError::ExternalModified {
+                current_hash_hex: hash_bytes_hex(b"current\n")
+            })
+        );
+    }
+
+    #[test]
+    fn write_text_file_converts_to_crlf_and_writes_final_bytes() {
+        let fs = InMemoryFileSystemProvider::new();
+        let path = PathBuf::from("C:\\repo\\note.txt");
+        write_text_file_with(&fs, &path, "a\nb", None, "crlf", true).unwrap();
+        assert_eq!(fs.read(&path).unwrap(), b"a\r\nb\r\n");
+    }
+
+    #[test]
+    fn write_text_file_missing_conditional_target_returns_not_found() {
+        let fs = InMemoryFileSystemProvider::new();
+        let path = PathBuf::from("C:\\repo\\missing.txt");
+        let result = write_text_file_with(&fs, &path, "new", Some(hash_bytes_hex(b"old")), "lf", true);
+        assert_eq!(result, Err(WriteError::NotFound));
     }
 }
