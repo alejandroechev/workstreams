@@ -2,6 +2,8 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import Editor, { DiffEditor } from "@monaco-editor/react";
 import { MarkdownView } from "../ui/MarkdownView";
+import { FileEditorView } from "../files/FileEditorView";
+import type { BufferSnapshot } from "../files/FileBufferRegistry";
 import AudioPlayer from "./AudioPlayer";
 import { open } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
@@ -47,11 +49,24 @@ type Mode = "browse" | "view" | "audio" | "log" | "hooks";
 type DiffMode = "unstaged" | "last_commit" | "branch_vs_master";
 
 const MARKDOWN_EXTS = new Set(["md", "mdx", "markdown"]);
+const FILE_EDITOR_EXCLUDED_EXTS = new Set([
+  "wav", "mp3", "ogg", "flac",
+  "png", "jpg", "jpeg", "gif", "webp", "bmp", "ico",
+  "mp4", "mov", "webm",
+  "pdf", "zip", "gz", "tar", "7z", "exe", "dll", "so", "dylib",
+]);
 const AUDIO_SIZE_LIMIT_BYTES = 100 * 1024 * 1024; // 100 MB
 
+function extensionFor(path: string): string {
+  return path.split(/[\\/.]/).pop()?.toLowerCase() || "";
+}
+
 function isMarkdown(path: string): boolean {
-  const ext = path.split(".").pop()?.toLowerCase() || "";
-  return MARKDOWN_EXTS.has(ext);
+  return MARKDOWN_EXTS.has(extensionFor(path));
+}
+
+export function shouldUseFileEditor(path: string): boolean {
+  return !FILE_EDITOR_EXCLUDED_EXTS.has(extensionFor(path));
 }
 
 function formatBytes(bytes: number): string {
@@ -108,7 +123,7 @@ export function parseDiffToSides(diffText: string): { original: string; modified
   return { original: originalLines.join("\n"), modified: modifiedLines.join("\n") };
 }
 
-export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPath }: Props) {
+export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, initialPath }: Props) {
   const backend = useBackend();
 
   const [mode, setMode] = useState<Mode>(initialPath ? "view" : "browse");
@@ -147,12 +162,12 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
   // Git log state
   const [logCommits, setLogCommits] = useState<Array<{ hash: string; short_hash: string; message: string; author: string; date: string }>>([]);
   const [logLoading, setLogLoading] = useState(false);
-  const [commitDiff, setCommitDiff] = useState<string>("");
   const [commitDiffHash, setCommitDiffHash] = useState<string>("");
   // Git hooks state
   const [hooksList, setHooksList] = useState<Array<{ name: string; path: string; content_preview: string }>>([]);
   const [hooksLoading, setHooksLoading] = useState(false);
   const [hookContent, setHookContent] = useState<{ name: string; content: string } | null>(null);
+  const [editorSnapshot, setEditorSnapshot] = useState<BufferSnapshot | null>(null);
 
   // Font size (Ctrl+= / Ctrl+- and A-/A+ toolbar buttons)
   const [fontSize, setFontSize] = useState<number>(13);
@@ -211,27 +226,32 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
   }, [audioUrl]);
 
   const openFile = useCallback(async (path: string) => {
-    if (!path.trim()) return;
+    const trimmedPath = path.trim();
+    if (!trimmedPath) return;
     setFileError(null);
     setFileLoading(true);
+    setAudioUrl(null);
+    setAudioBytes(null);
     setAudioTooLarge(false);
+    setEditorSnapshot(null);
+    setCommitDiffHash("");
 
     // Audio branch.
-    if (isAudioFile(path)) {
+    if (isAudioFile(trimmedPath)) {
       try {
         // Peek at the size via the directory listing if we have it.
-        const found = entries.find((e) => e.fullPath === path);
+        const found = entries.find((e) => e.fullPath === trimmedPath);
         if (found && found.size > AUDIO_SIZE_LIMIT_BYTES) {
           setAudioUrl(null);
           setAudioBytes(null);
           setAudioSizeBytes(found.size);
           setAudioTooLarge(true);
-          setFilePath(path.trim());
+          setFilePath(trimmedPath);
           setMode("audio");
           setFileLoading(false);
           return;
         }
-        const { url, bytes, size } = await loadAudioFile(path.trim());
+        const { url, bytes, size } = await loadAudioFile(trimmedPath);
         // Defensive: if size came back larger than the limit anyway, abort.
         if (size > AUDIO_SIZE_LIMIT_BYTES) {
           URL.revokeObjectURL(url);
@@ -244,7 +264,8 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
           setAudioBytes(bytes);
           setAudioSizeBytes(size);
         }
-        setFilePath(path.trim());
+        setFilePath(trimmedPath);
+        setContent(null);
         setMode("audio");
         return;
       } catch (e) {
@@ -255,19 +276,12 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
       }
     }
 
-    // Text/markdown branch (unchanged).
-    try {
-      const data = await backend.readFile(path.trim());
-      setContent(data);
-      setFilePath(path.trim());
-      setMode("view");
-      // Don't clear activeDiffMode here — it persists from browse diff selection
-    } catch (e) {
-      setFileError(String(e));
-    } finally {
-      setFileLoading(false);
-    }
-  }, [backend]);
+    setFilePath(trimmedPath);
+    setContent(null);
+    setMode("view");
+    setFileLoading(false);
+    // Don't clear activeDiffMode here — it persists from browse diff selection.
+  }, [entries, loadAudioFile]);
 
   // Load directory on mount (browse mode)
   useEffect(() => {
@@ -304,8 +318,8 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
           }));
           setEntries(fresh);
         } catch { /* ignore */ }
-      } else if (mode === "view" && filePath) {
-        // Refresh file content if the changed file matches
+      } else if (mode === "view" && filePath && !shouldUseFileEditor(filePath)) {
+        // Refresh legacy read-only content if the changed file matches.
         const normalFile = filePath.replace(/\//g, "\\");
         if (changedPath === normalFile || changedPath.startsWith(normalDir)) {
           try {
@@ -410,8 +424,16 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
     }
   };
 
-  // Note: navigation back to the file list is handled by the tab bar.
-  // The standalone "Back to Browse" buttons were removed in favor of tabs.
+  const handleBackToBrowse = useCallback(() => {
+    setContent(null);
+    setFilePath("");
+    setFileError(null);
+    setEditorSnapshot(null);
+    setAudioUrl(null);
+    setAudioBytes(null);
+    setAudioTooLarge(false);
+    setMode("browse");
+  }, []);
 
   const handleBrowseDialog = async () => {
     const file = await open({ title: "Open file", multiple: false, directory: false });
@@ -469,7 +491,6 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
   const openGitLog = useCallback(async () => {
     setMode("log");
     setLogLoading(true);
-    setCommitDiff("");
     setCommitDiffHash("");
     try {
       const commits = await backend.gitLog(gitRoot, 50);
@@ -486,12 +507,12 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
     setLogLoading(true);
     try {
       const diff = await backend.gitShowCommit(gitRoot, hash);
-      setCommitDiff(diff);
+      setEditorSnapshot(null);
       setMode("view");
       setContent(diff);
       setFilePath(`commit:${hash}`);
     } catch {
-      setCommitDiff("");
+      setContent("");
     } finally {
       setLogLoading(false);
     }
@@ -544,6 +565,7 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
       setDiffFilePath("");
       setContent(null);
       setFilePath("");
+      setEditorSnapshot(null);
       setAudioUrl(null);
       setAudioBytes(null);
       setAudioTooLarge(false);
@@ -556,6 +578,7 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
         setMode("browse");
         setContent(null);
         setFilePath("");
+        setEditorSnapshot(null);
         activateDiffMode("unstaged");
         break;
       case "log":
@@ -887,7 +910,7 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
       );
     }
 
-    if (content === null && !fileLoading && !activeDiffMode) {
+    if (!filePath && !fileLoading && !activeDiffMode) {
       return (
         <div ref={containerRef} style={{ ...containerStyle, alignItems: "center", justifyContent: "center" }}>
           {tabBar}
@@ -921,15 +944,18 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
       </div>
     );
 
+    const displayedFilePath = activeDiffMode && diffFilePath ? diffFilePath : filePath;
+    const isEditorDirty = editorSnapshot?.dirty === true;
     const viewToolbar = (
       <div style={toolbarStyle}>
         <div style={{ display: "flex", alignItems: "center", gap: 6, overflow: "hidden", flex: 1 }}>
-          <span style={{ ...pathTextStyle, display: "flex", alignItems: "center", gap: 4 }}>
+          <span style={{ ...pathTextStyle, display: "flex", alignItems: "center", gap: 4 }} data-testid="repo-explorer-file-title">
             {isMarkdown(filePath)
               ? <DocumentTextIcon style={{ width: 14, height: 14, flexShrink: 0 }} />
               : <DocumentIcon style={{ width: 14, height: 14, flexShrink: 0 }} />
             }
-            {activeDiffMode && diffFilePath ? diffFilePath : filePath}
+            {isEditorDirty && <span data-testid="repo-explorer-dirty-dot" style={dirtyDotStyle} />}
+            {displayedFilePath}{isEditorDirty ? "*" : ""}
           </span>
         </div>
         <button
@@ -1005,19 +1031,39 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
       );
     }
 
-    // Markdown rendering
-    if (isMarkdown(filePath)) {
+    if (shouldUseFileEditor(filePath) && !commitDiffHash) {
       return (
         <div ref={containerRef} style={containerStyle}>
       {tabBar}
           {viewToolbar}
-          <MarkdownView style={markdownContainerStyle} baseFontSize={fontSize}>{content ?? ""}</MarkdownView>
+          <div style={{ flex: 1, minHeight: 0 }}>
+            <FileEditorView
+              key={filePath}
+              path={filePath}
+              onBack={handleBackToBrowse}
+              renderMarkdownPreview={(markdownContent) => (
+                <MarkdownView style={markdownContainerStyle} baseFontSize={fontSize}>{markdownContent}</MarkdownView>
+              )}
+              onSnapshotChange={setEditorSnapshot}
+            />
+          </div>
           {overlays}
         </div>
       );
     }
 
-    // Code rendering (Monaco)
+    if (!commitDiffHash) {
+      return (
+        <div ref={containerRef} style={containerStyle}>
+      {tabBar}
+          {viewToolbar}
+          <div style={unsupportedPreviewStyle}>Preview not supported for this file type.</div>
+          {overlays}
+        </div>
+      );
+    }
+
+    // Legacy read-only rendering for virtual content such as commit diffs.
     return (
       <div ref={containerRef} style={containerStyle}>
       {tabBar}
@@ -1025,7 +1071,7 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
         <div style={{ flex: 1 }}>
           <Editor
             height="100%"
-            language={commitDiffHash ? "diff" : detectLanguage(filePath)}
+            language="diff"
             value={content ?? ""}
             theme="vs-dark"
             onMount={(editor) => { editorRef.current = editor; }}
@@ -1238,7 +1284,8 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
           key={dm}
           onClick={(e) => {
             e.stopPropagation();
-            activeDiffMode === dm ? exitDiffMode() : activateDiffMode(dm);
+            if (activeDiffMode === dm) exitDiffMode();
+            else activateDiffMode(dm);
           }}
           style={{
             background: activeDiffMode === dm ? "#45475a" : "transparent",
@@ -1505,16 +1552,6 @@ const toolbarButtonStyle: React.CSSProperties = {
   padding: "0 4px",
 };
 
-const backButtonStyle: React.CSSProperties = {
-  background: "none",
-  border: "none",
-  color: "#89b4fa",
-  cursor: "pointer",
-  fontSize: 12,
-  padding: "4px 8px",
-  marginTop: 8,
-};
-
 const pathTextStyle: React.CSSProperties = {
   overflow: "hidden",
   textOverflow: "ellipsis",
@@ -1532,6 +1569,24 @@ const errorTextStyle: React.CSSProperties = {
 const markdownContainerStyle: React.CSSProperties = {
   flex: 1,
   overflowY: "auto",
+};
+
+const dirtyDotStyle: React.CSSProperties = {
+  width: 7,
+  height: 7,
+  borderRadius: "50%",
+  background: "#f9e2af",
+  flexShrink: 0,
+};
+
+const unsupportedPreviewStyle: React.CSSProperties = {
+  flex: 1,
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  color: "#585b70",
+  padding: 24,
+  textAlign: "center",
 };
 
 const searchOverlayStyle: React.CSSProperties = {
