@@ -4,7 +4,9 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { MarkdownView } from "../ui/MarkdownView";
 import { useBackend } from "../backend/context";
-import { isAudioFile, makeAudioBlobUrl } from "../domain/file-types";
+import { makeAudioBlobUrl } from "../domain/file-types";
+import { FileEditorView } from "../files/FileEditorView";
+import type { BufferSnapshot } from "../files/FileBufferRegistry";
 import AudioPlayer from "./AudioPlayer";
 import type { CopilotConfigItem } from "../domain/types";
 import {
@@ -63,6 +65,9 @@ const CATEGORY_META: Record<string, CategoryMeta> = {
 };
 
 const CATEGORY_ORDER = ["skill", "extension", "agent", "mcp_server", "instruction", "git_hook"];
+const AUDIO_EXTS = new Set(["wav", "mp3", "ogg", "flac"]);
+const IMAGE_EXTS = new Set(["png", "jpg", "jpeg", "gif", "webp", "bmp", "ico"]);
+const BINARY_EXTS = new Set(["mp4", "mov", "webm", "pdf", "zip", "gz", "tar", "7z", "exe", "dll", "so", "dylib"]);
 
 type TabId = "config" | "files" | "database" | "checkpoints" | "events";
 
@@ -131,16 +136,16 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
   // Blob URL + raw bytes so <AudioPlayer> can drive playback + waveform.
   const [viewContent, setViewContent] = useState<{
     title: string;
+    path: string;
     content: string;
-    type: "text" | "markdown" | "image" | "audio";
+    type: "editor" | "image" | "audio" | "unsupported";
     mimeType?: string;
     audioUrl?: string;
     audioBytes?: ArrayBuffer;
     audioPath?: string;
     audioSize?: number;
   } | null>(null);
-  // Toggle raw text for markdown
-  const [showRawMd, setShowRawMd] = useState(false);
+  const [editorSnapshot, setEditorSnapshot] = useState<BufferSnapshot | null>(null);
 
   // Revoke any object URL the previous audio entry created.
   useEffect(() => {
@@ -325,14 +330,11 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
 
   // Open a file in the content viewer
   const viewFile = useCallback(async (path: string, title: string) => {
-    setShowRawMd(false);
+    setEditorSnapshot(null);
     const ext = path.split(".").pop()?.toLowerCase() || "";
-    const mdExts = new Set(["md", "mdx", "markdown"]);
-    const imgExts = new Set(["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "ico"]);
-    // Audio is handled via the shared file-types helpers — no per-tile set.
     const mimeMap: Record<string, string> = {
       png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif",
-      webp: "image/webp", svg: "image/svg+xml", bmp: "image/bmp", ico: "image/x-icon",
+      webp: "image/webp", bmp: "image/bmp", ico: "image/x-icon",
     };
 
     try {
@@ -345,11 +347,11 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
           const candidatePath = path.endsWith("\\") || path.endsWith("/") ? `${path}${candidate}` : `${path}\\${candidate}`;
           try {
             const content = await backend.readFile(candidatePath);
-            const cExt = candidate.split(".").pop()?.toLowerCase() || "";
             setViewContent({
               title: `${title}/${candidate}`,
+              path: candidatePath,
               content,
-              type: mdExts.has(cExt) ? "markdown" : "text",
+              type: "editor",
             });
             return;
           } catch { /* try next */ }
@@ -357,21 +359,22 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
         // No key file found — list directory contents
         const entries = await backend.listDirectory(path);
         const listing = entries.map((e) => `${e.is_dir ? "📁" : "📄"} ${e.name}`).join("\n");
-        setViewContent({ title, content: listing || "(empty directory)", type: "text" });
+        setViewContent({ title, path, content: listing || "(empty directory)", type: "unsupported" });
         return;
       }
 
       // Binary files: images and audio
-      if (imgExts.has(ext)) {
+      if (IMAGE_EXTS.has(ext)) {
         const b64 = await invoke<string>("read_file_base64", { path });
-        setViewContent({ title, content: b64, type: "image", mimeType: mimeMap[ext] || "image/png" });
+        setViewContent({ title, path, content: b64, type: "image", mimeType: mimeMap[ext] || "image/png" });
         return;
       }
-      if (isAudioFile(path)) {
+      if (AUDIO_EXTS.has(ext)) {
         const b64 = await invoke<string>("read_file_base64", { path });
         const r = makeAudioBlobUrl(path, b64);
         setViewContent({
           title,
+          path,
           content: "",
           type: "audio",
           audioUrl: r.url,
@@ -381,16 +384,14 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
         });
         return;
       }
+      if (BINARY_EXTS.has(ext)) {
+        setViewContent({ title, path, content: "Preview is not supported for this file type.", type: "unsupported" });
+        return;
+      }
 
-      // Text files
-      const content = await backend.readFile(path);
-      setViewContent({
-        title,
-        content,
-        type: mdExts.has(ext) ? "markdown" : "text",
-      });
+      setViewContent({ title, path, content: "", type: "editor" });
     } catch (e) {
-      setViewContent({ title, content: `Error: ${e}`, type: "text" });
+      setViewContent({ title, path, content: `Error: ${e}`, type: "unsupported" });
     }
   }, [backend]);
 
@@ -865,22 +866,21 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
             flexShrink: 0,
           }}>
             <button
-              onClick={() => setViewContent(null)}
+              onClick={() => { setViewContent(null); setEditorSnapshot(null); }}
               style={{ background: "none", border: "none", color: "#89b4fa", cursor: "pointer", fontSize: 11, padding: "2px 4px", display: "flex", alignItems: "center", gap: 2 }}
             >
               <ArrowLeftIcon style={{ width: 12, height: 12 }} /> Back
             </button>
-            <span style={{ color: "#cdd6f4", fontWeight: 600, fontSize: 11, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>
+            <span style={{ color: "#cdd6f4", fontWeight: 600, fontSize: 11, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, display: "flex", alignItems: "center", gap: 4 }}>
               {viewContent.title}
+              {editorSnapshot?.dirty && (
+                <span data-testid="meta-file-dirty-indicator" style={{ color: "#f9e2af", display: "inline-flex", alignItems: "center", gap: 3, flexShrink: 0 }}>
+                  <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#f9e2af", display: "inline-block" }} />*
+                </span>
+              )}
             </span>
-            {viewContent.type === "markdown" && (
-              <button
-                onClick={() => setShowRawMd((v) => !v)}
-                style={{ background: "#313244", border: "none", color: "#a6adc8", cursor: "pointer", fontSize: 10, padding: "2px 8px", borderRadius: 3, flexShrink: 0 }}
-              >{showRawMd ? "Rendered" : "Raw"}</button>
-            )}
           </div>
-          {viewContent.type === "text" && (
+          {viewContent.type === "unsupported" && (
             <pre style={{
               flex: 1,
               overflow: "auto",
@@ -896,16 +896,14 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
               {viewContent.content}
             </pre>
           )}
-          {viewContent.type === "markdown" && (
-            showRawMd ? (
-              <pre style={{ flex: 1, overflow: "auto", padding: "8px 12px", margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-word", fontSize: 11, lineHeight: 1.5, color: "#cdd6f4", fontFamily: "monospace" }}>
-                {viewContent.content}
-              </pre>
-            ) : (
-              <div style={{ flex: 1, overflow: "auto" }}>
-                <MarkdownView>{viewContent.content}</MarkdownView>
-              </div>
-            )
+          {viewContent.type === "editor" && (
+            <FileEditorView
+              key={viewContent.path}
+              path={viewContent.path}
+              onBack={() => { setViewContent(null); setEditorSnapshot(null); }}
+              renderMarkdownPreview={(content) => <MarkdownView>{content}</MarkdownView>}
+              onSnapshotChange={setEditorSnapshot}
+            />
           )}
           {viewContent.type === "image" && (
             <div style={{ flex: 1, overflow: "auto", display: "flex", alignItems: "center", justifyContent: "center", padding: 12 }}>
