@@ -10,14 +10,21 @@ graph TB
             Terminal["TerminalTile<br/>xterm.js + FitAddon + SerializeAddon"]
             CodeView["CodeViewerTile<br/>Monaco Editor (read-only)"]
             DocView["DocViewerTile<br/>MarkdownView (VS Code style)<br/>+ Mermaid + Prism highlighting"]
+            RepoExplorer["RepoExplorerTile<br/>Files / Diff / Log / Hooks"]
+            SessionMeta["SessionMetaTile<br/>Session + file detail"]
+            Workbench["WorkbenchTile<br/>Workbench file detail"]
             StatusBar["StatusBar<br/>Shortcuts + metadata"]
-            FileBuffers["FileBufferRegistry<br/>Editable file buffers + dirty state"]
+            subgraph Files["Files"]
+                FileBuffers["FileBufferRegistry<br/>Editable file buffers + dirty state"]
+                Monaco["Monaco<br/>Lazy-loaded editor"]
+            end
         end
 
         subgraph Backend["Rust Backend"]
             LibRS["lib.rs<br/>22 Tauri commands"]
             PtyRS["pty.rs<br/>PtyManager: spawn, write, resize, close"]
             DbRS["db.rs<br/>SQLite schema + WAL"]
+            FileSystemProvider["FileSystemProvider trait<br/>OS / InMemory impls"]
         end
     end
 
@@ -30,6 +37,7 @@ graph TB
         ConPTY["ConPTY<br/>via portable-pty"]
         Shell["pwsh.exe / agency copilot --yolo"]
         GhCli["gh CLI<br/>(optional, for repo create)"]
+        FileSystem["Filesystem"]
     end
 
     subgraph Providers["External-integration boundary"]
@@ -41,6 +49,9 @@ graph TB
     TileGrid --> Terminal
     TileGrid --> CodeView
     TileGrid --> DocView
+    TileGrid --> RepoExplorer
+    TileGrid --> SessionMeta
+    TileGrid --> Workbench
     App --> StatusBar
     App -- "close-requested / switch guard" --> FileBuffers
 
@@ -49,6 +60,11 @@ graph TB
     Sidebar -- "invoke: create/list workstreams" --> LibRS
     CodeView -- "invoke: read_file" --> LibRS
     DocView -- "invoke: read_file" --> LibRS
+    RepoExplorer --> FileBuffers
+    SessionMeta --> FileBuffers
+    Workbench --> FileBuffers
+    FileBuffers --> Monaco
+    FileBuffers -- "invoke: read/write/watch/canonicalize" --> LibRS
 
     LibRS --> PtyRS
     LibRS --> DbRS
@@ -56,6 +72,8 @@ graph TB
     ConPTY --> Shell
     DbRS --> AppDB
     LibRS -- "read-only query" --> CopilotDB
+    LibRS --> FileSystemProvider
+    FileSystemProvider --> FileSystem
     LibRS -- "create_git_repo" --> RemoteProv
     RemoteProv -- "gh repo create" --> GhCli
 ```
