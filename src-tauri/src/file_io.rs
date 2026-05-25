@@ -1,7 +1,13 @@
+use notify_debouncer_mini::{new_debouncer, DebouncedEventKind};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::path::{Component, Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::collections::HashMap;
+#[cfg(test)]
+use std::path::Component;
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use tauri::{AppHandle, Emitter, State};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum FsError {
@@ -65,6 +71,35 @@ pub enum WriteError {
     IsADirectory,
     DiskFull,
     Other { message: String },
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct FileChangedPayload {
+    pub mtime_unix_ms: i64,
+    pub kind: String,
+}
+
+pub struct WatcherState {
+    entries: Mutex<HashMap<PathBuf, WatchEntry>>,
+}
+
+impl WatcherState {
+    pub fn new() -> Self {
+        Self {
+            entries: Mutex::new(HashMap::new()),
+        }
+    }
+}
+
+impl Default for WatcherState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+struct WatchEntry {
+    refcount: usize,
+    debouncer: notify_debouncer_mini::Debouncer<notify::RecommendedWatcher>,
 }
 
 pub struct OsFileSystemProvider;
@@ -176,6 +211,9 @@ pub fn read_text_file_with(
     provider: &dyn FileSystemProvider,
     path: &Path,
 ) -> Result<ReadTextFileResult, String> {
+    if provider.is_dir(path) {
+        return Err("is_directory".to_string());
+    }
     let meta = provider.metadata(path).map_err(fs_error_to_string)?;
     if meta.size_bytes > MAX_TEXT_FILE_BYTES {
         return Err("too_large".to_string());
@@ -274,6 +312,9 @@ pub fn write_text_file_with(
     line_ending: &str,
     ensure_trailing_newline: bool,
 ) -> Result<WriteTextFileResult, WriteError> {
+    if provider.is_dir(path) {
+        return Err(WriteError::IsADirectory);
+    }
     if let Some(expected_hash_hex) = expected_hash_hex {
         if !provider.exists(path) {
             return Err(WriteError::NotFound);
@@ -349,6 +390,7 @@ pub fn canonicalize_path_with(
     provider.canonicalize(path)
 }
 
+#[cfg(test)]
 fn lexical_normalize(path: &Path) -> PathBuf {
     let mut normalized = PathBuf::new();
     for component in path.components() {
@@ -361,6 +403,156 @@ fn lexical_normalize(path: &Path) -> PathBuf {
         }
     }
     normalized
+}
+
+#[tauri::command]
+pub fn watch_file_changes(
+    path: String,
+    app: AppHandle,
+    state: State<'_, WatcherState>,
+) -> Result<(), String> {
+    let canonical = canonicalize_path_with(&OsFileSystemProvider, Path::new(&path))
+        .map_err(fs_error_to_string)?;
+    watch_file_changes_with_state(&state, canonical, app)
+}
+
+#[tauri::command]
+pub fn unwatch_file_changes(path: String, state: State<'_, WatcherState>) -> Result<(), String> {
+    let canonical = canonicalize_path_with(&OsFileSystemProvider, Path::new(&path))
+        .map_err(fs_error_to_string)?;
+    unwatch_file_changes_with_state(&state, &canonical)
+}
+
+fn watch_file_changes_with_state(
+    state: &WatcherState,
+    canonical_path: PathBuf,
+    app: AppHandle,
+) -> Result<(), String> {
+    {
+        let mut entries = state.entries.lock().unwrap();
+        if let Some(entry) = entries.get_mut(&canonical_path) {
+            entry.refcount += 1;
+            return Ok(());
+        }
+    }
+
+    let event_path = canonical_path.clone();
+    let event_name = format!("file-changed-{}", canonical_path.to_string_lossy());
+    let app_handle = app.clone();
+    let mut debouncer = new_debouncer(
+        Duration::from_millis(100),
+        move |events: Result<Vec<notify_debouncer_mini::DebouncedEvent>, notify::Error>| {
+            if let Ok(events) = events {
+                if events.iter().any(|event| {
+                    matches!(
+                        event.kind,
+                        DebouncedEventKind::Any | DebouncedEventKind::AnyContinuous
+                    )
+                }) {
+                    let payload = file_changed_payload(&event_path);
+                    let _ = app_handle.emit(&event_name, payload);
+                }
+            }
+        },
+    )
+    .map_err(|error| format!("watcher init failed: {error}"))?;
+
+    debouncer
+        .watcher()
+        .watch(&canonical_path, notify::RecursiveMode::NonRecursive)
+        .map_err(|error| format!("watch failed: {error}"))?;
+
+    state.entries.lock().unwrap().insert(
+        canonical_path,
+        WatchEntry {
+            refcount: 1,
+            debouncer,
+        },
+    );
+    Ok(())
+}
+
+fn unwatch_file_changes_with_state(
+    state: &WatcherState,
+    canonical_path: &Path,
+) -> Result<(), String> {
+    let mut entries = state.entries.lock().unwrap();
+    let Some(entry) = entries.get_mut(canonical_path) else {
+        return Ok(());
+    };
+    if entry.refcount > 1 {
+        entry.refcount -= 1;
+        return Ok(());
+    }
+    let mut entry = entries.remove(canonical_path).unwrap();
+    let _ = entry.debouncer.watcher().unwatch(canonical_path);
+    Ok(())
+}
+
+fn file_changed_payload(path: &Path) -> FileChangedPayload {
+    if path.exists() {
+        let mtime_unix_ms = std::fs::metadata(path)
+            .and_then(|metadata| metadata.modified())
+            .map(system_time_to_unix_ms)
+            .unwrap_or(0);
+        FileChangedPayload {
+            mtime_unix_ms,
+            kind: "modified".to_string(),
+        }
+    } else {
+        FileChangedPayload {
+            mtime_unix_ms: 0,
+            kind: "removed".to_string(),
+        }
+    }
+}
+
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WatchRefChange {
+    FirstWatch,
+    Incremented,
+    Decremented,
+    LastUnwatch,
+    NotWatched,
+}
+
+#[cfg(test)]
+#[derive(Default)]
+struct WatchRefCounts {
+    counts: Mutex<HashMap<PathBuf, usize>>,
+}
+
+#[cfg(test)]
+impl WatchRefCounts {
+    fn watch(&self, path: PathBuf) -> WatchRefChange {
+        let mut counts = self.counts.lock().unwrap();
+        let count = counts.entry(path).or_insert(0);
+        *count += 1;
+        if *count == 1 {
+            WatchRefChange::FirstWatch
+        } else {
+            WatchRefChange::Incremented
+        }
+    }
+
+    fn unwatch(&self, path: &Path) -> WatchRefChange {
+        let mut counts = self.counts.lock().unwrap();
+        let Some(count) = counts.get_mut(path) else {
+            return WatchRefChange::NotWatched;
+        };
+        if *count > 1 {
+            *count -= 1;
+            WatchRefChange::Decremented
+        } else {
+            counts.remove(path);
+            WatchRefChange::LastUnwatch
+        }
+    }
+
+    fn is_watched(&self, path: &Path) -> bool {
+        self.counts.lock().unwrap().contains_key(path)
+    }
 }
 
 #[cfg(test)]
@@ -404,10 +596,14 @@ impl InMemoryFileSystemProvider {
     }
 
     fn injected_error(&self) -> Option<FsError> {
-        self.error_mode.lock().unwrap().as_ref().map(|mode| match mode {
-            InMemoryErrorMode::PermissionDenied => FsError::PermissionDenied,
-            InMemoryErrorMode::DiskFull => FsError::DiskFull,
-        })
+        self.error_mode
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|mode| match mode {
+                InMemoryErrorMode::PermissionDenied => FsError::PermissionDenied,
+                InMemoryErrorMode::DiskFull => FsError::DiskFull,
+            })
     }
 }
 
@@ -476,7 +672,8 @@ impl FileSystemProvider for InMemoryFileSystemProvider {
     }
 
     fn exists(&self, path: &Path) -> bool {
-        self.files.lock().unwrap().contains_key(path) || self.directories.lock().unwrap().contains(path)
+        self.files.lock().unwrap().contains_key(path)
+            || self.directories.lock().unwrap().contains(path)
     }
 
     fn is_dir(&self, path: &Path) -> bool {
@@ -502,7 +699,10 @@ mod tests {
         let fs = InMemoryFileSystemProvider::new();
         fs.set_error_mode(Some(InMemoryErrorMode::PermissionDenied));
         let path = PathBuf::from("C:\\repo\\note.txt");
-        assert_eq!(fs.write_atomic(&path, b"hello"), Err(FsError::PermissionDenied));
+        assert_eq!(
+            fs.write_atomic(&path, b"hello"),
+            Err(FsError::PermissionDenied)
+        );
     }
 
     #[test]
@@ -527,7 +727,10 @@ mod tests {
         let path = PathBuf::from("C:\\repo\\large.txt");
         fs.write_atomic(&path, &vec![b'a'; (MAX_TEXT_FILE_BYTES + 1) as usize])
             .unwrap();
-        assert_eq!(read_text_file_with(&fs, &path), Err("too_large".to_string()));
+        assert_eq!(
+            read_text_file_with(&fs, &path),
+            Err("too_large".to_string())
+        );
     }
 
     #[test]
@@ -575,7 +778,8 @@ mod tests {
         let path = PathBuf::from("C:\\repo\\note.txt");
         fs.write_atomic(&path, b"old\n").unwrap();
         let expected_hash_hex = hash_bytes_hex(b"old\n");
-        let result = write_text_file_with(&fs, &path, "new", Some(expected_hash_hex), "lf", true).unwrap();
+        let result =
+            write_text_file_with(&fs, &path, "new", Some(expected_hash_hex), "lf", true).unwrap();
         assert_eq!(fs.read(&path).unwrap(), b"new\n");
         assert_eq!(result.hash_hex, hash_bytes_hex(b"new\n"));
     }
@@ -585,7 +789,14 @@ mod tests {
         let fs = InMemoryFileSystemProvider::new();
         let path = PathBuf::from("C:\\repo\\note.txt");
         fs.write_atomic(&path, b"current\n").unwrap();
-        let result = write_text_file_with(&fs, &path, "new", Some(hash_bytes_hex(b"old\n")), "lf", true);
+        let result = write_text_file_with(
+            &fs,
+            &path,
+            "new",
+            Some(hash_bytes_hex(b"old\n")),
+            "lf",
+            true,
+        );
         assert_eq!(
             result,
             Err(WriteError::ExternalModified {
@@ -606,7 +817,8 @@ mod tests {
     fn write_text_file_missing_conditional_target_returns_not_found() {
         let fs = InMemoryFileSystemProvider::new();
         let path = PathBuf::from("C:\\repo\\missing.txt");
-        let result = write_text_file_with(&fs, &path, "new", Some(hash_bytes_hex(b"old")), "lf", true);
+        let result =
+            write_text_file_with(&fs, &path, "new", Some(hash_bytes_hex(b"old")), "lf", true);
         assert_eq!(result, Err(WriteError::NotFound));
     }
 
@@ -626,5 +838,17 @@ mod tests {
         let fs = InMemoryFileSystemProvider::new();
         let path = PathBuf::from("C:\\repo\\missing.txt");
         assert_eq!(canonicalize_path_with(&fs, &path).unwrap(), path);
+    }
+
+    #[test]
+    fn watcher_refcount_keeps_path_watched_until_last_unwatch() {
+        let counts = WatchRefCounts::default();
+        let path = PathBuf::from("C:\\repo\\note.txt");
+        assert_eq!(counts.watch(path.clone()), WatchRefChange::FirstWatch);
+        assert_eq!(counts.watch(path.clone()), WatchRefChange::Incremented);
+        assert_eq!(counts.unwatch(&path), WatchRefChange::Decremented);
+        assert!(counts.is_watched(&path));
+        assert_eq!(counts.unwatch(&path), WatchRefChange::LastUnwatch);
+        assert!(!counts.is_watched(&path));
     }
 }

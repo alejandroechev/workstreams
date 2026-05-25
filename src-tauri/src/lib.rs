@@ -2626,6 +2626,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(app_state)
+        .manage(file_io::WatcherState::new())
         .setup(move |app| {
             // Start the session stats poller background thread
             session_poller::start_poller(app.handle().clone(), poller);
@@ -2678,6 +2679,11 @@ pub fn run() {
             search_files,
             search_in_files,
             cancel_searches,
+            file_io::read_text_file,
+            file_io::write_text_file,
+            file_io::canonicalize_path,
+            file_io::watch_file_changes,
+            file_io::unwatch_file_changes,
             ping,
             // Git diff
             git_diff_files,
