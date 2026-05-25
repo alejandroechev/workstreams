@@ -6,7 +6,9 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useBackend } from "../backend/context";
 import { detectLanguage } from "../domain/tile-config";
-import { isAudioFile, makeAudioBlobUrl } from "../domain/file-types";
+import { makeAudioBlobUrl } from "../domain/file-types";
+import { FileEditorView } from "../files/FileEditorView";
+import type { BufferSnapshot } from "../files/FileBufferRegistry";
 import AudioPlayer from "./AudioPlayer";
 import {
   PlusIcon,
@@ -28,11 +30,38 @@ interface Props {
 
 type Mode = "list" | "view";
 
-const MARKDOWN_EXTS = new Set(["md", "mdx", "markdown"]);
+const WORKBENCH_AUDIO_EXTS = new Set(["wav", "mp3", "ogg", "flac"]);
+const IMAGE_EXTS = new Set(["png", "jpg", "jpeg", "gif", "webp", "bmp", "ico"]);
+const BINARY_FALLBACK_EXTS = new Set(["mp4", "mov", "webm", "pdf", "zip", "gz", "tar", "7z", "exe", "dll", "so", "dylib"]);
 
-function isMarkdown(path: string): boolean {
-  const ext = path.split(".").pop()?.toLowerCase() || "";
-  return MARKDOWN_EXTS.has(ext);
+const IMAGE_MIME_BY_EXT: Record<string, string> = {
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  gif: "image/gif",
+  webp: "image/webp",
+  bmp: "image/bmp",
+  ico: "image/x-icon",
+};
+
+function extensionFor(path: string): string {
+  return path.split(/[\\/]/).pop()?.split(".").pop()?.toLowerCase() || "";
+}
+
+function isWorkbenchAudioFile(path: string): boolean {
+  return WORKBENCH_AUDIO_EXTS.has(extensionFor(path));
+}
+
+function isImageFile(path: string): boolean {
+  return IMAGE_EXTS.has(extensionFor(path));
+}
+
+function isBinaryFallbackFile(path: string): boolean {
+  return BINARY_FALLBACK_EXTS.has(extensionFor(path));
+}
+
+function imageMimeFor(path: string): string {
+  return IMAGE_MIME_BY_EXT[extensionFor(path)] ?? "image/png";
 }
 
 function FileItemIcon({ name }: { name: string }) {
@@ -60,6 +89,8 @@ export default function WorkbenchTile({ tileId: _tileId, isFocused, configJson, 
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const [audioBytes, setAudioBytes] = useState<ArrayBuffer | null>(null);
   const [audioSize, setAudioSize] = useState(0);
+  const [imageDataUrl, setImageDataUrl] = useState<string | null>(null);
+  const [editorSnapshot, setEditorSnapshot] = useState<BufferSnapshot | null>(null);
 
   const files: string[] = useMemo(() => {
     try {
@@ -102,20 +133,25 @@ export default function WorkbenchTile({ tileId: _tileId, isFocused, configJson, 
     setLoadingFile(true);
     setViewingPath(path);
     setMode("view");
-    // Reset prior audio state (and revoke any object URL we created).
+    // Reset prior media/editor state (and revoke any object URL we created).
     if (audioUrl) URL.revokeObjectURL(audioUrl);
     setAudioUrl(null);
     setAudioBytes(null);
     setAudioSize(0);
+    setImageDataUrl(null);
+    setEditorSnapshot(null);
+    setFileContent("");
     try {
-      if (isAudioFile(path)) {
+      if (isWorkbenchAudioFile(path)) {
         const b64 = await invoke<string>("read_file_base64", { path });
         const r = makeAudioBlobUrl(path, b64);
         setAudioUrl(r.url);
         setAudioBytes(r.bytes);
         setAudioSize(r.size);
-        setFileContent("");
-      } else {
+      } else if (isImageFile(path)) {
+        const b64 = await invoke<string>("read_file_base64", { path });
+        setImageDataUrl(`data:${imageMimeFor(path)};base64,${b64}`);
+      } else if (isBinaryFallbackFile(path)) {
         const content = await backend.readFile(path);
         setFileContent(content);
       }
@@ -130,6 +166,8 @@ export default function WorkbenchTile({ tileId: _tileId, isFocused, configJson, 
     if (audioUrl) URL.revokeObjectURL(audioUrl);
     setAudioUrl(null);
     setAudioBytes(null);
+    setImageDataUrl(null);
+    setEditorSnapshot(null);
     setMode("list");
     setViewingPath(null);
     setFileContent("");
@@ -149,9 +187,9 @@ export default function WorkbenchTile({ tileId: _tileId, isFocused, configJson, 
     }
     const unlisten = listen<{ path: string }>("fs-change", async (event) => {
       const changedPath = event.payload.path.replace(/\//g, "\\");
-      // If viewing a file that changed, refresh content (text files only;
-      // audio playback is left alone — re-reading would mid-play swap).
-      if (mode === "view" && viewingPath && !isAudioFile(viewingPath)) {
+      // Editable files are watched by FileEditorView; keep this live refresh only
+      // for the legacy binary fallback branch.
+      if (mode === "view" && viewingPath && isBinaryFallbackFile(viewingPath)) {
         const normalPath = viewingPath.replace(/\//g, "\\");
         if (changedPath === normalPath) {
           try {
@@ -172,7 +210,7 @@ export default function WorkbenchTile({ tileId: _tileId, isFocused, configJson, 
   const fileName = (path: string) => path.split(/[\\/]/).pop() || path;
 
   if (mode === "view" && viewingPath) {
-    const md = isMarkdown(viewingPath);
+    const dirty = editorSnapshot?.dirty === true;
     return (
       <div style={{ height: "100%", display: "flex", flexDirection: "column", background: "#1e1e2e" }}>
         {/* View toolbar */}
@@ -211,6 +249,17 @@ export default function WorkbenchTile({ tileId: _tileId, isFocused, configJson, 
           <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "#585b70" }}>
             {viewingPath}
           </span>
+          {dirty ? (
+            <span
+              data-testid="workbench-dirty-indicator"
+              aria-label="Unsaved changes"
+              title="Unsaved changes"
+              style={{ display: "inline-flex", alignItems: "center", gap: 4, color: "#f9e2af", flexShrink: 0 }}
+            >
+              <span style={{ width: 7, height: 7, borderRadius: "50%", background: "#f9e2af" }} />
+              *
+            </span>
+          ) : null}
         </div>
 
         {/* File content */}
@@ -227,11 +276,16 @@ export default function WorkbenchTile({ tileId: _tileId, isFocused, configJson, 
               audioBytes={audioBytes}
               isFocused={isFocused}
             />
-          ) : md ? (
-            <div style={{ overflow: "auto", height: "100%" }}>
-              <MarkdownView>{fileContent}</MarkdownView>
+          ) : imageDataUrl ? (
+            <div style={{ height: "100%", overflow: "auto", display: "grid", placeItems: "center", padding: 12 }}>
+              <img
+                data-testid="workbench-image-preview"
+                src={imageDataUrl}
+                alt={fileName(viewingPath)}
+                style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }}
+              />
             </div>
-          ) : (
+          ) : isBinaryFallbackFile(viewingPath) ? (
             <Editor
               height="100%"
               language={detectLanguage(viewingPath)}
@@ -245,6 +299,14 @@ export default function WorkbenchTile({ tileId: _tileId, isFocused, configJson, 
                 scrollBeyondLastLine: false,
                 wordWrap: "on",
               }}
+            />
+          ) : (
+            <FileEditorView
+              key={viewingPath}
+              path={viewingPath}
+              onBack={handleBack}
+              renderMarkdownPreview={(content) => <MarkdownView>{content}</MarkdownView>}
+              onSnapshotChange={setEditorSnapshot}
             />
           )}
         </div>
