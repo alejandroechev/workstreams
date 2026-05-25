@@ -159,6 +159,7 @@ describe("FileEditorView", () => {
     renderEditor(harness);
 
     expect(screen.getByText("Loading file…")).toBeTruthy();
+    expect(screen.getByTestId("file-editor-view").dataset.fileEditorRoot).toBe("true");
   });
 
   it("renders Monaco editor after acquiring a TypeScript file", async () => {

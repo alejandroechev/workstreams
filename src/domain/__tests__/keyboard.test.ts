@@ -1,5 +1,11 @@
-import { describe, it, expect } from "vitest";
+import { beforeEach, describe, it, expect, vi } from "vitest";
+
+import { getMonacoIfLoaded } from "../../files/loadMonaco";
 import { shouldSwallowKeyEvent, parseKeyAction } from "../keyboard";
+
+vi.mock("../../files/loadMonaco", () => ({
+  getMonacoIfLoaded: vi.fn(() => null),
+}));
 
 function mockElement(tag: string, className?: string, parentClass?: string): Element {
   const el = document.createElement(tag);
@@ -34,8 +40,14 @@ describe("shouldSwallowKeyEvent", () => {
 });
 
 describe("parseKeyAction", () => {
+  const getMonacoIfLoadedMock = vi.mocked(getMonacoIfLoaded);
   const noMod = { altKey: false, ctrlKey: false, activeElement: null };
   const alt = { altKey: true, ctrlKey: false, activeElement: null };
+
+  beforeEach(() => {
+    getMonacoIfLoadedMock.mockReset();
+    getMonacoIfLoadedMock.mockReturnValue(null);
+  });
 
   it("returns escape for Escape key", () => {
     expect(parseKeyAction({ key: "Escape", ...noMod })).toEqual({ type: "escape" });
@@ -61,6 +73,58 @@ describe("parseKeyAction", () => {
   it("returns addTile for Alt+M (session_meta) and Alt+B (workbench)", () => {
     expect(parseKeyAction({ key: "m", ...alt })).toEqual({ type: "addTile", tileType: "session_meta" });
     expect(parseKeyAction({ key: "b", ...alt })).toEqual({ type: "addTile", tileType: "workbench" });
+  });
+
+  it("returns null for Alt+P when a Monaco editor has text focus", () => {
+    getMonacoIfLoadedMock.mockReturnValue({
+      editor: { getEditors: () => [{ hasTextFocus: () => true }] },
+    } as never);
+
+    expect(parseKeyAction({ key: "p", ...alt })).toBeNull();
+  });
+
+  it("returns null for tile-creation shortcuts when a Monaco editor has text focus", () => {
+    getMonacoIfLoadedMock.mockReturnValue({
+      editor: { getEditors: () => [{ hasTextFocus: () => true }] },
+    } as never);
+
+    for (const key of ["s", "t", "w", "r", "m", "b", "p"]) {
+      expect(parseKeyAction({ key, ...alt })).toBeNull();
+    }
+  });
+
+  it("keeps Alt+Arrow shortcuts available when a Monaco editor has text focus", () => {
+    getMonacoIfLoadedMock.mockReturnValue({
+      editor: { getEditors: () => [{ hasTextFocus: () => true }] },
+    } as never);
+
+    expect(parseKeyAction({ key: "ArrowUp", ...alt })).toEqual({ type: "navigate", direction: "up" });
+  });
+
+  it("keeps Ctrl+S unaffected when a Monaco editor has text focus", () => {
+    getMonacoIfLoadedMock.mockReturnValue({
+      editor: { getEditors: () => [{ hasTextFocus: () => true }] },
+    } as never);
+
+    expect(parseKeyAction({ key: "s", altKey: false, ctrlKey: true, activeElement: null })).toBeNull();
+  });
+
+  it("returns null for tile-creation shortcuts when focus is inside Monaco DOM", () => {
+    const monacoRoot = document.createElement("div");
+    monacoRoot.className = "monaco-editor";
+    const child = document.createElement("input");
+    monacoRoot.appendChild(child);
+
+    expect(parseKeyAction({ key: "p", altKey: true, ctrlKey: false, activeElement: child })).toBeNull();
+  });
+
+  it("returns null for tile-creation shortcuts when focus is inside FileEditorView root", () => {
+    const editorRoot = document.createElement("div");
+    editorRoot.dataset.fileEditorRoot = "true";
+    const child = document.createElement("button");
+    editorRoot.appendChild(child);
+
+    expect(parseKeyAction({ key: "p", altKey: true, ctrlKey: false, activeElement: child })).toBeNull();
   });
 
   it("returns closeTile for Alt+Q (was Alt+W)", () => {

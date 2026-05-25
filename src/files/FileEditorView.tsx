@@ -271,6 +271,7 @@ export function FileEditorView({
 
   return (
     <div
+      data-file-editor-root="true"
       data-testid="file-editor-view"
       tabIndex={0}
       onKeyDown={handleKeyDown}

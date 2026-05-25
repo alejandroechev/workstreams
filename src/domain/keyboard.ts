@@ -1,3 +1,4 @@
+import { getMonacoIfLoaded } from "../files/loadMonaco";
 import type { TileType, Direction } from "./types";
 
 export type KeyAction =
@@ -27,6 +28,42 @@ export interface ParseKeyActionOpts {
   activeElement: Element | null;
 }
 
+type MonacoTextFocusEditor = {
+  hasTextFocus?: () => boolean;
+};
+
+type MonacoEditorRegistry = {
+  getEditors?: () => MonacoTextFocusEditor[];
+};
+
+const tileCreationShortcutKeys = new Set(["b", "m", "p", "r", "s", "t", "w"]);
+
+function isAltTileCreationShortcut(altKey: boolean, key: string): boolean {
+  return altKey && tileCreationShortcutKeys.has(key.toLowerCase());
+}
+
+function isMonacoFocused(activeElement: Element | null): boolean {
+  const monaco = getMonacoIfLoaded();
+  const editorRegistry = monaco?.editor as MonacoEditorRegistry | undefined;
+  if (editorRegistry?.getEditors) {
+    try {
+      for (const editor of editorRegistry.getEditors()) {
+        if (editor.hasTextFocus?.()) return true;
+      }
+    } catch {
+      // Fall through to the DOM containment check.
+    }
+  }
+
+  let el: Element | null = activeElement ?? document.activeElement;
+  while (el) {
+    if (el.classList?.contains("monaco-editor")) return true;
+    if ((el as HTMLElement).dataset?.fileEditorRoot === "true") return true;
+    el = el.parentElement;
+  }
+  return false;
+}
+
 /**
  * Maps a keyboard event to a semantic action.
  * All app-level commands use Alt+ prefix to avoid conflicts with
@@ -49,6 +86,10 @@ export interface ParseKeyActionOpts {
  */
 export function parseKeyAction(opts: ParseKeyActionOpts): KeyAction | null {
   const { altKey, key } = opts;
+
+  if (isAltTileCreationShortcut(altKey, key) && isMonacoFocused(opts.activeElement)) {
+    return null;
+  }
 
   // Escape always works
   if (key === "Escape") {
