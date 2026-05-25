@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -332,6 +332,37 @@ fn write_error_from_fs_error(error: FsError) -> WriteError {
     }
 }
 
+#[tauri::command]
+pub fn canonicalize_path(path: String) -> Result<String, String> {
+    canonicalize_path_with(&OsFileSystemProvider, Path::new(&path))
+        .map(|path| path.to_string_lossy().to_string())
+        .map_err(fs_error_to_string)
+}
+
+pub fn canonicalize_path_with(
+    provider: &dyn FileSystemProvider,
+    path: &Path,
+) -> Result<PathBuf, FsError> {
+    if !provider.exists(path) {
+        return Ok(path.to_path_buf());
+    }
+    provider.canonicalize(path)
+}
+
+fn lexical_normalize(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            _ => normalized.push(component.as_os_str()),
+        }
+    }
+    normalized
+}
+
 #[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InMemoryErrorMode {
@@ -441,7 +472,7 @@ impl FileSystemProvider for InMemoryFileSystemProvider {
         if !self.exists(path) {
             return Err(FsError::NotFound);
         }
-        Ok(path.components().collect())
+        Ok(lexical_normalize(path))
     }
 
     fn exists(&self, path: &Path) -> bool {
@@ -577,5 +608,23 @@ mod tests {
         let path = PathBuf::from("C:\\repo\\missing.txt");
         let result = write_text_file_with(&fs, &path, "new", Some(hash_bytes_hex(b"old")), "lf", true);
         assert_eq!(result, Err(WriteError::NotFound));
+    }
+
+    #[test]
+    fn canonicalize_path_normalizes_existing_path() {
+        let fs = InMemoryFileSystemProvider::new();
+        let path = PathBuf::from("C:\\repo\\.\\note.txt");
+        fs.write_atomic(&path, b"hello").unwrap();
+        assert_eq!(
+            canonicalize_path_with(&fs, &path).unwrap(),
+            PathBuf::from("C:\\repo\\note.txt")
+        );
+    }
+
+    #[test]
+    fn canonicalize_path_returns_nonexistent_input_unchanged() {
+        let fs = InMemoryFileSystemProvider::new();
+        let path = PathBuf::from("C:\\repo\\missing.txt");
+        assert_eq!(canonicalize_path_with(&fs, &path).unwrap(), path);
     }
 }
