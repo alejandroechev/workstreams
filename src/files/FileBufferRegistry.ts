@@ -29,6 +29,7 @@ export interface FileBufferRegistry {
   save(path: string): Promise<void>;
   resolveConflict(path: string, choice: "keep_mine" | "take_disk"): Promise<void>;
   retrySave(path: string): Promise<void>;
+  setAutoSaveEnabled(path: string, enabled: boolean): void;
   listAll(): BufferSnapshot[];
   _disposeAllForTests(): void;
 }
@@ -75,6 +76,7 @@ type InternalEntry = {
   sniffedBinary: boolean;
   sizeBytes: number;
   debounceTimer: ReturnType<typeof setTimeout> | null;
+  autoSaveEnabled: boolean;
   watcherUnsub?: () => void;
   contentChangeDisposable?: Disposable;
   conflictingDiskContent?: string;
@@ -281,6 +283,14 @@ class FileBufferRegistryImpl implements FileBufferRegistry {
     await this.save(entry.path);
   }
 
+  setAutoSaveEnabled(path: string, enabled: boolean): void {
+    const entry = this.findEntry(path);
+    if (entry === undefined) return;
+
+    entry.autoSaveEnabled = enabled;
+    if (!enabled) this.cancelAutoSave(entry);
+  }
+
   listAll(): BufferSnapshot[] {
     return Array.from(this.entries.values(), snapshotFor);
   }
@@ -311,6 +321,7 @@ class FileBufferRegistryImpl implements FileBufferRegistry {
         sniffedBinary: read.sniffed_binary,
         sizeBytes: read.size_bytes,
         debounceTimer: null,
+        autoSaveEnabled: true,
         lastError: read.sniffed_binary ? BINARY_ERROR : undefined,
       };
 
@@ -332,6 +343,7 @@ class FileBufferRegistryImpl implements FileBufferRegistry {
         sniffedBinary: true,
         sizeBytes: 0,
         debounceTimer: null,
+        autoSaveEnabled: true,
         lastError,
       };
     }
@@ -346,7 +358,7 @@ class FileBufferRegistryImpl implements FileBufferRegistry {
     entry.contentChangeDisposable = entry.model.onDidChangeContent(() => {
       if (this.suppressedTyping.has(entry.path)) return;
       this.dispatch(entry, { type: "user_typed" });
-      if (entry.stateContext.autoSaveAllowed) this.scheduleAutoSave(entry);
+      if (entry.autoSaveEnabled && entry.stateContext.autoSaveAllowed) this.scheduleAutoSave(entry);
     });
   }
 
@@ -404,7 +416,7 @@ class FileBufferRegistryImpl implements FileBufferRegistry {
     this.cancelAutoSave(entry);
     entry.debounceTimer = setTimeout(() => {
       entry.debounceTimer = null;
-      if (entry.stateContext.autoSaveAllowed) void this.save(entry.path);
+      if (entry.autoSaveEnabled && entry.stateContext.autoSaveAllowed) void this.save(entry.path);
     }, this.autoSaveDebounceMs);
   }
 

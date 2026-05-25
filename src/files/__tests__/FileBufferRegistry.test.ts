@@ -207,6 +207,29 @@ describe("FileBufferRegistry", () => {
     expect(h.invokeTauri.mock.calls.filter(([cmd]) => cmd === "write_text_file")).toHaveLength(1);
   });
 
+  it("can disable auto-save for a loaded path", async () => {
+    const h = createHarness();
+    await h.registry.acquire("file.txt");
+
+    h.registry.setAutoSaveEnabled(canonical, false);
+    h.models[0].setValue("changed\n");
+    await vi.advanceTimersByTimeAsync(25);
+
+    expect(h.invokeTauri.mock.calls.filter(([cmd]) => cmd === "write_text_file")).toHaveLength(0);
+  });
+
+  it("can re-enable auto-save for a loaded path", async () => {
+    const h = createHarness();
+    await h.registry.acquire("file.txt");
+
+    h.registry.setAutoSaveEnabled(canonical, false);
+    h.registry.setAutoSaveEnabled(canonical, true);
+    h.models[0].setValue("changed\n");
+    await vi.advanceTimersByTimeAsync(25);
+
+    expect(h.invokeTauri.mock.calls.filter(([cmd]) => cmd === "write_text_file")).toHaveLength(1);
+  });
+
   it("moves to conflicted when save reports ExternalModified", async () => {
     const h = createHarness();
     h.writeQueue[0] = { kind: "ExternalModified", current_hash_hex: "disk-hash" };
