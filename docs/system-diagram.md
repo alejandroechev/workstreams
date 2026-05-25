@@ -11,6 +11,7 @@ graph TB
             CodeView["CodeViewerTile<br/>Monaco Editor (read-only)"]
             DocView["DocViewerTile<br/>MarkdownView (VS Code style)<br/>+ Mermaid + Prism highlighting"]
             StatusBar["StatusBar<br/>Shortcuts + metadata"]
+            FileBuffers["FileBufferRegistry<br/>Editable file buffers + dirty state"]
         end
 
         subgraph Backend["Rust Backend"]
@@ -41,6 +42,7 @@ graph TB
     TileGrid --> CodeView
     TileGrid --> DocView
     App --> StatusBar
+    App -- "close-requested / switch guard" --> FileBuffers
 
     Terminal -- "invoke: write_to_pty, resize_pty" --> LibRS
     LibRS -- "emit: pty-output-{id}" --> Terminal

@@ -1,6 +1,7 @@
-// @test-skip: top-level App shell, behavior covered by domain + backend tests
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { fileBufferRegistry } from "./files/FileBufferRegistry";
 import WorkstreamSidebar from "./workstream/WorkstreamSidebar";
 import ProjectCreateForm from "./workstream/ProjectCreateForm";
 import RepoCreateForm from "./workstream/RepoCreateForm";
@@ -83,6 +84,34 @@ export default function App() {
   // Track which tile IDs have active PTYs to avoid double-spawning
   const spawnedPtys = useRef<Set<string>>(new Set());
   const previousWsTiles = useRef<Map<string, { tiles: Tile[]; order: string[] }>>(new Map());
+
+  const getDirtyFileBuffers = useCallback(() => fileBufferRegistry.listAll().filter((snapshot) => snapshot.dirty), []);
+
+  const confirmDiscardDirtyFileBuffers = useCallback((action: string) => {
+    const dirtyCount = getDirtyFileBuffers().length;
+    if (dirtyCount === 0) return true;
+    return window.confirm(`You have unsaved changes in ${dirtyCount} file(s). Discard and ${action}?`);
+  }, [getDirtyFileBuffers]);
+
+  useEffect(() => {
+    const unsub = (async () => {
+      const win = getCurrentWindow();
+      const unlisten = await win.onCloseRequested(async (event) => {
+        const dirty = getDirtyFileBuffers();
+        if (dirty.length === 0) return;
+
+        event.preventDefault();
+        const list = dirty.map((snapshot) => `  • ${snapshot.path}`).join("\n");
+        const ok = window.confirm(`You have unsaved changes in ${dirty.length} file(s):\n\n${list}\n\nClose anyway and discard?`);
+        if (ok) {
+          win.destroy();
+        }
+      });
+      return unlisten;
+    })();
+
+    return () => { unsub.then((unlisten) => unlisten?.()).catch(() => {}); };
+  }, [getDirtyFileBuffers]);
 
   // Load projects and workstreams on mount (with saved order)
   useEffect(() => {
@@ -191,14 +220,21 @@ export default function App() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeWsId]);
 
+  const selectWorkstream = useCallback((id: string) => {
+    if (id === activeWsId) return;
+    if (!confirmDiscardDirtyFileBuffers("switch workstreams")) return;
+    setActiveWsId(id);
+  }, [activeWsId, confirmDiscardDirtyFileBuffers]);
+
   // Switch workstream by index (Ctrl+1-9)
   const switchWorkstream = useCallback(
     (index: number) => {
-      if (index < workstreams.length) {
-        setActiveWsId(workstreams[index].id);
+      const ws = workstreams[index];
+      if (ws) {
+        selectWorkstream(ws.id);
       }
     },
-    [workstreams]
+    [workstreams, selectWorkstream]
   );
 
   // Workstream commands stored per-workstream for terminal spawning
@@ -334,6 +370,8 @@ export default function App() {
     const ws = workstreams.find((w) => w.id === id);
     if (!ws) return;
 
+    if (ws.status !== "archived" && !confirmDiscardDirtyFileBuffers("archive workstream")) return;
+
     if (ws.status === "archived") {
       // Unarchive
       await backend.updateWorkstream(id, { status: "active" });
@@ -354,7 +392,7 @@ export default function App() {
         setTileOrder([]);
       }
     }
-  }, [workstreams, activeWsId, tiles, backend]);
+  }, [workstreams, activeWsId, tiles, backend, confirmDiscardDirtyFileBuffers]);
 
   const handleForkWorkstream = useCallback(async (
     sourceWsId: string,
@@ -696,7 +734,7 @@ export default function App() {
         workstreams={workstreams}
         activeWsId={activeWsId}
         sessionInfoByWs={sessionInfoByWs}
-        onSelectWorkstream={setActiveWsId}
+        onSelectWorkstream={selectWorkstream}
         onCreateProject={() => setShowRepoCreate(true)}
         onImportProject={() => setShowProjectCreate(true)}
         onCreateWorkstream={(projectId) => setShowWsCreate({ show: true, projectId })}
