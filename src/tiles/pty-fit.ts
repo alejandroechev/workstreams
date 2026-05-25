@@ -20,6 +20,10 @@ export interface PtyFitController {
  *     redraw spinners on every SIGWINCH using cursor-up sequences: a spurious
  *     same-size resize during a visibility flip causes the previous frame's
  *     cursor moves to land on a re-flowed buffer and leaves stale glyphs.
+ *   - Rejects implausibly tiny `cols` for a wide container (the signature of
+ *     stale CharSizeService measurement right after display:none → visible)
+ *     and schedules a delayed retry so the next fit can pick up the correct
+ *     cell metrics.
  *
  * @param debounceMs idle window before flushing a resize (default 80ms).
  */
@@ -28,20 +32,44 @@ export function createPtyFitController(opts: {
   fitAddon: FitAddon;
   getContainer: () => HTMLElement | null;
   debounceMs?: number;
+  /** Container px width below which "tiny cols" are accepted as genuine. */
+  narrowContainerPx?: number;
+  /** Cols threshold under which dims are treated as suspicious when container is wide. */
+  minPlausibleCols?: number;
+  /** Delay before retrying after a rejected fit (gives CharSizeService time to remeasure). */
+  retryMs?: number;
 }): PtyFitController {
-  const { tileId, fitAddon, getContainer, debounceMs = 80 } = opts;
+  const {
+    tileId,
+    fitAddon,
+    getContainer,
+    debounceMs = 80,
+    narrowContainerPx = 400,
+    minPlausibleCols = 20,
+    retryMs = 350,
+  } = opts;
   let timer: ReturnType<typeof setTimeout> | null = null;
+  let retryTimer: ReturnType<typeof setTimeout> | null = null;
   let rafId: number | null = null;
   let last: { cols: number; rows: number } | null = null;
   let disposed = false;
+
+  const scheduleRetry = () => {
+    if (retryTimer !== null) clearTimeout(retryTimer);
+    retryTimer = setTimeout(() => {
+      retryTimer = null;
+      if (disposed) return;
+      // Use the public request path so the same debounce/rAF settling applies.
+      if (timer !== null) clearTimeout(timer);
+      timer = setTimeout(flush, 0);
+    }, retryMs);
+  };
 
   const flush = () => {
     timer = null;
     if (disposed) return;
     const el = getContainer();
     if (!el || el.offsetWidth === 0) return;
-    // Use rAF so the layout is settled (visibility flips often fire ResizeObserver
-    // before the parent flexbox has reflowed).
     if (rafId !== null) cancelAnimationFrame(rafId);
     rafId = requestAnimationFrame(() => {
       rafId = null;
@@ -56,6 +84,14 @@ export function createPtyFitController(opts: {
       const dims = fitAddon.proposeDimensions();
       if (!dims || !Number.isFinite(dims.cols) || !Number.isFinite(dims.rows)) return;
       if (dims.cols <= 0 || dims.rows <= 0) return;
+      // Stale-measurement guard: a wide container that proposes a tiny cols
+      // count is almost certainly a stale CharSizeService measurement from a
+      // just-revealed display:none element. Reject and retry shortly so the
+      // next fit can pick up the real cell metrics.
+      if (el2.offsetWidth >= narrowContainerPx && dims.cols < minPlausibleCols) {
+        scheduleRetry();
+        return;
+      }
       if (last && last.cols === dims.cols && last.rows === dims.rows) {
         return;
       }
@@ -79,8 +115,10 @@ export function createPtyFitController(opts: {
     dispose() {
       disposed = true;
       if (timer !== null) clearTimeout(timer);
+      if (retryTimer !== null) clearTimeout(retryTimer);
       if (rafId !== null) cancelAnimationFrame(rafId);
       timer = null;
+      retryTimer = null;
       rafId = null;
     },
   };

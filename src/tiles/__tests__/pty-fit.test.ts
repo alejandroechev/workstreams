@@ -147,4 +147,54 @@ describe("createPtyFitController", () => {
     vi.advanceTimersByTime(20);
     expect(invoke).not.toHaveBeenCalled();
   });
+
+  it("rejects implausibly tiny cols when container is wide (stale char-size measurement)", () => {
+    // Repro of ws-switch bug: container is 800px wide but xterm's CharSizeService
+    // returned a stale tiny cell width → proposeDimensions returns cols=11.
+    // The controller must NOT send that to the PTY.
+    const fit = makeFit({ cols: 11, rows: 24 });
+    const ctl = createPtyFitController({
+      tileId: "t1",
+      fitAddon: fit,
+      getContainer: () => makeEl(800),
+      debounceMs: 10,
+    });
+    ctl.request();
+    vi.advanceTimersByTime(20);
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it("accepts tiny cols when container itself is genuinely narrow", () => {
+    const fit = makeFit({ cols: 11, rows: 24 });
+    const ctl = createPtyFitController({
+      tileId: "t1",
+      fitAddon: fit,
+      getContainer: () => makeEl(120),
+      debounceMs: 10,
+    });
+    ctl.request();
+    vi.advanceTimersByTime(20);
+    expect(invoke).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries after the implausible-dims rejection so the next fit can recover", () => {
+    // First fit returns bogus cols=11 → rejected. Second fit (after retry) returns
+    // the real value → invoke fires.
+    const dims = { cols: 11, rows: 24 };
+    const fit = makeFit(dims);
+    const ctl = createPtyFitController({
+      tileId: "t1",
+      fitAddon: fit,
+      getContainer: () => makeEl(800),
+      debounceMs: 10,
+    });
+    ctl.request();
+    vi.advanceTimersByTime(20);
+    expect(invoke).not.toHaveBeenCalled();
+    // Simulate that by the time the retry runs, the measurement has settled.
+    dims.cols = 120;
+    vi.advanceTimersByTime(400);
+    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(invoke).toHaveBeenLastCalledWith("resize_pty", { tileId: "t1", rows: 24, cols: 120 });
+  });
 });

@@ -215,8 +215,23 @@ export default function TerminalTile({ tileId, isFocused, focusToken, onStatusCh
     const visibilityObserver = new IntersectionObserver((entries) => {
       for (const entry of entries) {
         if (entry.isIntersecting) {
+          try {
+            const core = (term as unknown as {
+              _core?: { _charSizeService?: { measure?: () => void } };
+            })._core;
+            core?._charSizeService?.measure?.();
+          } catch { /* best effort */ }
+          ptyFit.invalidate();
           ptyFit.request();
           setTimeout(() => {
+            try {
+              const core = (term as unknown as {
+                _core?: { _charSizeService?: { measure?: () => void } };
+              })._core;
+              core?._charSizeService?.measure?.();
+            } catch { /* best effort */ }
+            ptyFit.invalidate();
+            ptyFit.request();
             if (term.rows > 0) {
               try { (term as unknown as { _core?: { _renderService?: { handleResize(c: number, r: number): void } } })._core?._renderService?.handleResize(term.cols, term.rows); } catch { /* best effort */ }
               term.refresh(0, term.rows - 1);

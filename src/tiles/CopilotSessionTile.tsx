@@ -243,9 +243,29 @@ export default function CopilotSessionTile({
     const visibilityObserver = new IntersectionObserver((entries) => {
       for (const entry of entries) {
         if (entry.isIntersecting) {
+          // Force xterm to remeasure cell metrics — when this element was
+          // display:none, CharSizeService cached zero/stale cell dimensions
+          // and the next fit would propose a tiny cols/rows pair (cols≈11)
+          // which then gets shipped to the PTY and sticks.
+          try {
+            const core = (term as unknown as {
+              _core?: { _charSizeService?: { measure?: () => void } };
+            })._core;
+            core?._charSizeService?.measure?.();
+          } catch { /* best effort */ }
+          ptyFit.invalidate();
           ptyFit.request();
-          // Schedule repaint after the fit controller's debounce + rAF settles.
+          // Schedule a second fit + repaint after the fit controller's debounce
+          // + rAF settles, in case the first fit still ran with stale metrics.
           setTimeout(() => {
+            try {
+              const core = (term as unknown as {
+                _core?: { _charSizeService?: { measure?: () => void } };
+              })._core;
+              core?._charSizeService?.measure?.();
+            } catch { /* best effort */ }
+            ptyFit.invalidate();
+            ptyFit.request();
             if (term.rows > 0) {
               try { (term as unknown as { _core?: { _renderService?: { handleResize(c: number, r: number): void } } })._core?._renderService?.handleResize(term.cols, term.rows); } catch { /* best effort */ }
               term.refresh(0, term.rows - 1);
