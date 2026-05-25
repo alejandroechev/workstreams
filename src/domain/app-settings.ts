@@ -96,13 +96,59 @@ export function _resetAppSettingsCacheForTests(): void {
   listeners.clear();
 }
 
+// Expose a tiny debug bridge so CDP/E2E probes can set settings directly
+// without driving the UI (avoids slider-dragging flakiness). Single-user
+// desktop app — no security impact.
+if (typeof globalThis !== "undefined") {
+  (globalThis as unknown as { __wsAppSettings?: unknown }).__wsAppSettings = {
+    get: getAppSettings,
+    set: setAppSettings,
+  };
+}
+
 /**
  * Convert a wheel `deltaY` plus the current scroll speed into an integer
  * number of lines to scroll. Always returns at least 1 so a small tick is
  * not lost.
+ *
+ * Note: prefer `createWheelLineAccumulator` for actual wheel handlers — the
+ * floor-to-1 here is what made the scroll-speed setting feel like a no-op
+ * for precision touchpad / smooth-wheel events (where individual deltaY
+ * values are small and the floor swallowed the speed multiplier entirely).
  */
 export function wheelDeltaToLines(deltaY: number, scrollSpeed: number): number {
   const baseLines = Math.abs(deltaY) / 120;
   const scaled = baseLines * scrollSpeed;
   return Math.max(1, Math.round(scaled));
+}
+
+/**
+ * Stateful wheel-to-lines converter. Accumulates fractional lines across
+ * events so that low scroll speeds produce noticeably slower scrolling on
+ * precision touchpads and smooth-wheel devices (where each event has a
+ * small deltaY).
+ *
+ * Returns a function that takes a (signed) `deltaY` and returns the (signed)
+ * integer number of lines to scroll on this event. Direction changes reset
+ * the pending fractional accumulator so a flip doesn't get swallowed by
+ * partial credit in the opposite direction.
+ */
+export function createWheelLineAccumulator(
+  getSpeed: () => number,
+): (deltaY: number) => number {
+  let pending = 0; // signed, in lines
+  return (deltaY: number) => {
+    if (!Number.isFinite(deltaY) || deltaY === 0) return 0;
+    const speed = getSpeed();
+    const baseLines = deltaY / 120;
+    const scaled = baseLines * speed;
+    if (pending !== 0 && Math.sign(scaled) !== Math.sign(pending)) {
+      pending = 0;
+    }
+    pending += scaled;
+    if (Math.abs(pending) < 1) return 0;
+    const lines = Math.trunc(pending);
+    pending -= lines;
+    return lines;
+  };
 }

@@ -7,7 +7,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { parseCopilotSessionConfig } from "../domain/tile-config";
 import { createPtyFitController } from "./pty-fit";
-import { getAppSettings, wheelDeltaToLines } from "../domain/app-settings";
+import { getAppSettings, createWheelLineAccumulator } from "../domain/app-settings";
 import { playBell, notifySessionIdle } from "../domain/notifications";
 import {
   keyToZoomAction,
@@ -109,6 +109,9 @@ export default function CopilotSessionTile({
 
     term.open(containerRef.current);
     fitAddon.fit();
+
+    // Expose terminal instance on container for dev/E2E probes.
+    (containerRef.current as unknown as { __wsTerm?: unknown }).__wsTerm = term;
 
     // Focus terminal after initialization (with delay for DOM readiness)
     setTimeout(() => term.focus(), 150);
@@ -284,19 +287,19 @@ export default function CopilotSessionTile({
     //   Arrow keys move the cursor in agency's input box (not what we want);
     //   PgUp/PgDn are what agency uses to scroll conversation history.
     // Scroll speed is controlled by app setting `terminalScrollSpeed`.
+    const wheelAcc = createWheelLineAccumulator(() => getAppSettings().terminalScrollSpeed);
     const wheelHandler = (e: WheelEvent) => {
       const buf = (term as unknown as { buffer: { active: { type: string } } }).buffer?.active;
-      const speed = getAppSettings().terminalScrollSpeed;
-      const lines = wheelDeltaToLines(e.deltaY, speed);
+      const lines = wheelAcc(e.deltaY);
+      e.preventDefault();
+      if (lines === 0) return;
       if (buf && buf.type === "alternate") {
-        e.preventDefault();
         // \x1b[5~ = PgUp, \x1b[6~ = PgDn
-        const seq = e.deltaY < 0 ? "\x1b[5~" : "\x1b[6~";
-        invoke("write_to_pty", { tileId, data: seq.repeat(lines) }).catch(() => {});
+        const seq = lines < 0 ? "\x1b[5~" : "\x1b[6~";
+        invoke("write_to_pty", { tileId, data: seq.repeat(Math.abs(lines)) }).catch(() => {});
         return;
       }
-      e.preventDefault();
-      term.scrollLines(e.deltaY < 0 ? -lines : lines);
+      term.scrollLines(lines);
     };
     const wheelTarget =
       (containerRef.current.querySelector(".xterm-scrollable-element") as HTMLElement | null) ??

@@ -6,6 +6,7 @@ import {
   SCROLL_SPEED_MAX,
   SCROLL_SPEED_MIN,
   _resetAppSettingsCacheForTests,
+  createWheelLineAccumulator,
   getAppSettings,
   sanitize,
   setAppSettings,
@@ -61,6 +62,51 @@ describe("app-settings", () => {
     expect(wheelDeltaToLines(480, 0.5)).toBe(2);
     expect(wheelDeltaToLines(-360, 0.5)).toBe(2);
     expect(wheelDeltaToLines(120, 2)).toBe(2);
+  });
+
+  it("createWheelLineAccumulator returns 0 for small ticks at low speed, accumulates fractional progress", () => {
+    let speed = 0.1;
+    const acc = createWheelLineAccumulator(() => speed);
+    // 30px per tick — typical precision touchpad. At speed 0.1, baseLines=0.25,
+    // scaled=0.025, so we need ~40 ticks to scroll 1 line. The bug pre-fix:
+    // every tick returned 1 line regardless of speed.
+    let lines = 0;
+    for (let i = 0; i < 5; i++) lines += acc(30);
+    expect(lines).toBe(0); // small ticks at min speed must NOT each force 1 line
+    for (let i = 0; i < 50; i++) lines += acc(30);
+    expect(lines).toBeGreaterThanOrEqual(1);
+    expect(lines).toBeLessThanOrEqual(3);
+  });
+
+  it("createWheelLineAccumulator differentiates min vs max speed", () => {
+    // Same wheel input -> very different line counts depending on speed.
+    let minLines = 0;
+    let speedMin = SCROLL_SPEED_MIN;
+    const accMin = createWheelLineAccumulator(() => speedMin);
+    for (let i = 0; i < 20; i++) minLines += accMin(30);
+
+    let maxLines = 0;
+    let speedMax = SCROLL_SPEED_MAX;
+    const accMax = createWheelLineAccumulator(() => speedMax);
+    for (let i = 0; i < 20; i++) maxLines += accMax(30);
+
+    expect(maxLines).toBeGreaterThan(minLines * 5);
+  });
+
+  it("createWheelLineAccumulator preserves direction (signed result)", () => {
+    const acc = createWheelLineAccumulator(() => 1);
+    expect(acc(120)).toBe(1);
+    expect(acc(-240)).toBe(-2);
+  });
+
+  it("createWheelLineAccumulator flips sign of accumulator on direction change", () => {
+    const acc = createWheelLineAccumulator(() => 0.5);
+    // Build up some upward partial credit, then scroll the other way; the
+    // partial credit must not "swallow" the new direction.
+    acc(60); // 0.25 lines pending
+    acc(60); // 0.5 lines pending
+    const out = acc(-240); // 1 line pending downward → discard pending up
+    expect(out).toBeLessThan(0);
   });
 
   it("sanitize clamps and rounds mermaid font size", () => {
