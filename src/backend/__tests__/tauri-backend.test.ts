@@ -370,4 +370,14 @@ describe("TauriBackend", () => {
     await backend.detectDrift("rev-1");
     expect(invoke).toHaveBeenCalledWith("detect_drift", { reviewId: "rev-1" });
   });
+
+  it("diff review tile commands map to snake_case Tauri commands", async () => {
+    invoke.mockResolvedValueOnce([]);
+    await backend.listActiveDiffReviews("ws-1");
+    expect(invoke).toHaveBeenCalledWith("list_active_diff_reviews", { workstreamId: "ws-1" });
+
+    invoke.mockResolvedValueOnce({ id: "tile-1" });
+    await backend.createOrFocusDiffReviewTile("ws-1", "rev-1");
+    expect(invoke).toHaveBeenCalledWith("create_or_focus_diff_review_tile", { workstreamId: "ws-1", reviewId: "rev-1" });
+  });
 });

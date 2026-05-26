@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { MemoryBackend } from "../memory-backend";
+import type { DiffReview } from "../../domain/diff-review";
 
 describe("MemoryBackend", () => {
   let backend: MemoryBackend;
@@ -288,6 +289,57 @@ describe("MemoryBackend", () => {
   });
 
   describe("diff review", () => {
+    function review(id: string, workstreamId: string, status: DiffReview["status"], createdAt: string): DiffReview {
+      return {
+        id,
+        workstream_id: workstreamId,
+        diff_source: "branch",
+        source_ref: "main",
+        status,
+        plan_json: null,
+        exported_path: null,
+        created_at: createdAt,
+        updated_at: createdAt,
+        completed_at: null,
+      };
+    }
+
+    it("lists active diff reviews by workstream ordered by creation desc then id asc", async () => {
+      backend.seedDiffReview({ review: review("rev-b", "ws-1", "active", "2026-05-26T10:00:00.000Z"), chunks: [], hunks: [] });
+      backend.seedDiffReview({ review: review("rev-done", "ws-1", "completed", "2026-05-26T11:00:00.000Z"), chunks: [], hunks: [] });
+      backend.seedDiffReview({ review: review("rev-a", "ws-1", "active", "2026-05-26T10:00:00.000Z"), chunks: [], hunks: [] });
+      backend.seedDiffReview({ review: review("rev-other", "ws-2", "active", "2026-05-26T12:00:00.000Z"), chunks: [], hunks: [] });
+
+      const active = await backend.listActiveDiffReviews("ws-1");
+
+      expect(active.map((r) => r.id)).toEqual(["rev-a", "rev-b"]);
+    });
+
+    it("creates or focuses diff review tiles idempotently per workstream and review", async () => {
+      const ws1 = await backend.createWorkstream("WS 1", "C:\\one");
+      const ws2 = await backend.createWorkstream("WS 2", "C:\\two");
+
+      const first = await backend.createOrFocusDiffReviewTile(ws1.id, "rev-1");
+      expect(first.tile_type).toBe("diff_review");
+      expect(first.title).toBe("Review: rev-1");
+      expect(JSON.parse(first.config_json)).toEqual({ reviewId: "rev-1" });
+      await expect(backend.getLayout(ws1.id)).resolves.toMatchObject({
+        tile_order_json: JSON.stringify([first.id]),
+      });
+
+      const focused = await backend.createOrFocusDiffReviewTile(ws1.id, "rev-1");
+      expect(focused.id).toBe(first.id);
+      expect(JSON.parse((await backend.getLayout(ws1.id)).tile_order_json)).toEqual([first.id]);
+
+      const secondReviewTile = await backend.createOrFocusDiffReviewTile(ws1.id, "rev-2");
+      expect(secondReviewTile.id).not.toBe(first.id);
+      expect(JSON.parse((await backend.getLayout(ws1.id)).tile_order_json)).toEqual([first.id, secondReviewTile.id]);
+
+      const otherWorkstreamTile = await backend.createOrFocusDiffReviewTile(ws2.id, "rev-1");
+      expect(otherWorkstreamTile.id).not.toBe(first.id);
+      expect(JSON.parse((await backend.getLayout(ws2.id)).tile_order_json)).toEqual([otherWorkstreamTile.id]);
+    });
+
     it("creates a review in planning status", async () => {
       const review = await backend.createDiffReview("ws-1", "branch", "main");
       expect(review.status).toBe("planning");

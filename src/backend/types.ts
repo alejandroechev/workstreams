@@ -77,6 +77,8 @@ export interface Backend {
   listSessionTodos(sessionId: string): Promise<SessionTodo[]>;
   // Diff Review (ADR 007)
   createDiffReview(workstreamId: string, diffSource: DiffSource, sourceRef: string | null): Promise<DiffReview>;
+  listActiveDiffReviews(workstreamId: string): Promise<DiffReview[]>;
+  createOrFocusDiffReviewTile(workstreamId: string, reviewId: string): Promise<Tile>;
   setReviewPlan(reviewId: string, planJson: string, chunks: ChunkInput[]): Promise<void>;
   getReview(reviewId: string): Promise<DiffReview>;
   listChunks(reviewId: string): Promise<DiffChunk[]>;

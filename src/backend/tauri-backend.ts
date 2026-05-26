@@ -198,6 +198,14 @@ export class TauriBackend implements Backend {
     return invoke<DiffReview>("create_diff_review", { workstreamId, diffSource, sourceRef });
   }
 
+  async listActiveDiffReviews(workstreamId: string): Promise<DiffReview[]> {
+    return invoke<DiffReview[]>("list_active_diff_reviews", { workstreamId });
+  }
+
+  async createOrFocusDiffReviewTile(workstreamId: string, reviewId: string): Promise<Tile> {
+    return invoke<Tile>("create_or_focus_diff_review_tile", { workstreamId, reviewId });
+  }
+
   async setReviewPlan(reviewId: string, planJson: string, chunks: ChunkInput[]): Promise<void> {
     await invoke("set_review_plan", { reviewId, planJson, chunks });
   }

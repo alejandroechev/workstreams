@@ -357,6 +357,63 @@ export class MemoryBackend implements Backend {
     this.invalidatedChunks.set(reviewId, new Set(chunkIds));
   }
 
+  async listActiveDiffReviews(workstreamId: string): Promise<DiffReview[]> {
+    return Array.from(this.diffReviews.values())
+      .filter((review) => review.workstream_id === workstreamId && review.status === "active")
+      .sort((a, b) => {
+        const createdCompare = b.created_at.localeCompare(a.created_at);
+        return createdCompare !== 0 ? createdCompare : a.id.localeCompare(b.id);
+      });
+  }
+
+  private getDiffReviewIdFromTile(tile: Tile): string | null {
+    try {
+      const config = JSON.parse(tile.config_json) as { reviewId?: unknown };
+      return typeof config.reviewId === "string" ? config.reviewId : null;
+    } catch {
+      return null;
+    }
+  }
+
+  async createOrFocusDiffReviewTile(workstreamId: string, reviewId: string): Promise<Tile> {
+    for (const tile of this.tiles.values()) {
+      if (
+        tile.workstream_id === workstreamId &&
+        tile.tile_type === "diff_review" &&
+        this.getDiffReviewIdFromTile(tile) === reviewId
+      ) {
+        return tile;
+      }
+    }
+
+    const timestamp = now();
+    const tile: Tile = {
+      id: generateId(),
+      workstream_id: workstreamId,
+      tile_type: "diff_review",
+      title: `Review: ${reviewId.slice(0, 8)}`,
+      config_json: JSON.stringify({ reviewId }),
+      created_at: timestamp,
+      updated_at: timestamp,
+    };
+    this.tiles.set(tile.id, tile);
+
+    const layout = await this.getLayout(workstreamId);
+    let tileOrder: string[];
+    try {
+      const parsed = JSON.parse(layout.tile_order_json) as unknown;
+      tileOrder = Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === "string") : [];
+    } catch {
+      tileOrder = [];
+    }
+    if (!tileOrder.includes(tile.id)) {
+      tileOrder.push(tile.id);
+    }
+    await this.updateLayout(workstreamId, { tile_order_json: JSON.stringify(tileOrder) });
+
+    return tile;
+  }
+
   async createDiffReview(workstreamId: string, diffSource: DiffSource, sourceRef: string | null): Promise<DiffReview> {
     const review: DiffReview = {
       id: generateId(),
