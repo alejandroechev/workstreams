@@ -611,7 +611,71 @@ export default function App() {
     setFocusedIndex(tileOrder.length);
   }, [activeWsId, workstreams, tileOrder.length, backend]);
 
-  // Compute linked session IDs from copilot_session tiles
+  // Debug bridge for CDP visual probes (Phase 4 of ADR 007). Exposes a
+  // minimal helper that seeds a diff review + tile end-to-end so the visual
+  // probe can render the Diff Review tile without driving the skill terminal.
+  // Only enabled when window flag is set by the test harness.
+  useEffect(() => {
+    const w = window as unknown as {
+      __wsSeedDiffReviewTile?: (input?: { workstreamId?: string }) => Promise<{ reviewId: string; tileId: string }>;
+    };
+    w.__wsSeedDiffReviewTile = async (input) => {
+      const wsId = input?.workstreamId ?? activeWsId;
+      if (!wsId) throw new Error("no active workstream");
+      const review = await backend.createDiffReview(wsId, "working_tree", null);
+      await backend.setReviewPlan(review.id, JSON.stringify({ source: "cdp-seed" }), [
+        {
+          title: "Add retry budget to JWT verification",
+          summary: "Wraps verifyJwt() in a 3-attempt retry with exponential backoff.",
+          is_trivial: false,
+          question_text: "Why is the retry budget hardcoded to 3?",
+          question_style: "socratic",
+          hunks: [
+            {
+              file_path: "src/auth/jwt.ts",
+              old_start: 10,
+              old_lines: 4,
+              new_start: 10,
+              new_lines: 12,
+              patch_text:
+                "@@ -10,4 +10,12 @@\n-  return verifyJwt(token);\n+  for (let i = 0; i < 3; i++) {\n+    try { return verifyJwt(token); }\n+    catch (e) { if (i === 2) throw e; await sleep(2 ** i * 100); }\n+  }\n",
+            },
+          ],
+        },
+        {
+          title: "Bump @types/node to 20.11.0",
+          summary: null,
+          is_trivial: true,
+          question_text: null,
+          question_style: null,
+          hunks: [
+            {
+              file_path: "package.json",
+              old_start: 22,
+              old_lines: 1,
+              new_start: 22,
+              new_lines: 1,
+              patch_text: '@@ -22,1 +22,1 @@\n-    "@types/node": "20.10.0",\n+    "@types/node": "20.11.0",\n',
+            },
+          ],
+        },
+      ]);
+      const config = JSON.stringify({ reviewId: review.id });
+      const tile = await backend.createTile(wsId, "diff_review", "CDP Review", config);
+      setTiles((prev) => [...prev, tile]);
+      setTileOrder((prev) => {
+        const next = [...prev, tile.id];
+        backend.updateLayout(wsId, { tile_order_json: JSON.stringify(next) });
+        return next;
+      });
+      const chunks = await backend.listChunks(review.id);
+      if (chunks[0]) await backend.activateChunk(review.id, chunks[0].id);
+      return { reviewId: review.id, tileId: tile.id };
+    };
+    return () => { delete w.__wsSeedDiffReviewTile; };
+  }, [activeWsId, backend]);
+
+
   const linkedSessionIds = useMemo(() => {
     return tiles
       .filter((t) => t.tile_type === "copilot_session")

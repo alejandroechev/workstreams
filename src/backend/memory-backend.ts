@@ -1,5 +1,6 @@
 import type { Project, Workstream, Tile, TileType, WorkstreamLayout, CopilotConfigItem } from "../domain/types";
 import type {
+  ChunkInput,
   ChunkWithDetails,
   DiffChunk,
   DiffComment,
@@ -373,12 +374,42 @@ export class MemoryBackend implements Backend {
     return review;
   }
 
-  async setReviewPlan(reviewId: string, planJson: string): Promise<void> {
+  async setReviewPlan(reviewId: string, planJson: string, chunks: ChunkInput[] = []): Promise<void> {
     const review = this.diffReviews.get(reviewId);
     if (!review) throw new Error(`Review not found: ${reviewId}`);
     review.plan_json = planJson;
     review.status = "active";
     review.updated_at = now();
+    chunks.forEach((input, idx) => {
+      const chunkId = generateId();
+      const chunk: DiffChunk = {
+        id: chunkId,
+        review_id: reviewId,
+        ordinal: idx,
+        title: input.title,
+        summary: input.summary,
+        is_trivial: input.is_trivial,
+        state: "pending",
+        question_text: input.question_text,
+        question_style: input.question_style,
+        invalidated_at: null,
+        created_at: now(),
+        updated_at: now(),
+      };
+      this.diffChunks.set(chunkId, chunk);
+      const hunks: DiffHunk[] = input.hunks.map((h) => ({
+        id: generateId(),
+        chunk_id: chunkId,
+        file_path: h.file_path,
+        old_start: h.old_start,
+        old_lines: h.old_lines,
+        new_start: h.new_start,
+        new_lines: h.new_lines,
+        patch_text: h.patch_text,
+        content_hash: `mem-${chunkId}-${h.file_path}`,
+      }));
+      this.diffHunks.set(chunkId, hunks);
+    });
   }
 
   async getReview(reviewId: string): Promise<DiffReview> {

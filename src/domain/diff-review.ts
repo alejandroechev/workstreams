@@ -136,6 +136,29 @@ export interface DiffReviewTileConfig {
 }
 
 /**
+ * Plan input passed to `setReviewPlan`. The skill builds these from its
+ * pre-analysis pass; the Rust backend persists each chunk + its hunks and
+ * computes content hashes for drift detection.
+ */
+export interface HunkInput {
+  file_path: string;
+  old_start: number | null;
+  old_lines: number | null;
+  new_start: number | null;
+  new_lines: number | null;
+  patch_text: string;
+}
+
+export interface ChunkInput {
+  title: string;
+  summary: string | null;
+  is_trivial: boolean;
+  question_text: string | null;
+  question_style: QuestionStyle | null;
+  hunks: HunkInput[];
+}
+
+/**
  * Export schema version 1 — written to
  * `.copilot-reviews/<review-id>/review.json` on completion.
  */

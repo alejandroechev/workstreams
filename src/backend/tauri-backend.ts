@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { Project, Workstream, Tile, TileType, WorkstreamLayout, CopilotConfigItem } from "../domain/types";
 import type {
+  ChunkInput,
   ChunkWithDetails,
   DiffComment,
   DiffReview,
@@ -197,8 +198,8 @@ export class TauriBackend implements Backend {
     return invoke<DiffReview>("create_diff_review", { workstreamId, diffSource, sourceRef });
   }
 
-  async setReviewPlan(reviewId: string, planJson: string): Promise<void> {
-    await invoke("set_review_plan", { reviewId, planJson });
+  async setReviewPlan(reviewId: string, planJson: string, chunks: ChunkInput[]): Promise<void> {
+    await invoke("set_review_plan", { reviewId, planJson, chunks });
   }
 
   async getReview(reviewId: string): Promise<DiffReview> {

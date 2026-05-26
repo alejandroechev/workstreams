@@ -13,6 +13,7 @@ graph TB
             RepoExplorer["RepoExplorerTile<br/>Files / Diff / Log / Hooks"]
             SessionMeta["SessionMetaTile<br/>Session + file detail"]
             Workbench["WorkbenchTile<br/>Workbench file detail"]
+            DiffReview["DiffReviewTile<br/>3-pane diff/question/comments<br/>+ Monaco diff editor"]
             StatusBar["StatusBar<br/>Shortcuts + metadata"]
             subgraph Files["Files"]
                 FileBuffers["FileBufferRegistry<br/>Editable file buffers + dirty state"]
@@ -42,6 +43,7 @@ graph TB
 
     subgraph Providers["External-integration boundary"]
         RemoteProv["RemoteRepoProvider trait<br/>GhCli / InMemory impls"]
+        DiffRunner["DiffCommandRunner trait<br/>Real (git/gh) / Fake impls"]
     end
 
     App --> Sidebar
@@ -52,6 +54,7 @@ graph TB
     TileGrid --> RepoExplorer
     TileGrid --> SessionMeta
     TileGrid --> Workbench
+    TileGrid --> DiffReview
     App --> StatusBar
     App -- "close-requested / switch guard" --> FileBuffers
 
@@ -76,4 +79,8 @@ graph TB
     FileSystemProvider --> FileSystem
     LibRS -- "create_git_repo" --> RemoteProv
     RemoteProv -- "gh repo create" --> GhCli
+    DiffReview -- "invoke: create/get/ack/comment + subscribe events" --> LibRS
+    LibRS -- "emit: diff-review:chunk-active/done/drift" --> DiffReview
+    LibRS --> DiffRunner
+    DiffRunner -- "git diff / gh pr diff" --> FileSystem
 ```

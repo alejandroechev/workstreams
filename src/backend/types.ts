@@ -1,6 +1,7 @@
 // @test-skip: Type-only interface; behaviour covered by MemoryBackend + TauriBackend tests.
 import type { Project, Workstream, Tile, TileType, WorkstreamLayout, CopilotConfigItem } from "../domain/types";
 import type {
+  ChunkInput,
   ChunkWithDetails,
   DiffComment,
   DiffReview,
@@ -76,7 +77,7 @@ export interface Backend {
   listSessionTodos(sessionId: string): Promise<SessionTodo[]>;
   // Diff Review (ADR 007)
   createDiffReview(workstreamId: string, diffSource: DiffSource, sourceRef: string | null): Promise<DiffReview>;
-  setReviewPlan(reviewId: string, planJson: string): Promise<void>;
+  setReviewPlan(reviewId: string, planJson: string, chunks: ChunkInput[]): Promise<void>;
   getReview(reviewId: string): Promise<DiffReview>;
   listChunks(reviewId: string): Promise<DiffChunk[]>;
   getChunkDetails(chunkId: string): Promise<ChunkWithDetails>;

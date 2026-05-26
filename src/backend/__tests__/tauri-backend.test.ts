@@ -329,8 +329,8 @@ describe("TauriBackend", () => {
     expect(invoke).toHaveBeenCalledWith("create_diff_review", { workstreamId: "ws-1", diffSource: "branch", sourceRef: "main" });
 
     invoke.mockResolvedValueOnce(undefined);
-    await backend.setReviewPlan("rev-1", "{}");
-    expect(invoke).toHaveBeenCalledWith("set_review_plan", { reviewId: "rev-1", planJson: "{}" });
+    await backend.setReviewPlan("rev-1", "{}", []);
+    expect(invoke).toHaveBeenCalledWith("set_review_plan", { reviewId: "rev-1", planJson: "{}", chunks: [] });
 
     invoke.mockResolvedValueOnce({ id: "rev-1" });
     await backend.getReview("rev-1");
