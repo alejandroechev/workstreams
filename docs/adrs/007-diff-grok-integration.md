@@ -240,3 +240,28 @@ follow-on Copilot CLI session.
   comments workflow and tile integration are large enough additions that a
   separate skill keeps `code-grok` focused on its current strength
   (comprehension).
+
+## Tile entry points (added post-launch)
+
+Added: 2026-05-26 after gap-analysis discussion.
+
+Diff Review tiles can be opened through two supported paths:
+
+1. **Skill-driven auto-open.** After `diff-grok` submits its plan with
+   `set_review_plan`, it calls `create_or_focus_diff_review_tile(workstream_id,
+   review_id)`. This makes the planned review visible without requiring the user
+   to manually add a tile.
+
+2. **User-driven open.** The Add Tile menu exposes Diff Review via `Alt+G`. That
+   path lists active reviews for the workstream and opens the selected review
+   using the same backend command.
+
+The tile-opening command is idempotent: the same `(workstream_id, review_id)`
+returns the same `diff_review` tile instead of creating duplicates. Both entry
+points therefore share the same resume-safe contract.
+
+When a new tile is inserted, Rust emits `tile-created` with the full `Tile`
+struct as its payload. The React listener routes the update by
+`tile.workstream_id`, not by the currently active workstream. If that workstream
+is not loaded in frontend state, the listener is a no-op; first-load still reads
+truth from SQLite, so no event queue is required.

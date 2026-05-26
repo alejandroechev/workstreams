@@ -81,6 +81,8 @@ graph TB
     RemoteProv -- "gh repo create" --> GhCli
     DiffReview -- "invoke: create/get/ack/comment + subscribe events" --> LibRS
     LibRS -- "emit: diff-review:chunk-active/done/drift" --> DiffReview
+    LibRS -- "emit: tile-created<br/>(create_tile / create_or_focus_diff_review_tile)" --> App
+    App -- "listen: tile-created<br/>route by tile.workstream_id" --> TileGrid
     LibRS --> DiffRunner
     DiffRunner -- "git diff / gh pr diff" --> FileSystem
 ```
