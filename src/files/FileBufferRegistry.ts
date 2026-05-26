@@ -98,6 +98,12 @@ const BINARY_ERROR = "Binary files cannot be edited";
 
 const isDirtyState = (state: BufferState) => state === "dirty" || state === "conflicted" || state === "save_blocked";
 
+// Tauri event names only permit [a-zA-Z0-9-/:_]. We replace any other char
+// with `_`. The Rust side has an identical sanitizer (file_io::sanitize_event_name)
+// — both must produce the same string for the same canonical path so that
+// emit and listen match.
+const sanitizeEventName = (s: string): string => s.replace(/[^a-zA-Z0-9\-/:_]/g, "_");
+
 const snapshotFor = (entry: InternalEntry): BufferSnapshot => ({
   path: entry.path,
   state: entry.stateContext.state,
@@ -364,7 +370,8 @@ class FileBufferRegistryImpl implements FileBufferRegistry {
 
   private async attachWatcher(entry: InternalEntry): Promise<void> {
     await this.deps.invokeTauri<void>("watch_file_changes", { path: entry.path });
-    entry.watcherUnsub = await this.deps.listenTauri<FileChangedPayload>(`file-changed-${entry.path}`, (ev) => {
+    const eventName = `file-changed-${sanitizeEventName(entry.path)}`;
+    entry.watcherUnsub = await this.deps.listenTauri<FileChangedPayload>(eventName, (ev) => {
       void this.handleWatcherEvent(entry, ev.payload);
     });
   }
@@ -485,5 +492,11 @@ export const fileBufferRegistry: FileBufferRegistry = createFileBufferRegistry({
   listenTauri: listen as RegistryDeps["listenTauri"],
   loadMonaco: loadRealMonaco,
 });
+
+// Expose a tiny debug bridge for CDP/E2E probes. Single-user desktop app.
+if (typeof globalThis !== "undefined") {
+  (globalThis as unknown as { __wsFileBufferRegistry?: unknown }).__wsFileBufferRegistry =
+    fileBufferRegistry;
+}
 
 export default fileBufferRegistry;

@@ -120,7 +120,8 @@ const createHarness = () => {
   return { registry, invokeTauri, listenTauri, watchHandlers, unlisten, readQueue, writeQueue, models, monaco };
 };
 
-const watcherEvent = (harness: ReturnType<typeof createHarness>, path = canonical) => `file-changed-${path}`;
+const sanitizeForEvent = (s: string) => s.replace(/[^a-zA-Z0-9\-/:_]/g, "_");
+const watcherEvent = (_harness: ReturnType<typeof createHarness>, path = canonical) => `file-changed-${sanitizeForEvent(path)}`;
 
 describe("FileBufferRegistry", () => {
   beforeEach(() => {

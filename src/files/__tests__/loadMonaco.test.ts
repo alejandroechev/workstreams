@@ -1,10 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-
-class EditorWorkerMock {}
-class JsonWorkerMock {}
-class CssWorkerMock {}
-class HtmlWorkerMock {}
-class TypeScriptWorkerMock {}
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const monacoMock = {
   editor: {
@@ -14,11 +8,20 @@ const monacoMock = {
 };
 
 vi.mock("monaco-editor", () => monacoMock);
-vi.mock("monaco-editor/esm/vs/editor/editor.worker?worker", () => ({ default: EditorWorkerMock }));
-vi.mock("monaco-editor/esm/vs/language/json/json.worker?worker", () => ({ default: JsonWorkerMock }));
-vi.mock("monaco-editor/esm/vs/language/css/css.worker?worker", () => ({ default: CssWorkerMock }));
-vi.mock("monaco-editor/esm/vs/language/html/html.worker?worker", () => ({ default: HtmlWorkerMock }));
-vi.mock("monaco-editor/esm/vs/language/typescript/ts.worker?worker", () => ({ default: TypeScriptWorkerMock }));
+
+// Stub Worker + URL.createObjectURL — jsdom doesn't fully implement them.
+class WorkerStub {
+  constructor(_url: string) {}
+  postMessage(): void {}
+  terminate(): void {}
+  addEventListener(): void {}
+  removeEventListener(): void {}
+  onmessage: ((e: MessageEvent) => void) | null = null;
+}
+const originalCreateObjectURL = URL.createObjectURL;
+const originalWorker = (globalThis as unknown as { Worker?: typeof Worker }).Worker;
+(globalThis as unknown as { Worker: typeof Worker }).Worker = WorkerStub as unknown as typeof Worker;
+URL.createObjectURL = vi.fn(() => "blob:mock");
 
 import { _resetMonacoLoaderForTests, getMonacoIfLoaded, loadMonaco } from "../loadMonaco";
 
@@ -70,13 +73,28 @@ describe("loadMonaco", () => {
     expect(loadMonaco()).not.toBe(firstPromise);
   });
 
-  it("configures synchronous Monaco web worker construction", async () => {
+  it("installs a Monaco environment with a synchronous getWorker", async () => {
     await loadMonaco();
-
-    expect(monacoHost.MonacoEnvironment?.getWorker("json-worker", "json")).toBeInstanceOf(JsonWorkerMock);
-    expect(monacoHost.MonacoEnvironment?.getWorker("css-worker", "scss")).toBeInstanceOf(CssWorkerMock);
-    expect(monacoHost.MonacoEnvironment?.getWorker("html-worker", "handlebars")).toBeInstanceOf(HtmlWorkerMock);
-    expect(monacoHost.MonacoEnvironment?.getWorker("ts-worker", "javascript")).toBeInstanceOf(TypeScriptWorkerMock);
-    expect(monacoHost.MonacoEnvironment?.getWorker("editor-worker", "plaintext")).toBeInstanceOf(EditorWorkerMock);
+    const env = monacoHost.MonacoEnvironment;
+    expect(env).toBeDefined();
+    // getWorker must return a Worker-shaped object for any label without throwing.
+    expect(env!.getWorker("any-id", "json")).toBeInstanceOf(WorkerStub);
+    expect(env!.getWorker("any-id", "plaintext")).toBeInstanceOf(WorkerStub);
+    expect(env!.getWorker("any-id", "css")).toBeInstanceOf(WorkerStub);
   });
+
+  it("preserves a pre-existing MonacoEnvironment if one was already configured", async () => {
+    const custom = { getWorker: vi.fn().mockReturnValue(new WorkerStub("x")) };
+    monacoHost.MonacoEnvironment = custom;
+    await loadMonaco();
+    expect(monacoHost.MonacoEnvironment).toBe(custom);
+  });
+});
+
+// Restore createObjectURL after the suite (vitest's globalThis lives across tests).
+afterAll(() => {
+  URL.createObjectURL = originalCreateObjectURL;
+  if (originalWorker) {
+    (globalThis as unknown as { Worker?: typeof Worker }).Worker = originalWorker;
+  }
 });

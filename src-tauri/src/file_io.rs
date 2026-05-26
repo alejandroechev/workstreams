@@ -437,7 +437,10 @@ fn watch_file_changes_with_state(
     }
 
     let event_path = canonical_path.clone();
-    let event_name = format!("file-changed-{}", canonical_path.to_string_lossy());
+    let event_name = format!(
+        "file-changed-{}",
+        sanitize_event_name(&canonical_path.to_string_lossy())
+    );
     let app_handle = app.clone();
     let mut debouncer = new_debouncer(
         Duration::from_millis(100),
@@ -505,6 +508,18 @@ fn file_changed_payload(path: &Path) -> FileChangedPayload {
             kind: "removed".to_string(),
         }
     }
+}
+
+/// Sanitize a string so it can be used as a Tauri event name. Tauri only
+/// permits `[a-zA-Z0-9-/:_]` in event names. We replace any other char with
+/// `_` so the same sanitization in TS and Rust produces matching names.
+fn sanitize_event_name(s: &str) -> String {
+    s.chars()
+        .map(|c| match c {
+            'a'..='z' | 'A'..='Z' | '0'..='9' | '-' | '/' | ':' | '_' => c,
+            _ => '_',
+        })
+        .collect()
 }
 
 #[cfg(test)]

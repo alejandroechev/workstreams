@@ -1,15 +1,6 @@
 import type * as MonacoNs from "monaco-editor";
 
 type MonacoModule = typeof MonacoNs;
-type WorkerConstructor = new () => Worker;
-
-interface WorkerConstructors {
-  editor: WorkerConstructor;
-  json: WorkerConstructor;
-  css: WorkerConstructor;
-  html: WorkerConstructor;
-  typescript: WorkerConstructor;
-}
 
 interface MonacoEnvironmentHost extends Window {
   MonacoEnvironment?: {
@@ -20,51 +11,33 @@ interface MonacoEnvironmentHost extends Window {
 let loadPromise: Promise<MonacoModule> | null = null;
 let loadedMonaco: MonacoModule | null = null;
 
-const loadWorkerConstructors = async (): Promise<WorkerConstructors> => {
-  const [editor, json, css, html, typescript] = await Promise.all([
-    import("monaco-editor/esm/vs/editor/editor.worker?worker"),
-    import("monaco-editor/esm/vs/language/json/json.worker?worker"),
-    import("monaco-editor/esm/vs/language/css/css.worker?worker"),
-    import("monaco-editor/esm/vs/language/html/html.worker?worker"),
-    import("monaco-editor/esm/vs/language/typescript/ts.worker?worker"),
-  ]);
-
-  return {
-    editor: editor.default,
-    json: json.default,
-    css: css.default,
-    html: html.default,
-    typescript: typescript.default,
+// Tiny inline no-op worker: returned for every Monaco language. Monaco needs
+// `getWorker` to return SOMETHING, but if our only use case is plain-text
+// editing (no JSON/TS/CSS IntelliSense), the worker doesn't need to do
+// anything. This avoids the Vite `?worker` imports which:
+//   1. Spawn shared_worker targets that Playwright's older CDP-connect chokes
+//      on, breaking CDP visual validation.
+//   2. Add ~1 MB of language-server code per worker that we'd ship to disk
+//      but never use.
+// If we add IntelliSense later, swap this for the proper worker bundle.
+const createNoopWorkerSource = (): string => `
+  self.onmessage = function(e) {
+    // Reply to Monaco's "create worker" handshake with empty results so it
+    // doesn't keep retrying. Real language workers respond with structured
+    // results; we just acknowledge to avoid console noise.
+    if (e.data && e.data.method === "$initialize") {
+      self.postMessage({ id: e.data.id, result: null });
+    }
   };
-};
+`;
 
-const pickWorkerConstructor = (workers: WorkerConstructors, label: string): WorkerConstructor => {
-  switch (label) {
-    case "json":
-      return workers.json;
-    case "css":
-    case "scss":
-    case "less":
-      return workers.css;
-    case "html":
-    case "handlebars":
-    case "razor":
-      return workers.html;
-    case "typescript":
-    case "javascript":
-      return workers.typescript;
-    default:
-      return workers.editor;
-  }
-};
-
-const configureMonacoEnvironment = (workers: WorkerConstructors): void => {
+const configureMonacoEnvironment = (): void => {
   const monacoHost = self as MonacoEnvironmentHost;
-
+  if (monacoHost.MonacoEnvironment) return;
   monacoHost.MonacoEnvironment = {
-    getWorker(_workerId: string, label: string): Worker {
-      const WorkerClass = pickWorkerConstructor(workers, label);
-      return new WorkerClass();
+    getWorker(): Worker {
+      const blob = new Blob([createNoopWorkerSource()], { type: "application/javascript" });
+      return new Worker(URL.createObjectURL(blob));
     },
   };
 };
@@ -79,9 +52,7 @@ const configureMonacoEnvironment = (workers: WorkerConstructors): void => {
 export function loadMonaco(): Promise<MonacoModule> {
   if (loadPromise === null) {
     loadPromise = (async () => {
-      const workers = await loadWorkerConstructors();
-      configureMonacoEnvironment(workers);
-
+      configureMonacoEnvironment();
       const monaco = await import("monaco-editor");
       loadedMonaco = monaco;
       return monaco;
