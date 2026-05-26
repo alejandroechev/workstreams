@@ -41,8 +41,19 @@ export async function run({ page, screenshot }) {
   const tile = page.locator('[data-testid="diff-review-tile"]').first();
   await tile.waitFor({ timeout: 20000 });
 
-  const monaco = tile.locator('[data-testid="diff-review-monaco"] .monaco-editor').first();
-  await monaco.waitFor({ timeout: 30000 });
+  // Wait for the Monaco container to be present; the editor inside it may be
+  // hidden initially (newly added tile is not focused) — that's fine, we just
+  // need it mounted.
+  const monacoContainer = tile.locator('[data-testid="diff-review-monaco"]').first();
+  await monacoContainer.waitFor({ state: "attached", timeout: 30000 });
+  await page.waitForFunction(
+    () =>
+      document.querySelectorAll(
+        '[data-testid="diff-review-tile"] [data-testid="diff-review-monaco"] .monaco-editor',
+      ).length > 0,
+    null,
+    { timeout: 30000 },
+  );
 
   const title = tile.locator('[data-testid="diff-review-chunk-title"]').first();
   await title.waitFor({ timeout: 10000 });
