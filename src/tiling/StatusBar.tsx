@@ -13,6 +13,7 @@ interface Props {
   onAddSessionMeta?: () => void;
   onAddWorkbench?: () => void;
   onAddPlan?: () => void;
+  onAddDiffReview?: () => void;
   onCloseTitle?: () => void;
   onToggleFullscreen?: () => void;
   onOpenSettings?: () => void;
@@ -41,11 +42,12 @@ export default function StatusBar({
   onAddSessionMeta,
   onAddWorkbench,
   onAddPlan,
+  onAddDiffReview,
   onCloseTitle,
   onToggleFullscreen,
   onOpenSettings,
 }: Props) {
-  const rawItems: Array<{ key: string; label: string; icon: "session" | "terminal" | "folder" | "info" | "beaker" | "plan"; shortcut?: string; onSelect?: () => void }> = [
+  const rawItems: Array<{ key: string; label: string; icon: "session" | "terminal" | "folder" | "info" | "beaker" | "plan" | "bug"; shortcut?: string; onSelect?: () => void }> = [
     { key: "session", label: "Copilot Session", icon: "session", shortcut: "Alt+S", onSelect: onAddSession },
     { key: "terminal", label: "PowerShell", icon: "terminal", shortcut: "Alt+T", onSelect: onAddTerminal },
     { key: "wsl", label: "WSL Terminal", icon: "terminal", shortcut: "Alt+W", onSelect: onAddWslTerminal },
@@ -53,6 +55,7 @@ export default function StatusBar({
     { key: "meta", label: "Session Meta", icon: "info", shortcut: "Alt+M", onSelect: onAddSessionMeta },
     { key: "workbench", label: "Workbench", icon: "beaker", shortcut: "Alt+B", onSelect: onAddWorkbench },
     { key: "plan", label: "Plan", icon: "plan", shortcut: "Alt+P", onSelect: onAddPlan },
+    { key: "diff-review", label: "Diff Review", icon: "bug", shortcut: "Alt+G", onSelect: onAddDiffReview },
   ];
   const menuItems = rawItems
     .filter((it) => typeof it.onSelect === "function")

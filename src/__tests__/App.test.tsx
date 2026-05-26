@@ -157,6 +157,8 @@ function createBackend(): Backend {
     listSessionTodoDeps: vi.fn(),
     listSessionTodos: vi.fn(),
     createDiffReview: vi.fn(),
+    listActiveDiffReviews: vi.fn(async () => []),
+    createOrFocusDiffReviewTile: vi.fn(),
     setReviewPlan: vi.fn(),
     getReview: vi.fn(),
     listChunks: vi.fn(),
