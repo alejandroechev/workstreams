@@ -513,7 +513,7 @@ fn file_changed_payload(path: &Path) -> FileChangedPayload {
 /// Sanitize a string so it can be used as a Tauri event name. Tauri only
 /// permits `[a-zA-Z0-9-/:_]` in event names. We replace any other char with
 /// `_` so the same sanitization in TS and Rust produces matching names.
-fn sanitize_event_name(s: &str) -> String {
+pub(crate) fn sanitize_event_name(s: &str) -> String {
     s.chars()
         .map(|c| match c {
             'a'..='z' | 'A'..='Z' | '0'..='9' | '-' | '/' | ':' | '_' => c,

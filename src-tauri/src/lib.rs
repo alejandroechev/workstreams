@@ -1,4 +1,5 @@
 mod db;
+mod diff_review;
 mod file_io;
 mod fs_watcher;
 mod pty;
@@ -2715,6 +2716,17 @@ pub fn run() {
             // Filesystem watcher
             watch_directory,
             unwatch_directory,
+            // Diff Review (diff-grok)
+            diff_review::create_diff_review,
+            diff_review::set_review_plan,
+            diff_review::get_review,
+            diff_review::list_chunks,
+            diff_review::get_chunk_details,
+            diff_review::activate_chunk,
+            diff_review::ack_chunk,
+            diff_review::add_comment,
+            diff_review::complete_review,
+            diff_review::detect_drift,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
