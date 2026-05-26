@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { fileBufferRegistry } from "./files/FileBufferRegistry";
 import WorkstreamSidebar from "./workstream/WorkstreamSidebar";
@@ -11,12 +12,14 @@ import TileGrid from "./tiling/TileGrid";
 import StatusBar from "./tiling/StatusBar";
 import SessionPicker, { type CopilotSession } from "./tiles/SessionPicker";
 import SettingsModal from "./ui/SettingsModal";
+import DiffReviewPickerModal from "./ui/components/DiffReviewPickerModal";
 import { navigateFocus } from "./domain/layout";
 import { parseKeyAction } from "./domain/keyboard";
 import { createTerminalConfig, createCopilotSessionConfig } from "./domain/tile-config";
 import { createWorkstreamFlow } from "./domain/workstream-create";
 import { useBackend } from "./backend/context";
 import type { Project, Workstream, Tile, TileType } from "./domain/types";
+import type { DiffReview } from "./domain/diff-review";
 
 export default function App() {
   const backend = useBackend();
@@ -74,6 +77,28 @@ export default function App() {
     updateActiveState((s) => ({ ...s, fullscreenTileId: typeof v === "function" ? v(s.fullscreenTileId) : v })),
     [updateActiveState],
   );
+
+  // Idempotently insert/replace a tile in its workstream's state, deduped by id.
+  // Used by addTile, the tile-created event listener, the CDP seed bridge, and
+  // the diff-review path B handler — single source of truth so all entry points
+  // converge on the same state shape.
+  const upsertTileLocally = useCallback((tile: Tile) => {
+    setWsStates((prev) => {
+      const wsId = tile.workstream_id;
+      // No-op for unloaded workstreams: first-load will read truth from DB.
+      if (!prev.has(wsId)) return prev;
+      const next = new Map(prev);
+      const current = next.get(wsId)!;
+      const tiles = current.tiles.some((t) => t.id === tile.id)
+        ? current.tiles.map((t) => (t.id === tile.id ? tile : t))
+        : [...current.tiles, tile];
+      const tileOrder = current.tileOrder.includes(tile.id)
+        ? current.tileOrder
+        : [...current.tileOrder, tile.id];
+      next.set(wsId, { ...current, tiles, tileOrder });
+      return next;
+    });
+  }, []);
   const [showSessionPicker, setShowSessionPicker] = useState(false);
   const [linkingTileId, setLinkingTileId] = useState<string | null>(null);
   const [showProjectCreate, setShowProjectCreate] = useState(false);
@@ -81,6 +106,9 @@ export default function App() {
   const [showWsCreate, setShowWsCreate] = useState<{ show: boolean; projectId?: string }>({ show: false });
   const [showForkWs, setShowForkWs] = useState<{ show: boolean; wsId?: string }>({ show: false });
   const [showSettings, setShowSettings] = useState(false);
+  const [showDiffReviewPicker, setShowDiffReviewPicker] = useState(false);
+  const [diffReviewPickerReviews, setDiffReviewPickerReviews] = useState<DiffReview[]>([]);
+  const [noActiveReviewHint, setNoActiveReviewHint] = useState(false);
   // Track which tile IDs have active PTYs to avoid double-spawning
   const spawnedPtys = useRef<Set<string>>(new Set());
   const previousWsTiles = useRef<Map<string, { tiles: Tile[]; order: string[] }>>(new Map());
@@ -529,12 +557,9 @@ export default function App() {
 
     const tile = await backend.createTile(activeWsId, tileType, title, config);
 
-    setTiles((prev) => [...prev, tile]);
-    setTileOrder((prev) => {
-      const next = [...prev, tile.id];
-      backend.updateLayout(activeWsId, { tile_order_json: JSON.stringify(next) });
-      return next;
-    });
+    upsertTileLocally(tile);
+    // Persist new layout order (tileOrder closure is the active state at call time).
+    backend.updateLayout(activeWsId, { tile_order_json: JSON.stringify([...tileOrder, tile.id]) });
 
     // Spawn PTY for terminal and copilot_session tiles
     if (tileType === "terminal") {
@@ -548,7 +573,7 @@ export default function App() {
     }
 
     setFocusedIndex(tileOrder.length);
-  }, [activeWsId, workstreams, tiles.length, tileOrder.length, backend]);
+  }, [activeWsId, workstreams, tiles, tileOrder, backend, upsertTileLocally, setFocusedIndex]);
 
   const closeTile = useCallback(
     async (tileId: string) => {
@@ -663,11 +688,14 @@ export default function App() {
       ]);
       const config = JSON.stringify({ reviewId: review.id });
       const tile = await backend.createTile(wsId, "diff_review", "CDP Review", config);
-      setTiles((prev) => [...prev, tile]);
-      setTileOrder((prev) => {
-        const next = [...prev, tile.id];
-        backend.updateLayout(wsId, { tile_order_json: JSON.stringify(next) });
-        return next;
+      upsertTileLocally(tile);
+      // Persist order only if newly appended.
+      setWsStates((prev) => {
+        const state = prev.get(wsId);
+        if (state) {
+          backend.updateLayout(wsId, { tile_order_json: JSON.stringify(state.tileOrder) });
+        }
+        return prev;
       });
       const chunks = await backend.listChunks(review.id);
       if (chunks[0]) await backend.activateChunk(review.id, chunks[0].id);
@@ -677,7 +705,54 @@ export default function App() {
       await closeTile(tileId);
     };
     return () => { delete w.__wsSeedDiffReviewTile; delete w.__wsCloseDiffReviewTile; };
-  }, [activeWsId, backend, closeTile]);
+  }, [activeWsId, backend, closeTile, upsertTileLocally]);
+
+  // Diff Review tile-open handler (path B + skill auto-open fallback).
+  // 0 active reviews → inline hint banner (auto-clears).
+  // 1 active review → open/focus it via idempotent backend command.
+  // >1 active reviews → show picker modal so user disambiguates.
+  const addTileDiffReview = useCallback(async () => {
+    if (!activeWsId) return;
+    let reviews: DiffReview[] = [];
+    try {
+      reviews = await backend.listActiveDiffReviews(activeWsId);
+    } catch {
+      reviews = [];
+    }
+    if (reviews.length === 0) {
+      setNoActiveReviewHint(true);
+      window.setTimeout(() => setNoActiveReviewHint(false), 6000);
+      return;
+    }
+    if (reviews.length === 1) {
+      const tile = await backend.createOrFocusDiffReviewTile(activeWsId, reviews[0].id);
+      const existing = wsStates.get(activeWsId);
+      const wasAlreadyThere = !!existing?.tileOrder.includes(tile.id);
+      upsertTileLocally(tile);
+      if (!wasAlreadyThere) {
+        const newOrder = [...(existing?.tileOrder ?? []), tile.id];
+        backend.updateLayout(activeWsId, { tile_order_json: JSON.stringify(newOrder) });
+        setFocusedIndex(newOrder.length - 1);
+      } else {
+        setFocusedIndex(existing!.tileOrder.indexOf(tile.id));
+      }
+      return;
+    }
+    setDiffReviewPickerReviews(reviews);
+    setShowDiffReviewPicker(true);
+  }, [activeWsId, backend, upsertTileLocally, wsStates, setFocusedIndex]);
+
+  // Listen for tile-created events emitted by the Rust backend (e.g. when
+  // `create_or_focus_diff_review_tile` or `create_tile` is invoked from the
+  // skill or any other source). Idempotent via upsertTileLocally.
+  useEffect(() => {
+    const unsubPromise = listen<Tile>("tile-created", (event) => {
+      upsertTileLocally(event.payload);
+    });
+    return () => {
+      unsubPromise.then((u) => u()).catch(() => { /* ignore */ });
+    };
+  }, [upsertTileLocally]);
 
 
   const linkedSessionIds = useMemo(() => {
@@ -749,6 +824,8 @@ export default function App() {
           e.preventDefault();
           if (action.tileType === "copilot_session") {
             setShowSessionPicker(true);
+          } else if (action.tileType === "diff_review") {
+            addTileDiffReview();
           } else {
             addTile(action.tileType, action.extraConfig);
           }
@@ -933,6 +1010,7 @@ export default function App() {
           onAddSessionMeta={() => addTile("session_meta")}
           onAddWorkbench={() => addTile("workbench")}
           onAddPlan={() => addTile("plan")}
+          onAddDiffReview={() => addTileDiffReview()}
           onOpenSettings={() => setShowSettings(true)}
           onToggleFullscreen={() => {
             if (orderedTiles.length > 0 && orderedTiles[focusedIndex]) {
@@ -949,6 +1027,50 @@ export default function App() {
       </div>
 
       <SettingsModal open={showSettings} onClose={() => setShowSettings(false)} />
+
+      {showDiffReviewPicker && (
+        <DiffReviewPickerModal
+          reviews={diffReviewPickerReviews}
+          onPick={async (reviewId) => {
+            setShowDiffReviewPicker(false);
+            if (!activeWsId) return;
+            const tile = await backend.createOrFocusDiffReviewTile(activeWsId, reviewId);
+            const existing = wsStates.get(activeWsId);
+            const wasAlreadyThere = !!existing?.tileOrder.includes(tile.id);
+            upsertTileLocally(tile);
+            if (!wasAlreadyThere) {
+              const newOrder = [...(existing?.tileOrder ?? []), tile.id];
+              backend.updateLayout(activeWsId, { tile_order_json: JSON.stringify(newOrder) });
+              setFocusedIndex(newOrder.length - 1);
+            } else {
+              setFocusedIndex(existing!.tileOrder.indexOf(tile.id));
+            }
+          }}
+          onClose={() => setShowDiffReviewPicker(false)}
+        />
+      )}
+
+      {noActiveReviewHint && (
+        <div
+          data-testid="no-active-review-hint"
+          role="status"
+          style={{
+            position: "fixed",
+            bottom: 40,
+            right: 20,
+            zIndex: 1000,
+            background: "#1e293b",
+            color: "#e2e8f0",
+            padding: "10px 14px",
+            borderRadius: 6,
+            fontSize: 13,
+            boxShadow: "0 4px 12px rgba(0,0,0,0.4)",
+            maxWidth: 340,
+          }}
+        >
+          No active diff reviews. Run the <code>diff-grok</code> skill in a Copilot session to start one.
+        </div>
+      )}
 
       {/* Session picker modal */}
       {showSessionPicker && (

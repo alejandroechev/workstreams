@@ -1,6 +1,6 @@
 import React from "react";
 import "@testing-library/jest-dom/vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "../App";
 import { BackendProvider } from "../backend/context";
@@ -10,11 +10,16 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 
 const mocks = vi.hoisted(() => {
   let closeHandler: ((event: { preventDefault: () => void }) => void | Promise<void>) | null = null;
+  let tileCreatedHandler: ((event: { payload: unknown }) => void) | null = null;
   const unlisten = vi.fn();
   const destroy = vi.fn();
   const onCloseRequested = vi.fn(async (handler: (event: { preventDefault: () => void }) => void | Promise<void>) => {
     closeHandler = handler;
     return unlisten;
+  });
+  const eventListen = vi.fn(async (eventName: string, handler: (event: { payload: unknown }) => void) => {
+    if (eventName === "tile-created") tileCreatedHandler = handler;
+    return () => { if (eventName === "tile-created") tileCreatedHandler = null; };
   });
 
   return {
@@ -22,9 +27,12 @@ const mocks = vi.hoisted(() => {
     listAll: vi.fn<() => Array<{ path: string; dirty: boolean }>>(() => []),
     getCloseHandler: () => closeHandler,
     resetCloseHandler: () => { closeHandler = null; },
+    emitTileCreated: (tile: unknown) => { tileCreatedHandler?.({ payload: tile }); },
+    resetTileCreatedHandler: () => { tileCreatedHandler = null; },
     unlisten,
     destroy,
     onCloseRequested,
+    eventListen,
   };
 });
 
@@ -35,6 +43,7 @@ vi.mock("@tauri-apps/api/window", () => ({
     destroy: mocks.destroy,
   })),
 }));
+vi.mock("@tauri-apps/api/event", () => ({ listen: mocks.eventListen }));
 vi.mock("../files/FileBufferRegistry", () => ({
   fileBufferRegistry: { listAll: mocks.listAll },
 }));
@@ -278,5 +287,91 @@ describe("dirty file buffer close confirmations", () => {
 
     expect(preventDefault).toHaveBeenCalledOnce();
     expect(mocks.destroy).not.toHaveBeenCalled();
+  });
+});
+
+function makeReview(id: string, ref: string | null = null): import("../domain/diff-review").DiffReview {
+  return {
+    id,
+    workstream_id: "ws-1",
+    diff_source: "working_tree",
+    source_ref: ref,
+    status: "active",
+    created_at: now,
+    completed_at: null,
+    exported_path: null,
+  } as import("../domain/diff-review").DiffReview;
+}
+
+function makeTile(id: string, wsId = "ws-1"): Tile {
+  return {
+    id,
+    workstream_id: wsId,
+    tile_type: "diff_review",
+    title: "Review",
+    config_json: "{}",
+    created_at: now,
+    updated_at: now,
+  } as Tile;
+}
+
+describe("diff-review tile-open paths", () => {
+  beforeEach(() => {
+    mocks.resetTileCreatedHandler();
+  });
+
+  it("Alt+G with 0 active reviews shows the inline hint banner", async () => {
+    const backend = createBackend();
+    (backend.listActiveDiffReviews as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    await renderApp(backend);
+
+    fireEvent.keyDown(window, { key: "g", altKey: true });
+
+    expect(backend.listActiveDiffReviews).toHaveBeenCalledWith("ws-1");
+    await waitFor(() => expect(screen.getByTestId("no-active-review-hint")).toBeInTheDocument());
+    expect(backend.createOrFocusDiffReviewTile).not.toHaveBeenCalled();
+  });
+
+  it("Alt+G with 1 active review auto-opens via createOrFocusDiffReviewTile", async () => {
+    const backend = createBackend();
+    (backend.listActiveDiffReviews as ReturnType<typeof vi.fn>).mockResolvedValue([makeReview("r1")]);
+    (backend.createOrFocusDiffReviewTile as ReturnType<typeof vi.fn>).mockResolvedValue(makeTile("t1"));
+    await renderApp(backend);
+
+    fireEvent.keyDown(window, { key: "g", altKey: true });
+
+    await waitFor(() =>
+      expect(backend.createOrFocusDiffReviewTile).toHaveBeenCalledWith("ws-1", "r1"),
+    );
+  });
+
+  it("Alt+G with >1 active reviews opens the picker modal", async () => {
+    const backend = createBackend();
+    (backend.listActiveDiffReviews as ReturnType<typeof vi.fn>).mockResolvedValue([
+      makeReview("r1"), makeReview("r2"),
+    ]);
+    await renderApp(backend);
+
+    fireEvent.keyDown(window, { key: "g", altKey: true });
+
+    await waitFor(() => expect(screen.getByTestId("diff-review-picker-modal")).toBeInTheDocument());
+    expect(backend.createOrFocusDiffReviewTile).not.toHaveBeenCalled();
+  });
+
+  it("tile-created event upserts the tile in the matching workstream", async () => {
+    const backend = createBackend();
+    await renderApp(backend);
+
+    act(() => mocks.emitTileCreated(makeTile("evt-tile")));
+    act(() => mocks.emitTileCreated(makeTile("evt-tile")));
+    expect(backend.updateLayout).not.toHaveBeenCalled();
+  });
+
+  it("tile-created event for an unloaded workstream is a no-op", async () => {
+    const backend = createBackend();
+    await renderApp(backend);
+
+    expect(() => act(() => mocks.emitTileCreated(makeTile("orphan", "ws-99")))).not.toThrow();
+    expect(backend.updateLayout).not.toHaveBeenCalled();
   });
 });
