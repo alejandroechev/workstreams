@@ -485,6 +485,7 @@ export default function App() {
       session_meta: "Meta-session",
       workbench: "Bench",
       plan: "Plan",
+      diff_review: "Review",
     };
     // Count by sub-shell (PowerShell vs WSL) so each gets its own
     // numbered sequence.

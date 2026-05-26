@@ -102,6 +102,69 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
             console_error_count INTEGER NOT NULL DEFAULT 0,
             captured_at TEXT NOT NULL
         );
+
+        CREATE TABLE IF NOT EXISTS diff_reviews (
+            id TEXT PRIMARY KEY,
+            workstream_id TEXT NOT NULL REFERENCES workstreams(id) ON DELETE CASCADE,
+            diff_source TEXT NOT NULL,
+            source_ref TEXT,
+            status TEXT NOT NULL DEFAULT 'planning',
+            plan_json TEXT,
+            exported_path TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            completed_at TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS diff_chunks (
+            id TEXT PRIMARY KEY,
+            review_id TEXT NOT NULL REFERENCES diff_reviews(id) ON DELETE CASCADE,
+            ordinal INTEGER NOT NULL,
+            title TEXT NOT NULL,
+            summary TEXT,
+            is_trivial INTEGER NOT NULL DEFAULT 0,
+            state TEXT NOT NULL DEFAULT 'pending',
+            question_text TEXT,
+            question_style TEXT,
+            invalidated_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS diff_hunks (
+            id TEXT PRIMARY KEY,
+            chunk_id TEXT NOT NULL REFERENCES diff_chunks(id) ON DELETE CASCADE,
+            file_path TEXT NOT NULL,
+            old_start INTEGER,
+            old_lines INTEGER,
+            new_start INTEGER,
+            new_lines INTEGER,
+            patch_text TEXT NOT NULL,
+            content_hash TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS diff_comments (
+            id TEXT PRIMARY KEY,
+            chunk_id TEXT NOT NULL REFERENCES diff_chunks(id) ON DELETE CASCADE,
+            anchor_file TEXT NOT NULL,
+            anchor_line_start INTEGER NOT NULL,
+            anchor_line_end INTEGER NOT NULL,
+            text TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS diff_review_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            review_id TEXT NOT NULL REFERENCES diff_reviews(id) ON DELETE CASCADE,
+            event_type TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_diff_chunks_review ON diff_chunks(review_id, ordinal);
+        CREATE INDEX IF NOT EXISTS idx_diff_hunks_chunk ON diff_hunks(chunk_id);
+        CREATE INDEX IF NOT EXISTS idx_diff_comments_chunk ON diff_comments(chunk_id);
+        CREATE INDEX IF NOT EXISTS idx_diff_review_events_review ON diff_review_events(review_id, id);
         ",
     )?;
 
@@ -151,6 +214,11 @@ mod tests {
             "copilot_session_links",
             "settings",
             "visual_proofs",
+            "diff_reviews",
+            "diff_chunks",
+            "diff_hunks",
+            "diff_comments",
+            "diff_review_events",
         ];
         for table in &expected {
             let count: i64 = conn
