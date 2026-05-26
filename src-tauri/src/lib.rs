@@ -13,7 +13,7 @@ use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use session_poller::SessionPoller;
 use std::sync::{Arc, Mutex};
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -357,6 +357,7 @@ fn delete_workstream(state: State<'_, AppState>, id: String) -> Result<(), Strin
 
 #[tauri::command]
 fn create_tile(
+    app: AppHandle,
     state: State<'_, AppState>,
     workstream_id: String,
     tile_type: String,
@@ -394,7 +395,7 @@ fn create_tile(
     )
     .map_err(|e| format!("DB error: {e}"))?;
 
-    Ok(Tile {
+    let tile = Tile {
         id,
         workstream_id,
         tile_type,
@@ -402,7 +403,10 @@ fn create_tile(
         config_json: config,
         created_at: ts.clone(),
         updated_at: ts,
-    })
+    };
+    drop(db);
+    let _ = app.emit("tile-created", &tile);
+    Ok(tile)
 }
 
 #[tauri::command]
@@ -2720,6 +2724,8 @@ pub fn run() {
             diff_review::create_diff_review,
             diff_review::set_review_plan,
             diff_review::get_review,
+            diff_review::list_active_diff_reviews,
+            diff_review::create_or_focus_diff_review_tile,
             diff_review::list_chunks,
             diff_review::get_chunk_details,
             diff_review::activate_chunk,

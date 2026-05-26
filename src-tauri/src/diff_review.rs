@@ -3,8 +3,8 @@
 //! Mirrors `src/domain/diff-review.ts`. See `docs/adrs/007-diff-grok-integration.md`.
 
 use crate::file_io::sanitize_event_name;
-use crate::AppState;
-use rusqlite::{params, Connection};
+use crate::{AppState, Tile};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
@@ -315,26 +315,128 @@ fn fetch_review(conn: &Connection, id: &str) -> rusqlite::Result<Option<DiffRevi
                 exported_path, created_at, updated_at, completed_at
          FROM diff_reviews WHERE id = ?1",
         params![id],
-        |row| {
-            Ok(DiffReview {
-                id: row.get(0)?,
-                workstream_id: row.get(1)?,
-                diff_source: row.get(2)?,
-                source_ref: row.get(3)?,
-                status: row.get(4)?,
-                plan_json: row.get(5)?,
-                exported_path: row.get(6)?,
-                created_at: row.get(7)?,
-                updated_at: row.get(8)?,
-                completed_at: row.get(9)?,
-            })
-        },
+        row_to_review,
     )
-    .map(Some)
-    .or_else(|e| match e {
-        rusqlite::Error::QueryReturnedNoRows => Ok(None),
-        other => Err(other),
+    .optional()
+}
+
+fn row_to_review(row: &rusqlite::Row) -> rusqlite::Result<DiffReview> {
+    Ok(DiffReview {
+        id: row.get(0)?,
+        workstream_id: row.get(1)?,
+        diff_source: row.get(2)?,
+        source_ref: row.get(3)?,
+        status: row.get(4)?,
+        plan_json: row.get(5)?,
+        exported_path: row.get(6)?,
+        created_at: row.get(7)?,
+        updated_at: row.get(8)?,
+        completed_at: row.get(9)?,
     })
+}
+
+fn list_active_diff_reviews_from_db(
+    conn: &Connection,
+    workstream_id: &str,
+) -> rusqlite::Result<Vec<DiffReview>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, workstream_id, diff_source, source_ref, status, plan_json,
+                exported_path, created_at, updated_at, completed_at
+         FROM diff_reviews
+         WHERE workstream_id = ?1 AND status = 'active'
+         ORDER BY created_at DESC, id ASC",
+    )?;
+    let rows = stmt.query_map(params![workstream_id], row_to_review)?;
+    rows.collect()
+}
+
+fn row_to_tile(row: &rusqlite::Row) -> rusqlite::Result<Tile> {
+    Ok(Tile {
+        id: row.get(0)?,
+        workstream_id: row.get(1)?,
+        tile_type: row.get(2)?,
+        title: row.get(3)?,
+        config_json: row.get(4)?,
+        created_at: row.get(5)?,
+        updated_at: row.get(6)?,
+    })
+}
+
+#[cfg(test)]
+fn create_or_focus_diff_review_tile_in_db(
+    conn: &Connection,
+    workstream_id: &str,
+    review_id: &str,
+) -> rusqlite::Result<Tile> {
+    create_or_focus_diff_review_tile_in_db_with_status(conn, workstream_id, review_id)
+        .map(|(tile, _created)| tile)
+}
+
+fn create_or_focus_diff_review_tile_in_db_with_status(
+    conn: &Connection,
+    workstream_id: &str,
+    review_id: &str,
+) -> rusqlite::Result<(Tile, bool)> {
+    let existing = conn
+        .query_row(
+            "SELECT id, workstream_id, tile_type, title, config_json, created_at, updated_at
+             FROM tiles
+             WHERE workstream_id = ?1
+               AND tile_type = 'diff_review'
+               AND json_extract(config_json, '$.reviewId') = ?2
+             LIMIT 1",
+            params![workstream_id, review_id],
+            row_to_tile,
+        )
+        .optional()?;
+    if let Some(tile) = existing {
+        return Ok((tile, false));
+    }
+
+    let id = new_id();
+    let ts = now();
+    let tile_type = "diff_review".to_string();
+    let title = Some(format!(
+        "Review: {}",
+        review_id.chars().take(8).collect::<String>()
+    ));
+    let config_json = serde_json::json!({ "reviewId": review_id }).to_string();
+
+    conn.execute(
+        "INSERT INTO tiles (id, workstream_id, tile_type, title, config_json, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
+        params![id, workstream_id, tile_type, title, config_json, ts],
+    )?;
+
+    let mut order: Vec<String> = {
+        let order_json: String = conn
+            .query_row(
+                "SELECT tile_order_json FROM workstream_layouts WHERE workstream_id = ?1",
+                params![workstream_id],
+                |row| row.get(0),
+            )
+            .unwrap_or_else(|_| "[]".into());
+        serde_json::from_str(&order_json).unwrap_or_default()
+    };
+    order.push(id.clone());
+    let new_order = serde_json::to_string(&order).unwrap();
+    conn.execute(
+        "UPDATE workstream_layouts SET tile_order_json = ?1, updated_at = ?2 WHERE workstream_id = ?3",
+        params![new_order, ts, workstream_id],
+    )?;
+
+    Ok((
+        Tile {
+            id,
+            workstream_id: workstream_id.to_string(),
+            tile_type,
+            title,
+            config_json,
+            created_at: ts.clone(),
+            updated_at: ts,
+        },
+        true,
+    ))
 }
 
 fn fetch_chunks(conn: &Connection, review_id: &str) -> rusqlite::Result<Vec<DiffChunk>> {
@@ -562,6 +664,33 @@ pub fn get_review(
 ) -> Result<Option<DiffReview>, String> {
     let db = state.db.lock().unwrap();
     fetch_review(&db, &review_id).map_err(|e| format!("DB error: {e}"))
+}
+
+#[tauri::command]
+pub fn list_active_diff_reviews(
+    state: State<'_, AppState>,
+    workstream_id: String,
+) -> Result<Vec<DiffReview>, String> {
+    let db = state.db.lock().unwrap();
+    list_active_diff_reviews_from_db(&db, &workstream_id).map_err(|e| format!("DB error: {e}"))
+}
+
+#[tauri::command]
+pub fn create_or_focus_diff_review_tile(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    workstream_id: String,
+    review_id: String,
+) -> Result<Tile, String> {
+    let db = state.db.lock().unwrap();
+    let (tile, created) =
+        create_or_focus_diff_review_tile_in_db_with_status(&db, &workstream_id, &review_id)
+            .map_err(|e| format!("DB error: {e}"))?;
+    drop(db);
+    if created {
+        let _ = app.emit("tile-created", &tile);
+    }
+    Ok(tile)
 }
 
 #[tauri::command]
@@ -1187,12 +1316,36 @@ mod tests {
     }
 
     fn insert_review(conn: &Connection, id: &str, ws: &str) {
+        insert_review_with_status_and_created_at(conn, id, ws, "active", "t");
+    }
+
+    fn insert_review_with_status_and_created_at(
+        conn: &Connection,
+        id: &str,
+        ws: &str,
+        status: &str,
+        created_at: &str,
+    ) {
         conn.execute(
             "INSERT INTO diff_reviews (id, workstream_id, diff_source, source_ref, status, created_at, updated_at)
-             VALUES (?1, ?2, 'branch', 'main', 'active', 't', 't')",
-            params![id, ws],
+             VALUES (?1, ?2, 'branch', 'main', ?3, ?4, ?4)",
+            params![id, ws, status, created_at],
         )
         .unwrap();
+    }
+
+    fn insert_layout(conn: &Connection, ws: &str) {
+        conn.execute(
+            "INSERT INTO workstream_layouts (workstream_id, layout_mode, tile_order_json, updated_at)
+             VALUES (?1, 'adaptive', '[]', 't')",
+            params![ws],
+        )
+        .unwrap();
+    }
+
+    fn tile_count(conn: &Connection) -> i64 {
+        conn.query_row("SELECT COUNT(*) FROM tiles", [], |row| row.get(0))
+            .unwrap()
     }
 
     fn insert_chunk(
@@ -1219,6 +1372,74 @@ mod tests {
             params![id, chunk, patch, hash],
         )
         .unwrap();
+    }
+
+    #[test]
+    fn list_active_diff_reviews_filters_and_orders_by_created_desc_then_id() {
+        let db = open_in_memory_db();
+        insert_workstream(&db, "w1", "/repo");
+        insert_review_with_status_and_created_at(&db, "review-b", "w1", "active", "200");
+        insert_review_with_status_and_created_at(&db, "review-a", "w1", "active", "200");
+        insert_review_with_status_and_created_at(&db, "review-c", "w1", "completed", "300");
+        insert_review_with_status_and_created_at(&db, "review-d", "w1", "active", "100");
+        insert_workstream(&db, "w2", "/repo2");
+        insert_review_with_status_and_created_at(&db, "review-e", "w2", "active", "400");
+
+        let reviews = list_active_diff_reviews_from_db(&db, "w1").unwrap();
+
+        let ids: Vec<_> = reviews.iter().map(|review| review.id.as_str()).collect();
+        assert_eq!(ids, vec!["review-a", "review-b", "review-d"]);
+    }
+
+    #[test]
+    fn create_or_focus_diff_review_tile_is_idempotent_for_same_review() {
+        let db = open_in_memory_db();
+        insert_workstream(&db, "w1", "/repo");
+        insert_layout(&db, "w1");
+        insert_review(&db, "review-12345678", "w1");
+
+        let first = create_or_focus_diff_review_tile_in_db(&db, "w1", "review-12345678").unwrap();
+        let second = create_or_focus_diff_review_tile_in_db(&db, "w1", "review-12345678").unwrap();
+
+        assert_eq!(first.id, second.id);
+        assert_eq!(tile_count(&db), 1);
+        let config: serde_json::Value = serde_json::from_str(&first.config_json).unwrap();
+        assert_eq!(
+            config.get("reviewId").and_then(|value| value.as_str()),
+            Some("review-12345678")
+        );
+    }
+
+    #[test]
+    fn create_or_focus_diff_review_tile_creates_distinct_tiles_for_different_reviews() {
+        let db = open_in_memory_db();
+        insert_workstream(&db, "w1", "/repo");
+        insert_layout(&db, "w1");
+        insert_review(&db, "review-one", "w1");
+        insert_review(&db, "review-two", "w1");
+
+        let first = create_or_focus_diff_review_tile_in_db(&db, "w1", "review-one").unwrap();
+        let second = create_or_focus_diff_review_tile_in_db(&db, "w1", "review-two").unwrap();
+
+        assert_ne!(first.id, second.id);
+        assert_eq!(tile_count(&db), 2);
+    }
+
+    #[test]
+    fn create_or_focus_diff_review_tile_scopes_idempotency_to_workstream() {
+        let db = open_in_memory_db();
+        insert_workstream(&db, "w1", "/repo");
+        insert_workstream(&db, "w2", "/repo2");
+        insert_layout(&db, "w1");
+        insert_layout(&db, "w2");
+        insert_review(&db, "review-shared", "w1");
+        insert_review(&db, "review-shared-w2", "w2");
+
+        let first = create_or_focus_diff_review_tile_in_db(&db, "w1", "review-shared").unwrap();
+        let second = create_or_focus_diff_review_tile_in_db(&db, "w2", "review-shared").unwrap();
+
+        assert_ne!(first.id, second.id);
+        assert_eq!(tile_count(&db), 2);
     }
 
     #[test]
