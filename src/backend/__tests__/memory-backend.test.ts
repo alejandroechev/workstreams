@@ -287,6 +287,117 @@ describe("MemoryBackend", () => {
     });
   });
 
+  describe("diff review", () => {
+    it("creates a review in planning status", async () => {
+      const review = await backend.createDiffReview("ws-1", "branch", "main");
+      expect(review.status).toBe("planning");
+      expect(review.diff_source).toBe("branch");
+      expect(review.source_ref).toBe("main");
+      expect(await backend.getReview(review.id)).toEqual(review);
+    });
+
+    it("setReviewPlan transitions to active", async () => {
+      const review = await backend.createDiffReview("ws-1", "branch", "main");
+      await backend.setReviewPlan(review.id, "{\"clusters\":[]}");
+      const updated = await backend.getReview(review.id);
+      expect(updated.status).toBe("active");
+      expect(updated.plan_json).toBe("{\"clusters\":[]}");
+    });
+
+    it("setReviewPlan / getReview throw for unknown ids", async () => {
+      await expect(backend.setReviewPlan("nope", "{}")).rejects.toThrow();
+      await expect(backend.getReview("nope")).rejects.toThrow();
+    });
+
+    it("seeds + lists chunks sorted by ordinal", async () => {
+      const review = await backend.createDiffReview("ws-1", "working_tree", null);
+      backend.seedDiffReview({
+        review,
+        chunks: [
+          { id: "c2", review_id: review.id, ordinal: 2, title: "B", summary: null, is_trivial: false, state: "pending", question_text: null, question_style: null, invalidated_at: null, created_at: "t", updated_at: "t" },
+          { id: "c1", review_id: review.id, ordinal: 1, title: "A", summary: null, is_trivial: false, state: "pending", question_text: null, question_style: null, invalidated_at: null, created_at: "t", updated_at: "t" },
+        ],
+        hunks: [
+          { id: "h1", chunk_id: "c1", file_path: "f.ts", old_start: 1, old_lines: 1, new_start: 1, new_lines: 2, patch_text: "@@", content_hash: "abc" },
+        ],
+      });
+      const chunks = await backend.listChunks(review.id);
+      expect(chunks.map((c) => c.id)).toEqual(["c1", "c2"]);
+      const details = await backend.getChunkDetails("c1");
+      expect(details.hunks).toHaveLength(1);
+      expect(details.comments).toEqual([]);
+    });
+
+    it("getChunkDetails throws for unknown chunks", async () => {
+      await expect(backend.getChunkDetails("missing")).rejects.toThrow();
+    });
+
+    it("activateChunk marks pending → seen and is idempotent for non-pending", async () => {
+      const review = await backend.createDiffReview("ws-1", "branch", null);
+      backend.seedDiffReview({
+        review,
+        chunks: [
+          { id: "c1", review_id: review.id, ordinal: 1, title: "A", summary: null, is_trivial: false, state: "pending", question_text: null, question_style: null, invalidated_at: null, created_at: "t", updated_at: "t" },
+        ],
+        hunks: [],
+      });
+      await backend.activateChunk(review.id, "c1");
+      let d = await backend.getChunkDetails("c1");
+      expect(d.chunk.state).toBe("seen");
+      // already approved: do not regress to seen
+      await backend.ackChunk("c1", "approved");
+      await backend.activateChunk(review.id, "c1");
+      d = await backend.getChunkDetails("c1");
+      expect(d.chunk.state).toBe("approved");
+    });
+
+    it("activateChunk / ackChunk throw for unknown chunks", async () => {
+      await expect(backend.activateChunk("r", "nope")).rejects.toThrow();
+      await expect(backend.ackChunk("nope", "approved")).rejects.toThrow();
+    });
+
+    it("addComment appends and flips chunk state to commented", async () => {
+      const review = await backend.createDiffReview("ws-1", "branch", null);
+      backend.seedDiffReview({
+        review,
+        chunks: [
+          { id: "c1", review_id: review.id, ordinal: 1, title: "A", summary: null, is_trivial: false, state: "seen", question_text: null, question_style: null, invalidated_at: null, created_at: "t", updated_at: "t" },
+        ],
+        hunks: [],
+      });
+      const comment = await backend.addComment("c1", "src/a.ts", 10, 12, "log level too high");
+      expect(comment.text).toBe("log level too high");
+      const details = await backend.getChunkDetails("c1");
+      expect(details.comments).toHaveLength(1);
+      expect(details.chunk.state).toBe("commented");
+    });
+
+    it("addComment throws for unknown chunks", async () => {
+      await expect(backend.addComment("nope", "f", 1, 2, "x")).rejects.toThrow();
+    });
+
+    it("completeReview sets status + exported path", async () => {
+      const review = await backend.createDiffReview("ws-1", "pr", "42");
+      const result = await backend.completeReview(review.id);
+      expect(result.exported_path).toContain(review.id);
+      const r = await backend.getReview(review.id);
+      expect(r.status).toBe("completed");
+      expect(r.exported_path).toBe(result.exported_path);
+      expect(r.completed_at).toBeTruthy();
+    });
+
+    it("completeReview throws for unknown reviews", async () => {
+      await expect(backend.completeReview("nope")).rejects.toThrow();
+    });
+
+    it("detectDrift returns seeded invalidations", async () => {
+      const review = await backend.createDiffReview("ws-1", "branch", null);
+      expect(await backend.detectDrift(review.id)).toEqual([]);
+      backend.seedDiffDrift(review.id, ["c1", "c3"]);
+      expect((await backend.detectDrift(review.id)).sort()).toEqual(["c1", "c3"]);
+    });
+  });
+
   describe("terminals", () => {
     it("spawns and tracks a terminal", async () => {
       await backend.spawnTerminal("tile-1", "/", "bash");

@@ -1,5 +1,12 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { Project, Workstream, Tile, TileType, WorkstreamLayout, CopilotConfigItem } from "../domain/types";
+import type {
+  ChunkWithDetails,
+  DiffComment,
+  DiffReview,
+  DiffSource,
+  DiffChunk,
+} from "../domain/diff-review";
 import type { Backend } from "./types";
 
 export class TauriBackend implements Backend {
@@ -184,5 +191,45 @@ export class TauriBackend implements Backend {
 
   async listSessionTodos(sessionId: string): Promise<import("./types").SessionTodo[]> {
     return invoke<import("./types").SessionTodo[]>("query_session_todos", { sessionId });
+  }
+
+  async createDiffReview(workstreamId: string, diffSource: DiffSource, sourceRef: string | null): Promise<DiffReview> {
+    return invoke<DiffReview>("create_diff_review", { workstreamId, diffSource, sourceRef });
+  }
+
+  async setReviewPlan(reviewId: string, planJson: string): Promise<void> {
+    await invoke("set_review_plan", { reviewId, planJson });
+  }
+
+  async getReview(reviewId: string): Promise<DiffReview> {
+    return invoke<DiffReview>("get_review", { reviewId });
+  }
+
+  async listChunks(reviewId: string): Promise<DiffChunk[]> {
+    return invoke<DiffChunk[]>("list_chunks", { reviewId });
+  }
+
+  async getChunkDetails(chunkId: string): Promise<ChunkWithDetails> {
+    return invoke<ChunkWithDetails>("get_chunk_details", { chunkId });
+  }
+
+  async activateChunk(reviewId: string, chunkId: string): Promise<void> {
+    await invoke("activate_chunk", { reviewId, chunkId });
+  }
+
+  async ackChunk(chunkId: string, state: "approved" | "commented" | "seen"): Promise<void> {
+    await invoke("ack_chunk", { chunkId, state });
+  }
+
+  async addComment(chunkId: string, anchorFile: string, anchorLineStart: number, anchorLineEnd: number, text: string): Promise<DiffComment> {
+    return invoke<DiffComment>("add_comment", { chunkId, anchorFile, anchorLineStart, anchorLineEnd, text });
+  }
+
+  async completeReview(reviewId: string): Promise<{ exported_path: string }> {
+    return invoke<{ exported_path: string }>("complete_review", { reviewId });
+  }
+
+  async detectDrift(reviewId: string): Promise<string[]> {
+    return invoke<string[]>("detect_drift", { reviewId });
   }
 }

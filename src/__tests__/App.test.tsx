@@ -156,6 +156,16 @@ function createBackend(): Backend {
     getCurrentSessionPlan: vi.fn(),
     listSessionTodoDeps: vi.fn(),
     listSessionTodos: vi.fn(),
+    createDiffReview: vi.fn(),
+    setReviewPlan: vi.fn(),
+    getReview: vi.fn(),
+    listChunks: vi.fn(),
+    getChunkDetails: vi.fn(),
+    activateChunk: vi.fn(),
+    ackChunk: vi.fn(),
+    addComment: vi.fn(),
+    completeReview: vi.fn(),
+    detectDrift: vi.fn(),
   } as Backend;
 }
 

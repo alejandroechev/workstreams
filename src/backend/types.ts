@@ -1,5 +1,12 @@
 // @test-skip: Type-only interface; behaviour covered by MemoryBackend + TauriBackend tests.
 import type { Project, Workstream, Tile, TileType, WorkstreamLayout, CopilotConfigItem } from "../domain/types";
+import type {
+  ChunkWithDetails,
+  DiffComment,
+  DiffReview,
+  DiffSource,
+  DiffChunk,
+} from "../domain/diff-review";
 
 export interface FileSearchMatch {
   path: string;
@@ -67,6 +74,17 @@ export interface Backend {
   getCurrentSessionPlan(sessionId: string): Promise<string | null>;
   listSessionTodoDeps(sessionId: string): Promise<SessionTodoDep[]>;
   listSessionTodos(sessionId: string): Promise<SessionTodo[]>;
+  // Diff Review (ADR 007)
+  createDiffReview(workstreamId: string, diffSource: DiffSource, sourceRef: string | null): Promise<DiffReview>;
+  setReviewPlan(reviewId: string, planJson: string): Promise<void>;
+  getReview(reviewId: string): Promise<DiffReview>;
+  listChunks(reviewId: string): Promise<DiffChunk[]>;
+  getChunkDetails(chunkId: string): Promise<ChunkWithDetails>;
+  activateChunk(reviewId: string, chunkId: string): Promise<void>;
+  ackChunk(chunkId: string, state: "approved" | "commented" | "seen"): Promise<void>;
+  addComment(chunkId: string, anchorFile: string, anchorLineStart: number, anchorLineEnd: number, text: string): Promise<DiffComment>;
+  completeReview(reviewId: string): Promise<{ exported_path: string }>;
+  detectDrift(reviewId: string): Promise<string[]>;
 }
 
 export interface SessionPlanEntry {

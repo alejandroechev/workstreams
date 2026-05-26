@@ -6,6 +6,7 @@ import RepoExplorerTile from "../tiles/RepoExplorerTile";
 import SessionMetaTile from "../tiles/SessionMetaTile";
 import WorkbenchTile from "../tiles/WorkbenchTile";
 import PlanTile from "../tiles/PlanTile";
+import DiffReviewTile from "../tiles/DiffReviewTile";
 import type { Tile } from "../workstream/types";
 import type { CopilotSessionStats } from "../domain/types";
 import { invoke } from "@tauri-apps/api/core";
@@ -182,6 +183,25 @@ export default function TileWrapper({
         />
       );
       break;
+    case "diff_review": {
+      const cfg = JSON.parse(tile.config_json || "{}");
+      if (!cfg.reviewId) {
+        content = (
+          <div style={{ padding: 16, color: "#f38ba8" }}>
+            Diff Review tile missing reviewId in config.
+          </div>
+        );
+      } else {
+        content = (
+          <DiffReviewTile
+            tileId={tile.id}
+            isFocused={isFocused}
+            reviewId={cfg.reviewId}
+          />
+        );
+      }
+      break;
+    }
     default:
       content = <div>Unknown tile type: {tile.tile_type}</div>;
   }

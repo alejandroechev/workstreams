@@ -322,4 +322,52 @@ describe("TauriBackend", () => {
     await backend.listSessionTodos("s1");
     expect(invoke).toHaveBeenCalledWith("query_session_todos", { sessionId: "s1" });
   });
+
+  it("diff review commands map to snake_case Tauri commands", async () => {
+    invoke.mockResolvedValueOnce({ id: "rev-1" });
+    await backend.createDiffReview("ws-1", "branch", "main");
+    expect(invoke).toHaveBeenCalledWith("create_diff_review", { workstreamId: "ws-1", diffSource: "branch", sourceRef: "main" });
+
+    invoke.mockResolvedValueOnce(undefined);
+    await backend.setReviewPlan("rev-1", "{}");
+    expect(invoke).toHaveBeenCalledWith("set_review_plan", { reviewId: "rev-1", planJson: "{}" });
+
+    invoke.mockResolvedValueOnce({ id: "rev-1" });
+    await backend.getReview("rev-1");
+    expect(invoke).toHaveBeenCalledWith("get_review", { reviewId: "rev-1" });
+
+    invoke.mockResolvedValueOnce([]);
+    await backend.listChunks("rev-1");
+    expect(invoke).toHaveBeenCalledWith("list_chunks", { reviewId: "rev-1" });
+
+    invoke.mockResolvedValueOnce({ chunk: {}, hunks: [], comments: [] });
+    await backend.getChunkDetails("c1");
+    expect(invoke).toHaveBeenCalledWith("get_chunk_details", { chunkId: "c1" });
+
+    invoke.mockResolvedValueOnce(undefined);
+    await backend.activateChunk("rev-1", "c1");
+    expect(invoke).toHaveBeenCalledWith("activate_chunk", { reviewId: "rev-1", chunkId: "c1" });
+
+    invoke.mockResolvedValueOnce(undefined);
+    await backend.ackChunk("c1", "approved");
+    expect(invoke).toHaveBeenCalledWith("ack_chunk", { chunkId: "c1", state: "approved" });
+
+    invoke.mockResolvedValueOnce({ id: "cm-1" });
+    await backend.addComment("c1", "f.ts", 1, 2, "note");
+    expect(invoke).toHaveBeenCalledWith("add_comment", {
+      chunkId: "c1",
+      anchorFile: "f.ts",
+      anchorLineStart: 1,
+      anchorLineEnd: 2,
+      text: "note",
+    });
+
+    invoke.mockResolvedValueOnce({ exported_path: "/p" });
+    await backend.completeReview("rev-1");
+    expect(invoke).toHaveBeenCalledWith("complete_review", { reviewId: "rev-1" });
+
+    invoke.mockResolvedValueOnce([]);
+    await backend.detectDrift("rev-1");
+    expect(invoke).toHaveBeenCalledWith("detect_drift", { reviewId: "rev-1" });
+  });
 });
