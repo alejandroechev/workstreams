@@ -618,6 +618,7 @@ export default function App() {
   useEffect(() => {
     const w = window as unknown as {
       __wsSeedDiffReviewTile?: (input?: { workstreamId?: string }) => Promise<{ reviewId: string; tileId: string }>;
+      __wsCloseDiffReviewTile?: (tileId: string) => Promise<void>;
     };
     w.__wsSeedDiffReviewTile = async (input) => {
       const wsId = input?.workstreamId ?? activeWsId;
@@ -672,8 +673,11 @@ export default function App() {
       if (chunks[0]) await backend.activateChunk(review.id, chunks[0].id);
       return { reviewId: review.id, tileId: tile.id };
     };
-    return () => { delete w.__wsSeedDiffReviewTile; };
-  }, [activeWsId, backend]);
+    w.__wsCloseDiffReviewTile = async (tileId) => {
+      await closeTile(tileId);
+    };
+    return () => { delete w.__wsSeedDiffReviewTile; delete w.__wsCloseDiffReviewTile; };
+  }, [activeWsId, backend, closeTile]);
 
 
   const linkedSessionIds = useMemo(() => {

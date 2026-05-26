@@ -83,4 +83,15 @@ export async function run({ page, screenshot }) {
   await screenshot("diff-review-with-comment");
 
   await verifyNoConsoleErrors(page);
+
+  // Clean up: close the seeded tile so repeated probes don't accumulate
+  // junk tiles in the dev workstream. The closeTile flow is keyboard-driven
+  // (focus the tile via its testid then press 'd' to delete), but since the
+  // tile is the newest one we can call the same backend path directly.
+  await page.evaluate(async (tileId) => {
+    const w = window;
+    if (typeof w.__wsCloseDiffReviewTile === "function") {
+      await w.__wsCloseDiffReviewTile(tileId);
+    }
+  }, result.tileId);
 }
