@@ -71,6 +71,7 @@ const fakeMonaco = {
   editor: {
     createDiffEditor: vi.fn((_c: HTMLElement, opts: Record<string, unknown>) => createFakeEditor(opts)),
     createModel: vi.fn((value: string) => createFakeModel(value)),
+    setModelLanguage: vi.fn(),
   },
 };
 
@@ -198,6 +199,20 @@ describe("DiffReviewTile", () => {
     const tallies = screen.getByTestId("diff-review-tallies");
     expect(tallies.textContent).toContain("1"); // approved
     expect(tallies.textContent).toContain("2"); // pending
+  });
+
+  it("creates the Monaco diff editor with vs-dark theme, inline mode, and file-detected language", async () => {
+    const backend = new MemoryBackend();
+    seedBackend(backend);
+    renderTile(backend);
+
+    await waitFor(() => expect(fakeMonaco.editor.createDiffEditor).toHaveBeenCalled());
+    const opts = fakeMonaco.editor.createDiffEditor.mock.calls[0]?.[1] as Record<string, unknown>;
+    expect(opts.theme).toBe("vs-dark");
+    expect(opts.renderSideBySide).toBe(false);
+    // src/auth/mw.ts → "typescript"
+    const createdLanguages = fakeMonaco.editor.createModel.mock.calls.map((c) => c[1]);
+    expect(createdLanguages.every((l) => l === "typescript")).toBe(true);
   });
 
   it("renders the active chunk's question text and style controls", async () => {

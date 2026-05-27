@@ -12,6 +12,7 @@ import {
 } from "@heroicons/react/24/outline";
 import { useBackend } from "../backend/context";
 import { loadMonaco } from "../files/loadMonaco";
+import { detectLanguage } from "../domain/tile-config";
 import {
   DIFF_REVIEW_EVENTS,
   type ChunkActivePayload,
@@ -232,6 +233,12 @@ export default function DiffReviewTile({ reviewId }: Props): React.ReactElement 
     [details],
   );
 
+  const primaryFilePath = useMemo(() => details?.hunks[0]?.file_path ?? "", [details]);
+  const editorLanguage = useMemo(
+    () => (primaryFilePath ? detectLanguage(primaryFilePath) : "plaintext"),
+    [primaryFilePath],
+  );
+
   useEffect(() => {
     lineRefsRef.current = parsed?.modifiedLineRefs ?? [];
   }, [parsed]);
@@ -247,15 +254,21 @@ export default function DiffReviewTile({ reviewId }: Props): React.ReactElement 
       if (!containerRef.current) return;
 
       if (!editorRef.current) {
-        const original = monaco.editor.createModel(parsed.originalText, "diff");
-        const modified = monaco.editor.createModel(parsed.modifiedText, "diff");
+        const original = monaco.editor.createModel(parsed.originalText, editorLanguage);
+        const modified = monaco.editor.createModel(parsed.modifiedText, editorLanguage);
         originalModelRef.current = original;
         modifiedModelRef.current = modified;
         const editor = monaco.editor.createDiffEditor(containerRef.current, {
           readOnly: true,
           originalEditable: false,
           automaticLayout: true,
-          renderSideBySide: true,
+          renderSideBySide: false,
+          theme: "vs-dark",
+          minimap: { enabled: false },
+          fontSize: 13,
+          fontFamily: "'Cascadia Code', 'Consolas', monospace",
+          scrollBeyondLastLine: false,
+          overviewRulerBorder: false,
         });
         editor.setModel({ original, modified });
         editorRef.current = editor;
@@ -275,6 +288,12 @@ export default function DiffReviewTile({ reviewId }: Props): React.ReactElement 
       } else {
         originalModelRef.current?.setValue(parsed.originalText);
         modifiedModelRef.current?.setValue(parsed.modifiedText);
+        if (originalModelRef.current) {
+          monaco.editor.setModelLanguage(originalModelRef.current, editorLanguage);
+        }
+        if (modifiedModelRef.current) {
+          monaco.editor.setModelLanguage(modifiedModelRef.current, editorLanguage);
+        }
       }
     };
 
@@ -282,7 +301,7 @@ export default function DiffReviewTile({ reviewId }: Props): React.ReactElement 
     return () => {
       disposed = true;
     };
-  }, [parsed]);
+  }, [parsed, editorLanguage]);
 
   useEffect(
     () => () => {
