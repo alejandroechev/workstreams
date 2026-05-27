@@ -8,6 +8,7 @@ import { listen } from "@tauri-apps/api/event";
 import { playBell, flashWindow } from "../domain/notifications";
 import { createPtyFitController } from "./pty-fit";
 import { getAppSettings, createWheelLineAccumulator } from "../domain/app-settings";
+import { writeTextToClipboard, readTextFromClipboard } from "../domain/clipboard";
 import {
   keyToZoomAction,
   nextFontSize,
@@ -157,7 +158,7 @@ export default function TerminalTile({ tileId, isFocused, focusToken, onStatusCh
         const selection = term.getSelection();
         if (selection) {
           ev.preventDefault();
-          navigator.clipboard.writeText(selection).catch(() => {});
+          writeTextToClipboard(selection).catch(() => {});
           return false;
         }
         return true;
@@ -166,7 +167,7 @@ export default function TerminalTile({ tileId, isFocused, focusToken, onStatusCh
       // Ctrl+V: paste from clipboard
       if (ev.key === "v" && ev.ctrlKey && !ev.shiftKey) {
         ev.preventDefault();
-        navigator.clipboard.readText().then((text) => {
+        readTextFromClipboard().then((text) => {
           if (text) invoke("write_to_pty", { tileId, data: text }).catch(() => {});
         }).catch(() => {});
         return false;

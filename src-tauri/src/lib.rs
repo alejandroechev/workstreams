@@ -2668,6 +2668,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
         .manage(app_state)
         .manage(file_io::WatcherState::new())
         .setup(move |app| {
@@ -3232,8 +3233,14 @@ Body here.
         let conn = fresh_mem_db();
         setup_tiles_table(&conn);
         let env = workstream_env_from_db(&conn, "tile-1").expect("env should be Some");
-        assert_eq!(env.get("WORKSTREAMS_ACTIVE_WS").map(String::as_str), Some("ws-abc"));
-        assert_eq!(env.get("WORKSTREAMS_ACTIVE_TILE").map(String::as_str), Some("tile-1"));
+        assert_eq!(
+            env.get("WORKSTREAMS_ACTIVE_WS").map(String::as_str),
+            Some("ws-abc")
+        );
+        assert_eq!(
+            env.get("WORKSTREAMS_ACTIVE_TILE").map(String::as_str),
+            Some("tile-1")
+        );
     }
 
     #[test]

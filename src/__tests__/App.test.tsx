@@ -248,15 +248,16 @@ describe("dirty file buffer close confirmations", () => {
     expect(backend.updateWorkstream).not.toHaveBeenCalled();
   });
 
-  it("lets app quit proceed when no buffers are dirty", async () => {
+  it("destroys the window on close when no buffers are dirty", async () => {
     await renderApp();
     const preventDefault = vi.fn();
 
     await mocks.getCloseHandler()?.({ preventDefault });
 
     expect(getCurrentWindow).toHaveBeenCalled();
-    expect(preventDefault).not.toHaveBeenCalled();
+    expect(preventDefault).toHaveBeenCalledOnce();
     expect(window.confirm).not.toHaveBeenCalled();
+    expect(mocks.destroy).toHaveBeenCalledOnce();
   });
 
   it("prevents app quit and destroys the window when dirty buffers are discarded", async () => {

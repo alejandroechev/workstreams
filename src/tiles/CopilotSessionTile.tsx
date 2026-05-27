@@ -8,6 +8,7 @@ import { listen } from "@tauri-apps/api/event";
 import { parseCopilotSessionConfig } from "../domain/tile-config";
 import { createPtyFitController } from "./pty-fit";
 import { getAppSettings, createWheelLineAccumulator } from "../domain/app-settings";
+import { writeTextToClipboard, readTextFromClipboard } from "../domain/clipboard";
 import { playBell, notifySessionIdle } from "../domain/notifications";
 import {
   keyToZoomAction,
@@ -163,7 +164,7 @@ export default function CopilotSessionTile({
         const selection = term.getSelection();
         if (selection) {
           ev.preventDefault();
-          navigator.clipboard.writeText(selection).catch(() => {});
+          writeTextToClipboard(selection).catch(() => {});
           return false;
         }
         // No selection — let xterm send \x03 to PTY
@@ -172,7 +173,7 @@ export default function CopilotSessionTile({
 
       if (ev.key === "v" && ev.ctrlKey && !ev.shiftKey) {
         ev.preventDefault();
-        navigator.clipboard.readText().then((text) => {
+        readTextFromClipboard().then((text) => {
           if (text) invoke("write_to_pty", { tileId, data: text }).catch(() => {});
         }).catch(() => {});
         return false;

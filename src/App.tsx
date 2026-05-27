@@ -126,13 +126,19 @@ export default function App() {
       const win = getCurrentWindow();
       const unlisten = await win.onCloseRequested(async (event) => {
         const dirty = getDirtyFileBuffers();
-        if (dirty.length === 0) return;
+        if (dirty.length === 0) {
+          // No unsaved work; explicitly destroy so we don't depend on the
+          // framework's "no preventDefault → auto destroy" path.
+          event.preventDefault();
+          await win.destroy();
+          return;
+        }
 
         event.preventDefault();
         const list = dirty.map((snapshot) => `  • ${snapshot.path}`).join("\n");
         const ok = window.confirm(`You have unsaved changes in ${dirty.length} file(s):\n\n${list}\n\nClose anyway and discard?`);
         if (ok) {
-          win.destroy();
+          await win.destroy();
         }
       });
       return unlisten;
@@ -713,7 +719,7 @@ export default function App() {
   // >1 active reviews → show picker modal so user disambiguates.
   const addTileDiffReview = useCallback(async () => {
     if (!activeWsId) return;
-    let reviews: DiffReview[] = [];
+    let reviews: DiffReview[];
     try {
       reviews = await backend.listActiveDiffReviews(activeWsId);
     } catch {
