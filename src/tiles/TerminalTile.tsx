@@ -9,6 +9,7 @@ import { playBell, flashWindow } from "../domain/notifications";
 import { createPtyFitController } from "./pty-fit";
 import { getAppSettings, createWheelLineAccumulator } from "../domain/app-settings";
 import { writeTextToClipboard, readTextFromClipboard } from "../domain/clipboard";
+import { handleOsc52 } from "../domain/osc52";
 import {
   keyToZoomAction,
   nextFontSize,
@@ -185,6 +186,12 @@ export default function TerminalTile({ tileId, isFocused, focusToken, onStatusCh
       flashWindow();
     });
 
+    // OSC 52 — host clipboard set requests from TUI apps.
+    const oscDisposable = term.parser.registerOscHandler(52, (data) => {
+      void handleOsc52(data);
+      return true;
+    });
+
     // Listen for PTY output
     const unlistenOutput = listen<string>(`pty-output-${tileId}`, (event) => {
       term.write(event.payload);
@@ -287,6 +294,7 @@ export default function TerminalTile({ tileId, isFocused, focusToken, onStatusCh
       ptyFitRef.current = null;
       unlistenOutput.then((u) => u());
       unlistenExit.then((u) => u());
+      oscDisposable?.dispose?.();
       term.dispose();
     };
   }, [tileId, saveScrollback, updateStatus]);

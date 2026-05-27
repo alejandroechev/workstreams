@@ -31,3 +31,17 @@ tauri-plugin-clipboard-manager = "2.3.2"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_System_Threading", "Win32_Foundation"] }
+
+[profile.release]
+ panic = "abort"
+ codegen-units = 16    # parallelize codegen
+ lto = "thin"          # ~95% of fat-LTO benefit, much faster
+ opt-level = "s"
+ strip = true
+ incremental = false
+
+ [profile.release-fast]
+ inherits = "release"
+ lto = false
+ codegen-units = 256
+ opt-level = 1

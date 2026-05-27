@@ -9,6 +9,7 @@ import { parseCopilotSessionConfig } from "../domain/tile-config";
 import { createPtyFitController } from "./pty-fit";
 import { getAppSettings, createWheelLineAccumulator } from "../domain/app-settings";
 import { writeTextToClipboard, readTextFromClipboard } from "../domain/clipboard";
+import { handleOsc52 } from "../domain/osc52";
 import { playBell, notifySessionIdle } from "../domain/notifications";
 import {
   keyToZoomAction,
@@ -189,6 +190,14 @@ export default function CopilotSessionTile({
       playBell();
     });
 
+    // Handle OSC 52 — TUI apps (copilot CLI, vim, tmux) emit this to put
+    // text on the host clipboard. Without a handler, xterm.js silently
+    // drops it and the user's "Copying to clipboard" never lands.
+    const oscDisposable = term.parser.registerOscHandler(52, (data) => {
+      void handleOsc52(data);
+      return true;
+    });
+
     // Listen for PTY output
     const unlistenOutput = listen<string>(`pty-output-${tileId}`, (event) => {
       term.write(event.payload);
@@ -322,6 +331,7 @@ export default function CopilotSessionTile({
       unlistenOutput.then((u) => u());
       unlistenExit.then((u) => u());
       unlistenStats.then((u) => u());
+      oscDisposable?.dispose?.();
       term.dispose();
     };
   }, [tileId]);
