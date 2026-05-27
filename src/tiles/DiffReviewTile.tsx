@@ -531,22 +531,6 @@ export default function DiffReviewTile({ reviewId }: Props): React.ReactElement 
             <div style={{ fontSize: 13, color: "#cdd6f4", whiteSpace: "pre-wrap" }}>
               {details?.chunk.question_text ?? "Waiting for the skill to post a question..."}
             </div>
-            <div style={{ marginTop: 8, display: "flex", gap: 6 }}>
-              <button
-                data-testid="diff-review-ask-socratic"
-                onClick={() => setQuestionStyle("socratic")}
-                style={styleButton(questionStyle === "socratic")}
-              >
-                Ask Socratic
-              </button>
-              <button
-                data-testid="diff-review-ask-review"
-                onClick={() => setQuestionStyle("review")}
-                style={styleButton(questionStyle === "review")}
-              >
-                Ask Review
-              </button>
-            </div>
           </div>
 
           {/* Comments + actions */}
@@ -665,18 +649,6 @@ export default function DiffReviewTile({ reviewId }: Props): React.ReactElement 
       )}
     </div>
   );
-}
-
-function styleButton(active: boolean): React.CSSProperties {
-  return {
-    background: active ? "#45475a" : "transparent",
-    border: "1px solid #45475a",
-    color: "#cdd6f4",
-    borderRadius: 3,
-    padding: "3px 8px",
-    fontSize: 11,
-    cursor: "pointer",
-  };
 }
 
 function primaryButton(disabled: boolean): React.CSSProperties {

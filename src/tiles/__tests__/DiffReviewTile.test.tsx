@@ -70,7 +70,7 @@ function createFakeEditor(options: Record<string, unknown>): FakeEditor {
 const fakeMonaco = {
   editor: {
     createDiffEditor: vi.fn((_c: HTMLElement, opts: Record<string, unknown>) => createFakeEditor(opts)),
-    createModel: vi.fn((value: string) => createFakeModel(value)),
+    createModel: vi.fn((value: string, _language?: string) => createFakeModel(value)),
     setModelLanguage: vi.fn(),
   },
 };
@@ -215,21 +215,13 @@ describe("DiffReviewTile", () => {
     expect(createdLanguages.every((l) => l === "typescript")).toBe(true);
   });
 
-  it("renders the active chunk's question text and style controls", async () => {
+  it("renders the active chunk's question text and style label", async () => {
     const backend = new MemoryBackend();
     seedBackend(backend);
     renderTile(backend);
 
     await waitFor(() => expect(screen.getByText("Why log here at debug?")).toBeTruthy());
     expect(screen.getByTestId("diff-review-question-style").textContent).toContain("socratic");
-    expect(screen.getByTestId("diff-review-ask-socratic")).toBeTruthy();
-    expect(screen.getByTestId("diff-review-ask-review")).toBeTruthy();
-
-    fireEvent.click(screen.getByTestId("diff-review-ask-review"));
-    // Local state flips
-    await waitFor(() =>
-      expect(screen.getByTestId("diff-review-question-style").textContent).toContain("review"),
-    );
   });
 
   it("calls addComment on submit with the selected line range", async () => {
