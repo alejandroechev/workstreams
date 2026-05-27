@@ -570,6 +570,40 @@ fn update_layout(
 
 // ── PTY Commands ───────────────────────────────────────────────────────
 
+/// Builds a HashMap of env vars to inject into PTY-spawned child processes
+/// so skills (notably diff-grok) can detect which workstream they belong to
+/// and connect back to the Tauri command bridge.
+///
+/// Looks up the workstream id from the tile via the DB. Returns None if the
+/// tile is not found — terminals can still spawn, the env var just won't
+/// be present (matches dev behavior before this was added).
+fn build_workstream_env(
+    state: &State<'_, AppState>,
+    tile_id: &str,
+) -> Option<std::collections::HashMap<String, String>> {
+    let db = state.db.lock().ok()?;
+    workstream_env_from_db(&db, tile_id)
+}
+
+/// Pure helper: builds the env-var map from a DB connection + tile id.
+/// Returns None when the tile is unknown.
+fn workstream_env_from_db(
+    db: &rusqlite::Connection,
+    tile_id: &str,
+) -> Option<std::collections::HashMap<String, String>> {
+    let ws_id: String = db
+        .query_row(
+            "SELECT workstream_id FROM tiles WHERE id = ?1",
+            [tile_id],
+            |row| row.get(0),
+        )
+        .ok()?;
+    let mut env = std::collections::HashMap::new();
+    env.insert("WORKSTREAMS_ACTIVE_WS".to_string(), ws_id);
+    env.insert("WORKSTREAMS_ACTIVE_TILE".to_string(), tile_id.to_string());
+    Some(env)
+}
+
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 fn spawn_terminal(
@@ -582,6 +616,7 @@ fn spawn_terminal(
     rows: Option<u16>,
     cols: Option<u16>,
 ) -> Result<Option<u32>, String> {
+    let env = build_workstream_env(&state, &tile_id);
     state.pty.spawn(
         &app,
         &tile_id,
@@ -590,6 +625,7 @@ fn spawn_terminal(
         args,
         rows.unwrap_or(30),
         cols.unwrap_or(120),
+        env,
     )
 }
 
@@ -612,6 +648,7 @@ fn spawn_copilot_session(
     if let Some(sid) = &resume_session_id {
         args.push(format!("--resume={sid}"));
     }
+    let env = build_workstream_env(&state, &tile_id);
     let pid = state.pty.spawn(
         &app,
         &tile_id,
@@ -620,6 +657,7 @@ fn spawn_copilot_session(
         Some(args),
         rows.unwrap_or(30),
         cols.unwrap_or(120),
+        env,
     )?;
     // Only register pending if we don't already know the session_id (resume
     // case has the id up front so the regular watch_with_id path is enough).
@@ -3176,5 +3214,38 @@ Body here.
         let conn = fresh_mem_db();
         let deps = query_session_todo_deps_impl(&conn).unwrap();
         assert!(deps.is_empty());
+    }
+
+    // ── PTY env injection ──────────────────────────────────────────────
+
+    fn setup_tiles_table(conn: &Connection) {
+        conn.execute_batch(
+            "CREATE TABLE tiles (id TEXT PRIMARY KEY, workstream_id TEXT NOT NULL);
+             INSERT INTO tiles VALUES ('tile-1','ws-abc');
+             INSERT INTO tiles VALUES ('tile-2','ws-xyz');",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn workstream_env_returns_active_ws_and_tile_for_known_tile() {
+        let conn = fresh_mem_db();
+        setup_tiles_table(&conn);
+        let env = workstream_env_from_db(&conn, "tile-1").expect("env should be Some");
+        assert_eq!(env.get("WORKSTREAMS_ACTIVE_WS").map(String::as_str), Some("ws-abc"));
+        assert_eq!(env.get("WORKSTREAMS_ACTIVE_TILE").map(String::as_str), Some("tile-1"));
+    }
+
+    #[test]
+    fn workstream_env_returns_none_for_unknown_tile() {
+        let conn = fresh_mem_db();
+        setup_tiles_table(&conn);
+        assert!(workstream_env_from_db(&conn, "tile-missing").is_none());
+    }
+
+    #[test]
+    fn workstream_env_returns_none_when_tiles_table_missing() {
+        let conn = fresh_mem_db();
+        assert!(workstream_env_from_db(&conn, "tile-1").is_none());
     }
 }

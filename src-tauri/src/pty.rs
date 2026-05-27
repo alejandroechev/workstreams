@@ -34,6 +34,7 @@ impl PtyManager {
         args: Option<Vec<String>>,
         rows: u16,
         cols: u16,
+        env: Option<HashMap<String, String>>,
     ) -> Result<Option<u32>, String> {
         let pty_system = native_pty_system();
         let pair = pty_system
@@ -51,6 +52,11 @@ impl PtyManager {
         if let Some(ref a) = args {
             for arg in a {
                 cmd.arg(arg);
+            }
+        }
+        if let Some(env_vars) = env {
+            for (k, v) in env_vars {
+                cmd.env(k, v);
             }
         }
 
