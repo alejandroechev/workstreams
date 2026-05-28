@@ -8,6 +8,7 @@ import ProjectCreateForm from "./workstream/ProjectCreateForm";
 import RepoCreateForm from "./workstream/RepoCreateForm";
 import WorkstreamCreateForm from "./workstream/WorkstreamCreateForm";
 import ForkWorkstreamForm from "./workstream/ForkWorkstreamForm";
+import { ChangeWorktreeForm } from "./workstream/ChangeWorktreeForm";
 import TileGrid from "./tiling/TileGrid";
 import StatusBar from "./tiling/StatusBar";
 import SessionPicker, { type CopilotSession } from "./tiles/SessionPicker";
@@ -17,6 +18,7 @@ import { navigateFocus } from "./domain/layout";
 import { parseKeyAction } from "./domain/keyboard";
 import { createTerminalConfig, createCopilotSessionConfig } from "./domain/tile-config";
 import { createWorkstreamFlow } from "./domain/workstream-create";
+import { summarizeTilesToRestart } from "./domain/worktree-change";
 import { useBackend } from "./backend/context";
 import type { Project, Workstream, Tile, TileType } from "./domain/types";
 import type { DiffReview } from "./domain/diff-review";
@@ -105,6 +107,7 @@ export default function App() {
   const [showRepoCreate, setShowRepoCreate] = useState(false);
   const [showWsCreate, setShowWsCreate] = useState<{ show: boolean; projectId?: string }>({ show: false });
   const [showForkWs, setShowForkWs] = useState<{ show: boolean; wsId?: string }>({ show: false });
+  const [changeWorktreeTarget, setChangeWorktreeTarget] = useState<Workstream | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [showDiffReviewPicker, setShowDiffReviewPicker] = useState(false);
   const [diffReviewPickerReviews, setDiffReviewPickerReviews] = useState<DiffReview[]>([]);
@@ -503,6 +506,72 @@ export default function App() {
     });
   }, [workstreams, backend]);
 
+  const restartTileInDirectory = useCallback(async (tile: Tile, directory: string) => {
+    if (tile.tile_type !== "terminal" && tile.tile_type !== "copilot_session") return;
+
+    const cfg = JSON.parse(tile.config_json || "{}");
+    spawnedPtys.current.delete(tile.id);
+    await backend.closeTerminal(tile.id).catch(() => {});
+    spawnedPtys.current.add(tile.id);
+
+    try {
+      if (tile.tile_type === "terminal") {
+        await backend.spawnTerminal(tile.id, directory, cfg.command || undefined, undefined, 30, 120);
+      } else {
+        const sessionId = cfg.copilot_session_id || cfg.resume_by_id || null;
+        await backend.spawnCopilotSession(tile.id, directory, sessionId, 30, 120);
+      }
+    } catch (error) {
+      spawnedPtys.current.delete(tile.id);
+      throw error;
+    }
+  }, [backend]);
+
+  const handleChangeWorktreeSubmit = useCallback(async (
+    mode: "switch_existing" | "create_new",
+    opts: { directory?: string; branchName?: string; folderName?: string },
+  ) => {
+    if (!changeWorktreeTarget) return;
+
+    const { workstream, affectedTileIds } = await backend.changeWorkstreamWorktree(changeWorktreeTarget.id, mode, opts);
+    const updatedTiles = await backend.listTiles(workstream.id);
+    const updatedTilesById = new Map(updatedTiles.map((tile) => [tile.id, tile]));
+
+    setWsStates((prev) => {
+      const current = prev.get(workstream.id);
+      if (!current) return prev;
+      const next = new Map(prev);
+      next.set(workstream.id, {
+        ...current,
+        tiles: current.tiles.map((tile) => updatedTilesById.get(tile.id) ?? tile),
+      });
+      return next;
+    });
+
+    const restartDirectory = workstream.directory || "C:\\";
+    for (const tileId of affectedTileIds) {
+      const tile = updatedTilesById.get(tileId);
+      if (tile) await restartTileInDirectory(tile, restartDirectory);
+    }
+
+    const latestWorkstreams = await backend.listWorkstreams();
+    setWorkstreams((prev) => {
+      const latestById = new Map(latestWorkstreams.map((ws) => [ws.id, ws]));
+      latestById.set(workstream.id, workstream);
+      const ordered = prev
+        .map((ws) => latestById.get(ws.id))
+        .filter((ws): ws is Workstream => Boolean(ws));
+      for (const ws of latestWorkstreams) {
+        if (!ordered.some((existing) => existing.id === ws.id)) ordered.push(ws);
+      }
+      return ordered;
+    });
+
+    setChangeWorktreeTarget(null);
+    const restartSummary = summarizeTilesToRestart(updatedTiles.filter((tile) => affectedTileIds.includes(tile.id)));
+    console.info(`Changed worktree for ${workstream.name}; restarted ${restartSummary.count} tile(s).`);
+  }, [backend, changeWorktreeTarget, restartTileInDirectory]);
+
   const addTile = useCallback(async (tileType: TileType, extraConfig?: Record<string, string>) => {
     if (!activeWsId) return;
     const ws = workstreams.find((w) => w.id === activeWsId);
@@ -761,6 +830,11 @@ export default function App() {
   }, [upsertTileLocally]);
 
 
+  const changeWorktreeTiles = useMemo(() => {
+    if (!changeWorktreeTarget) return [];
+    return wsStates.get(changeWorktreeTarget.id)?.tiles ?? [];
+  }, [changeWorktreeTarget, wsStates]);
+
   const linkedSessionIds = useMemo(() => {
     return tiles
       .filter((t) => t.tile_type === "copilot_session")
@@ -911,6 +985,7 @@ export default function App() {
           setWorkstreams((prev) => prev.map((w) => w.id === id ? { ...w, status } : w));
         }}
         onForkWorkstream={(id) => setShowForkWs({ show: true, wsId: id })}
+        onChangeWorktree={(ws) => setChangeWorktreeTarget(ws)}
       />
 
       <div
@@ -1191,6 +1266,16 @@ export default function App() {
           projects={projects}
           onSubmit={handleCreateWorkstream}
           onCancel={() => setShowWsCreate({ show: false })}
+        />
+      )}
+
+      {/* Change worktree modal */}
+      {changeWorktreeTarget && (
+        <ChangeWorktreeForm
+          workstream={changeWorktreeTarget}
+          tiles={changeWorktreeTiles}
+          onSubmit={handleChangeWorktreeSubmit}
+          onCancel={() => setChangeWorktreeTarget(null)}
         />
       )}
 

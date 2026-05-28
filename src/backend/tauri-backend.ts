@@ -45,6 +45,21 @@ export class TauriBackend implements Backend {
     await invoke("update_workstream", { id, ...updates });
   }
 
+  async changeWorkstreamWorktree(
+    wsId: string,
+    mode: "switch_existing" | "create_new",
+    opts: { directory?: string; branchName?: string; folderName?: string }
+  ): Promise<{ workstream: Workstream; affectedTileIds: string[] }> {
+    const raw = await invoke<{ workstream: Workstream; affected_tile_ids: string[] }>("change_workstream_worktree", {
+      wsId,
+      mode,
+      directory: opts.directory ?? null,
+      branchName: opts.branchName ?? null,
+      folderName: opts.folderName ?? null,
+    });
+    return { workstream: raw.workstream, affectedTileIds: raw.affected_tile_ids };
+  }
+
   async deleteWorkstream(id: string): Promise<void> {
     await invoke("delete_workstream", { id });
   }

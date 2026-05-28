@@ -9,6 +9,7 @@ import type {
   DiffSource,
 } from "../domain/diff-review";
 import type { Backend } from "./types";
+import { rewriteTileCwd } from "../domain/worktree-change";
 
 function generateId(): string {
   return Math.random().toString(36).slice(2, 10);
@@ -16,6 +17,28 @@ function generateId(): string {
 
 function now(): string {
   return new Date().toISOString();
+}
+
+function pathSeparator(path: string): string {
+  return path.includes("\\") ? "\\" : "/";
+}
+
+function parentDirectory(path: string): string {
+  const separator = pathSeparator(path);
+  const parts = path.split(/[/\\]/);
+  if (parts.length <= 1) return "";
+  return parts.slice(0, -1).join(separator);
+}
+
+function lastSlashSegment(path: string): string {
+  const segments = path.split(/[/\\]/).filter(Boolean);
+  return segments[segments.length - 1] ?? path;
+}
+
+function pathJoin(parent: string, child: string): string {
+  if (!parent) return child;
+  if (parent.endsWith("/") || parent.endsWith("\\")) return `${parent}${child}`;
+  return `${parent}${pathSeparator(parent)}${child}`;
 }
 
 /**
@@ -103,6 +126,39 @@ export class MemoryBackend implements Backend {
     const ws = this.workstreams.get(id);
     if (!ws) throw new Error(`Workstream not found: ${id}`);
     Object.assign(ws, updates, { updated_at: now() });
+  }
+
+  async changeWorkstreamWorktree(
+    wsId: string,
+    mode: "switch_existing" | "create_new",
+    opts: { directory?: string; branchName?: string; folderName?: string }
+  ): Promise<{ workstream: Workstream; affectedTileIds: string[] }> {
+    const ws = this.workstreams.get(wsId);
+    if (!ws) throw new Error(`Workstream not found: ${wsId}`);
+
+    let finalDir: string;
+    let finalBranch = ws.worktree_branch;
+    if (mode === "switch_existing") {
+      if (!opts.directory) throw new Error("Directory is required");
+      finalDir = opts.directory;
+    } else {
+      if (!opts.branchName) throw new Error("Branch name is required");
+      finalDir = pathJoin(parentDirectory(ws.directory ?? ""), opts.folderName || lastSlashSegment(opts.branchName));
+      finalBranch = opts.branchName;
+    }
+
+    Object.assign(ws, { directory: finalDir, worktree_branch: finalBranch, updated_at: now() });
+
+    const affectedTileIds: string[] = [];
+    for (const tile of this.tiles.values()) {
+      if (tile.workstream_id !== wsId) continue;
+      if (tile.tile_type !== "terminal" && tile.tile_type !== "copilot_session") continue;
+      tile.config_json = rewriteTileCwd(tile.config_json, finalDir, tile.tile_type);
+      tile.updated_at = now();
+      affectedTileIds.push(tile.id);
+    }
+
+    return { workstream: ws, affectedTileIds };
   }
 
   async deleteWorkstream(id: string): Promise<void> {

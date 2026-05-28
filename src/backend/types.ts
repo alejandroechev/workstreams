@@ -25,6 +25,11 @@ export interface Backend {
   listWorkstreams(): Promise<Workstream[]>;
   createWorkstream(name: string, directory: string, opts?: { projectId?: string; workstreamType?: string; worktreeBranch?: string }): Promise<Workstream>;
   updateWorkstream(id: string, updates: Partial<Workstream>): Promise<void>;
+  changeWorkstreamWorktree(
+    wsId: string,
+    mode: "switch_existing" | "create_new",
+    opts: { directory?: string; branchName?: string; folderName?: string }
+  ): Promise<{ workstream: Workstream; affectedTileIds: string[] }>;
   deleteWorkstream(id: string): Promise<void>;
   // Tiles
   listTiles(workstreamId: string): Promise<Tile[]>;

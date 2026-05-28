@@ -9,7 +9,7 @@ mod session_poller;
 use db::open_db;
 use fs_watcher::FsWatcher;
 use pty::PtyManager;
-use rusqlite::Connection;
+use rusqlite::{Connection, Row};
 use serde::{Deserialize, Serialize};
 use session_poller::SessionPoller;
 use std::sync::{Arc, Mutex};
@@ -42,6 +42,12 @@ pub struct Workstream {
     pub worktree_branch: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+}
+
+#[derive(Debug, Serialize)]
+struct ChangeWorktreeResult {
+    workstream: Workstream,
+    affected_tile_ids: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -80,6 +86,55 @@ fn now() -> String {
         .unwrap()
         .as_secs();
     format!("{t}")
+}
+
+pub fn rewrite_tile_cwd(
+    config_json: &str,
+    tile_type: &str,
+    new_cwd: &str,
+) -> Result<String, String> {
+    let mut value: serde_json::Value =
+        serde_json::from_str(config_json).map_err(|e| format!("Invalid tile config JSON: {e}"))?;
+
+    if matches!(tile_type, "terminal" | "copilot_session") {
+        let object = value.as_object_mut().ok_or_else(|| {
+            format!("Tile type {tile_type} requires an object config to rewrite cwd")
+        })?;
+        object.insert(
+            "cwd".to_string(),
+            serde_json::Value::String(new_cwd.to_string()),
+        );
+    }
+
+    serde_json::to_string(&value).map_err(|e| format!("Failed to serialize tile config JSON: {e}"))
+}
+
+fn workstream_from_row(row: &Row<'_>) -> rusqlite::Result<Workstream> {
+    Ok(Workstream {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        description: row.get(2)?,
+        directory: row.get(3)?,
+        git_repo: row.get(4)?,
+        git_branch: row.get(5)?,
+        status: row.get(6)?,
+        project_id: row.get(7)?,
+        workstream_type: row.get(8)?,
+        worktree_branch: row.get(9)?,
+        created_at: row.get(10)?,
+        updated_at: row.get(11)?,
+    })
+}
+
+fn get_workstream_by_id(db: &Connection, id: &str) -> Result<Workstream, String> {
+    db.query_row(
+        "SELECT id, name, description, directory, git_repo, git_branch, status,
+                project_id, workstream_type, worktree_branch, created_at, updated_at
+         FROM workstreams WHERE id = ?1",
+        [id],
+        workstream_from_row,
+    )
+    .map_err(|e| format!("DB error: {e}"))
 }
 
 /// Create a git Command that doesn't show a console window on Windows
@@ -274,22 +329,7 @@ fn list_workstreams(state: State<'_, AppState>) -> Result<Vec<Workstream>, Strin
         .map_err(|e| format!("DB error: {e}"))?;
 
     let rows = stmt
-        .query_map([], |row| {
-            Ok(Workstream {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                description: row.get(2)?,
-                directory: row.get(3)?,
-                git_repo: row.get(4)?,
-                git_branch: row.get(5)?,
-                status: row.get(6)?,
-                project_id: row.get(7)?,
-                workstream_type: row.get(8)?,
-                worktree_branch: row.get(9)?,
-                created_at: row.get(10)?,
-                updated_at: row.get(11)?,
-            })
-        })
+        .query_map([], workstream_from_row)
         .map_err(|e| format!("DB error: {e}"))?;
 
     rows.collect::<Result<Vec<_>, _>>()
@@ -351,6 +391,91 @@ fn delete_workstream(state: State<'_, AppState>, id: String) -> Result<(), Strin
     db.execute("DELETE FROM workstreams WHERE id = ?1", [&id])
         .map_err(|e| format!("DB error: {e}"))?;
     Ok(())
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+fn change_workstream_worktree(
+    state: State<'_, AppState>,
+    ws_id: String,
+    mode: String,
+    directory: Option<String>,
+    branch_name: Option<String>,
+    folder_name: Option<String>,
+) -> Result<ChangeWorktreeResult, String> {
+    let (final_dir, final_branch) = match mode.as_str() {
+        "switch_existing" => {
+            let dir = directory.ok_or("directory is required for switch_existing")?;
+            if !std::path::Path::new(&dir).exists() {
+                return Err(format!("Directory does not exist: {dir}"));
+            }
+            let info = detect_worktree_info(dir.clone())?;
+            (dir, info.branch)
+        }
+        "create_new" => {
+            let branch = branch_name.ok_or("branch_name is required for create_new")?;
+            let current_dir = {
+                let db = state.db.lock().unwrap();
+                get_workstream_by_id(&db, &ws_id)?
+                    .directory
+                    .ok_or("workstream has no directory, cannot create worktree")?
+            };
+            let info = detect_worktree_info(current_dir.clone())?;
+            let repo_root = if info.is_worktree {
+                info.parent_repo_path
+                    .ok_or("worktree parent repo path was not detected")?
+            } else if std::path::Path::new(&current_dir).join(".git").is_dir() {
+                current_dir
+            } else {
+                return Err("workstream is not in a git repo, cannot create worktree".into());
+            };
+            let created_dir = create_worktree(repo_root, branch.clone(), folder_name)?;
+            (created_dir, Some(branch))
+        }
+        _ => return Err(format!("Unknown worktree change mode: {mode}")),
+    };
+
+    let ts = now();
+    let mut db = state.db.lock().unwrap();
+    let tx = db.transaction().map_err(|e| format!("DB error: {e}"))?;
+    tx.execute(
+        "UPDATE workstreams SET directory = ?1, worktree_branch = ?2, updated_at = ?3 WHERE id = ?4",
+        (&final_dir, &final_branch, &ts, &ws_id),
+    )
+    .map_err(|e| format!("DB error: {e}"))?;
+
+    let tile_rows: Vec<(String, String, String)> = {
+        let mut stmt = tx
+            .prepare(
+                "SELECT id, tile_type, config_json FROM tiles
+                 WHERE workstream_id = ?1 AND tile_type IN ('terminal','copilot_session')",
+            )
+            .map_err(|e| format!("DB error: {e}"))?;
+        let rows = stmt
+            .query_map([&ws_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+            .map_err(|e| format!("DB error: {e}"))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("DB error: {e}"))?;
+        rows
+    };
+
+    let mut affected_tile_ids = Vec::new();
+    for (tile_id, tile_type, config_json) in tile_rows {
+        let rewritten = rewrite_tile_cwd(&config_json, &tile_type, &final_dir)?;
+        tx.execute(
+            "UPDATE tiles SET config_json = ?1, updated_at = ?2 WHERE id = ?3",
+            (&rewritten, &ts, &tile_id),
+        )
+        .map_err(|e| format!("DB error: {e}"))?;
+        affected_tile_ids.push(tile_id);
+    }
+
+    tx.commit().map_err(|e| format!("DB error: {e}"))?;
+    let workstream = get_workstream_by_id(&db, &ws_id)?;
+    Ok(ChangeWorktreeResult {
+        workstream,
+        affected_tile_ids,
+    })
 }
 
 // ── Tile Commands ──────────────────────────────────────────────────────
@@ -929,8 +1054,8 @@ fn list_directory(path: String) -> Result<Vec<DirEntry>, String> {
         }
     }
     // Folders first (alpha), then files (alpha)
-    dirs.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
-    files.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    dirs.sort_by_key(|a| a.name.to_lowercase());
+    files.sort_by_key(|a| a.name.to_lowercase());
     dirs.extend(files);
     Ok(dirs)
 }
@@ -2689,6 +2814,7 @@ pub fn run() {
             list_workstreams,
             update_workstream,
             delete_workstream,
+            change_workstream_worktree,
             // Tiles
             create_tile,
             list_tiles,
@@ -2787,6 +2913,52 @@ pub fn run() {
 mod tests {
     use super::*;
     use std::io::Write;
+
+    #[test]
+    fn rewrite_tile_cwd_updates_terminal_cwd() {
+        let out = rewrite_tile_cwd(r#"{"cwd":"C:/old","shell":"pwsh"}"#, "terminal", "C:/new")
+            .expect("terminal config should rewrite");
+        let json: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(json["cwd"], "C:/new");
+        assert_eq!(json["shell"], "pwsh");
+    }
+
+    #[test]
+    fn rewrite_tile_cwd_adds_cwd_when_missing() {
+        let out = rewrite_tile_cwd(r#"{"shell":"pwsh"}"#, "terminal", "C:/new")
+            .expect("terminal config should rewrite");
+        let json: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(json["cwd"], "C:/new");
+        assert_eq!(json["shell"], "pwsh");
+    }
+
+    #[test]
+    fn rewrite_tile_cwd_updates_copilot_session_cwd() {
+        let out = rewrite_tile_cwd(
+            r#"{"cwd":"C:/old","sessionName":"main"}"#,
+            "copilot_session",
+            "C:/new",
+        )
+        .expect("copilot session config should rewrite");
+        let json: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(json["cwd"], "C:/new");
+        assert_eq!(json["sessionName"], "main");
+    }
+
+    #[test]
+    fn rewrite_tile_cwd_leaves_other_types_alone() {
+        let out = rewrite_tile_cwd(r#"{"root":"C:/repo"}"#, "file_explorer", "C:/new")
+            .expect("non-cwd tile config should parse");
+        let json: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(json["root"], "C:/repo");
+        assert!(json.get("cwd").is_none());
+    }
+
+    #[test]
+    fn rewrite_tile_cwd_errors_on_malformed_json() {
+        let err = rewrite_tile_cwd("{ not json", "terminal", "C:/new").unwrap_err();
+        assert!(err.contains("Invalid tile config JSON"));
+    }
 
     #[test]
     fn search_in_files_finds_matches_case_insensitive() {

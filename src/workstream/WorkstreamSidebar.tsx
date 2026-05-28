@@ -11,6 +11,7 @@ import {
   ChevronUpIcon,
   ChevronDownIcon,
   BellAlertIcon,
+  ArrowsRightLeftIcon,
 } from "@heroicons/react/20/solid";
 import { PROJECT_PRESET_COLORS, isCustomProjectColor } from "../domain/colors";
 
@@ -30,6 +31,7 @@ interface Props {
   onReorderWorkstream: (id: string, direction: 'up' | 'down') => void;
   onChangeStatus: (id: string, status: Workstream['status']) => void;
   onForkWorkstream?: (id: string) => void;
+  onChangeWorktree?: (ws: Workstream) => void;
 }
 
 type WorkstreamStatus = Workstream['status'];
@@ -69,6 +71,7 @@ export default function WorkstreamSidebar({
   onReorderWorkstream,
   onChangeStatus,
   onForkWorkstream,
+  onChangeWorktree,
 }: Props) {
   const [showArchived, setShowArchived] = useState(false);
   const [archiveConfirm, setArchiveConfirm] = useState<string | null>(null);
@@ -363,6 +366,16 @@ export default function WorkstreamSidebar({
                         title="Fork to new worktree"
                       >
                         ⑂
+                      </button>
+                    )}
+                    {onChangeWorktree && (
+                      <button
+                        aria-label="Change worktree…"
+                        onClick={(e) => { e.stopPropagation(); onChangeWorktree(ws); }}
+                        style={sidebarBtnStyle}
+                        title="Change worktree…"
+                      >
+                        <ArrowsRightLeftIcon style={{ width: 12, height: 12 }} />
                       </button>
                     )}
                     <button

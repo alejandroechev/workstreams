@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { MemoryBackend } from "../memory-backend";
 import type { DiffReview } from "../../domain/diff-review";
+import { rewriteTileCwd } from "../../domain/worktree-change";
 
 describe("MemoryBackend", () => {
   let backend: MemoryBackend;
@@ -56,6 +57,77 @@ describe("MemoryBackend", () => {
 
       const tiles = await backend.listTiles(ws.id);
       expect(tiles).toHaveLength(0);
+    });
+
+    it("switches to an existing worktree and leaves the current worktree branch intact", async () => {
+      const ws = await backend.createWorkstream("WS", "C:\\Repos\\app", { worktreeBranch: "feature/current" });
+
+      const result = await backend.changeWorkstreamWorktree(ws.id, "switch_existing", { directory: "D:\\Worktrees\\app-fix" });
+
+      expect(result.workstream.directory).toBe("D:\\Worktrees\\app-fix");
+      expect(result.workstream.worktree_branch).toBe("feature/current");
+      const [stored] = await backend.listWorkstreams();
+      expect(stored.directory).toBe("D:\\Worktrees\\app-fix");
+      expect(stored.worktree_branch).toBe("feature/current");
+    });
+
+    it("switches worktrees by rewriting restartable tile cwd values and leaving file explorer tiles untouched", async () => {
+      const ws = await backend.createWorkstream("WS", "C:\\Repos\\app", { worktreeBranch: "feature/current" });
+      const terminalConfig = JSON.stringify({ cwd: "C:\\Repos\\app", command: "pwsh" });
+      const copilotConfig = JSON.stringify({ cwd: "C:\\Repos\\app", resumeSessionId: "abc" });
+      const explorerConfig = JSON.stringify({ cwd: "C:\\Repos\\app", selectedPath: "README.md" });
+      const terminal = await backend.createTile(ws.id, "terminal", "Terminal", terminalConfig);
+      const copilot = await backend.createTile(ws.id, "copilot_session", "Copilot", copilotConfig);
+      const explorer = await backend.createTile(ws.id, "file_explorer", "Files", explorerConfig);
+
+      await backend.changeWorkstreamWorktree(ws.id, "switch_existing", { directory: "D:\\Worktrees\\app-fix" });
+
+      const tiles = await backend.listTiles(ws.id);
+      expect(tiles.find((tile) => tile.id === terminal.id)?.config_json).toBe(
+        rewriteTileCwd(terminalConfig, "D:\\Worktrees\\app-fix", "terminal")
+      );
+      expect(tiles.find((tile) => tile.id === copilot.id)?.config_json).toBe(
+        rewriteTileCwd(copilotConfig, "D:\\Worktrees\\app-fix", "copilot_session")
+      );
+      expect(tiles.find((tile) => tile.id === explorer.id)?.config_json).toBe(explorerConfig);
+    });
+
+    it("returns affected tile ids only for restartable tiles when switching worktrees", async () => {
+      const ws = await backend.createWorkstream("WS", "C:\\Repos\\app");
+      const terminal = await backend.createTile(ws.id, "terminal", "Terminal", "{}");
+      const copilot = await backend.createTile(ws.id, "copilot_session", "Copilot", "{}");
+      await backend.createTile(ws.id, "file_explorer", "Files", "{}");
+
+      const result = await backend.changeWorkstreamWorktree(ws.id, "switch_existing", { directory: "D:\\Worktrees\\app-fix" });
+
+      expect(result.affectedTileIds).toEqual([terminal.id, copilot.id]);
+    });
+
+    it("creates a new worktree by setting the branch and deriving a sibling directory", async () => {
+      const ws = await backend.createWorkstream("WS", "C:\\Repos\\app", { worktreeBranch: "main" });
+
+      const result = await backend.changeWorkstreamWorktree(ws.id, "create_new", { branchName: "feature/login" });
+
+      expect(result.workstream.directory).toBe("C:\\Repos\\login");
+      expect(result.workstream.worktree_branch).toBe("feature/login");
+    });
+
+    it("throws when changing an unknown workstream", async () => {
+      await expect(
+        backend.changeWorkstreamWorktree("missing", "switch_existing", { directory: "D:\\Worktrees\\app-fix" })
+      ).rejects.toThrow("Workstream not found: missing");
+    });
+
+    it("throws when switching to an existing worktree without a directory", async () => {
+      const ws = await backend.createWorkstream("WS", "C:\\Repos\\app");
+
+      await expect(backend.changeWorkstreamWorktree(ws.id, "switch_existing", {})).rejects.toThrow("Directory is required");
+    });
+
+    it("throws when creating a new worktree without a branch name", async () => {
+      const ws = await backend.createWorkstream("WS", "C:\\Repos\\app");
+
+      await expect(backend.changeWorkstreamWorktree(ws.id, "create_new", {})).rejects.toThrow("Branch name is required");
     });
   });
 
