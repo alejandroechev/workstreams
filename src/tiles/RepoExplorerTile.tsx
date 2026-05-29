@@ -10,7 +10,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useBackend } from "../backend/context";
 import { detectLanguage } from "../domain/tile-config";
-import { isAudioFile, makeAudioBlobUrl } from "../domain/file-types";
+import { isAudioFile, isImageFile, makeAudioBlobUrl, makeImageBlobUrl, dirnameOf } from "../domain/file-types";
 import {
   FolderIcon,
   DocumentIcon,
@@ -45,7 +45,7 @@ interface DirEntry {
   size: number;
 }
 
-type Mode = "browse" | "view" | "audio" | "log" | "hooks";
+type Mode = "browse" | "view" | "audio" | "image" | "log" | "hooks";
 type DiffMode = "unstaged" | "last_commit" | "branch_vs_master";
 
 const MARKDOWN_EXTS = new Set(["md", "mdx", "markdown"]);
@@ -145,6 +145,9 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
   const [audioBytes, setAudioBytes] = useState<ArrayBuffer | null>(null);
   const [audioSizeBytes, setAudioSizeBytes] = useState(0);
   const [audioTooLarge, setAudioTooLarge] = useState(false);
+  // Image preview state.
+  const [imageUrl, setImageUrl] = useState<string | null>(null);
+  const [imageSizeBytes, setImageSizeBytes] = useState(0);
   // Ctrl+P search overlay
   const [showFileSearch, setShowFileSearch] = useState(false);
   const [fileSearchQuery, setFileSearchQuery] = useState("");
@@ -225,6 +228,11 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
     return () => { if (prev) URL.revokeObjectURL(prev); };
   }, [audioUrl]);
 
+  useEffect(() => {
+    const prev = imageUrl;
+    return () => { if (prev) URL.revokeObjectURL(prev); };
+  }, [imageUrl]);
+
   const openFile = useCallback(async (path: string) => {
     const trimmedPath = path.trim();
     if (!trimmedPath) return;
@@ -233,8 +241,28 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
     setAudioUrl(null);
     setAudioBytes(null);
     setAudioTooLarge(false);
+    setImageUrl(null);
     setEditorSnapshot(null);
     setCommitDiffHash("");
+
+    // Image branch — fast path: read base64, render <img>.
+    if (isImageFile(trimmedPath)) {
+      try {
+        const b64 = await invoke<string>("read_file_base64", { path: trimmedPath });
+        const r = makeImageBlobUrl(trimmedPath, b64);
+        setImageUrl(r.url);
+        setImageSizeBytes(r.size);
+        setFilePath(trimmedPath);
+        setContent(null);
+        setMode("image");
+        return;
+      } catch (e) {
+        setFileError(String(e));
+        return;
+      } finally {
+        setFileLoading(false);
+      }
+    }
 
     // Audio branch.
     if (isAudioFile(trimmedPath)) {
@@ -1042,7 +1070,7 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
               path={filePath}
               onBack={handleBackToBrowse}
               renderMarkdownPreview={(markdownContent) => (
-                <MarkdownView style={markdownContainerStyle} baseFontSize={fontSize}>{markdownContent}</MarkdownView>
+                <MarkdownView style={markdownContainerStyle} baseFontSize={fontSize} basePath={dirnameOf(filePath)}>{markdownContent}</MarkdownView>
               )}
               onSnapshotChange={setEditorSnapshot}
             />
@@ -1144,6 +1172,64 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
         ) : (
           <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "#585b70" }}>
             {fileLoading ? "Loading audio…" : fileError ? fileError : "No audio loaded"}
+          </div>
+        )}
+        {overlays}
+      </div>
+    );
+  }
+
+  // ─── Image mode ───
+  if (mode === "image") {
+    return (
+      <div ref={containerRef} style={containerStyle}>
+        {tabBar}
+        <div style={toolbarStyle}>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, overflow: "hidden", flex: 1 }}>
+            <span style={{ ...pathTextStyle, display: "flex", alignItems: "center", gap: 4 }}>
+              <DocumentIcon style={{ width: 14, height: 14, color: "#f5c2e7", flexShrink: 0 }} />
+              {filePath}
+            </span>
+            <span style={{ fontSize: 11, color: "#6c7086", marginLeft: 8 }}>
+              {formatBytes(imageSizeBytes)}
+            </span>
+          </div>
+          <button
+            onClick={handleBackToBrowse}
+            style={toolbarButtonStyle}
+            title="Back to browse"
+          >
+            ← Back
+          </button>
+        </div>
+        {imageUrl ? (
+          <div
+            data-testid="image-preview"
+            style={{
+              flex: 1,
+              overflow: "auto",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              padding: 12,
+              background: "#181825",
+            }}
+          >
+            <img
+              src={imageUrl}
+              alt={filePath}
+              style={{
+                maxWidth: "100%",
+                maxHeight: "100%",
+                objectFit: "contain",
+                borderRadius: 4,
+                boxShadow: "0 2px 12px rgba(0,0,0,0.5)",
+              }}
+            />
+          </div>
+        ) : (
+          <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "#585b70" }}>
+            {fileLoading ? "Loading image…" : fileError ? fileError : "No image loaded"}
           </div>
         )}
         {overlays}

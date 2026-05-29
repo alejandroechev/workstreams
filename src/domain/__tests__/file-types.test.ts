@@ -1,5 +1,16 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { isAudioFile, mimeForAudio, SUPPORTED_AUDIO_EXTS, base64ToBytes, makeAudioBlobUrl } from "../file-types";
+import {
+  isAudioFile,
+  mimeForAudio,
+  SUPPORTED_AUDIO_EXTS,
+  base64ToBytes,
+  makeAudioBlobUrl,
+  isImageFile,
+  mimeForImage,
+  makeImageBlobUrl,
+  resolveRelativePath,
+  dirnameOf,
+} from "../file-types";
 
 describe("file-types", () => {
   describe("isAudioFile", () => {
@@ -94,6 +105,90 @@ describe("file-types", () => {
       expect(r.size).toBe(5);
       expect(r.mime).toBe("audio/mpeg");
       expect(r.bytes.byteLength).toBe(5);
+    });
+  });
+
+  describe("isImageFile", () => {
+    it.each(["png", "jpg", "jpeg", "gif", "webp", "bmp", "ico", "svg", "avif"])(
+      "returns true for .%s",
+      (ext) => {
+        expect(isImageFile(`pic.${ext}`)).toBe(true);
+        expect(isImageFile(`C:\\img\\shot.${ext}`)).toBe(true);
+      },
+    );
+    it("is case-insensitive", () => {
+      expect(isImageFile("pic.PNG")).toBe(true);
+      expect(isImageFile("pic.JpEg")).toBe(true);
+    });
+    it("returns false for non-image extensions", () => {
+      expect(isImageFile("doc.md")).toBe(false);
+      expect(isImageFile("song.mp3")).toBe(false);
+      expect(isImageFile("video.mp4")).toBe(false);
+      expect(isImageFile("Makefile")).toBe(false);
+    });
+  });
+
+  describe("mimeForImage", () => {
+    it("maps known extensions", () => {
+      expect(mimeForImage("a.png")).toBe("image/png");
+      expect(mimeForImage("a.jpg")).toBe("image/jpeg");
+      expect(mimeForImage("a.jpeg")).toBe("image/jpeg");
+      expect(mimeForImage("a.svg")).toBe("image/svg+xml");
+      expect(mimeForImage("a.ico")).toBe("image/x-icon");
+    });
+    it("returns null for non-images", () => {
+      expect(mimeForImage("a.txt")).toBe(null);
+    });
+  });
+
+  describe("makeImageBlobUrl", () => {
+    const realCreate = URL.createObjectURL;
+    afterEach(() => { URL.createObjectURL = realCreate; });
+    it("creates a blob URL with the right image MIME", () => {
+      URL.createObjectURL = vi.fn(() => "blob:img");
+      const r = makeImageBlobUrl("pic.png", "aGVsbG8=");
+      expect(r.url).toBe("blob:img");
+      expect(r.mime).toBe("image/png");
+      expect(r.size).toBe(5);
+    });
+  });
+
+  describe("dirnameOf", () => {
+    it("returns the parent directory for posix paths", () => {
+      expect(dirnameOf("/a/b/c.md")).toBe("/a/b");
+    });
+    it("returns the parent directory for windows paths", () => {
+      expect(dirnameOf("C:\\a\\b\\c.md")).toBe("C:\\a\\b");
+    });
+    it("returns empty for bare filenames", () => {
+      expect(dirnameOf("foo.md")).toBe("");
+    });
+  });
+
+  describe("resolveRelativePath", () => {
+    it("leaves absolute paths unchanged", () => {
+      expect(resolveRelativePath("/base", "/other/x.png")).toBe("/other/x.png");
+      expect(resolveRelativePath("C:\\base", "D:\\other\\x.png")).toBe("D:\\other\\x.png");
+    });
+    it("leaves URLs with schemes unchanged", () => {
+      expect(resolveRelativePath("/base", "https://example.com/x.png")).toBe("https://example.com/x.png");
+      expect(resolveRelativePath("/base", "data:image/png;base64,abc")).toBe("data:image/png;base64,abc");
+      expect(resolveRelativePath("/base", "blob:abc")).toBe("blob:abc");
+    });
+    it("joins relative paths against the base", () => {
+      expect(resolveRelativePath("/a/b", "c/d.png")).toBe("/a/b/c/d.png");
+      expect(resolveRelativePath("/a/b", "./c.png")).toBe("/a/b/c.png");
+    });
+    it("walks up with ..", () => {
+      expect(resolveRelativePath("/a/b/c", "../d.png")).toBe("/a/b/d.png");
+      expect(resolveRelativePath("/a/b/c", "../../e.png")).toBe("/a/e.png");
+    });
+    it("preserves windows separators", () => {
+      expect(resolveRelativePath("C:\\a\\b", "c\\d.png")).toBe("C:\\a\\b\\c\\d.png");
+      expect(resolveRelativePath("C:\\a\\b", "images/01.png")).toBe("C:\\a\\b\\images\\01.png");
+    });
+    it("handles trailing separators on the base", () => {
+      expect(resolveRelativePath("/a/b/", "c.png")).toBe("/a/b/c.png");
     });
   });
 });

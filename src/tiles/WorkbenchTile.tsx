@@ -2,6 +2,7 @@
 import { useState, useCallback, useMemo, useEffect } from "react";
 import Editor from "@monaco-editor/react";
 import { MarkdownView } from "../ui/MarkdownView";
+import { dirnameOf } from "../domain/file-types";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useBackend } from "../backend/context";
@@ -305,7 +306,7 @@ export default function WorkbenchTile({ tileId: _tileId, isFocused, configJson, 
               key={viewingPath}
               path={viewingPath}
               onBack={handleBack}
-              renderMarkdownPreview={(content) => <MarkdownView>{content}</MarkdownView>}
+              renderMarkdownPreview={(content) => <MarkdownView basePath={dirnameOf(viewingPath)}>{content}</MarkdownView>}
               onSnapshotChange={setEditorSnapshot}
             />
           )}

@@ -3,6 +3,7 @@ import { useState, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { MarkdownView } from "../ui/MarkdownView";
+import { dirnameOf } from "../domain/file-types";
 import { useBackend } from "../backend/context";
 import { makeAudioBlobUrl } from "../domain/file-types";
 import { FileEditorView } from "../files/FileEditorView";
@@ -901,7 +902,7 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
               key={viewContent.path}
               path={viewContent.path}
               onBack={() => { setViewContent(null); setEditorSnapshot(null); }}
-              renderMarkdownPreview={(content) => <MarkdownView>{content}</MarkdownView>}
+              renderMarkdownPreview={(content) => <MarkdownView basePath={dirnameOf(viewContent.path)}>{content}</MarkdownView>}
               onSnapshotChange={setEditorSnapshot}
             />
           )}

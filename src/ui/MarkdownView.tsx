@@ -1,9 +1,11 @@
-import { type CSSProperties, type ReactNode } from "react";
+import { type CSSProperties, type ReactNode, useEffect, useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { vscDarkPlus } from "react-syntax-highlighter/dist/esm/styles/prism";
+import { invoke } from "@tauri-apps/api/core";
 import { MermaidDiagram } from "./MermaidDiagram";
+import { isImageFile, makeImageBlobUrl, resolveRelativePath } from "../domain/file-types";
 
 interface Props {
   children: string;
@@ -11,6 +13,14 @@ interface Props {
   style?: CSSProperties;
   /** Base font size in px for the body. Headings/code scale proportionally. Default 14. */
   baseFontSize?: number;
+  /**
+   * Absolute directory of the source markdown file. Used to resolve
+   * relative image paths (e.g. `images/foo.png`) into blob URLs loaded
+   * through Tauri's `read_file_base64` command. When omitted, relative
+   * paths are passed through unchanged (renders broken images, same as
+   * before).
+   */
+  basePath?: string;
 }
 
 /**
@@ -23,19 +33,71 @@ interface Props {
  * When `baseFontSize` is provided, all element sizes (headings, code blocks,
  * blockquote, inline code, etc.) scale proportionally via em units.
  */
-export function MarkdownView({ children, className, style, baseFontSize }: Props) {
+export function MarkdownView({ children, className, style, baseFontSize, basePath }: Props) {
   const mergedContainer: CSSProperties = {
     ...containerStyle,
     ...(baseFontSize ? { fontSize: baseFontSize } : null),
     ...style,
   };
+  const componentMap = basePath
+    ? { ...components, img: (props: { src?: string; alt?: string }) => <ResolvedImg {...props} basePath={basePath} /> }
+    : components;
   return (
     <div className={className} style={mergedContainer} data-testid="markdown-content">
-      <Markdown remarkPlugins={[remarkGfm]} components={components}>
+      <Markdown remarkPlugins={[remarkGfm]} components={componentMap}>
         {children}
       </Markdown>
     </div>
   );
+}
+
+/**
+ * Image component that resolves relative `src` against `basePath` and
+ * loads disk-resident image files through Tauri's read_file_base64.
+ * Falls back to the raw src for URLs / absolute paths / unknown extensions.
+ */
+function ResolvedImg({ src, alt, basePath }: { src?: string; alt?: string; basePath: string }) {
+  const [blobUrl, setBlobUrl] = useState<string | null>(null);
+  const [errored, setErrored] = useState(false);
+  const resolved = src ? resolveRelativePath(basePath, src) : "";
+
+  useEffect(() => {
+    if (!src) return;
+    // Pass through scheme URLs (http, data, blob, asset) untouched.
+    if (/^([a-z][a-z0-9+.-]*:|\/\/)/i.test(src)) {
+      setBlobUrl(src);
+      return;
+    }
+    if (!isImageFile(resolved)) {
+      setBlobUrl(resolved);
+      return;
+    }
+    let cancelled = false;
+    let createdUrl: string | null = null;
+    (async () => {
+      try {
+        const b64 = await invoke<string>("read_file_base64", { path: resolved });
+        if (cancelled) return;
+        const r = makeImageBlobUrl(resolved, b64);
+        createdUrl = r.url;
+        setBlobUrl(r.url);
+      } catch {
+        if (!cancelled) setErrored(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+      if (createdUrl) URL.revokeObjectURL(createdUrl);
+    };
+  }, [src, resolved]);
+
+  if (errored) {
+    return <span style={imgErrorStyle}>⚠ Failed to load image: {alt || src}</span>;
+  }
+  // 1x1 transparent png as placeholder while loading — avoids React's
+  // "empty string src" warning + an extra network round-trip in DOM.
+  const PLACEHOLDER = "data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==";
+  return <img src={blobUrl ?? PLACEHOLDER} alt={alt} style={imgStyle} />;
 }
 
 const containerStyle: CSSProperties = {
@@ -226,6 +288,16 @@ const hrStyle: CSSProperties = {
 const imgStyle: CSSProperties = {
   maxWidth: "100%",
   borderRadius: 4,
+};
+
+const imgErrorStyle: CSSProperties = {
+  display: "inline-block",
+  padding: "6px 10px",
+  border: "1px dashed #f38ba8",
+  borderRadius: 4,
+  color: "#f38ba8",
+  fontSize: "0.9em",
+  background: "rgba(243, 139, 168, 0.08)",
 };
 
 const blockquoteStyle: CSSProperties = {

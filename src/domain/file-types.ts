@@ -62,6 +62,44 @@ export function mimeForAudio(path: string): string | null {
 /** Exposed for tests / debugging. */
 export const SUPPORTED_AUDIO_EXTS: ReadonlyArray<string> = Array.from(AUDIO_EXTS);
 
+const IMAGE_EXTS = new Set<string>([
+  "png",
+  "jpg",
+  "jpeg",
+  "gif",
+  "webp",
+  "bmp",
+  "ico",
+  "svg",
+  "avif",
+]);
+
+const IMAGE_MIME: Record<string, string> = {
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  gif: "image/gif",
+  webp: "image/webp",
+  bmp: "image/bmp",
+  ico: "image/x-icon",
+  svg: "image/svg+xml",
+  avif: "image/avif",
+};
+
+/** True if the path has an image extension we know how to render inline. */
+export function isImageFile(path: string): boolean {
+  return IMAGE_EXTS.has(getExt(path));
+}
+
+/** MIME type for an image path, or null when the extension isn't known. */
+export function mimeForImage(path: string): string | null {
+  const ext = getExt(path);
+  if (!IMAGE_EXTS.has(ext)) return null;
+  return IMAGE_MIME[ext] ?? "application/octet-stream";
+}
+
+export const SUPPORTED_IMAGE_EXTS: ReadonlyArray<string> = Array.from(IMAGE_EXTS);
+
 /**
  * Decode a base64 string (as returned by Rust's `read_file_base64`) into
  * a Uint8Array. Browser-native, no Buffer dependency. Exposed so tiles
@@ -84,4 +122,56 @@ export function makeAudioBlobUrl(path: string, b64: string): { url: string; byte
   const mime = mimeForAudio(path) || "audio/mpeg";
   const blob = new Blob([bytes], { type: mime });
   return { url: URL.createObjectURL(blob), bytes: bytes.buffer, size: bytes.length, mime };
+}
+
+/**
+ * Build an object URL + raw bytes for an image file path. Mirrors the
+ * audio loader. Caller revokes the URL on unmount / next swap.
+ */
+export function makeImageBlobUrl(path: string, b64: string): { url: string; bytes: ArrayBuffer; size: number; mime: string } {
+  const bytes = base64ToBytes(b64);
+  const mime = mimeForImage(path) || "application/octet-stream";
+  const blob = new Blob([bytes], { type: mime });
+  return { url: URL.createObjectURL(blob), bytes: bytes.buffer, size: bytes.length, mime };
+}
+
+/**
+ * Resolve a relative path (as found in a markdown image src) against a
+ * base directory. Absolute paths and URLs with schemes are returned
+ * unchanged so http(s)/data/blob URLs continue to work as-is.
+ *
+ * Works for both Windows (`\`) and POSIX (`/`) separators. The result
+ * preserves the base directory's separator style.
+ */
+export function resolveRelativePath(basePath: string, relativePath: string): string {
+  if (!relativePath) return relativePath;
+  if (/^[a-z][a-z0-9+.-]*:/i.test(relativePath)) return relativePath; // scheme present
+  if (relativePath.startsWith("//")) return relativePath; // protocol-relative
+  if (/^([a-zA-Z]:[\\/]|[\\/])/.test(relativePath)) return relativePath; // absolute
+
+  const sep = basePath.includes("\\") && !basePath.includes("/") ? "\\" : "/";
+  // Normalise the relative path to the base's separator.
+  const normalisedRel = relativePath.replace(/[\\/]+/g, sep);
+  // Split + collapse `..` / `.` segments.
+  const baseSegments = basePath.replace(/[\\/]+$/, "").split(/[\\/]+/);
+  const relSegments = normalisedRel.split(sep);
+  for (const seg of relSegments) {
+    if (seg === "" || seg === ".") continue;
+    if (seg === "..") {
+      if (baseSegments.length > 0) baseSegments.pop();
+    } else {
+      baseSegments.push(seg);
+    }
+  }
+  return baseSegments.join(sep);
+}
+
+/**
+ * Directory portion of a file path, with trailing separator stripped.
+ * Works for both `\` and `/` separators. Returns "" for bare filenames.
+ */
+export function dirnameOf(path: string): string {
+  const idx = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+  if (idx < 0) return "";
+  return path.slice(0, idx);
 }

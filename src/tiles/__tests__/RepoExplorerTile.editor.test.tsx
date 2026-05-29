@@ -144,11 +144,11 @@ describe("RepoExplorerTile editor wiring", () => {
     expect(screen.queryByTestId("file-editor-view")).toBeNull();
   });
 
-  it("does not render FileEditorView for png image files", async () => {
+  it("renders an image preview for png files instead of FileEditorView", async () => {
     renderTile();
     await openFile("logo.png");
-    await waitFor(() => expect(screen.queryByTestId("file-editor-view")).toBeNull());
-    expect(screen.getByText(/Preview not supported/i)).toBeInTheDocument();
+    expect(await screen.findByTestId("image-preview")).toBeInTheDocument();
+    expect(screen.queryByTestId("file-editor-view")).toBeNull();
   });
 
   it("opens Markdown files in FileEditorView so the editor owns preview rendering", async () => {
