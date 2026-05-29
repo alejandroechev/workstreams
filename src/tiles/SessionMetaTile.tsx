@@ -902,7 +902,12 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
               key={viewContent.path}
               path={viewContent.path}
               onBack={() => { setViewContent(null); setEditorSnapshot(null); }}
-              renderMarkdownPreview={(content) => <MarkdownView basePath={dirnameOf(viewContent.path)}>{content}</MarkdownView>}
+              renderMarkdownPreview={(content) => (
+                <MarkdownView
+                  basePath={dirnameOf(viewContent.path)}
+                  onLinkClick={(absPath) => viewFile(absPath, absPath.split(/[\\/]/).pop() || absPath)}
+                >{content}</MarkdownView>
+              )}
               onSnapshotChange={setEditorSnapshot}
             />
           )}

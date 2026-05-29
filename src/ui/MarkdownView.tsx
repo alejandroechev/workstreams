@@ -1,11 +1,12 @@
-import { type CSSProperties, type ReactNode, useEffect, useState } from "react";
+import { type CSSProperties, type ReactNode, useEffect, useState, useCallback } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { vscDarkPlus } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { invoke } from "@tauri-apps/api/core";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { MermaidDiagram } from "./MermaidDiagram";
-import { isImageFile, makeImageBlobUrl, resolveRelativePath } from "../domain/file-types";
+import { classifyLinkTarget, isImageFile, makeImageBlobUrl, resolveRelativePath, type LinkTargetKind } from "../domain/file-types";
 
 interface Props {
   children: string;
@@ -21,6 +22,15 @@ interface Props {
    * before).
    */
   basePath?: string;
+  /**
+   * Internal link handler. Invoked when the user clicks a relative `<a>`
+   * pointing at a file or directory on disk. The href is already resolved
+   * against `basePath`. The host (Repo Explorer / FileEditorView wrapper)
+   * decides what to do with it. When omitted, internal links fall back to
+   * the previous behavior (default-tagged open in new tab — which is
+   * broken under Tauri, hence the bug this prop fixes).
+   */
+  onLinkClick?: (absolutePath: string, kind: LinkTargetKind) => void;
 }
 
 /**
@@ -33,15 +43,72 @@ interface Props {
  * When `baseFontSize` is provided, all element sizes (headings, code blocks,
  * blockquote, inline code, etc.) scale proportionally via em units.
  */
-export function MarkdownView({ children, className, style, baseFontSize, basePath }: Props) {
+export function MarkdownView({ children, className, style, baseFontSize, basePath, onLinkClick }: Props) {
   const mergedContainer: CSSProperties = {
     ...containerStyle,
     ...(baseFontSize ? { fontSize: baseFontSize } : null),
     ...style,
   };
-  const componentMap = basePath
-    ? { ...components, img: (props: { src?: string; alt?: string }) => <ResolvedImg {...props} basePath={basePath} /> }
-    : components;
+
+  const handleLinkClick = useCallback(
+    (e: React.MouseEvent<HTMLAnchorElement>, href: string | undefined) => {
+      if (!href) return;
+      // Anchor-only links — scroll within the rendered preview.
+      if (href.startsWith("#")) {
+        e.preventDefault();
+        const id = decodeURIComponent(href.slice(1));
+        const root = (e.currentTarget.ownerDocument || document)
+          .querySelector('[data-testid="markdown-content"]');
+        if (root) {
+          const escapeId = typeof CSS !== "undefined" && CSS.escape ? CSS.escape(id) : id.replace(/"/g, "\\\"");
+          let target: Element | null;
+          try { target = root.querySelector(`#${escapeId}`); } catch { target = null; }
+          if (!target) {
+            target = Array.from(root.querySelectorAll<HTMLElement>("h1,h2,h3,h4,h5,h6")).find((h) =>
+              slugify(h.textContent || "") === id
+            ) ?? null;
+          }
+          (target as HTMLElement | null)?.scrollIntoView({ behavior: "smooth", block: "start" });
+        }
+        return;
+      }
+      // External http(s) / mailto: / data: / blob: — open via system handler.
+      if (/^([a-z][a-z0-9+.-]*:|\/\/)/i.test(href)) {
+        if (/^https?:|^mailto:|^tel:/i.test(href)) {
+          e.preventDefault();
+          openUrl(href).catch(() => { /* swallow; opener may not be configured */ });
+        }
+        return;
+      }
+      // Internal relative path — needs basePath + a host handler. Without
+      // either, fall through to native (broken) behaviour so we don't
+      // regress unrelated callsites.
+      if (!basePath || !onLinkClick) return;
+      e.preventDefault();
+      const resolved = resolveRelativePath(basePath, href);
+      onLinkClick(resolved, classifyLinkTarget(resolved));
+    },
+    [basePath, onLinkClick],
+  );
+
+  const componentMap = {
+    ...components,
+    ...(basePath
+      ? { img: (props: { src?: string; alt?: string }) => <ResolvedImg {...props} basePath={basePath} /> }
+      : null),
+    a: ({ children: c, href }: { children?: ReactNode; href?: string }) => (
+      <a
+        href={href}
+        style={linkStyle}
+        onClick={(e) => handleLinkClick(e, href)}
+        target="_blank"
+        rel="noreferrer noopener"
+      >
+        {c}
+      </a>
+    ),
+  };
+
   return (
     <div className={className} style={mergedContainer} data-testid="markdown-content">
       <Markdown remarkPlugins={[remarkGfm]} components={componentMap}>
@@ -49,6 +116,10 @@ export function MarkdownView({ children, className, style, baseFontSize, basePat
       </Markdown>
     </div>
   );
+}
+
+function slugify(s: string): string {
+  return s.toLowerCase().trim().replace(/[^\w\s-]/g, "").replace(/\s+/g, "-");
 }
 
 /**
@@ -145,6 +216,9 @@ const components = {
     <p style={pStyle}>{children}</p>
   ),
   a: ({ children, href }: { children?: ReactNode; href?: string }) => (
+    // Default fallback when MarkdownView is rendered without onLinkClick.
+    // Kept for backwards compatibility — replaced at render time when the
+    // host provides handling.
     <a href={href} style={linkStyle} target="_blank" rel="noreferrer noopener">
       {children}
     </a>

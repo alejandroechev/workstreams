@@ -1,9 +1,11 @@
 import { describe, it, expect, vi, afterAll } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { MarkdownView } from "../MarkdownView";
 
 const invokeMock = vi.hoisted(() => vi.fn());
+const openUrlMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: invokeMock }));
+vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: openUrlMock }));
 
 // MermaidDiagram lazy-loads scripts in jsdom which would fail; stub it.
 vi.mock("../MermaidDiagram", () => ({
@@ -112,6 +114,88 @@ describe("MarkdownView", () => {
       // No basePath means the original components.img runs — relative src is preserved untouched.
       expect(img.getAttribute("src")).toBe("images/01.png");
       expect(invokeMock).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("link click handling", () => {
+    it("calls onLinkClick with resolved absolute path + kind for a relative .md link", () => {
+      const onLinkClick = vi.fn();
+      const { container } = render(
+        <MarkdownView basePath="/repo/docs" onLinkClick={onLinkClick}>
+          {"[next](./other.md)"}
+        </MarkdownView>,
+      );
+      fireEvent.click(container.querySelector("a")!);
+      expect(onLinkClick).toHaveBeenCalledWith("/repo/docs/other.md", "markdown");
+    });
+
+    it("classifies images and code files correctly", () => {
+      const onLinkClick = vi.fn();
+      const { container } = render(
+        <MarkdownView basePath="/repo" onLinkClick={onLinkClick}>
+          {"[img](pic.png) [code](script.ts)"}
+        </MarkdownView>,
+      );
+      const links = container.querySelectorAll("a");
+      fireEvent.click(links[0]);
+      fireEvent.click(links[1]);
+      expect(onLinkClick).toHaveBeenNthCalledWith(1, "/repo/pic.png", "image");
+      expect(onLinkClick).toHaveBeenNthCalledWith(2, "/repo/script.ts", "file");
+    });
+
+    it("walks up with ../ when resolving relative links", () => {
+      const onLinkClick = vi.fn();
+      const { container } = render(
+        <MarkdownView basePath="/repo/docs/tutorial" onLinkClick={onLinkClick}>
+          {"[adr](../adrs/001.md)"}
+        </MarkdownView>,
+      );
+      fireEvent.click(container.querySelector("a")!);
+      expect(onLinkClick).toHaveBeenCalledWith("/repo/docs/adrs/001.md", "markdown");
+    });
+
+    it("routes http(s) links to openUrl via tauri-plugin-opener, NOT onLinkClick", () => {
+      const onLinkClick = vi.fn();
+      openUrlMock.mockClear();
+      const { container } = render(
+        <MarkdownView basePath="/repo" onLinkClick={onLinkClick}>
+          {"[ext](https://example.com)"}
+        </MarkdownView>,
+      );
+      fireEvent.click(container.querySelector("a")!);
+      expect(openUrlMock).toHaveBeenCalledWith("https://example.com");
+      expect(onLinkClick).not.toHaveBeenCalled();
+    });
+
+    it("anchor-only links scroll to the matching heading (no onLinkClick)", () => {
+      const onLinkClick = vi.fn();
+      const scrollSpy = vi.fn();
+      // Stub scrollIntoView on the Element prototype for jsdom.
+      const realScroll = (window as unknown as { HTMLElement: { prototype: { scrollIntoView?: () => void } } }).HTMLElement.prototype.scrollIntoView;
+      (window as unknown as { HTMLElement: { prototype: { scrollIntoView: () => void } } }).HTMLElement.prototype.scrollIntoView = scrollSpy;
+      try {
+        const { container } = render(
+          <MarkdownView basePath="/repo" onLinkClick={onLinkClick}>
+            {"## Some Heading\n\n[jump](#some-heading)"}
+          </MarkdownView>,
+        );
+        const link = container.querySelector("a")!;
+        fireEvent.click(link);
+        expect(onLinkClick).not.toHaveBeenCalled();
+        expect(scrollSpy).toHaveBeenCalled();
+      } finally {
+        if (realScroll) (window as unknown as { HTMLElement: { prototype: { scrollIntoView?: () => void } } }).HTMLElement.prototype.scrollIntoView = realScroll;
+      }
+    });
+
+    it("does nothing for internal links when onLinkClick is omitted", () => {
+      openUrlMock.mockClear();
+      const { container } = render(
+        <MarkdownView basePath="/repo">{"[x](./other.md)"}</MarkdownView>,
+      );
+      // No throw — and no openUrl invocation for the relative href.
+      fireEvent.click(container.querySelector("a")!);
+      expect(openUrlMock).not.toHaveBeenCalled();
     });
   });
 });

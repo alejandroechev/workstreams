@@ -10,7 +10,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useBackend } from "../backend/context";
 import { detectLanguage } from "../domain/tile-config";
-import { isAudioFile, isImageFile, makeAudioBlobUrl, makeImageBlobUrl, dirnameOf } from "../domain/file-types";
+import { isAudioFile, isImageFile, makeAudioBlobUrl, makeImageBlobUrl, dirnameOf, classifyLinkTarget, type LinkTargetKind } from "../domain/file-types";
+import { createNavigationStack, currentPath as navCurrent, canGoBack as navCanBack, canGoForward as navCanFwd, pushPath as navPush, goBack as navBack, goForward as navFwd, type NavigationStack } from "../domain/nav-history";
 import {
   FolderIcon,
   DocumentIcon,
@@ -147,6 +148,9 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
   const [audioTooLarge, setAudioTooLarge] = useState(false);
   // Image preview state.
   const [imageUrl, setImageUrl] = useState<string | null>(null);
+  // File-viewer navigation history: each entry is an absolute file path.
+  // Empty when not in a file/image/audio view (i.e. we're browsing).
+  const [navStack, setNavStack] = useState<NavigationStack | null>(null);
   const [imageSizeBytes, setImageSizeBytes] = useState(0);
   // Ctrl+P search overlay
   const [showFileSearch, setShowFileSearch] = useState(false);
@@ -233,9 +237,12 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
     return () => { if (prev) URL.revokeObjectURL(prev); };
   }, [imageUrl]);
 
-  const openFile = useCallback(async (path: string) => {
+  const openFile = useCallback(async (path: string, navMode: "push" | "replace" | "none" = "push") => {
     const trimmedPath = path.trim();
     if (!trimmedPath) return;
+    if (navMode === "push") {
+      setNavStack((prev) => (prev ? navPush(prev, trimmedPath) : createNavigationStack(trimmedPath)));
+    }
     setFileError(null);
     setFileLoading(true);
     setAudioUrl(null);
@@ -460,8 +467,32 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
     setAudioUrl(null);
     setAudioBytes(null);
     setAudioTooLarge(false);
+    setNavStack(null);
     setMode("browse");
   }, []);
+
+  const handleLinkClick = useCallback(async (absPath: string, kind: LinkTargetKind) => {
+    if (kind === "markdown" || kind === "image" || kind === "audio" || kind === "file") {
+      await openFile(absPath, "push");
+      return;
+    }
+    // Fallback (shouldn't happen with current LinkTargetKind union).
+    openPath(absPath).catch(() => {});
+  }, [openFile]);
+
+  const handleNavBack = useCallback(async () => {
+    if (!navStack || !navCanBack(navStack)) return;
+    const next = navBack(navStack);
+    setNavStack(next);
+    await openFile(navCurrent(next), "none");
+  }, [navStack, openFile]);
+
+  const handleNavForward = useCallback(async () => {
+    if (!navStack || !navCanFwd(navStack)) return;
+    const next = navFwd(navStack);
+    setNavStack(next);
+    await openFile(navCurrent(next), "none");
+  }, [navStack, openFile]);
 
   const handleBrowseDialog = async () => {
     const file = await open({ title: "Open file", multiple: false, directory: false });
@@ -976,6 +1007,32 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
     const isEditorDirty = editorSnapshot?.dirty === true;
     const viewToolbar = (
       <div style={toolbarStyle}>
+        <button
+          onClick={handleNavBack}
+          disabled={!navStack || !navCanBack(navStack)}
+          style={{
+            ...toolbarButtonStyle,
+            opacity: !navStack || !navCanBack(navStack) ? 0.35 : 1,
+            cursor: !navStack || !navCanBack(navStack) ? "default" : "pointer",
+          }}
+          title="Back"
+          data-testid="repo-explorer-nav-back"
+        >
+          ←
+        </button>
+        <button
+          onClick={handleNavForward}
+          disabled={!navStack || !navCanFwd(navStack)}
+          style={{
+            ...toolbarButtonStyle,
+            opacity: !navStack || !navCanFwd(navStack) ? 0.35 : 1,
+            cursor: !navStack || !navCanFwd(navStack) ? "default" : "pointer",
+          }}
+          title="Forward"
+          data-testid="repo-explorer-nav-forward"
+        >
+          →
+        </button>
         <div style={{ display: "flex", alignItems: "center", gap: 6, overflow: "hidden", flex: 1 }}>
           <span style={{ ...pathTextStyle, display: "flex", alignItems: "center", gap: 4 }} data-testid="repo-explorer-file-title">
             {isMarkdown(filePath)
@@ -1070,7 +1127,12 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
               path={filePath}
               onBack={handleBackToBrowse}
               renderMarkdownPreview={(markdownContent) => (
-                <MarkdownView style={markdownContainerStyle} baseFontSize={fontSize} basePath={dirnameOf(filePath)}>{markdownContent}</MarkdownView>
+                <MarkdownView
+                  style={markdownContainerStyle}
+                  baseFontSize={fontSize}
+                  basePath={dirnameOf(filePath)}
+                  onLinkClick={handleLinkClick}
+                >{markdownContent}</MarkdownView>
               )}
               onSnapshotChange={setEditorSnapshot}
             />

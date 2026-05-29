@@ -306,7 +306,12 @@ export default function WorkbenchTile({ tileId: _tileId, isFocused, configJson, 
               key={viewingPath}
               path={viewingPath}
               onBack={handleBack}
-              renderMarkdownPreview={(content) => <MarkdownView basePath={dirnameOf(viewingPath)}>{content}</MarkdownView>}
+              renderMarkdownPreview={(content) => (
+                <MarkdownView
+                  basePath={dirnameOf(viewingPath)}
+                  onLinkClick={(absPath) => setViewingPath(absPath)}
+                >{content}</MarkdownView>
+              )}
               onSnapshotChange={setEditorSnapshot}
             />
           )}

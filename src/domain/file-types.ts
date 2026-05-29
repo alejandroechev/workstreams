@@ -100,6 +100,26 @@ export function mimeForImage(path: string): string | null {
 
 export const SUPPORTED_IMAGE_EXTS: ReadonlyArray<string> = Array.from(IMAGE_EXTS);
 
+const MARKDOWN_EXTS = new Set<string>(["md", "mdx", "markdown"]);
+
+/** True if the path has a markdown extension we know how to preview. */
+export function isMarkdownFile(path: string): boolean {
+  return MARKDOWN_EXTS.has(getExt(path));
+}
+
+/**
+ * Classify a path by what kind of viewer it should open in. Pure / extension-based.
+ * `file` is the default catch-all for non-markdown, non-image things (source code,
+ * configs, plain text, etc.).
+ */
+export type LinkTargetKind = "markdown" | "image" | "audio" | "file";
+export function classifyLinkTarget(path: string): LinkTargetKind {
+  if (isMarkdownFile(path)) return "markdown";
+  if (isImageFile(path)) return "image";
+  if (isAudioFile(path)) return "audio";
+  return "file";
+}
+
 /**
  * Decode a base64 string (as returned by Rust's `read_file_base64`) into
  * a Uint8Array. Browser-native, no Buffer dependency. Exposed so tiles
