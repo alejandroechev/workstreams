@@ -234,7 +234,14 @@ describe("dirty file buffer close confirmations", () => {
     fireEvent.click(screen.getByText("Two"));
 
     expect(window.confirm).toHaveBeenCalledWith("You have unsaved changes in 1 file(s). Discard and switch workstreams?");
-    expect(screen.getByText("One")).toHaveAttribute("data-active", "true");
+    expect(screen.getByText("One")).toHaveAttribute("data-active", "false");
+    expect(screen.getByText("Two")).toHaveAttribute("data-active", "false");
+  });
+
+  it("does not auto-select any workstream on startup", async () => {
+    await renderApp();
+    await screen.findByText("One");
+    expect(screen.getByText("One")).toHaveAttribute("data-active", "false");
     expect(screen.getByText("Two")).toHaveAttribute("data-active", "false");
   });
 
@@ -326,6 +333,7 @@ describe("diff-review tile-open paths", () => {
     const backend = createBackend();
     (backend.listActiveDiffReviews as ReturnType<typeof vi.fn>).mockResolvedValue([]);
     await renderApp(backend);
+    fireEvent.click(screen.getByText("One"));
 
     fireEvent.keyDown(window, { key: "g", altKey: true });
 
@@ -339,6 +347,7 @@ describe("diff-review tile-open paths", () => {
     (backend.listActiveDiffReviews as ReturnType<typeof vi.fn>).mockResolvedValue([makeReview("r1")]);
     (backend.createOrFocusDiffReviewTile as ReturnType<typeof vi.fn>).mockResolvedValue(makeTile("t1"));
     await renderApp(backend);
+    fireEvent.click(screen.getByText("One"));
 
     fireEvent.keyDown(window, { key: "g", altKey: true });
 
@@ -353,6 +362,7 @@ describe("diff-review tile-open paths", () => {
       makeReview("r1"), makeReview("r2"),
     ]);
     await renderApp(backend);
+    fireEvent.click(screen.getByText("One"));
 
     fireEvent.keyDown(window, { key: "g", altKey: true });
 

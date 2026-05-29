@@ -1491,7 +1491,41 @@ fn git_list_branches(directory: String) -> Result<Vec<String>, String> {
 #[tauri::command]
 fn git_diff_files(directory: String, mode: String) -> Result<Vec<String>, String> {
     let args: Vec<&str> = match mode.as_str() {
-        "unstaged" => vec!["diff", "--name-only"],
+        "unstaged" => {
+            let tracked = git_cmd()
+                .args(["diff", "--name-only"])
+                .current_dir(&directory)
+                .output()
+                .map_err(|e| format!("Failed to run git: {e}"))?;
+            if !tracked.status.success() {
+                let stderr = String::from_utf8_lossy(&tracked.stderr);
+                return Err(format!("git error: {stderr}"));
+            }
+            let untracked = git_cmd()
+                .args(["ls-files", "--others", "--exclude-standard"])
+                .current_dir(&directory)
+                .output()
+                .map_err(|e| format!("Failed to run git: {e}"))?;
+            if !untracked.status.success() {
+                let stderr = String::from_utf8_lossy(&untracked.stderr);
+                return Err(format!("git error: {stderr}"));
+            }
+            let mut files: Vec<String> = Vec::new();
+            for chunk in [&tracked.stdout, &untracked.stdout] {
+                for line in String::from_utf8_lossy(chunk).lines() {
+                    let trimmed = line.trim();
+                    if trimmed.is_empty() {
+                        continue;
+                    }
+                    let owned = trimmed.to_string();
+                    if !files.contains(&owned) {
+                        files.push(owned);
+                    }
+                }
+            }
+            files.sort();
+            return Ok(files);
+        }
         "last_commit" => vec!["diff", "HEAD~1", "--name-only"],
         "branch_vs_master" => {
             // Try master first, fall back to main
@@ -1537,7 +1571,32 @@ fn git_diff_files(directory: String, mode: String) -> Result<Vec<String>, String
 #[tauri::command]
 fn git_diff_file(directory: String, file_path: String, mode: String) -> Result<String, String> {
     let base_args: Vec<&str> = match mode.as_str() {
-        "unstaged" => vec!["diff"],
+        "unstaged" => {
+            let ls = git_cmd()
+                .args([
+                    "ls-files",
+                    "--others",
+                    "--exclude-standard",
+                    "--",
+                    &file_path,
+                ])
+                .current_dir(&directory)
+                .output()
+                .map_err(|e| format!("Failed to run git: {e}"))?;
+            let is_untracked =
+                ls.status.success() && !String::from_utf8_lossy(&ls.stdout).trim().is_empty();
+            if is_untracked {
+                // `git diff --no-index` exits with status 1 when files differ;
+                // that's not an error for us — just return stdout.
+                let output = git_cmd()
+                    .args(["diff", "--no-index", "--", "/dev/null", &file_path])
+                    .current_dir(&directory)
+                    .output()
+                    .map_err(|e| format!("Failed to run git: {e}"))?;
+                return Ok(String::from_utf8_lossy(&output.stdout).to_string());
+            }
+            vec!["diff"]
+        }
         "last_commit" => vec!["diff", "HEAD~1"],
         "branch_vs_master" => {
             // Try master, fallback to main
@@ -3426,5 +3485,58 @@ Body here.
     fn workstream_env_returns_none_when_tiles_table_missing() {
         let conn = fresh_mem_db();
         assert!(workstream_env_from_db(&conn, "tile-1").is_none());
+    }
+
+    #[test]
+    fn git_diff_files_unstaged_includes_untracked() {
+        let tmp = std::env::temp_dir().join(format!(
+            "ws-gitdiff-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let dir_str = tmp.to_string_lossy().to_string();
+
+        let run = |args: &[&str]| {
+            std::process::Command::new("git")
+                .args(args)
+                .current_dir(&tmp)
+                .output()
+                .expect("git invoke")
+        };
+
+        assert!(run(&["init", "-q"]).status.success());
+        run(&["config", "user.email", "t@t"]);
+        run(&["config", "user.name", "t"]);
+        // Commit a tracked file
+        std::fs::write(tmp.join("kept.txt"), "v1\n").unwrap();
+        run(&["add", "kept.txt"]);
+        run(&["commit", "-q", "-m", "init"]);
+        // Modify tracked + add untracked
+        std::fs::write(tmp.join("kept.txt"), "v2\n").unwrap();
+        std::fs::write(tmp.join("brand-new.txt"), "hello\n").unwrap();
+
+        let files =
+            git_diff_files(dir_str.clone(), "unstaged".into()).expect("git_diff_files unstaged");
+        assert!(
+            files.iter().any(|f| f == "kept.txt"),
+            "modified tracked should be listed: {files:?}"
+        );
+        assert!(
+            files.iter().any(|f| f == "brand-new.txt"),
+            "untracked file should be listed: {files:?}"
+        );
+
+        let diff = git_diff_file(dir_str, "brand-new.txt".into(), "unstaged".into())
+            .expect("git_diff_file unstaged for untracked");
+        assert!(
+            diff.contains("brand-new.txt") && diff.contains("hello"),
+            "untracked diff should contain filename + content; got: {diff}"
+        );
+
+        std::fs::remove_dir_all(&tmp).ok();
     }
 }

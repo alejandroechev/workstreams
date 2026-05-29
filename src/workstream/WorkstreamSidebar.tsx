@@ -221,6 +221,7 @@ export default function WorkstreamSidebar({
               key={ws.id}
               data-testid="workstream-item"
               data-workstream-id={ws.id}
+              data-active={isActive ? "true" : "false"}
               onClick={() => onSelectWorkstream(ws.id)}
               style={{
                 padding: "6px 8px",

@@ -172,9 +172,6 @@ export default function App() {
         }
       } catch { /* ignore */ }
       setWorkstreams(ws);
-      if (ws.length > 0 && !activeWsId) {
-        setActiveWsId(ws[0].id);
-      }
 
       // Populate session info from each workstream's pinned tile (background).
       void (async () => {
