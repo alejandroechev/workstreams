@@ -4,7 +4,7 @@
 
 Project-aware workstream manager with tiling compositor for Copilot CLI — manage projects, persist sessions, embed terminals with adaptive tiling layouts, code viewers, and doc viewers.
 
-> 📖 **New here?** Start with the [Beginner's Tutorial](docs/tutorial.md) — an annotated walkthrough from first launch to productive use, with screenshots.
+> 📖 **New here?** Start with the [Beginner's Tutorial](docs/tutorial/tutorial.md) — an annotated walkthrough from first launch to productive use, with screenshots.
 
 ## Features
 

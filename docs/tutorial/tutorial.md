@@ -281,9 +281,9 @@ tracked ones, rendered as full-file diffs.
 
 ## 11. Where to go next
 
-- **Architecture overview** → [`docs/system-diagram.md`](system-diagram.md)
-- **All ADRs** → [`docs/adrs/`](adrs/)
-- **Feature catalog + shortcut reference** → [README](../README.md)
+- **Architecture overview** → [`docs/system-diagram.md`](../system-diagram.md)
+- **All ADRs** → [`docs/adrs/`](../adrs/)
+- **Feature catalog + shortcut reference** → [README](../../README.md)
 - **Issues / feature requests** → https://github.com/alejandroechev/workstreams
 
 Happy tiling.
