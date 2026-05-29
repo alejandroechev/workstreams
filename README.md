@@ -4,6 +4,8 @@
 
 Project-aware workstream manager with tiling compositor for Copilot CLI — manage projects, persist sessions, embed terminals with adaptive tiling layouts, code viewers, and doc viewers.
 
+> 📖 **New here?** Start with the [Beginner's Tutorial](docs/tutorial.md) — an annotated walkthrough from first launch to productive use, with screenshots.
+
 ## Features
 
 - **Workstream management** — Create, switch, and persist project workstreams with git repo detection. Switching or archiving a workstream prompts before discarding unsaved editable file buffers. Each workstream row has a kebab "Change worktree…" action that re-points the workstream at a different worktree directory (switch existing or create a new branch worktree) and respawns affected terminal/copilot session PTYs in the new location.
@@ -16,7 +18,7 @@ Project-aware workstream manager with tiling compositor for Copilot CLI — mana
 - **Editable text files** — Repo Explorer / Meta / Workbench file-detail panes use a Monaco-backed editor with explicit Ctrl+S plus 10 s debounced auto-save, conditional writes that detect external modification, read-only side-by-side conflict diffs, and dangerous-path warnings for `.git/`, `node_modules/`, build artifacts, and lockfiles. See [ADR 006](docs/adrs/006-editable-text-files.md).
 - **Diff Review tile** — Exhaustive agent-driven diff walkthroughs paired with the user-level `diff-grok` skill. The skill (running in an adjacent terminal tile) plans semantic-cluster chunks from `git diff <base>...HEAD`, a GitHub PR, or the working tree, then drives a 3-pane Monaco diff + question + comments tile. The tile opens automatically when the diff-grok skill plans a review, or manually via the Add Tile menu (`Alt+G`) which picks from active reviews. Reviews persist in SQLite (resumable across crashes), drift against re-diffs is detected by hunk hashes, and on completion the review is exported as `review.json` + `action-plan.md` under `.copilot-reviews/<id>/` for handoff to an actioning agent. Offline CLI smoke: `npm run diff-grok:smoke`. See [ADR 007](docs/adrs/007-diff-grok-integration.md).
 - **Plan tile** — Per-session viewer (Alt+P) of the linked Copilot session's plan: rendered `plan.md`, current-plan todos grouped by status, mermaid dependency graph of `todo_deps`, and plan/todo history sourced from the `plans` table snapshots.
-- **App settings** — Status-bar gear opens a Settings modal. Currently exposes terminal scroll speed (0.1× – 5×, default 0.5×) so wheel-driven scrolling in terminal and Copilot session tiles can be tuned to taste; persisted in localStorage.
+- **App settings** — Status-bar gear opens a Settings modal. Exposes terminal scroll speed (0.1× – 5×, default 0.5×) and Mermaid diagram font size (8–24px, default 12px); persisted in localStorage.
 - **Session persistence** — Workstreams, tile layouts, and terminal scrollback survive app restarts
 - **Keyboard-driven** — hjkl navigation, n/c/d for new tiles, Ctrl+1-9 for workstream switching
 - **Copilot CLI enrichment** — Reads session-store.db for context %, turn count, summaries
@@ -88,17 +90,23 @@ See `docs/adrs/003-cdp-feature-validation.md` for the design.
 
 ## Keyboard Shortcuts
 
+All app-level commands are prefixed with **Alt** to avoid conflicts with terminal (`Ctrl+C/V/...`) and Monaco (`Ctrl+F/P/...`) shortcuts.
+
 | Key | Action |
 |-----|--------|
-| `n` | New terminal tile |
-| `c` | New code viewer tile |
-| `d` | New doc viewer tile |
-| `x` | Close focused tile |
-| `f` | Toggle fullscreen |
-| `hjkl` / arrows | Navigate tiles |
-| `Esc` | Unfocus terminal |
-| `1-9` | Jump to tile by number |
-| `Ctrl+1-9` | Switch workstream |
+| `Alt+S` | New Copilot session tile |
+| `Alt+T` | New terminal tile (PowerShell) |
+| `Alt+W` | New terminal tile (WSL) |
+| `Alt+R` | New Repo Explorer tile |
+| `Alt+M` | New Session Meta tile |
+| `Alt+B` | New Workbench tile |
+| `Alt+P` | New Plan tile |
+| `Alt+G` | New Diff Review tile (picker if >1 active reviews) |
+| `Alt+Q` | Close focused tile |
+| `Alt+F` | Toggle fullscreen for focused tile |
+| `Alt+Arrows` | Navigate between tiles |
+| `Alt+1`–`Alt+9` | Switch to workstream by index |
+| `Esc` | Unfocus terminal / close modal |
 
 ## Architecture
 
