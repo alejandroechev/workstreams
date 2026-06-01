@@ -37,6 +37,12 @@ export interface FileEditorViewProps {
   showDangerousPathConfirm?: (hit: DangerHit) => Promise<boolean>;
   /** Called whenever the registry snapshot changes, and with null on unmount. */
   onSnapshotChange?: (snapshot: BufferSnapshot | null) => void;
+  /**
+   * When false, the internal header (Back / title / Edit) is hidden. The
+   * parent is expected to render its own toolbar with equivalent affordances.
+   * Defaults to true for back-compat with Workbench / SessionMeta callers.
+   */
+  showHeader?: boolean;
 }
 
 import { detectLanguage } from "../domain/tile-config";
@@ -78,6 +84,7 @@ export function FileEditorView({
   registry = fileBufferRegistry,
   showDangerousPathConfirm = defaultDangerousPathConfirm,
   onSnapshotChange,
+  showHeader = true,
 }: FileEditorViewProps): ReactElement {
   const editorHostRef = useRef<HTMLDivElement | null>(null);
   const editorRef = useRef<MonacoNs.editor.IStandaloneCodeEditor | null>(null);
@@ -264,30 +271,50 @@ export function FileEditorView({
         fontFamily: "monospace",
       }}
     >
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 8,
-          borderBottom: "1px solid #313244",
-          padding: "8px 10px",
-          flexShrink: 0,
-        }}
-      >
-        <button aria-label="Back" onClick={onBack} style={headerButtonStyle}>
-          <ArrowLeftIcon style={{ width: 16, height: 16 }} />
-          <span>Back</span>
-        </button>
-        <div style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-          {title}{dirtyMark}
+      {showHeader ? (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            borderBottom: "1px solid #313244",
+            padding: "8px 10px",
+            flexShrink: 0,
+          }}
+        >
+          <button aria-label="Back" onClick={onBack} style={headerButtonStyle}>
+            <ArrowLeftIcon style={{ width: 16, height: 16 }} />
+            <span>Back</span>
+          </button>
+          <div style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {title}{dirtyMark}
+          </div>
+          {shouldShowPreview ? (
+            <button aria-label="Edit" onClick={() => setModeState({ inputPath: path, mode: "edit" })} style={headerButtonStyle}>
+              <PencilIcon style={{ width: 16, height: 16 }} />
+              <span>Edit</span>
+            </button>
+          ) : null}
         </div>
-        {shouldShowPreview ? (
+      ) : shouldShowPreview ? (
+        // When the parent owns the toolbar (Repo Explorer), only surface the
+        // Edit toggle here — back + title would duplicate the parent toolbar.
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "flex-end",
+            gap: 8,
+            borderBottom: "1px solid #313244",
+            padding: "4px 10px",
+            flexShrink: 0,
+          }}
+        >
           <button aria-label="Edit" onClick={() => setModeState({ inputPath: path, mode: "edit" })} style={headerButtonStyle}>
             <PencilIcon style={{ width: 16, height: 16 }} />
             <span>Edit</span>
           </button>
-        ) : null}
-      </div>
+        </div>
+      ) : null}
 
       <main style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>{renderBody()}</main>
 

@@ -1008,6 +1008,14 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
     const viewToolbar = (
       <div style={toolbarStyle}>
         <button
+          onClick={handleBackToBrowse}
+          style={{ ...toolbarButtonStyle, display: "flex", alignItems: "center" }}
+          title="Go to folder"
+          data-testid="repo-explorer-go-to-folder"
+        >
+          <ChevronUpIcon style={{ width: 16, height: 16 }} />
+        </button>
+        <button
           onClick={handleNavBack}
           disabled={!navStack || !navCanBack(navStack)}
           style={{
@@ -1015,7 +1023,7 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
             opacity: !navStack || !navCanBack(navStack) ? 0.35 : 1,
             cursor: !navStack || !navCanBack(navStack) ? "default" : "pointer",
           }}
-          title="Back"
+          title="Previous file in this view"
           data-testid="repo-explorer-nav-back"
         >
           ←
@@ -1028,7 +1036,7 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
             opacity: !navStack || !navCanFwd(navStack) ? 0.35 : 1,
             cursor: !navStack || !navCanFwd(navStack) ? "default" : "pointer",
           }}
-          title="Forward"
+          title="Next file in this view"
           data-testid="repo-explorer-nav-forward"
         >
           →
@@ -1126,6 +1134,7 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
               key={filePath}
               path={filePath}
               onBack={handleBackToBrowse}
+              showHeader={false}
               renderMarkdownPreview={(markdownContent) => (
                 <MarkdownView
                   style={markdownContainerStyle}
@@ -1189,6 +1198,14 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
       <div ref={containerRef} style={containerStyle}>
         {tabBar}
         <div style={toolbarStyle}>
+          <button
+            onClick={handleBackToBrowse}
+            style={{ ...toolbarButtonStyle, display: "flex", alignItems: "center" }}
+            title="Go to folder"
+            data-testid="repo-explorer-go-to-folder"
+          >
+            <ChevronUpIcon style={{ width: 16, height: 16 }} />
+          </button>
           <div style={{ display: "flex", alignItems: "center", gap: 6, overflow: "hidden", flex: 1 }}>
             <span style={{ ...pathTextStyle, display: "flex", alignItems: "center", gap: 4 }}>
               <MusicalNoteIcon style={{ width: 14, height: 14, color: "#cba6f7", flexShrink: 0 }} />
@@ -1247,6 +1264,14 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
       <div ref={containerRef} style={containerStyle}>
         {tabBar}
         <div style={toolbarStyle}>
+          <button
+            onClick={handleBackToBrowse}
+            style={{ ...toolbarButtonStyle, display: "flex", alignItems: "center" }}
+            title="Go to folder"
+            data-testid="repo-explorer-go-to-folder"
+          >
+            <ChevronUpIcon style={{ width: 16, height: 16 }} />
+          </button>
           <div style={{ display: "flex", alignItems: "center", gap: 6, overflow: "hidden", flex: 1 }}>
             <span style={{ ...pathTextStyle, display: "flex", alignItems: "center", gap: 4 }}>
               <DocumentIcon style={{ width: 14, height: 14, color: "#f5c2e7", flexShrink: 0 }} />
@@ -1256,13 +1281,6 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
               {formatBytes(imageSizeBytes)}
             </span>
           </div>
-          <button
-            onClick={handleBackToBrowse}
-            style={toolbarButtonStyle}
-            title="Back to browse"
-          >
-            ← Back
-          </button>
         </div>
         {imageUrl ? (
           <div
