@@ -16,11 +16,19 @@ import { resolveTileIcon } from "./tile-icons";
 interface TileProps {
   tile: Tile;
   index: number;
+  /** Explicit CSS grid-area name (e.g. "t0", "sbs-left"). Falls back to t<index>. */
+  gridArea?: string;
   isFocused: boolean;
   focusToken?: number;
   isFullscreen?: boolean;
   /** When true the tile renders into the DOM but is invisible (display:none). */
   hidden?: boolean;
+  /** When true the side-by-side selection checkbox is rendered in the header. */
+  selectable?: boolean;
+  /** Whether this tile is currently selected for side-by-side. */
+  isSelected?: boolean;
+  /** Toggle the side-by-side selection for this tile. */
+  onToggleSelect?: (tileId: string) => void;
   onFocus: () => void;
   onClose: () => void;
   onOpenFile?: (path: string) => void;
@@ -37,10 +45,14 @@ interface TileProps {
 export default function TileWrapper({
   tile,
   index,
+  gridArea,
   isFocused,
   focusToken,
   isFullscreen = false,
   hidden = false,
+  selectable = false,
+  isSelected = false,
+  onToggleSelect,
   onFocus,
   onClose,
   onOpenFile,
@@ -242,7 +254,7 @@ export default function TileWrapper({
       data-tile-id={tile.id}
       data-hidden={hidden ? "true" : "false"}
       style={{
-        gridArea: hidden ? undefined : `t${index}`,
+        gridArea: hidden ? undefined : (gridArea ?? `t${index}`),
         display: hidden ? "none" : "flex",
         flexDirection: "column",
         border: computeTileBorder({ isFullscreen, isFocused }),
@@ -273,6 +285,23 @@ export default function TileWrapper({
         }}
       >
         <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0, flex: 1 }}>
+          {selectable && (
+            <input
+              type="checkbox"
+              data-testid={`tile-sbs-select-${tile.id}`}
+              checked={isSelected}
+              onChange={() => onToggleSelect?.(tile.id)}
+              onClick={(e) => e.stopPropagation()}
+              title="Select for side-by-side (Alt+C)"
+              style={{
+                width: 13,
+                height: 13,
+                accentColor: "#89b4fa",
+                flexShrink: 0,
+                cursor: "pointer",
+              }}
+            />
+          )}
           {createElement(TileIcon, { style: { width: 14, height: 14, color: "#89b4fa", flexShrink: 0 } })}
           {editingTitle ? (
             <input

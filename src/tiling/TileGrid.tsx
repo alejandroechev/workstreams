@@ -1,6 +1,6 @@
 // @test-skip: Thin React rendering wrapper; layout logic tested in layout.test.ts
 import type { Tile } from "../workstream/types";
-import { computeLayout } from "./layout";
+import { computeLayout, computeSideBySideLayout } from "../domain/layout";
 import TileWrapper from "./Tile";
 
 interface Props {
@@ -9,6 +9,11 @@ interface Props {
   focusedIndex: number;
   focusToken?: number;
   fullscreenTileId: string | null;
+  /** When non-null, exactly these tile ids render visibly in a 50/50 split. */
+  sideBySideTileIds: string[] | null;
+  /** Tile ids currently selected for entering side-by-side. */
+  selectedForSideBySide: Set<string>;
+  onToggleSideBySideSelect: (tileId: string) => void;
   onFocusTile: (index: number) => void;
   onCloseTile: (tileId: string) => void;
   onOpenFile?: (path: string) => void;
@@ -28,6 +33,9 @@ export default function TileGrid({
   focusedIndex,
   focusToken,
   fullscreenTileId,
+  sideBySideTileIds,
+  selectedForSideBySide,
+  onToggleSideBySideSelect,
   onFocusTile,
   onCloseTile,
   onOpenFile,
@@ -45,11 +53,16 @@ export default function TileGrid({
     .map((id) => tiles.find((t) => t.id === id))
     .filter((t): t is Tile => t !== undefined);
 
-  // When fullscreen, the layout only allocates one cell. Non-fullscreen
-  // tiles are still rendered (so their xterm/audio/tab state is preserved
-  // by React) but hidden via display:none — they sit outside the grid.
+  // Mode precedence: fullscreen > side-by-side > adaptive grid. Fullscreen
+  // takes one slot; side-by-side takes exactly two; both hide the rest via
+  // display:none so xterm/audio state is preserved.
   const fullscreenActive = !!fullscreenTileId;
-  const layout = computeLayout(fullscreenActive ? 1 : orderedTiles.length);
+  const sideBySideActive = !fullscreenActive && !!sideBySideTileIds && sideBySideTileIds.length === 2;
+  const layout = fullscreenActive
+    ? computeLayout(1)
+    : sideBySideActive
+      ? computeSideBySideLayout()
+      : computeLayout(orderedTiles.length);
 
   if (orderedTiles.length === 0) {
     return (
@@ -88,19 +101,33 @@ export default function TileGrid({
     >
       {orderedTiles.map((tile, i) => {
         const isFs = fullscreenTileId === tile.id;
-        const hidden = fullscreenActive && !isFs;
-        // When fullscreen, the visible tile occupies the single grid cell `t0`.
-        // When non-fullscreen, each tile gets its natural grid slot `t<i>`.
-        const renderIndex = fullscreenActive ? 0 : i;
+        let hidden: boolean;
+        let gridArea: string | undefined;
+        if (fullscreenActive) {
+          hidden = !isFs;
+          gridArea = isFs ? "t0" : undefined;
+        } else if (sideBySideActive) {
+          const sbsIdx = sideBySideTileIds!.indexOf(tile.id);
+          hidden = sbsIdx === -1;
+          gridArea = sbsIdx === 0 ? "sbs-left" : sbsIdx === 1 ? "sbs-right" : undefined;
+        } else {
+          hidden = false;
+          gridArea = `t${i}`;
+        }
+        const showSelectable = !fullscreenActive && !sideBySideActive;
         return (
           <TileWrapper
             key={tile.id}
             tile={tile}
-            index={renderIndex}
+            index={i}
+            gridArea={gridArea}
             isFocused={i === focusedIndex}
             focusToken={focusToken}
             isFullscreen={isFs}
             hidden={hidden}
+            selectable={showSelectable}
+            isSelected={selectedForSideBySide.has(tile.id)}
+            onToggleSelect={onToggleSideBySideSelect}
             onFocus={() => onFocusTile(i)}
             onClose={() => onCloseTile(tile.id)}
             onOpenFile={onOpenFile}

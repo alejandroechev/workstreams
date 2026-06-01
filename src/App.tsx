@@ -39,8 +39,19 @@ export default function App() {
     tileOrder: string[];
     focusedIndex: number;
     fullscreenTileId: string | null;
+    /** Set of tile ids currently selected for entering side-by-side. */
+    selectedForSideBySide: Set<string>;
+    /** When set, exactly two tile ids that are rendered visibly side-by-side. */
+    sideBySideTileIds: string[] | null;
   };
-  const EMPTY_STATE: WsState = { tiles: [], tileOrder: [], focusedIndex: 0, fullscreenTileId: null };
+  const EMPTY_STATE: WsState = {
+    tiles: [],
+    tileOrder: [],
+    focusedIndex: 0,
+    fullscreenTileId: null,
+    selectedForSideBySide: new Set(),
+    sideBySideTileIds: null,
+  };
   const [wsStates, setWsStates] = useState<Map<string, WsState>>(new Map());
   // Focus token bumped on every workstream switch so per-tile effects know to
   // re-focus their xterm textarea.
@@ -52,6 +63,8 @@ export default function App() {
   const tileOrder = activeState.tileOrder;
   const focusedIndex = activeState.focusedIndex;
   const fullscreenTileId = activeState.fullscreenTileId;
+  const selectedForSideBySide = activeState.selectedForSideBySide;
+  const sideBySideTileIds = activeState.sideBySideTileIds;
 
   // Update helpers that act on the active workstream
   const updateActiveState = useCallback((updater: (prev: WsState) => WsState) => {
@@ -79,6 +92,34 @@ export default function App() {
     updateActiveState((s) => ({ ...s, fullscreenTileId: typeof v === "function" ? v(s.fullscreenTileId) : v })),
     [updateActiveState],
   );
+
+  /** Toggle a tile's side-by-side selection. Cap is enforced at click time. */
+  const toggleSideBySideSelect = useCallback((tileId: string) => {
+    updateActiveState((s) => {
+      const next = new Set(s.selectedForSideBySide);
+      if (next.has(tileId)) next.delete(tileId);
+      else next.add(tileId);
+      return { ...s, selectedForSideBySide: next };
+    });
+  }, [updateActiveState]);
+
+  /**
+   * Toggle side-by-side mode. If currently active → exit (clear selection).
+   * If exactly two tiles selected → enter with them. Otherwise no-op.
+   */
+  const toggleSideBySide = useCallback(() => {
+    updateActiveState((s) => {
+      if (s.sideBySideTileIds) {
+        return { ...s, sideBySideTileIds: null, selectedForSideBySide: new Set() };
+      }
+      if (s.selectedForSideBySide.size !== 2) return s;
+      // Preserve tile order: pair appears left=earlier-in-tileOrder.
+      const ids = s.tileOrder.filter((id) => s.selectedForSideBySide.has(id));
+      if (ids.length !== 2) return s;
+      // Entering SBS exits fullscreen so the two modes never collide.
+      return { ...s, sideBySideTileIds: ids, fullscreenTileId: null };
+    });
+  }, [updateActiveState]);
 
   // Idempotently insert/replace a tile in its workstream's state, deduped by id.
   // Used by addTile, the tile-created event listener, the CDP seed bridge, and
@@ -227,6 +268,8 @@ export default function App() {
           tileOrder: order,
           focusedIndex: 0,
           fullscreenTileId: layout.fullscreen_tile_id || null,
+          selectedForSideBySide: new Set(),
+          sideBySideTileIds: null,
         });
         return next;
       });
@@ -673,8 +716,22 @@ export default function App() {
       if (fullscreenTileId === tileId) {
         setFullscreenTileId(null);
       }
+      // If the closed tile was part of side-by-side or pending selection,
+      // collapse back to the adaptive grid.
+      updateActiveState((s) => {
+        const inSelection = s.selectedForSideBySide.has(tileId);
+        const inSbs = s.sideBySideTileIds?.includes(tileId) ?? false;
+        if (!inSelection && !inSbs) return s;
+        const nextSel = new Set(s.selectedForSideBySide);
+        nextSel.delete(tileId);
+        return {
+          ...s,
+          selectedForSideBySide: nextSel,
+          sideBySideTileIds: inSbs ? null : s.sideBySideTileIds,
+        };
+      });
     },
-    [activeWsId, fullscreenTileId, backend, tiles]
+    [activeWsId, fullscreenTileId, backend, tiles, updateActiveState]
   );
 
   // Resume an existing Copilot session by creating a copilot_session tile with --resume
@@ -927,6 +984,10 @@ export default function App() {
             }
           }
           break;
+        case "toggleSideBySide":
+          e.preventDefault();
+          toggleSideBySide();
+          break;
         case "focusTile":
           if (action.index < count) setFocusedIndex(action.index);
           break;
@@ -935,7 +996,7 @@ export default function App() {
 
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [tiles, tileOrder, focusedIndex, fullscreenTileId, activeWsId, addTile, closeTile, switchWorkstream, backend]);
+  }, [tiles, tileOrder, focusedIndex, fullscreenTileId, activeWsId, addTile, closeTile, switchWorkstream, backend, toggleSideBySide]);
 
   const orderedTiles = tileOrder
     .map((id) => tiles.find((t) => t.id === id))
@@ -1023,6 +1084,9 @@ export default function App() {
                   focusedIndex={st.focusedIndex}
                   focusToken={focusToken}
                   fullscreenTileId={st.fullscreenTileId}
+                  sideBySideTileIds={st.sideBySideTileIds}
+                  selectedForSideBySide={st.selectedForSideBySide}
+                  onToggleSideBySideSelect={isActive ? toggleSideBySideSelect : () => {}}
                   onFocusTile={isActive ? setFocusedIndex : () => {}}
                   onCloseTile={isActive ? closeTile : () => {}}
                   workstreamDir={workstreams.find((w) => w.id === wsId)?.directory || undefined}
@@ -1082,6 +1146,8 @@ export default function App() {
             focusedTile?.title || focusedTile?.tile_type || "none"
           }
           fullscreen={fullscreenTileId !== null}
+          sideBySide={sideBySideTileIds !== null}
+          canEnterSideBySide={selectedForSideBySide.size === 2}
           workstreamName={
             workstreams.find((w) => w.id === activeWsId)?.name || ""
           }
@@ -1100,6 +1166,7 @@ export default function App() {
               setFullscreenTileId((prev) => (prev === tid ? null : tid));
             }
           }}
+          onToggleSideBySide={toggleSideBySide}
           onCloseTitle={() => {
             if (orderedTiles.length > 0 && orderedTiles[focusedIndex]) {
               closeTile(orderedTiles[focusedIndex]!.id);

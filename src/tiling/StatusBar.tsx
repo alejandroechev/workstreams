@@ -5,6 +5,9 @@ interface Props {
   tileCount: number;
   focusedLabel: string;
   fullscreen: boolean;
+  sideBySide: boolean;
+  /** True only when a side-by-side toggle is currently valid. */
+  canEnterSideBySide: boolean;
   workstreamName?: string;
   onAddSession?: () => void;
   onAddTerminal?: () => void;
@@ -16,6 +19,7 @@ interface Props {
   onAddDiffReview?: () => void;
   onCloseTitle?: () => void;
   onToggleFullscreen?: () => void;
+  onToggleSideBySide?: () => void;
   onOpenSettings?: () => void;
 }
 
@@ -34,6 +38,8 @@ export default function StatusBar({
   tileCount,
   focusedLabel,
   fullscreen,
+  sideBySide,
+  canEnterSideBySide,
   workstreamName,
   onAddSession,
   onAddTerminal,
@@ -45,6 +51,7 @@ export default function StatusBar({
   onAddDiffReview,
   onCloseTitle,
   onToggleFullscreen,
+  onToggleSideBySide,
   onOpenSettings,
 }: Props) {
   const rawItems: Array<{ key: string; label: string; icon: "session" | "terminal" | "folder" | "info" | "beaker" | "plan" | "bug"; shortcut?: string; onSelect?: () => void }> = [
@@ -86,6 +93,9 @@ export default function StatusBar({
         {fullscreen && (
           <span style={{ color: "#f9e2af" }}>⛶ Full</span>
         )}
+        {sideBySide && (
+          <span style={{ color: "#89b4fa" }}>⊟ Side-by-side</span>
+        )}
       </div>
       <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
         <AddTileMenu items={menuItems} />
@@ -97,6 +107,27 @@ export default function StatusBar({
             title="Settings"
           >
             ⚙
+          </button>
+        )}
+        {onToggleSideBySide && (
+          <button
+            data-testid="toggle-sbs"
+            disabled={!sideBySide && !canEnterSideBySide}
+            style={{
+              ...btnStyle,
+              color: sideBySide ? "#89b4fa" : !canEnterSideBySide ? "#3a3b48" : "#585b70",
+              cursor: !sideBySide && !canEnterSideBySide ? "default" : "pointer",
+            }}
+            onClick={onToggleSideBySide}
+            title={
+              sideBySide
+                ? "Exit side-by-side (Alt+C)"
+                : canEnterSideBySide
+                  ? "Enter side-by-side with selected tiles (Alt+C)"
+                  : "Select two tiles to enable side-by-side"
+            }
+          >
+            ⊟
           </button>
         )}
         <button style={{ ...btnStyle, color: "#585b70" }} onClick={onToggleFullscreen} title="Toggle fullscreen">⛶</button>

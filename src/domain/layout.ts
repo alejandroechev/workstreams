@@ -77,6 +77,19 @@ export function computeLayout(tileCount: number): GridConfig {
 }
 
 /**
+ * Side-by-side layout: exactly two visible cells split 50/50 horizontally.
+ * Cell areas are named `sbs-left` and `sbs-right` so it's obvious the
+ * grid is a different mode from the adaptive one (which uses t0..tN).
+ */
+export function computeSideBySideLayout(): GridConfig {
+  return {
+    columns: "1fr 1fr",
+    rows: "1fr",
+    areas: '"sbs-left sbs-right"',
+  };
+}
+
+/**
  * Navigate focus between tiles. Returns the new focused index.
  */
 export function navigateFocus(

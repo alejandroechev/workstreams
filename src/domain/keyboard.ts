@@ -8,6 +8,7 @@ export type KeyAction =
   | { type: "addTile"; tileType: TileType; extraConfig?: Record<string, string> }
   | { type: "closeTile" }
   | { type: "toggleFullscreen" }
+  | { type: "toggleSideBySide" }
   | { type: "focusTile"; index: number };
 
 /**
@@ -82,6 +83,7 @@ function isMonacoFocused(activeElement: Element | null): boolean {
  * Tile management:
  *   Alt+Q  close focused tile
  *   Alt+F  toggle fullscreen
+ *   Alt+C  toggle side-by-side (when exactly 2 tiles are selected)
  *   Alt+ArrowKeys  navigate between tiles
  *   Alt+1..9  switch workstream
  */
@@ -131,6 +133,8 @@ export function parseKeyAction(opts: ParseKeyActionOpts): KeyAction | null {
         return { type: "closeTile" };
       case "f":
         return { type: "toggleFullscreen" };
+      case "c":
+        return { type: "toggleSideBySide" };
     }
 
     // Alt+1-9 switches workstreams

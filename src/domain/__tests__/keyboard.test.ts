@@ -136,6 +136,10 @@ describe("parseKeyAction", () => {
     expect(parseKeyAction({ key: "f", ...alt })).toEqual({ type: "toggleFullscreen" });
   });
 
+  it("returns toggleSideBySide for Alt+C", () => {
+    expect(parseKeyAction({ key: "c", ...alt })).toEqual({ type: "toggleSideBySide" });
+  });
+
   it("returns switchWorkstream for Alt+1-9", () => {
     for (let i = 1; i <= 9; i++) {
       expect(parseKeyAction({ key: String(i), ...alt })).toEqual({

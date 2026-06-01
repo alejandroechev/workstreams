@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { computeLayout, navigateFocus } from "../layout";
+import { computeLayout, computeSideBySideLayout, navigateFocus } from "../layout";
 
 describe("computeLayout", () => {
   it("returns empty grid for 0 tiles", () => {
@@ -53,6 +53,15 @@ describe("computeLayout", () => {
     const result = computeLayout(8);
     expect(result.columns).toBe("1fr 1fr");
     expect(result.areas).toContain("t7");
+  });
+});
+
+describe("computeSideBySideLayout", () => {
+  it("returns a 50/50 two-column grid with named slots", () => {
+    const result = computeSideBySideLayout();
+    expect(result.columns).toBe("1fr 1fr");
+    expect(result.rows).toBe("1fr");
+    expect(result.areas).toBe('"sbs-left sbs-right"');
   });
 });
 
