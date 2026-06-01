@@ -39,36 +39,15 @@ export interface FileEditorViewProps {
   onSnapshotChange?: (snapshot: BufferSnapshot | null) => void;
 }
 
+import { detectLanguage } from "../domain/tile-config";
+
+/**
+ * Resolve the Monaco language id for a file path. Thin wrapper around the
+ * shared {@link detectLanguage} map so Repo Explorer, Plan tile, and any
+ * future viewer agree on the same mapping (including .cs, .go, .java, etc.).
+ */
 export function inferLanguage(path: string): string {
-  const extension = path.split(/[\\/.]/).pop()?.toLowerCase() ?? "";
-  switch (extension) {
-    case "ts":
-    case "tsx":
-      return "typescript";
-    case "js":
-    case "jsx":
-      return "javascript";
-    case "json":
-      return "json";
-    case "md":
-    case "markdown":
-      return "markdown";
-    case "py":
-      return "python";
-    case "rs":
-      return "rust";
-    case "toml":
-      return "toml";
-    case "yml":
-    case "yaml":
-      return "yaml";
-    case "html":
-      return "html";
-    case "css":
-      return "css";
-    default:
-      return "plaintext";
-  }
+  return detectLanguage(path);
 }
 
 function defaultDangerousPathConfirm(hit: DangerHit): Promise<boolean> {
