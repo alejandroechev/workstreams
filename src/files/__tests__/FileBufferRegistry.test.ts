@@ -288,6 +288,52 @@ describe("FileBufferRegistry", () => {
     expect(h.registry.getSnapshot(canonical)?.state).toBe("clean");
   });
 
+  it("ignores watcher echoes of our own write (hash unchanged) — preserves Monaco scroll/cursor", async () => {
+    // Regression: autosave wrote the file; OS watcher fires for that same
+    // write; old behaviour called model.setValue(disk.content), resetting
+    // scroll to top mid-edit. The echo guard short-circuits when the disk
+    // hash equals what we just wrote.
+    const h = createHarness();
+    await h.registry.acquire("file.txt");
+    // initial acquire already called setValue once via createModel; clear.
+    h.models[0].setValueCalls = [];
+
+    // Watcher delivers an event with the SAME disk content we already know.
+    h.readQueue.push(readResponse({ content: "hello\n", hash_hex: "hash-1" }));
+    h.watchHandlers.get(watcherEvent(h))?.({ payload: { kind: "modified", mtime_unix_ms: 99 } });
+    await Promise.resolve();
+
+    expect(h.models[0].setValueCalls).toEqual([]);
+    expect(h.registry.getSnapshot(canonical)?.state).toBe("clean");
+  });
+
+  it("does not flip a saving buffer into conflicted on our own write echo", async () => {
+    // Twin regression: if the watcher event arrives while state is still
+    // 'saving' (before save_succeeded resolves), the same hash-echo must
+    // be ignored — otherwise the buffer flips to conflicted.
+    const h = createHarness();
+    await h.registry.acquire("file.txt");
+    h.models[0].setValue("changed\n");
+
+    // Defer the write response so we stay in 'saving' when the watcher fires.
+    let resolveWrite: (v: { mtime_unix_ms: number; hash_hex: string }) => void = () => undefined;
+    h.writeQueue.unshift(new Promise<{ mtime_unix_ms: number; hash_hex: string }>((res) => { resolveWrite = res; }) as never);
+    const savePromise = h.registry.save(canonical);
+    await Promise.resolve();
+    expect(h.registry.getSnapshot(canonical)?.state).toBe("saving");
+
+    // Watcher fires with the SAME hash that lastDiskHash currently holds
+    // (the original hash from acquire — not yet updated by the in-flight save).
+    h.readQueue.push(readResponse({ content: "hello\n", hash_hex: "hash-1" }));
+    h.watchHandlers.get(watcherEvent(h))?.({ payload: { kind: "modified", mtime_unix_ms: 99 } });
+    await Promise.resolve();
+
+    expect(h.registry.getSnapshot(canonical)?.state).toBe("saving");
+    resolveWrite({ mtime_unix_ms: 20, hash_hex: "hash-2" });
+    await savePromise;
+    expect(h.registry.getSnapshot(canonical)?.state).toBe("clean");
+  });
+
   it("turns watcher modifications while dirty into conflicts with disk content", async () => {
     const h = createHarness();
     h.readQueue.push(readResponse({ content: "disk\n", hash_hex: "disk-hash" }));

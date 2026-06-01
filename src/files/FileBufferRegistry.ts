@@ -384,6 +384,18 @@ class FileBufferRegistryImpl implements FileBufferRegistry {
     }
 
     const disk = normalizeReadResult(await this.deps.invokeTauri<ReadTextFileResult>("read_text_file", { path: entry.path }));
+
+    // Echo guard: the OS watcher fires for OUR own writes too. If the disk
+    // hash equals the hash we just wrote (or the hash we last read), the
+    // event carries no real change — skipping prevents:
+    //   - resetting Monaco scroll/cursor by re-calling setValue() with the
+    //     same content (the "scroll jumps to top during edit" bug);
+    //   - falsely flipping a still-saving buffer into save_failed_external_modified.
+    if (entry.lastDiskHash !== undefined && disk.hash_hex === entry.lastDiskHash) {
+      entry.lastDiskMtime = disk.mtime_unix_ms;
+      return;
+    }
+
     if (entry.stateContext.state === "clean") {
       entry.lastDiskHash = disk.hash_hex;
       entry.lastDiskMtime = disk.mtime_unix_ms;
