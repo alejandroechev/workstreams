@@ -133,7 +133,8 @@ export default function App() {
           // No unsaved work; explicitly destroy so we don't depend on the
           // framework's "no preventDefault → auto destroy" path.
           event.preventDefault();
-          await win.destroy();
+          try { await win.destroy(); }
+          catch (err) { console.error("window.destroy failed (check capabilities/default.json for core:window:allow-destroy):", err); }
           return;
         }
 
@@ -141,7 +142,8 @@ export default function App() {
         const list = dirty.map((snapshot) => `  • ${snapshot.path}`).join("\n");
         const ok = window.confirm(`You have unsaved changes in ${dirty.length} file(s):\n\n${list}\n\nClose anyway and discard?`);
         if (ok) {
-          await win.destroy();
+          try { await win.destroy(); }
+          catch (err) { console.error("window.destroy failed:", err); }
         }
       });
       return unlisten;
