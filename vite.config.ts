@@ -17,8 +17,10 @@ export default defineConfig({
         alias: {
           "@tauri-apps/api/core": path.resolve(__dirname, "src/test-shims/tauri-core-shim.ts"),
           "@tauri-apps/api/event": path.resolve(__dirname, "src/test-shims/tauri-event-shim.ts"),
+          "@tauri-apps/api/window": path.resolve(__dirname, "src/test-shims/tauri-window-shim.ts"),
           "@tauri-apps/plugin-dialog": path.resolve(__dirname, "src/test-shims/tauri-dialog-shim.ts"),
           "@tauri-apps/plugin-opener": path.resolve(__dirname, "src/test-shims/tauri-opener-shim.ts"),
+          "@tauri-apps/plugin-clipboard-manager": path.resolve(__dirname, "src/test-shims/tauri-clipboard-shim.ts"),
         },
       }
     : undefined,

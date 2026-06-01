@@ -1,0 +1,209 @@
+name: CI / Release
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # Unit tests run on Linux (cheaper, faster) — same vitest suite passes
+  # on both OSs since it never touches Windows-specific code.
+  unit-tests:
+    name: Unit tests (vitest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type check
+        run: npx tsc --noEmit
+
+      - name: Run vitest
+        run: npm test
+
+  # E2E tests use the in-memory backend (VITE_E2E=1) — no Tauri needed,
+  # so they can run on Linux too.
+  e2e-tests:
+    name: E2E tests (Playwright)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Run Playwright tests
+        run: npm run test:e2e
+
+      - name: Upload Playwright report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 14
+
+  # Build the Windows release binary only after both test jobs pass.
+  build-windows:
+    name: Build Windows release
+    needs: [unit-tests, e2e-tests]
+    runs-on: windows-latest
+    outputs:
+      version: ${{ steps.compute.outputs.version }}
+      tag: ${{ steps.compute.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry + target
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "src-tauri -> target"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Compute version + tag
+        id: compute
+        shell: bash
+        run: |
+          pkg_version=$(node -p "require('./package.json').version")
+          tauri_version=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          if [ "$pkg_version" != "$tauri_version" ]; then
+            echo "::error::package.json version ($pkg_version) != src-tauri/tauri.conf.json version ($tauri_version)"
+            exit 1
+          fi
+          tag="v${pkg_version}-build.${{ github.run_number }}"
+          echo "version=${pkg_version}" >> "$GITHUB_OUTPUT"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "Will tag as ${tag}"
+
+      - name: Build Tauri app
+        run: npx tauri build
+
+      - name: Stage artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p staging
+          # NSIS installer (.exe) — required.
+          nsis=$(find src-tauri/target/release/bundle/nsis -name "*.exe" -print -quit 2>/dev/null || true)
+          if [ -z "$nsis" ]; then
+            echo "::error::NSIS installer not found under src-tauri/target/release/bundle/nsis"
+            ls -la src-tauri/target/release/bundle/ || true
+            exit 1
+          fi
+          cp "$nsis" staging/
+
+          # MSI installer — required.
+          msi=$(find src-tauri/target/release/bundle/msi -name "*.msi" -print -quit 2>/dev/null || true)
+          if [ -z "$msi" ]; then
+            echo "::error::MSI installer not found under src-tauri/target/release/bundle/msi"
+            exit 1
+          fi
+          cp "$msi" staging/
+
+          # Raw exe (portable copy with the tag in the filename) — required.
+          if [ ! -f src-tauri/target/release/workstreams.exe ]; then
+            echo "::error::Raw workstreams.exe not found under src-tauri/target/release"
+            exit 1
+          fi
+          cp src-tauri/target/release/workstreams.exe "staging/workstreams-${{ steps.compute.outputs.tag }}.exe"
+
+          echo "Staged artifacts:"
+          ls -la staging/
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-release-${{ steps.compute.outputs.tag }}
+          path: staging/*
+          retention-days: 30
+
+  # Tag + release only on master pushes (skip for workflow_dispatch from PR branches).
+  release:
+    name: Tag + GitHub Release
+    needs: build-windows
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download Windows artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-release-${{ needs.build-windows.outputs.tag }}
+          path: dist/
+
+      - name: Create tag (idempotent)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.build-windows.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch --tags origin
+          if git rev-parse "refs/tags/$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG already exists locally — skipping create"
+          else
+            git tag -a "$TAG" -m "Release $TAG from ${{ github.sha }}"
+            git push origin "$TAG"
+          fi
+
+      - name: Create or update GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.build-windows.outputs.tag }}
+        run: |
+          set -euo pipefail
+          notes_file=$(mktemp)
+          {
+            echo "Automated release for commit ${{ github.sha }}"
+            echo
+            echo "Built on \`windows-latest\` from \`master\`."
+            echo
+            echo "## Commit"
+            git log -1 --pretty=format:"%H%n%n%B" "${{ github.sha }}"
+          } > "$notes_file"
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists — re-uploading artifacts (clobber)."
+            gh release upload "$TAG" dist/* --clobber
+          else
+            gh release create "$TAG" \
+              --title "$TAG" \
+              --notes-file "$notes_file" \
+              dist/*
+          fi
