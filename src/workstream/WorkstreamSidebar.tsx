@@ -158,7 +158,6 @@ export default function WorkstreamSidebar({
   const handleDragStart = (e: React.DragEvent, wsId: string) => {
     setDraggedWsId(wsId);
     e.dataTransfer.effectAllowed = "move";
-    // Some browsers require setData for the drag to actually start.
     try { e.dataTransfer.setData("text/plain", wsId); } catch { /* ignore */ }
   };
   const handleDragOver = (e: React.DragEvent, targetWsId: string) => {
