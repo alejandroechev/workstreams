@@ -27,8 +27,12 @@ import {
   MinusIcon,
   PlusIcon,
   MusicalNoteIcon,
+  EyeIcon,
+  PencilSquareIcon,
+  ClipboardDocumentIcon,
 } from "@heroicons/react/24/outline";
 import { openPath } from "@tauri-apps/plugin-opener";
+import { writeTextToClipboard } from "../domain/clipboard";
 import type { FileSearchMatch } from "../backend/types";
 
 interface Props {
@@ -175,6 +179,12 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
   const [hooksLoading, setHooksLoading] = useState(false);
   const [hookContent, setHookContent] = useState<{ name: string; content: string } | null>(null);
   const [editorSnapshot, setEditorSnapshot] = useState<BufferSnapshot | null>(null);
+  // Markdown view/edit toggle from FileEditorView. Null when the current
+  // file isn't markdown or no toggle is meaningful (conflict, save_blocked).
+  const [editorViewState, setEditorViewState] = useState<{ mode: "preview" | "edit"; toggle: () => void } | null>(null);
+  // Right-click context menu state. Anchored to viewport coordinates of
+  // the contextmenu event; null when closed.
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; path: string; isDir: boolean } | null>(null);
 
   // Font size (Ctrl+= / Ctrl+- and A-/A+ toolbar buttons)
   const [fontSize, setFontSize] = useState<number>(13);
@@ -954,6 +964,15 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
     <>
       {fileSearchOverlay}
       {contentSearchOverlay}
+      {contextMenu && (
+        <FileContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          path={contextMenu.path}
+          isDir={contextMenu.isDir}
+          onClose={() => setContextMenu(null)}
+        />
+      )}
     </>
   );
 
@@ -1051,6 +1070,20 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
             {displayedFilePath}{isEditorDirty ? "*" : ""}
           </span>
         </div>
+        {editorViewState && (
+          <button
+            onClick={editorViewState.toggle}
+            style={{ ...toolbarButtonStyle, display: "flex", alignItems: "center", gap: 4 }}
+            title={editorViewState.mode === "preview" ? "Edit (raw markdown)" : "Preview (rendered)"}
+            data-testid="repo-explorer-md-toggle"
+          >
+            {editorViewState.mode === "preview" ? (
+              <><PencilSquareIcon style={{ width: 14, height: 14 }} /><span>Edit</span></>
+            ) : (
+              <><EyeIcon style={{ width: 14, height: 14 }} /><span>View</span></>
+            )}
+          </button>
+        )}
         <button
           onClick={triggerEditorFind}
           style={{ ...toolbarButtonStyle, display: "flex", alignItems: "center", gap: 2 }}
@@ -1144,6 +1177,7 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
                 >{markdownContent}</MarkdownView>
               )}
               onSnapshotChange={setEditorSnapshot}
+              onViewStateChange={setEditorViewState}
             />
           </div>
           {overlays}
@@ -1624,6 +1658,10 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
                 data-testid="file-tree-item"
                 data-path={entry.fullPath}
                 onClick={() => handleEntryClick(entry)}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  setContextMenu({ x: e.clientX, y: e.clientY, path: entry.fullPath, isDir: entry.isDir });
+                }}
                 style={{
                   display: "flex",
                   alignItems: "center",
@@ -1650,6 +1688,129 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
       </div>
       {overlays}
     </div>
+  );
+}
+
+// ─── File context menu ───
+
+interface FileContextMenuProps {
+  x: number;
+  y: number;
+  path: string;
+  isDir: boolean;
+  onClose: () => void;
+}
+
+function FileContextMenu({ x, y, path, isDir, onClose }: FileContextMenuProps) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const handleClick = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) onClose();
+    };
+    const handleEsc = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    const t = setTimeout(() => {
+      document.addEventListener("mousedown", handleClick);
+      document.addEventListener("keydown", handleEsc);
+    }, 0);
+    return () => {
+      clearTimeout(t);
+      document.removeEventListener("mousedown", handleClick);
+      document.removeEventListener("keydown", handleEsc);
+    };
+  }, [onClose]);
+
+  const close = (fn: () => void) => () => { onClose(); fn(); };
+  const segments = path.split(/[\\/]/).filter(Boolean);
+  const name = segments[segments.length - 1] || path;
+
+  return (
+    <div
+      ref={ref}
+      data-testid="file-context-menu"
+      data-path={path}
+      role="menu"
+      style={{
+        position: "fixed",
+        top: y,
+        left: x,
+        zIndex: 2000,
+        minWidth: 200,
+        background: "#181825",
+        border: "1px solid #45475a",
+        borderRadius: 6,
+        padding: 4,
+        boxShadow: "0 6px 16px rgba(0,0,0,0.45)",
+        color: "#cdd6f4",
+        fontSize: 12,
+        fontFamily: "inherit",
+      }}
+    >
+      <div
+        style={{
+          padding: "6px 10px 8px",
+          borderBottom: "1px solid #313244",
+          marginBottom: 4,
+          color: "#bac2de",
+          fontWeight: 500,
+          fontSize: 11,
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
+          maxWidth: 320,
+        }}
+      >
+        {name}
+      </div>
+      <ContextMenuItem
+        icon={<ClipboardDocumentIcon style={{ width: 14, height: 14, color: "#a6adc8", flexShrink: 0 }} />}
+        label="Copy full path"
+        onClick={close(() => { void writeTextToClipboard(path); })}
+        testid="ctx-copy-path"
+      />
+      <ContextMenuItem
+        icon={<ClipboardDocumentIcon style={{ width: 14, height: 14, color: "#a6adc8", flexShrink: 0 }} />}
+        label={isDir ? "Copy folder name" : "Copy file name"}
+        onClick={close(() => { void writeTextToClipboard(name); })}
+        testid="ctx-copy-name"
+      />
+      <ContextMenuItem
+        icon={<FolderOpenIcon style={{ width: 14, height: 14, color: "#a6adc8", flexShrink: 0 }} />}
+        label="Open in system"
+        onClick={close(() => { openPath(path).catch(() => {}); })}
+        testid="ctx-open-system"
+      />
+    </div>
+  );
+}
+
+function ContextMenuItem({
+  icon, label, onClick, testid,
+}: { icon: React.ReactNode; label: string; onClick: () => void; testid: string }) {
+  return (
+    <button
+      type="button"
+      data-testid={testid}
+      onClick={onClick}
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        width: "100%",
+        padding: "6px 10px",
+        background: "transparent",
+        border: "none",
+        cursor: "pointer",
+        color: "#cdd6f4",
+        fontSize: 12,
+        textAlign: "left",
+        borderRadius: 4,
+      }}
+      onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "#313244"; }}
+      onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "transparent"; }}
+    >
+      {icon}
+      <span>{label}</span>
+    </button>
   );
 }
 

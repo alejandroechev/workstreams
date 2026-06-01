@@ -43,6 +43,12 @@ export interface FileEditorViewProps {
    * Defaults to true for back-compat with Workbench / SessionMeta callers.
    */
   showHeader?: boolean;
+  /**
+   * Called whenever the markdown view state changes so a parent toolbar
+   * can render its own preview/edit toggle. Fires `null` when the file
+   * isn't a markdown file (no toggle needed) and an object otherwise.
+   */
+  onViewStateChange?: (state: { mode: "preview" | "edit"; toggle: () => void } | null) => void;
 }
 
 import { detectLanguage } from "../domain/tile-config";
@@ -85,6 +91,7 @@ export function FileEditorView({
   showDangerousPathConfirm = defaultDangerousPathConfirm,
   onSnapshotChange,
   showHeader = true,
+  onViewStateChange,
 }: FileEditorViewProps): ReactElement {
   const editorHostRef = useRef<HTMLDivElement | null>(null);
   const editorRef = useRef<MonacoNs.editor.IStandaloneCodeEditor | null>(null);
@@ -111,8 +118,12 @@ export function FileEditorView({
       ? editorErrorState.message
       : null;
   const localMode = modeState.inputPath === path ? modeState.mode : "preview";
+  // Conflict + save_blocked always force the editor so the user can
+  // resolve. Plain "dirty" no longer forces edit mode — the user can
+  // freely toggle back to preview (it reads from the Monaco model so
+  // unsaved changes are still visible).
   const effectiveMode =
-    snapshot?.state === "dirty" || snapshot?.state === "conflicted" || snapshot?.state === "save_blocked"
+    snapshot?.state === "conflicted" || snapshot?.state === "save_blocked"
       ? "edit"
       : localMode;
   const conflictKey = snapshot?.state === "conflicted" ? conflictKeyFor(snapshot) : null;
@@ -166,11 +177,33 @@ export function FileEditorView({
     snapshot !== null &&
     renderMarkdownPreview !== undefined &&
     isMarkdown(snapshot.path) &&
-    snapshot.state === "clean" &&
     effectiveMode === "preview";
 
   const shouldShowEditor = snapshot !== null && !isNonEditable(snapshot) && !shouldShowPreview;
   const editorPath = shouldShowEditor ? snapshot?.path ?? null : null;
+
+  // Notify parent of view state so it can render its own preview/edit
+  // toggle in an external toolbar. We only emit toggle availability for
+  // markdown files; non-markdown / no-preview-callback files have no
+  // toggle to make. The forced edit modes (conflict, save_blocked) emit
+  // `null` so the toolbar doesn't show a useless toggle.
+  useEffect(() => {
+    if (!onViewStateChange) return;
+    const isMd = snapshot !== null && renderMarkdownPreview !== undefined && isMarkdown(snapshot.path);
+    const isForcedEdit = snapshot?.state === "conflicted" || snapshot?.state === "save_blocked";
+    if (!isMd || isForcedEdit) {
+      onViewStateChange(null);
+      return;
+    }
+    onViewStateChange({
+      mode: effectiveMode,
+      toggle: () => setModeState({
+        inputPath: path,
+        mode: effectiveMode === "preview" ? "edit" : "preview",
+      }),
+    });
+    return () => onViewStateChange(null);
+  }, [onViewStateChange, snapshot, effectiveMode, renderMarkdownPreview, path]);
 
   useEffect(() => {
     if (editorPath === null || editorHostRef.current === null) return undefined;
@@ -295,24 +328,6 @@ export function FileEditorView({
               <span>Edit</span>
             </button>
           ) : null}
-        </div>
-      ) : shouldShowPreview ? (
-        // When the parent owns the toolbar (Repo Explorer), only surface the
-        // Edit toggle here — back + title would duplicate the parent toolbar.
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "flex-end",
-            gap: 8,
-            borderBottom: "1px solid #313244",
-            padding: "4px 10px",
-            flexShrink: 0,
-          }}
-        >
-          <button aria-label="Edit" onClick={() => setModeState({ inputPath: path, mode: "edit" })} style={headerButtonStyle}>
-            <PencilIcon style={{ width: 16, height: 16 }} />
-            <span>Edit</span>
-          </button>
         </div>
       ) : null}
 

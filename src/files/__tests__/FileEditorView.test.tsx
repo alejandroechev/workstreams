@@ -196,7 +196,7 @@ describe("FileEditorView", () => {
     expect(screen.getByTestId("file-editor-monaco")).toBeTruthy();
   });
 
-  it("switches markdown preview to editor when the buffer becomes dirty", async () => {
+  it("keeps markdown in preview mode when the buffer becomes dirty (user can manually toggle)", async () => {
     const harness = createRegistryHarness({
       initialSnapshot: snapshot({ path: "C:\\repo\\README.md" }),
     });
@@ -208,8 +208,55 @@ describe("FileEditorView", () => {
       harness.emit(snapshot({ path: "C:\\repo\\README.md", state: "dirty", dirty: true }));
     });
 
+    // Stay in preview — no Monaco editor should be mounted yet.
+    expect(screen.queryByTestId("file-editor-monaco")).toBeNull();
+    expect(screen.getByText(/Preview:/)).toBeTruthy();
+  });
+
+  it("still forces editor mode when the buffer enters conflicted state", async () => {
+    const harness = createRegistryHarness({
+      initialSnapshot: snapshot({ path: "C:\\repo\\README.md" }),
+    });
+
+    renderEditor(harness, { renderMarkdownPreview: (content: string) => <article>Preview: {content}</article> });
+    expect(await screen.findByText("Preview: initial content")).toBeTruthy();
+
+    act(() => {
+      harness.emit(snapshot({
+        path: "C:\\repo\\README.md",
+        state: "conflicted",
+        dirty: true,
+        conflictingDiskContent: "disk version",
+        conflictingDiskHash: "h",
+      }));
+    });
+
     await waitFor(() => expect(fakeEditors).toHaveLength(1));
     expect(screen.getByTestId("file-editor-monaco")).toBeTruthy();
+  });
+
+  it("emits view state to onViewStateChange so a parent toolbar can render the toggle", async () => {
+    const onViewStateChange = vi.fn();
+    const harness = createRegistryHarness({
+      initialSnapshot: snapshot({ path: "C:\\repo\\README.md" }),
+    });
+    renderEditor(harness, {
+      renderMarkdownPreview: (content: string) => <article>Preview: {content}</article>,
+      onViewStateChange,
+    });
+    await screen.findByText("Preview: initial content");
+    // Look at the most recent (non-null) emission.
+    const lastCall = onViewStateChange.mock.calls.findLast((c) => c[0] !== null)?.[0];
+    expect(lastCall?.mode).toBe("preview");
+    expect(typeof lastCall?.toggle).toBe("function");
+
+    // Calling the emitted toggle flips to edit, which mounts Monaco.
+    act(() => { lastCall.toggle(); });
+    await waitFor(() => expect(fakeEditors).toHaveLength(1));
+
+    // And another emission reflects the new mode.
+    const afterToggle = onViewStateChange.mock.calls.findLast((c) => c[0] !== null)?.[0];
+    expect(afterToggle?.mode).toBe("edit");
   });
 
   it("renders a too large or binary message with a back button", async () => {
