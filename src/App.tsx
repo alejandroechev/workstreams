@@ -966,17 +966,19 @@ export default function App() {
         onArchiveWorkstream={handleArchiveWorkstream}
         onRenameWorkstream={handleRenameWorkstream}
         onUpdateProject={handleUpdateProject}
-        onReorderWorkstream={(id, direction) => {
+        onReorderWorkstreams={(orderedIds) => {
           setWorkstreams((prev) => {
-            const idx = prev.findIndex((w) => w.id === id);
-            if (idx < 0) return prev;
-            const swapIdx = direction === "up" ? idx - 1 : idx + 1;
-            if (swapIdx < 0 || swapIdx >= prev.length) return prev;
-            const next = [...prev];
-            [next[idx], next[swapIdx]] = [next[swapIdx], next[idx]];
-            // Persist order
-            invoke("set_setting", { key: "workstream_order", value: JSON.stringify(next.map((w) => w.id)) }).catch(() => {});
-            return next;
+            const byId = new Map(prev.map((w) => [w.id, w]));
+            const reordered: typeof prev = [];
+            for (const id of orderedIds) {
+              const w = byId.get(id);
+              if (w) { reordered.push(w); byId.delete(id); }
+            }
+            // Append any workstreams missing from the order (archived rows
+            // or anything the sidebar didn't enumerate).
+            for (const w of prev) if (byId.has(w.id)) reordered.push(w);
+            invoke("set_setting", { key: "workstream_order", value: JSON.stringify(reordered.map((w) => w.id)) }).catch(() => {});
+            return reordered;
           });
         }}
         onChangeStatus={async (id, status) => {

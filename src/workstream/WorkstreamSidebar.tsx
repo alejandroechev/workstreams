@@ -8,12 +8,12 @@ import {
   ExclamationTriangleIcon,
   EyeIcon,
   ArchiveBoxIcon,
-  ChevronUpIcon,
-  ChevronDownIcon,
   BellAlertIcon,
-  ArrowsRightLeftIcon,
+  EllipsisHorizontalIcon,
 } from "@heroicons/react/20/solid";
 import { PROJECT_PRESET_COLORS, isCustomProjectColor } from "../domain/colors";
+import { reorderById } from "../domain/reorder";
+import { WorkstreamActionMenu } from "./WorkstreamActionMenu";
 
 interface Props {
   projects: Project[];
@@ -28,7 +28,12 @@ interface Props {
   onArchiveWorkstream: (id: string) => void;
   onRenameWorkstream: (id: string, newName: string) => void;
   onUpdateProject: (id: string, updates: { name: string; color: string }) => void;
-  onReorderWorkstream: (id: string, direction: 'up' | 'down') => void;
+  /**
+   * Called after a drag-and-drop reorder with the FULL new order of active
+   * workstream ids. The caller persists this (and any archived rows can be
+   * left untouched).
+   */
+  onReorderWorkstreams: (orderedIds: string[]) => void;
   onChangeStatus: (id: string, status: Workstream['status']) => void;
   onForkWorkstream?: (id: string) => void;
   onChangeWorktree?: (ws: Workstream) => void;
@@ -68,7 +73,7 @@ export default function WorkstreamSidebar({
   onArchiveWorkstream,
   onRenameWorkstream,
   onUpdateProject,
-  onReorderWorkstream,
+  onReorderWorkstreams,
   onChangeStatus,
   onForkWorkstream,
   onChangeWorktree,
@@ -81,8 +86,10 @@ export default function WorkstreamSidebar({
   const [editingProject, setEditingProject] = useState<Project | null>(null);
   const [editProjectName, setEditProjectName] = useState("");
   const [editProjectColor, setEditProjectColor] = useState("");
-  const [statusDropdownWsId, setStatusDropdownWsId] = useState<string | null>(null);
-  const statusDropdownRef = useRef<HTMLDivElement>(null);
+  const [actionMenuWsId, setActionMenuWsId] = useState<string | null>(null);
+  const [actionMenuAnchor, setActionMenuAnchor] = useState<{ top: number; left: number }>({ top: 0, left: 0 });
+  const [draggedWsId, setDraggedWsId] = useState<string | null>(null);
+  const [dragOverWsId, setDragOverWsId] = useState<string | null>(null);
   const [showRepoMenu, setShowRepoMenu] = useState(false);
   const repoMenuRef = useRef<HTMLDivElement>(null);
 
@@ -147,17 +154,35 @@ export default function WorkstreamSidebar({
     }
   }, [renamingWsId]);
 
-  // Close status dropdown on outside click
-  useEffect(() => {
-    if (!statusDropdownWsId) return;
-    const handler = (e: MouseEvent) => {
-      if (statusDropdownRef.current && !statusDropdownRef.current.contains(e.target as Node)) {
-        setStatusDropdownWsId(null);
-      }
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, [statusDropdownWsId]);
+  // Drag-and-drop reorder helpers.
+  const handleDragStart = (e: React.DragEvent, wsId: string) => {
+    setDraggedWsId(wsId);
+    e.dataTransfer.effectAllowed = "move";
+    // Some browsers require setData for the drag to actually start.
+    try { e.dataTransfer.setData("text/plain", wsId); } catch { /* ignore */ }
+  };
+  const handleDragOver = (e: React.DragEvent, targetWsId: string) => {
+    if (!draggedWsId || draggedWsId === targetWsId) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    if (dragOverWsId !== targetWsId) setDragOverWsId(targetWsId);
+  };
+  const handleDragLeave = (_e: React.DragEvent, targetWsId: string) => {
+    if (dragOverWsId === targetWsId) setDragOverWsId(null);
+  };
+  const handleDrop = (e: React.DragEvent, targetWsId: string) => {
+    e.preventDefault();
+    if (!draggedWsId || draggedWsId === targetWsId) {
+      setDraggedWsId(null); setDragOverWsId(null); return;
+    }
+    const next = reorderById(activeWorkstreams, draggedWsId, targetWsId);
+    if (next !== activeWorkstreams) {
+      onReorderWorkstreams(next.map((w) => w.id));
+    }
+    setDraggedWsId(null);
+    setDragOverWsId(null);
+  };
+  const handleDragEnd = () => { setDraggedWsId(null); setDragOverWsId(null); };
 
   const activeWorkstreams = workstreams.filter((ws) => ws.status !== "archived");
   const archivedWorkstreams = workstreams.filter((ws) => ws.status === "archived");
@@ -213,27 +238,41 @@ export default function WorkstreamSidebar({
             No workstreams yet
           </div>
         )}
-        {activeWorkstreams.map((ws, wsIndex) => {
+        {activeWorkstreams.map((ws) => {
           const isActive = ws.id === activeWsId;
           const project = getProject(ws.project_id);
+          const isDragOver = dragOverWsId === ws.id;
+          const isBeingDragged = draggedWsId === ws.id;
           return (
             <div
               key={ws.id}
               data-testid="workstream-item"
               data-workstream-id={ws.id}
               data-active={isActive ? "true" : "false"}
+              draggable={renamingWsId !== ws.id}
+              onDragStart={(e) => handleDragStart(e, ws.id)}
+              onDragOver={(e) => handleDragOver(e, ws.id)}
+              onDragLeave={(e) => handleDragLeave(e, ws.id)}
+              onDrop={(e) => handleDrop(e, ws.id)}
+              onDragEnd={handleDragEnd}
               onClick={() => onSelectWorkstream(ws.id)}
               style={{
                 padding: "6px 8px",
                 marginBottom: 1,
                 borderRadius: 4,
-                cursor: "pointer",
-                background: isActive ? "#1e1e2e" : "transparent",
-                borderTop: isActive ? "1px solid #313244" : "1px solid transparent",
-                borderRight: isActive ? "1px solid #313244" : "1px solid transparent",
-                borderBottom: isActive ? "1px solid #313244" : "1px solid transparent",
-                borderLeft: project ? `3px solid ${project.color}` : isActive ? "1px solid #313244" : "1px solid transparent",
-                transition: "background 0.1s",
+                cursor: isBeingDragged ? "grabbing" : "pointer",
+                opacity: isBeingDragged ? 0.4 : 1,
+                background: isActive ? "#313244" : "transparent",
+                borderTop: isDragOver ? "2px solid #89b4fa" : isActive ? "1px solid #45475a" : "1px solid transparent",
+                borderRight: isActive ? "1px solid #45475a" : "1px solid transparent",
+                borderBottom: isActive ? "1px solid #45475a" : "1px solid transparent",
+                borderLeft: isActive
+                  ? `3px solid ${project ? project.color : "#89b4fa"}`
+                  : project
+                    ? `3px solid ${project.color}`
+                    : "3px solid transparent",
+                boxShadow: isActive ? "0 1px 0 rgba(137, 180, 250, 0.18) inset" : "none",
+                transition: "background 0.1s, border-color 0.1s",
                 position: "relative",
               }}
             >
@@ -249,20 +288,14 @@ export default function WorkstreamSidebar({
                   gap: 6,
                   overflow: "hidden",
                   fontSize: 12,
-                  color: isActive ? "#cdd6f4" : "#a6adc8",
-                  fontWeight: isActive ? 500 : 400,
+                  color: isActive ? "#f5e0dc" : "#a6adc8",
+                  fontWeight: isActive ? 600 : 400,
                   flex: 1,
                   minWidth: 0,
                 }}>
                   <span
-                    style={{ flexShrink: 0, cursor: isActive ? "pointer" : "default", display: "flex", alignItems: "center" }}
-                    onClick={(e) => {
-                      if (isActive) {
-                        e.stopPropagation();
-                        setStatusDropdownWsId(statusDropdownWsId === ws.id ? null : ws.id);
-                      }
-                    }}
-                    title={isActive ? "Change status" : STATUS_META[ws.status]?.label ?? ws.status}
+                    style={{ flexShrink: 0, display: "flex", alignItems: "center" }}
+                    title={STATUS_META[ws.status]?.label ?? ws.status}
                   >
                     {wsBell.has(ws.id) ? (
                       <BellAlertIcon style={{ width: 14, height: 14, color: "#f9e2af", animation: "pulse-dot 1s ease-in-out 3" }} />
@@ -332,108 +365,36 @@ export default function WorkstreamSidebar({
                   )}
                 </div>
                 {isActive && renamingWsId !== ws.id && (
-                  <div style={{ display: "flex", gap: 2, flexShrink: 0, alignItems: "center" }}>
-                    <button
-                      onClick={(e) => { e.stopPropagation(); onReorderWorkstream(ws.id, "up"); }}
-                      disabled={wsIndex === 0}
-                      style={{ ...sidebarBtnStyle, opacity: wsIndex === 0 ? 0.3 : 1 }}
-                      title="Move up"
-                    >
-                      <ChevronUpIcon style={{ width: 12, height: 12 }} />
-                    </button>
-                    <button
-                      onClick={(e) => { e.stopPropagation(); onReorderWorkstream(ws.id, "down"); }}
-                      disabled={wsIndex === activeWorkstreams.length - 1}
-                      style={{ ...sidebarBtnStyle, opacity: wsIndex === activeWorkstreams.length - 1 ? 0.3 : 1 }}
-                      title="Move down"
-                    >
-                      <ChevronDownIcon style={{ width: 12, height: 12 }} />
-                    </button>
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setRenameValue(ws.name);
-                        setRenamingWsId(ws.id);
-                      }}
-                      style={sidebarBtnStyle}
-                      title="Rename workstream"
-                    >
-                      ✎
-                    </button>
-                    {onForkWorkstream && (
-                      <button
-                        onClick={(e) => { e.stopPropagation(); onForkWorkstream(ws.id); }}
-                        style={sidebarBtnStyle}
-                        title="Fork to new worktree"
-                      >
-                        ⑂
-                      </button>
-                    )}
-                    {onChangeWorktree && (
-                      <button
-                        aria-label="Change worktree…"
-                        onClick={(e) => { e.stopPropagation(); onChangeWorktree(ws); }}
-                        style={sidebarBtnStyle}
-                        title="Change worktree…"
-                      >
-                        <ArrowsRightLeftIcon style={{ width: 12, height: 12 }} />
-                      </button>
-                    )}
-                    <button
-                      onClick={(e) => { e.stopPropagation(); setArchiveConfirm(ws.id); }}
-                      style={sidebarBtnStyle}
-                      title="Archive workstream"
-                    >
-                      ✕
-                    </button>
-                  </div>
+                  <button
+                    type="button"
+                    aria-label="Workstream actions"
+                    data-testid={`ws-actions-${ws.id}`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      const rect = (e.currentTarget as HTMLButtonElement).getBoundingClientRect();
+                      setActionMenuAnchor({ top: rect.bottom + 4, left: Math.max(8, rect.right - 220) });
+                      setActionMenuWsId(actionMenuWsId === ws.id ? null : ws.id);
+                    }}
+                    style={sidebarBtnStyle}
+                    title="Actions"
+                  >
+                    <EllipsisHorizontalIcon style={{ width: 14, height: 14 }} />
+                  </button>
                 )}
               </div>
 
-              {/* Status dropdown */}
-              {statusDropdownWsId === ws.id && (
-                <div
-                  ref={statusDropdownRef}
-                  style={{
-                    position: "absolute",
-                    top: "100%",
-                    left: 8,
-                    zIndex: 1000,
-                    background: "#181825",
-                    border: "1px solid #45475a",
-                    borderRadius: 6,
-                    padding: 4,
-                    boxShadow: "0 4px 16px rgba(0,0,0,0.4)",
-                    minWidth: 130,
-                  }}
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  {(["active", "working", "blocked", "in_review"] as WorkstreamStatus[]).map((s) => (
-                    <div
-                      key={s}
-                      onClick={() => {
-                        onChangeStatus(ws.id, s);
-                        setStatusDropdownWsId(null);
-                      }}
-                      style={{
-                        display: "flex",
-                        alignItems: "center",
-                        gap: 6,
-                        padding: "4px 8px",
-                        borderRadius: 4,
-                        cursor: "pointer",
-                        fontSize: 11,
-                        color: ws.status === s ? "#cdd6f4" : "#a6adc8",
-                        background: ws.status === s ? "#313244" : "transparent",
-                      }}
-                      onMouseEnter={(e) => { if (ws.status !== s) (e.currentTarget as HTMLElement).style.background = "#1e1e2e"; }}
-                      onMouseLeave={(e) => { if (ws.status !== s) (e.currentTarget as HTMLElement).style.background = "transparent"; }}
-                    >
-                      <StatusIcon status={s} size={14} />
-                      <span>{STATUS_META[s].label}</span>
-                    </div>
-                  ))}
-                </div>
+              {/* Action menu */}
+              {actionMenuWsId === ws.id && (
+                <WorkstreamActionMenu
+                  workstream={ws}
+                  anchor={actionMenuAnchor}
+                  onClose={() => setActionMenuWsId(null)}
+                  onRename={() => { setRenameValue(ws.name); setRenamingWsId(ws.id); }}
+                  onChangeStatus={(status) => onChangeStatus(ws.id, status)}
+                  onChangeWorktree={onChangeWorktree ? () => onChangeWorktree(ws) : undefined}
+                  onFork={onForkWorkstream ? () => onForkWorkstream(ws.id) : undefined}
+                  onArchive={() => setArchiveConfirm(ws.id)}
+                />
               )}
 
               {/* Project badge */}
