@@ -13,50 +13,99 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # Unit tests run on Linux (cheaper, faster) — same vitest suite passes
-  # on both OSs since it never touches Windows-specific code.
+  # Compute the next SemVer tag from conventional-commit history. If the only
+  # commits since the last tag are docs:, set should_release=false and the
+  # build/release jobs are short-circuited. Tests still run unconditionally
+  # so docs-only changes can't sneak through a code regression.
+  decide-release:
+    name: Decide release
+    runs-on: ubuntu-latest
+    outputs:
+      should_release: ${{ steps.decide.outputs.should_release }}
+      tag: ${{ steps.decide.outputs.tag }}
+      bump: ${{ steps.decide.outputs.bump }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Compute next version
+        id: decide
+        shell: bash
+        run: |
+          set -euo pipefail
+          last_tag=$(git tag --list 'v*' --sort=-v:refname | head -n 1 || true)
+          if [ -z "$last_tag" ]; then
+            range_spec="HEAD"
+            echo "No prior tag found; reading all commits on HEAD."
+          else
+            range_spec="${last_tag}..HEAD"
+            echo "Last tag: $last_tag"
+          fi
+
+          # Stream commit messages as NUL-separated records so newlines inside
+          # message bodies don't confuse parsing.
+          mapfile -d $'\0' -t messages < <(git log --format=%B%x00 "$range_spec")
+
+          result=$(node --input-type=module -e "
+            import { computeNextVersion } from './scripts/compute-next-version.mjs';
+            const last = process.argv[1] || null;
+            const msgs = process.argv.slice(2);
+            const out = computeNextVersion(last, msgs, { fallback: 'v0.1.0' });
+            process.stdout.write(JSON.stringify(out));
+          " "$last_tag" "${messages[@]}")
+
+          echo "Decision: $result"
+          if [ "$result" = "null" ]; then
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+            echo "tag=" >> "$GITHUB_OUTPUT"
+            echo "bump=none" >> "$GITHUB_OUTPUT"
+            echo "::notice::Docs-only or empty range. Skipping release."
+          else
+            tag=$(node -e "console.log(JSON.parse(process.argv[1]).tag)" "$result")
+            bump=$(node -e "console.log(JSON.parse(process.argv[1]).bump)" "$result")
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+            echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+            echo "bump=${bump}" >> "$GITHUB_OUTPUT"
+            echo "::notice::Next release will be ${tag} (${bump} bump)."
+          fi
+
   unit-tests:
     name: Unit tests (vitest)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
           cache: "npm"
-
       - name: Install dependencies
         run: npm ci
-
       - name: Type check
         run: npx tsc --noEmit
-
       - name: Run vitest
         run: npm test
 
-  # E2E tests use the in-memory backend (VITE_E2E=1) — no Tauri needed,
-  # so they can run on Linux too.
   e2e-tests:
     name: E2E tests (Playwright)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
           cache: "npm"
-
       - name: Install dependencies
         run: npm ci
-
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium
-
       - name: Run Playwright tests
         run: npm run test:e2e
-
       - name: Upload Playwright report on failure
         if: failure()
         uses: actions/upload-artifact@v4
@@ -65,57 +114,55 @@ jobs:
           path: playwright-report/
           retention-days: 14
 
-  # Build the Windows release binary only after both test jobs pass.
   build-windows:
     name: Build Windows release
-    needs: [unit-tests, e2e-tests]
+    needs: [decide-release, unit-tests, e2e-tests]
+    if: needs.decide-release.outputs.should_release == 'true'
     runs-on: windows-latest
     outputs:
-      version: ${{ steps.compute.outputs.version }}
-      tag: ${{ steps.compute.outputs.tag }}
+      tag: ${{ needs.decide-release.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
           cache: "npm"
-
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
-
       - name: Cache cargo registry + target
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: "src-tauri -> target"
-
       - name: Install dependencies
         run: npm ci
 
-      - name: Compute version + tag
-        id: compute
+      - name: Stamp computed version into manifests for the build
         shell: bash
+        env:
+          TAG: ${{ needs.decide-release.outputs.tag }}
         run: |
-          pkg_version=$(node -p "require('./package.json').version")
-          tauri_version=$(node -p "require('./src-tauri/tauri.conf.json').version")
-          if [ "$pkg_version" != "$tauri_version" ]; then
-            echo "::error::package.json version ($pkg_version) != src-tauri/tauri.conf.json version ($tauri_version)"
-            exit 1
-          fi
-          tag="v${pkg_version}-build.${{ github.run_number }}"
-          echo "version=${pkg_version}" >> "$GITHUB_OUTPUT"
-          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
-          echo "Will tag as ${tag}"
+          set -euo pipefail
+          ver="${TAG#v}"
+          echo "Stamping version $ver into package.json + tauri.conf.json"
+          node -e "
+            const fs = require('fs');
+            for (const p of ['package.json', 'src-tauri/tauri.conf.json']) {
+              const j = JSON.parse(fs.readFileSync(p, 'utf8'));
+              j.version = process.argv[1];
+              fs.writeFileSync(p, JSON.stringify(j, null, 2) + '\n');
+            }
+          " "$ver"
 
       - name: Build Tauri app
         run: npx tauri build
 
       - name: Stage artifacts
         shell: bash
+        env:
+          TAG: ${{ needs.decide-release.outputs.tag }}
         run: |
           set -euo pipefail
           mkdir -p staging
-          # NSIS installer (.exe) — required.
           nsis=$(find src-tauri/target/release/bundle/nsis -name "*.exe" -print -quit 2>/dev/null || true)
           if [ -z "$nsis" ]; then
             echo "::error::NSIS installer not found under src-tauri/target/release/bundle/nsis"
@@ -124,7 +171,6 @@ jobs:
           fi
           cp "$nsis" staging/
 
-          # MSI installer — required.
           msi=$(find src-tauri/target/release/bundle/msi -name "*.msi" -print -quit 2>/dev/null || true)
           if [ -z "$msi" ]; then
             echo "::error::MSI installer not found under src-tauri/target/release/bundle/msi"
@@ -132,12 +178,11 @@ jobs:
           fi
           cp "$msi" staging/
 
-          # Raw exe (portable copy with the tag in the filename) — required.
           if [ ! -f src-tauri/target/release/workstreams.exe ]; then
             echo "::error::Raw workstreams.exe not found under src-tauri/target/release"
             exit 1
           fi
-          cp src-tauri/target/release/workstreams.exe "staging/workstreams-${{ steps.compute.outputs.tag }}.exe"
+          cp src-tauri/target/release/workstreams.exe "staging/workstreams-${TAG}.exe"
 
           echo "Staged artifacts:"
           ls -la staging/
@@ -145,15 +190,14 @@ jobs:
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: windows-release-${{ steps.compute.outputs.tag }}
+          name: windows-release-${{ needs.decide-release.outputs.tag }}
           path: staging/*
           retention-days: 30
 
-  # Tag + release only on master pushes (skip for workflow_dispatch from PR branches).
   release:
     name: Tag + GitHub Release
-    needs: build-windows
-    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    needs: [decide-release, build-windows]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master' && needs.decide-release.outputs.should_release == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -163,13 +207,13 @@ jobs:
       - name: Download Windows artifacts
         uses: actions/download-artifact@v4
         with:
-          name: windows-release-${{ needs.build-windows.outputs.tag }}
+          name: windows-release-${{ needs.decide-release.outputs.tag }}
           path: dist/
 
       - name: Create tag (idempotent)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ needs.build-windows.outputs.tag }}
+          TAG: ${{ needs.decide-release.outputs.tag }}
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
@@ -178,24 +222,31 @@ jobs:
           if git rev-parse "refs/tags/$TAG" >/dev/null 2>&1; then
             echo "Tag $TAG already exists locally — skipping create"
           else
-            git tag -a "$TAG" -m "Release $TAG from ${{ github.sha }}"
+            git tag -a "$TAG" -m "Release $TAG (${{ needs.decide-release.outputs.bump }} bump from ${{ github.sha }})"
             git push origin "$TAG"
           fi
 
       - name: Create or update GitHub release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ needs.build-windows.outputs.tag }}
+          TAG: ${{ needs.decide-release.outputs.tag }}
+          BUMP: ${{ needs.decide-release.outputs.bump }}
         run: |
           set -euo pipefail
           notes_file=$(mktemp)
           {
             echo "Automated release for commit ${{ github.sha }}"
             echo
-            echo "Built on \`windows-latest\` from \`master\`."
+            echo "**Bump kind:** \`${BUMP}\`"
+            echo "**Built on:** \`windows-latest\` from \`master\`"
             echo
-            echo "## Commit"
-            git log -1 --pretty=format:"%H%n%n%B" "${{ github.sha }}"
+            echo "## Commit log since previous tag"
+            prev_tag=$(git tag --list 'v*' --sort=-v:refname | grep -v "^${TAG}$" | head -n 1 || true)
+            if [ -n "$prev_tag" ]; then
+              git log "${prev_tag}..${{ github.sha }}" --pretty=format:"- %s (%h)"
+            else
+              git log --pretty=format:"- %s (%h)" -20
+            fi
           } > "$notes_file"
 
           if gh release view "$TAG" >/dev/null 2>&1; then
