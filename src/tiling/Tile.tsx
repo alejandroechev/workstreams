@@ -153,6 +153,7 @@ export default function TileWrapper({
           isFocused={isFocused}
           rootDir={workstreamDir || "C:\\"}
           initialPath={cfg.filePath}
+          workstreamId={workstreamId}
         />
       );
       break;
@@ -163,6 +164,7 @@ export default function TileWrapper({
           tileId={tile.id}
           isFocused={isFocused}
           rootDir={workstreamDir || "C:\\"}
+          workstreamId={workstreamId}
         />
       );
       break;
@@ -173,6 +175,7 @@ export default function TileWrapper({
           isFocused={isFocused}
           workstreamDir={workstreamDir}
           linkedSessionIds={linkedSessionIds}
+          workstreamId={workstreamId}
         />
       );
       break;
@@ -183,6 +186,7 @@ export default function TileWrapper({
           isFocused={isFocused}
           configJson={tile.config_json}
           onConfigChange={(cfg) => onUpdateTileConfig?.(tile.id, cfg)}
+          workstreamId={workstreamId}
         />
       );
       break;

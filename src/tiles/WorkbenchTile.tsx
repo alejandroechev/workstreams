@@ -10,6 +10,7 @@ import { detectLanguage } from "../domain/tile-config";
 import { makeAudioBlobUrl } from "../domain/file-types";
 import { FileEditorView } from "../files/FileEditorView";
 import type { BufferSnapshot } from "../files/FileBufferRegistry";
+import { subscribeAddToWorkbench, appendUnique } from "../domain/workbench-events";
 import AudioPlayer from "./AudioPlayer";
 import {
   PlusIcon,
@@ -27,6 +28,8 @@ interface Props {
   isFocused: boolean;
   configJson: string;
   onConfigChange: (configJson: string) => void;
+  /** Workstream id this tile lives in; used to scope cross-tile add events. */
+  workstreamId?: string;
 }
 
 type Mode = "list" | "view";
@@ -79,7 +82,7 @@ function FileItemIcon({ name }: { name: string }) {
   }
 }
 
-export default function WorkbenchTile({ tileId: _tileId, isFocused, configJson, onConfigChange }: Props) {
+export default function WorkbenchTile({ tileId: _tileId, isFocused, configJson, onConfigChange, workstreamId }: Props) {
   const backend = useBackend();
   const [mode, setMode] = useState<Mode>("list");
   const [viewingPath, setViewingPath] = useState<string | null>(null);
@@ -106,6 +109,17 @@ export default function WorkbenchTile({ tileId: _tileId, isFocused, configJson, 
     const cfg = JSON.stringify({ files: newFiles });
     onConfigChange(cfg);
   }, [onConfigChange]);
+
+  // Listen for cross-tile "add to workbench" events. Only respond when the
+  // event targets this tile's workstream (or carries no workstream id,
+  // which means "any workbench").
+  useEffect(() => {
+    return subscribeAddToWorkbench(({ path, workstreamId: targetWsId }) => {
+      if (targetWsId && workstreamId && targetWsId !== workstreamId) return;
+      const next = appendUnique(files, path);
+      if (next !== files) updateFiles(next);
+    });
+  }, [files, updateFiles, workstreamId]);
 
   const handleAddFile = useCallback(async () => {
     try {

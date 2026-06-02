@@ -1,5 +1,5 @@
 // @test-skip: pre-existing tile shell, domain logic tested separately
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { MarkdownView } from "../ui/MarkdownView";
@@ -9,6 +9,9 @@ import { makeAudioBlobUrl } from "../domain/file-types";
 import { FileEditorView } from "../files/FileEditorView";
 import type { BufferSnapshot } from "../files/FileBufferRegistry";
 import AudioPlayer from "./AudioPlayer";
+import { dispatchAddToWorkbench } from "../domain/workbench-events";
+import { writeTextToClipboard } from "../domain/clipboard";
+import { openPath } from "@tauri-apps/plugin-opener";
 import type { CopilotConfigItem } from "../domain/types";
 import {
   SparklesIcon,
@@ -26,8 +29,11 @@ import {
   BoltIcon,
   ArrowLeftIcon,
   ClipboardDocumentListIcon,
+  ClipboardDocumentIcon,
   FlagIcon,
   SignalIcon,
+  BeakerIcon,
+  FolderOpenIcon,
 } from "@heroicons/react/24/outline";
 
 interface Props {
@@ -35,6 +41,7 @@ interface Props {
   isFocused: boolean;
   workstreamDir?: string;
   linkedSessionIds?: string[];
+  workstreamId?: string;
 }
 
 interface CategoryMeta {
@@ -109,7 +116,7 @@ function isRelevantFile(filePath: string): boolean {
   return true;
 }
 
-export default function SessionMetaTile({ tileId: _tileId, isFocused, workstreamDir, linkedSessionIds }: Props) {
+export default function SessionMetaTile({ tileId: _tileId, isFocused, workstreamDir, linkedSessionIds, workstreamId }: Props) {
   const backend = useBackend();
   const [items, setItems] = useState<CopilotConfigItem[]>([]);
   const [files, setFiles] = useState<SessionFileEntry[]>([]);
@@ -147,6 +154,8 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
     audioSize?: number;
   } | null>(null);
   const [editorSnapshot, setEditorSnapshot] = useState<BufferSnapshot | null>(null);
+  // Right-click context menu on file rows (files-only).
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; path: string } | null>(null);
 
   // Revoke any object URL the previous audio entry created.
   useEffect(() => {
@@ -566,6 +575,10 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
                     <div
                       key={`${item.name}-${idx}`}
                       onClick={() => viewFile(item.path, item.name)}
+                      onContextMenu={(e) => {
+                        e.preventDefault();
+                        setContextMenu({ x: e.clientX, y: e.clientY, path: item.path });
+                      }}
                       style={{
                         display: "flex",
                         alignItems: "center",
@@ -636,6 +649,10 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
                 <div
                   key={`${f.file_path}-${i}`}
                   onClick={() => viewFile(f.file_path, fileName)}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    setContextMenu({ x: e.clientX, y: e.clientY, path: f.file_path });
+                  }}
                   style={{
                     display: "flex",
                     alignItems: "center",
@@ -933,6 +950,135 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
           )}
         </div>
       )}
+
+      {contextMenu && (
+        <SessionMetaContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          path={contextMenu.path}
+          workstreamId={workstreamId ?? null}
+          onClose={() => setContextMenu(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+interface SessionMetaContextMenuProps {
+  x: number;
+  y: number;
+  path: string;
+  workstreamId: string | null;
+  onClose: () => void;
+}
+
+function SessionMetaContextMenu({ x, y, path, workstreamId, onClose }: SessionMetaContextMenuProps) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const handleClick = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) onClose();
+    };
+    const handleEsc = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    const t = setTimeout(() => {
+      document.addEventListener("mousedown", handleClick);
+      document.addEventListener("keydown", handleEsc);
+    }, 0);
+    return () => {
+      clearTimeout(t);
+      document.removeEventListener("mousedown", handleClick);
+      document.removeEventListener("keydown", handleEsc);
+    };
+  }, [onClose]);
+
+  const close = (fn: () => void) => () => { onClose(); fn(); };
+  const name = path.split(/[\\/]/).filter(Boolean).pop() || path;
+
+  const itemStyle: React.CSSProperties = {
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+    width: "100%",
+    padding: "6px 10px",
+    background: "transparent",
+    border: "none",
+    cursor: "pointer",
+    color: "#cdd6f4",
+    fontSize: 12,
+    textAlign: "left",
+    borderRadius: 4,
+  };
+
+  return (
+    <div
+      ref={ref}
+      data-testid="session-meta-context-menu"
+      data-path={path}
+      role="menu"
+      style={{
+        position: "fixed",
+        top: y,
+        left: x,
+        zIndex: 2000,
+        minWidth: 200,
+        background: "#181825",
+        border: "1px solid #45475a",
+        borderRadius: 6,
+        padding: 4,
+        boxShadow: "0 6px 16px rgba(0,0,0,0.45)",
+        color: "#cdd6f4",
+        fontSize: 12,
+        fontFamily: "inherit",
+      }}
+    >
+      <div
+        style={{
+          padding: "6px 10px 8px",
+          borderBottom: "1px solid #313244",
+          marginBottom: 4,
+          color: "#bac2de",
+          fontWeight: 500,
+          fontSize: 11,
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
+          maxWidth: 320,
+        }}
+      >
+        {name}
+      </div>
+      <button
+        type="button"
+        data-testid="ctx-copy-path"
+        onClick={close(() => { void writeTextToClipboard(path); })}
+        style={itemStyle}
+        onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "#313244"; }}
+        onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "transparent"; }}
+      >
+        <ClipboardDocumentIcon style={{ width: 14, height: 14, color: "#a6adc8", flexShrink: 0 }} />
+        <span>Copy full path</span>
+      </button>
+      <button
+        type="button"
+        data-testid="ctx-open-system"
+        onClick={close(() => { openPath(path).catch(() => {}); })}
+        style={itemStyle}
+        onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "#313244"; }}
+        onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "transparent"; }}
+      >
+        <FolderOpenIcon style={{ width: 14, height: 14, color: "#a6adc8", flexShrink: 0 }} />
+        <span>Open in system</span>
+      </button>
+      <button
+        type="button"
+        data-testid="ctx-add-to-workbench"
+        onClick={close(() => { dispatchAddToWorkbench({ path, workstreamId }); })}
+        style={itemStyle}
+        onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "#313244"; }}
+        onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "transparent"; }}
+      >
+        <BeakerIcon style={{ width: 14, height: 14, color: "#a6adc8", flexShrink: 0 }} />
+        <span>Add to Workbench</span>
+      </button>
     </div>
   );
 }

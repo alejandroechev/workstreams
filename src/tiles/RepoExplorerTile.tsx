@@ -30,9 +30,11 @@ import {
   EyeIcon,
   PencilSquareIcon,
   ClipboardDocumentIcon,
+  BeakerIcon,
 } from "@heroicons/react/24/outline";
 import { openPath } from "@tauri-apps/plugin-opener";
 import { writeTextToClipboard } from "../domain/clipboard";
+import { dispatchAddToWorkbench } from "../domain/workbench-events";
 import type { FileSearchMatch } from "../backend/types";
 
 interface Props {
@@ -40,6 +42,7 @@ interface Props {
   isFocused: boolean;
   rootDir?: string;
   initialPath?: string;
+  workstreamId?: string;
 }
 
 interface DirEntry {
@@ -128,7 +131,7 @@ export function parseDiffToSides(diffText: string): { original: string; modified
   return { original: originalLines.join("\n"), modified: modifiedLines.join("\n") };
 }
 
-export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, initialPath }: Props) {
+export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, initialPath, workstreamId }: Props) {
   const backend = useBackend();
 
   const [mode, setMode] = useState<Mode>(initialPath ? "view" : "browse");
@@ -970,6 +973,7 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
           y={contextMenu.y}
           path={contextMenu.path}
           isDir={contextMenu.isDir}
+          workstreamId={workstreamId ?? null}
           onClose={() => setContextMenu(null)}
         />
       )}
@@ -1698,10 +1702,11 @@ interface FileContextMenuProps {
   y: number;
   path: string;
   isDir: boolean;
+  workstreamId: string | null;
   onClose: () => void;
 }
 
-function FileContextMenu({ x, y, path, isDir, onClose }: FileContextMenuProps) {
+function FileContextMenu({ x, y, path, isDir, workstreamId, onClose }: FileContextMenuProps) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const handleClick = (e: MouseEvent) => {
@@ -1779,6 +1784,14 @@ function FileContextMenu({ x, y, path, isDir, onClose }: FileContextMenuProps) {
         onClick={close(() => { openPath(path).catch(() => {}); })}
         testid="ctx-open-system"
       />
+      {!isDir && (
+        <ContextMenuItem
+          icon={<BeakerIcon style={{ width: 14, height: 14, color: "#a6adc8", flexShrink: 0 }} />}
+          label="Add to Workbench"
+          onClick={close(() => { dispatchAddToWorkbench({ path, workstreamId }); })}
+          testid="ctx-add-to-workbench"
+        />
+      )}
     </div>
   );
 }
