@@ -246,16 +246,23 @@ describe("FileEditorView", () => {
     });
     await screen.findByText("Preview: initial content");
     // Look at the most recent (non-null) emission.
-    const lastCall = onViewStateChange.mock.calls.findLast((c) => c[0] !== null)?.[0];
+    const findLastEmission = (): { mode: "preview" | "edit"; toggle: () => void } | undefined => {
+      const calls = onViewStateChange.mock.calls as Array<[unknown]>;
+      for (let i = calls.length - 1; i >= 0; i--) {
+        if (calls[i][0] !== null) return calls[i][0] as { mode: "preview" | "edit"; toggle: () => void };
+      }
+      return undefined;
+    };
+    const lastCall = findLastEmission();
     expect(lastCall?.mode).toBe("preview");
     expect(typeof lastCall?.toggle).toBe("function");
 
     // Calling the emitted toggle flips to edit, which mounts Monaco.
-    act(() => { lastCall.toggle(); });
+    act(() => { lastCall!.toggle(); });
     await waitFor(() => expect(fakeEditors).toHaveLength(1));
 
     // And another emission reflects the new mode.
-    const afterToggle = onViewStateChange.mock.calls.findLast((c) => c[0] !== null)?.[0];
+    const afterToggle = findLastEmission();
     expect(afterToggle?.mode).toBe("edit");
   });
 
