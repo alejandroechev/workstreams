@@ -34,6 +34,9 @@ import {
   SignalIcon,
   BeakerIcon,
   FolderOpenIcon,
+  ChevronUpIcon,
+  EyeIcon,
+  PencilSquareIcon,
 } from "@heroicons/react/24/outline";
 
 interface Props {
@@ -154,6 +157,7 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
     audioSize?: number;
   } | null>(null);
   const [editorSnapshot, setEditorSnapshot] = useState<BufferSnapshot | null>(null);
+  const [editorViewState, setEditorViewState] = useState<{ mode: "preview" | "edit"; toggle: () => void } | null>(null);
   // Right-click context menu on file rows (files-only).
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; path: string } | null>(null);
 
@@ -510,7 +514,7 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
       </div>
 
       {/* Content */}
-      <div style={{ flex: 1, overflow: "auto", padding: "4px 0" }}>
+      <div style={{ flex: 1, overflow: "auto", padding: "4px 0", display: viewContent ? "none" : "block" }}>
         {loading && activeTab === "config" && (
           <div style={{ padding: 12, color: "#585b70", textAlign: "center" }}>
             Scanning…
@@ -864,39 +868,50 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
         {/* Plan tab removed — see PlanTile (Alt+P) */}
       </div>
 
-      {/* Content viewer overlay */}
+      {/* Content viewer (inline — keeps tab bar visible above) */}
       {viewContent && (
         <div style={{
-          position: "absolute",
-          top: 0, left: 0, right: 0, bottom: 0,
+          flex: 1,
+          minHeight: 0,
           background: "#1e1e2e",
           display: "flex",
           flexDirection: "column",
-          zIndex: 10,
         }}>
           <div style={{
             display: "flex",
             alignItems: "center",
             gap: 6,
-            padding: "6px 8px",
+            padding: "4px 6px",
             background: "#181825",
             borderBottom: "1px solid #313244",
             flexShrink: 0,
           }}>
             <button
-              onClick={() => { setViewContent(null); setEditorSnapshot(null); }}
-              style={{ background: "none", border: "none", color: "#89b4fa", cursor: "pointer", fontSize: 11, padding: "2px 4px", display: "flex", alignItems: "center", gap: 2 }}
+              data-testid="meta-go-to-list"
+              onClick={() => { setViewContent(null); setEditorSnapshot(null); setEditorViewState(null); }}
+              title="Back to list"
+              style={{ background: "none", border: "none", color: "#89b4fa", cursor: "pointer", padding: "2px 4px", display: "flex", alignItems: "center" }}
             >
-              <ArrowLeftIcon style={{ width: 12, height: 12 }} /> Back
+              <ChevronUpIcon style={{ width: 14, height: 14 }} />
             </button>
-            <span style={{ color: "#cdd6f4", fontWeight: 600, fontSize: 11, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, display: "flex", alignItems: "center", gap: 4 }}>
-              {viewContent.title}
-              {editorSnapshot?.dirty && (
-                <span data-testid="meta-file-dirty-indicator" style={{ color: "#f9e2af", display: "inline-flex", alignItems: "center", gap: 3, flexShrink: 0 }}>
-                  <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#f9e2af", display: "inline-block" }} />*
-                </span>
-              )}
-            </span>
+            {editorSnapshot?.dirty && (
+              <span data-testid="meta-file-dirty-indicator" style={{ color: "#f9e2af", display: "inline-flex", alignItems: "center", gap: 3, flexShrink: 0, fontSize: 11 }}>
+                <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#f9e2af", display: "inline-block" }} />*
+              </span>
+            )}
+            <div style={{ flex: 1 }} />
+            {editorViewState && (
+              <button
+                data-testid="meta-md-toggle"
+                onClick={editorViewState.toggle}
+                title={editorViewState.mode === "preview" ? "Edit" : "View"}
+                style={{ background: "none", border: "none", color: "#89b4fa", cursor: "pointer", padding: "2px 4px", display: "flex", alignItems: "center" }}
+              >
+                {editorViewState.mode === "preview"
+                  ? <PencilSquareIcon style={{ width: 14, height: 14 }} />
+                  : <EyeIcon style={{ width: 14, height: 14 }} />}
+              </button>
+            )}
           </div>
           {viewContent.type === "unsupported" && (
             <pre style={{
@@ -918,7 +933,8 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
             <FileEditorView
               key={viewContent.path}
               path={viewContent.path}
-              onBack={() => { setViewContent(null); setEditorSnapshot(null); }}
+              onBack={() => { setViewContent(null); setEditorSnapshot(null); setEditorViewState(null); }}
+              showHeader={false}
               renderMarkdownPreview={(content) => (
                 <MarkdownView
                   basePath={dirnameOf(viewContent.path)}
@@ -926,6 +942,7 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
                 >{content}</MarkdownView>
               )}
               onSnapshotChange={setEditorSnapshot}
+              onViewStateChange={setEditorViewState}
             />
           )}
           {viewContent.type === "image" && (

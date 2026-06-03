@@ -7,8 +7,8 @@ export function rewriteTileCwd(configJson: string, newCwd: string, tileType: Til
   try {
     config = JSON.parse(configJson);
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`Invalid tile config JSON: ${message}`);
+    // eslint-disable-next-line preserve-caught-error -- ES2020 lib lacks ErrorOptions.cause; message preserves original detail
+    throw new Error(`Invalid tile config JSON: ${(error as Error).message}`);
   }
 
   if (!RESTARTABLE_TILE_TYPES.has(tileType)) {

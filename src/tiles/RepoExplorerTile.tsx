@@ -23,7 +23,6 @@ import {
   CodeBracketSquareIcon,
   ClockIcon,
   BoltIcon,
-  MagnifyingGlassIcon,
   MinusIcon,
   PlusIcon,
   MusicalNoteIcon,
@@ -747,11 +746,6 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
     setContentSearchResults([]);
   }, []);
 
-  const triggerEditorFind = useCallback(() => {
-    const ed = editorRef.current as { getAction?: (id: string) => { run?: () => void } | undefined } | null;
-    ed?.getAction?.("actions.find")?.run?.();
-  }, []);
-
   // Filter entries by search
   const filteredEntries = searchFilter
     ? entries.filter((e) => e.name.toLowerCase().includes(searchFilter.toLowerCase()))
@@ -1088,15 +1082,6 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
             )}
           </button>
         )}
-        <button
-          onClick={triggerEditorFind}
-          style={{ ...toolbarButtonStyle, display: "flex", alignItems: "center", gap: 2 }}
-          title="Find in file (Ctrl+F)"
-          data-testid="find-in-file-btn"
-        >
-          <MagnifyingGlassIcon style={{ width: 14, height: 14 }} />
-        </button>
-        {diffToolbar}
       </div>
     );
 
@@ -1107,6 +1092,7 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
         <div ref={containerRef} style={containerStyle}>
       {tabBar}
           {viewToolbar}
+          {diffToolbar}
           <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
             {/* Diff file list panel */}
             <div style={diffFilePanelStyle} data-testid="diff-file-list">

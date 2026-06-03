@@ -16,13 +16,15 @@ import AudioPlayer from "./AudioPlayer";
 import {
   PlusIcon,
   XMarkIcon,
-  ArrowLeftIcon,
+  ChevronUpIcon,
   DocumentIcon,
   DocumentTextIcon,
   CodeBracketIcon,
   FolderOpenIcon,
   MusicalNoteIcon,
   ExclamationTriangleIcon,
+  EyeIcon,
+  PencilSquareIcon,
 } from "@heroicons/react/24/outline";
 
 interface Props {
@@ -97,6 +99,7 @@ export default function WorkbenchTile({ tileId: _tileId, isFocused, configJson: 
   const [audioSize, setAudioSize] = useState(0);
   const [imageDataUrl, setImageDataUrl] = useState<string | null>(null);
   const [editorSnapshot, setEditorSnapshot] = useState<BufferSnapshot | null>(null);
+  const [editorViewState, setEditorViewState] = useState<{ mode: "preview" | "edit"; toggle: () => void } | null>(null);
 
   // Files are sourced from the persistent per-workstream Workbench store
   // (not from tile.config_json anymore). Closing the tile leaves the
@@ -258,7 +261,7 @@ export default function WorkbenchTile({ tileId: _tileId, isFocused, configJson: 
     const dirty = editorSnapshot?.dirty === true;
     return (
       <div style={{ height: "100%", display: "flex", flexDirection: "column", background: "#1e1e2e" }}>
-        {/* View toolbar */}
+        {/* Slim view toolbar (mirrors Repo Explorer pattern) */}
         <div
           style={{
             display: "flex",
@@ -278,22 +281,17 @@ export default function WorkbenchTile({ tileId: _tileId, isFocused, configJson: 
             style={{
               background: "none",
               border: "none",
-              color: "#89b4fa",
+              color: "#a6adc8",
               cursor: "pointer",
               display: "flex",
               alignItems: "center",
-              gap: 4,
               padding: "2px 4px",
-              fontSize: 11,
-              fontFamily: "monospace",
             }}
+            title="Back to file list"
+            data-testid="workbench-go-to-list"
           >
-            <ArrowLeftIcon style={{ width: 14, height: 14 }} />
-            Back
+            <ChevronUpIcon style={{ width: 16, height: 16 }} />
           </button>
-          <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "#585b70" }}>
-            {viewingPath}
-          </span>
           {dirty ? (
             <span
               data-testid="workbench-dirty-indicator"
@@ -305,6 +303,30 @@ export default function WorkbenchTile({ tileId: _tileId, isFocused, configJson: 
               *
             </span>
           ) : null}
+          <span style={{ flex: 1 }} />
+          {editorViewState && (
+            <button
+              onClick={editorViewState.toggle}
+              style={{
+                background: "none",
+                border: "none",
+                color: "#a6adc8",
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                gap: 4,
+                padding: "2px 4px",
+              }}
+              title={editorViewState.mode === "preview" ? "Edit (raw markdown)" : "Preview (rendered)"}
+              data-testid="workbench-md-toggle"
+            >
+              {editorViewState.mode === "preview" ? (
+                <><PencilSquareIcon style={{ width: 14, height: 14 }} /><span>Edit</span></>
+              ) : (
+                <><EyeIcon style={{ width: 14, height: 14 }} /><span>View</span></>
+              )}
+            </button>
+          )}
         </div>
 
         {/* File content */}
@@ -350,6 +372,7 @@ export default function WorkbenchTile({ tileId: _tileId, isFocused, configJson: 
               key={viewingPath}
               path={viewingPath}
               onBack={handleBack}
+              showHeader={false}
               renderMarkdownPreview={(content) => (
                 <MarkdownView
                   basePath={dirnameOf(viewingPath)}
@@ -357,6 +380,7 @@ export default function WorkbenchTile({ tileId: _tileId, isFocused, configJson: 
                 >{content}</MarkdownView>
               )}
               onSnapshotChange={setEditorSnapshot}
+              onViewStateChange={setEditorViewState}
             />
           )}
         </div>

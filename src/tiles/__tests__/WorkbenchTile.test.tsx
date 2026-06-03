@@ -171,7 +171,7 @@ describe("WorkbenchTile editable files", () => {
     const firstEditor = await screen.findByTestId("file-editor-view");
     const firstInstanceId = firstEditor.getAttribute("data-instance-id");
 
-    fireEvent.click(screen.getByText("Back"));
+    fireEvent.click(screen.getByTestId("workbench-go-to-list"));
     fireEvent.click(screen.getByText("second.ts"));
     const secondEditor = await screen.findByTestId("file-editor-view");
 
