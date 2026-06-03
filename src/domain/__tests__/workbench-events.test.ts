@@ -4,7 +4,9 @@ import {
   dispatchAddToWorkbench,
   subscribeAddToWorkbench,
   appendUnique,
+  setWorkbenchStoreForDispatcher,
 } from "../workbench-events";
+import { createWorkbenchStore } from "../workbench-store";
 
 describe("workbench-events", () => {
   describe("appendUnique", () => {
@@ -21,26 +23,48 @@ describe("workbench-events", () => {
   });
 
   describe("dispatch + subscribe", () => {
-    afterEach(() => { /* listeners cleaned up by tests themselves */ });
+    afterEach(() => { setWorkbenchStoreForDispatcher(null); });
 
-    it("subscriber receives dispatched payload", () => {
+    it("subscriber receives dispatched payload", async () => {
       const handler = vi.fn();
       const off = subscribeAddToWorkbench(handler);
-      dispatchAddToWorkbench({ path: "C:/x", workstreamId: "ws-1" });
+      await dispatchAddToWorkbench({ path: "C:/x", workstreamId: "ws-1" });
       expect(handler).toHaveBeenCalledWith({ path: "C:/x", workstreamId: "ws-1" });
       off();
     });
 
-    it("unsubscribed handlers do not receive subsequent dispatches", () => {
+    it("unsubscribed handlers do not receive subsequent dispatches", async () => {
       const handler = vi.fn();
       const off = subscribeAddToWorkbench(handler);
       off();
-      dispatchAddToWorkbench({ path: "C:/x", workstreamId: null });
+      await dispatchAddToWorkbench({ path: "C:/x", workstreamId: null });
       expect(handler).not.toHaveBeenCalled();
     });
 
     it("event name is stable for cross-bundle subscribers", () => {
       expect(WORKBENCH_ADD_EVENT).toBe("workstreams:add-to-workbench");
+    });
+
+    it("persists through the wired store when a workstreamId is supplied", async () => {
+      const backing = new Map<string, string>();
+      const store = createWorkbenchStore({
+        getSetting: async (k) => backing.get(k) ?? null,
+        setSetting: async (k, v) => { backing.set(k, v); },
+      });
+      setWorkbenchStoreForDispatcher(store);
+      await dispatchAddToWorkbench({ path: "C:/x", workstreamId: "ws-1" });
+      expect(await store.list("ws-1")).toEqual(["C:/x"]);
+    });
+
+    it("does NOT persist when workstreamId is null", async () => {
+      const backing = new Map<string, string>();
+      const store = createWorkbenchStore({
+        getSetting: async (k) => backing.get(k) ?? null,
+        setSetting: async (k, v) => { backing.set(k, v); },
+      });
+      setWorkbenchStoreForDispatcher(store);
+      await dispatchAddToWorkbench({ path: "C:/x", workstreamId: null });
+      expect(backing.size).toBe(0);
     });
   });
 });

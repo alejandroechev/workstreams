@@ -11,6 +11,18 @@ const listenMock = vi.hoisted(() => vi.fn());
 const fileEditorRenderMock = vi.hoisted(() => vi.fn());
 const fileEditorState = vi.hoisted(() => ({ nextInstanceId: 0 }));
 
+// Per-test in-memory Workbench store. Seeded by renderWorkbench(files).
+const workbenchBacking = vi.hoisted(() => new Map<string, string>());
+vi.mock("../../domain/workbench-store-instance", async () => {
+  const { createWorkbenchStore } = await import("../../domain/workbench-store");
+  return {
+    workbenchStore: createWorkbenchStore({
+      getSetting: async (key: string) => workbenchBacking.get(key) ?? null,
+      setSetting: async (key: string, value: string) => { workbenchBacking.set(key, value); },
+    }),
+  };
+});
+
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: invokeMock,
 }));
@@ -60,6 +72,9 @@ vi.mock("../../files/FileEditorView", async () => {
 });
 
 function renderWorkbench(files: string[], backend = new MemoryBackend()) {
+  // Seed the per-workstream persisted file list.
+  workbenchBacking.set("workbench:ws-1", JSON.stringify(files));
+
   const Wrapper = ({ children }: { children: ReactNode }) => (
     <BackendProvider backend={backend}>{children}</BackendProvider>
   );
@@ -68,8 +83,9 @@ function renderWorkbench(files: string[], backend = new MemoryBackend()) {
     <WorkbenchTile
       tileId="tile-1"
       isFocused={false}
-      configJson={JSON.stringify({ files })}
+      configJson="{}"
       onConfigChange={vi.fn()}
+      workstreamId="ws-1"
     />,
     { wrapper: Wrapper },
   );
@@ -78,7 +94,13 @@ function renderWorkbench(files: string[], backend = new MemoryBackend()) {
 }
 
 beforeEach(() => {
-  invokeMock.mockResolvedValue("AA==");
+  workbenchBacking.clear();
+  // The path_exists check fires once per file; default to "exists" so the
+  // existing assertions don't trip the stale-warning UI.
+  invokeMock.mockImplementation(async (cmd: string) => {
+    if (cmd === "path_exists") return true;
+    return "AA==";
+  });
   listenMock.mockResolvedValue(vi.fn());
   fileEditorRenderMock.mockClear();
   fileEditorState.nextInstanceId = 0;
@@ -95,7 +117,7 @@ describe("WorkbenchTile editable files", () => {
   it("opens TypeScript files in FileEditorView", async () => {
     renderWorkbench(["C:\\repo\\src\\file.ts"]);
 
-    fireEvent.click(screen.getByText("file.ts"));
+    fireEvent.click(await screen.findByText("file.ts"));
 
     const editor = await screen.findByTestId("file-editor-view");
     expect(editor.getAttribute("data-path")).toBe("C:\\repo\\src\\file.ts");
@@ -105,7 +127,7 @@ describe("WorkbenchTile editable files", () => {
   it("opens Markdown files in FileEditorView and wires the preview renderer", async () => {
     renderWorkbench(["C:\\repo\\README.md"]);
 
-    fireEvent.click(screen.getByText("README.md"));
+    fireEvent.click(await screen.findByText("README.md"));
 
     await screen.findByTestId("file-editor-view");
     await waitFor(() => expect(fileEditorRenderMock).toHaveBeenCalledWith(
@@ -117,7 +139,7 @@ describe("WorkbenchTile editable files", () => {
   it("keeps audio files on AudioPlayer instead of FileEditorView", async () => {
     renderWorkbench(["C:\\repo\\clip.mp3"]);
 
-    fireEvent.click(screen.getByText("clip.mp3"));
+    fireEvent.click(await screen.findByText("clip.mp3"));
 
     expect(await screen.findByTestId("audio-player")).toBeTruthy();
     expect(screen.queryByTestId("file-editor-view")).toBeNull();
@@ -126,7 +148,7 @@ describe("WorkbenchTile editable files", () => {
   it("keeps image files on the image preview branch instead of FileEditorView", async () => {
     renderWorkbench(["C:\\repo\\image.png"]);
 
-    fireEvent.click(screen.getByText("image.png"));
+    fireEvent.click(await screen.findByText("image.png"));
 
     const image = await screen.findByTestId("workbench-image-preview") as HTMLImageElement;
     expect(image.src).toBe("data:image/png;base64,AA==");
@@ -136,7 +158,7 @@ describe("WorkbenchTile editable files", () => {
   it("shows a dirty indicator when the editor snapshot becomes dirty", async () => {
     renderWorkbench(["C:\\repo\\src\\file.ts"]);
 
-    fireEvent.click(screen.getByText("file.ts"));
+    fireEvent.click(await screen.findByText("file.ts"));
     fireEvent.click(await screen.findByText("Make dirty"));
 
     expect((await screen.findByTestId("workbench-dirty-indicator")).textContent).toContain("*");
@@ -145,7 +167,7 @@ describe("WorkbenchTile editable files", () => {
   it("remounts FileEditorView when switching files", async () => {
     renderWorkbench(["C:\\repo\\src\\first.ts", "C:\\repo\\src\\second.ts"]);
 
-    fireEvent.click(screen.getByText("first.ts"));
+    fireEvent.click(await screen.findByText("first.ts"));
     const firstEditor = await screen.findByTestId("file-editor-view");
     const firstInstanceId = firstEditor.getAttribute("data-instance-id");
 
@@ -155,5 +177,47 @@ describe("WorkbenchTile editable files", () => {
 
     expect(secondEditor.getAttribute("data-path")).toBe("C:\\repo\\src\\second.ts");
     expect(secondEditor.getAttribute("data-instance-id")).not.toBe(firstInstanceId);
+  });
+
+  it("persists files across tile close + reopen (per workstream)", async () => {
+    const { unmount } = renderWorkbench(["C:\\repo\\persisted.ts"]);
+    expect(await screen.findByText("persisted.ts")).toBeTruthy();
+    // Simulate the user closing the Workbench tile.
+    unmount();
+
+    // Reopen a brand-new Workbench tile in the same workstream.
+    render(
+      <BackendProvider backend={new MemoryBackend()}>
+        <WorkbenchTile
+          tileId="tile-2"
+          isFocused={false}
+          configJson="{}"
+          onConfigChange={vi.fn()}
+          workstreamId="ws-1"
+        />
+      </BackendProvider>,
+    );
+
+    // The persisted file is restored from the store.
+    expect(await screen.findByText("persisted.ts")).toBeTruthy();
+  });
+
+  it("renders a stale-warning icon when a persisted file is missing on disk", async () => {
+    // Override the default 'exists' mock for this test only.
+    invokeMock.mockImplementation(async (cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === "path_exists") {
+        return args?.path !== "C:\\repo\\missing.ts";
+      }
+      return "AA==";
+    });
+    renderWorkbench(["C:\\repo\\ok.ts", "C:\\repo\\missing.ts"]);
+
+    const rows = await screen.findAllByTestId("workbench-file-row");
+    expect(rows).toHaveLength(2);
+    await waitFor(() => {
+      const missingRow = rows.find((r) => r.getAttribute("data-path") === "C:\\repo\\missing.ts");
+      expect(missingRow?.getAttribute("data-stale")).toBe("true");
+    });
+    expect(screen.getAllByTestId("workbench-file-stale-icon")).toHaveLength(1);
   });
 });

@@ -1002,6 +1002,14 @@ fn read_file(path: String) -> Result<String, String> {
     std::fs::read_to_string(&path).map_err(|e| format!("Cannot read file: {e}"))
 }
 
+/// Quick existence check for a path. Returns true when something exists at
+/// the path (file or directory), false otherwise. Used by Workbench tiles
+/// to surface stale entries that the user added but later deleted on disk.
+#[tauri::command]
+fn path_exists(path: String) -> Result<bool, String> {
+    Ok(std::path::Path::new(&path).exists())
+}
+
 /// Read a binary file and return as base64
 #[tauri::command]
 fn read_file_base64(path: String) -> Result<String, String> {
@@ -2901,6 +2909,7 @@ pub fn run() {
             // File system
             read_file,
             read_file_base64,
+            path_exists,
             list_directory,
             detect_git_info,
             create_git_repo,

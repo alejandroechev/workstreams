@@ -10,7 +10,8 @@ import { detectLanguage } from "../domain/tile-config";
 import { makeAudioBlobUrl } from "../domain/file-types";
 import { FileEditorView } from "../files/FileEditorView";
 import type { BufferSnapshot } from "../files/FileBufferRegistry";
-import { subscribeAddToWorkbench, appendUnique } from "../domain/workbench-events";
+import { subscribeAddToWorkbench } from "../domain/workbench-events";
+import { workbenchStore } from "../domain/workbench-store-instance";
 import AudioPlayer from "./AudioPlayer";
 import {
   PlusIcon,
@@ -21,6 +22,7 @@ import {
   CodeBracketIcon,
   FolderOpenIcon,
   MusicalNoteIcon,
+  ExclamationTriangleIcon,
 } from "@heroicons/react/24/outline";
 
 interface Props {
@@ -82,7 +84,7 @@ function FileItemIcon({ name }: { name: string }) {
   }
 }
 
-export default function WorkbenchTile({ tileId: _tileId, isFocused, configJson, onConfigChange, workstreamId }: Props) {
+export default function WorkbenchTile({ tileId: _tileId, isFocused, configJson: _configJson, onConfigChange: _onConfigChange, workstreamId }: Props) {
   const backend = useBackend();
   const [mode, setMode] = useState<Mode>("list");
   const [viewingPath, setViewingPath] = useState<string | null>(null);
@@ -96,30 +98,58 @@ export default function WorkbenchTile({ tileId: _tileId, isFocused, configJson, 
   const [imageDataUrl, setImageDataUrl] = useState<string | null>(null);
   const [editorSnapshot, setEditorSnapshot] = useState<BufferSnapshot | null>(null);
 
-  const files: string[] = useMemo(() => {
-    try {
-      const cfg = JSON.parse(configJson || "{}");
-      return Array.isArray(cfg.files) ? cfg.files : [];
-    } catch {
-      return [];
-    }
-  }, [configJson]);
+  // Files are sourced from the persistent per-workstream Workbench store
+  // (not from tile.config_json anymore). Closing the tile leaves the
+  // workstream's list intact; reopening picks it back up.
+  const [files, setFiles] = useState<string[]>([]);
+  // Paths that don't exist on disk anymore — rendered with a warning badge.
+  const [staleFiles, setStaleFiles] = useState<Set<string>>(new Set());
 
-  const updateFiles = useCallback((newFiles: string[]) => {
-    const cfg = JSON.stringify({ files: newFiles });
-    onConfigChange(cfg);
-  }, [onConfigChange]);
+  // Hydrate from the store on mount and whenever the workstream id changes.
+  useEffect(() => {
+    if (!workstreamId) { setFiles([]); return; }
+    let cancelled = false;
+    void workbenchStore.list(workstreamId).then((persisted) => {
+      if (!cancelled) setFiles(persisted);
+    });
+    return () => { cancelled = true; };
+  }, [workstreamId]);
 
-  // Listen for cross-tile "add to workbench" events. Only respond when the
-  // event targets this tile's workstream (or carries no workstream id,
-  // which means "any workbench").
+  // Re-check stale paths whenever the file list changes. Best-effort: any
+  // path that throws on stat is treated as missing.
+  useEffect(() => {
+    if (files.length === 0) { setStaleFiles(new Set()); return; }
+    let cancelled = false;
+    void Promise.all(files.map(async (p) => {
+      try {
+        const ok = await invoke<boolean>("path_exists", { path: p });
+        return [p, ok] as const;
+      } catch {
+        return [p, false] as const;
+      }
+    })).then((results) => {
+      if (cancelled) return;
+      const stale = new Set<string>();
+      for (const [path, ok] of results) if (!ok) stale.add(path);
+      setStaleFiles(stale);
+    });
+    return () => { cancelled = true; };
+  }, [files]);
+
+  const persistFiles = useCallback(async (newFiles: string[]) => {
+    setFiles(newFiles);
+    if (workstreamId) await workbenchStore.set(workstreamId, newFiles);
+  }, [workstreamId]);
+
+  // Listen for cross-tile "add to workbench" events. Optimistically
+  // refresh the local file list — the dispatcher already persisted to
+  // the store, so this is purely a UX shortcut for the mounted tile.
   useEffect(() => {
     return subscribeAddToWorkbench(({ path, workstreamId: targetWsId }) => {
       if (targetWsId && workstreamId && targetWsId !== workstreamId) return;
-      const next = appendUnique(files, path);
-      if (next !== files) updateFiles(next);
+      setFiles((prev) => (prev.includes(path) ? prev : [...prev, path]));
     });
-  }, [files, updateFiles, workstreamId]);
+  }, [workstreamId]);
 
   const handleAddFile = useCallback(async () => {
     try {
@@ -134,15 +164,15 @@ export default function WorkbenchTile({ tileId: _tileId, isFocused, configJson, 
           newFiles.push(filePath);
         }
       }
-      updateFiles(newFiles);
+      await persistFiles(newFiles);
     } catch {
       // Dialog not available (test env) — silently ignore
     }
-  }, [files, updateFiles]);
+  }, [files, persistFiles]);
 
   const handleRemoveFile = useCallback((path: string) => {
-    updateFiles(files.filter((f) => f !== path));
-  }, [files, updateFiles]);
+    void persistFiles(files.filter((f) => f !== path));
+  }, [files, persistFiles]);
 
   const handleViewFile = useCallback(async (path: string) => {
     setLoadingFile(true);
@@ -392,9 +422,14 @@ export default function WorkbenchTile({ tileId: _tileId, isFocused, configJson, 
             No files added yet
           </div>
         )}
-        {files.map((path) => (
+        {files.map((path) => {
+          const isStale = staleFiles.has(path);
+          return (
           <div
             key={path}
+            data-testid="workbench-file-row"
+            data-path={path}
+            data-stale={isStale ? "true" : "false"}
             style={{
               display: "flex",
               alignItems: "center",
@@ -410,15 +445,23 @@ export default function WorkbenchTile({ tileId: _tileId, isFocused, configJson, 
               style={{ flex: 1, display: "flex", alignItems: "center", gap: 6, overflow: "hidden" }}
               onClick={() => handleViewFile(path)}
             >
-              <FileItemIcon name={fileName(path)} />
+              {isStale ? (
+                <ExclamationTriangleIcon
+                  data-testid="workbench-file-stale-icon"
+                  style={{ width: 14, height: 14, color: "#f38ba8", flexShrink: 0 }}
+                />
+              ) : (
+                <FileItemIcon name={fileName(path)} />
+              )}
               <span
                 style={{
                   overflow: "hidden",
                   textOverflow: "ellipsis",
                   whiteSpace: "nowrap",
-                  color: "#cdd6f4",
+                  color: isStale ? "#f38ba8" : "#cdd6f4",
+                  textDecoration: isStale ? "line-through" : "none",
                 }}
-                title={path}
+                title={isStale ? `Missing on disk: ${path}` : path}
               >
                 {fileName(path)}
               </span>
@@ -446,7 +489,8 @@ export default function WorkbenchTile({ tileId: _tileId, isFocused, configJson, 
               <XMarkIcon style={{ width: 14, height: 14 }} />
             </button>
           </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );

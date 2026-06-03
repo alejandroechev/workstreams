@@ -19,9 +19,16 @@ import { parseKeyAction } from "./domain/keyboard";
 import { createTerminalConfig, createCopilotSessionConfig } from "./domain/tile-config";
 import { createWorkstreamFlow } from "./domain/workstream-create";
 import { summarizeTilesToRestart } from "./domain/worktree-change";
+import { workbenchStore } from "./domain/workbench-store-instance";
+import { setWorkbenchStoreForDispatcher } from "./domain/workbench-events";
 import { useBackend } from "./backend/context";
 import type { Project, Workstream, Tile, TileType } from "./domain/types";
 import type { DiffReview } from "./domain/diff-review";
+
+// Wire the persistent Workbench store into the cross-tile dispatcher
+// so right-clicks from anywhere persist to the workstream's setting
+// even when no Workbench tile is currently mounted.
+setWorkbenchStoreForDispatcher(workbenchStore);
 
 export default function App() {
   const backend = useBackend();
