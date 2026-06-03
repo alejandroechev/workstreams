@@ -1174,11 +1174,6 @@ export default function App() {
             }
           }}
           onToggleSideBySide={toggleSideBySide}
-          onCloseTitle={() => {
-            if (orderedTiles.length > 0 && orderedTiles[focusedIndex]) {
-              closeTile(orderedTiles[focusedIndex]!.id);
-            }
-          }}
         />
       </div>
 

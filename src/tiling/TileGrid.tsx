@@ -103,6 +103,7 @@ export default function TileGrid({
         const isFs = fullscreenTileId === tile.id;
         let hidden: boolean;
         let gridArea: string | undefined;
+        let isInSbs = false;
         if (fullscreenActive) {
           hidden = !isFs;
           gridArea = isFs ? "t0" : undefined;
@@ -110,6 +111,7 @@ export default function TileGrid({
           const sbsIdx = sideBySideTileIds!.indexOf(tile.id);
           hidden = sbsIdx === -1;
           gridArea = sbsIdx === 0 ? "sbs-left" : sbsIdx === 1 ? "sbs-right" : undefined;
+          isInSbs = sbsIdx !== -1;
         } else {
           hidden = false;
           gridArea = `t${i}`;
@@ -124,6 +126,7 @@ export default function TileGrid({
             isFocused={i === focusedIndex}
             focusToken={focusToken}
             isFullscreen={isFs}
+            isSideBySide={isInSbs}
             hidden={hidden}
             selectable={showSelectable}
             isSelected={selectedForSideBySide.has(tile.id)}

@@ -21,6 +21,7 @@ interface TileProps {
   isFocused: boolean;
   focusToken?: number;
   isFullscreen?: boolean;
+  isSideBySide?: boolean;
   /** When true the tile renders into the DOM but is invisible (display:none). */
   hidden?: boolean;
   /** When true the side-by-side selection checkbox is rendered in the header. */
@@ -49,6 +50,7 @@ export default function TileWrapper({
   isFocused,
   focusToken,
   isFullscreen = false,
+  isSideBySide = false,
   hidden = false,
   selectable = false,
   isSelected = false,
@@ -261,7 +263,7 @@ export default function TileWrapper({
         gridArea: hidden ? undefined : (gridArea ?? `t${index}`),
         display: hidden ? "none" : "flex",
         flexDirection: "column",
-        border: computeTileBorder({ isFullscreen, isFocused }),
+        border: computeTileBorder({ isFullscreen, isFocused, isSideBySide }),
         borderRadius: 6,
         overflow: "hidden",
         background: "#1e1e2e",

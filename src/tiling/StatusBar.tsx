@@ -17,7 +17,6 @@ interface Props {
   onAddWorkbench?: () => void;
   onAddPlan?: () => void;
   onAddDiffReview?: () => void;
-  onCloseTitle?: () => void;
   onToggleFullscreen?: () => void;
   onToggleSideBySide?: () => void;
   onOpenSettings?: () => void;
@@ -32,6 +31,21 @@ const btnStyle: React.CSSProperties = {
   fontSize: 11,
   padding: "2px 8px",
   fontFamily: "monospace",
+};
+
+// Icon-only chrome buttons (settings, fullscreen, side-by-side) — beefier
+// contrast: lighter background + brighter icon color so the affordance is
+// readable against the dark status bar.
+const iconBtnStyle: React.CSSProperties = {
+  background: "#45475a",
+  border: "1px solid #585b70",
+  borderRadius: 4,
+  color: "#cdd6f4",
+  cursor: "pointer",
+  fontSize: 13,
+  padding: "2px 8px",
+  fontFamily: "monospace",
+  lineHeight: 1,
 };
 
 export default function StatusBar({
@@ -49,7 +63,6 @@ export default function StatusBar({
   onAddWorkbench,
   onAddPlan,
   onAddDiffReview,
-  onCloseTitle,
   onToggleFullscreen,
   onToggleSideBySide,
   onOpenSettings,
@@ -94,7 +107,7 @@ export default function StatusBar({
           <span style={{ color: "#f9e2af" }}>⛶ Full</span>
         )}
         {sideBySide && (
-          <span style={{ color: "#89b4fa" }}>⊟ Side-by-side</span>
+          <span style={{ color: "#cba6f7" }}>⊟ Side-by-side</span>
         )}
       </div>
       <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
@@ -102,7 +115,7 @@ export default function StatusBar({
         {onOpenSettings && (
           <button
             data-testid="open-settings"
-            style={{ ...btnStyle, color: "#585b70" }}
+            style={iconBtnStyle}
             onClick={onOpenSettings}
             title="Settings"
           >
@@ -114,9 +127,12 @@ export default function StatusBar({
             data-testid="toggle-sbs"
             disabled={!sideBySide && !canEnterSideBySide}
             style={{
-              ...btnStyle,
-              color: sideBySide ? "#89b4fa" : !canEnterSideBySide ? "#3a3b48" : "#585b70",
+              ...iconBtnStyle,
+              color: sideBySide ? "#cba6f7" : !canEnterSideBySide ? "#6c7086" : "#cdd6f4",
+              borderColor: sideBySide ? "#cba6f7" : iconBtnStyle.border?.toString().includes("#585b70") ? "#585b70" : "#585b70",
+              background: sideBySide ? "#3a2f4f" : iconBtnStyle.background,
               cursor: !sideBySide && !canEnterSideBySide ? "default" : "pointer",
+              opacity: !sideBySide && !canEnterSideBySide ? 0.55 : 1,
             }}
             onClick={onToggleSideBySide}
             title={
@@ -130,8 +146,18 @@ export default function StatusBar({
             ⊟
           </button>
         )}
-        <button style={{ ...btnStyle, color: "#585b70" }} onClick={onToggleFullscreen} title="Toggle fullscreen">⛶</button>
-        <button style={{ ...btnStyle, color: "#585b70" }} onClick={onCloseTitle} title="Close focused tile">✕</button>
+        <button
+          style={{
+            ...iconBtnStyle,
+            color: fullscreen ? "#f9e2af" : "#cdd6f4",
+            borderColor: fullscreen ? "#f9e2af" : "#585b70",
+            background: fullscreen ? "#3f3a25" : iconBtnStyle.background,
+          }}
+          onClick={onToggleFullscreen}
+          title="Toggle fullscreen (Alt+F)"
+        >
+          ⛶
+        </button>
       </div>
     </div>
   );
