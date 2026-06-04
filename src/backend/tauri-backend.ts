@@ -8,6 +8,7 @@ import type {
   DiffSource,
   DiffChunk,
 } from "../domain/diff-review";
+import type { FileComment, ImportedCommentInput, ImportSummary } from "../domain/file-comments";
 import type { Backend } from "./types";
 
 export class TauriBackend implements Backend {
@@ -255,5 +256,42 @@ export class TauriBackend implements Backend {
 
   async detectDrift(reviewId: string): Promise<string[]> {
     return invoke<string[]>("detect_drift", { reviewId });
+  }
+
+  async listFileComments(workstreamId: string, absolutePath: string): Promise<FileComment[]> {
+    return invoke<FileComment[]>("list_file_comments", { workstreamId, absolutePath });
+  }
+
+  async addFileComment(
+    workstreamId: string,
+    absolutePath: string,
+    anchorLineStart: number,
+    anchorLineEnd: number,
+    anchorText: string | null,
+    bodyMd: string,
+  ): Promise<FileComment> {
+    return invoke<FileComment>("add_file_comment", {
+      workstreamId,
+      absolutePath,
+      anchorLineStart,
+      anchorLineEnd,
+      anchorText,
+      bodyMd,
+    });
+  }
+
+  async updateFileComment(id: string, bodyMd: string): Promise<FileComment> {
+    return invoke<FileComment>("update_file_comment", { id, bodyMd });
+  }
+
+  async deleteFileComment(id: string): Promise<void> {
+    return invoke("delete_file_comment", { id });
+  }
+
+  async importPrComments(
+    workstreamId: string,
+    items: ImportedCommentInput[],
+  ): Promise<ImportSummary> {
+    return invoke<ImportSummary>("import_pr_comments", { workstreamId, items });
   }
 }

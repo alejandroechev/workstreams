@@ -8,6 +8,7 @@ import type {
   DiffReview,
   DiffSource,
 } from "../domain/diff-review";
+import type { FileComment, ImportedCommentInput, ImportSummary } from "../domain/file-comments";
 import type { Backend } from "./types";
 import { rewriteTileCwd } from "../domain/worktree-change";
 
@@ -57,6 +58,7 @@ export class MemoryBackend implements Backend {
   private diffHunks = new Map<string, DiffHunk[]>();
   private diffComments = new Map<string, DiffComment[]>();
   private invalidatedChunks = new Map<string, Set<string>>();
+  private fileComments = new Map<string, FileComment>();
 
   seedFile(path: string, content: string): void {
     this.files.set(path, content);
@@ -599,5 +601,122 @@ export class MemoryBackend implements Backend {
   async detectDrift(reviewId: string): Promise<string[]> {
     const set = this.invalidatedChunks.get(reviewId);
     return set ? Array.from(set) : [];
+  }
+
+  async listFileComments(workstreamId: string, absolutePath: string): Promise<FileComment[]> {
+    const all = Array.from(this.fileComments.values()).filter(
+      (c) => c.workstream_id === workstreamId && c.absolute_path === absolutePath,
+    );
+    all.sort((a, b) => {
+      if (a.anchor_line_start !== b.anchor_line_start) {
+        return a.anchor_line_start - b.anchor_line_start;
+      }
+      return a.created_at.localeCompare(b.created_at);
+    });
+    return all;
+  }
+
+  async addFileComment(
+    workstreamId: string,
+    absolutePath: string,
+    anchorLineStart: number,
+    anchorLineEnd: number,
+    anchorText: string | null,
+    bodyMd: string,
+  ): Promise<FileComment> {
+    if (anchorLineEnd < anchorLineStart) {
+      throw new Error("anchor_line_end must be >= anchor_line_start");
+    }
+    const ts = now();
+    const comment: FileComment = {
+      id: generateId(),
+      workstream_id: workstreamId,
+      absolute_path: absolutePath,
+      anchor_line_start: anchorLineStart,
+      anchor_line_end: anchorLineEnd,
+      anchor_text: anchorText,
+      body_md: bodyMd,
+      author: "me",
+      origin_type: "user",
+      origin_pr_id: null,
+      origin_comment_id: null,
+      origin_thread_id: null,
+      origin_parent_id: null,
+      origin_url: null,
+      status: null,
+      created_at: ts,
+      updated_at: ts,
+    };
+    this.fileComments.set(comment.id, comment);
+    return comment;
+  }
+
+  async updateFileComment(id: string, bodyMd: string): Promise<FileComment> {
+    const existing = this.fileComments.get(id);
+    if (!existing) {
+      throw new Error(`comment ${id} not found or not editable (imported comments are read-only)`);
+    }
+    if (existing.origin_type !== "user") {
+      throw new Error(`comment ${id} not found or not editable (imported comments are read-only)`);
+    }
+    const updated: FileComment = { ...existing, body_md: bodyMd, updated_at: now() };
+    this.fileComments.set(id, updated);
+    return updated;
+  }
+
+  async deleteFileComment(id: string): Promise<void> {
+    const existing = this.fileComments.get(id);
+    if (!existing || existing.origin_type !== "user") {
+      throw new Error(`comment ${id} not found or not deletable (imported comments are read-only)`);
+    }
+    this.fileComments.delete(id);
+  }
+
+  async importPrComments(
+    workstreamId: string,
+    items: ImportedCommentInput[],
+  ): Promise<ImportSummary> {
+    let inserted = 0;
+    let skipped = 0;
+    const ts = now();
+    for (const item of items) {
+      if (item.anchor_line_end < item.anchor_line_start) {
+        throw new Error(
+          `invalid anchor for ${item.absolute_path}:${item.anchor_line_start}-${item.anchor_line_end} (end < start)`,
+        );
+      }
+      const dup = Array.from(this.fileComments.values()).some(
+        (c) =>
+          c.origin_type === "ado-pr" &&
+          c.origin_pr_id === item.origin_pr_id &&
+          c.origin_comment_id === item.origin_comment_id,
+      );
+      if (dup) {
+        skipped += 1;
+        continue;
+      }
+      const comment: FileComment = {
+        id: generateId(),
+        workstream_id: workstreamId,
+        absolute_path: item.absolute_path,
+        anchor_line_start: item.anchor_line_start,
+        anchor_line_end: item.anchor_line_end,
+        anchor_text: item.anchor_text ?? null,
+        body_md: item.body_md,
+        author: item.author,
+        origin_type: "ado-pr",
+        origin_pr_id: item.origin_pr_id,
+        origin_comment_id: item.origin_comment_id,
+        origin_thread_id: item.origin_thread_id ?? null,
+        origin_parent_id: item.origin_parent_id ?? null,
+        origin_url: item.origin_url ?? null,
+        status: item.status ?? null,
+        created_at: ts,
+        updated_at: ts,
+      };
+      this.fileComments.set(comment.id, comment);
+      inserted += 1;
+    }
+    return { inserted, skipped };
   }
 }

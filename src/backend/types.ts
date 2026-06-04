@@ -8,6 +8,7 @@ import type {
   DiffSource,
   DiffChunk,
 } from "../domain/diff-review";
+import type { FileComment, ImportedCommentInput, ImportSummary } from "../domain/file-comments";
 
 export interface FileSearchMatch {
   path: string;
@@ -93,6 +94,22 @@ export interface Backend {
   addComment(chunkId: string, anchorFile: string, anchorLineStart: number, anchorLineEnd: number, text: string): Promise<DiffComment>;
   completeReview(reviewId: string): Promise<{ exported_path: string }>;
   detectDrift(reviewId: string): Promise<string[]>;
+  // File comments (inline per-workstream comments + ADO PR import)
+  listFileComments(workstreamId: string, absolutePath: string): Promise<FileComment[]>;
+  addFileComment(
+    workstreamId: string,
+    absolutePath: string,
+    anchorLineStart: number,
+    anchorLineEnd: number,
+    anchorText: string | null,
+    bodyMd: string,
+  ): Promise<FileComment>;
+  updateFileComment(id: string, bodyMd: string): Promise<FileComment>;
+  deleteFileComment(id: string): Promise<void>;
+  importPrComments(
+    workstreamId: string,
+    items: ImportedCommentInput[],
+  ): Promise<ImportSummary>;
 }
 
 export interface SessionPlanEntry {

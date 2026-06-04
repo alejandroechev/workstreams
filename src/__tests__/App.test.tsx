@@ -178,6 +178,11 @@ function createBackend(): Backend {
     addComment: vi.fn(),
     completeReview: vi.fn(),
     detectDrift: vi.fn(),
+    listFileComments: vi.fn().mockResolvedValue([]),
+    addFileComment: vi.fn(),
+    updateFileComment: vi.fn(),
+    deleteFileComment: vi.fn(),
+    importPrComments: vi.fn(),
   } as Backend;
 }
 

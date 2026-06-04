@@ -380,4 +380,44 @@ describe("TauriBackend", () => {
     await backend.createOrFocusDiffReviewTile("ws-1", "rev-1");
     expect(invoke).toHaveBeenCalledWith("create_or_focus_diff_review_tile", { workstreamId: "ws-1", reviewId: "rev-1" });
   });
+
+  it("file comment commands map to snake_case Tauri commands", async () => {
+    invoke.mockResolvedValueOnce([]);
+    await backend.listFileComments("ws-1", "C:/a.ts");
+    expect(invoke).toHaveBeenCalledWith("list_file_comments", { workstreamId: "ws-1", absolutePath: "C:/a.ts" });
+
+    invoke.mockResolvedValueOnce({ id: "fc-1" });
+    await backend.addFileComment("ws-1", "C:/a.ts", 5, 7, "  foo();", "note");
+    expect(invoke).toHaveBeenCalledWith("add_file_comment", {
+      workstreamId: "ws-1",
+      absolutePath: "C:/a.ts",
+      anchorLineStart: 5,
+      anchorLineEnd: 7,
+      anchorText: "  foo();",
+      bodyMd: "note",
+    });
+
+    invoke.mockResolvedValueOnce({ id: "fc-1" });
+    await backend.updateFileComment("fc-1", "edited");
+    expect(invoke).toHaveBeenCalledWith("update_file_comment", { id: "fc-1", bodyMd: "edited" });
+
+    invoke.mockResolvedValueOnce(undefined);
+    await backend.deleteFileComment("fc-1");
+    expect(invoke).toHaveBeenCalledWith("delete_file_comment", { id: "fc-1" });
+
+    invoke.mockResolvedValueOnce({ inserted: 2, skipped: 1 });
+    const items = [
+      {
+        absolute_path: "C:/a.ts",
+        anchor_line_start: 1,
+        anchor_line_end: 1,
+        body_md: "x",
+        author: "bob",
+        origin_pr_id: "42",
+        origin_comment_id: "c-1",
+      },
+    ];
+    await backend.importPrComments("ws-1", items);
+    expect(invoke).toHaveBeenCalledWith("import_pr_comments", { workstreamId: "ws-1", items });
+  });
 });
