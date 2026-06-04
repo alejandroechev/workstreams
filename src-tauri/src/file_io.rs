@@ -838,6 +838,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(windows)]
     fn canonicalize_path_normalizes_existing_path() {
         let fs = InMemoryFileSystemProvider::new();
         let path = PathBuf::from("C:\\repo\\.\\note.txt");
