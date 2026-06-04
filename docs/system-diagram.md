@@ -14,6 +14,7 @@ graph TB
             SessionMeta["SessionMetaTile<br/>Session + file detail"]
             Workbench["WorkbenchTile<br/>Workbench file detail"]
             DiffReview["DiffReviewTile<br/>3-pane diff/question/comments<br/>+ Monaco diff editor"]
+            InlineComments["Inline File Comments<br/>(view zones in FileEditorView<br/>+ comments-toggle in viewToolbar)"]
             StatusBar["StatusBar<br/>Shortcuts + metadata"]
             subgraph Files["Files"]
                 FileBuffers["FileBufferRegistry<br/>Editable file buffers + dirty state"]

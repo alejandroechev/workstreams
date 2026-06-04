@@ -18,6 +18,14 @@ import {
 } from "./FileBufferRegistry";
 import { classifyDangerousPath, type DangerHit } from "./dangerousPaths";
 import { loadMonaco } from "./loadMonaco";
+import {
+  selectionToAnchor,
+  formatCommentMeta,
+  isMutable,
+  estimateZoneHeightInLines,
+  type Anchor,
+} from "./comments-layer";
+import type { FileComment } from "../domain/file-comments";
 
 const MAX_INLINE_EDIT_SIZE_BYTES = 1024 * 1024;
 const confirmedDangerousWarningKeys = new Set<string>();
@@ -49,6 +57,27 @@ export interface FileEditorViewProps {
    * isn't a markdown file (no toggle needed) and an object otherwise.
    */
   onViewStateChange?: (state: { mode: "preview" | "edit"; toggle: () => void } | null) => void;
+  /**
+   * Inline file comments to render as Monaco view zones below their anchor.
+   * Only used when `commentsEnabled` is true and the editor is mounted.
+   */
+  comments?: import("../domain/file-comments").FileComment[];
+  /** When true, comment view zones are rendered. */
+  commentsEnabled?: boolean;
+  /**
+   * Add-comment handler. Wired by the parent tile to `useFileComments.add`.
+   * Called when the user submits the inline composer.
+   */
+  onAddComment?: (
+    start: number,
+    end: number,
+    anchorText: string | null,
+    bodyMd: string,
+  ) => Promise<unknown>;
+  /** Update-comment handler. Wired by the parent tile to `useFileComments.update`. */
+  onUpdateComment?: (id: string, bodyMd: string) => Promise<unknown>;
+  /** Delete-comment handler. Wired by the parent tile to `useFileComments.remove`. */
+  onDeleteComment?: (id: string) => Promise<unknown>;
 }
 
 import { detectLanguage } from "../domain/tile-config";
@@ -92,6 +121,11 @@ export function FileEditorView({
   onSnapshotChange,
   showHeader = true,
   onViewStateChange,
+  comments = [],
+  commentsEnabled = false,
+  onAddComment,
+  onUpdateComment,
+  onDeleteComment,
 }: FileEditorViewProps): ReactElement {
   const editorHostRef = useRef<HTMLDivElement | null>(null);
   const editorRef = useRef<MonacoNs.editor.IStandaloneCodeEditor | null>(null);
@@ -110,6 +144,100 @@ export function FileEditorView({
   const [editorRetryToken, setEditorRetryToken] = useState(0);
   const [modeState, setModeState] = useState<{ inputPath: string; mode: ViewMode }>({ inputPath: path, mode: "preview" });
   const [dismissedConflictKey, setDismissedConflictKey] = useState<string | null>(null);
+  // Bumped each time the Monaco editor instance is (re)created so dependent
+  // effects can react without polluting the main editor effect.
+  const [editorReadyToken, setEditorReadyToken] = useState(0);
+  const [selectionAnchor, setSelectionAnchor] = useState<Anchor | null>(null);
+  // Composer state: either creating a new comment for a selection, or
+  // editing an existing comment in place.
+  const [composer, setComposer] = useState<
+    | { mode: "create"; anchor: Anchor; body: string }
+    | { mode: "edit"; comment: FileComment; body: string }
+    | null
+  >(null);
+
+  const handleEditClick = useCallback((c: FileComment) => {
+    setComposer({ mode: "edit", comment: c, body: c.body_md });
+  }, []);
+
+  const handleDeleteClick = useCallback(
+    (c: FileComment) => {
+      if (!onDeleteComment) return;
+      if (!window.confirm("Delete this comment?")) return;
+      void onDeleteComment(c.id);
+    },
+    [onDeleteComment],
+  );
+
+  /** Imperatively populate the view-zone DOM node for a comment. */
+  function renderCommentZone(node: HTMLDivElement, c: FileComment): void {
+    node.innerHTML = "";
+    const header = document.createElement("div");
+    header.style.display = "flex";
+    header.style.alignItems = "center";
+    header.style.gap = "8px";
+    header.style.marginBottom = "4px";
+    header.style.color = "#a6adc8";
+    header.style.fontSize = "10px";
+    const meta = document.createElement("span");
+    meta.textContent = formatCommentMeta(c);
+    if (c.status === "fixed" || c.status === "closed") {
+      meta.style.textDecoration = "line-through";
+      meta.style.opacity = "0.7";
+    }
+    header.appendChild(meta);
+    const spacer = document.createElement("span");
+    spacer.style.flex = "1";
+    header.appendChild(spacer);
+    if (isMutable(c)) {
+      const editBtn = document.createElement("button");
+      editBtn.textContent = "Edit";
+      editBtn.dataset.testid = `comment-edit-${c.id}`;
+      Object.assign(editBtn.style, {
+        background: "none",
+        border: "1px solid #45475a",
+        color: "#89b4fa",
+        borderRadius: "3px",
+        padding: "1px 6px",
+        cursor: "pointer",
+        fontSize: "10px",
+      });
+      editBtn.onclick = () => handleEditClick(c);
+      header.appendChild(editBtn);
+      const delBtn = document.createElement("button");
+      delBtn.textContent = "Delete";
+      delBtn.dataset.testid = `comment-delete-${c.id}`;
+      Object.assign(delBtn.style, {
+        background: "none",
+        border: "1px solid #45475a",
+        color: "#f38ba8",
+        borderRadius: "3px",
+        padding: "1px 6px",
+        cursor: "pointer",
+        fontSize: "10px",
+      });
+      delBtn.onclick = () => handleDeleteClick(c);
+      header.appendChild(delBtn);
+    } else if (c.origin_url) {
+      const link = document.createElement("a");
+      link.href = c.origin_url;
+      link.target = "_blank";
+      link.rel = "noreferrer";
+      link.textContent = "open in ADO";
+      link.style.color = "#89b4fa";
+      link.style.fontSize = "10px";
+      link.style.textDecoration = "none";
+      header.appendChild(link);
+    }
+    node.appendChild(header);
+    const body = document.createElement("div");
+    body.style.whiteSpace = "pre-wrap";
+    body.style.wordBreak = "break-word";
+    body.style.lineHeight = "1.5";
+    body.textContent = c.body_md;
+    node.appendChild(body);
+  }
+
 
   const snapshot = snapshotState.inputPath === path ? snapshotState.snapshot : null;
   const acquireError = acquireErrorState?.inputPath === path ? acquireErrorState.message : null;
@@ -228,6 +356,7 @@ export function FileEditorView({
           scrollBeyondLastLine: false,
         });
         editorRef.current = editor;
+        setEditorReadyToken((v) => v + 1);
 
         resizeObserver = new ResizeObserver(() => editor.layout());
         resizeObserver.observe(editorHostRef.current);
@@ -249,8 +378,99 @@ export function FileEditorView({
       visibilityObserver?.disconnect();
       editorRef.current?.dispose();
       editorRef.current = null;
+      setEditorReadyToken(0);
     };
   }, [editorPath, editorRetryToken, path, registry]);
+
+  // ─── Inline comments: view zones + selection listener ─────────────────
+  const zoneIdsRef = useRef<Map<string, string>>(new Map());
+  const zoneNodesRef = useRef<Map<string, HTMLDivElement>>(new Map());
+
+  // Rebuild view zones whenever the comment list or enabled state changes.
+  useEffect(() => {
+    const editor = editorRef.current;
+    if (!editor || effectiveMode !== "edit") {
+      // tear down any existing zones
+      const ids = zoneIdsRef.current;
+      if (ids.size > 0 && editor) {
+        editor.changeViewZones((accessor: MonacoNs.editor.IViewZoneChangeAccessor) => {
+          for (const zid of ids.values()) accessor.removeZone(zid);
+        });
+      }
+      ids.clear();
+      zoneNodesRef.current.clear();
+      return;
+    }
+    if (!commentsEnabled) {
+      const ids = zoneIdsRef.current;
+      if (ids.size > 0) {
+        editor.changeViewZones((accessor: MonacoNs.editor.IViewZoneChangeAccessor) => {
+          for (const zid of ids.values()) accessor.removeZone(zid);
+        });
+      }
+      ids.clear();
+      zoneNodesRef.current.clear();
+      return;
+    }
+    editor.changeViewZones((accessor: MonacoNs.editor.IViewZoneChangeAccessor) => {
+      for (const zid of zoneIdsRef.current.values()) accessor.removeZone(zid);
+      zoneIdsRef.current.clear();
+      zoneNodesRef.current.clear();
+      for (const c of comments) {
+        const dom = document.createElement("div");
+        dom.style.background = "#1e1e2e";
+        dom.style.borderTop = "1px solid #313244";
+        dom.style.borderBottom = "1px solid #313244";
+        dom.style.padding = "6px 12px 8px";
+        dom.style.fontFamily = "system-ui, sans-serif";
+        dom.style.fontSize = "11px";
+        dom.style.color = "#cdd6f4";
+        dom.dataset.testid = `comment-zone-${c.id}`;
+        dom.dataset.commentId = c.id;
+        renderCommentZone(dom, c);
+        zoneNodesRef.current.set(c.id, dom);
+        const zid = accessor.addZone({
+          afterLineNumber: c.anchor_line_end,
+          heightInLines: estimateZoneHeightInLines(c.body_md),
+          domNode: dom,
+        });
+        zoneIdsRef.current.set(c.id, zid);
+      }
+    });
+    return () => {
+      const ed = editorRef.current;
+      const ids = zoneIdsRef.current;
+      if (ed && ids.size > 0) {
+        ed.changeViewZones((accessor: MonacoNs.editor.IViewZoneChangeAccessor) => {
+          for (const zid of ids.values()) accessor.removeZone(zid);
+        });
+      }
+      ids.clear();
+      zoneNodesRef.current.clear();
+    };
+  }, [comments, commentsEnabled, editorReadyToken, effectiveMode, handleEditClick, handleDeleteClick]);
+
+  // Selection listener -> floating + composer trigger.
+  useEffect(() => {
+    const editor = editorRef.current;
+    if (!editor || effectiveMode !== "edit" || !commentsEnabled || !onAddComment) {
+      setSelectionAnchor(null);
+      return;
+    }
+    const disposable = editor.onDidChangeCursorSelection?.((e: MonacoNs.editor.ICursorSelectionChangedEvent) => {
+      const sel = e.selection;
+      if (!sel || sel.isEmpty()) {
+        setSelectionAnchor(null);
+        return;
+      }
+      const model = editor.getModel();
+      if (!model) return;
+      const lines = model.getValue().split(/\r?\n/);
+      const anchor = selectionToAnchor(lines, sel.startLineNumber, sel.endLineNumber);
+      setSelectionAnchor(anchor);
+    });
+    return () => disposable?.dispose?.();
+  }, [editorReadyToken, effectiveMode, commentsEnabled, onAddComment]);
 
   const saveWithDangerousPathGuard = useCallback(async () => {
     const canonicalPath = canonicalPathRef.current;
@@ -384,7 +604,118 @@ export function FileEditorView({
       );
     }
 
-    return <div ref={editorHostRef} data-testid="file-editor-monaco" style={{ height: "100%", width: "100%" }} />;
+    return (
+      <div style={{ position: "relative", height: "100%", width: "100%" }}>
+        <div ref={editorHostRef} data-testid="file-editor-monaco" style={{ height: "100%", width: "100%" }} />
+        {commentsEnabled && onAddComment && selectionAnchor && !composer ? (
+          <button
+            data-testid="add-comment-floating"
+            onClick={() => setComposer({ mode: "create", anchor: selectionAnchor, body: "" })}
+            style={{
+              position: "absolute",
+              top: 8,
+              right: 16,
+              padding: "4px 10px",
+              background: "#89b4fa",
+              color: "#11111b",
+              border: "none",
+              borderRadius: 4,
+              cursor: "pointer",
+              fontSize: 11,
+              fontWeight: 600,
+              boxShadow: "0 2px 6px rgba(0,0,0,0.4)",
+              zIndex: 5,
+            }}
+          >
+            + Comment ({selectionAnchor.start}{selectionAnchor.start !== selectionAnchor.end ? `-${selectionAnchor.end}` : ""})
+          </button>
+        ) : null}
+        {composer ? (
+          <div
+            data-testid="comment-composer"
+            style={{
+              position: "absolute",
+              top: 8,
+              right: 16,
+              width: 360,
+              background: "#1e1e2e",
+              border: "1px solid #45475a",
+              borderRadius: 6,
+              padding: 10,
+              boxShadow: "0 4px 12px rgba(0,0,0,0.5)",
+              zIndex: 10,
+              display: "flex",
+              flexDirection: "column",
+              gap: 8,
+            }}
+          >
+            <div style={{ fontSize: 10, color: "#a6adc8" }}>
+              {composer.mode === "create"
+                ? `Lines ${composer.anchor.start}${composer.anchor.start !== composer.anchor.end ? `-${composer.anchor.end}` : ""}`
+                : `Editing comment on line ${composer.comment.anchor_line_start}`}
+            </div>
+            <textarea
+              data-testid="comment-composer-textarea"
+              autoFocus
+              rows={5}
+              value={composer.body}
+              onChange={(e) => setComposer((cur) => (cur ? { ...cur, body: e.target.value } : cur))}
+              style={{
+                background: "#11111b",
+                color: "#cdd6f4",
+                border: "1px solid #313244",
+                borderRadius: 4,
+                padding: 6,
+                fontFamily: "monospace",
+                fontSize: 12,
+                resize: "vertical",
+              }}
+            />
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 6 }}>
+              <button
+                data-testid="comment-composer-cancel"
+                onClick={() => setComposer(null)}
+                style={{ background: "none", border: "1px solid #45475a", color: "#a6adc8", borderRadius: 4, padding: "3px 10px", cursor: "pointer", fontSize: 11 }}
+              >
+                Cancel
+              </button>
+              <button
+                data-testid="comment-composer-save"
+                disabled={composer.body.trim().length === 0}
+                onClick={async () => {
+                  const body = composer.body.trim();
+                  if (body.length === 0) return;
+                  if (composer.mode === "create" && onAddComment) {
+                    await onAddComment(
+                      composer.anchor.start,
+                      composer.anchor.end,
+                      composer.anchor.anchorText,
+                      body,
+                    );
+                  } else if (composer.mode === "edit" && onUpdateComment) {
+                    await onUpdateComment(composer.comment.id, body);
+                  }
+                  setComposer(null);
+                  setSelectionAnchor(null);
+                }}
+                style={{
+                  background: composer.body.trim().length === 0 ? "#45475a" : "#89b4fa",
+                  border: "none",
+                  color: "#11111b",
+                  borderRadius: 4,
+                  padding: "3px 10px",
+                  cursor: composer.body.trim().length === 0 ? "not-allowed" : "pointer",
+                  fontSize: 11,
+                  fontWeight: 600,
+                }}
+              >
+                Save
+              </button>
+            </div>
+          </div>
+        ) : null}
+      </div>
+    );
   }
 }
 

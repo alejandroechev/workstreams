@@ -30,10 +30,12 @@ import {
   PencilSquareIcon,
   ClipboardDocumentIcon,
   BeakerIcon,
+  ChatBubbleLeftRightIcon,
 } from "@heroicons/react/24/outline";
 import { openPath } from "@tauri-apps/plugin-opener";
 import { writeTextToClipboard } from "../domain/clipboard";
 import { dispatchAddToWorkbench } from "../domain/workbench-events";
+import { useFileComments } from "../files/useFileComments";
 import type { FileSearchMatch } from "../backend/types";
 
 interface Props {
@@ -184,6 +186,26 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
   // Markdown view/edit toggle from FileEditorView. Null when the current
   // file isn't markdown or no toggle is meaningful (conflict, save_blocked).
   const [editorViewState, setEditorViewState] = useState<{ mode: "preview" | "edit"; toggle: () => void } | null>(null);
+  // Inline file-comments toggle. Persisted per-workstream via settings.
+  const [commentsEnabled, setCommentsEnabled] = useState(false);
+  useEffect(() => {
+    if (!workstreamId) return;
+    let cancelled = false;
+    void invoke<string | null>("get_setting", { key: `comments-visible:${workstreamId}` })
+      .then((v) => { if (!cancelled) setCommentsEnabled(v === "1"); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [workstreamId]);
+  const fileComments = useFileComments(workstreamId ?? null, filePath || null);
+  const toggleCommentsVisible = useCallback(() => {
+    setCommentsEnabled((v) => {
+      const next = !v;
+      if (workstreamId) {
+        void invoke("set_setting", { key: `comments-visible:${workstreamId}`, value: next ? "1" : "0" }).catch(() => {});
+      }
+      return next;
+    });
+  }, [workstreamId]);
   // Right-click context menu state. Anchored to viewport coordinates of
   // the contextmenu event; null when closed.
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; path: string; isDir: boolean } | null>(null);
@@ -1080,6 +1102,25 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
               : <EyeIcon style={{ width: 14, height: 14 }} />}
           </button>
         )}
+        {workstreamId && filePath ? (
+          <button
+            onClick={toggleCommentsVisible}
+            style={{
+              background: commentsEnabled ? "#313244" : "none",
+              border: "none",
+              color: commentsEnabled ? "#a6e3a1" : "#89b4fa",
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              padding: "2px 4px",
+              borderRadius: 3,
+            }}
+            title={commentsEnabled ? "Hide inline comments" : "Show inline comments"}
+            data-testid="repo-explorer-comments-toggle"
+          >
+            <ChatBubbleLeftRightIcon style={{ width: 14, height: 14 }} />
+          </button>
+        ) : null}
       </div>
     );
 
@@ -1166,6 +1207,11 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
               )}
               onSnapshotChange={setEditorSnapshot}
               onViewStateChange={setEditorViewState}
+              comments={fileComments.comments}
+              commentsEnabled={commentsEnabled}
+              onAddComment={fileComments.add}
+              onUpdateComment={fileComments.update}
+              onDeleteComment={fileComments.remove}
             />
           </div>
           {overlays}
