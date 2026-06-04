@@ -45,6 +45,7 @@ interface Props {
   workstreamDir?: string;
   linkedSessionIds?: string[];
   workstreamId?: string;
+  workstreamVisible?: boolean;
 }
 
 interface CategoryMeta {
@@ -119,7 +120,7 @@ function isRelevantFile(filePath: string): boolean {
   return true;
 }
 
-export default function SessionMetaTile({ tileId: _tileId, isFocused, workstreamDir, linkedSessionIds, workstreamId }: Props) {
+export default function SessionMetaTile({ tileId: _tileId, isFocused, workstreamDir, linkedSessionIds, workstreamId, workstreamVisible = true }: Props) {
   const backend = useBackend();
   const [items, setItems] = useState<CopilotConfigItem[]>([]);
   const [files, setFiles] = useState<SessionFileEntry[]>([]);
@@ -322,6 +323,7 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
 
     let debounceTimer: ReturnType<typeof setTimeout> | null = null;
     const unlisten = listen<{ path: string }>("fs-change", (event) => {
+      if (!workstreamVisible) return;
       const changedPath = event.payload.path.replace(/\//g, "\\").toLowerCase();
       // Skip events.jsonl changes (too frequent, handled by session poller)
       if (changedPath.endsWith("events.jsonl")) return;
@@ -340,7 +342,7 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
       }
       unlisten.then((u) => u());
     };
-  }, [workstreamDir, linkedSessionIds, activeTab, loadConfig, loadSessionData, loadPlan, loadDbTables]);
+  }, [workstreamDir, linkedSessionIds, activeTab, loadConfig, loadSessionData, loadPlan, loadDbTables, workstreamVisible]);
 
   // Open a file in the content viewer
   const viewFile = useCallback(async (path: string, title: string) => {

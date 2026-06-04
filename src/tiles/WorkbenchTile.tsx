@@ -34,6 +34,7 @@ interface Props {
   onConfigChange: (configJson: string) => void;
   /** Workstream id this tile lives in; used to scope cross-tile add events. */
   workstreamId?: string;
+  workstreamVisible?: boolean;
 }
 
 type Mode = "list" | "view";
@@ -86,7 +87,7 @@ function FileItemIcon({ name }: { name: string }) {
   }
 }
 
-export default function WorkbenchTile({ tileId: _tileId, isFocused, configJson: _configJson, onConfigChange: _onConfigChange, workstreamId }: Props) {
+export default function WorkbenchTile({ tileId: _tileId, isFocused, configJson: _configJson, onConfigChange: _onConfigChange, workstreamId, workstreamVisible = true }: Props) {
   const backend = useBackend();
   const [mode, setMode] = useState<Mode>("list");
   const [viewingPath, setViewingPath] = useState<string | null>(null);
@@ -234,6 +235,7 @@ export default function WorkbenchTile({ tileId: _tileId, isFocused, configJson: 
       invoke("watch_directory", { path: d }).catch(() => {});
     }
     const unlisten = listen<{ path: string }>("fs-change", async (event) => {
+      if (!workstreamVisible) return;
       const changedPath = event.payload.path.replace(/\//g, "\\");
       // Editable files are watched by FileEditorView; keep this live refresh only
       // for the legacy binary fallback branch.
@@ -253,7 +255,7 @@ export default function WorkbenchTile({ tileId: _tileId, isFocused, configJson: 
       }
       unlisten.then((u) => u());
     };
-  }, [files, mode, viewingPath, backend]);
+  }, [files, mode, viewingPath, backend, workstreamVisible]);
 
   const fileName = (path: string) => path.split(/[\\/]/).pop() || path;
 

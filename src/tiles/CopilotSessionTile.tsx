@@ -364,10 +364,12 @@ export default function CopilotSessionTile({
       ) as HTMLTextAreaElement | null;
       textarea?.focus();
     };
-    const timers = [50, 150, 300, 600].map((d) => window.setTimeout(focusNow, d));
-    return () => {
-      for (const t of timers) clearTimeout(t);
-    };
+    // Single deferred focus — was previously 4 staggered timers (50, 150, 300,
+    // 600 ms), which under rapid ws-switches piled up redundant term.refresh()
+    // full-buffer repaints. One frame is enough in practice; if layout has
+    // not settled by then the next render's effect re-runs with a fresh token.
+    const timer = window.setTimeout(focusNow, 50);
+    return () => clearTimeout(timer);
   }, [isFocused, focusToken]);
 
   // Apply font-size changes to xterm + re-fit + tell the PTY about the

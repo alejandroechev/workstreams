@@ -24,6 +24,12 @@ interface TileProps {
   isSideBySide?: boolean;
   /** When true the tile renders into the DOM but is invisible (display:none). */
   hidden?: boolean;
+  /**
+   * Whether this tile's owning workstream is currently visible (active).
+   * Tiles use this to early-return from event-listen callbacks (fs-change,
+   * etc.) when the user can't see the result of the work anyway.
+   */
+  workstreamVisible?: boolean;
   /** When true the side-by-side selection checkbox is rendered in the header. */
   selectable?: boolean;
   /** Whether this tile is currently selected for side-by-side. */
@@ -56,6 +62,7 @@ function TileWrapperImpl({
   isFullscreen = false,
   isSideBySide = false,
   hidden = false,
+  workstreamVisible = true,
   selectable = false,
   isSelected = false,
   onToggleSelect,
@@ -160,6 +167,7 @@ function TileWrapperImpl({
           rootDir={workstreamDir || "C:\\"}
           initialPath={cfg.filePath}
           workstreamId={workstreamId}
+          workstreamVisible={workstreamVisible}
         />
       );
       break;
@@ -171,6 +179,7 @@ function TileWrapperImpl({
           isFocused={isFocused}
           rootDir={workstreamDir || "C:\\"}
           workstreamId={workstreamId}
+          workstreamVisible={workstreamVisible}
         />
       );
       break;
@@ -182,6 +191,7 @@ function TileWrapperImpl({
           workstreamDir={workstreamDir}
           linkedSessionIds={linkedSessionIds}
           workstreamId={workstreamId}
+          workstreamVisible={workstreamVisible}
         />
       );
       break;
@@ -193,6 +203,7 @@ function TileWrapperImpl({
           configJson={tile.config_json}
           onConfigChange={(cfg) => onUpdateTileConfig?.(tile.id, cfg)}
           workstreamId={workstreamId}
+          workstreamVisible={workstreamVisible}
         />
       );
       break;

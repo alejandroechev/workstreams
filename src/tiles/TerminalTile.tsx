@@ -315,12 +315,12 @@ export default function TerminalTile({ tileId, isFocused, focusToken, onStatusCh
       ) as HTMLTextAreaElement | null;
       textarea?.focus();
     };
-    // Schedule across a few ticks: WebView2 sometimes blurs back to body
-    // immediately after a click event, so we retry until something sticks.
-    const timers = [50, 150, 300, 600].map((d) => window.setTimeout(focusNow, d));
-    return () => {
-      for (const t of timers) clearTimeout(t);
-    };
+    // Single deferred focus — was previously 4 staggered timers (50, 150,
+    // 300, 600 ms) which under rapid ws-switches stacked redundant full-
+    // buffer term.refresh() calls. One frame is enough; the effect re-runs
+    // on the next focusToken bump if it didn't stick.
+    const timer = window.setTimeout(focusNow, 50);
+    return () => clearTimeout(timer);
   }, [isFocused, focusToken]);
 
   // Apply font-size changes to xterm + re-fit + tell the PTY about the

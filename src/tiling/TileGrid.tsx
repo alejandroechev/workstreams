@@ -14,6 +14,13 @@ interface Props {
   sideBySideTileIds: string[] | null;
   /** Tile ids currently selected for entering side-by-side. */
   selectedForSideBySide: Set<string>;
+  /**
+   * Whether this TileGrid belongs to the currently-active workstream.
+   * Hidden grids skip the heavy listen-callback work (fs-change refreshes,
+   * etc.) since the user can't see results anyway. Subscribers remain
+   * mounted so xterm/PTY state survives switching back.
+   */
+  isVisible: boolean;
   onToggleSideBySideSelect: (tileId: string) => void;
   onFocusTile: (index: number) => void;
   onCloseTile: (tileId: string) => void;
@@ -36,6 +43,7 @@ function TileGridImpl({
   fullscreenTileId,
   sideBySideTileIds,
   selectedForSideBySide,
+  isVisible,
   onToggleSideBySideSelect,
   onFocusTile,
   onCloseTile,
@@ -129,6 +137,7 @@ function TileGridImpl({
             isFullscreen={isFs}
             isSideBySide={isInSbs}
             hidden={hidden}
+            workstreamVisible={isVisible}
             selectable={showSelectable}
             isSelected={selectedForSideBySide.has(tile.id)}
             onToggleSelect={onToggleSideBySideSelect}

@@ -45,6 +45,7 @@ interface Props {
   rootDir?: string;
   initialPath?: string;
   workstreamId?: string;
+  workstreamVisible?: boolean;
 }
 
 interface DirEntry {
@@ -133,7 +134,7 @@ export function parseDiffToSides(diffText: string): { original: string; modified
   return { original: originalLines.join("\n"), modified: modifiedLines.join("\n") };
 }
 
-export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, initialPath, workstreamId }: Props) {
+export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, initialPath, workstreamId, workstreamVisible = true }: Props) {
   const backend = useBackend();
 
   const [mode, setMode] = useState<Mode>(initialPath ? "view" : "browse");
@@ -398,6 +399,10 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
       }
     }, 200);
     const unlisten = listen<{ path: string; kind: string }>("fs-change", (event) => {
+      // Skip when our workstream isn't active — the user can't see refreshes
+      // anyway and a fs-change burst would otherwise wake every Repo
+      // Explorer subscriber across every loaded workstream.
+      if (!workstreamVisible) return;
       const changedPath = event.payload.path.replace(/\//g, "\\");
       const normalDir = currentDir.replace(/\//g, "\\");
       if (!changedPath.startsWith(normalDir)) return;
@@ -416,7 +421,7 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
       invoke("unwatch_directory", { path: currentDir }).catch(() => {});
       unlisten.then((u) => u());
     };
-  }, [currentDir, mode, activeDiffMode, filePath, backend]);
+  }, [currentDir, mode, activeDiffMode, filePath, backend, workstreamVisible]);
 
   // Fetch current branch on mount and when directory changes
   useEffect(() => {

@@ -1093,6 +1093,7 @@ export default function App() {
                   fullscreenTileId={st.fullscreenTileId}
                   sideBySideTileIds={st.sideBySideTileIds}
                   selectedForSideBySide={st.selectedForSideBySide}
+                  isVisible={isActive}
                   onToggleSideBySideSelect={isActive ? toggleSideBySideSelect : () => {}}
                   onFocusTile={isActive ? setFocusedIndex : () => {}}
                   onCloseTile={isActive ? closeTile : () => {}}
