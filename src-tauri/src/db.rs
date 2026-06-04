@@ -161,10 +161,34 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
             created_at TEXT NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS file_comments (
+            id TEXT PRIMARY KEY,
+            workstream_id TEXT NOT NULL,
+            absolute_path TEXT NOT NULL,
+            anchor_line_start INTEGER NOT NULL,
+            anchor_line_end INTEGER NOT NULL,
+            anchor_text TEXT,
+            body_md TEXT NOT NULL,
+            author TEXT NOT NULL,
+            origin_type TEXT NOT NULL,
+            origin_pr_id TEXT,
+            origin_comment_id TEXT,
+            origin_thread_id TEXT,
+            origin_parent_id TEXT,
+            origin_url TEXT,
+            status TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
         CREATE INDEX IF NOT EXISTS idx_diff_chunks_review ON diff_chunks(review_id, ordinal);
         CREATE INDEX IF NOT EXISTS idx_diff_hunks_chunk ON diff_hunks(chunk_id);
         CREATE INDEX IF NOT EXISTS idx_diff_comments_chunk ON diff_comments(chunk_id);
         CREATE INDEX IF NOT EXISTS idx_diff_review_events_review ON diff_review_events(review_id, id);
+        CREATE INDEX IF NOT EXISTS idx_file_comments_ws_path ON file_comments(workstream_id, absolute_path);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_file_comments_origin
+            ON file_comments(origin_type, origin_pr_id, origin_comment_id)
+            WHERE origin_type = 'ado-pr';
         ",
     )?;
 
@@ -219,6 +243,7 @@ mod tests {
             "diff_hunks",
             "diff_comments",
             "diff_review_events",
+            "file_comments",
         ];
         for table in &expected {
             let count: i64 = conn

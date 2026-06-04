@@ -1,5 +1,6 @@
 mod db;
 mod diff_review;
+mod file_comments;
 mod file_io;
 mod fs_watcher;
 mod pty;
@@ -2966,6 +2967,11 @@ pub fn run() {
             diff_review::add_comment,
             diff_review::complete_review,
             diff_review::detect_drift,
+            file_comments::list_file_comments,
+            file_comments::add_file_comment,
+            file_comments::update_file_comment,
+            file_comments::delete_file_comment,
+            file_comments::import_pr_comments,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
