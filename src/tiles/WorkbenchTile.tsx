@@ -281,7 +281,7 @@ export default function WorkbenchTile({ tileId: _tileId, isFocused, configJson: 
             style={{
               background: "none",
               border: "none",
-              color: "#a6adc8",
+              color: "#89b4fa",
               cursor: "pointer",
               display: "flex",
               alignItems: "center",
@@ -290,7 +290,7 @@ export default function WorkbenchTile({ tileId: _tileId, isFocused, configJson: 
             title="Back to file list"
             data-testid="workbench-go-to-list"
           >
-            <ChevronUpIcon style={{ width: 16, height: 16 }} />
+            <ChevronUpIcon style={{ width: 14, height: 14 }} />
           </button>
           {dirty ? (
             <span
@@ -310,21 +310,18 @@ export default function WorkbenchTile({ tileId: _tileId, isFocused, configJson: 
               style={{
                 background: "none",
                 border: "none",
-                color: "#a6adc8",
+                color: "#89b4fa",
                 cursor: "pointer",
                 display: "flex",
                 alignItems: "center",
-                gap: 4,
                 padding: "2px 4px",
               }}
               title={editorViewState.mode === "preview" ? "Edit (raw markdown)" : "Preview (rendered)"}
               data-testid="workbench-md-toggle"
             >
-              {editorViewState.mode === "preview" ? (
-                <><PencilSquareIcon style={{ width: 14, height: 14 }} /><span>Edit</span></>
-              ) : (
-                <><EyeIcon style={{ width: 14, height: 14 }} /><span>View</span></>
-              )}
+              {editorViewState.mode === "preview"
+                ? <PencilSquareIcon style={{ width: 14, height: 14 }} />
+                : <EyeIcon style={{ width: 14, height: 14 }} />}
             </button>
           )}
         </div>
