@@ -389,15 +389,10 @@ export function FileEditorView({
   // Rebuild view zones whenever the comment list or enabled state changes.
   useEffect(() => {
     const editor = editorRef.current;
-    if (!editor || effectiveMode !== "edit") {
-      // tear down any existing zones
-      const ids = zoneIdsRef.current;
-      if (ids.size > 0 && editor) {
-        editor.changeViewZones((accessor: MonacoNs.editor.IViewZoneChangeAccessor) => {
-          for (const zid of ids.values()) accessor.removeZone(zid);
-        });
-      }
-      ids.clear();
+    if (!editor) {
+      // Editor not mounted yet (or showing markdown preview / error). Tear
+      // down any stale zone tracking.
+      zoneIdsRef.current.clear();
       zoneNodesRef.current.clear();
       return;
     }
@@ -448,12 +443,12 @@ export function FileEditorView({
       ids.clear();
       zoneNodesRef.current.clear();
     };
-  }, [comments, commentsEnabled, editorReadyToken, effectiveMode, handleEditClick, handleDeleteClick]);
+  }, [comments, commentsEnabled, editorReadyToken, handleEditClick, handleDeleteClick]);
 
   // Selection listener -> floating + composer trigger.
   useEffect(() => {
     const editor = editorRef.current;
-    if (!editor || effectiveMode !== "edit" || !commentsEnabled || !onAddComment) {
+    if (!editor || !commentsEnabled || !onAddComment) {
       setSelectionAnchor(null);
       return;
     }
@@ -470,7 +465,7 @@ export function FileEditorView({
       setSelectionAnchor(anchor);
     });
     return () => disposable?.dispose?.();
-  }, [editorReadyToken, effectiveMode, commentsEnabled, onAddComment]);
+  }, [editorReadyToken, commentsEnabled, onAddComment]);
 
   const saveWithDangerousPathGuard = useCallback(async () => {
     const canonicalPath = canonicalPathRef.current;
