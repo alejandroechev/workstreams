@@ -91,6 +91,32 @@ jobs:
       - name: Run vitest
         run: npm test
 
+  rust-tests:
+    name: Rust unit tests (cargo test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Install Linux build deps (Tauri)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-3-dev \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libsoup-3.0-dev \
+            libjavascriptcoregtk-4.1-dev \
+            pkg-config
+      - name: Cache cargo registry + target
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "src-tauri -> target"
+      - name: cargo test --lib
+        working-directory: src-tauri
+        run: cargo test --lib --no-fail-fast
+
   e2e-tests:
     name: E2E tests (Playwright)
     runs-on: ubuntu-latest
@@ -116,7 +142,7 @@ jobs:
 
   build-windows:
     name: Build Windows release
-    needs: [decide-release, unit-tests, e2e-tests]
+    needs: [decide-release, unit-tests, e2e-tests, rust-tests]
     if: needs.decide-release.outputs.should_release == 'true'
     runs-on: windows-latest
     outputs:
