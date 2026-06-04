@@ -36,6 +36,7 @@ import { openPath } from "@tauri-apps/plugin-opener";
 import { writeTextToClipboard } from "../domain/clipboard";
 import { dispatchAddToWorkbench } from "../domain/workbench-events";
 import { useFileComments } from "../files/useFileComments";
+import { debounce } from "../domain/debounce";
 import type { FileSearchMatch } from "../backend/types";
 
 interface Props {
@@ -364,17 +365,16 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
     if (initialPath) openFile(initialPath);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Watch directory for filesystem changes (replaces 3s polling)
+  // Watch directory for filesystem changes (replaces 3s polling).
+  // The fs-change events from Rust are already debounced to 500 ms and
+  // filtered for node_modules/.git/target, but a single user action can
+  // still produce many distinct event paths under the watched dir. We
+  // debounce again on the React side so we issue at most one
+  // listDirectory() round-trip per quiet window.
   useEffect(() => {
     invoke("watch_directory", { path: currentDir }).catch(() => {});
-    const unlisten = listen<{ path: string; kind: string }>("fs-change", async (event) => {
-      // Check if the change is within our current directory
-      const changedPath = event.payload.path.replace(/\//g, "\\");
-      const normalDir = currentDir.replace(/\//g, "\\");
-      if (!changedPath.startsWith(normalDir)) return;
-
+    const refreshEntries = debounce(async () => {
       if (mode === "browse" && !activeDiffMode) {
-        // Refresh directory listing
         try {
           const raw = await backend.listDirectory(currentDir);
           const sep = currentDir.endsWith("\\") ? "" : "\\";
@@ -387,18 +387,32 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
           }));
           setEntries(fresh);
         } catch { /* ignore */ }
+      }
+    }, 200);
+    const refreshLegacyContent = debounce(async () => {
+      if (mode === "view" && filePath && !shouldUseFileEditor(filePath)) {
+        try {
+          const newContent = await backend.readFile(filePath);
+          setContent((prev) => prev === newContent ? prev : newContent);
+        } catch { /* ignore */ }
+      }
+    }, 200);
+    const unlisten = listen<{ path: string; kind: string }>("fs-change", (event) => {
+      const changedPath = event.payload.path.replace(/\//g, "\\");
+      const normalDir = currentDir.replace(/\//g, "\\");
+      if (!changedPath.startsWith(normalDir)) return;
+      if (mode === "browse" && !activeDiffMode) {
+        refreshEntries();
       } else if (mode === "view" && filePath && !shouldUseFileEditor(filePath)) {
-        // Refresh legacy read-only content if the changed file matches.
         const normalFile = filePath.replace(/\//g, "\\");
         if (changedPath === normalFile || changedPath.startsWith(normalDir)) {
-          try {
-            const newContent = await backend.readFile(filePath);
-            setContent((prev) => prev === newContent ? prev : newContent);
-          } catch { /* ignore */ }
+          refreshLegacyContent();
         }
       }
     });
     return () => {
+      refreshEntries.cancel();
+      refreshLegacyContent.cancel();
       invoke("unwatch_directory", { path: currentDir }).catch(() => {});
       unlisten.then((u) => u());
     };

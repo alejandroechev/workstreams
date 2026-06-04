@@ -1,4 +1,5 @@
 // @test-skip: Thin React rendering wrapper; layout logic tested in layout.test.ts
+import { memo } from "react";
 import type { Tile } from "../workstream/types";
 import { computeLayout, computeSideBySideLayout } from "../domain/layout";
 import TileWrapper from "./Tile";
@@ -27,7 +28,7 @@ interface Props {
   linkedSessionIds?: string[];
 }
 
-export default function TileGrid({
+function TileGridImpl({
   tiles,
   tileOrder,
   focusedIndex,
@@ -148,3 +149,9 @@ export default function TileGrid({
     </div>
   );
 }
+
+// Memoize so App.tsx state changes that don't actually alter the props
+// (e.g. selectWorkstream when this WS isn't the target, modal toggles,
+// notifications) don't re-render every Tile subtree.
+const TileGrid = memo(TileGridImpl);
+export default TileGrid;

@@ -1,5 +1,5 @@
 // @test-skip: Thin React wrapper; pure border logic in tile-border.ts is tested
-import { ReactNode, createElement, useEffect, useMemo, useRef, useState } from "react";
+import { ReactNode, createElement, memo, useEffect, useMemo, useRef, useState } from "react";
 import TerminalTile from "../tiles/TerminalTile";
 import CopilotSessionTile from "../tiles/CopilotSessionTile";
 import RepoExplorerTile from "../tiles/RepoExplorerTile";
@@ -43,7 +43,11 @@ interface TileProps {
   linkedSessionIds?: string[];
 }
 
-export default function TileWrapper({
+export default function TileWrapper(props: Parameters<typeof TileWrapperImpl>[0]) {
+  return <MemoTileWrapper {...props} />;
+}
+
+function TileWrapperImpl({
   tile,
   index,
   gridArea,
@@ -428,3 +432,11 @@ export default function TileWrapper({
     </div>
   );
 }
+
+// Memo wrapper: with the mount-all-workstreams strategy in App.tsx, every
+// setState in App can otherwise re-render every Tile across every loaded
+// workstream. React.memo with default shallow prop equality is enough
+// because most props are stable (tile object, ids, callbacks created
+// once); the isFocused/hidden/focusToken trio captures the per-tile
+// reasons to actually re-render.
+const MemoTileWrapper = memo(TileWrapperImpl);
