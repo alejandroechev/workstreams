@@ -32,6 +32,9 @@ tauri-plugin-clipboard-manager = "2.3.2"
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_System_Threading", "Win32_Foundation"] }
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [profile.release]
  panic = "abort"
  codegen-units = 16    # parallelize codegen
