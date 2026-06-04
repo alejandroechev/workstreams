@@ -12,11 +12,13 @@ const STORAGE_KEY = "ws.app-settings.v1";
 export interface AppSettings {
   terminalScrollSpeed: number;
   mermaidFontSize: number;
+  noVerifyBlockingEnabled: boolean;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
   terminalScrollSpeed: 0.5,
   mermaidFontSize: 12,
+  noVerifyBlockingEnabled: true,
 };
 
 export const SCROLL_SPEED_MIN = 0.1;
@@ -38,7 +40,15 @@ export function sanitize(raw: Partial<AppSettings> | null | undefined): AppSetti
     typeof raw.mermaidFontSize === "number" && Number.isFinite(raw.mermaidFontSize)
       ? clamp(raw.mermaidFontSize, MERMAID_FONT_SIZE_MIN, MERMAID_FONT_SIZE_MAX)
       : DEFAULT_SETTINGS.mermaidFontSize;
-  return { terminalScrollSpeed: speed, mermaidFontSize: Math.round(fontSize) };
+  const noVerifyBlockingEnabled =
+    typeof raw.noVerifyBlockingEnabled === "boolean"
+      ? raw.noVerifyBlockingEnabled
+      : DEFAULT_SETTINGS.noVerifyBlockingEnabled;
+  return {
+    terminalScrollSpeed: speed,
+    mermaidFontSize: Math.round(fontSize),
+    noVerifyBlockingEnabled,
+  };
 }
 
 type Listener = (s: AppSettings) => void;

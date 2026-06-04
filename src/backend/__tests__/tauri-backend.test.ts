@@ -174,13 +174,13 @@ describe("TauriBackend", () => {
     invoke.mockResolvedValueOnce(42);
     const pid = await backend.spawnCopilotSession("t1", "/cwd", "sid-abc", 24, 80);
     expect(pid).toBe(42);
-    expect(invoke).toHaveBeenCalledWith("spawn_copilot_session", {
+    expect(invoke).toHaveBeenCalledWith("spawn_copilot_session", expect.objectContaining({
       tileId: "t1",
       cwd: "/cwd",
       resumeSessionId: "sid-abc",
       rows: 24,
       cols: 80,
-    });
+    }));
   });
 
   it("spawnCopilotSession defaults resumeSessionId to null and pid to null", async () => {
@@ -191,6 +191,35 @@ describe("TauriBackend", () => {
       resumeSessionId: null,
       rows: 30,
       cols: 120,
+    }));
+  });
+
+  it("spawnTerminal forwards enableNoVerifyBlock from app settings", async () => {
+    const { setAppSettings, _resetAppSettingsCacheForTests } = await import("../../domain/app-settings");
+    _resetAppSettingsCacheForTests();
+    setAppSettings({ noVerifyBlockingEnabled: false });
+    invoke.mockResolvedValueOnce(undefined);
+    await backend.spawnTerminal("t1", "/cwd");
+    expect(invoke).toHaveBeenCalledWith("spawn_terminal", expect.objectContaining({
+      enableNoVerifyBlock: false,
+    }));
+
+    setAppSettings({ noVerifyBlockingEnabled: true });
+    invoke.mockResolvedValueOnce(undefined);
+    await backend.spawnTerminal("t2", "/cwd");
+    expect(invoke).toHaveBeenLastCalledWith("spawn_terminal", expect.objectContaining({
+      enableNoVerifyBlock: true,
+    }));
+  });
+
+  it("spawnCopilotSession forwards enableNoVerifyBlock from app settings", async () => {
+    const { setAppSettings, _resetAppSettingsCacheForTests } = await import("../../domain/app-settings");
+    _resetAppSettingsCacheForTests();
+    setAppSettings({ noVerifyBlockingEnabled: false });
+    invoke.mockResolvedValueOnce(null);
+    await backend.spawnCopilotSession("t1", "/cwd");
+    expect(invoke).toHaveBeenCalledWith("spawn_copilot_session", expect.objectContaining({
+      enableNoVerifyBlock: false,
     }));
   });
 

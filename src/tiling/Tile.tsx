@@ -10,6 +10,7 @@ import DiffReviewTile from "../tiles/DiffReviewTile";
 import type { Tile } from "../workstream/types";
 import type { CopilotSessionStats } from "../domain/types";
 import { invoke } from "@tauri-apps/api/core";
+import { getAppSettings } from "../domain/app-settings";
 import { computeTileBorder } from "./tile-border";
 import { resolveTileIcon } from "./tile-icons";
 
@@ -100,6 +101,7 @@ export default function TileWrapper({
         command: config.command || null,
         rows: 30,
         cols: 120,
+        enableNoVerifyBlock: getAppSettings().noVerifyBlockingEnabled,
       });
       setTermStatus("running");
     } catch {

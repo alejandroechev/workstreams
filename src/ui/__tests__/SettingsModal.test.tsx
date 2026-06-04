@@ -39,4 +39,14 @@ describe("SettingsModal", () => {
     fireEvent.click(screen.getByTestId("settings-modal-close"));
     expect(closed).toBe(true);
   });
+
+  it("no-verify blocking checkbox reflects current setting and toggles it", () => {
+    render(<SettingsModal open onClose={() => {}} />);
+    const cb = screen.getByTestId("settings-no-verify-blocking") as HTMLInputElement;
+    expect(cb.checked).toBe(true); // default
+    fireEvent.click(cb);
+    expect(getAppSettings().noVerifyBlockingEnabled).toBe(false);
+    fireEvent.click(cb);
+    expect(getAppSettings().noVerifyBlockingEnabled).toBe(true);
+  });
 });

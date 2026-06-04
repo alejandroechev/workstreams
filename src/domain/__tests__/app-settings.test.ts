@@ -109,6 +109,25 @@ describe("app-settings", () => {
     expect(out).toBeLessThan(0);
   });
 
+  it("sanitize defaults noVerifyBlockingEnabled to true when missing or invalid", () => {
+    expect(sanitize({}).noVerifyBlockingEnabled).toBe(true);
+    expect(sanitize(null).noVerifyBlockingEnabled).toBe(true);
+    expect(sanitize({ noVerifyBlockingEnabled: "yes" as unknown as boolean }).noVerifyBlockingEnabled)
+      .toBe(true);
+  });
+
+  it("sanitize preserves explicit noVerifyBlockingEnabled=false", () => {
+    expect(sanitize({ noVerifyBlockingEnabled: false }).noVerifyBlockingEnabled).toBe(false);
+    expect(sanitize({ noVerifyBlockingEnabled: true }).noVerifyBlockingEnabled).toBe(true);
+  });
+
+  it("setAppSettings toggles noVerifyBlockingEnabled and round-trips", () => {
+    setAppSettings({ noVerifyBlockingEnabled: false });
+    expect(getAppSettings().noVerifyBlockingEnabled).toBe(false);
+    _resetAppSettingsCacheForTests();
+    expect(getAppSettings().noVerifyBlockingEnabled).toBe(false);
+  });
+
   it("sanitize clamps and rounds mermaid font size", () => {
     expect(sanitize({ mermaidFontSize: 100 }).mermaidFontSize).toBe(MERMAID_FONT_SIZE_MAX);
     expect(sanitize({ mermaidFontSize: 2 }).mermaidFontSize).toBe(MERMAID_FONT_SIZE_MIN);

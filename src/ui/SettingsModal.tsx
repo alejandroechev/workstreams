@@ -161,6 +161,31 @@ export default function SettingsModal({ open, onClose }: Props) {
             their container on initial render; you can still scroll-zoom.
           </div>
 
+          <div style={{ height: 1, background: "#313244", margin: "18px 0 14px" }} />
+
+          <label
+            htmlFor="no-verify-blocking"
+            style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}
+          >
+            <input
+              id="no-verify-blocking"
+              data-testid="settings-no-verify-blocking"
+              type="checkbox"
+              checked={settings.noVerifyBlockingEnabled}
+              onChange={(e) =>
+                setAppSettings({ noVerifyBlockingEnabled: e.target.checked })
+              }
+            />
+            <span>Block <code>git --no-verify</code> in agent sessions</span>
+          </label>
+          <div style={{ fontSize: 11, color: "#6c7086" }}>
+            When enabled (default), terminals and Copilot sessions launched
+            from Workstreams refuse <code>git commit --no-verify</code> /
+            <code>git push --no-verify</code> and surface a message asking
+            the agent to consult you before bypassing pre-commit / pre-push
+            hooks. Turn off if you don't want this safety net.
+          </div>
+
           <div style={{ marginTop: 14, textAlign: "right" }}>
             <button
               data-testid="settings-reset"

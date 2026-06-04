@@ -65,6 +65,7 @@ export default function TerminalTile({ tileId, isFocused, focusToken, onStatusCh
         cwd: "C:\\",
         rows: 30,
         cols: 120,
+        enableNoVerifyBlock: getAppSettings().noVerifyBlockingEnabled,
       });
       updateStatus("running");
     } catch {

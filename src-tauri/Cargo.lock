@@ -1429,6 +1429,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "git-no-verify"
+version = "0.1.0"
+dependencies = [
+ "tempfile",
+]
+
+[[package]]
 name = "glib"
 version = "0.18.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
