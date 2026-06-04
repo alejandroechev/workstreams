@@ -172,6 +172,10 @@ export function FileEditorView({
   /** Imperatively populate the view-zone DOM node for a comment. */
   function renderCommentZone(node: HTMLDivElement, c: FileComment): void {
     node.innerHTML = "";
+    // Monaco's view-zone overlay defaults to pointer-events: none for the
+    // surrounding layer; explicitly opt the comment dom into receiving
+    // hover + click so the buttons are actually interactive.
+    node.style.pointerEvents = "auto";
     const header = document.createElement("div");
     header.style.display = "flex";
     header.style.alignItems = "center";
@@ -201,8 +205,14 @@ export function FileEditorView({
         padding: "1px 6px",
         cursor: "pointer",
         fontSize: "10px",
+        pointerEvents: "auto",
       });
-      editBtn.onclick = () => handleEditClick(c);
+      editBtn.addEventListener("mousedown", (e) => e.stopPropagation());
+      editBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        e.preventDefault();
+        handleEditClick(c);
+      });
       header.appendChild(editBtn);
       const delBtn = document.createElement("button");
       delBtn.textContent = "Delete";
@@ -215,8 +225,14 @@ export function FileEditorView({
         padding: "1px 6px",
         cursor: "pointer",
         fontSize: "10px",
+        pointerEvents: "auto",
       });
-      delBtn.onclick = () => handleDeleteClick(c);
+      delBtn.addEventListener("mousedown", (e) => e.stopPropagation());
+      delBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        e.preventDefault();
+        handleDeleteClick(c);
+      });
       header.appendChild(delBtn);
     } else if (c.origin_url) {
       const link = document.createElement("a");
@@ -428,7 +444,10 @@ export function FileEditorView({
           afterLineNumber: c.anchor_line_end,
           heightInLines: estimateZoneHeightInLines(c.body_md),
           domNode: dom,
-        });
+          // Let our DOM (with pointer-events: auto) handle mouse events
+          // instead of Monaco eating mousedown as a cursor movement.
+          suppressMouseDown: true,
+        } as MonacoNs.editor.IViewZone);
         zoneIdsRef.current.set(c.id, zid);
       }
     });
