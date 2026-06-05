@@ -37,6 +37,10 @@ struct PendingCorrelation {
     pid: u32,
     cwd: String,
     spawned_at: Instant,
+    /// Wall-clock spawn timestamp, used by `find_session_by_cwd` to filter
+    /// out pre-existing session dirs in the same cwd. Independent of
+    /// `spawned_at` (which is monotonic for timeout sweeps).
+    spawned_at_wall: std::time::SystemTime,
 }
 
 const PENDING_CORRELATION_TIMEOUT: Duration = Duration::from_secs(60);
@@ -102,6 +106,7 @@ impl SessionPoller {
                 pid,
                 cwd: cwd.to_string(),
                 spawned_at: Instant::now(),
+                spawned_at_wall: std::time::SystemTime::now(),
             },
         );
     }
@@ -188,6 +193,14 @@ pub fn start_poller(app: AppHandle, poller: Arc<SessionPoller>) {
             // event for any of them that are still being watched.
             let timed_out = poller.prune_pending();
 
+            // Snapshot of session ids already claimed by some tile this
+            // cycle. Used by `find_session_by_cwd` to avoid two tiles in
+            // the same cwd grabbing the same new session.
+            let already_linked: std::collections::HashSet<String> = watched
+                .iter()
+                .filter_map(|(_, _, sid, _)| sid.clone())
+                .collect();
+
             for (tile_id, session_name, session_id_opt, ws_id_opt) in &watched {
                 // Try events.jsonl approach first if we have a session_id
                 let stats = if let Some(sid) = session_id_opt {
@@ -223,8 +236,20 @@ pub fn start_poller(app: AppHandle, poller: Arc<SessionPoller>) {
                 } else if let Some(pending) = poller.get_pending(tile_id) {
                     // We have a pending correlation: try to find the session
                     // dir owned by our PID. On match, promote the tile to a
-                    // known session_id; otherwise emit no-session.
-                    match find_session_by_pid(&home, pending.pid) {
+                    // known session_id; otherwise fall back to cwd+timestamp
+                    // matching (handles the common Windows case where
+                    // child.process_id() returns the agency.exe wrapper PID
+                    // but the inuse.<pid>.lock is written by an inner
+                    // copilot.exe child — making the PID match never fire).
+                    let found_sid = find_session_by_pid(&home, pending.pid).or_else(|| {
+                        find_session_by_cwd(
+                            &home,
+                            &pending.cwd,
+                            pending.spawned_at_wall,
+                            &already_linked,
+                        )
+                    });
+                    match found_sid {
                         Some(found_sid) => {
                             poller.forget_pending(tile_id);
                             // Promote: update the watch entry so subsequent
@@ -538,7 +563,7 @@ fn is_pid_alive(pid: u32) -> bool {
 
 /// Scan `~/.copilot/session-state/*/` for a directory containing
 /// `inuse.<pid>.lock` matching the given PID. Returns the session id (dir name).
-fn find_session_by_pid(home: &std::path::Path, pid: u32) -> Option<String> {
+pub fn find_session_by_pid(home: &std::path::Path, pid: u32) -> Option<String> {
     let needle = format!("inuse.{pid}.lock");
     let root = home.join(".copilot").join("session-state");
     let entries = std::fs::read_dir(&root).ok()?;
@@ -552,6 +577,89 @@ fn find_session_by_pid(home: &std::path::Path, pid: u32) -> Option<String> {
         }
     }
     None
+}
+
+/// Parse the `cwd:` field from a session's `workspace.yaml`. Returns None
+/// if the file is missing, unreadable, or has no `cwd:` line. Tolerant of
+/// extra fields, comments, and trailing whitespace.
+pub fn read_workspace_cwd(workspace_yaml_path: &std::path::Path) -> Option<String> {
+    let contents = std::fs::read_to_string(workspace_yaml_path).ok()?;
+    for line in contents.lines() {
+        let trimmed = line.trim_start();
+        if let Some(rest) = trimmed.strip_prefix("cwd:") {
+            let v = rest.trim().trim_matches('"').trim_matches('\'').to_string();
+            if v.is_empty() {
+                return None;
+            }
+            return Some(v);
+        }
+    }
+    None
+}
+
+/// Fallback for auto-link when `find_session_by_pid` fails (the lock file
+/// is written by an inner copilot.exe child, not by the agency.exe wrapper
+/// whose PID we registered). Scans every session-state directory, reads
+/// `workspace.yaml.cwd`, and returns the OLDEST session dir whose:
+///   - workspace.yaml.cwd matches `target_cwd` (case-insensitive on Windows)
+///   - directory was created/modified after `spawned_after` (so we don't
+///     accidentally link to a pre-existing session in the same cwd)
+///   - is not in `already_linked_session_ids` (so two tiles in the same
+///     workstream don't both grab the same new session)
+///
+/// "Oldest" means smallest mtime — matches the pending entry that has been
+/// waiting longest, which is the right choice when multiple new sessions
+/// were spawned in the same cwd within a short window.
+pub fn find_session_by_cwd(
+    home: &std::path::Path,
+    target_cwd: &str,
+    spawned_after: std::time::SystemTime,
+    already_linked_session_ids: &std::collections::HashSet<String>,
+) -> Option<String> {
+    let root = home.join(".copilot").join("session-state");
+    let entries = std::fs::read_dir(&root).ok()?;
+    let normalized_target = normalize_path_for_compare(target_cwd);
+    let mut best: Option<(std::time::SystemTime, String)> = None;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let id = match path.file_name().map(|n| n.to_string_lossy().to_string()) {
+            Some(n) => n,
+            None => continue,
+        };
+        if already_linked_session_ids.contains(&id) {
+            continue;
+        }
+        let workspace_path = path.join("workspace.yaml");
+        let cwd = match read_workspace_cwd(&workspace_path) {
+            Some(c) => c,
+            None => continue,
+        };
+        if normalize_path_for_compare(&cwd) != normalized_target {
+            continue;
+        }
+        let mtime = match std::fs::metadata(&workspace_path).and_then(|m| m.modified()) {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+        if mtime < spawned_after {
+            continue;
+        }
+        match &best {
+            Some((cur_mtime, _)) if mtime >= *cur_mtime => {} // we want oldest match
+            _ => best = Some((mtime, id)),
+        }
+    }
+    best.map(|(_, id)| id)
+}
+
+fn normalize_path_for_compare(p: &str) -> String {
+    // Windows is case-insensitive and uses backslashes; the workspace.yaml
+    // sometimes stores forward slashes. Compare case-insensitively with
+    // separators normalized.
+    p.replace('/', "\\").to_lowercase()
 }
 
 fn no_session_stats() -> SessionStats {
@@ -886,6 +994,129 @@ mod tests {
         )
         .ok();
         assert_eq!(find_session_by_pid(&tmp, 9999), None);
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    // ── find_session_by_cwd tests ──────────────────────────────────────
+
+    fn write_workspace_yaml(dir: &std::path::Path, cwd: &str) {
+        std::fs::create_dir_all(dir).ok();
+        std::fs::write(
+            dir.join("workspace.yaml"),
+            format!("id: x\ncwd: {cwd}\nbranch: main\n"),
+        )
+        .ok();
+    }
+
+    #[test]
+    fn read_workspace_cwd_parses_simple_yaml() {
+        let tmp = std::env::temp_dir().join(format!("ws_yaml_simple_{}", std::process::id()));
+        write_workspace_yaml(&tmp, "C:\\repo\\foo");
+        assert_eq!(
+            read_workspace_cwd(&tmp.join("workspace.yaml")).as_deref(),
+            Some("C:\\repo\\foo"),
+        );
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn read_workspace_cwd_strips_quotes() {
+        let tmp = std::env::temp_dir().join(format!("ws_yaml_quoted_{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).ok();
+        std::fs::write(
+            tmp.join("workspace.yaml"),
+            "cwd: \"C:/repo\\foo\"\nname: x\n",
+        )
+        .ok();
+        assert_eq!(
+            read_workspace_cwd(&tmp.join("workspace.yaml")).as_deref(),
+            Some("C:/repo\\foo"),
+        );
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn read_workspace_cwd_returns_none_when_missing() {
+        let tmp = std::env::temp_dir().join(format!("ws_yaml_missing_{}", std::process::id()));
+        assert_eq!(read_workspace_cwd(&tmp.join("workspace.yaml")), None);
+    }
+
+    #[test]
+    fn find_session_by_cwd_finds_match_after_spawn_time() {
+        let tmp = std::env::temp_dir().join(format!("ws_cwd_match_{}", std::process::id()));
+        let root = tmp.join(".copilot").join("session-state");
+        std::fs::create_dir_all(&root).ok();
+        // Old session with same cwd (should be skipped because of spawned_after).
+        write_workspace_yaml(&root.join("sid-old"), "C:\\repo\\foo");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let spawn_time = std::time::SystemTime::now();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        write_workspace_yaml(&root.join("sid-new"), "C:\\repo\\foo");
+        let empty: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let found = find_session_by_cwd(&tmp, "C:\\repo\\foo", spawn_time, &empty);
+        assert_eq!(found.as_deref(), Some("sid-new"));
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn find_session_by_cwd_ignores_already_linked() {
+        let tmp = std::env::temp_dir().join(format!("ws_cwd_linked_{}", std::process::id()));
+        let root = tmp.join(".copilot").join("session-state");
+        std::fs::create_dir_all(&root).ok();
+        let spawn_time = std::time::SystemTime::now() - std::time::Duration::from_secs(60);
+        write_workspace_yaml(&root.join("sid-a"), "C:\\repo\\bar");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        write_workspace_yaml(&root.join("sid-b"), "C:\\repo\\bar");
+        let mut already: std::collections::HashSet<String> = std::collections::HashSet::new();
+        already.insert("sid-a".to_string());
+        // sid-a is claimed → only sid-b should be returned
+        let found = find_session_by_cwd(&tmp, "C:\\repo\\bar", spawn_time, &already);
+        assert_eq!(found.as_deref(), Some("sid-b"));
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn find_session_by_cwd_matches_case_insensitive_and_normalizes_separators() {
+        let tmp = std::env::temp_dir().join(format!("ws_cwd_case_{}", std::process::id()));
+        let root = tmp.join(".copilot").join("session-state");
+        std::fs::create_dir_all(&root).ok();
+        let spawn_time = std::time::SystemTime::now() - std::time::Duration::from_secs(60);
+        // Stored cwd uses forward slashes + uppercase drive
+        write_workspace_yaml(&root.join("sid-c"), "C:/Repo/Foo");
+        let empty: std::collections::HashSet<String> = std::collections::HashSet::new();
+        // Target uses backslashes + lowercase
+        let found = find_session_by_cwd(&tmp, "c:\\repo\\foo", spawn_time, &empty);
+        assert_eq!(found.as_deref(), Some("sid-c"));
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn find_session_by_cwd_returns_none_for_mismatched_cwd() {
+        let tmp = std::env::temp_dir().join(format!("ws_cwd_miss_{}", std::process::id()));
+        let root = tmp.join(".copilot").join("session-state");
+        std::fs::create_dir_all(&root).ok();
+        write_workspace_yaml(&root.join("sid-d"), "C:\\other");
+        let spawn_time = std::time::SystemTime::now() - std::time::Duration::from_secs(60);
+        let empty: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let found = find_session_by_cwd(&tmp, "C:\\target", spawn_time, &empty);
+        assert_eq!(found, None);
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn find_session_by_cwd_picks_oldest_match() {
+        // Two NEW sessions both match. The oldest one wins so the
+        // longest-waiting pending tile gets the older session.
+        let tmp = std::env::temp_dir().join(format!("ws_cwd_oldest_{}", std::process::id()));
+        let root = tmp.join(".copilot").join("session-state");
+        std::fs::create_dir_all(&root).ok();
+        let spawn_time = std::time::SystemTime::now() - std::time::Duration::from_secs(60);
+        write_workspace_yaml(&root.join("sid-old"), "C:\\repo");
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        write_workspace_yaml(&root.join("sid-new"), "C:\\repo");
+        let empty: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let found = find_session_by_cwd(&tmp, "C:\\repo", spawn_time, &empty);
+        assert_eq!(found.as_deref(), Some("sid-old"));
         std::fs::remove_dir_all(&tmp).ok();
     }
 

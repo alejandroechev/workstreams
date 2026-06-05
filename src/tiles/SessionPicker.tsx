@@ -15,6 +15,12 @@ interface Props {
   onSelect: (session: CopilotSession) => void;
   onCreateNew: () => void;
   onCancel: () => void;
+  /**
+   * Active workstream's directory. Sessions whose cwd matches (case-
+   * insensitively, separator-normalized) sort to the top with a
+   * "this workstream" badge.
+   */
+  activeWorkstreamDir?: string;
 }
 
 function timeAgo(dateStr: string | null): string {
@@ -30,7 +36,11 @@ function timeAgo(dateStr: string | null): string {
   return `${days}d ago`;
 }
 
-export default function SessionPicker({ onSelect, onCreateNew, onCancel }: Props) {
+function normalizePath(p: string | null | undefined): string {
+  return (p ?? "").replace(/\//g, "\\").toLowerCase();
+}
+
+export default function SessionPicker({ onSelect, onCreateNew, onCancel, activeWorkstreamDir }: Props) {
   const [sessions, setSessions] = useState<CopilotSession[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState("");
@@ -44,16 +54,32 @@ export default function SessionPicker({ onSelect, onCreateNew, onCancel }: Props
       .catch(() => setLoading(false));
   }, []);
 
-  const filtered = sessions.filter((s) => {
-    if (!filter) return true;
-    const q = filter.toLowerCase();
-    return (
-      (s.summary?.toLowerCase().includes(q)) ||
-      (s.cwd?.toLowerCase().includes(q)) ||
-      (s.repository?.toLowerCase().includes(q)) ||
-      (s.session_id.toLowerCase().startsWith(q))
-    );
-  });
+  const targetDir = normalizePath(activeWorkstreamDir);
+  const matchesWorkstream = (s: CopilotSession): boolean => {
+    if (!targetDir) return false;
+    return normalizePath(s.cwd) === targetDir;
+  };
+
+  const filtered = sessions
+    .filter((s) => {
+      if (!filter) return true;
+      const q = filter.toLowerCase();
+      return (
+        (s.summary?.toLowerCase().includes(q)) ||
+        (s.cwd?.toLowerCase().includes(q)) ||
+        (s.repository?.toLowerCase().includes(q)) ||
+        (s.session_id.toLowerCase().startsWith(q))
+      );
+    })
+    .sort((a, b) => {
+      // Matching-workstream rows first; within each group keep updated_at desc.
+      const am = matchesWorkstream(a) ? 1 : 0;
+      const bm = matchesWorkstream(b) ? 1 : 0;
+      if (am !== bm) return bm - am;
+      const at = a.updated_at ? Date.parse(a.updated_at) : 0;
+      const bt = b.updated_at ? Date.parse(b.updated_at) : 0;
+      return bt - at;
+    });
 
   return (
     <div
@@ -155,7 +181,9 @@ export default function SessionPicker({ onSelect, onCreateNew, onCancel }: Props
               No sessions found
             </div>
           )}
-          {filtered.map((s) => (
+          {filtered.map((s) => {
+            const matching = matchesWorkstream(s);
+            return (
             <div
               key={s.session_id}
               onClick={() => onSelect(s)}
@@ -163,12 +191,16 @@ export default function SessionPicker({ onSelect, onCreateNew, onCancel }: Props
                 padding: "10px 16px",
                 cursor: "pointer",
                 borderBottom: "1px solid #181825",
+                background: matching ? "rgba(166,227,161,0.06)" : "transparent",
+                borderLeft: matching ? "3px solid #a6e3a1" : "3px solid transparent",
               }}
               onMouseEnter={(e) => {
                 (e.currentTarget as HTMLElement).style.background = "#313244";
               }}
               onMouseLeave={(e) => {
-                (e.currentTarget as HTMLElement).style.background = "transparent";
+                (e.currentTarget as HTMLElement).style.background = matching
+                  ? "rgba(166,227,161,0.06)"
+                  : "transparent";
               }}
             >
               <div style={{
@@ -178,6 +210,11 @@ export default function SessionPicker({ onSelect, onCreateNew, onCancel }: Props
               }}>
                 <span style={{ color: "#cdd6f4", fontWeight: 500, fontSize: 13 }}>
                   {s.summary || s.session_id.slice(0, 8)}
+                  {matching && (
+                    <span style={{ marginLeft: 8, padding: "1px 6px", background: "#a6e3a1", color: "#1e1e2e", borderRadius: 3, fontSize: 10, fontWeight: 600 }}>
+                      this workstream
+                    </span>
+                  )}
                 </span>
                 <span style={{ color: "#585b70", fontSize: 11 }}>
                   {timeAgo(s.updated_at)}
@@ -200,7 +237,8 @@ export default function SessionPicker({ onSelect, onCreateNew, onCancel }: Props
                 <span style={{ color: "#45475a" }}>{s.session_id.slice(0, 8)}</span>
               </div>
             </div>
-          ))}
+            );
+          })}
         </div>
       </div>
     </div>

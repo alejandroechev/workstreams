@@ -44,26 +44,6 @@ export default function TerminalTile({ tileId, isFocused, focusToken, onStatusCh
     }
   }, [tileId]);
 
-  // Restart terminal (kill existing + respawn)
-  const restart = useCallback(async () => {
-    try {
-      await invoke("close_terminal", { tileId }).catch(() => {});
-      updateStatus("spawning");
-      // Re-read tile config to get cwd/command
-      const tiles = await invoke<Array<{id: string; config_json: string}>>("list_tiles", { workstreamId: "" }).catch(() => []);
-      // Default respawn with pwsh
-      await invoke("spawn_terminal", {
-        tileId,
-        cwd: "C:\\",
-        rows: 30,
-        cols: 120,
-      });
-      updateStatus("running");
-    } catch {
-      updateStatus("failed");
-    }
-  }, [tileId, updateStatus]);
-
   useEffect(() => {
     if (!containerRef.current) return;
 
@@ -191,7 +171,15 @@ export default function TerminalTile({ tileId, isFocused, focusToken, onStatusCh
 
     // Listen for PTY exit
     const unlistenExit = listen(`pty-exit-${tileId}`, () => {
-      term.write("\r\n\x1b[90m[Process exited]\x1b[0m\r\n");
+      const intentional = (window as unknown as { __wsIntentionalRestartIds?: Set<string> })
+        .__wsIntentionalRestartIds?.has(tileId) ?? false;
+      if (intentional) {
+        term.write("\r\n\x1b[90m[Restarting…]\x1b[0m\r\n");
+        (window as unknown as { __wsIntentionalRestartIds?: Set<string> })
+          .__wsIntentionalRestartIds?.delete(tileId);
+      } else {
+        term.write("\r\n\x1b[90m[Process exited]\x1b[0m\r\n");
+      }
       updateStatus("exited");
     });
 
@@ -332,25 +320,6 @@ export default function TerminalTile({ tileId, isFocused, focusToken, onStatusCh
 
   return (
     <div style={{ width: "100%", height: "100%", position: "relative", overflow: "hidden" }}>
-      {status === "exited" && (
-        <div
-          style={{
-            position: "absolute",
-            top: 4,
-            right: 4,
-            zIndex: 10,
-            background: "#313244",
-            borderRadius: 4,
-            padding: "4px 10px",
-            fontSize: 11,
-            color: "#f9e2af",
-            cursor: "pointer",
-          }}
-          onClick={restart}
-        >
-          ↻ Restart
-        </div>
-      )}
       <div
         ref={containerRef}
         onMouseDown={() => {

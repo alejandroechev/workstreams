@@ -3,7 +3,6 @@ import type { CSSProperties, JSX } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import type { Tile, Workstream } from "../domain/types";
-import { summarizeTilesToRestart } from "../domain/worktree-change";
 
 export interface ChangeWorktreeFormProps {
   workstream: Workstream;
@@ -87,7 +86,6 @@ export function ChangeWorktreeForm({ workstream, tiles, onCancel, onSubmit }: Ch
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const restartSummary = summarizeTilesToRestart(tiles);
   const derivedFolderName = deriveFolderName(branchName);
   const effectiveFolderName = folderNameOverride.trim() || derivedFolderName;
   const canSubmit = mode === "switch_existing" ? !!directory.trim() : !!branchName.trim();
@@ -256,12 +254,6 @@ export function ChangeWorktreeForm({ workstream, tiles, onCancel, onSubmit }: Ch
               style={{ ...inputStyle, marginBottom: 14 }}
             />
           </>
-        )}
-
-        {restartSummary.count > 0 && (
-          <div style={{ fontSize: 11, color: "#f9e2af", marginBottom: 14, padding: "6px 8px", background: "#181825", borderRadius: 4 }}>
-            {restartSummary.count} session tile(s) will be restarted in the new directory.
-          </div>
         )}
 
         {error && (

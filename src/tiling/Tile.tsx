@@ -102,6 +102,20 @@ function TileWrapperImpl({
 
   const handleRestart = async (e: React.MouseEvent) => {
     e.stopPropagation();
+    // Delegate restart to App.tsx's onRestart callback so the correct
+    // spawn command runs per tile type (copilot_session → spawnCopilotSession
+    // preserving the linked session id; terminal → spawn_terminal preserving
+    // command + cwd). Previously this function always called spawn_terminal,
+    // which left copilot session tiles stuck and required a second click on
+    // the in-tile Restart button.
+    if (onRestart) {
+      onRestart(tile.id);
+      setTermStatus("running");
+      return;
+    }
+    // Fallback (no parent-provided handler): plain spawn_terminal — kept
+    // for safety, but shouldn't ever fire since App always provides
+    // onRestart for active workstreams.
     try {
       await invoke("close_terminal", { tileId: tile.id }).catch(() => {});
       const config = JSON.parse(tile.config_json || "{}");

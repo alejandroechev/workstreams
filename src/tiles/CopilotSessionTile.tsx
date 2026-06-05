@@ -197,7 +197,15 @@ export default function CopilotSessionTile({
     });
 
     const unlistenExit = listen(`pty-exit-${tileId}`, () => {
-      term.write("\r\n\x1b[90m[Session ended]\x1b[0m\r\n");
+      const intentional = (window as unknown as { __wsIntentionalRestartIds?: Set<string> })
+        .__wsIntentionalRestartIds?.has(tileId) ?? false;
+      if (intentional) {
+        term.write("\r\n\x1b[90m[Restarting…]\x1b[0m\r\n");
+        (window as unknown as { __wsIntentionalRestartIds?: Set<string> })
+          .__wsIntentionalRestartIds?.delete(tileId);
+      } else {
+        term.write("\r\n\x1b[90m[Session ended]\x1b[0m\r\n");
+      }
       updateStatus("exited");
     });
 
@@ -403,41 +411,32 @@ export default function CopilotSessionTile({
             ◉ Starting...
           </span>
         )}
-        {/* Restart button — only when session has exited */}
-        {status === "exited" && onRestart && (
-          <button
-            onClick={(e) => { e.stopPropagation(); onRestart(); }}
-            style={{
-              background: "#a6e3a1",
-              color: "#1e1e2e",
-              border: "none",
-              borderRadius: 4,
-              padding: "4px 10px",
-              fontSize: 11,
-              cursor: "pointer",
-              fontWeight: 600,
-            }}
-            title="Restart the copilot session"
-          >
-            ▶ Restart
-          </button>
-        )}
-        {/* Link session button — manual override for auto-link */}
+        {/* Link session button — manual override for auto-link.
+            States:
+              - linked        : "🔗 Linked"
+              - spawned, not linked yet (auto-link pending): "🔗 New"
+              - not spawned   : "🔗 Link" */}
         {onLinkSession && (
           <button
             onClick={(e) => { e.stopPropagation(); onLinkSession(); }}
             style={{
               background: "#313244",
-              color: hasLinkedSession ? "#a6e3a1" : "#585b70",
+              color: hasLinkedSession ? "#a6e3a1" : alreadyRunning ? "#f9e2af" : "#585b70",
               border: "none",
               borderRadius: 4,
               padding: "4px 10px",
               fontSize: 11,
               cursor: "pointer",
             }}
-            title={hasLinkedSession ? `Linked: ${config.copilot_session_id || ""}` : "Link an existing Copilot session"}
+            title={
+              hasLinkedSession
+                ? `Linked: ${config.copilot_session_id || ""}`
+                : alreadyRunning
+                  ? "New session — type a prompt to identify it. Link will attach automatically."
+                  : "Link an existing Copilot session"
+            }
           >
-            {hasLinkedSession ? "🔗 Linked" : "🔗 Link"}
+            {hasLinkedSession ? "🔗 Linked" : alreadyRunning ? "🔗 New" : "🔗 Link"}
           </button>
         )}
       </div>

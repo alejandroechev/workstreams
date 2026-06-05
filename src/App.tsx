@@ -19,7 +19,6 @@ import { navigateFocus } from "./domain/layout";
 import { parseKeyAction } from "./domain/keyboard";
 import { createTerminalConfig, createCopilotSessionConfig } from "./domain/tile-config";
 import { createWorkstreamFlow } from "./domain/workstream-create";
-import { summarizeTilesToRestart } from "./domain/worktree-change";
 import { workbenchStore } from "./domain/workbench-store-instance";
 import { setWorkbenchStoreForDispatcher } from "./domain/workbench-events";
 import { useBackend } from "./backend/context";
@@ -163,6 +162,16 @@ export default function App() {
   const [noActiveReviewHint, setNoActiveReviewHint] = useState(false);
   // Track which tile IDs have active PTYs to avoid double-spawning
   const spawnedPtys = useRef<Set<string>>(new Set());
+  // Tile ids whose PTY exit was triggered by our own restart code path.
+  // Used by CopilotSessionTile / TerminalTile to swap the "[Session ended]"
+  // banner for "[Restarting…]" when we know the exit was intentional.
+  const intentionalRestartIds = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    // Expose to tiles via a window global to avoid plumbing yet another
+    // prop through Tile → Tile children for what is purely a UI hint.
+    (window as unknown as { __wsIntentionalRestartIds?: Set<string> }).__wsIntentionalRestartIds =
+      intentionalRestartIds.current;
+  }, []);
   const previousWsTiles = useRef<Map<string, { tiles: Tile[]; order: string[] }>>(new Map());
 
   const getDirtyFileBuffers = useCallback(() => fileBufferRegistry.listAll().filter((snapshot) => snapshot.dirty), []);
@@ -580,34 +589,13 @@ export default function App() {
     });
   }, [workstreams, backend]);
 
-  const restartTileInDirectory = useCallback(async (tile: Tile, directory: string) => {
-    if (tile.tile_type !== "terminal" && tile.tile_type !== "copilot_session") return;
-
-    const cfg = JSON.parse(tile.config_json || "{}");
-    spawnedPtys.current.delete(tile.id);
-    await backend.closeTerminal(tile.id).catch(() => {});
-    spawnedPtys.current.add(tile.id);
-
-    try {
-      if (tile.tile_type === "terminal") {
-        await backend.spawnTerminal(tile.id, directory, cfg.command || undefined, undefined, 30, 120);
-      } else {
-        const sessionId = cfg.copilot_session_id || cfg.resume_by_id || null;
-        await backend.spawnCopilotSession(tile.id, directory, sessionId, 30, 120);
-      }
-    } catch (error) {
-      spawnedPtys.current.delete(tile.id);
-      throw error;
-    }
-  }, [backend]);
-
   const handleChangeWorktreeSubmit = useCallback(async (
     mode: "switch_existing" | "create_new",
     opts: { directory?: string; branchName?: string; folderName?: string },
   ) => {
     if (!changeWorktreeTarget) return;
 
-    const { workstream, affectedTileIds } = await backend.changeWorkstreamWorktree(changeWorktreeTarget.id, mode, opts);
+    const { workstream } = await backend.changeWorkstreamWorktree(changeWorktreeTarget.id, mode, opts);
     const updatedTiles = await backend.listTiles(workstream.id);
     const updatedTilesById = new Map(updatedTiles.map((tile) => [tile.id, tile]));
 
@@ -622,11 +610,11 @@ export default function App() {
       return next;
     });
 
-    const restartDirectory = workstream.directory || "C:\\";
-    for (const tileId of affectedTileIds) {
-      const tile = updatedTilesById.get(tileId);
-      if (tile) await restartTileInDirectory(tile, restartDirectory);
-    }
+    // Intentionally do NOT restart any tiles here. The Rust command has
+    // already rewritten each restartable tile's config_json.cwd, so the new
+    // directory will take effect on the next manual restart / app relaunch.
+    // Restarting on worktree-switch was killing scrollback for no benefit
+    // (cd inside the running session must be done by the user / agent).
 
     const latestWorkstreams = await backend.listWorkstreams();
     setWorkstreams((prev) => {
@@ -642,9 +630,8 @@ export default function App() {
     });
 
     setChangeWorktreeTarget(null);
-    const restartSummary = summarizeTilesToRestart(updatedTiles.filter((tile) => affectedTileIds.includes(tile.id)));
-    console.info(`Changed worktree for ${workstream.name}; restarted ${restartSummary.count} tile(s).`);
-  }, [backend, changeWorktreeTarget, restartTileInDirectory]);
+    console.info(`Changed worktree for ${workstream.name} (tiles left running; new dir applies on next restart).`);
+  }, [backend, changeWorktreeTarget]);
 
   const addTile = useCallback(async (tileType: TileType, extraConfig?: Record<string, string>) => {
     if (!activeWsId) return;
@@ -1150,14 +1137,26 @@ export default function App() {
                     }
                   } : undefined}
                   onRestart={isActive ? async (tileId) => {
-                    const tile = tiles.find((t) => t.id === tileId);
+                    const tile = st.tiles.find((t) => t.id === tileId);
                     if (!tile) return;
                     const cfg = JSON.parse(tile.config_json || "{}");
-                    const cwd = cfg.cwd || workstreams.find((w) => w.id === activeWsId)?.directory || "C:\\";
+                    const cwd = cfg.cwd || workstreams.find((w) => w.id === wsId)?.directory || "C:\\";
+                    // Mark "we initiated this" so the PTY-exit handler in
+                    // the tile writes [Restarting…] instead of [Session ended].
+                    intentionalRestartIds.current.add(tileId);
                     await backend.closeTerminal(tileId).catch(() => {});
                     spawnedPtys.current.add(tileId);
-                    const sessionId = cfg.copilot_session_id || cfg.resume_by_id || null;
-                    await backend.spawnCopilotSession(tileId, cwd, sessionId, 30, 120);
+                    try {
+                      if (tile.tile_type === "copilot_session") {
+                        const sessionId = cfg.copilot_session_id || cfg.resume_by_id || null;
+                        await backend.spawnCopilotSession(tileId, cwd, sessionId, 30, 120);
+                      } else if (tile.tile_type === "terminal") {
+                        await backend.spawnTerminal(tileId, cwd, cfg.command || undefined, undefined, 30, 120);
+                      }
+                    } catch {
+                      spawnedPtys.current.delete(tileId);
+                      intentionalRestartIds.current.delete(tileId);
+                    }
                   } : undefined}
                   onUpdateTileConfig={isActive ? async (tileId, configJson) => {
                     await backend.updateTileConfig(tileId, configJson);
@@ -1252,6 +1251,7 @@ export default function App() {
       {/* Session picker modal */}
       {showSessionPicker && (
         <SessionPicker
+          activeWorkstreamDir={workstreams.find((w) => w.id === activeWsId)?.directory ?? undefined}
           onSelect={async (session) => {
             setShowSessionPicker(false);
             // Case A: user started "new WS + existing session" — create the
