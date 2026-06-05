@@ -22,11 +22,16 @@ describe("WorkstreamCreateForm", () => {
     expect(getRadio("ws-create-session-new").checked).toBe(true);
   });
 
-  it("forces existing session when import_worktree is selected", () => {
+  it("allows choosing either session type when import_worktree is selected", () => {
     render(<WorkstreamCreateForm projects={projects} onSubmit={vi.fn()} onCancel={vi.fn()} />);
     fireEvent.click(getRadio("ws-create-repo-import_worktree"));
+    // Default still falls through to "new"; both radios remain enabled.
+    expect(getRadio("ws-create-session-new").checked).toBe(true);
+    expect(getRadio("ws-create-session-existing").disabled).toBe(false);
+    expect(getRadio("ws-create-session-new").disabled).toBe(false);
+    // User can switch to existing if they want.
+    fireEvent.click(getRadio("ws-create-session-existing"));
     expect(getRadio("ws-create-session-existing").checked).toBe(true);
-    expect(getRadio("ws-create-session-new").disabled).toBe(true);
   });
 
   it("submits the correct payload for new worktree + new session", () => {
