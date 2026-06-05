@@ -36,6 +36,8 @@ import { dispatchAddToWorkbench } from "../domain/workbench-events";
 import { useFileComments } from "../files/useFileComments";
 import { debounce } from "../domain/debounce";
 import { getAppSettings, subscribeAppSettings } from "../domain/app-settings";
+import { parseViewState } from "../domain/tile-view-state";
+import { useTileViewStatePersist } from "../domain/useTileViewStatePersist";
 
 interface Props {
   tileId: string;
@@ -44,6 +46,8 @@ interface Props {
   initialPath?: string;
   workstreamId?: string;
   workstreamVisible?: boolean;
+  configJson?: string;
+  onConfigChange?: (configJson: string) => void;
 }
 
 interface DirEntry {
@@ -132,7 +136,7 @@ export function parseDiffToSides(diffText: string): { original: string; modified
   return { original: originalLines.join("\n"), modified: modifiedLines.join("\n") };
 }
 
-export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, initialPath, workstreamId, workstreamVisible = true }: Props) {
+export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, initialPath, workstreamId, workstreamVisible = true, configJson, onConfigChange }: Props) {
   const backend = useBackend();
 
   const [mode, setMode] = useState<Mode>(initialPath ? "view" : "browse");
@@ -712,6 +716,56 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
         break;
     }
   }, [activeTab, activateDiffMode, openGitLog, openGitHooks]);
+
+  const hydratedRef = useRef(false);
+  useEffect(() => {
+    if (!workstreamVisible || hydratedRef.current) return;
+    hydratedRef.current = true;
+    const vs = parseViewState(configJson, "repo_explorer");
+    if (vs.currentDir) setCurrentDir(vs.currentDir);
+    const tab = vs.activeTab as TabId | undefined;
+    if (tab && tab !== "files") {
+      if (tab === "diff") {
+        const dm = (vs.diffMode as DiffMode | undefined) ?? "unstaged";
+        activateDiffMode(dm);
+      } else if (tab === "log") {
+        void openGitLog();
+      } else if (tab === "hooks") {
+        void openGitHooks();
+      }
+    }
+    if (vs.filePath && (!tab || tab === "files")) {
+      void openFile(vs.filePath, "none").catch(() => {});
+    }
+  }, [workstreamVisible, configJson, activateDiffMode, openGitLog, openGitHooks, openFile]);
+
+  // Restore selected hook once hooksList loads after hooks tab hydration.
+  useEffect(() => {
+    if (!hydratedRef.current) return;
+    if (mode !== "hooks") return;
+    if (hookContent) return;
+    if (hooksList.length === 0) return;
+    const vs = parseViewState(configJson, "repo_explorer");
+    if (vs.hookName) {
+      const hook = hooksList.find((h) => h.name === vs.hookName);
+      if (hook) void viewHookContent(hook);
+    }
+  }, [hooksList, mode, hookContent, configJson, viewHookContent]);
+
+  useTileViewStatePersist(
+    configJson,
+    "repo_explorer",
+    {
+      activeTab,
+      currentDir,
+      filePath: mode === "view" && filePath && !filePath.startsWith("commit:") ? filePath : undefined,
+      diffMode: activeTab === "diff" && activeDiffMode ? activeDiffMode : undefined,
+      hookName: activeTab === "hooks" && hookContent ? hookContent.name : undefined,
+      mdViewMode: editorViewState?.mode,
+    },
+    onConfigChange,
+    { enabled: hydratedRef.current },
+  );
 
   // Reset Ctrl+P selection when results change
   useEffect(() => { setFileSearchSelectedIndex(0); }, [fileSearchResults]);

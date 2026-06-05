@@ -1,10 +1,12 @@
 // @test-skip: pre-existing tile shell pattern; pure helpers/backends tested separately
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { MarkdownView } from "../ui/MarkdownView";
 import { MermaidDiagram } from "../ui/MermaidDiagram";
 import { useBackend } from "../backend/context";
 import { buildTodoDepsMermaid } from "../domain/todo-deps-mermaid";
+import { parseViewState } from "../domain/tile-view-state";
+import { useTileViewStatePersist } from "../domain/useTileViewStatePersist";
 import type {
   SessionPlanEntry,
   SessionTodo,
@@ -24,6 +26,9 @@ interface Props {
   tileId: string;
   isFocused: boolean;
   linkedSessionIds?: string[];
+  configJson?: string;
+  onConfigChange?: (configJson: string) => void;
+  workstreamVisible?: boolean;
 }
 
 type TabId = "plan" | "todos" | "graph" | "history";
@@ -132,7 +137,7 @@ function TodoList({ todos }: { todos: SessionTodo[] }) {
   );
 }
 
-export default function PlanTile({ linkedSessionIds }: Props) {
+export default function PlanTile({ linkedSessionIds, configJson, onConfigChange, workstreamVisible = true }: Props) {
   const backend = useBackend();
   const sessionId = linkedSessionIds?.[0];
   const [activeTab, setActiveTab] = useState<TabId>("plan");
@@ -178,6 +183,30 @@ export default function PlanTile({ linkedSessionIds }: Props) {
     const t = setInterval(() => void load(), 5000);
     return () => clearInterval(t);
   }, [load]);
+
+  const hydratedRef = useRef(false);
+  useEffect(() => {
+    if (!workstreamVisible || hydratedRef.current) return;
+    hydratedRef.current = true;
+    const vs = parseViewState(configJson, "plan");
+    if (vs.activeTab) setActiveTab(vs.activeTab as TabId);
+    if (vs.selectedHistoryPlanId) setSelectedHistoryPlanId(vs.selectedHistoryPlanId);
+    if (vs.historySubTab === "plan" || vs.historySubTab === "todos") {
+      setHistorySubTab(vs.historySubTab);
+    }
+  }, [workstreamVisible, configJson]);
+
+  useTileViewStatePersist(
+    configJson,
+    "plan",
+    {
+      activeTab,
+      selectedHistoryPlanId: selectedHistoryPlanId ?? undefined,
+      historySubTab,
+    },
+    onConfigChange,
+    { enabled: hydratedRef.current },
+  );
 
   const currentTodos = todos.filter((t) => t.plan_id === currentPlanId);
   const mermaidSrc = buildTodoDepsMermaid(currentTodos, deps);

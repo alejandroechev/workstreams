@@ -9,6 +9,8 @@ import { makeAudioBlobUrl } from "../domain/file-types";
 import { FileEditorView } from "../files/FileEditorView";
 import type { BufferSnapshot } from "../files/FileBufferRegistry";
 import AudioPlayer from "./AudioPlayer";
+import { parseViewState } from "../domain/tile-view-state";
+import { useTileViewStatePersist } from "../domain/useTileViewStatePersist";
 import { dispatchAddToWorkbench } from "../domain/workbench-events";
 import { writeTextToClipboard } from "../domain/clipboard";
 import { openPath } from "@tauri-apps/plugin-opener";
@@ -46,6 +48,8 @@ interface Props {
   linkedSessionIds?: string[];
   workstreamId?: string;
   workstreamVisible?: boolean;
+  configJson?: string;
+  onConfigChange?: (configJson: string) => void;
 }
 
 interface CategoryMeta {
@@ -120,7 +124,7 @@ function isRelevantFile(filePath: string): boolean {
   return true;
 }
 
-export default function SessionMetaTile({ tileId: _tileId, isFocused, workstreamDir, linkedSessionIds, workstreamId, workstreamVisible = true }: Props) {
+export default function SessionMetaTile({ tileId: _tileId, isFocused, workstreamDir, linkedSessionIds, workstreamId, workstreamVisible = true, configJson, onConfigChange }: Props) {
   const backend = useBackend();
   const [items, setItems] = useState<CopilotConfigItem[]>([]);
   const [files, setFiles] = useState<SessionFileEntry[]>([]);
@@ -416,6 +420,33 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
     loadSessionData();
     if (activeTab === "database") loadDbTables();
   }, [loadConfig, loadSessionData, loadDbTables, activeTab]);
+
+  const hydratedRef = useRef(false);
+  useEffect(() => {
+    if (!workstreamVisible || hydratedRef.current) return;
+    hydratedRef.current = true;
+    const vs = parseViewState(configJson, "session_meta");
+    if (vs.activeTab) setActiveTab(vs.activeTab as TabId);
+    if (vs.filePath) {
+      const name = vs.filePath.split(/[\\/]/).pop() || vs.filePath;
+      void viewFile(vs.filePath, name);
+    }
+    if (vs.dbTable) {
+      void loadTableData(vs.dbTable);
+    }
+  }, [workstreamVisible, configJson, viewFile, loadTableData]);
+
+  useTileViewStatePersist(
+    configJson,
+    "session_meta",
+    {
+      activeTab,
+      filePath: viewContent?.path,
+      dbTable: selectedTable ?? undefined,
+    },
+    onConfigChange,
+    { enabled: hydratedRef.current },
+  );
 
   const toggleCategory = (cat: string) => {
     setCollapsed((prev) => {

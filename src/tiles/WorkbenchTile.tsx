@@ -1,5 +1,5 @@
 // @test-skip: pre-existing tile shell, domain logic tested separately
-import { useState, useCallback, useMemo, useEffect } from "react";
+import { useState, useCallback, useMemo, useEffect, useRef } from "react";
 import Editor from "@monaco-editor/react";
 import { MarkdownView } from "../ui/MarkdownView";
 import { dirnameOf } from "../domain/file-types";
@@ -12,6 +12,8 @@ import { FileEditorView } from "../files/FileEditorView";
 import type { BufferSnapshot } from "../files/FileBufferRegistry";
 import { subscribeAddToWorkbench } from "../domain/workbench-events";
 import { workbenchStore } from "../domain/workbench-store-instance";
+import { parseViewState } from "../domain/tile-view-state";
+import { useTileViewStatePersist } from "../domain/useTileViewStatePersist";
 import AudioPlayer from "./AudioPlayer";
 import {
   PlusIcon,
@@ -87,7 +89,7 @@ function FileItemIcon({ name }: { name: string }) {
   }
 }
 
-export default function WorkbenchTile({ tileId: _tileId, isFocused, configJson: _configJson, onConfigChange: _onConfigChange, workstreamId, workstreamVisible = true }: Props) {
+export default function WorkbenchTile({ tileId: _tileId, isFocused, configJson, onConfigChange, workstreamId, workstreamVisible = true }: Props) {
   const backend = useBackend();
   const [mode, setMode] = useState<Mode>("list");
   const [viewingPath, setViewingPath] = useState<string | null>(null);
@@ -101,6 +103,7 @@ export default function WorkbenchTile({ tileId: _tileId, isFocused, configJson: 
   const [imageDataUrl, setImageDataUrl] = useState<string | null>(null);
   const [editorSnapshot, setEditorSnapshot] = useState<BufferSnapshot | null>(null);
   const [editorViewState, setEditorViewState] = useState<{ mode: "preview" | "edit"; toggle: () => void } | null>(null);
+  const hydratedRef = useRef(false);
 
   // Files are sourced from the persistent per-workstream Workbench store
   // (not from tile.config_json anymore). Closing the tile leaves the
@@ -221,6 +224,23 @@ export default function WorkbenchTile({ tileId: _tileId, isFocused, configJson: 
     setViewingPath(null);
     setFileContent("");
   }, [audioUrl]);
+
+  useEffect(() => {
+    if (!workstreamVisible || hydratedRef.current) return;
+    hydratedRef.current = true;
+    const vs = parseViewState(configJson, "workbench");
+    if (vs.viewingPath) {
+      void handleViewFile(vs.viewingPath);
+    }
+  }, [workstreamVisible, configJson, handleViewFile]);
+
+  useTileViewStatePersist(
+    configJson,
+    "workbench",
+    { viewingPath: mode === "view" ? viewingPath ?? undefined : undefined },
+    onConfigChange,
+    { enabled: hydratedRef.current },
+  );
 
   // Watch files for live updates
   useEffect(() => {

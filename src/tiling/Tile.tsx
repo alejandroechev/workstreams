@@ -182,6 +182,8 @@ function TileWrapperImpl({
           initialPath={cfg.filePath}
           workstreamId={workstreamId}
           workstreamVisible={workstreamVisible}
+          configJson={tile.config_json}
+          onConfigChange={(c) => onUpdateTileConfig?.(tile.id, c)}
         />
       );
       break;
@@ -194,6 +196,8 @@ function TileWrapperImpl({
           rootDir={workstreamDir || "C:\\"}
           workstreamId={workstreamId}
           workstreamVisible={workstreamVisible}
+          configJson={tile.config_json}
+          onConfigChange={(c) => onUpdateTileConfig?.(tile.id, c)}
         />
       );
       break;
@@ -206,6 +210,8 @@ function TileWrapperImpl({
           linkedSessionIds={linkedSessionIds}
           workstreamId={workstreamId}
           workstreamVisible={workstreamVisible}
+          configJson={tile.config_json}
+          onConfigChange={(c) => onUpdateTileConfig?.(tile.id, c)}
         />
       );
       break;
@@ -227,6 +233,9 @@ function TileWrapperImpl({
           tileId={tile.id}
           isFocused={isFocused}
           linkedSessionIds={linkedSessionIds}
+          configJson={tile.config_json}
+          onConfigChange={(c) => onUpdateTileConfig?.(tile.id, c)}
+          workstreamVisible={workstreamVisible}
         />
       );
       break;
