@@ -36,7 +36,7 @@ pub fn is_excluded_path(path: &str) -> bool {
         ".turbo",
         ".dev",
     ];
-    for segment in path.split(|c| c == '\\' || c == '/') {
+    for segment in path.split(['\\', '/']) {
         if EXCLUDED_SEGMENTS.contains(&segment) {
             return true;
         }
