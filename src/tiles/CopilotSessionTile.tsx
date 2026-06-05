@@ -466,7 +466,7 @@ export default function CopilotSessionTile({
           </button>
         )}
       </div>
-      <div ref={containerRef} onMouseEnter={() => termRef.current?.focus()} style={{ width: "100%", height: "100%", overflow: "hidden" }} />
+      <div ref={containerRef} onMouseDown={() => termRef.current?.focus()} style={{ width: "100%", height: "100%", overflow: "hidden" }} />
     </div>
   );
 }

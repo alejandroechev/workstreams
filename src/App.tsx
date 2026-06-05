@@ -400,7 +400,18 @@ export default function App() {
       }
     } catch { /* ignore */ }
 
-    setWorkstreams((prev) => [ws, ...prev]);
+    setWorkstreams((prev) => {
+      const next = [ws, ...prev];
+      // Persist the new order so reopen places the new WS first (matches
+      // the visible position right after creation). Without this the
+      // saved workstream_order (only updated on drag-reorder) doesn't
+      // include the new id, and the load effect appends it to the end.
+      invoke("set_setting", {
+        key: "workstream_order",
+        value: JSON.stringify(next.map((w) => w.id)),
+      }).catch(() => {});
+      return next;
+    });
     setActiveWsId(ws.id);
     setTiles([tile]);
     setTileOrder([tile.id]);
@@ -542,7 +553,14 @@ export default function App() {
     }
 
     // Switch to new workstream
-    setWorkstreams((prev) => [newWs, ...prev]);
+    setWorkstreams((prev) => {
+      const next = [newWs, ...prev];
+      invoke("set_setting", {
+        key: "workstream_order",
+        value: JSON.stringify(next.map((w) => w.id)),
+      }).catch(() => {});
+      return next;
+    });
     setActiveWsId(newWs.id);
     setTiles([tile]);
     setTileOrder([tile.id]);

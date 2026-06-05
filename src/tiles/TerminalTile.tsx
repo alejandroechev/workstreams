@@ -378,7 +378,12 @@ export default function TerminalTile({ tileId, isFocused, focusToken, onStatusCh
       )}
       <div
         ref={containerRef}
-        onMouseEnter={() => termRef.current?.focus()}
+        onMouseDown={() => {
+          // Focus the xterm textarea on intentional click so typing goes
+          // to the terminal. Hover does NOT focus (that was the cause of
+          // accidental focus stealing between session+terminal tiles).
+          termRef.current?.focus();
+        }}
         style={{ width: "100%", height: "100%", overflow: "hidden" }}
       />
     </div>
