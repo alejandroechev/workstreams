@@ -345,6 +345,14 @@ export class MemoryBackend implements Backend {
     return "";
   }
 
+  async gitDiffFilesWithStatus(_directory: string, _mode: string): Promise<Array<{ path: string; status: "A" | "M" | "D" | "R" }>> {
+    return [];
+  }
+
+  async gitDiffFileSides(_directory: string, _filePath: string, _mode: string): Promise<{ before: string; after: string }> {
+    return { before: "", after: "" };
+  }
+
   async gitLog(_directory: string, _limit?: number): Promise<Array<{ hash: string; short_hash: string; message: string; author: string; date: string }>> {
     return [
       { hash: "abc1234567890", short_hash: "abc1234", message: "Initial commit", author: "Dev", date: "2 days ago" },

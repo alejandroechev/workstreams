@@ -337,6 +337,16 @@ describe("MemoryBackend", () => {
       const diff = await backend.gitDiffFile("C:\\project", "file.ts", "unstaged");
       expect(diff).toBe("");
     });
+
+    it("gitDiffFilesWithStatus returns empty array", async () => {
+      const files = await backend.gitDiffFilesWithStatus("C:\\project", "unstaged");
+      expect(files).toEqual([]);
+    });
+
+    it("gitDiffFileSides returns empty sides", async () => {
+      const sides = await backend.gitDiffFileSides("C:\\project", "file.ts", "unstaged");
+      expect(sides).toEqual({ before: "", after: "" });
+    });
   });
 
   describe("discoverCopilotConfig", () => {

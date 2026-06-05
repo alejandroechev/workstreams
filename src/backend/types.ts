@@ -70,6 +70,8 @@ export interface Backend {
   // Git diff
   gitDiffFiles(directory: string, mode: string): Promise<string[]>;
   gitDiffFile(directory: string, filePath: string, mode: string): Promise<string>;
+  gitDiffFilesWithStatus(directory: string, mode: string): Promise<Array<{ path: string; status: "A" | "M" | "D" | "R" }>>;
+  gitDiffFileSides(directory: string, filePath: string, mode: string): Promise<{ before: string; after: string }>;
   // Git log & branch
   gitLog(directory: string, limit?: number): Promise<Array<{ hash: string; short_hash: string; message: string; author: string; date: string }>>;
   gitShowCommit(directory: string, hash: string): Promise<string>;

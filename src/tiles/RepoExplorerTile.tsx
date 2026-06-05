@@ -172,8 +172,9 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
   const fileSearchInputRef = useRef<HTMLInputElement>(null);
   // Diff mode state
   const [activeDiffMode, setActiveDiffMode] = useState<DiffMode | null>(null);
-  const [diffFiles, setDiffFiles] = useState<string[]>([]);
-  const [diffContent, setDiffContent] = useState<string>("");
+  const [diffFiles, setDiffFiles] = useState<Array<{ path: string; status: "A" | "M" | "D" | "R" }>>([]);
+  const [diffBefore, setDiffBefore] = useState<string>("");
+  const [diffAfter, setDiffAfter] = useState<string>("");
   const [diffFilePath, setDiffFilePath] = useState<string>("");
   const [diffLoading, setDiffLoading] = useState(false);
   // Git branch state
@@ -513,7 +514,7 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
     } else {
       // Normal browse click clears diff mode
       setActiveDiffMode(null);
-      setDiffContent("");
+      setDiffBefore(""); setDiffAfter("");
       setDiffFilePath("");
       openFile(entry.fullPath);
     }
@@ -563,19 +564,33 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
   const gitRoot = rootDir || currentDir;
 
   // Diff mode handlers
+  const loadDiffSides = useCallback(async (file: string, mode: DiffMode) => {
+    try {
+      const { before, after } = await backend.gitDiffFileSides(gitRoot, file, mode);
+      setDiffBefore(before);
+      setDiffAfter(after);
+    } catch {
+      setDiffBefore("");
+      setDiffAfter("");
+    }
+  }, [backend, gitRoot]);
+
   const activateDiffMode = useCallback(async (diffMode: DiffMode) => {
     setActiveDiffMode(diffMode);
     setDiffLoading(true);
-    setDiffContent("");
-    setDiffFilePath("");
+    setDiffBefore("");
+    setDiffAfter("");
     try {
-      const files = await backend.gitDiffFiles(gitRoot, diffMode);
+      const files = await backend.gitDiffFilesWithStatus(gitRoot, diffMode);
       setDiffFiles(files);
-      if (files.length > 0) {
-        const firstFile = files[0];
-        setDiffFilePath(firstFile);
-        const diff = await backend.gitDiffFile(gitRoot, firstFile, diffMode);
-        setDiffContent(diff);
+      // If the previously-selected file is still in the new mode's list,
+      // keep it; otherwise drop to the first.
+      const keep = diffFilePath && files.some((f) => f.path === diffFilePath)
+        ? diffFilePath
+        : files[0]?.path ?? "";
+      setDiffFilePath(keep);
+      if (keep) {
+        await loadDiffSides(keep, diffMode);
       }
     } catch (e) {
       console.error("[Explorer] diff error:", e);
@@ -583,25 +598,23 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
     } finally {
       setDiffLoading(false);
     }
-  }, [backend, gitRoot]);
+  }, [backend, gitRoot, diffFilePath, loadDiffSides]);
 
   const selectDiffFile = useCallback(async (file: string) => {
     if (!activeDiffMode) return;
     setDiffFilePath(file);
     setDiffLoading(true);
     try {
-      const diff = await backend.gitDiffFile(gitRoot, file, activeDiffMode);
-      setDiffContent(diff);
-    } catch {
-      setDiffContent("");
+      await loadDiffSides(file, activeDiffMode);
     } finally {
       setDiffLoading(false);
     }
-  }, [backend, gitRoot, activeDiffMode]);
+  }, [activeDiffMode, loadDiffSides]);
 
   const exitDiffMode = useCallback(() => {
     setActiveDiffMode(null);
-    setDiffContent("");
+    setDiffBefore("");
+    setDiffAfter("");
     setDiffFiles([]);
     setDiffFilePath("");
   }, []);
@@ -679,7 +692,7 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
     // Files tab is unclickable from those modes, leaving the user stuck.
     if (tab === "files") {
       setActiveDiffMode(null);
-      setDiffContent("");
+      setDiffBefore(""); setDiffAfter("");
       setDiffFiles([]);
       setDiffFilePath("");
       setContent(null);
@@ -702,14 +715,14 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
         break;
       case "log":
         setActiveDiffMode(null);
-        setDiffContent("");
+        setDiffBefore(""); setDiffAfter("");
         setDiffFiles([]);
         setDiffFilePath("");
         openGitLog();
         break;
       case "hooks":
         setActiveDiffMode(null);
-        setDiffContent("");
+        setDiffBefore(""); setDiffAfter("");
         setDiffFiles([]);
         setDiffFilePath("");
         openGitHooks();
@@ -888,6 +901,107 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
     </>
   );
 
+  // ─── Diff mode (unified: file list + DiffEditor) ───
+  // Render regardless of `mode` so the user lands here as soon as they
+  // pick a diff sub-mode, and stays put across mode/file changes.
+  const diffModeToolbar = (
+    <div style={{ display: "flex", alignItems: "center", gap: 4, padding: "4px 8px", borderBottom: "1px solid #313244", background: "#181825" }}>
+      {(["unstaged", "last_commit", "branch_vs_master"] as DiffMode[]).map((dm) => (
+        <button
+          key={dm}
+          onClick={() => activeDiffMode === dm ? exitDiffMode() : activateDiffMode(dm)}
+          style={{
+            ...toolbarButtonStyle,
+            fontSize: 10,
+            padding: "2px 6px",
+            borderRadius: 3,
+            background: activeDiffMode === dm ? "#45475a" : "transparent",
+            color: activeDiffMode === dm ? "#cdd6f4" : "#89b4fa",
+          }}
+          data-testid={`diff-btn-${dm}`}
+        >
+          {dm === "unstaged" ? "Unstaged" : dm === "last_commit" ? "Last Commit" : "vs Master"}
+        </button>
+      ))}
+      {activeDiffMode && (
+        <span style={{ marginLeft: "auto", fontSize: 10, color: "#6c7086" }} data-testid="diff-file-count">
+          {diffFiles.length} file{diffFiles.length !== 1 ? "s" : ""} changed
+        </span>
+      )}
+    </div>
+  );
+
+  if (activeDiffMode) {
+    return (
+      <div ref={containerRef} style={containerStyle}>
+        {tabBar}
+        {diffModeToolbar}
+        <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
+          <div style={diffFilePanelStyle} data-testid="diff-file-list">
+            {diffLoading && diffFiles.length === 0 && (
+              <div style={{ padding: "6px 8px", color: "#585b70", fontSize: 11 }}>Loading...</div>
+            )}
+            {!diffLoading && diffFiles.length === 0 && (
+              <div style={{ padding: "6px 8px", color: "#585b70", fontSize: 11 }}>No changes</div>
+            )}
+            {diffFiles.map((f) => {
+              const badgeColor = f.status === "A" ? "#a6e3a1" : f.status === "D" ? "#f38ba8" : f.status === "R" ? "#cba6f7" : "#f9e2af";
+              return (
+                <div
+                  key={f.path}
+                  onClick={() => selectDiffFile(f.path)}
+                  title={f.path}
+                  data-testid="diff-file-item"
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 6,
+                    padding: "3px 8px",
+                    cursor: "pointer",
+                    fontSize: 11,
+                    color: f.path === diffFilePath ? "#cdd6f4" : "#a6adc8",
+                    background: f.path === diffFilePath ? "#313244" : "transparent",
+                  }}
+                  onMouseEnter={(e) => { if (f.path !== diffFilePath) (e.currentTarget as HTMLElement).style.background = "#1e1e2e"; }}
+                  onMouseLeave={(e) => { if (f.path !== diffFilePath) (e.currentTarget as HTMLElement).style.background = "transparent"; }}
+                >
+                  <span style={{ color: badgeColor, fontWeight: 600, flexShrink: 0, width: 12, textAlign: "center" }}>{f.status}</span>
+                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.path}</span>
+                </div>
+              );
+            })}
+          </div>
+          <div style={{ flex: 1 }}>
+            {diffFilePath ? (
+              <DiffEditor
+                height="100%"
+                language={detectLanguage(diffFilePath)}
+                original={diffBefore}
+                modified={diffAfter}
+                theme="vs-dark"
+                onMount={(editor) => { editorRef.current = editor.getModifiedEditor(); }}
+                options={{
+                  readOnly: true,
+                  minimap: { enabled: false },
+                  fontSize: globalTextFont,
+                  fontFamily: "'Cascadia Code', 'Consolas', monospace",
+                  scrollBeyondLastLine: false,
+                  renderSideBySide: true,
+                  overviewRulerBorder: false,
+                }}
+              />
+            ) : (
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", color: "#585b70" }}>
+                {diffFiles.length === 0 ? "No changes in this diff mode" : "Pick a file from the list"}
+              </div>
+            )}
+          </div>
+        </div>
+        {overlays}
+      </div>
+    );
+  }
+
   // ─── View mode ───
   if (mode === "view") {
     if (fileLoading) {
@@ -911,30 +1025,6 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
       );
     }
 
-    // Diff toolbar buttons
-    const diffToolbar = (
-      <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-        {(["unstaged", "last_commit", "branch_vs_master"] as DiffMode[]).map((dm) => (
-          <button
-            key={dm}
-            onClick={() => activeDiffMode === dm ? exitDiffMode() : activateDiffMode(dm)}
-            style={{
-              ...toolbarButtonStyle,
-              fontSize: 10,
-              padding: "2px 6px",
-              borderRadius: 3,
-              background: activeDiffMode === dm ? "#45475a" : "transparent",
-              color: activeDiffMode === dm ? "#cdd6f4" : "#89b4fa",
-            }}
-            data-testid={`diff-btn-${dm}`}
-          >
-            {dm === "unstaged" ? "Unstaged" : dm === "last_commit" ? "Last Commit" : "vs Master"}
-          </button>
-        ))}
-      </div>
-    );
-
-    const displayedFilePath = activeDiffMode && diffFilePath ? diffFilePath : filePath;
     const isEditorDirty = editorSnapshot?.dirty === true;
     const viewToolbar = (
       <div style={toolbarStyle}>
@@ -979,7 +1069,7 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
               : <DocumentIcon style={{ width: 14, height: 14, flexShrink: 0 }} />
             }
             {isEditorDirty && <span data-testid="repo-explorer-dirty-dot" style={dirtyDotStyle} />}
-            {displayedFilePath}{isEditorDirty ? "*" : ""}
+            {filePath}{isEditorDirty ? "*" : ""}
           </span>
         </div>
         {editorViewState && (
@@ -1015,68 +1105,6 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
         ) : null}
       </div>
     );
-
-    // Diff view mode
-    if (activeDiffMode) {
-      const { original, modified } = parseDiffToSides(diffContent);
-      return (
-        <div ref={containerRef} style={containerStyle}>
-      {tabBar}
-          {viewToolbar}
-          {diffToolbar}
-          <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
-            {/* Diff file list panel */}
-            <div style={diffFilePanelStyle} data-testid="diff-file-list">
-              {diffLoading && <div style={{ padding: "6px 8px", color: "#585b70", fontSize: 11 }}>Loading...</div>}
-              {!diffLoading && diffFiles.length === 0 && (
-                <div style={{ padding: "6px 8px", color: "#585b70", fontSize: 11 }}>No changes</div>
-              )}
-              {diffFiles.map((f) => (
-                <div
-                  key={f}
-                  onClick={() => selectDiffFile(f)}
-                  style={{
-                    padding: "3px 8px",
-                    cursor: "pointer",
-                    fontSize: 11,
-                    color: f === diffFilePath ? "#cdd6f4" : "#a6adc8",
-                    background: f === diffFilePath ? "#313244" : "transparent",
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                    whiteSpace: "nowrap",
-                  }}
-                  onMouseEnter={(e) => { if (f !== diffFilePath) (e.currentTarget as HTMLElement).style.background = "#1e1e2e"; }}
-                  onMouseLeave={(e) => { if (f !== diffFilePath) (e.currentTarget as HTMLElement).style.background = "transparent"; }}
-                >
-                  {f.split("/").pop() || f}
-                </div>
-              ))}
-            </div>
-            {/* Diff editor */}
-            <div style={{ flex: 1 }}>
-              <DiffEditor
-                height="100%"
-                language={detectLanguage(diffFilePath || filePath)}
-                original={original}
-                modified={modified}
-                theme="vs-dark"
-                onMount={(editor) => { editorRef.current = editor.getModifiedEditor(); }}
-                options={{
-                  readOnly: true,
-                  minimap: { enabled: false },
-                  fontSize: globalTextFont,
-                  fontFamily: "'Cascadia Code', 'Consolas', monospace",
-                  scrollBeyondLastLine: false,
-                  renderSideBySide: false,
-                  overviewRulerBorder: false,
-                }}
-              />
-            </div>
-          </div>
-          {overlays}
-        </div>
-      );
-    }
 
     if (shouldUseFileEditor(filePath) && !commitDiffHash) {
       return (
@@ -1392,224 +1420,120 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
 
   // ─── Browse mode ───
 
-  // Diff mode toolbar for browse mode
-  const browseDiffToolbar = (
-    <div style={{
-      display: "flex",
-      alignItems: "center",
-      gap: 4,
-      padding: "3px 8px",
-      background: "#181825",
-      borderBottom: "1px solid #313244",
-      flexShrink: 0,
-    }}>
-      <span style={{ fontSize: 10, color: "#585b70", marginRight: 4 }}>Diff:</span>
-      {(["unstaged", "last_commit", "branch_vs_master"] as DiffMode[]).map((dm) => (
-        <button
-          key={dm}
-          onClick={(e) => {
-            e.stopPropagation();
-            if (activeDiffMode === dm) exitDiffMode();
-            else activateDiffMode(dm);
-          }}
-          style={{
-            background: activeDiffMode === dm ? "#45475a" : "transparent",
-            border: activeDiffMode === dm ? "1px solid #585b70" : "1px solid transparent",
-            borderRadius: 3,
-            color: activeDiffMode === dm ? "#cdd6f4" : "#6c7086",
-            cursor: "pointer",
-            fontSize: 10,
-            padding: "2px 6px",
-          }}
-        >
-          {dm === "unstaged" ? "Unstaged" : dm === "last_commit" ? "Last Commit" : "vs Master"}
-        </button>
-      ))}
-      {activeDiffMode && diffFiles.length > 0 && (
-        <span style={{ fontSize: 10, color: "#a6e3a1", marginLeft: 4 }}>
-          {diffFiles.length} file{diffFiles.length !== 1 ? "s" : ""} changed
-        </span>
-      )}
-    </div>
-  );
-
-  // When diff mode is active in browse, show diff files instead of directory entries
-  const browseFileList = activeDiffMode ? diffFiles : [];
-
   return (
     <div ref={containerRef} style={containerStyle} data-testid="tile-explorer">
       {tabBar}
       {/* Path bar */}
       <div style={toolbarStyle}>
-        {activeDiffMode ? (
-          <>
-            <span style={{ ...pathTextStyle, flex: 1, color: "#f9e2af" }}>
-              {activeDiffMode === "unstaged" ? "Unstaged Changes" : activeDiffMode === "last_commit" ? "Last Commit" : "Branch vs Master"}
-            </span>
-          </>
-        ) : (
-          <>
-            <button onClick={navigateUp} style={{ ...toolbarButtonStyle, display: "flex", alignItems: "center" }} title="Go up">
-              <ChevronUpIcon style={{ width: 16, height: 16 }} />
-            </button>
-            <span style={{ ...pathTextStyle, flex: 1 }}>
-              {currentDir}
-            </span>
-            {currentBranch && (
-              <span
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 3,
-                  fontSize: 10,
-                  color: "#a6e3a1",
-                  background: "#1e1e2e",
-                  border: "1px solid #313244",
-                  borderRadius: 4,
-                  padding: "1px 6px",
-                  flexShrink: 0,
-                }}
-                data-testid="branch-badge"
-              >
-                <CodeBracketSquareIcon style={{ width: 12, height: 12 }} />
-                {currentBranch}
-              </span>
-            )}
-            <button onClick={() => loadDir(currentDir)} style={{ ...toolbarButtonStyle, display: "flex", alignItems: "center" }} title="Refresh">
-              <ArrowPathIcon style={{ width: 14, height: 14 }} />
-            </button>
-            <button
-              onClick={async (e) => { e.stopPropagation(); await handleBrowseDialog(); }}
-              style={{ ...toolbarButtonStyle, display: "flex", alignItems: "center" }}
-              title="Browse file..."
-            >
-              <FolderOpenIcon style={{ width: 16, height: 16 }} />
-            </button>
-          </>
+        <button onClick={navigateUp} style={{ ...toolbarButtonStyle, display: "flex", alignItems: "center" }} title="Go up">
+          <ChevronUpIcon style={{ width: 16, height: 16 }} />
+        </button>
+        <span style={{ ...pathTextStyle, flex: 1 }}>
+          {currentDir}
+        </span>
+        {currentBranch && (
+          <span
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 3,
+              fontSize: 10,
+              color: "#a6e3a1",
+              background: "#1e1e2e",
+              border: "1px solid #313244",
+              borderRadius: 4,
+              padding: "1px 6px",
+              flexShrink: 0,
+            }}
+            data-testid="branch-badge"
+          >
+            <CodeBracketSquareIcon style={{ width: 12, height: 12 }} />
+            {currentBranch}
+          </span>
         )}
+        <button onClick={() => loadDir(currentDir)} style={{ ...toolbarButtonStyle, display: "flex", alignItems: "center" }} title="Refresh">
+          <ArrowPathIcon style={{ width: 14, height: 14 }} />
+        </button>
+        <button
+          onClick={async (e) => { e.stopPropagation(); await handleBrowseDialog(); }}
+          style={{ ...toolbarButtonStyle, display: "flex", alignItems: "center" }}
+          title="Browse file..."
+        >
+          <FolderOpenIcon style={{ width: 16, height: 16 }} />
+        </button>
       </div>
 
-      {/* Diff mode selector */}
-      {/* Diff sub-mode selector (only shown in Diff tab) */}
-      {activeTab === "diff" && browseDiffToolbar}
-
-      {/* Search bar (only in normal browse, not diff mode) */}
-      {!activeDiffMode && (
-        <div style={{
-          padding: "3px 8px",
-          background: "#181825",
-          borderBottom: "1px solid #313244",
-          flexShrink: 0,
-        }}>
-          <input
-            type="text"
-            value={searchFilter}
-            onChange={(e) => setSearchFilter(e.target.value)}
-            onKeyDown={(e) => e.stopPropagation()}
-            placeholder="Filter files..."
-            style={{
-              width: "100%",
-              background: "#313244",
-              border: "1px solid #45475a",
-              borderRadius: 3,
-              color: "#cdd6f4",
-              padding: "3px 8px",
-              fontSize: 11,
-              fontFamily: "monospace",
-              outline: "none",
-            }}
-          />
-        </div>
-      )}
+      {/* Search bar */}
+      <div style={{
+        padding: "3px 8px",
+        background: "#181825",
+        borderBottom: "1px solid #313244",
+        flexShrink: 0,
+      }}>
+        <input
+          type="text"
+          value={searchFilter}
+          onChange={(e) => setSearchFilter(e.target.value)}
+          onKeyDown={(e) => e.stopPropagation()}
+          placeholder="Filter files..."
+          style={{
+            width: "100%",
+            background: "#313244",
+            border: "1px solid #45475a",
+            borderRadius: 3,
+            color: "#cdd6f4",
+            padding: "3px 8px",
+            fontSize: 11,
+            fontFamily: "monospace",
+            outline: "none",
+          }}
+        />
+      </div>
 
       {/* File list */}
       <div style={{ flex: 1, overflowY: "auto", padding: "4px 0" }}>
-        {activeDiffMode ? (
-          // Diff mode: show changed files
-          <>
-            {diffLoading && (
-              <div style={{ padding: "8px 12px", color: "#585b70" }}>Loading diff...</div>
-            )}
-            {!diffLoading && browseFileList.length === 0 && (
-              <div style={{ padding: "8px 12px", color: "#585b70" }}>No changes found</div>
-            )}
-            {browseFileList.map((file) => (
-              <div
-                key={file}
-                onClick={() => {
-                  // Switch to view mode showing only this file's diff
-                  setDiffFilePath(file);
-                  setFilePath(file);
-                  setMode("view");
-                  // Load diff content for this file
-                  selectDiffFile(file);
-                }}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 8,
-                  padding: "4px 12px",
-                  cursor: "pointer",
-                  color: "#f9e2af",
-                  fontSize: 12,
-                }}
-                onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "#313244"; }}
-                onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "transparent"; }}
-              >
-                <span style={{ fontSize: 12, color: "#f38ba8", flexShrink: 0 }}>M</span>
-                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                  {file}
-                </span>
-              </div>
-            ))}
-          </>
-        ) : (
-          // Normal browse mode
-          <>
-            {dirLoading && (
-              <div style={{ padding: "8px 12px", color: "#585b70" }}>Loading...</div>
-            )}
-            {dirError && (
-              <div style={{ padding: "8px 12px", color: "#f38ba8", fontSize: 11 }}>{dirError}</div>
-            )}
-            {!dirLoading && filteredEntries.length === 0 && !dirError && (
-              <div style={{ padding: "8px 12px", color: "#585b70" }}>
-                {searchFilter ? "No matches" : "Empty directory"}
-              </div>
-            )}
-            {filteredEntries.map((entry) => (
-              <div
-                key={entry.name}
-                data-testid="file-tree-item"
-                data-path={entry.fullPath}
-                onClick={() => handleEntryClick(entry)}
-                onContextMenu={(e) => {
-                  e.preventDefault();
-                  setContextMenu({ x: e.clientX, y: e.clientY, path: entry.fullPath, isDir: entry.isDir });
-                }}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 8,
-                  padding: "3px 12px",
-                  cursor: "pointer",
-                  color: entry.isDir ? "#89b4fa" : "#cdd6f4",
-                  fontWeight: entry.isDir ? 500 : 400,
-                  fontSize: 13,
-                }}
-                onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "#313244"; }}
-                onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "transparent"; }}
-              >
-                <span style={{ width: 20, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                  <FileIcon name={entry.name} isDir={entry.isDir} />
-                </span>
-                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                  {entry.name}
-                </span>
-              </div>
-            ))}
-          </>
+        {dirLoading && (
+          <div style={{ padding: "8px 12px", color: "#585b70" }}>Loading...</div>
         )}
+        {dirError && (
+          <div style={{ padding: "8px 12px", color: "#f38ba8", fontSize: 11 }}>{dirError}</div>
+        )}
+        {!dirLoading && filteredEntries.length === 0 && !dirError && (
+          <div style={{ padding: "8px 12px", color: "#585b70" }}>
+            {searchFilter ? "No matches" : "Empty directory"}
+          </div>
+        )}
+        {filteredEntries.map((entry) => (
+          <div
+            key={entry.name}
+            data-testid="file-tree-item"
+            data-path={entry.fullPath}
+            onClick={() => handleEntryClick(entry)}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              setContextMenu({ x: e.clientX, y: e.clientY, path: entry.fullPath, isDir: entry.isDir });
+            }}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              padding: "3px 12px",
+              cursor: "pointer",
+              color: entry.isDir ? "#89b4fa" : "#cdd6f4",
+              fontWeight: entry.isDir ? 500 : 400,
+              fontSize: 13,
+            }}
+            onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "#313244"; }}
+            onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "transparent"; }}
+          >
+            <span style={{ width: 20, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+              <FileIcon name={entry.name} isDir={entry.isDir} />
+            </span>
+            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {entry.name}
+            </span>
+          </div>
+        ))}
       </div>
       {overlays}
     </div>

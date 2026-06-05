@@ -1646,7 +1646,151 @@ fn git_diff_file(directory: String, file_path: String, mode: String) -> Result<S
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
-/// Detect git repo info from a directory
+/// Returns the full content of a file at a specific git revision, or empty
+/// string if the file doesn't exist at that revision.
+fn read_git_show(directory: &str, revision: &str, file_path: &str) -> Result<String, String> {
+    let spec = format!("{revision}:{file_path}");
+    let output = git_cmd()
+        .args(["show", &spec])
+        .current_dir(directory)
+        .output()
+        .map_err(|e| format!("Failed to run git show: {e}"))?;
+    if !output.status.success() {
+        return Ok(String::new());
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+/// Returns both sides of a diff (before/after) as full file contents so the
+/// frontend can render them in a regular DiffEditor without synthesising
+/// from a unified-diff text.
+#[tauri::command]
+fn git_diff_file_sides(
+    directory: String,
+    file_path: String,
+    mode: String,
+) -> Result<(String, String), String> {
+    match mode.as_str() {
+        "unstaged" => {
+            let before = read_git_show(&directory, "HEAD", &file_path)?;
+            let abs = std::path::Path::new(&directory).join(&file_path);
+            let after = std::fs::read_to_string(&abs).unwrap_or_default();
+            Ok((before, after))
+        }
+        "last_commit" => {
+            let before = read_git_show(&directory, "HEAD~1", &file_path)?;
+            let after = read_git_show(&directory, "HEAD", &file_path)?;
+            Ok((before, after))
+        }
+        "branch_vs_master" => {
+            let mut before = read_git_show(&directory, "master", &file_path)?;
+            if before.is_empty() {
+                // Distinguish "no master branch" from "file not on master".
+                // Try main; if that also empty, leave before as "".
+                before = read_git_show(&directory, "main", &file_path)?;
+            }
+            let after = read_git_show(&directory, "HEAD", &file_path)?;
+            Ok((before, after))
+        }
+        _ => Err(format!("Unknown diff mode: {mode}")),
+    }
+}
+
+/// Returns the changed files along with their status: "A" added, "M"
+/// modified, "D" deleted, "R" renamed.
+#[tauri::command]
+fn git_diff_files_with_status(
+    directory: String,
+    mode: String,
+) -> Result<Vec<(String, String)>, String> {
+    fn parse_name_status(out: &str) -> Vec<(String, String)> {
+        let mut v = Vec::new();
+        for line in out.lines() {
+            let line = line.trim_end();
+            if line.is_empty() {
+                continue;
+            }
+            let mut parts = line.split('\t');
+            let raw_status = parts.next().unwrap_or("");
+            let status_char = raw_status.chars().next().unwrap_or('M');
+            let kind = match status_char {
+                'A' => "A",
+                'D' => "D",
+                'R' => "R",
+                'C' => "R",
+                _ => "M",
+            }
+            .to_string();
+            let path = if status_char == 'R' || status_char == 'C' {
+                parts.nth(1).unwrap_or("").to_string()
+            } else {
+                parts.next().unwrap_or("").to_string()
+            };
+            if !path.is_empty() {
+                v.push((path, kind));
+            }
+        }
+        v
+    }
+
+    let args_owned: Vec<String> = match mode.as_str() {
+        "unstaged" => {
+            let tracked = git_cmd()
+                .args(["diff", "--name-status"])
+                .current_dir(&directory)
+                .output()
+                .map_err(|e| format!("Failed to run git: {e}"))?;
+            if !tracked.status.success() {
+                return Err(format!(
+                    "git error: {}",
+                    String::from_utf8_lossy(&tracked.stderr)
+                ));
+            }
+            let mut files = parse_name_status(&String::from_utf8_lossy(&tracked.stdout));
+            let untracked = git_cmd()
+                .args(["ls-files", "--others", "--exclude-standard"])
+                .current_dir(&directory)
+                .output()
+                .map_err(|e| format!("Failed to run git: {e}"))?;
+            if untracked.status.success() {
+                for line in String::from_utf8_lossy(&untracked.stdout).lines() {
+                    let p = line.trim();
+                    if !p.is_empty() && !files.iter().any(|(pp, _)| pp == p) {
+                        files.push((p.to_string(), "A".to_string()));
+                    }
+                }
+            }
+            files.sort_by(|a, b| a.0.cmp(&b.0));
+            return Ok(files);
+        }
+        "last_commit" => vec!["diff".into(), "HEAD~1".into(), "--name-status".into()],
+        "branch_vs_master" => {
+            let output = git_cmd()
+                .args(["diff", "master...HEAD", "--name-status"])
+                .current_dir(&directory)
+                .output()
+                .map_err(|e| format!("Failed to run git: {e}"))?;
+            if output.status.success() {
+                return Ok(parse_name_status(&String::from_utf8_lossy(&output.stdout)));
+            }
+            vec!["diff".into(), "main...HEAD".into(), "--name-status".into()]
+        }
+        _ => return Err(format!("Unknown diff mode: {mode}")),
+    };
+    let arg_refs: Vec<&str> = args_owned.iter().map(String::as_str).collect();
+    let output = git_cmd()
+        .args(&arg_refs)
+        .current_dir(&directory)
+        .output()
+        .map_err(|e| format!("Failed to run git: {e}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "git error: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    Ok(parse_name_status(&String::from_utf8_lossy(&output.stdout)))
+}
 #[tauri::command]
 fn detect_git_info(directory: String) -> Result<(Option<String>, Option<String>), String> {
     let dir = std::path::Path::new(&directory);
@@ -2927,6 +3071,8 @@ pub fn run() {
             // Git diff
             git_diff_files,
             git_diff_file,
+            git_diff_files_with_status,
+            git_diff_file_sides,
             // Copilot config
             discover_copilot_config,
             // Session files & todos & DB
@@ -3551,6 +3697,56 @@ Body here.
             diff.contains("brand-new.txt") && diff.contains("hello"),
             "untracked diff should contain filename + content; got: {diff}"
         );
+
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn git_diff_files_with_status_and_sides() {
+        let tmp = std::env::temp_dir().join(format!(
+            "ws-gitsides-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let dir_str = tmp.to_string_lossy().to_string();
+        let run = |args: &[&str]| {
+            std::process::Command::new("git")
+                .args(args)
+                .current_dir(&tmp)
+                .output()
+                .expect("git invoke")
+        };
+        assert!(run(&["init", "-q"]).status.success());
+        run(&["config", "user.email", "t@t"]);
+        run(&["config", "user.name", "t"]);
+        std::fs::write(tmp.join("kept.txt"), "v1\nshared\n").unwrap();
+        run(&["add", "kept.txt"]);
+        run(&["commit", "-q", "-m", "init"]);
+        std::fs::write(tmp.join("kept.txt"), "v2\nshared\n").unwrap();
+        std::fs::write(tmp.join("new.txt"), "brand new\n").unwrap();
+
+        let files = git_diff_files_with_status(dir_str.clone(), "unstaged".into())
+            .expect("with_status");
+        let kept = files.iter().find(|(p, _)| p == "kept.txt").expect("kept");
+        assert_eq!(kept.1, "M");
+        let added = files.iter().find(|(p, _)| p == "new.txt").expect("new");
+        assert_eq!(added.1, "A");
+
+        let (before, after) =
+            git_diff_file_sides(dir_str.clone(), "kept.txt".into(), "unstaged".into())
+                .expect("sides");
+        assert!(before.contains("v1") && !before.contains("v2"));
+        assert!(after.contains("v2") && !after.contains("v1"));
+
+        let (before2, after2) =
+            git_diff_file_sides(dir_str.clone(), "new.txt".into(), "unstaged".into())
+                .expect("sides untracked");
+        assert_eq!(before2, "");
+        assert!(after2.contains("brand new"));
 
         std::fs::remove_dir_all(&tmp).ok();
     }

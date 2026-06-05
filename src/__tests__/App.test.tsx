@@ -158,6 +158,8 @@ function createBackend(): Backend {
     cancelSearches: vi.fn(),
     gitDiffFiles: vi.fn(),
     gitDiffFile: vi.fn(),
+    gitDiffFilesWithStatus: vi.fn(async () => []),
+    gitDiffFileSides: vi.fn(async () => ({ before: "", after: "" })),
     gitLog: vi.fn(),
     gitShowCommit: vi.fn(),
     gitCurrentBranch: vi.fn(),

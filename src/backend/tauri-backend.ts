@@ -178,6 +178,19 @@ export class TauriBackend implements Backend {
     return invoke<string>("git_diff_file", { directory, filePath, mode });
   }
 
+  async gitDiffFilesWithStatus(directory: string, mode: string): Promise<Array<{ path: string; status: "A" | "M" | "D" | "R" }>> {
+    const raw = await invoke<Array<[string, string]>>("git_diff_files_with_status", { directory, mode });
+    return raw.map(([path, status]) => ({
+      path,
+      status: (status === "A" || status === "D" || status === "R" ? status : "M") as "A" | "M" | "D" | "R",
+    }));
+  }
+
+  async gitDiffFileSides(directory: string, filePath: string, mode: string): Promise<{ before: string; after: string }> {
+    const [before, after] = await invoke<[string, string]>("git_diff_file_sides", { directory, filePath, mode });
+    return { before, after };
+  }
+
   async gitLog(directory: string, limit?: number): Promise<Array<{ hash: string; short_hash: string; message: string; author: string; date: string }>> {
     return invoke<Array<{ hash: string; short_hash: string; message: string; author: string; date: string }>>("git_log", { directory, limit: limit ?? null });
   }
