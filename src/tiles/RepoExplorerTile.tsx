@@ -37,7 +37,6 @@ import { writeTextToClipboard } from "../domain/clipboard";
 import { dispatchAddToWorkbench } from "../domain/workbench-events";
 import { useFileComments } from "../files/useFileComments";
 import { debounce } from "../domain/debounce";
-import type { FileSearchMatch } from "../backend/types";
 
 interface Props {
   tileId: string;
@@ -217,14 +216,6 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
 
   // Ctrl+P keyboard navigation
   const [fileSearchSelectedIndex, setFileSearchSelectedIndex] = useState(0);
-
-  // Ctrl+Shift+F cross-file content search
-  const [showContentSearch, setShowContentSearch] = useState(false);
-  const [contentSearchQuery, setContentSearchQuery] = useState("");
-  const [contentSearchResults, setContentSearchResults] = useState<FileSearchMatch[]>([]);
-  const [contentSearchLoading, setContentSearchLoading] = useState(false);
-  const [contentSearchSelectedIndex, setContentSearchSelectedIndex] = useState(0);
-  const contentSearchInputRef = useRef<HTMLInputElement>(null);
 
   // Monaco editor ref (to trigger find widget programmatically)
   const editorRef = useRef<unknown>(null);
@@ -712,24 +703,6 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
 
   // Reset Ctrl+P selection when results change
   useEffect(() => { setFileSearchSelectedIndex(0); }, [fileSearchResults]);
-  useEffect(() => { setContentSearchSelectedIndex(0); }, [contentSearchResults]);
-
-  // Ctrl+Shift+F: open cross-file content search overlay
-  useEffect(() => {
-    if (!isFocused) return;
-    const handler = (e: KeyboardEvent) => {
-      if (e.ctrlKey && e.shiftKey && (e.key === "F" || e.key === "f")) {
-        e.preventDefault();
-        e.stopPropagation();
-        setShowContentSearch(true);
-        setContentSearchQuery("");
-        setContentSearchResults([]);
-        setTimeout(() => contentSearchInputRef.current?.focus(), 50);
-      }
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [isFocused]);
 
   // Font-size shortcuts (Ctrl+= / Ctrl+- / Ctrl+0)
   useEffect(() => {
@@ -750,42 +723,6 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, [isFocused]);
-
-  // Debounced cross-file content search (Ctrl+Shift+F).
-  // Same cancellation pattern as Ctrl+P: bump the Rust epoch on cleanup so
-  // a slow walk doesn't keep the IPC queue full and freeze adjacent tiles.
-  useEffect(() => {
-    if (!showContentSearch || !contentSearchQuery.trim()) {
-      setContentSearchResults([]);
-      return;
-    }
-    let cancelled = false;
-    const timer = setTimeout(async () => {
-      try { await backend.cancelSearches(); } catch { /* ignore */ }
-      if (cancelled) return;
-      setContentSearchLoading(true);
-      try {
-        const root = rootDir || currentDir;
-        const r = await backend.searchInFiles(root, contentSearchQuery.trim());
-        if (!cancelled) setContentSearchResults(r);
-      } catch {
-        if (!cancelled) setContentSearchResults([]);
-      } finally {
-        if (!cancelled) setContentSearchLoading(false);
-      }
-    }, 300);
-    return () => {
-      cancelled = true;
-      clearTimeout(timer);
-      void backend.cancelSearches();
-    };
-  }, [contentSearchQuery, showContentSearch, backend, rootDir, currentDir]);
-
-  const closeContentSearch = useCallback(() => {
-    setShowContentSearch(false);
-    setContentSearchQuery("");
-    setContentSearchResults([]);
-  }, []);
 
   // Filter entries by search
   const filteredEntries = searchFilter
@@ -908,100 +845,9 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
     </div>
   ) : null;
 
-  // ─── Ctrl+Shift+F Content Search Overlay (cross-file, scoped to tile) ───
-  const contentSearchOverlay = showContentSearch ? (
-    <div style={searchOverlayStyle} data-testid="content-search-overlay" onClick={closeContentSearch}>
-      <div style={searchModalStyle} onClick={(e) => e.stopPropagation()}>
-        <input
-          ref={contentSearchInputRef}
-          type="text"
-          value={contentSearchQuery}
-          onChange={(e) => setContentSearchQuery(e.target.value)}
-          onKeyDown={(e) => {
-            e.stopPropagation();
-            if (e.key === "Escape") closeContentSearch();
-            else if (e.key === "ArrowDown") {
-              e.preventDefault();
-              setContentSearchSelectedIndex((i) => Math.min(contentSearchResults.length - 1, i + 1));
-            } else if (e.key === "ArrowUp") {
-              e.preventDefault();
-              setContentSearchSelectedIndex((i) => Math.max(0, i - 1));
-            } else if (e.key === "Enter") {
-              e.preventDefault();
-              const m = contentSearchResults[contentSearchSelectedIndex];
-              if (m) {
-                const q = contentSearchQuery.trim();
-                closeContentSearch();
-                openFile(m.path).then(() => {
-                  // After file loads, trigger Monaco find with the query
-                  setTimeout(() => {
-                    const ed = editorRef.current as
-                      | { getAction?: (id: string) => { run?: () => void } | undefined; trigger?: (s: string, id: string, p: unknown) => void }
-                      | null;
-                    try {
-                      ed?.trigger?.("repo-explorer", "actions.find", null);
-                      // Best-effort: set find input value via clipboard-like API isn't directly exposed,
-                      // so users will just see the find widget open; they can paste the query.
-                      // (We keep query for them to retype if needed.)
-                      void q;
-                    } catch { /* ignore */ }
-                  }, 200);
-                }).catch(() => {});
-              }
-            }
-          }}
-          placeholder="Search in files (content)…"
-          style={searchInputStyle}
-          data-testid="content-search-input"
-        />
-        <div style={searchResultsStyle}>
-          {contentSearchLoading && (
-            <div style={{ padding: "8px 12px", color: "#585b70" }}>Searching…</div>
-          )}
-          {!contentSearchLoading && contentSearchQuery && contentSearchResults.length === 0 && (
-            <div style={{ padding: "8px 12px", color: "#585b70" }}>No matches</div>
-          )}
-          {contentSearchResults.map((m, idx) => {
-            const selected = idx === contentSearchSelectedIndex;
-            const fileName = m.path.split(/[\\/]/).pop() || m.path;
-            return (
-              <div
-                key={`${m.path}:${m.line_number}:${idx}`}
-                onClick={() => { closeContentSearch(); openFile(m.path); }}
-                onMouseEnter={() => setContentSearchSelectedIndex(idx)}
-                style={{
-                  ...searchResultItemStyle,
-                  flexDirection: "column",
-                  alignItems: "stretch",
-                  background: selected ? "#313244" : "transparent",
-                  gap: 2,
-                }}
-                data-testid={`content-search-result-${idx}`}
-                data-selected={selected ? "true" : "false"}
-              >
-                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                  <FileIcon name={fileName} isDir={false} />
-                  <span style={{ fontSize: 11, color: "#cdd6f4" }}>{fileName}</span>
-                  <span style={{ fontSize: 10, color: "#6c7086" }}>:{m.line_number}</span>
-                  <span style={{ flex: 1, fontSize: 10, color: "#585b70", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                    {m.path}
-                  </span>
-                </div>
-                <div style={{ fontSize: 11, color: "#a6adc8", fontFamily: "monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", paddingLeft: 22 }}>
-                  {m.line_text}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-    </div>
-  ) : null;
-
   const overlays = (
     <>
       {fileSearchOverlay}
-      {contentSearchOverlay}
       {contextMenu && (
         <FileContextMenu
           x={contextMenu.x}
