@@ -1,4 +1,5 @@
 // @test-skip: Thin layout wrapper; AddTileMenu (the only logic-bearing child) has its own tests.
+import { ViewColumnsIcon } from "@heroicons/react/24/outline";
 import AddTileMenu from "./AddTileMenu";
 
 interface Props {
@@ -143,7 +144,7 @@ export default function StatusBar({
                   : "Select two tiles to enable side-by-side"
             }
           >
-            ⊟
+            <ViewColumnsIcon style={{ width: 16, height: 16 }} />
           </button>
         )}
         <button
