@@ -7,14 +7,9 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { playBell, flashWindow } from "../domain/notifications";
 import { createPtyFitController } from "./pty-fit";
-import { getAppSettings, createWheelLineAccumulator } from "../domain/app-settings";
+import { getAppSettings, subscribeAppSettings, createWheelLineAccumulator } from "../domain/app-settings";
 import { writeTextToClipboard, readTextFromClipboard } from "../domain/clipboard";
 import { handleOsc52 } from "../domain/osc52";
-import {
-  keyToZoomAction,
-  nextFontSize,
-  TERMINAL_DEFAULT_FONT_SIZE,
-} from "../domain/terminal-zoom";
 
 interface Props {
   tileId: string;
@@ -31,9 +26,6 @@ export default function TerminalTile({ tileId, isFocused, focusToken, onStatusCh
   const ptyFitRef = useRef<ReturnType<typeof createPtyFitController> | null>(null);
   const serializeRef = useRef<SerializeAddon | null>(null);
   const [status, setStatus] = useState<"spawning" | "running" | "exited" | "failed">("spawning");
-  // Live font size, controlled by Ctrl+= / Ctrl+- / Ctrl+0 while focused.
-  // Not persisted across remounts on purpose (per UX decision).
-  const [fontSize, setFontSize] = useState<number>(TERMINAL_DEFAULT_FONT_SIZE);
 
   const updateStatus = useCallback((s: typeof status) => {
     setStatus(s);
@@ -78,7 +70,7 @@ export default function TerminalTile({ tileId, isFocused, focusToken, onStatusCh
     const term = new Terminal({
       cursorBlink: true,
       altClickMovesCursor: true,
-      fontSize: TERMINAL_DEFAULT_FONT_SIZE,
+      fontSize: getAppSettings().terminalFontSize,
       fontFamily: "'Cascadia Code', 'Consolas', monospace",
       scrollback: 999999,
       scrollOnUserInput: true,
@@ -325,35 +317,18 @@ export default function TerminalTile({ tileId, isFocused, focusToken, onStatusCh
 
   // Apply font-size changes to xterm + re-fit + tell the PTY about the
   // new cell grid. Idempotent: if the term hasn't been initialised yet
-  // (still in the cold-spawn window) the effect re-runs harmlessly.
+  // Live font-size updates from the global terminal font setting.
   useEffect(() => {
-    const term = termRef.current;
-    if (!term) return;
-    term.options.fontSize = fontSize;
-    ptyFitRef.current?.invalidate();
-    ptyFitRef.current?.request();
-  }, [fontSize, tileId]);
-
-  // Zoom shortcuts. Only listen while focused so other tiles don't see
-  // them (each terminal/session tile owns its own font size).
-  useEffect(() => {
-    if (!isFocused) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (!e.ctrlKey || e.shiftKey || e.altKey || e.metaKey) return;
-      const action = keyToZoomAction(e.key);
-      if (!action) return;
-      // Don't hijack if the user is typing in an unrelated input/textarea.
-      const tgt = e.target as HTMLElement | null;
-      const tag = tgt?.tagName;
-      if (tag === "INPUT" || (tag === "TEXTAREA" && !tgt?.classList.contains("xterm-helper-textarea"))) {
-        return;
+    return subscribeAppSettings((s) => {
+      const term = termRef.current;
+      if (!term) return;
+      if (term.options.fontSize !== s.terminalFontSize) {
+        term.options.fontSize = s.terminalFontSize;
+        ptyFitRef.current?.invalidate();
+        ptyFitRef.current?.request();
       }
-      e.preventDefault();
-      setFontSize((s) => nextFontSize(s, action));
-    };
-    window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
-  }, [isFocused]);
+    });
+  }, []);
 
   return (
     <div style={{ width: "100%", height: "100%", position: "relative", overflow: "hidden" }}>

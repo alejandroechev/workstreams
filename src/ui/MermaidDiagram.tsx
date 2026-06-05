@@ -5,18 +5,9 @@ import {
   ArrowPathIcon,
   ClipboardDocumentIcon,
   XMarkIcon,
-  MinusIcon,
-  PlusIcon,
 } from "@heroicons/react/24/outline";
 import { loadMermaid, loadPanzoom } from "./mermaid-loader";
 import { preprocessMermaidCode } from "./preprocessMermaid";
-import {
-  getAppSettings,
-  setAppSettings,
-  subscribeAppSettings,
-  MERMAID_FONT_SIZE_MAX,
-  MERMAID_FONT_SIZE_MIN,
-} from "../domain/app-settings";
 
 interface Props {
   source: string;
@@ -35,13 +26,7 @@ export function MermaidDiagram({ source }: Props) {
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [fullscreen, setFullscreen] = useState(false);
-  const [fontSize, setFontSize] = useState<number>(() => getAppSettings().mermaidFontSize);
   const idRef = useRef(`mermaid-${++diagramCounter}`);
-
-  useEffect(
-    () => subscribeAppSettings((s) => setFontSize(s.mermaidFontSize)),
-    [],
-  );
 
   useEffect(() => {
     let cancelled = false;
@@ -59,7 +44,6 @@ export function MermaidDiagram({ source }: Props) {
           theme: "dark",
           securityLevel: "loose",
           fontFamily: "'Segoe UI', system-ui, sans-serif",
-          themeVariables: { fontSize: `${fontSize}px` },
         });
         const code = preprocessMermaidCode(source);
         const { svg } = await mermaid.render(`${idRef.current}-svg`, code);
@@ -134,18 +118,10 @@ export function MermaidDiagram({ source }: Props) {
       cleanup?.();
       panzoomInstanceRef.current = null;
     };
-  }, [source, fullscreen, fontSize]);
+  }, [source, fullscreen]);
 
   const handleReset = () => {
     panzoomInstanceRef.current?.reset?.();
-  };
-
-  const bumpFont = (delta: number) => {
-    const next = Math.max(
-      MERMAID_FONT_SIZE_MIN,
-      Math.min(MERMAID_FONT_SIZE_MAX, fontSize + delta),
-    );
-    setAppSettings({ mermaidFontSize: next });
   };
 
   const handleCopySvg = async () => {
@@ -174,30 +150,6 @@ export function MermaidDiagram({ source }: Props) {
   const body = (
     <div style={fullscreen ? fullscreenWrapperStyle : wrapperStyle} data-testid="mermaid-diagram">
       <div style={toolbarStyle}>
-        <button
-          title={`Smaller font (${fontSize}px)`}
-          onClick={() => bumpFont(-1)}
-          style={toolbarBtnStyle}
-          data-testid="mermaid-font-smaller"
-          disabled={fontSize <= MERMAID_FONT_SIZE_MIN}
-        >
-          <MinusIcon style={iconStyle} />
-        </button>
-        <span
-          style={{ fontSize: 10, color: "#cdd6f4", padding: "0 4px", alignSelf: "center" }}
-          data-testid="mermaid-font-size"
-        >
-          {fontSize}
-        </span>
-        <button
-          title={`Larger font (${fontSize}px)`}
-          onClick={() => bumpFont(1)}
-          style={toolbarBtnStyle}
-          data-testid="mermaid-font-larger"
-          disabled={fontSize >= MERMAID_FONT_SIZE_MAX}
-        >
-          <PlusIcon style={iconStyle} />
-        </button>
         <button title="Reset view" onClick={handleReset} style={toolbarBtnStyle}>
           <ArrowPathIcon style={iconStyle} />
         </button>

@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { hydrateAppSettings } from "./domain/app-settings";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { fileBufferRegistry } from "./files/FileBufferRegistry";
@@ -199,6 +200,12 @@ export default function App() {
 
     return () => { unsub.then((unlisten) => unlisten?.()).catch(() => {}); };
   }, [getDirtyFileBuffers]);
+
+  // Hydrate app-level settings (font sizes, scroll speed) from SQLite
+  // before tiles render so the first paint uses real values.
+  useEffect(() => {
+    void hydrateAppSettings();
+  }, []);
 
   // Load projects and workstreams on mount (with saved order)
   useEffect(() => {

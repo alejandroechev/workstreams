@@ -8,6 +8,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { MermaidDiagram } from "./MermaidDiagram";
 import { classifyLinkTarget, isImageFile, makeImageBlobUrl, resolveRelativePath, type LinkTargetKind } from "../domain/file-types";
 import { extractFrontmatter } from "./frontmatter";
+import { getAppSettings, subscribeAppSettings } from "../domain/app-settings";
 
 // Register only the languages we actually use. PrismLight does NOT
 // auto-load grammars at scroll time (that's what made the colors "go
@@ -102,9 +103,14 @@ interface Props {
  * blockquote, inline code, etc.) scale proportionally via em units.
  */
 export function MarkdownView({ children, className, style, baseFontSize, basePath, onLinkClick }: Props) {
+  // Subscribe to global markdown font size; per-call baseFontSize prop wins
+  // when explicitly provided (kept for back-compat / tests).
+  const [globalFont, setGlobalFont] = useState<number>(() => getAppSettings().markdownFontSize);
+  useEffect(() => subscribeAppSettings((s) => setGlobalFont(s.markdownFontSize)), []);
+  const effectiveFontSize = baseFontSize ?? globalFont;
   const mergedContainer: CSSProperties = {
     ...containerStyle,
-    ...(baseFontSize ? { fontSize: baseFontSize } : null),
+    fontSize: effectiveFontSize,
     ...style,
   };
 
@@ -179,7 +185,7 @@ export function MarkdownView({ children, className, style, baseFontSize, basePat
   return (
     <div className={className} style={mergedContainer} data-testid="markdown-content">
       {hasFrontmatter && frontmatter.length > 0 ? (
-        <FrontmatterCard fields={frontmatter} baseFontSize={baseFontSize ?? 14} />
+        <FrontmatterCard fields={frontmatter} baseFontSize={effectiveFontSize} />
       ) : null}
       <Markdown remarkPlugins={[remarkGfm]} components={componentMap}>
         {body}

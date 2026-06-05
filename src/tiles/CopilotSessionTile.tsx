@@ -7,15 +7,10 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { parseCopilotSessionConfig } from "../domain/tile-config";
 import { createPtyFitController } from "./pty-fit";
-import { getAppSettings, createWheelLineAccumulator } from "../domain/app-settings";
+import { getAppSettings, subscribeAppSettings, createWheelLineAccumulator } from "../domain/app-settings";
 import { writeTextToClipboard, readTextFromClipboard } from "../domain/clipboard";
 import { handleOsc52 } from "../domain/osc52";
 import { playBell, notifySessionIdle } from "../domain/notifications";
-import {
-  keyToZoomAction,
-  nextFontSize,
-  TERMINAL_DEFAULT_FONT_SIZE,
-} from "../domain/terminal-zoom";
 import type { CopilotSessionStats } from "../domain/types";
 
 interface Props {
@@ -55,8 +50,6 @@ export default function CopilotSessionTile({
   const serializeRef = useRef<SerializeAddon | null>(null);
   const prevActivityRef = useRef<string>("idle");
   const [status, setStatus] = useState<string>(isResuming ? "resuming" : "starting");
-  // Live font size, controlled by Ctrl+= / Ctrl+- / Ctrl+0 while focused.
-  const [fontSize, setFontSize] = useState<number>(TERMINAL_DEFAULT_FONT_SIZE);
 
   const config = parseCopilotSessionConfig(configJson);
 
@@ -80,7 +73,7 @@ export default function CopilotSessionTile({
     const term = new Terminal({
       cursorBlink: true,
       altClickMovesCursor: true,
-      fontSize: TERMINAL_DEFAULT_FONT_SIZE,
+      fontSize: getAppSettings().terminalFontSize,
       fontFamily: "'Cascadia Code', 'Consolas', monospace",
       scrollback: 999999,
       scrollOnUserInput: true,
@@ -372,36 +365,18 @@ export default function CopilotSessionTile({
     return () => clearTimeout(timer);
   }, [isFocused, focusToken]);
 
-  // Apply font-size changes to xterm + re-fit + tell the PTY about the
-  // new cell grid.
+  // Live font-size updates from the global terminal font setting.
   useEffect(() => {
-    const term = termRef.current;
-    if (!term) return;
-    term.options.fontSize = fontSize;
-    // Force the controller to re-send dims (cell grid may have changed even if
-    // pixel size of the tile didn't).
-    ptyFitRef.current?.invalidate();
-    ptyFitRef.current?.request();
-  }, [fontSize, tileId]);
-
-  // Zoom shortcuts (Ctrl+= / Ctrl+- / Ctrl+0) — active only while focused.
-  useEffect(() => {
-    if (!isFocused) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (!e.ctrlKey || e.shiftKey || e.altKey || e.metaKey) return;
-      const action = keyToZoomAction(e.key);
-      if (!action) return;
-      const tgt = e.target as HTMLElement | null;
-      const tag = tgt?.tagName;
-      if (tag === "INPUT" || (tag === "TEXTAREA" && !tgt?.classList.contains("xterm-helper-textarea"))) {
-        return;
+    return subscribeAppSettings((s) => {
+      const term = termRef.current;
+      if (!term) return;
+      if (term.options.fontSize !== s.terminalFontSize) {
+        term.options.fontSize = s.terminalFontSize;
+        ptyFitRef.current?.invalidate();
+        ptyFitRef.current?.request();
       }
-      e.preventDefault();
-      setFontSize((s) => nextFontSize(s, action));
-    };
-    window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
-  }, [isFocused]);
+    });
+  }, []);
 
   const hasLinkedSession = !!(config.copilot_session_id || (config as unknown as Record<string, unknown>).resume_by_id);
 

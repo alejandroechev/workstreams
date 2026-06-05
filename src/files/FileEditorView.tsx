@@ -26,6 +26,7 @@ import {
   type Anchor,
 } from "./comments-layer";
 import type { FileComment } from "../domain/file-comments";
+import { getAppSettings, subscribeAppSettings } from "../domain/app-settings";
 
 const MAX_INLINE_EDIT_SIZE_BYTES = 1024 * 1024;
 const confirmedDangerousWarningKeys = new Set<string>();
@@ -370,6 +371,7 @@ export function FileEditorView({
           automaticLayout: false,
           minimap: { enabled: false },
           scrollBeyondLastLine: false,
+          fontSize: getAppSettings().textFontSize,
         });
         editorRef.current = editor;
         setEditorReadyToken((v) => v + 1);
@@ -397,6 +399,14 @@ export function FileEditorView({
       setEditorReadyToken(0);
     };
   }, [editorPath, editorRetryToken, path, registry]);
+
+  // ─── Live font-size updates from global app settings ──────────────────
+  useEffect(() => {
+    return subscribeAppSettings((s) => {
+      const editor = editorRef.current;
+      if (editor) editor.updateOptions({ fontSize: s.textFontSize });
+    });
+  }, [editorReadyToken]);
 
   // ─── Inline comments: view zones + selection listener ─────────────────
   const zoneIdsRef = useRef<Map<string, string>>(new Map());

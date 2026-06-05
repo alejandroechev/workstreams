@@ -23,8 +23,6 @@ import {
   CodeBracketSquareIcon,
   ClockIcon,
   BoltIcon,
-  MinusIcon,
-  PlusIcon,
   MusicalNoteIcon,
   EyeIcon,
   PencilSquareIcon,
@@ -37,6 +35,7 @@ import { writeTextToClipboard } from "../domain/clipboard";
 import { dispatchAddToWorkbench } from "../domain/workbench-events";
 import { useFileComments } from "../files/useFileComments";
 import { debounce } from "../domain/debounce";
+import { getAppSettings, subscribeAppSettings } from "../domain/app-settings";
 
 interface Props {
   tileId: string;
@@ -212,7 +211,20 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; path: string; isDir: boolean } | null>(null);
 
   // Font size (Ctrl+= / Ctrl+- and A-/A+ toolbar buttons)
-  const [fontSize, setFontSize] = useState<number>(13);
+  // Read global font sizes from app settings. RepoExplorer no longer has a
+  // per-tile font size; the Settings modal globals drive Monaco editors
+  // (text) and MarkdownView (markdown). We keep two local snapshots so
+  // re-render fires when the global changes.
+  const [globalTextFont, setGlobalTextFont] = useState<number>(() => getAppSettings().textFontSize);
+  const [globalMarkdownFont, setGlobalMarkdownFont] = useState<number>(() => getAppSettings().markdownFontSize);
+  useEffect(
+    () =>
+      subscribeAppSettings((s) => {
+        setGlobalTextFont(s.textFontSize);
+        setGlobalMarkdownFont(s.markdownFontSize);
+      }),
+    [],
+  );
 
   // Ctrl+P keyboard navigation
   const [fileSearchSelectedIndex, setFileSearchSelectedIndex] = useState(0);
@@ -704,26 +716,6 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
   // Reset Ctrl+P selection when results change
   useEffect(() => { setFileSearchSelectedIndex(0); }, [fileSearchResults]);
 
-  // Font-size shortcuts (Ctrl+= / Ctrl+- / Ctrl+0)
-  useEffect(() => {
-    if (!isFocused) return;
-    const handler = (e: KeyboardEvent) => {
-      if (!e.ctrlKey) return;
-      if (e.key === "=" || e.key === "+") {
-        e.preventDefault();
-        setFontSize((s) => Math.min(28, s + 1));
-      } else if (e.key === "-") {
-        e.preventDefault();
-        setFontSize((s) => Math.max(8, s - 1));
-      } else if (e.key === "0") {
-        e.preventDefault();
-        setFontSize(13);
-      }
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [isFocused]);
-
   // Filter entries by search
   const filteredEntries = searchFilter
     ? entries.filter((e) => e.name.toLowerCase().includes(searchFilter.toLowerCase()))
@@ -760,25 +752,6 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
         );
       })}
       <div style={{ flex: 1 }} />
-      <div style={{ display: "flex", alignItems: "center", gap: 2 }}>
-        <button
-          onClick={() => setFontSize((s) => Math.max(8, s - 1))}
-          style={tabIconButtonStyle}
-          title="Decrease font size (Ctrl+-)"
-          data-testid="repo-explorer-font-dec"
-        >
-          <MinusIcon style={{ width: 12, height: 12 }} />
-        </button>
-        <span style={{ fontSize: 10, color: "#6c7086", minWidth: 20, textAlign: "center" }} data-testid="repo-explorer-font-size">{fontSize}</span>
-        <button
-          onClick={() => setFontSize((s) => Math.min(28, s + 1))}
-          style={tabIconButtonStyle}
-          title="Increase font size (Ctrl+=)"
-          data-testid="repo-explorer-font-inc"
-        >
-          <PlusIcon style={{ width: 12, height: 12 }} />
-        </button>
-      </div>
     </div>
   );
 
@@ -1037,7 +1010,7 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
                 options={{
                   readOnly: true,
                   minimap: { enabled: false },
-                  fontSize,
+                  fontSize: globalTextFont,
                   fontFamily: "'Cascadia Code', 'Consolas', monospace",
                   scrollBeyondLastLine: false,
                   renderSideBySide: false,
@@ -1065,7 +1038,6 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
               renderMarkdownPreview={(markdownContent) => (
                 <MarkdownView
                   style={markdownContainerStyle}
-                  baseFontSize={fontSize}
                   basePath={dirnameOf(filePath)}
                   onLinkClick={handleLinkClick}
                 >{markdownContent}</MarkdownView>
@@ -1110,7 +1082,7 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
             options={{
               readOnly: true,
               minimap: { enabled: false },
-              fontSize,
+              fontSize: globalTextFont,
               fontFamily: "'Cascadia Code', 'Consolas', monospace",
               scrollBeyondLastLine: false,
               wordWrap: "on",
@@ -1569,7 +1541,7 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
                   cursor: "pointer",
                   color: entry.isDir ? "#89b4fa" : "#cdd6f4",
                   fontWeight: entry.isDir ? 500 : 400,
-                  fontSize,
+                  fontSize: 13,
                 }}
                 onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "#313244"; }}
                 onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "transparent"; }}
@@ -1756,16 +1728,6 @@ const tabButtonStyle: React.CSSProperties = {
   cursor: "pointer",
   fontSize: 11,
   fontFamily: "inherit",
-};
-
-const tabIconButtonStyle: React.CSSProperties = {
-  background: "transparent",
-  border: "none",
-  color: "#6c7086",
-  cursor: "pointer",
-  padding: "0 4px",
-  display: "flex",
-  alignItems: "center",
 };
 
 const toolbarStyle: React.CSSProperties = {
