@@ -15,6 +15,7 @@ import StatusBar from "./tiling/StatusBar";
 import SessionPicker, { type CopilotSession } from "./tiles/SessionPicker";
 import SettingsModal from "./ui/SettingsModal";
 import DiffReviewPickerModal from "./ui/components/DiffReviewPickerModal";
+import ConfirmCloseDialog from "./ui/components/ConfirmCloseDialog";
 import { navigateFocus } from "./domain/layout";
 import { parseKeyAction } from "./domain/keyboard";
 import { createTerminalConfig, createCopilotSessionConfig } from "./domain/tile-config";
@@ -182,14 +183,35 @@ export default function App() {
     return window.confirm(`You have unsaved changes in ${dirtyCount} file(s). Discard and ${action}?`);
   }, [getDirtyFileBuffers]);
 
+  const [confirmCloseOpen, setConfirmCloseOpen] = useState(false);
+  const confirmCloseFinalizeRef = useRef<(() => Promise<void>) | null>(null);
+
   useEffect(() => {
     const unsub = (async () => {
       const win = getCurrentWindow();
       const unlisten = await win.onCloseRequested(async (event) => {
         const dirty = getDirtyFileBuffers();
-        if (dirty.length === 0) {
-          // No unsaved work; explicitly destroy so we don't depend on the
-          // framework's "no preventDefault → auto destroy" path.
+        // Dirty buffers get their own (more informative) confirm.
+        if (dirty.length > 0) {
+          event.preventDefault();
+          const list = dirty.map((snapshot) => `  • ${snapshot.path}`).join("\n");
+          const ok = window.confirm(`You have unsaved changes in ${dirty.length} file(s):\n\n${list}\n\nClose anyway and discard?`);
+          if (ok) {
+            try { await win.destroy(); }
+            catch (err) { console.error("window.destroy failed:", err); }
+          }
+          return;
+        }
+
+        // Generic confirm-close gate. Respects the "Don't ask again"
+        // setting under app.confirm-close-disabled.
+        let disabled = false;
+        try {
+          const raw = await invoke<string | null>("get_setting", { key: "app.confirm-close-disabled" });
+          disabled = raw === "1";
+        } catch { /* default to ask */ }
+
+        if (disabled) {
           event.preventDefault();
           try { await win.destroy(); }
           catch (err) { console.error("window.destroy failed (check capabilities/default.json for core:window:allow-destroy):", err); }
@@ -197,18 +219,33 @@ export default function App() {
         }
 
         event.preventDefault();
-        const list = dirty.map((snapshot) => `  • ${snapshot.path}`).join("\n");
-        const ok = window.confirm(`You have unsaved changes in ${dirty.length} file(s):\n\n${list}\n\nClose anyway and discard?`);
-        if (ok) {
+        confirmCloseFinalizeRef.current = async () => {
           try { await win.destroy(); }
           catch (err) { console.error("window.destroy failed:", err); }
-        }
+        };
+        setConfirmCloseOpen(true);
       });
       return unlisten;
     })();
 
     return () => { unsub.then((unlisten) => unlisten?.()).catch(() => {}); };
   }, [getDirtyFileBuffers]);
+
+  const handleConfirmClose = useCallback(async (dontAskAgain: boolean) => {
+    setConfirmCloseOpen(false);
+    if (dontAskAgain) {
+      try { await invoke("set_setting", { key: "app.confirm-close-disabled", value: "1" }); }
+      catch (err) { console.error("set_setting failed:", err); }
+    }
+    const finalize = confirmCloseFinalizeRef.current;
+    confirmCloseFinalizeRef.current = null;
+    if (finalize) await finalize();
+  }, []);
+
+  const handleCancelClose = useCallback(() => {
+    setConfirmCloseOpen(false);
+    confirmCloseFinalizeRef.current = null;
+  }, []);
 
   // Hydrate app-level settings (font sizes, scroll speed) from SQLite
   // before tiles render so the first paint uses real values.
@@ -1203,6 +1240,11 @@ export default function App() {
       </div>
 
       <SettingsModal open={showSettings} onClose={() => setShowSettings(false)} />
+      <ConfirmCloseDialog
+        open={confirmCloseOpen}
+        onConfirm={handleConfirmClose}
+        onCancel={handleCancelClose}
+      />
 
       {showDiffReviewPicker && (
         <DiffReviewPickerModal

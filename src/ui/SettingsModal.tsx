@@ -1,5 +1,6 @@
 import { useEffect, useState, useRef } from "react";
 import { XMarkIcon } from "@heroicons/react/24/outline";
+import { invoke } from "@tauri-apps/api/core";
 import {
   getAppSettings,
   setAppSettings,
@@ -32,6 +33,16 @@ export default function SettingsModal({ open, onClose }: Props) {
   // Local optimistic copies so the sliders feel snappy while we debounce
   // the global commit.
   const [localValues, setLocalValues] = useState<AppSettings>(() => getAppSettings());
+  const [confirmCloseEnabled, setConfirmCloseEnabled] = useState(true);
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    void invoke<string | null>("get_setting", { key: "app.confirm-close-disabled" })
+      .then((raw) => { if (!cancelled) setConfirmCloseEnabled(raw !== "1"); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [open]);
 
   useEffect(() => {
     return subscribeAppSettings((s) => {
@@ -194,6 +205,31 @@ export default function SettingsModal({ open, onClose }: Props) {
           <div style={{ marginTop: 6, fontSize: 11, color: "#6c7086" }}>
             Controls how many lines a single mouse-wheel tick scrolls in
             terminal and Copilot session tiles.
+          </div>
+
+          <div style={{ height: 1, background: "#313244", margin: "18px 0 14px" }} />
+
+          <div style={{ fontSize: 11, color: "#89b4fa", marginBottom: 8, textTransform: "uppercase", letterSpacing: 0.5 }}>
+            App behavior
+          </div>
+          <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+            <input
+              type="checkbox"
+              data-testid="settings-confirm-close"
+              checked={confirmCloseEnabled}
+              onChange={async (e) => {
+                const next = e.target.checked;
+                setConfirmCloseEnabled(next);
+                try {
+                  await invoke("set_setting", { key: "app.confirm-close-disabled", value: next ? "0" : "1" });
+                } catch { /* swallow */ }
+              }}
+            />
+            <span>Ask for confirmation before closing the app</span>
+          </label>
+          <div style={{ marginTop: 4, fontSize: 11, color: "#6c7086" }}>
+            When off, the window closes immediately. Unsaved file changes
+            always trigger a separate prompt regardless of this setting.
           </div>
 
           <div style={{ marginTop: 14, textAlign: "right" }}>
