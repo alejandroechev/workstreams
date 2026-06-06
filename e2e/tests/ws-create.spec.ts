@@ -89,11 +89,11 @@ test.describe("Workstream creation flow", () => {
     await expect(page.getByText("Existing demo session")).toBeVisible();
   });
 
-  test("import_worktree forces existing session and disables 'new'", async ({ page }) => {
+  test("import_worktree allows both existing and new session", async ({ page }) => {
     await openWsCreateForm(page);
     await page.locator('[data-testid="ws-create-repo-import_worktree"] input').click();
-    await expect(page.locator('[data-testid="ws-create-session-existing"] input')).toBeChecked();
-    await expect(page.locator('[data-testid="ws-create-session-new"] input')).toBeDisabled();
+    await expect(page.locator('[data-testid="ws-create-session-existing"] input')).toBeEnabled();
+    await expect(page.locator('[data-testid="ws-create-session-new"] input')).toBeEnabled();
   });
 
   test("new worktree shows the branch field with the derived branch name", async ({ page }) => {
