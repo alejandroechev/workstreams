@@ -203,6 +203,11 @@ export class TauriBackend implements Backend {
     return invoke<string>("git_current_branch", { directory });
   }
 
+  async gitBranchTrackingInfo(directory: string): Promise<{ ahead: number; behind: number; remoteHeadShort: string }> {
+    const [ahead, behind, remoteHeadShort] = await invoke<[number, number, string]>("git_branch_tracking_info", { directory });
+    return { ahead, behind, remoteHeadShort };
+  }
+
   async discoverCopilotConfig(workstreamDir?: string): Promise<CopilotConfigItem[]> {
     return invoke<CopilotConfigItem[]>("discover_copilot_config", { workstreamDir: workstreamDir ?? null });
   }

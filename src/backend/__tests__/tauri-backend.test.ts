@@ -314,6 +314,10 @@ describe("TauriBackend", () => {
     expect(invoke).toHaveBeenCalledWith("git_show_commit", { directory: "/", hash: "abc" });
     await backend.gitCurrentBranch("/");
     expect(invoke).toHaveBeenCalledWith("git_current_branch", { directory: "/" });
+    invoke.mockResolvedValueOnce([2, 3, "abc1234"]);
+    const tracking = await backend.gitBranchTrackingInfo("/");
+    expect(invoke).toHaveBeenCalledWith("git_branch_tracking_info", { directory: "/" });
+    expect(tracking).toEqual({ ahead: 2, behind: 3, remoteHeadShort: "abc1234" });
   });
 
   it("discoverCopilotConfig passes workstreamDir", async () => {

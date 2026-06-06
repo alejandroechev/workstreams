@@ -182,6 +182,7 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
   // Git log state
   const [logCommits, setLogCommits] = useState<Array<{ hash: string; short_hash: string; message: string; author: string; date: string }>>([]);
   const [logLoading, setLogLoading] = useState(false);
+  const [logTracking, setLogTracking] = useState<{ ahead: number; behind: number; remoteHeadShort: string } | null>(null);
   const [commitDiffHash, setCommitDiffHash] = useState<string>("");
   // Git hooks state
   const [hooksList, setHooksList] = useState<Array<{ name: string; path: string; content_preview: string }>>([]);
@@ -624,9 +625,14 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
     setMode("log");
     setLogLoading(true);
     setCommitDiffHash("");
+    setLogTracking(null);
     try {
-      const commits = await backend.gitLog(gitRoot, 50);
+      const [commits, tracking] = await Promise.all([
+        backend.gitLog(gitRoot, 50),
+        backend.gitBranchTrackingInfo(gitRoot).catch(() => ({ ahead: 0, behind: 0, remoteHeadShort: "" })),
+      ]);
       setLogCommits(commits);
+      setLogTracking(tracking);
     } catch {
       setLogCommits([]);
     } finally {
@@ -1306,6 +1312,7 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
 
   // ─── Log mode ───
   if (mode === "log") {
+    const hasTracking = logTracking && (logTracking.ahead > 0 || logTracking.behind > 0 || logTracking.remoteHeadShort);
     return (
       <div ref={containerRef} style={containerStyle}>
       {tabBar}
@@ -1315,6 +1322,28 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
               <ClockIcon style={{ width: 14, height: 14, flexShrink: 0 }} />
               Git Log{currentBranch ? ` — ${currentBranch}` : ""}
             </span>
+            {hasTracking && logTracking && (
+              <span data-testid="log-tracking-summary" style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 10 }}>
+                {logTracking.ahead > 0 && (
+                  <span title={`${logTracking.ahead} commit(s) on local not on origin/${currentBranch ?? ""}`}
+                    style={{ color: "#a6e3a1", background: "#1e1e2e", border: "1px solid #313244", borderRadius: 4, padding: "1px 6px" }}>
+                    ↑{logTracking.ahead}
+                  </span>
+                )}
+                {logTracking.behind > 0 && (
+                  <span title={`${logTracking.behind} commit(s) on origin/${currentBranch ?? ""} not on local`}
+                    style={{ color: "#f38ba8", background: "#1e1e2e", border: "1px solid #313244", borderRadius: 4, padding: "1px 6px" }}>
+                    ↓{logTracking.behind}
+                  </span>
+                )}
+                {logTracking.ahead === 0 && logTracking.behind === 0 && logTracking.remoteHeadShort && (
+                  <span title={`in sync with origin/${currentBranch ?? ""}`}
+                    style={{ color: "#94e2d5", background: "#1e1e2e", border: "1px solid #313244", borderRadius: 4, padding: "1px 6px" }}>
+                    ✓ synced
+                  </span>
+                )}
+              </span>
+            )}
           </div>
         </div>
         <div style={{ flex: 1, overflowY: "auto", padding: "4px 0" }}>
@@ -1324,35 +1353,48 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
           {!logLoading && logCommits.length === 0 && (
             <div style={{ padding: "8px 12px", color: "#585b70" }}>No commits found</div>
           )}
-          {logCommits.map((c) => (
-            <div
-              key={c.hash}
-              onClick={() => viewCommitDiff(c.hash)}
-              style={{
-                display: "flex",
-                flexDirection: "column",
-                gap: 2,
-                padding: "6px 12px",
-                cursor: "pointer",
-                borderBottom: "1px solid #181825",
-              }}
-              onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "#313244"; }}
-              onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "transparent"; }}
-              data-testid={`log-commit-${c.short_hash}`}
-            >
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <span style={{ color: "#f9e2af", fontFamily: "monospace", fontSize: 11, flexShrink: 0 }}>
-                  {c.short_hash}
-                </span>
-                <span style={{ color: "#cdd6f4", fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                  {c.message}
-                </span>
+          {logCommits.map((c) => {
+            const isRemoteHead = !!logTracking?.remoteHeadShort && c.short_hash === logTracking.remoteHeadShort;
+            return (
+              <div
+                key={c.hash}
+                onClick={() => viewCommitDiff(c.hash)}
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 2,
+                  padding: "6px 12px",
+                  cursor: "pointer",
+                  borderBottom: "1px solid #181825",
+                  borderLeft: isRemoteHead ? "3px solid #89b4fa" : "3px solid transparent",
+                }}
+                onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "#313244"; }}
+                onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "transparent"; }}
+                data-testid={`log-commit-${c.short_hash}`}
+              >
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ color: "#f9e2af", fontFamily: "monospace", fontSize: 11, flexShrink: 0 }}>
+                    {c.short_hash}
+                  </span>
+                  {isRemoteHead && currentBranch && (
+                    <span
+                      data-testid="log-remote-head-badge"
+                      title={`origin/${currentBranch} points here`}
+                      style={{ color: "#89b4fa", background: "#1e1e2e", border: "1px solid #45475a", borderRadius: 3, padding: "0 4px", fontSize: 9, fontFamily: "monospace", flexShrink: 0 }}
+                    >
+                      origin/{currentBranch}
+                    </span>
+                  )}
+                  <span style={{ color: "#cdd6f4", fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {c.message}
+                  </span>
+                </div>
+                <div style={{ color: "#585b70", fontSize: 10 }}>
+                  {c.author} · {c.date}
+                </div>
               </div>
-              <div style={{ color: "#585b70", fontSize: 10 }}>
-                {c.author} · {c.date}
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
         {overlays}
       </div>

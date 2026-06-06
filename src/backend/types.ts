@@ -76,6 +76,8 @@ export interface Backend {
   gitLog(directory: string, limit?: number): Promise<Array<{ hash: string; short_hash: string; message: string; author: string; date: string }>>;
   gitShowCommit(directory: string, hash: string): Promise<string>;
   gitCurrentBranch(directory: string): Promise<string>;
+  /** Returns ahead/behind counts vs origin/<currentBranch> + remote head short hash. */
+  gitBranchTrackingInfo(directory: string): Promise<{ ahead: number; behind: number; remoteHeadShort: string }>;
   // Copilot config discovery
   discoverCopilotConfig(workstreamDir?: string): Promise<CopilotConfigItem[]>;
   // Plan / todo introspection of a Copilot session's session.db

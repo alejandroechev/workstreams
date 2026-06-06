@@ -368,6 +368,10 @@ export class MemoryBackend implements Backend {
     return "main";
   }
 
+  async gitBranchTrackingInfo(_directory: string): Promise<{ ahead: number; behind: number; remoteHeadShort: string }> {
+    return { ahead: 0, behind: 0, remoteHeadShort: "" };
+  }
+
   async discoverCopilotConfig(_workstreamDir?: string): Promise<CopilotConfigItem[]> {
     return [];
   }

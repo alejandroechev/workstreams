@@ -1406,7 +1406,55 @@ fn git_current_branch(directory: String) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
-/// Create a new git worktree with a new branch
+/// Tracking info for the current branch against its origin counterpart.
+/// Returns (ahead, behind, remote_head_short_hash). `remote_head_short_hash`
+/// is empty if origin doesn't have the branch.
+#[tauri::command]
+fn git_branch_tracking_info(directory: String) -> Result<(u32, u32, String), String> {
+    let branch_out = git_cmd()
+        .args(["branch", "--show-current"])
+        .current_dir(&directory)
+        .output()
+        .map_err(|e| format!("Failed to run git: {e}"))?;
+    if !branch_out.status.success() {
+        return Ok((0, 0, String::new()));
+    }
+    let branch = String::from_utf8_lossy(&branch_out.stdout).trim().to_string();
+    if branch.is_empty() {
+        return Ok((0, 0, String::new()));
+    }
+    let remote_ref = format!("origin/{branch}");
+    // Check origin/<branch> exists.
+    let exists = git_cmd()
+        .args(["rev-parse", "--verify", &remote_ref])
+        .current_dir(&directory)
+        .output()
+        .map_err(|e| format!("Failed to run git: {e}"))?;
+    if !exists.status.success() {
+        return Ok((0, 0, String::new()));
+    }
+    let remote_hash = String::from_utf8_lossy(&exists.stdout).trim().to_string();
+    let short = remote_hash.chars().take(7).collect::<String>();
+    // ahead/behind via rev-list --left-right --count <remote>...<local>
+    let counts = git_cmd()
+        .args([
+            "rev-list",
+            "--left-right",
+            "--count",
+            &format!("{remote_ref}...HEAD"),
+        ])
+        .current_dir(&directory)
+        .output()
+        .map_err(|e| format!("Failed to run git: {e}"))?;
+    if !counts.status.success() {
+        return Ok((0, 0, short));
+    }
+    let raw = String::from_utf8_lossy(&counts.stdout);
+    let mut parts = raw.split_whitespace();
+    let behind: u32 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+    let ahead: u32 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+    Ok((ahead, behind, short))
+}
 #[tauri::command]
 fn create_worktree(
     project_directory: String,
@@ -3088,6 +3136,7 @@ pub fn run() {
             query_session_db_table,
             // Git log & branch
             git_log,
+            git_branch_tracking_info,
             git_show_commit,
             git_current_branch,
             create_worktree,
@@ -3749,5 +3798,72 @@ Body here.
         assert!(after2.contains("brand new"));
 
         std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn git_branch_tracking_info_reports_ahead_behind_and_remote_head() {
+        let tmp = std::env::temp_dir().join(format!(
+            "ws-tracking-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let dir_str = tmp.to_string_lossy().to_string();
+        let run = |cwd: &std::path::Path, args: &[&str]| {
+            std::process::Command::new("git")
+                .args(args)
+                .current_dir(cwd)
+                .output()
+                .expect("git invoke")
+        };
+
+        // Set up bare remote + local clone simulating "origin".
+        let remote = tmp.join("remote.git");
+        std::fs::create_dir_all(&remote).unwrap();
+        assert!(run(&remote, &["init", "--bare", "-q"]).status.success());
+
+        let local = tmp.join("local");
+        std::fs::create_dir_all(&local).unwrap();
+        assert!(run(&local, &["init", "-q", "-b", "main"]).status.success());
+        run(&local, &["config", "user.email", "t@t"]);
+        run(&local, &["config", "user.name", "t"]);
+        std::fs::write(local.join("a.txt"), "1\n").unwrap();
+        run(&local, &["add", "."]);
+        run(&local, &["commit", "-q", "-m", "c1"]);
+        run(
+            &local,
+            &["remote", "add", "origin", remote.to_string_lossy().as_ref()],
+        );
+        run(&local, &["push", "-q", "-u", "origin", "main"]);
+
+        // Now local is even with origin/main.
+        let (ahead, behind, short) =
+            git_branch_tracking_info(local.to_string_lossy().to_string()).expect("tracking");
+        assert_eq!(ahead, 0);
+        assert_eq!(behind, 0);
+        assert_eq!(short.len(), 7);
+
+        // Add one local commit -> ahead 1, behind 0.
+        std::fs::write(local.join("a.txt"), "2\n").unwrap();
+        run(&local, &["add", "."]);
+        run(&local, &["commit", "-q", "-m", "c2"]);
+        let (ahead2, behind2, _) =
+            git_branch_tracking_info(local.to_string_lossy().to_string()).expect("tracking");
+        assert_eq!(ahead2, 1);
+        assert_eq!(behind2, 0);
+
+        // No-branch directory returns empty short hash.
+        let empty = tmp.join("empty");
+        std::fs::create_dir_all(&empty).unwrap();
+        run(&empty, &["init", "-q"]);
+        let (_, _, short_empty) =
+            git_branch_tracking_info(empty.to_string_lossy().to_string()).expect("tracking");
+        assert_eq!(short_empty, "");
+
+        std::fs::remove_dir_all(&tmp).ok();
+        let _ = dir_str; // silence unused warning
     }
 }

@@ -347,6 +347,11 @@ describe("MemoryBackend", () => {
       const sides = await backend.gitDiffFileSides("C:\\project", "file.ts", "unstaged");
       expect(sides).toEqual({ before: "", after: "" });
     });
+
+    it("gitBranchTrackingInfo returns zeroed defaults", async () => {
+      const t = await backend.gitBranchTrackingInfo("C:\\project");
+      expect(t).toEqual({ ahead: 0, behind: 0, remoteHeadShort: "" });
+    });
   });
 
   describe("discoverCopilotConfig", () => {
