@@ -46,10 +46,6 @@ describe("WorkstreamActionMenu", () => {
     expect(screen.getByTestId("action-change-worktree")).toBeTruthy();
     expect(screen.getByTestId("action-fork")).toBeTruthy();
     expect(screen.getByTestId("action-archive")).toBeTruthy();
-    expect(screen.getByTestId("action-status-active")).toBeTruthy();
-    expect(screen.getByTestId("action-status-working")).toBeTruthy();
-    expect(screen.getByTestId("action-status-blocked")).toBeTruthy();
-    expect(screen.getByTestId("action-status-in_review")).toBeTruthy();
   });
 
   it("hides fork + change-worktree when handlers are not provided", () => {
@@ -58,12 +54,12 @@ describe("WorkstreamActionMenu", () => {
     expect(screen.queryByTestId("action-change-worktree")).toBeNull();
   });
 
-  it("marks the current status visually", () => {
-    renderMenu({ workstream: { ...baseWs, status: "working" } });
-    const active = screen.getByTestId("action-status-active");
-    const working = screen.getByTestId("action-status-working");
-    expect(active.style.background).toBe("transparent");
-    expect(working.style.background).toBe("rgb(49, 50, 68)");
+  it("does not surface status options (status UI removed)", () => {
+    renderMenu();
+    expect(screen.queryByTestId("action-status-active")).toBeNull();
+    expect(screen.queryByTestId("action-status-working")).toBeNull();
+    expect(screen.queryByTestId("action-status-in_review")).toBeNull();
+    expect(screen.queryByTestId("action-status-blocked")).toBeNull();
   });
 
   it("fires Rename + Close on click", () => {
@@ -77,13 +73,6 @@ describe("WorkstreamActionMenu", () => {
     const handlers = renderMenu();
     fireEvent.click(screen.getByTestId("action-archive"));
     expect(handlers.onArchive).toHaveBeenCalledOnce();
-    expect(handlers.onClose).toHaveBeenCalledOnce();
-  });
-
-  it("dispatches the chosen status to onChangeStatus", () => {
-    const handlers = renderMenu();
-    fireEvent.click(screen.getByTestId("action-status-in_review"));
-    expect(handlers.onChangeStatus).toHaveBeenCalledWith("in_review");
     expect(handlers.onClose).toHaveBeenCalledOnce();
   });
 

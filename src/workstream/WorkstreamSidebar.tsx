@@ -3,11 +3,6 @@ import { useState, useRef, useEffect } from "react";
 import { listen } from "@tauri-apps/api/event";
 import type { Project, Workstream } from "../domain/types";
 import {
-  CheckCircleIcon,
-  Cog6ToothIcon,
-  ExclamationTriangleIcon,
-  EyeIcon,
-  ArchiveBoxIcon,
   BellAlertIcon,
   EllipsisHorizontalIcon,
 } from "@heroicons/react/20/solid";
@@ -39,26 +34,40 @@ interface Props {
   onChangeWorktree?: (ws: Workstream) => void;
 }
 
-type WorkstreamStatus = Workstream['status'];
+// Activity slot in the sidebar row. Replaces the previous status icon +
+// inline activity dot. Three states:
+//   - bell:    agent finished while the workstream was unfocused
+//   - working: any Copilot session in the workstream is non-idle
+//   - idle:    nothing rendered (preserves spacing via a fixed-width slot)
+const ACTIVE_ACTIVITIES = new Set(["thinking", "tool_use", "responding", "background_task"]);
 
-const STATUS_META: Record<WorkstreamStatus, { color: string; label: string }> = {
-  active:    { color: "#a6e3a1", label: "Active" },
-  working:   { color: "#89b4fa", label: "Working" },
-  blocked:   { color: "#f38ba8", label: "Blocked" },
-  in_review: { color: "#f9e2af", label: "In Review" },
-  archived:  { color: "#585b70", label: "Archived" },
-};
-
-function StatusIcon({ status, size = 14 }: { status: WorkstreamStatus; size?: number }) {
-  const s = { width: size, height: size, color: STATUS_META[status]?.color ?? "#585b70" };
-  switch (status) {
-    case "active":    return <CheckCircleIcon style={s} />;
-    case "working":   return <Cog6ToothIcon style={s} />;
-    case "blocked":   return <ExclamationTriangleIcon style={s} />;
-    case "in_review": return <EyeIcon style={s} />;
-    case "archived":  return <ArchiveBoxIcon style={s} />;
-    default:          return <CheckCircleIcon style={{ ...s, color: "#585b70" }} />;
+function ActivityIndicator({ bell, active }: { bell: boolean; active: boolean }) {
+  // Fixed 14×14 slot so rows don't reflow as state changes.
+  const slot: React.CSSProperties = { width: 14, height: 14, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 };
+  if (bell) {
+    return (
+      <span style={slot} title="Agent finished" data-testid="ws-indicator-bell">
+        <BellAlertIcon style={{ width: 14, height: 14, color: "#f9e2af", animation: "pulse-dot 1s ease-in-out 3" }} />
+      </span>
+    );
   }
+  if (active) {
+    return (
+      <span style={slot} title="Working" data-testid="ws-indicator-working">
+        <span
+          style={{
+            width: 8,
+            height: 8,
+            borderRadius: "50%",
+            background: "#89b4fa",
+            animation: "pulse-dot 1.5s ease-in-out infinite",
+            boxShadow: "0 0 6px #89b4fa",
+          }}
+        />
+      </span>
+    );
+  }
+  return <span style={slot} data-testid="ws-indicator-idle" />;
 }
 
 export default function WorkstreamSidebar({
@@ -292,42 +301,10 @@ export default function WorkstreamSidebar({
                   flex: 1,
                   minWidth: 0,
                 }}>
-                  <span
-                    style={{ flexShrink: 0, display: "flex", alignItems: "center" }}
-                    title={STATUS_META[ws.status]?.label ?? ws.status}
-                  >
-                    {wsBell.has(ws.id) ? (
-                      <BellAlertIcon style={{ width: 14, height: 14, color: "#f9e2af", animation: "pulse-dot 1s ease-in-out 3" }} />
-                    ) : (
-                      <StatusIcon status={ws.status} size={14} />
-                    )}
-                  </span>
-                  {/* Live activity indicator from session poller */}
-                  {(() => {
-                    const activity = wsActivity[ws.id];
-                    if (!activity || activity === "idle" || activity === "offline") return null;
-                    const activityColors: Record<string, string> = {
-                      thinking: "#a6e3a1",
-                      tool_use: "#89b4fa",
-                      responding: "#a6e3a1",
-                      background_task: "#cba6f7",
-                    };
-                    const color = activityColors[activity] || "#a6e3a1";
-                    return (
-                      <span
-                        style={{
-                          width: 8,
-                          height: 8,
-                          borderRadius: "50%",
-                          background: color,
-                          flexShrink: 0,
-                          animation: "pulse-dot 1.5s ease-in-out infinite",
-                          boxShadow: `0 0 6px ${color}`,
-                        }}
-                        title={activity === "tool_use" ? "Running tool" : activity === "thinking" ? "Thinking" : activity === "background_task" ? "Background task" : "Active"}
-                      />
-                    );
-                  })()}
+                  <ActivityIndicator
+                    bell={wsBell.has(ws.id)}
+                    active={ACTIVE_ACTIVITIES.has(wsActivity[ws.id] ?? "")}
+                  />
                   {renamingWsId === ws.id ? (
                     <input
                       ref={renameInputRef}
