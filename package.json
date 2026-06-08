@@ -17,6 +17,7 @@
     "lint": "eslint src",
     "validate-feature": "node scripts/cdp-validate.mjs",
     "cdp:feature": "node scripts/cdp-feature.mjs",
+    "dev:kill": "node scripts/dev-kill.mjs",
     "cdp:seed": "node scripts/dev-seed.mjs",
     "dev:reset": "node -e \"require('node:fs').rmSync('.dev', { recursive: true, force: true }); console.log('reset .dev')\"",
     "discipline-audit": "node scripts/discipline-audit.mjs",
