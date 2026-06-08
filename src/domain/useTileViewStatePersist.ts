@@ -44,14 +44,7 @@ export function useTileViewStatePersist<K extends AnyViewState["kind"]>(
   useEffect(() => {
     if (!enabled) return;
     writerRef.current(viewState);
-    // viewState is a fresh object literal every render in most callers
-    // (e.g. `{ viewingPath: ... }`), so depending on its identity would
-    // re-fire this effect every parent re-render and indefinitely reset
-    // the underlying debounce. Use a JSON snapshot of the contents
-    // instead, so the effect only re-runs when something actually
-    // changed.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled, JSON.stringify(viewState)]);
+  }, [enabled, viewState]);
 
   useEffect(() => {
     const w = writerRef.current;
