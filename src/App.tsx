@@ -959,6 +959,11 @@ export default function App() {
       .filter((id): id is string => !!id);
   }, [tiles]);
 
+  // Workstreams that have been "loaded" (have an entry in wsStates so tiles
+  // are mounted + listeners are active). Workstreams the user hasn't opened
+  // yet this session show a "stopped" indicator in the sidebar.
+  const loadedWsIds = useMemo(() => new Set(wsStates.keys()), [wsStates]);
+
   // Keyboard shortcuts
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -1076,6 +1081,7 @@ export default function App() {
         workstreams={workstreams}
         activeWsId={activeWsId}
         sessionInfoByWs={sessionInfoByWs}
+        loadedWsIds={loadedWsIds}
         onSelectWorkstream={selectWorkstream}
         onCreateProject={() => setShowRepoCreate(true)}
         onImportProject={() => setShowProjectCreate(true)}

@@ -25,6 +25,9 @@ interface Props {
   onStatusChange?: (status: string) => void;
   onStatsUpdate?: (stats: CopilotSessionStats) => void;
   onLinkSession?: () => void;
+  /** When true the workstream already has another linked session, so this
+   * tile must not allow linking (workstream → at most one linked session). */
+  workstreamHasOtherLinkedSession?: boolean;
   onAutoLink?: (sessionId: string, summary?: string) => void;
   onRestart?: () => void;
 }
@@ -40,6 +43,7 @@ export default function CopilotSessionTile({
   onStatusChange,
   onStatsUpdate,
   onLinkSession,
+  workstreamHasOtherLinkedSession,
   onAutoLink,
   onRestart,
 }: Props) {
@@ -224,8 +228,10 @@ export default function CopilotSessionTile({
       }
       prevActivityRef.current = newActivity;
 
-      // Auto-link: if tile has no linked session and poller found one, link it
-      if (!autoLinked.done && event.payload.session_id && onAutoLink) {
+      // Auto-link: if tile has no linked session and poller found one, link it.
+      // Skip when the workstream already has another linked session (enforced
+      // one-session-per-workstream policy).
+      if (!autoLinked.done && event.payload.session_id && onAutoLink && !workstreamHasOtherLinkedSession) {
         const currentConfig = parseCopilotSessionConfig(configJson);
         if (!currentConfig.copilot_session_id) {
           autoLinked.done = true;
@@ -416,7 +422,7 @@ export default function CopilotSessionTile({
               - linked        : "🔗 Linked"
               - spawned, not linked yet (auto-link pending): "🔗 New"
               - not spawned   : "🔗 Link" */}
-        {onLinkSession && (
+        {onLinkSession && !(workstreamHasOtherLinkedSession && !hasLinkedSession) && (
           <button
             onClick={(e) => { e.stopPropagation(); onLinkSession(); }}
             style={{

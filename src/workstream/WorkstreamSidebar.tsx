@@ -16,6 +16,10 @@ interface Props {
   activeWsId: string | null;
   /** Optional: map of wsId → linked-session summary (from pinned tile config). */
   sessionInfoByWs?: Record<string, string | undefined>;
+  /** Optional: set of workstream ids that have been loaded into the app's
+   * `wsStates` map (i.e. tiles + activity wired up). Workstreams not in this
+   * set render a "stopped" indicator (gray hollow square). */
+  loadedWsIds?: Set<string>;
   onSelectWorkstream: (id: string) => void;
   onCreateProject: () => void;
   onImportProject: () => void;
@@ -35,13 +39,14 @@ interface Props {
 }
 
 // Activity slot in the sidebar row. Replaces the previous status icon +
-// inline activity dot. Three states:
+// inline activity dot. Four states:
 //   - bell:    agent finished while the workstream was unfocused
 //   - working: any Copilot session in the workstream is non-idle
+//   - stopped: workstream hasn't been loaded yet (gray hollow square)
 //   - idle:    nothing rendered (preserves spacing via a fixed-width slot)
 const ACTIVE_ACTIVITIES = new Set(["thinking", "tool_use", "responding", "background_task"]);
 
-function ActivityIndicator({ bell, active }: { bell: boolean; active: boolean }) {
+function ActivityIndicator({ bell, active, stopped }: { bell: boolean; active: boolean; stopped: boolean }) {
   // Fixed 14×14 slot so rows don't reflow as state changes.
   const slot: React.CSSProperties = { width: 14, height: 14, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 };
   if (bell) {
@@ -67,6 +72,21 @@ function ActivityIndicator({ bell, active }: { bell: boolean; active: boolean })
       </span>
     );
   }
+  if (stopped) {
+    return (
+      <span style={slot} title="Stopped (not loaded)" data-testid="ws-indicator-stopped">
+        <span
+          style={{
+            width: 9,
+            height: 9,
+            background: "transparent",
+            border: "1px solid #6c7086",
+            borderRadius: 1,
+          }}
+        />
+      </span>
+    );
+  }
   return <span style={slot} data-testid="ws-indicator-idle" />;
 }
 
@@ -75,6 +95,7 @@ export default function WorkstreamSidebar({
   workstreams,
   activeWsId,
   sessionInfoByWs,
+  loadedWsIds,
   onSelectWorkstream,
   onCreateProject,
   onImportProject,
@@ -304,6 +325,7 @@ export default function WorkstreamSidebar({
                   <ActivityIndicator
                     bell={wsBell.has(ws.id)}
                     active={ACTIVE_ACTIVITIES.has(wsActivity[ws.id] ?? "")}
+                    stopped={!!loadedWsIds && !loadedWsIds.has(ws.id)}
                   />
                   {renamingWsId === ws.id ? (
                     <input

@@ -152,6 +152,12 @@ function TileWrapperImpl({
       break;
     case "copilot_session": {
       const cfg = JSON.parse(tile.config_json || "{}");
+      const thisLinkedId = (cfg.copilot_session_id || cfg.resume_by_id || null) as string | null;
+      // Workstream policy: at most one linked Copilot session per workstream.
+      // Other linked = any id in linkedSessionIds that isn't this tile's own.
+      const workstreamHasOtherLinkedSession = !!linkedSessionIds?.some(
+        (id) => id && id !== thisLinkedId,
+      );
       content = (
         <CopilotSessionTile
           tileId={tile.id}
@@ -164,6 +170,7 @@ function TileWrapperImpl({
           onStatusChange={setTermStatus}
           onStatsUpdate={setSessionStats}
           onLinkSession={onLinkSession ? () => onLinkSession(tile.id) : undefined}
+          workstreamHasOtherLinkedSession={workstreamHasOtherLinkedSession}
           onAutoLink={onAutoLink ? (sid, summary) => onAutoLink(tile.id, sid, summary) : undefined}
           onRestart={onRestart ? () => onRestart(tile.id) : undefined}
         />
