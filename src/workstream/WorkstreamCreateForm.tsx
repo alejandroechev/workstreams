@@ -174,7 +174,7 @@ export default function WorkstreamCreateForm({ project: initialProject, projects
           }}
         >
           <option value="">None</option>
-          {projects.map((p) => (
+          {[...projects].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" })).map((p) => (
             <option key={p.id} value={p.id}>
               {p.name}
             </option>

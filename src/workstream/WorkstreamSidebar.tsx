@@ -6,6 +6,9 @@ import {
   BellAlertIcon,
   EllipsisHorizontalIcon,
   MoonIcon,
+  PlusIcon,
+  ChevronDownIcon,
+  ChevronRightIcon,
 } from "@heroicons/react/20/solid";
 import { PROJECT_PRESET_COLORS, isCustomProjectColor } from "../domain/colors";
 import { reorderById } from "../domain/reorder";
@@ -46,6 +49,24 @@ interface Props {
 //   - stopped: workstream hasn't been loaded yet (gray hollow square)
 //   - idle:    nothing rendered (preserves spacing via a fixed-width slot)
 const ACTIVE_ACTIVITIES = new Set(["thinking", "tool_use", "responding", "background_task"]);
+
+// Shared style for the sidebar's "+" affordances (Workstreams / Repos
+// section headers). Larger hit area + hover background so the action is
+// obvious without crowding the header.
+const addButtonStyle: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  width: 22,
+  height: 22,
+  background: "transparent",
+  border: "none",
+  color: "#a6adc8",
+  cursor: "pointer",
+  borderRadius: 4,
+  padding: 0,
+  transition: "background 0.1s, color 0.1s",
+};
 
 function ActivityIndicator({ bell, active, stopped }: { bell: boolean; active: boolean; stopped: boolean }) {
   // Fixed 14×14 slot so rows don't reflow as state changes.
@@ -114,6 +135,7 @@ export default function WorkstreamSidebar({
   const [draggedWsId, setDraggedWsId] = useState<string | null>(null);
   const [dragOverWsId, setDragOverWsId] = useState<string | null>(null);
   const [showRepoMenu, setShowRepoMenu] = useState(false);
+  const [reposCollapsed, setReposCollapsed] = useState(false);
   const repoMenuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -264,18 +286,12 @@ export default function WorkstreamSidebar({
         <button
           data-testid="new-workstream-button"
           onClick={() => onCreateWorkstream()}
-          style={{
-            background: "none",
-            border: "none",
-            color: "#585b70",
-            cursor: "pointer",
-            fontSize: 14,
-            padding: 0,
-            lineHeight: 1,
-          }}
+          style={addButtonStyle}
+          onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "#313244"; (e.currentTarget as HTMLElement).style.color = "#cdd6f4"; }}
+          onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "transparent"; (e.currentTarget as HTMLElement).style.color = "#a6adc8"; }}
           title="New workstream"
         >
-          +
+          <PlusIcon style={{ width: 16, height: 16 }} />
         </button>
       </div>
 
@@ -547,22 +563,40 @@ export default function WorkstreamSidebar({
         justifyContent: "space-between",
         alignItems: "center",
       }}>
-        <span>Repos</span>
+        <button
+          data-testid="repos-toggle"
+          onClick={() => setReposCollapsed((v) => !v)}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 4,
+            background: "none",
+            border: "none",
+            color: "#585b70",
+            cursor: "pointer",
+            padding: 0,
+            fontSize: 10,
+            fontWeight: 600,
+            textTransform: "uppercase",
+            letterSpacing: 1,
+            fontFamily: "inherit",
+          }}
+          title={reposCollapsed ? "Show repos" : "Hide repos"}
+        >
+          {reposCollapsed
+            ? <ChevronRightIcon style={{ width: 12, height: 12 }} />
+            : <ChevronDownIcon style={{ width: 12, height: 12 }} />}
+          Repos
+        </button>
         <div ref={repoMenuRef} style={{ position: "relative" }}>
           <button
             onClick={() => setShowRepoMenu((v) => !v)}
-            style={{
-              background: "none",
-              border: "none",
-              color: "#585b70",
-              cursor: "pointer",
-              fontSize: 14,
-              padding: 0,
-              lineHeight: 1,
-            }}
+            style={addButtonStyle}
+            onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "#313244"; (e.currentTarget as HTMLElement).style.color = "#cdd6f4"; }}
+            onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "transparent"; (e.currentTarget as HTMLElement).style.color = "#a6adc8"; }}
             title="Add repo"
           >
-            +
+            <PlusIcon style={{ width: 16, height: 16 }} />
           </button>
           {showRepoMenu && (
             <div
@@ -621,6 +655,7 @@ export default function WorkstreamSidebar({
         </div>
       </div>
 
+      {!reposCollapsed && (
       <div style={{ overflowY: "auto", padding: "0 4px 8px", maxHeight: "40vh", minHeight: 120 }}>
         {projects.length === 0 && (
           <div style={{ padding: "4px 8px", color: "#45475a", fontSize: 11 }}>
@@ -666,6 +701,7 @@ export default function WorkstreamSidebar({
           </div>
         ))}
       </div>
+      )}
 
       {/* Repo edit modal */}
       {editingProject && (
