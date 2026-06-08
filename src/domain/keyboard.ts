@@ -3,7 +3,6 @@ import type { TileType, Direction } from "./types";
 
 export type KeyAction =
   | { type: "escape" }
-  | { type: "switchWorkstream"; index: number }
   | { type: "navigate"; direction: Direction }
   | { type: "addTile"; tileType: TileType; extraConfig?: Record<string, string> }
   | { type: "closeTile" }
@@ -85,7 +84,6 @@ function isMonacoFocused(activeElement: Element | null): boolean {
  *   Alt+F  toggle fullscreen
  *   Alt+S  toggle side-by-side (when exactly 2 tiles are selected)
  *   Alt+ArrowKeys  navigate between tiles
- *   Alt+1..9  switch workstream
  */
 export function parseKeyAction(opts: ParseKeyActionOpts): KeyAction | null {
   const { altKey, key } = opts;
@@ -135,11 +133,6 @@ export function parseKeyAction(opts: ParseKeyActionOpts): KeyAction | null {
         return { type: "toggleFullscreen" };
       case "s":
         return { type: "toggleSideBySide" };
-    }
-
-    // Alt+1-9 switches workstreams
-    if (key >= "1" && key <= "9") {
-      return { type: "switchWorkstream", index: parseInt(key) - 1 };
     }
   }
 

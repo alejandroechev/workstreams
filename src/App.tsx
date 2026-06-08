@@ -365,17 +365,6 @@ export default function App() {
     setActiveWsId(id);
   }, [activeWsId, confirmDiscardDirtyFileBuffers]);
 
-  // Switch workstream by index (Ctrl+1-9)
-  const switchWorkstream = useCallback(
-    (index: number) => {
-      const ws = workstreams[index];
-      if (ws) {
-        selectWorkstream(ws.id);
-      }
-    },
-    [workstreams, selectWorkstream]
-  );
-
   // Workstream commands stored per-workstream for terminal spawning
   const wsCommands = useRef<Map<string, string>>(new Map());
 
@@ -990,10 +979,6 @@ export default function App() {
           }
           break;
         }
-        case "switchWorkstream":
-          e.preventDefault();
-          switchWorkstream(action.index);
-          break;
         case "navigate": {
           e.preventDefault();
           // Blur current active element so focus moves to new tile
@@ -1057,7 +1042,7 @@ export default function App() {
 
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [tiles, tileOrder, focusedIndex, fullscreenTileId, activeWsId, addTile, closeTile, switchWorkstream, backend, toggleSideBySide]);
+  }, [tiles, tileOrder, focusedIndex, fullscreenTileId, activeWsId, addTile, closeTile, backend, toggleSideBySide]);
 
   const orderedTiles = tileOrder
     .map((id) => tiles.find((t) => t.id === id))

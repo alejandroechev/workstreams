@@ -140,11 +140,9 @@ describe("parseKeyAction", () => {
     expect(parseKeyAction({ key: "s", ...alt })).toEqual({ type: "toggleSideBySide" });
   });
 
-  it("returns switchWorkstream for Alt+1-9", () => {
+  it("returns null for Alt+1-9 (no shortcut for workstream switching)", () => {
     for (let i = 1; i <= 9; i++) {
-      expect(parseKeyAction({ key: String(i), ...alt })).toEqual({
-        type: "switchWorkstream", index: i - 1,
-      });
+      expect(parseKeyAction({ key: String(i), ...alt })).toBeNull();
     }
   });
 

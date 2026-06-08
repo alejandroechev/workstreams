@@ -145,7 +145,6 @@ Tile management:
 | `Alt+Q` | Close the focused tile |
 | `Alt+F` | Toggle fullscreen (yellow border indicates fullscreen) |
 | `Alt+←/↑/→/↓` | Navigate between tiles |
-| `Alt+1`–`Alt+9` | Switch workstream by index |
 | Double-click tile title | Rename inline |
 
 ### Adaptive tiling
@@ -268,8 +267,8 @@ Settings persist in `localStorage` and apply immediately.
 ### "I'm context-switching between two features all day"
 
 1. Make a workstream per feature.
-2. `Alt+1` / `Alt+2` to jump between them. Tiles + scrollback are
-   preserved.
+2. Click between them in the sidebar. Tiles + scrollback are
+   preserved per workstream.
 
 ### "I want to see all unstaged changes including new files"
 
