@@ -23,7 +23,7 @@ const mocks = vi.hoisted(() => {
   });
 
   return {
-    invoke: vi.fn(async () => null),
+    invoke: vi.fn(async (..._args: unknown[]) => null as unknown),
     listAll: vi.fn<() => Array<{ path: string; dirty: boolean }>>(() => []),
     getCloseHandler: () => closeHandler,
     resetCloseHandler: () => { closeHandler = null; },
@@ -282,11 +282,11 @@ describe("dirty file buffer close confirmations", () => {
   });
 
   it("skips the confirm-close dialog and destroys immediately when the pref is disabled", async () => {
-    mocks.invoke.mockImplementation((cmd: string, args?: Record<string, unknown>) => {
-      if (cmd === "get_setting" && (args as { key?: string })?.key === "app.confirm-close-disabled") {
-        return Promise.resolve("1");
+    mocks.invoke.mockImplementation(async (cmd: unknown, args?: unknown) => {
+      if (cmd === "get_setting" && (args as { key?: string } | undefined)?.key === "app.confirm-close-disabled") {
+        return "1";
       }
-      return Promise.resolve(null);
+      return null;
     });
     await renderApp();
     const preventDefault = vi.fn();
