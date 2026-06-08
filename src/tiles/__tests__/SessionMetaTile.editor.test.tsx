@@ -58,47 +58,48 @@ function snapshot(overrides: Partial<BufferSnapshot> = {}): BufferSnapshot {
   };
 }
 
-function createBackend(): Backend {
+function createBackend(entries: Array<{ name: string; is_dir: boolean }> = []): Backend {
+  const dirEntries = entries.map((e) => ({
+    name: e.name,
+    is_dir: e.is_dir,
+    modified_epoch: 0,
+    size: 0,
+  }));
   return {
     discoverCopilotConfig: vi.fn().mockResolvedValue([]),
-    listDirectory: vi.fn().mockRejectedValue(new Error("not a directory")),
+    listDirectory: vi.fn().mockImplementation(async (path: string) => {
+      if (path === STATE_ROOT) return dirEntries;
+      // Per-file viewFile() probes a path with listDirectory to detect dirs;
+      // reject for any non-root path so it falls through to file handling.
+      throw new Error("not a directory");
+    }),
     readFile: vi.fn().mockResolvedValue("file contents"),
   } as unknown as Backend;
 }
 
-function renderTile(backend = createBackend()) {
+const STATE_ROOT = "C:\\Users\\me\\.copilot\\session-state\\session-1";
+
+function renderTile(entries: Array<{ name: string; is_dir: boolean }>) {
+  invokeMock.mockImplementation((command: string) => {
+    if (command === "session_state_dir") return Promise.resolve(STATE_ROOT);
+    if (command === "read_file_base64") return Promise.resolve("AA==");
+    if (command === "watch_directory" || command === "unwatch_directory") return Promise.resolve(null);
+    return Promise.reject(new Error(`unexpected invoke ${command}`));
+  });
   return render(
-    <BackendProvider backend={backend}>
+    <BackendProvider backend={createBackend(entries)}>
       <SessionMetaTile tileId="meta" isFocused={false} linkedSessionIds={["session-1"]} />
     </BackendProvider>,
   );
 }
 
-function setSessionFiles(paths: string[]) {
-  invokeMock.mockImplementation((command: string, args?: Record<string, unknown>) => {
-    if (command === "query_session_files") {
-      return Promise.resolve(paths.map((filePath) => ({ file_path: filePath, tool_name: "edit", turn_index: 1 })));
-    }
-    if (command === "list_session_checkpoints") {
-      return Promise.resolve([]);
-    }
-    if (command === "read_file_base64") {
-      return Promise.resolve("AA==");
-    }
-    if (command === "watch_directory" || command === "unwatch_directory") {
-      return Promise.resolve(null);
-    }
-    return Promise.reject(new Error(`unexpected invoke ${command} ${JSON.stringify(args)}`));
-  });
+async function openStateTab() {
+  fireEvent.click(screen.getByRole("button", { name: /State/i }));
 }
 
-async function openFilesTab() {
-  fireEvent.click(screen.getByRole("button", { name: /Files/i }));
-}
-
-async function openLiveFile(fileName: string) {
-  await openFilesTab();
-  const row = await screen.findByText(fileName);
+async function openLiveFile(name: string) {
+  await openStateTab();
+  const row = await screen.findByText(name);
   fireEvent.click(row);
 }
 
@@ -113,7 +114,6 @@ beforeEach(() => {
     createObjectURL: vi.fn(() => "blob:audio"),
     revokeObjectURL: vi.fn(),
   });
-  setSessionFiles([]);
 });
 
 afterEach(() => {
@@ -122,64 +122,39 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-describe("SessionMetaTile editable live files", () => {
+describe("SessionMetaTile editable live files (State tab)", () => {
   it("renders FileEditorView for a live TypeScript file", async () => {
-    setSessionFiles(["C:\\repo\\src\\app.ts"]);
-    renderTile();
-
+    renderTile([{ name: "app.ts", is_dir: false }]);
     await openLiveFile("app.ts");
-
-    expect(await screen.findByTestId("file-editor-view")).toHaveTextContent("C:\\repo\\src\\app.ts");
-    expect(fileEditorProps[fileEditorProps.length - 1]?.path).toBe("C:\\repo\\src\\app.ts");
+    const expected = `${STATE_ROOT}\\app.ts`;
+    expect(await screen.findByTestId("file-editor-view")).toHaveTextContent(expected);
+    expect(fileEditorProps[fileEditorProps.length - 1]?.path).toBe(expected);
   });
 
   it("renders FileEditorView rather than direct MarkdownView for a live markdown file", async () => {
-    setSessionFiles(["C:\\repo\\README.md"]);
-    renderTile();
-
+    renderTile([{ name: "README.md", is_dir: false }]);
     await openLiveFile("README.md");
-
-    expect(await screen.findByTestId("file-editor-view")).toHaveTextContent("C:\\repo\\README.md");
+    const expected = `${STATE_ROOT}\\README.md`;
+    expect(await screen.findByTestId("file-editor-view")).toHaveTextContent(expected);
     expect(screen.queryByTestId("markdown-view")).toBeNull();
   });
 
   it("keeps audio files on AudioPlayer instead of FileEditorView", async () => {
-    setSessionFiles(["C:\\repo\\voice.mp3"]);
-    renderTile();
-
+    renderTile([{ name: "voice.mp3", is_dir: false }]);
     await openLiveFile("voice.mp3");
-
-    expect(await screen.findByTestId("audio-player")).toHaveTextContent("C:\\repo\\voice.mp3");
-    expect(screen.queryByTestId("file-editor-view")).toBeNull();
-  });
-
-  it("keeps checkpoint snapshots on MarkdownView instead of FileEditorView", async () => {
-    invokeMock.mockImplementation((command: string) => {
-      if (command === "query_session_files") return Promise.resolve([]);
-      if (command === "list_session_checkpoints") return Promise.resolve([{ number: 1, title: "Saved state", file_name: "cp.md" }]);
-      if (command === "read_session_file") return Promise.resolve("# Frozen checkpoint");
-      if (command === "watch_directory" || command === "unwatch_directory") return Promise.resolve(null);
-      return Promise.reject(new Error(`unexpected invoke ${command}`));
-    });
-    renderTile();
-
-    fireEvent.click(screen.getByRole("button", { name: /CP/i }));
-    fireEvent.click(await screen.findByText("Saved state"));
-
-    expect(await screen.findByTestId("markdown-view")).toHaveTextContent("Frozen checkpoint");
+    const expected = `${STATE_ROOT}\\voice.mp3`;
+    expect(await screen.findByTestId("audio-player")).toHaveTextContent(expected);
     expect(screen.queryByTestId("file-editor-view")).toBeNull();
   });
 
   it("shows a dirty indicator when the editor snapshot is dirty", async () => {
-    setSessionFiles(["C:\\repo\\src\\app.ts"]);
-    renderTile();
+    renderTile([{ name: "app.ts", is_dir: false }]);
     await openLiveFile("app.ts");
     await screen.findByTestId("file-editor-view");
-
+    const expected = `${STATE_ROOT}\\app.ts`;
     act(() => {
-      fileEditorProps[fileEditorProps.length - 1]?.onSnapshotChange?.(snapshot({ path: "C:\\repo\\src\\app.ts", state: "dirty", dirty: true }));
+      fileEditorProps[fileEditorProps.length - 1]?.onSnapshotChange?.(snapshot({ path: expected, state: "dirty", dirty: true }));
     });
-
     await waitFor(() => expect(screen.getByTestId("meta-file-dirty-indicator")).toHaveTextContent("*"));
   });
 });

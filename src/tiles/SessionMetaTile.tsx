@@ -28,11 +28,8 @@ import {
   DocumentIcon,
   FolderIcon,
   TableCellsIcon,
-  BoltIcon,
-  ArrowLeftIcon,
   ClipboardDocumentListIcon,
   ClipboardDocumentIcon,
-  FlagIcon,
   SignalIcon,
   BeakerIcon,
   FolderOpenIcon,
@@ -58,18 +55,6 @@ interface CategoryMeta {
   color: string;
 }
 
-interface SessionFileEntry {
-  file_path: string;
-  tool_name: string | null;
-  turn_index: number | null;
-}
-
-interface GitHookEntry {
-  name: string;
-  path: string;
-  content_preview: string;
-}
-
 const CATEGORY_META: Record<string, CategoryMeta> = {
   skill: { label: "Skills", icon: SparklesIcon, color: "#f9e2af" },
   extension: { label: "Extensions", icon: PuzzlePieceIcon, color: "#89b4fa" },
@@ -77,21 +62,14 @@ const CATEGORY_META: Record<string, CategoryMeta> = {
   mcp_server: { label: "MCP Servers", icon: ServerIcon, color: "#cba6f7" },
   instruction: { label: "Instructions", icon: DocumentTextIcon, color: "#fab387" },
   plugin: { label: "Plugins", icon: CubeIcon, color: "#94e2d5" },
-  git_hook: { label: "Git Hooks", icon: BoltIcon, color: "#f5c2e7" },
 };
 
-const CATEGORY_ORDER = ["skill", "extension", "agent", "mcp_server", "instruction", "git_hook"];
+const CATEGORY_ORDER = ["skill", "extension", "agent", "mcp_server", "instruction"];
 const AUDIO_EXTS = new Set(["wav", "mp3", "ogg", "flac"]);
 const IMAGE_EXTS = new Set(["png", "jpg", "jpeg", "gif", "webp", "bmp", "ico"]);
 const BINARY_EXTS = new Set(["mp4", "mov", "webm", "pdf", "zip", "gz", "tar", "7z", "exe", "dll", "so", "dylib"]);
 
-type TabId = "config" | "files" | "database" | "checkpoints" | "events";
-
-interface SessionCheckpoint {
-  number: number;
-  title: string;
-  fileName: string;
-}
+type TabId = "config" | "state" | "database" | "events";
 
 interface SessionEvent {
   type: string;
@@ -127,27 +105,28 @@ function isRelevantFile(filePath: string): boolean {
 export default function SessionMetaTile({ tileId: _tileId, isFocused, workstreamDir, linkedSessionIds, workstreamId, workstreamVisible = true, configJson, onConfigChange }: Props) {
   const backend = useBackend();
   const [items, setItems] = useState<CopilotConfigItem[]>([]);
-  const [files, setFiles] = useState<SessionFileEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [activeTab, setActiveTab] = useState<TabId>("config");
   // Config content viewer
   const [viewingContent, setViewingContent] = useState<{ name: string; content: string } | null>(null);
-  // File viewer
-  const [viewingFile, setViewingFile] = useState<{ path: string; content: string } | null>(null);
   // Database explorer
   const [dbTables, setDbTables] = useState<SessionDbTable[]>([]);
   const [selectedTable, setSelectedTable] = useState<string | null>(null);
   const [tableData, setTableData] = useState<SessionDbTableData | null>(null);
   const [dbLoading, setDbLoading] = useState(false);
-  // Plan content removed: see PlanTile.
-  // Checkpoints
-  const [checkpoints, setCheckpoints] = useState<SessionCheckpoint[]>([]);
-  const [checkpointContent, setCheckpointContent] = useState<{ title: string; content: string } | null>(null);
+  // Session State browser
+  const [stateRootDir, setStateRootDir] = useState<string | null>(null);
+  const [stateCurrentDir, setStateCurrentDir] = useState<string | null>(null);
+  const [stateEntries, setStateEntries] = useState<Array<{ name: string; is_dir: boolean; full_path: string }>>([]);
+  const [stateLoading, setStateLoading] = useState(false);
+  const [stateError, setStateError] = useState<string | null>(null);
   // Events
   const [events, setEvents] = useState<SessionEvent[]>([]);
   const [eventsLoading, setEventsLoading] = useState(false);
+  // Content viewer (for configs and files). For audio entries we store the
+  // Blob URL + raw bytes so <AudioPlayer> can drive playback + waveform.
   // Content viewer (for configs and files). For audio entries we store the
   // Blob URL + raw bytes so <AudioPlayer> can drive playback + waveform.
   const [viewContent, setViewContent] = useState<{
@@ -177,24 +156,7 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
     setError(null);
     try {
       const result = await backend.discoverCopilotConfig(workstreamDir);
-      // Also load git hooks if we have a workstream directory
-      if (workstreamDir) {
-        try {
-          const hooks = await invoke<GitHookEntry[]>("list_git_hooks", { directory: workstreamDir });
-          const hookItems: CopilotConfigItem[] = hooks.map((h) => ({
-            name: h.name,
-            category: "git_hook",
-            source: "repo",
-            path: h.path,
-            description: h.content_preview,
-          }));
-          setItems([...result, ...hookItems]);
-        } catch {
-          setItems(result);
-        }
-      } else {
-        setItems(result);
-      }
+      setItems(result);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -202,20 +164,46 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
     }
   }, [backend, workstreamDir]);
 
-  const loadSessionData = useCallback(async () => {
-    if (!linkedSessionIds || linkedSessionIds.length === 0) {
-      setFiles([]);
-      return;
-    }
-    const allFiles: SessionFileEntry[] = [];
+  // Resolve the absolute path of the session-state folder for the first
+  // linked session. Cached in stateRootDir.
+  const resolveStateRoot = useCallback(async (): Promise<string | null> => {
+    if (!linkedSessionIds || linkedSessionIds.length === 0) return null;
     for (const sid of linkedSessionIds) {
       try {
-        const f = await invoke<SessionFileEntry[]>("query_session_files", { sessionId: sid });
-        allFiles.push(...f);
-      } catch { /* ignore */ }
+        const dir = await invoke<string>("session_state_dir", { sessionId: sid });
+        return dir;
+      } catch { /* try next */ }
     }
-    setFiles(allFiles);
+    return null;
   }, [linkedSessionIds]);
+
+  const loadStateDir = useCallback(async (subdir: string | null) => {
+    setStateLoading(true);
+    setStateError(null);
+    try {
+      const root = stateRootDir ?? await resolveStateRoot();
+      if (!root) {
+        setStateRootDir(null);
+        setStateEntries([]);
+        return;
+      }
+      if (root !== stateRootDir) setStateRootDir(root);
+      const target = subdir ? `${root}\\${subdir.replace(/\//g, "\\")}` : root;
+      const entries = await backend.listDirectory(target);
+      const sep = target.endsWith("\\") ? "" : "\\";
+      setStateEntries(entries.map((e) => ({
+        name: e.name,
+        is_dir: e.is_dir,
+        full_path: `${target}${sep}${e.name}`,
+      })));
+      setStateCurrentDir(subdir);
+    } catch (e) {
+      setStateError(e instanceof Error ? e.message : String(e));
+      setStateEntries([]);
+    } finally {
+      setStateLoading(false);
+    }
+  }, [backend, resolveStateRoot, stateRootDir]);
 
   const loadDbTables = useCallback(async () => {
     if (!linkedSessionIds || linkedSessionIds.length === 0) {
@@ -256,34 +244,29 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
   }, [loadConfig]);
 
   useEffect(() => {
-    loadSessionData();
-  }, [loadSessionData]);
+    if (activeTab === "state") {
+      void loadStateDir(stateCurrentDir);
+    }
+    // We intentionally exclude loadStateDir + stateCurrentDir from deps so
+    // navigation triggers a single fresh fetch rather than re-fetching on
+    // every state change. Navigation handlers below call loadStateDir
+    // directly with the new subdir.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab]);
 
   useEffect(() => {
     if (activeTab === "database") loadDbTables();
   }, [activeTab, loadDbTables]);
 
-  // Load plan.md when plan tab is selected — removed (now in PlanTile).
-  const loadPlan = useCallback(async () => {}, []);
-
-  const loadCheckpoints = useCallback(async () => {
-    if (!linkedSessionIds || linkedSessionIds.length === 0) {
-      setCheckpoints([]);
-      return;
-    }
-    const all: SessionCheckpoint[] = [];
-    for (const sid of linkedSessionIds) {
-      try {
-        const cps = await invoke<Array<{ number: number; title: string; file_name: string }>>("list_session_checkpoints", { sessionId: sid });
-        all.push(...cps.map((c) => ({ number: c.number, title: c.title, fileName: c.file_name })));
-      } catch { /* ignore */ }
-    }
-    setCheckpoints(all);
+  // Reset session-state browser when linked sessions change.
+  useEffect(() => {
+    setStateRootDir(null);
+    setStateCurrentDir(null);
+    setStateEntries([]);
   }, [linkedSessionIds]);
 
-  useEffect(() => {
-    if (activeTab === "checkpoints") loadCheckpoints();
-  }, [activeTab, loadCheckpoints]);
+  // Load plan.md when plan tab is selected — removed (now in PlanTile).
+  const loadPlan = useCallback(async () => {}, []);
 
   const loadEvents = useCallback(async () => {
     if (!linkedSessionIds || linkedSessionIds.length === 0) {
@@ -335,7 +318,7 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
       if (debounceTimer) clearTimeout(debounceTimer);
       debounceTimer = setTimeout(() => {
         if (activeTab === "config") loadConfig();
-        if (activeTab === "files") loadSessionData();
+        if (activeTab === "state") void loadStateDir(stateCurrentDir);
         if (activeTab === "database") loadDbTables();
       }, 1000);
     });
@@ -346,7 +329,7 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
       }
       unlisten.then((u) => u());
     };
-  }, [workstreamDir, linkedSessionIds, activeTab, loadConfig, loadSessionData, loadPlan, loadDbTables, workstreamVisible]);
+  }, [workstreamDir, linkedSessionIds, activeTab, loadConfig, loadStateDir, stateCurrentDir, loadPlan, loadDbTables, workstreamVisible]);
 
   // Open a file in the content viewer
   const viewFile = useCallback(async (path: string, title: string) => {
@@ -417,9 +400,9 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
 
   const refresh = useCallback(() => {
     loadConfig();
-    loadSessionData();
+    if (activeTab === "state") void loadStateDir(stateCurrentDir);
     if (activeTab === "database") loadDbTables();
-  }, [loadConfig, loadSessionData, loadDbTables, activeTab]);
+  }, [loadConfig, loadStateDir, stateCurrentDir, loadDbTables, activeTab]);
 
   const hydratedRef = useRef(false);
   useEffect(() => {
@@ -462,16 +445,9 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
     items: items.filter((i) => i.category === cat),
   })).filter((g) => g.items.length > 0);
 
-  // Deduplicate files by path (keep first occurrence)
-  const uniqueFiles = files.reduce<SessionFileEntry[]>((acc, f) => {
-    if (!acc.some((e) => e.file_path === f.file_path)) acc.push(f);
-    return acc;
-  }, []);
-
   const tabs: { id: TabId; label: string; icon: React.ComponentType<React.SVGProps<SVGSVGElement>>; count: number }[] = [
     { id: "config", label: "Config", icon: SparklesIcon, count: items.length },
-    { id: "files", label: "Files", icon: FolderIcon, count: uniqueFiles.length },
-    { id: "checkpoints", label: "CP", icon: FlagIcon, count: checkpoints.length },
+    { id: "state", label: "State", icon: FolderIcon, count: stateEntries.length },
     { id: "events", label: "Events", icon: SignalIcon, count: events.length },
     { id: "database", label: "DB", icon: TableCellsIcon, count: dbTables.reduce((s, t) => s + t.row_count, 0) },
   ];
@@ -667,107 +643,83 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
             );
           })}
 
-        {/* Files tab */}
-        {activeTab === "files" && (
+        {/* Session State tab — browse ~/.copilot/session-state/<id> like Repo Explorer */}
+        {activeTab === "state" && (
           <>
             {(!linkedSessionIds || linkedSessionIds.length === 0) && (
               <div style={{ padding: 12, color: "#585b70", textAlign: "center" }}>
-                No linked sessions — link a copilot session to see its files
+                No linked sessions — link a copilot session to browse its state folder
               </div>
             )}
-            {linkedSessionIds && linkedSessionIds.length > 0 && uniqueFiles.length === 0 && (
-              <div style={{ padding: 12, color: "#585b70", textAlign: "center" }}>
-                No files found in linked sessions
-              </div>
-            )}
-            {uniqueFiles.map((f, i) => {
-              const fileName = f.file_path.split(/[/\\]/).pop() || f.file_path;
-              return (
-                <div
-                  key={`${f.file_path}-${i}`}
-                  onClick={() => viewFile(f.file_path, fileName)}
-                  onContextMenu={(e) => {
-                    e.preventDefault();
-                    setContextMenu({ x: e.clientX, y: e.clientY, path: f.file_path });
-                  }}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 6,
-                    padding: "3px 8px",
-                    color: "#cdd6f4",
-                    cursor: "pointer",
-                  }}
-                  title={`Click to view · ${f.file_path}`}
-                  onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "#313244"; }}
-                  onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "transparent"; }}
-                >
-                  <DocumentIcon style={{ width: 12, height: 12, color: "#89b4fa", flexShrink: 0 }} />
-                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                    {fileName}
-                  </span>
-                  {f.tool_name && (
-                    <span style={{ color: "#585b70", fontSize: 10, flexShrink: 0 }}>
-                      {f.tool_name}
-                    </span>
-                  )}
-                </div>
-              );
-            })}
-          </>
-        )}
-
-        {/* Checkpoints tab */}
-        {activeTab === "checkpoints" && (
-          <>
-            {(!linkedSessionIds || linkedSessionIds.length === 0) && (
-              <div style={{ padding: 12, color: "#585b70", textAlign: "center" }}>
-                No linked sessions
-              </div>
-            )}
-            {linkedSessionIds && linkedSessionIds.length > 0 && checkpoints.length === 0 && (
-              <div style={{ padding: 12, color: "#585b70", textAlign: "center" }}>
-                No checkpoints found
-              </div>
-            )}
-            {checkpointContent ? (
+            {linkedSessionIds && linkedSessionIds.length > 0 && (
               <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "4px 8px", borderBottom: "1px solid #313244", flexShrink: 0 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "4px 8px", borderBottom: "1px solid #313244", flexShrink: 0, fontSize: 11 }}>
                   <button
-                    onClick={() => setCheckpointContent(null)}
-                    style={{ background: "none", border: "none", color: "#89b4fa", cursor: "pointer", fontSize: 11, padding: "2px 4px", display: "flex", alignItems: "center", gap: 2 }}
+                    onClick={() => loadStateDir(null)}
+                    disabled={!stateCurrentDir}
+                    title="Back to session root"
+                    style={{
+                      background: "none",
+                      border: "none",
+                      color: stateCurrentDir ? "#89b4fa" : "#45475a",
+                      cursor: stateCurrentDir ? "pointer" : "default",
+                      padding: "2px 4px",
+                      display: "flex",
+                      alignItems: "center",
+                    }}
                   >
-                    <ArrowLeftIcon style={{ width: 12, height: 12 }} /> Back
+                    <ChevronUpIcon style={{ width: 14, height: 14 }} />
                   </button>
-                  <span style={{ color: "#cdd6f4", fontWeight: 600, fontSize: 11 }}>{checkpointContent.title}</span>
+                  <span style={{ color: "#6c7086", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}
+                    title={stateRootDir ? `${stateRootDir}${stateCurrentDir ? `\\${stateCurrentDir}` : ""}` : "session-state"}>
+                    .copilot/session-state/{(stateRootDir?.split(/[\\/]/).pop()) || "…"}
+                    {stateCurrentDir ? `/${stateCurrentDir.replace(/\\/g, "/")}` : ""}
+                  </span>
                 </div>
                 <div style={{ flex: 1, overflow: "auto" }}>
-                  <MarkdownView>{checkpointContent.content}</MarkdownView>
+                  {stateLoading && (
+                    <div style={{ padding: 12, color: "#585b70", textAlign: "center" }}>Loading…</div>
+                  )}
+                  {stateError && (
+                    <div style={{ padding: 12, color: "#f38ba8", fontSize: 11 }}>{stateError}</div>
+                  )}
+                  {!stateLoading && !stateError && stateEntries.length === 0 && (
+                    <div style={{ padding: 12, color: "#585b70", textAlign: "center" }}>(empty directory)</div>
+                  )}
+                  {stateEntries.map((entry) => (
+                    <div
+                      key={entry.full_path}
+                      onClick={() => {
+                        if (entry.is_dir) {
+                          const nextRel = stateCurrentDir ? `${stateCurrentDir}\\${entry.name}` : entry.name;
+                          void loadStateDir(nextRel);
+                        } else {
+                          void viewFile(entry.full_path, entry.name);
+                        }
+                      }}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 6,
+                        padding: "3px 8px",
+                        cursor: "pointer",
+                        color: entry.is_dir ? "#89b4fa" : "#cdd6f4",
+                        fontSize: 12,
+                      }}
+                      onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "#313244"; }}
+                      onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "transparent"; }}
+                    >
+                      {entry.is_dir
+                        ? <FolderIcon style={{ width: 12, height: 12, color: "#89b4fa", flexShrink: 0 }} />
+                        : <DocumentIcon style={{ width: 12, height: 12, color: "#cdd6f4", flexShrink: 0 }} />
+                      }
+                      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {entry.name}
+                      </span>
+                    </div>
+                  ))}
                 </div>
               </div>
-            ) : (
-              checkpoints.map((cp) => (
-                <div
-                  key={cp.number}
-                  onClick={async () => {
-                    if (!linkedSessionIds) return;
-                    for (const sid of linkedSessionIds) {
-                      try {
-                        const content = await invoke<string>("read_session_file", { sessionId: sid, relativePath: `checkpoints/${cp.fileName}` });
-                        setCheckpointContent({ title: `#${cp.number} — ${cp.title}`, content });
-                        return;
-                      } catch { /* try next */ }
-                    }
-                  }}
-                  style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 12px", cursor: "pointer", borderBottom: "1px solid #181825" }}
-                  onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "#313244"; }}
-                  onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "transparent"; }}
-                >
-                  <FlagIcon style={{ width: 14, height: 14, color: "#f9e2af", flexShrink: 0 }} />
-                  <span style={{ color: "#585b70", fontSize: 11, flexShrink: 0 }}>#{cp.number}</span>
-                  <span style={{ color: "#cdd6f4", fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{cp.title}</span>
-                </div>
-              ))
             )}
           </>
         )}

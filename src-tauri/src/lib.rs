@@ -2498,6 +2498,19 @@ fn read_session_file(session_id: String, relative_path: String) -> Result<String
     std::fs::read_to_string(&file_path).map_err(|e| format!("Cannot read {}: {}", relative_path, e))
 }
 
+/// Returns the absolute path of `~/.copilot/session-state/<id>` so the
+/// frontend can list it with the regular list_directory + read_file APIs.
+/// Errors if the directory doesn't exist.
+#[tauri::command]
+fn session_state_dir(session_id: String) -> Result<String, String> {
+    let home = dirs::home_dir().ok_or("No home directory")?;
+    let dir = home.join(".copilot").join("session-state").join(&session_id);
+    if !dir.is_dir() {
+        return Err(format!("session-state dir not found for {session_id}"));
+    }
+    Ok(dir.to_string_lossy().to_string())
+}
+
 /// List checkpoints for a session
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct CheckpointEntry {
@@ -3125,6 +3138,7 @@ pub fn run() {
             discover_copilot_config,
             // Session files & todos & DB
             read_session_file,
+            session_state_dir,
             list_session_checkpoints,
             list_session_events,
             query_session_files,
