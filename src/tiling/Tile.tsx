@@ -343,7 +343,7 @@ function TileWrapperImpl({
               checked={isSelected}
               onChange={() => onToggleSelect?.(tile.id)}
               onClick={(e) => e.stopPropagation()}
-              title="Select for side-by-side (Alt+C)"
+              title="Select for side-by-side (Alt+S)"
               style={{
                 width: 13,
                 height: 13,

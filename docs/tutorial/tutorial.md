@@ -129,7 +129,7 @@ keyboard shortcuts). Here's the full menu:
 
 | Tile | Shortcut | What it does |
 |---|---|---|
-| **Copilot Session** | `Alt+S` | Embedded Copilot CLI session (xterm.js + PTY). Persistent scrollback, picks up the workstream's `cwd`, injects `WORKSTREAMS_ACTIVE_WS` / `WORKSTREAMS_ACTIVE_TILE` env vars so skills / MCP servers know where they are. |
+| **Copilot Session** | `Alt+C` | Embedded Copilot CLI session (xterm.js + PTY). Persistent scrollback, picks up the workstream's `cwd`, injects `WORKSTREAMS_ACTIVE_WS` / `WORKSTREAMS_ACTIVE_TILE` env vars so skills / MCP servers know where they are. |
 | **PowerShell** | `Alt+T` | Plain PowerShell terminal in the workstream's `cwd`. |
 | **WSL Terminal** | `Alt+W` | Same but spawning WSL. |
 | **Repo Explorer** | `Alt+R` | Multi-tab repo browser: Files / Diff / Log / Hooks. Ctrl+P filename search, Ctrl+Shift+F content search, Monaco viewer, file-edit support. The Diff tab's **Unstaged** view shows both modified tracked files *and* new (untracked) files — see [ADR 004](../adrs/004-repo-explorer-tile.md). |
@@ -254,7 +254,7 @@ Settings persist in `localStorage` and apply immediately.
 ### "I want to review a PR"
 
 1. New workstream pointing at the repo (or reuse one).
-2. Open a Copilot session tile (`Alt+S`).
+2. Open a Copilot session tile (`Alt+C`).
 3. In it: `/diff-grok pull/1234`.
 4. Walk through the auto-opened Diff Review tile.
 

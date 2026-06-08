@@ -28,7 +28,7 @@ export async function run({ page, screenshot }) {
   let sessionTile = page.locator('[data-testid="tile-header"]').first();
   if (!(await sessionTile.count())) {
     // Use keyboard shortcut to add a session tile.
-    await page.keyboard.press("Alt+S");
+    await page.keyboard.press("Alt+C");
     await page.waitForTimeout(1500);
   }
 

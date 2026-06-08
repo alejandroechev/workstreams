@@ -627,7 +627,7 @@ export default function WorkstreamSidebar({
             No repos yet
           </div>
         )}
-        {projects.map((p) => (
+        {[...projects].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" })).map((p) => (
           <div
             key={p.id}
             onClick={() => {

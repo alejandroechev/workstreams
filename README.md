@@ -96,7 +96,7 @@ All app-level commands are prefixed with **Alt** to avoid conflicts with termina
 
 | Key | Action |
 |-----|--------|
-| `Alt+S` | New Copilot session tile |
+| `Alt+C` | New Copilot session tile |
 | `Alt+T` | New terminal tile (PowerShell) |
 | `Alt+W` | New terminal tile (WSL) |
 | `Alt+R` | New Repo Explorer tile |
@@ -106,6 +106,7 @@ All app-level commands are prefixed with **Alt** to avoid conflicts with termina
 | `Alt+G` | New Diff Review tile (picker if >1 active reviews) |
 | `Alt+Q` | Close focused tile |
 | `Alt+F` | Toggle fullscreen for focused tile |
+| `Alt+S` | Toggle side-by-side (when exactly 2 tiles are selected) |
 | `Alt+Arrows` | Navigate between tiles |
 | `Alt+1`–`Alt+9` | Switch to workstream by index |
 | `Esc` | Unfocus terminal / close modal |

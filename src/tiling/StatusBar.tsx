@@ -69,7 +69,7 @@ export default function StatusBar({
   onOpenSettings,
 }: Props) {
   const rawItems: Array<{ key: string; label: string; icon: "session" | "terminal" | "folder" | "info" | "beaker" | "plan" | "bug"; shortcut?: string; onSelect?: () => void }> = [
-    { key: "session", label: "Copilot Session", icon: "session", shortcut: "Alt+S", onSelect: onAddSession },
+    { key: "session", label: "Copilot Session", icon: "session", shortcut: "Alt+C", onSelect: onAddSession },
     { key: "terminal", label: "PowerShell", icon: "terminal", shortcut: "Alt+T", onSelect: onAddTerminal },
     { key: "wsl", label: "WSL Terminal", icon: "terminal", shortcut: "Alt+W", onSelect: onAddWslTerminal },
     { key: "explorer", label: "Repo Explorer", icon: "folder", shortcut: "Alt+R", onSelect: onAddExplorer },
@@ -138,9 +138,9 @@ export default function StatusBar({
             onClick={onToggleSideBySide}
             title={
               sideBySide
-                ? "Exit side-by-side (Alt+C)"
+                ? "Exit side-by-side (Alt+S)"
                 : canEnterSideBySide
-                  ? "Enter side-by-side with selected tiles (Alt+C)"
+                  ? "Enter side-by-side with selected tiles (Alt+S)"
                   : "Select two tiles to enable side-by-side"
             }
           >
