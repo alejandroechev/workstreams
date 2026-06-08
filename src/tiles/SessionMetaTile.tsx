@@ -30,7 +30,6 @@ import {
   TableCellsIcon,
   ClipboardDocumentListIcon,
   ClipboardDocumentIcon,
-  SignalIcon,
   BeakerIcon,
   FolderOpenIcon,
   ChevronUpIcon,
@@ -69,14 +68,7 @@ const AUDIO_EXTS = new Set(["wav", "mp3", "ogg", "flac"]);
 const IMAGE_EXTS = new Set(["png", "jpg", "jpeg", "gif", "webp", "bmp", "ico"]);
 const BINARY_EXTS = new Set(["mp4", "mov", "webm", "pdf", "zip", "gz", "tar", "7z", "exe", "dll", "so", "dylib"]);
 
-type TabId = "config" | "state" | "database" | "events";
-
-interface SessionEvent {
-  type: string;
-  timestamp: string;
-  tool?: string;
-  summary?: string;
-}
+type TabId = "config" | "state" | "database";
 
 interface SessionDbTable {
   name: string;
@@ -122,11 +114,6 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
   const [stateEntries, setStateEntries] = useState<Array<{ name: string; is_dir: boolean; full_path: string }>>([]);
   const [stateLoading, setStateLoading] = useState(false);
   const [stateError, setStateError] = useState<string | null>(null);
-  // Events
-  const [events, setEvents] = useState<SessionEvent[]>([]);
-  const [eventsLoading, setEventsLoading] = useState(false);
-  // Content viewer (for configs and files). For audio entries we store the
-  // Blob URL + raw bytes so <AudioPlayer> can drive playback + waveform.
   // Content viewer (for configs and files). For audio entries we store the
   // Blob URL + raw bytes so <AudioPlayer> can drive playback + waveform.
   const [viewContent, setViewContent] = useState<{
@@ -288,33 +275,6 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
   // Load plan.md when plan tab is selected — removed (now in PlanTile).
   const loadPlan = useCallback(async () => {}, []);
 
-  const loadEvents = useCallback(async () => {
-    if (!linkedSessionIds || linkedSessionIds.length === 0) {
-      setEvents([]);
-      return;
-    }
-    setEventsLoading(true);
-    const all: SessionEvent[] = [];
-    for (const sid of linkedSessionIds) {
-      try {
-        const evts = await invoke<Array<{ event_type: string; timestamp: string; tool: string | null; summary: string | null }>>("list_session_events", { sessionId: sid, limit: 200 });
-        all.push(...evts.map((e) => ({
-          type: e.event_type,
-          timestamp: e.timestamp,
-          tool: e.tool || undefined,
-          summary: e.summary || undefined,
-        })));
-      } catch { /* ignore */ }
-    }
-    setEvents(all);
-    setEventsLoading(false);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [linkedSessionsKey]);
-
-  useEffect(() => {
-    if (activeTab === "events") loadEvents();
-  }, [activeTab, loadEvents]);
-
   // Watch filesystem for live updates (debounced to prevent flicker)
   useEffect(() => {
     const watchPaths: string[] = [];
@@ -469,7 +429,6 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
   const tabs: { id: TabId; label: string; icon: React.ComponentType<React.SVGProps<SVGSVGElement>>; count: number }[] = [
     { id: "config", label: "Config", icon: SparklesIcon, count: items.length },
     { id: "state", label: "State", icon: FolderIcon, count: stateEntries.length },
-    { id: "events", label: "Events", icon: SignalIcon, count: events.length },
     { id: "database", label: "DB", icon: TableCellsIcon, count: dbTables.reduce((s, t) => s + t.row_count, 0) },
   ];
 
@@ -742,53 +701,6 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
                 </div>
               </div>
             )}
-          </>
-        )}
-
-        {/* Events tab */}
-        {activeTab === "events" && (
-          <>
-            {(!linkedSessionIds || linkedSessionIds.length === 0) && (
-              <div style={{ padding: 12, color: "#585b70", textAlign: "center" }}>
-                No linked sessions
-              </div>
-            )}
-            {eventsLoading && (
-              <div style={{ padding: 12, color: "#585b70", textAlign: "center" }}>Loading events…</div>
-            )}
-            {!eventsLoading && events.length === 0 && linkedSessionIds && linkedSessionIds.length > 0 && (
-              <div style={{ padding: 12, color: "#585b70", textAlign: "center" }}>
-                No events found
-              </div>
-            )}
-            {!eventsLoading && events.map((evt, i) => {
-              const typeColors: Record<string, string> = {
-                "user.message": "#89b4fa",
-                "assistant.message": "#a6e3a1",
-                "assistant.turn_start": "#a6e3a1",
-                "assistant.turn_end": "#585b70",
-                "tool.execution_start": "#f9e2af",
-                "tool.execution_complete": "#f9e2af",
-                "session.start": "#cba6f7",
-                "session.resume": "#cba6f7",
-                "subagent.started": "#f5c2e7",
-                "subagent.completed": "#f5c2e7",
-                "skill.invoked": "#94e2d5",
-              };
-              const color = typeColors[evt.type] || "#585b70";
-              const time = evt.timestamp.split("T")[1]?.split(".")[0] || evt.timestamp;
-              return (
-                <div
-                  key={`${evt.timestamp}-${i}`}
-                  style={{ display: "flex", alignItems: "center", gap: 6, padding: "2px 8px", fontSize: 10, fontFamily: "monospace" }}
-                >
-                  <span style={{ color: "#45475a", flexShrink: 0, width: 55 }}>{time}</span>
-                  <span style={{ color, flexShrink: 0, width: 140, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{evt.type}</span>
-                  {evt.tool && <span style={{ color: "#f9e2af", flexShrink: 0 }}>[{evt.tool}]</span>}
-                  {evt.summary && <span style={{ color: "#6c7086", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{evt.summary}</span>}
-                </div>
-              );
-            })}
           </>
         )}
 
