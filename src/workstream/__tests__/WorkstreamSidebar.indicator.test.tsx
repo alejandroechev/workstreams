@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { render, cleanup } from "@testing-library/react";
+import { act, render, cleanup } from "@testing-library/react";
 import WorkstreamSidebar from "../WorkstreamSidebar";
 import type { Workstream } from "../../domain/types";
 
@@ -23,12 +23,12 @@ const mk = (id: string, name: string): Workstream => ({
   updated_at: now,
 });
 
-function renderWith(loadedWsIds?: Set<string>) {
+function renderWith(loadedWsIds?: Set<string>, activeWsId: string | null = "a") {
   return render(
     <WorkstreamSidebar
       projects={[]}
       workstreams={[mk("a", "Alpha"), mk("b", "Beta")]}
-      activeWsId="a"
+      activeWsId={activeWsId}
       loadedWsIds={loadedWsIds}
       onSelectWorkstream={vi.fn()}
       onCreateProject={vi.fn()}
@@ -53,9 +53,28 @@ describe("WorkstreamSidebar activity indicator", () => {
 
   it("renders stopped indicator for workstreams not in loadedWsIds", () => {
     const { getAllByTestId, queryAllByTestId } = renderWith(new Set(["a"]));
-    // 'a' is loaded → idle, 'b' is stopped.
     expect(getAllByTestId("ws-indicator-stopped")).toHaveLength(1);
     expect(queryAllByTestId("ws-indicator-idle").length).toBeGreaterThanOrEqual(1);
     cleanup();
   });
+
+  it("raises the bell indicator on workstream-bell CustomEvent for an unfocused workstream", () => {
+    // 'a' is active, 'b' should react to the bell event.
+    const { findByTestId, queryByTestId } = renderWith(new Set(["a", "b"]), "a");
+    act(() => {
+      window.dispatchEvent(new CustomEvent("workstream-bell", { detail: { workstreamId: "b" } }));
+    });
+    return findByTestId("ws-indicator-bell").then((bell) => {
+      expect(bell).toBeTruthy();
+      // 'a' (active) should NOT have a bell even if event was dispatched for it.
+      act(() => {
+        window.dispatchEvent(new CustomEvent("workstream-bell", { detail: { workstreamId: "a" } }));
+      });
+      const bells = document.querySelectorAll('[data-testid="ws-indicator-bell"]');
+      expect(bells.length).toBe(1);
+      expect(queryByTestId).toBeDefined();
+      cleanup();
+    });
+  });
 });
+

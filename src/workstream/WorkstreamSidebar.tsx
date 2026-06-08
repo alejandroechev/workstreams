@@ -151,6 +151,31 @@ export default function WorkstreamSidebar({
     }
   }, [activeWsId]);
 
+  // Direct BEL signal from Copilot session tiles: a window-level
+  // CustomEvent("workstream-bell", { detail: { workstreamId } }) raises the
+  // sidebar bell on the matching row when that workstream isn't focused.
+  // The activity-poller path below ALSO raises the bell (on active→idle), so
+  // the two triggers coexist: BEL fires immediately when the agent emits \a;
+  // active→idle fires when it finishes a turn without BEL.
+  const activeWsIdRef = useRef(activeWsId);
+  useEffect(() => { activeWsIdRef.current = activeWsId; }, [activeWsId]);
+  useEffect(() => {
+    const onBell = (e: Event) => {
+      const detail = (e as CustomEvent).detail as { workstreamId?: string } | undefined;
+      const wsId = detail?.workstreamId;
+      if (!wsId) return;
+      if (wsId === activeWsIdRef.current) return;
+      setWsBell((prev) => {
+        if (prev.has(wsId)) return prev;
+        const next = new Set(prev);
+        next.add(wsId);
+        return next;
+      });
+    };
+    window.addEventListener("workstream-bell", onBell);
+    return () => window.removeEventListener("workstream-bell", onBell);
+  }, []);
+
   // Listen for workstream activity events
   useEffect(() => {
     const unlistens: Promise<() => void>[] = [];

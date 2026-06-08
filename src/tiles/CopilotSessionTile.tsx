@@ -182,9 +182,14 @@ export default function CopilotSessionTile({
       return true;
     });
 
-    // Handle BEL character — play notification sound + flash window
+    // Handle BEL character — play notification sound + raise the sidebar
+    // bell on the workstream row (only for Copilot session tiles; the
+    // sidebar listener ignores the event when the workstream is focused).
     term.onBell(() => {
       playBell();
+      if (workstreamId) {
+        window.dispatchEvent(new CustomEvent("workstream-bell", { detail: { workstreamId } }));
+      }
     });
 
     // Handle OSC 52 — TUI apps (copilot CLI, vim, tmux) emit this to put
