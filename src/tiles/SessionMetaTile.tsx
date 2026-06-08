@@ -164,6 +164,13 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
     }
   }, [backend, workstreamDir]);
 
+  // Stable string key for the linked-session list. Using the array directly
+  // as a dep would trigger every parent re-render (App.tsx recomputes the
+  // array on many state changes), causing the State-tab reset effect below
+  // to fight against in-flight loadStateDir() calls and flicker between
+  // "shows entries" and "empty directory".
+  const linkedSessionsKey = (linkedSessionIds ?? []).join("|");
+
   // Resolve the absolute path of the session-state folder for the first
   // linked session. Cached in stateRootDir.
   const resolveStateRoot = useCallback(async (): Promise<string | null> => {
@@ -175,19 +182,30 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
       } catch { /* try next */ }
     }
     return null;
-  }, [linkedSessionIds]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [linkedSessionsKey]);
+
+  // Use a ref so loadStateDir's identity doesn't change every time the
+  // resolved root is set — otherwise the file-watcher effect (which has
+  // loadStateDir as a dep) would tear down + re-install its listener on
+  // every successful load, racing with in-flight calls.
+  const stateRootRef = useRef<string | null>(null);
+  useEffect(() => { stateRootRef.current = stateRootDir; }, [stateRootDir]);
 
   const loadStateDir = useCallback(async (subdir: string | null) => {
     setStateLoading(true);
     setStateError(null);
     try {
-      const root = stateRootDir ?? await resolveStateRoot();
+      const root = stateRootRef.current ?? await resolveStateRoot();
       if (!root) {
         setStateRootDir(null);
         setStateEntries([]);
         return;
       }
-      if (root !== stateRootDir) setStateRootDir(root);
+      if (root !== stateRootRef.current) {
+        stateRootRef.current = root;
+        setStateRootDir(root);
+      }
       const target = subdir ? `${root}\\${subdir.replace(/\//g, "\\")}` : root;
       const entries = await backend.listDirectory(target);
       const sep = target.endsWith("\\") ? "" : "\\";
@@ -203,7 +221,7 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
     } finally {
       setStateLoading(false);
     }
-  }, [backend, resolveStateRoot, stateRootDir]);
+  }, [backend, resolveStateRoot]);
 
   const loadDbTables = useCallback(async () => {
     if (!linkedSessionIds || linkedSessionIds.length === 0) {
@@ -220,7 +238,8 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
     }
     setDbTables(allTables);
     setDbLoading(false);
-  }, [linkedSessionIds]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [linkedSessionsKey]);
 
   const loadTableData = useCallback(async (tableName: string) => {
     if (!linkedSessionIds || linkedSessionIds.length === 0) return;
@@ -237,7 +256,8 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
     }
     setTableData(null);
     setDbLoading(false);
-  }, [linkedSessionIds]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [linkedSessionsKey]);
 
   useEffect(() => {
     loadConfig();
@@ -258,12 +278,12 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
     if (activeTab === "database") loadDbTables();
   }, [activeTab, loadDbTables]);
 
-  // Reset session-state browser when linked sessions change.
   useEffect(() => {
+    stateRootRef.current = null;
     setStateRootDir(null);
     setStateCurrentDir(null);
     setStateEntries([]);
-  }, [linkedSessionIds]);
+  }, [linkedSessionsKey]);
 
   // Load plan.md when plan tab is selected — removed (now in PlanTile).
   const loadPlan = useCallback(async () => {}, []);
@@ -288,7 +308,8 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
     }
     setEvents(all);
     setEventsLoading(false);
-  }, [linkedSessionIds]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [linkedSessionsKey]);
 
   useEffect(() => {
     if (activeTab === "events") loadEvents();
@@ -329,7 +350,7 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
       }
       unlisten.then((u) => u());
     };
-  }, [workstreamDir, linkedSessionIds, activeTab, loadConfig, loadStateDir, stateCurrentDir, loadPlan, loadDbTables, workstreamVisible]);
+  }, [workstreamDir, linkedSessionsKey, activeTab, loadConfig, loadStateDir, stateCurrentDir, loadPlan, loadDbTables, workstreamVisible]);
 
   // Open a file in the content viewer
   const viewFile = useCallback(async (path: string, title: string) => {
