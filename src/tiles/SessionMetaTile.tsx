@@ -11,6 +11,7 @@ import type { BufferSnapshot } from "../files/FileBufferRegistry";
 import AudioPlayer from "./AudioPlayer";
 import { parseViewState } from "../domain/tile-view-state";
 import { useTileViewStatePersist } from "../domain/useTileViewStatePersist";
+import { debounce } from "../domain/debounce";
 import { dispatchAddToWorkbench } from "../domain/workbench-events";
 import { writeTextToClipboard } from "../domain/clipboard";
 import { openPath } from "@tauri-apps/plugin-opener";
@@ -129,16 +130,21 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
     return () => { if (prev) URL.revokeObjectURL(prev); };
   }, [viewContent?.audioUrl]);
 
-  const loadConfig = useCallback(async () => {
-    setLoading(true);
-    setError(null);
+  const loadConfig = useCallback(async (silent = false) => {
+    if (!silent) {
+      setLoading(true);
+      setError(null);
+    }
     try {
       const result = await backend.discoverCopilotConfig(workstreamDir);
-      setItems(result);
+      // Equality-check via JSON: payload is small (handful of items per
+      // category) and stable across noisy session-state writes, so most
+      // watcher-driven refreshes will be no-ops at the render level.
+      setItems((prev) => JSON.stringify(prev) === JSON.stringify(result) ? prev : result);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      if (!silent) setError(e instanceof Error ? e.message : String(e));
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, [backend, workstreamDir]);
 
@@ -170,9 +176,11 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
   const stateRootRef = useRef<string | null>(null);
   useEffect(() => { stateRootRef.current = stateRootDir; }, [stateRootDir]);
 
-  const loadStateDir = useCallback(async (subdir: string | null) => {
-    setStateLoading(true);
-    setStateError(null);
+  const loadStateDir = useCallback(async (subdir: string | null, silent = false) => {
+    if (!silent) {
+      setStateLoading(true);
+      setStateError(null);
+    }
     try {
       const root = stateRootRef.current ?? await resolveStateRoot();
       if (!root) {
@@ -187,26 +195,29 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
       const target = subdir ? `${root}\\${subdir.replace(/\//g, "\\")}` : root;
       const entries = await backend.listDirectory(target);
       const sep = target.endsWith("\\") ? "" : "\\";
-      setStateEntries(entries.map((e) => ({
+      const next = entries.map((e) => ({
         name: e.name,
         is_dir: e.is_dir,
         full_path: `${target}${sep}${e.name}`,
-      })));
+      }));
+      setStateEntries((prev) => JSON.stringify(prev) === JSON.stringify(next) ? prev : next);
       setStateCurrentDir(subdir);
     } catch (e) {
-      setStateError(e instanceof Error ? e.message : String(e));
-      setStateEntries([]);
+      if (!silent) {
+        setStateError(e instanceof Error ? e.message : String(e));
+        setStateEntries([]);
+      }
     } finally {
-      setStateLoading(false);
+      if (!silent) setStateLoading(false);
     }
   }, [backend, resolveStateRoot]);
 
-  const loadDbTables = useCallback(async () => {
+  const loadDbTables = useCallback(async (silent = false) => {
     if (!linkedSessionIds || linkedSessionIds.length === 0) {
       setDbTables([]);
       return;
     }
-    setDbLoading(true);
+    if (!silent) setDbLoading(true);
     const allTables: SqliteTable[] = [];
     for (const sid of linkedSessionIds) {
       try {
@@ -214,8 +225,8 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
         allTables.push(...tables);
       } catch { /* ignore */ }
     }
-    setDbTables(allTables);
-    setDbLoading(false);
+    setDbTables((prev) => JSON.stringify(prev) === JSON.stringify(allTables) ? prev : allTables);
+    if (!silent) setDbLoading(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [linkedSessionsKey]);
 
@@ -256,7 +267,11 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
   // Load plan.md when plan tab is selected — removed (now in PlanTile).
   const loadPlan = useCallback(async () => {}, []);
 
-  // Watch filesystem for live updates (debounced to prevent flicker)
+  // Watch filesystem for live updates. Mirrors RepoExplorerTile's pattern:
+  // per-loader 200ms JS-side debounce, silent refreshers (no Loading… flash),
+  // and content-equality check skips no-op renders. DB refresh narrows to
+  // session.db writes so steady SELECT-COUNT pressure from `session.db-journal`
+  // / `inuse.<pid>.lock` chatter doesn't wake the COUNT(*) loop.
   useEffect(() => {
     const watchPaths: string[] = [];
     if (workstreamDir) watchPaths.push(workstreamDir);
@@ -270,22 +285,24 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
       invoke("watch_directory", { path: p }).catch(() => {});
     }
 
-    let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+    const refreshConfig = debounce(() => { void loadConfig(true); }, 200);
+    const refreshState = debounce(() => { void loadStateDir(stateCurrentDir, true); }, 200);
+    const refreshDb = debounce(() => { void loadDbTables(true); }, 200);
+
     const unlisten = listen<{ path: string }>("fs-change", (event) => {
       if (!workstreamVisible) return;
       const changedPath = event.payload.path.replace(/\//g, "\\").toLowerCase();
-      // Skip events.jsonl changes (too frequent, handled by session poller)
+      // Skip events.jsonl writes — the session poller writes here on every
+      // turn / tool call; nothing in Meta needs to react to that.
       if (changedPath.endsWith("events.jsonl")) return;
-      // Debounce: wait 1s after last change before refreshing
-      if (debounceTimer) clearTimeout(debounceTimer);
-      debounceTimer = setTimeout(() => {
-        if (activeTab === "config") loadConfig();
-        if (activeTab === "state") void loadStateDir(stateCurrentDir);
-        if (activeTab === "database") loadDbTables();
-      }, 1000);
+      if (activeTab === "config") refreshConfig();
+      else if (activeTab === "state") refreshState();
+      else if (activeTab === "database" && changedPath.endsWith("session.db")) refreshDb();
     });
     return () => {
-      if (debounceTimer) clearTimeout(debounceTimer);
+      refreshConfig.cancel();
+      refreshState.cancel();
+      refreshDb.cancel();
       for (const p of watchPaths) {
         invoke("unwatch_directory", { path: p }).catch(() => {});
       }
