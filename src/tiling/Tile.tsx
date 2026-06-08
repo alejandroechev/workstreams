@@ -7,6 +7,26 @@ import SessionMetaTile from "../tiles/SessionMetaTile";
 import WorkbenchTile from "../tiles/WorkbenchTile";
 import PlanTile from "../tiles/PlanTile";
 import DiffReviewTile from "../tiles/DiffReviewTile";
+import { isFeatureEnabled, featureDescriptor } from "../domain/feature-flags";
+
+function DisabledFeaturePlaceholder({ label, requires }: { label: string; requires: string }) {
+  return (
+    <div style={{
+      padding: 24,
+      display: "flex",
+      flexDirection: "column",
+      alignItems: "center",
+      justifyContent: "center",
+      gap: 8,
+      height: "100%",
+      color: "#a6adc8",
+      textAlign: "center",
+    }}>
+      <div style={{ fontSize: 13, fontWeight: 600, color: "#f9e2af" }}>{label} tile is disabled</div>
+      <div style={{ fontSize: 11, color: "#6c7086", maxWidth: 360 }}>{requires}</div>
+    </div>
+  );
+}
 import type { Tile } from "../workstream/types";
 import type { CopilotSessionStats } from "../domain/types";
 import { invoke } from "@tauri-apps/api/core";
@@ -235,18 +255,28 @@ function TileWrapperImpl({
       );
       break;
     case "plan":
-      content = (
-        <PlanTile
-          tileId={tile.id}
-          isFocused={isFocused}
-          linkedSessionIds={linkedSessionIds}
-          configJson={tile.config_json}
-          onConfigChange={(c) => onUpdateTileConfig?.(tile.id, c)}
-          workstreamVisible={workstreamVisible}
-        />
-      );
+      if (!isFeatureEnabled("plan-tile")) {
+        const d = featureDescriptor("plan-tile");
+        content = <DisabledFeaturePlaceholder label={d.label} requires={d.requires} />;
+      } else {
+        content = (
+          <PlanTile
+            tileId={tile.id}
+            isFocused={isFocused}
+            linkedSessionIds={linkedSessionIds}
+            configJson={tile.config_json}
+            onConfigChange={(c) => onUpdateTileConfig?.(tile.id, c)}
+            workstreamVisible={workstreamVisible}
+          />
+        );
+      }
       break;
     case "diff_review": {
+      if (!isFeatureEnabled("diff-review")) {
+        const d = featureDescriptor("diff-review");
+        content = <DisabledFeaturePlaceholder label={d.label} requires={d.requires} />;
+        break;
+      }
       const cfg = JSON.parse(tile.config_json || "{}");
       if (!cfg.reviewId) {
         content = (

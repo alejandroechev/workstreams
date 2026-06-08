@@ -1,6 +1,7 @@
 // @test-skip: Thin layout wrapper; AddTileMenu (the only logic-bearing child) has its own tests.
 import { ViewColumnsIcon } from "@heroicons/react/24/outline";
 import AddTileMenu from "./AddTileMenu";
+import { isFeatureEnabled } from "../domain/feature-flags";
 
 interface Props {
   tileCount: number;
@@ -68,18 +69,18 @@ export default function StatusBar({
   onToggleSideBySide,
   onOpenSettings,
 }: Props) {
-  const rawItems: Array<{ key: string; label: string; icon: "session" | "terminal" | "folder" | "info" | "beaker" | "plan" | "bug"; shortcut?: string; onSelect?: () => void }> = [
+  const rawItems: Array<{ key: string; label: string; icon: "session" | "terminal" | "folder" | "info" | "beaker" | "plan" | "bug"; shortcut?: string; onSelect?: () => void; gated?: boolean }> = [
     { key: "session", label: "Copilot Session", icon: "session", shortcut: "Alt+C", onSelect: onAddSession },
     { key: "terminal", label: "PowerShell", icon: "terminal", shortcut: "Alt+T", onSelect: onAddTerminal },
     { key: "wsl", label: "WSL Terminal", icon: "terminal", shortcut: "Alt+W", onSelect: onAddWslTerminal },
     { key: "explorer", label: "Repo Explorer", icon: "folder", shortcut: "Alt+R", onSelect: onAddExplorer },
     { key: "meta", label: "Session Meta", icon: "info", shortcut: "Alt+M", onSelect: onAddSessionMeta },
     { key: "workbench", label: "Workbench", icon: "beaker", shortcut: "Alt+B", onSelect: onAddWorkbench },
-    { key: "plan", label: "Plan", icon: "plan", shortcut: "Alt+P", onSelect: onAddPlan },
-    { key: "diff-review", label: "Diff Review", icon: "bug", shortcut: "Alt+G", onSelect: onAddDiffReview },
+    { key: "plan", label: "Plan", icon: "plan", shortcut: "Alt+P", onSelect: onAddPlan, gated: !isFeatureEnabled("plan-tile") },
+    { key: "diff-review", label: "Diff Review", icon: "bug", shortcut: "Alt+G", onSelect: onAddDiffReview, gated: !isFeatureEnabled("diff-review") },
   ];
   const menuItems = rawItems
-    .filter((it) => typeof it.onSelect === "function")
+    .filter((it) => typeof it.onSelect === "function" && !it.gated)
     .map((it) => ({ key: it.key, label: it.label, icon: it.icon, shortcut: it.shortcut, onSelect: it.onSelect! }));
 
   return (
