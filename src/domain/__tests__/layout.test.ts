@@ -77,29 +77,50 @@ describe("navigateFocus", () => {
     expect(navigateFocus("right", 0, 0)).toBe(0);
   });
 
-  it("moves right/down forward", () => {
-    expect(navigateFocus("right", 0, 4)).toBe(1);
+  // 2-tile layout: "t0 t1"
+  it("2-tile: right from t0 → t1; left wraps", () => {
+    expect(navigateFocus("right", 0, 2)).toBe(1);
+    expect(navigateFocus("left", 0, 2)).toBe(1);
+    expect(navigateFocus("left", 1, 2)).toBe(0);
+  });
+
+  it("2-tile: up/down stay (single row) but wrap to the other tile", () => {
+    // No row below; falls through to same-column wrap (which yields self),
+    // so up/down from t0 stays at t0 — kept this way to avoid pretending
+    // there's a vertical neighbor when there isn't.
+    expect(navigateFocus("up", 0, 2)).toBe(0);
+    expect(navigateFocus("down", 0, 2)).toBe(0);
+  });
+
+  // 3-tile layout: "t0 t1" / "t0 t2" — t0 spans the left column.
+  it("3-tile: right from t0 picks t1 (top-right) of the spanned column", () => {
+    expect(navigateFocus("right", 0, 3)).toBe(1);
+  });
+  it("3-tile: left from t1 → t0; left from t2 → t0", () => {
+    expect(navigateFocus("left", 1, 3)).toBe(0);
+    expect(navigateFocus("left", 2, 3)).toBe(0);
+  });
+  it("3-tile: down from t1 → t2; up from t2 → t1", () => {
+    expect(navigateFocus("down", 1, 3)).toBe(2);
+    expect(navigateFocus("up", 2, 3)).toBe(1);
+  });
+
+  // 4-tile L-shape: "t0 t1" / "t3 t2" (top-left, top-right, bottom-right, bottom-left).
+  // The reported bug: left from bottom-right (t2) used to go to t1 (top-right).
+  it("4-tile L-shape: left from bottom-right (t2) goes to bottom-left (t3)", () => {
+    expect(navigateFocus("left", 2, 4)).toBe(3);
+  });
+  it("4-tile L-shape: right from bottom-left (t3) goes to bottom-right (t2)", () => {
+    expect(navigateFocus("right", 3, 4)).toBe(2);
+  });
+  it("4-tile L-shape: up from bottom-right (t2) goes to top-right (t1)", () => {
+    expect(navigateFocus("up", 2, 4)).toBe(1);
+  });
+  it("4-tile L-shape: down from top-right (t1) goes to bottom-right (t2)", () => {
     expect(navigateFocus("down", 1, 4)).toBe(2);
   });
-
-  it("moves left/up backward", () => {
-    expect(navigateFocus("left", 2, 4)).toBe(1);
-    expect(navigateFocus("up", 1, 4)).toBe(0);
-  });
-
-  it("wraps right→beginning", () => {
-    expect(navigateFocus("right", 3, 4)).toBe(0);
-  });
-
-  it("wraps left→end", () => {
-    expect(navigateFocus("left", 0, 4)).toBe(3);
-  });
-
-  it("wraps down→beginning", () => {
-    expect(navigateFocus("down", 4, 5)).toBe(0);
-  });
-
-  it("wraps up→end", () => {
-    expect(navigateFocus("up", 0, 5)).toBe(4);
+  it("4-tile L-shape: right from top-left (t0) goes to top-right (t1); down → bottom-left (t3)", () => {
+    expect(navigateFocus("right", 0, 4)).toBe(1);
+    expect(navigateFocus("down", 0, 4)).toBe(3);
   });
 });
