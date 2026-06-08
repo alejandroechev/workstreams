@@ -5,6 +5,7 @@ import type { Project, Workstream } from "../domain/types";
 import {
   BellAlertIcon,
   EllipsisHorizontalIcon,
+  MoonIcon,
 } from "@heroicons/react/20/solid";
 import { PROJECT_PRESET_COLORS, isCustomProjectColor } from "../domain/colors";
 import { reorderById } from "../domain/reorder";
@@ -75,15 +76,7 @@ function ActivityIndicator({ bell, active, stopped }: { bell: boolean; active: b
   if (stopped) {
     return (
       <span style={slot} title="Stopped (not loaded)" data-testid="ws-indicator-stopped">
-        <span
-          style={{
-            width: 9,
-            height: 9,
-            background: "transparent",
-            border: "1px solid #6c7086",
-            borderRadius: 1,
-          }}
-        />
+        <MoonIcon style={{ width: 12, height: 12, color: "#6c7086" }} />
       </span>
     );
   }
