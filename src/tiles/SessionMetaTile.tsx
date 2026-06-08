@@ -1,5 +1,5 @@
 // @test-skip: pre-existing tile shell, domain logic tested separately
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { MarkdownView } from "../ui/MarkdownView";
@@ -15,6 +15,7 @@ import { dispatchAddToWorkbench } from "../domain/workbench-events";
 import { writeTextToClipboard } from "../domain/clipboard";
 import { openPath } from "@tauri-apps/plugin-opener";
 import type { CopilotConfigItem } from "../domain/types";
+import { SqliteTableView, sessionSqliteOps, type SqliteTable } from "../ui/components/SqliteTableView";
 import {
   SparklesIcon,
   PuzzlePieceIcon,
@@ -70,16 +71,6 @@ const BINARY_EXTS = new Set(["mp4", "mov", "webm", "pdf", "zip", "gz", "tar", "7
 
 type TabId = "config" | "state" | "database";
 
-interface SessionDbTable {
-  name: string;
-  row_count: number;
-}
-
-interface SessionDbTableData {
-  columns: string[];
-  rows: unknown[][];
-}
-
 const SKIP_PREFIXES = [".git/", ".git\\", "node_modules/", "node_modules\\"];
 const SKIP_PATTERNS = [/[/\\]\.git[/\\]/, /[/\\]node_modules[/\\]/];
 
@@ -103,10 +94,10 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
   const [activeTab, setActiveTab] = useState<TabId>("config");
   // Config content viewer
   const [viewingContent, setViewingContent] = useState<{ name: string; content: string } | null>(null);
-  // Database explorer
-  const [dbTables, setDbTables] = useState<SessionDbTable[]>([]);
+  // Database explorer: counts shown in the tab label come from a lightweight
+  // list call; the table/grid UI is owned by SqliteTableView via sessionSqliteOps.
+  const [dbTables, setDbTables] = useState<SqliteTable[]>([]);
   const [selectedTable, setSelectedTable] = useState<string | null>(null);
-  const [tableData, setTableData] = useState<SessionDbTableData | null>(null);
   const [dbLoading, setDbLoading] = useState(false);
   // Session State browser
   const [stateRootDir, setStateRootDir] = useState<string | null>(null);
@@ -216,10 +207,10 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
       return;
     }
     setDbLoading(true);
-    const allTables: SessionDbTable[] = [];
+    const allTables: SqliteTable[] = [];
     for (const sid of linkedSessionIds) {
       try {
-        const tables = await invoke<SessionDbTable[]>("list_session_db_tables", { sessionId: sid });
+        const tables = await invoke<SqliteTable[]>("list_session_db_tables", { sessionId: sid });
         allTables.push(...tables);
       } catch { /* ignore */ }
     }
@@ -228,23 +219,13 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [linkedSessionsKey]);
 
-  const loadTableData = useCallback(async (tableName: string) => {
-    if (!linkedSessionIds || linkedSessionIds.length === 0) return;
-    setDbLoading(true);
-    setSelectedTable(tableName);
-    // Use first linked session that has this table
-    for (const sid of linkedSessionIds) {
-      try {
-        const data = await invoke<SessionDbTableData>("query_session_db_table", { sessionId: sid, tableName, limit: 200 });
-        setTableData(data);
-        setDbLoading(false);
-        return;
-      } catch { /* ignore */ }
-    }
-    setTableData(null);
-    setDbLoading(false);
+  // SqliteTableView ops, memoised so the component's effect doesn't re-fire
+  // unless the underlying session list actually changed.
+  const dbOps = useMemo(
+    () => sessionSqliteOps(linkedSessionIds ?? []),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [linkedSessionsKey]);
+    [linkedSessionsKey],
+  );
 
   useEffect(() => {
     loadConfig();
@@ -396,9 +377,10 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
       void viewFile(vs.filePath, name);
     }
     if (vs.dbTable) {
-      void loadTableData(vs.dbTable);
+      // SqliteTableView reads its initial table from props; just stash it.
+      setSelectedTable(vs.dbTable);
     }
-  }, [workstreamVisible, configJson, viewFile, loadTableData]);
+  }, [workstreamVisible, configJson, viewFile]);
 
   useTileViewStatePersist(
     configJson,
@@ -707,78 +689,19 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
         {/* Database tab */}
         {activeTab === "database" && (
           <>
-            {(!linkedSessionIds || linkedSessionIds.length === 0) && (
+            {(!linkedSessionIds || linkedSessionIds.length === 0) ? (
               <div style={{ padding: 12, color: "#585b70", textAlign: "center" }}>
                 No linked sessions — link a copilot session to explore its database
               </div>
-            )}
-            {dbLoading && (
+            ) : dbLoading && dbTables.length === 0 ? (
               <div style={{ padding: 12, color: "#585b70", textAlign: "center" }}>Loading…</div>
-            )}
-            {!dbLoading && !selectedTable && linkedSessionIds && linkedSessionIds.length > 0 && (
-              <>
-                {dbTables.length === 0 && (
-                  <div style={{ padding: 12, color: "#585b70", textAlign: "center" }}>
-                    No session database found
-                  </div>
-                )}
-                {dbTables.map((t) => (
-                  <div
-                    key={t.name}
-                    onClick={() => loadTableData(t.name)}
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 8,
-                      padding: "6px 12px",
-                      cursor: "pointer",
-                      color: "#cdd6f4",
-                    }}
-                    onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "#313244"; }}
-                    onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "transparent"; }}
-                  >
-                    <TableCellsIcon style={{ width: 14, height: 14, color: "#89b4fa", flexShrink: 0 }} />
-                    <span style={{ flex: 1 }}>{t.name}</span>
-                    <span style={{ fontSize: 10, color: "#585b70" }}>{t.row_count} rows</span>
-                  </div>
-                ))}
-              </>
-            )}
-            {!dbLoading && selectedTable && tableData && (
-              <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "4px 8px", borderBottom: "1px solid #313244", flexShrink: 0 }}>
-                  <button
-                    onClick={() => { setSelectedTable(null); setTableData(null); }}
-                    style={{ background: "none", border: "none", color: "#89b4fa", cursor: "pointer", fontSize: 11, padding: "2px 4px" }}
-                  >← Tables</button>
-                  <span style={{ color: "#cdd6f4", fontWeight: 600, fontSize: 11 }}>{selectedTable}</span>
-                  <span style={{ color: "#585b70", fontSize: 10 }}>({tableData.rows.length} rows)</span>
-                </div>
-                <div style={{ flex: 1, overflow: "auto" }}>
-                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 10, fontFamily: "monospace" }}>
-                    <thead>
-                      <tr>
-                        {tableData.columns.map((col) => (
-                          <th key={col} style={{ padding: "4px 6px", borderBottom: "1px solid #313244", color: "#89b4fa", textAlign: "left", fontWeight: 600, whiteSpace: "nowrap", position: "sticky", top: 0, background: "#181825" }}>
-                            {col}
-                          </th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {tableData.rows.map((row, ri) => (
-                        <tr key={ri} style={{ borderBottom: "1px solid #1e1e2e" }}>
-                          {row.map((val, ci) => (
-                            <td key={ci} style={{ padding: "3px 6px", color: "#cdd6f4", maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={val != null ? String(val) : ""}>
-                              {val === null ? <span style={{ color: "#585b70" }}>null</span> : String(val)}
-                            </td>
-                          ))}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
+            ) : (
+              <SqliteTableView
+                ops={dbOps}
+                initialTable={selectedTable}
+                onSelectTable={setSelectedTable}
+                limit={200}
+              />
             )}
           </>
         )}

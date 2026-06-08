@@ -2942,6 +2942,17 @@ pub struct SessionDbTableData {
     pub rows: Vec<Vec<serde_json::Value>>,
 }
 
+fn open_db_readonly(path: &std::path::Path) -> Result<Connection, String> {
+    if !path.exists() {
+        return Err(format!("File not found: {}", path.display()));
+    }
+    Connection::open_with_flags(
+        path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .map_err(|e| e.to_string())
+}
+
 fn open_session_db(session_id: &str) -> Result<Connection, String> {
     let home = dirs::home_dir().ok_or("No home directory")?;
     let session_db_path = home
@@ -2953,17 +2964,10 @@ fn open_session_db(session_id: &str) -> Result<Connection, String> {
     if !session_db_path.exists() {
         return Err("No session.db found".into());
     }
-
-    Connection::open_with_flags(
-        &session_db_path,
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    )
-    .map_err(|e| e.to_string())
+    open_db_readonly(&session_db_path)
 }
 
-#[tauri::command]
-fn list_session_db_tables(session_id: String) -> Result<Vec<SessionDbTable>, String> {
-    let conn = open_session_db(&session_id)?;
+fn list_db_tables_at(conn: &Connection) -> Result<Vec<SessionDbTable>, String> {
     let mut stmt = conn
         .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
         .map_err(|e| e.to_string())?;
@@ -2989,16 +2993,11 @@ fn list_session_db_tables(session_id: String) -> Result<Vec<SessionDbTable>, Str
     Ok(tables)
 }
 
-#[tauri::command]
-fn query_session_db_table(
-    session_id: String,
-    table_name: String,
-    limit: Option<i64>,
+fn query_db_table_at(
+    conn: &Connection,
+    table_name: &str,
+    limit: i64,
 ) -> Result<SessionDbTableData, String> {
-    let conn = open_session_db(&session_id)?;
-    let limit_val = limit.unwrap_or(100);
-
-    // Get column names
     let col_stmt = conn
         .prepare(&format!("SELECT * FROM [{}] LIMIT 0", table_name))
         .map_err(|e| e.to_string())?;
@@ -3009,11 +3008,10 @@ fn query_session_db_table(
         .collect();
     drop(col_stmt);
 
-    // Get rows
     let mut stmt = conn
         .prepare(&format!(
             "SELECT * FROM [{}] LIMIT {}",
-            table_name, limit_val
+            table_name, limit
         ))
         .map_err(|e| e.to_string())?;
     let col_count = columns.len();
@@ -3040,6 +3038,56 @@ fn query_session_db_table(
         columns,
         rows: rows_out,
     })
+}
+
+#[tauri::command]
+fn list_session_db_tables(session_id: String) -> Result<Vec<SessionDbTable>, String> {
+    let conn = open_session_db(&session_id)?;
+    list_db_tables_at(&conn)
+}
+
+#[tauri::command]
+fn query_session_db_table(
+    session_id: String,
+    table_name: String,
+    limit: Option<i64>,
+) -> Result<SessionDbTableData, String> {
+    let conn = open_session_db(&session_id)?;
+    query_db_table_at(&conn, &table_name, limit.unwrap_or(100))
+}
+
+/// Read-only SQLite browsing for arbitrary files (used by Repo Explorer).
+#[tauri::command]
+fn list_db_tables(path: String) -> Result<Vec<SessionDbTable>, String> {
+    let conn = open_db_readonly(std::path::Path::new(&path))?;
+    list_db_tables_at(&conn)
+}
+
+#[tauri::command]
+fn query_db_table(
+    path: String,
+    table_name: String,
+    limit: Option<i64>,
+) -> Result<SessionDbTableData, String> {
+    let conn = open_db_readonly(std::path::Path::new(&path))?;
+    query_db_table_at(&conn, &table_name, limit.unwrap_or(100))
+}
+
+/// Sniff the SQLite magic header ("SQLite format 3\0") at offset 0 to
+/// confirm whether a file is a SQLite database. Cheap (16 bytes read),
+/// catches files with non-standard extensions.
+#[tauri::command]
+fn is_sqlite_file(path: String) -> Result<bool, String> {
+    use std::io::Read;
+    let mut file = match std::fs::File::open(&path) {
+        Ok(f) => f,
+        Err(_) => return Ok(false),
+    };
+    let mut header = [0u8; 16];
+    match file.read_exact(&mut header) {
+        Ok(()) => Ok(&header == b"SQLite format 3\0"),
+        Err(_) => Ok(false),
+    }
 }
 
 // ── App Setup ──────────────────────────────────────────────────────────
@@ -3148,6 +3196,9 @@ pub fn run() {
             query_session_todo_deps,
             list_session_db_tables,
             query_session_db_table,
+            list_db_tables,
+            query_db_table,
+            is_sqlite_file,
             // Git log & branch
             git_log,
             git_branch_tracking_info,
@@ -3879,5 +3930,35 @@ Body here.
 
         std::fs::remove_dir_all(&tmp).ok();
         let _ = dir_str; // silence unused warning
+    }
+
+    #[test]
+    fn is_sqlite_file_detects_magic_header() {
+        let tmp = std::env::temp_dir().join(format!(
+            "ws-sqlite-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        let real_db = tmp.join("real.db");
+        std::fs::write(&real_db, b"SQLite format 3\0extra payload").unwrap();
+        assert!(is_sqlite_file(real_db.to_string_lossy().to_string()).unwrap());
+
+        let plain = tmp.join("plain.txt");
+        std::fs::write(&plain, b"# just markdown\nhello").unwrap();
+        assert!(!is_sqlite_file(plain.to_string_lossy().to_string()).unwrap());
+
+        let too_short = tmp.join("short.bin");
+        std::fs::write(&too_short, b"abc").unwrap();
+        assert!(!is_sqlite_file(too_short.to_string_lossy().to_string()).unwrap());
+
+        // Non-existent path returns Ok(false) instead of an error.
+        assert!(!is_sqlite_file(tmp.join("missing").to_string_lossy().to_string()).unwrap());
+
+        std::fs::remove_dir_all(&tmp).ok();
     }
 }

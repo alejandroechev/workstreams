@@ -29,10 +29,12 @@ import {
   ClipboardDocumentIcon,
   BeakerIcon,
   ChatBubbleLeftRightIcon,
+  TableCellsIcon,
 } from "@heroicons/react/24/outline";
 import { openPath } from "@tauri-apps/plugin-opener";
 import { writeTextToClipboard } from "../domain/clipboard";
 import { dispatchAddToWorkbench } from "../domain/workbench-events";
+import { SqliteTableView, fileSqliteOps } from "../ui/components/SqliteTableView";
 import { useFileComments } from "../files/useFileComments";
 import { debounce } from "../domain/debounce";
 import { getAppSettings, subscribeAppSettings } from "../domain/app-settings";
@@ -58,15 +60,17 @@ interface DirEntry {
   size: number;
 }
 
-type Mode = "browse" | "view" | "audio" | "image" | "log" | "hooks";
+type Mode = "browse" | "view" | "audio" | "image" | "log" | "hooks" | "sqlite";
 type DiffMode = "unstaged" | "last_commit" | "branch_vs_master";
 
 const MARKDOWN_EXTS = new Set(["md", "mdx", "markdown"]);
+const SQLITE_EXTS = new Set(["db", "sqlite", "sqlite3", "db3"]);
 const FILE_EDITOR_EXCLUDED_EXTS = new Set([
   "wav", "mp3", "ogg", "flac",
   "png", "jpg", "jpeg", "gif", "webp", "bmp", "ico",
   "mp4", "mov", "webm",
   "pdf", "zip", "gz", "tar", "7z", "exe", "dll", "so", "dylib",
+  "db", "sqlite", "sqlite3", "db3",
 ]);
 const AUDIO_SIZE_LIMIT_BYTES = 100 * 1024 * 1024; // 100 MB
 
@@ -76,6 +80,10 @@ function extensionFor(path: string): string {
 
 function isMarkdown(path: string): boolean {
   return MARKDOWN_EXTS.has(extensionFor(path));
+}
+
+function isSqliteByExt(path: string): boolean {
+  return SQLITE_EXTS.has(extensionFor(path));
 }
 
 export function shouldUseFileEditor(path: string): boolean {
@@ -354,6 +362,16 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
       } finally {
         setFileLoading(false);
       }
+    }
+
+    // SQLite branch — try by extension first, then sniff the magic header
+    // to catch non-standard names (e.g. Copilot's session.db).
+    if (isSqliteByExt(trimmedPath) || await invoke<boolean>("is_sqlite_file", { path: trimmedPath }).catch(() => false)) {
+      setFilePath(trimmedPath);
+      setContent(null);
+      setMode("sqlite");
+      setFileLoading(false);
+      return;
     }
 
     setFilePath(trimmedPath);
@@ -1179,6 +1197,33 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
               overviewRulerBorder: false,
             }}
           />
+        </div>
+        {overlays}
+      </div>
+    );
+  }
+
+  // ─── SQLite mode ───
+  if (mode === "sqlite") {
+    return (
+      <div ref={containerRef} style={containerStyle}>
+        {tabBar}
+        <div style={toolbarStyle}>
+          <button
+            onClick={handleBackToBrowse}
+            style={{ ...toolbarButtonStyle, display: "flex", alignItems: "center" }}
+            title="Go to folder"
+            data-testid="repo-explorer-go-to-folder"
+          >
+            <ChevronUpIcon style={{ width: 16, height: 16 }} />
+          </button>
+          <span style={{ ...pathTextStyle, display: "flex", alignItems: "center", gap: 4, flex: 1 }}>
+            <TableCellsIcon style={{ width: 14, height: 14, flexShrink: 0, color: "#89b4fa" }} />
+            {filePath}
+          </span>
+        </div>
+        <div style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column", minHeight: 0 }}>
+          <SqliteTableView ops={fileSqliteOps(filePath)} limit={200} />
         </div>
         {overlays}
       </div>
