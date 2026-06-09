@@ -178,7 +178,9 @@ mod tests {
 
     #[test]
     fn is_excluded_path_filters_nested_excludes() {
-        assert!(is_excluded_path("C:\\repo\\packages\\a\\node_modules\\b.js"));
+        assert!(is_excluded_path(
+            "C:\\repo\\packages\\a\\node_modules\\b.js"
+        ));
         assert!(is_excluded_path("/repo/workspaces/x/target/y"));
     }
 

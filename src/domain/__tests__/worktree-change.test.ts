@@ -52,6 +52,12 @@ describe("rewriteTileCwd", () => {
   it("throws on malformed JSON", () => {
     expect(() => rewriteTileCwd("{ not json", "C:\\new", "terminal")).toThrow(/^Invalid tile config JSON: /);
   });
+
+  it("wraps a non-object payload (e.g. array) into a fresh { cwd } object", () => {
+    // Arrays and primitives aren't isJsonObject — fall to the false branch.
+    expect(rewriteTileCwd(JSON.stringify([1, 2, 3]), "/repo", "terminal")).toBe(JSON.stringify({ cwd: "/repo" }));
+    expect(rewriteTileCwd(JSON.stringify(null), "/repo", "terminal")).toBe(JSON.stringify({ cwd: "/repo" }));
+  });
 });
 
 describe("summarizeTilesToRestart", () => {

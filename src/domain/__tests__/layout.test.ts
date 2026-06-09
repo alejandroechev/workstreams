@@ -123,4 +123,56 @@ describe("navigateFocus", () => {
     expect(navigateFocus("right", 0, 4)).toBe(1);
     expect(navigateFocus("down", 0, 4)).toBe(3);
   });
+
+  // Wrap-around branches: 2-tile single row exercised above; here we hit
+  // the wrap path for 4-tile L-shape and bigger grids.
+  it("4-tile L-shape: left wraps from top-left (t0) to top-right (t1)", () => {
+    expect(navigateFocus("left", 0, 4)).toBe(1);
+  });
+  it("4-tile L-shape: right wraps from top-right (t1) to top-left (t0)", () => {
+    expect(navigateFocus("right", 1, 4)).toBe(0);
+  });
+  it("4-tile L-shape: up wraps from top-row (t1) to bottom-row of same column (t2)", () => {
+    expect(navigateFocus("up", 1, 4)).toBe(2);
+  });
+  it("4-tile L-shape: down wraps from bottom-row (t2) to top-row of same column (t1)", () => {
+    expect(navigateFocus("down", 2, 4)).toBe(1);
+  });
+
+  // 5-tile layout: "t0 t2" / "t0 t3" / "t1 t4"
+  it("5-tile: right from t0 → t2 (spanning rectangle exit)", () => {
+    expect(navigateFocus("right", 0, 5)).toBe(2);
+  });
+  it("5-tile: down from t3 → t4", () => {
+    expect(navigateFocus("down", 3, 5)).toBe(4);
+  });
+  it("5-tile: up from t1 → t0 (spanning tile target)", () => {
+    expect(navigateFocus("up", 1, 5)).toBe(0);
+  });
+
+  // 6-tile 3x2 grid: exercises 3-row navigation
+  it("6-tile: down from t1 → t3; up from t5 → t3", () => {
+    expect(navigateFocus("down", 1, 6)).toBe(3);
+    expect(navigateFocus("up", 5, 6)).toBe(3);
+  });
+
+  // 7-tile layout uses the generic generator (last row spans both cols).
+  it("7-tile: down from t5 → t6 (spanning last row)", () => {
+    expect(navigateFocus("down", 5, 7)).toBe(6);
+  });
+
+  // Fallback path: currentIndex outside the grid → linear next/prev.
+  it("fallback (currentIndex not in grid): right → (idx + 1) mod n", () => {
+    expect(navigateFocus("right", 99, 4)).toBe(0);
+  });
+  it("fallback (currentIndex not in grid): left → previous index modulo n", () => {
+    // (99 - 1 + 4) % 4 = 102 % 4 = 2
+    expect(navigateFocus("left", 99, 4)).toBe(2);
+  });
+  it("fallback (currentIndex not in grid): up wraps", () => {
+    expect(navigateFocus("up", 99, 4)).toBeGreaterThanOrEqual(0);
+  });
+  it("fallback (currentIndex not in grid): down wraps", () => {
+    expect(navigateFocus("down", 99, 4)).toBeGreaterThanOrEqual(0);
+  });
 });

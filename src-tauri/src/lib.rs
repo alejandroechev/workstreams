@@ -1419,7 +1419,9 @@ fn git_branch_tracking_info(directory: String) -> Result<(u32, u32, String), Str
     if !branch_out.status.success() {
         return Ok((0, 0, String::new()));
     }
-    let branch = String::from_utf8_lossy(&branch_out.stdout).trim().to_string();
+    let branch = String::from_utf8_lossy(&branch_out.stdout)
+        .trim()
+        .to_string();
     if branch.is_empty() {
         return Ok((0, 0, String::new()));
     }
@@ -2504,7 +2506,10 @@ fn read_session_file(session_id: String, relative_path: String) -> Result<String
 #[tauri::command]
 fn session_state_dir(session_id: String) -> Result<String, String> {
     let home = dirs::home_dir().ok_or("No home directory")?;
-    let dir = home.join(".copilot").join("session-state").join(&session_id);
+    let dir = home
+        .join(".copilot")
+        .join("session-state")
+        .join(&session_id);
     if !dir.is_dir() {
         return Err(format!("session-state dir not found for {session_id}"));
     }
@@ -3009,10 +3014,7 @@ fn query_db_table_at(
     drop(col_stmt);
 
     let mut stmt = conn
-        .prepare(&format!(
-            "SELECT * FROM [{}] LIMIT {}",
-            table_name, limit
-        ))
+        .prepare(&format!("SELECT * FROM [{}] LIMIT {}", table_name, limit))
         .map_err(|e| e.to_string())?;
     let col_count = columns.len();
     let mut rows_out = Vec::new();
@@ -3843,8 +3845,8 @@ Body here.
         std::fs::write(tmp.join("kept.txt"), "v2\nshared\n").unwrap();
         std::fs::write(tmp.join("new.txt"), "brand new\n").unwrap();
 
-        let files = git_diff_files_with_status(dir_str.clone(), "unstaged".into())
-            .expect("with_status");
+        let files =
+            git_diff_files_with_status(dir_str.clone(), "unstaged".into()).expect("with_status");
         let kept = files.iter().find(|(p, _)| p == "kept.txt").expect("kept");
         assert_eq!(kept.1, "M");
         let added = files.iter().find(|(p, _)| p == "new.txt").expect("new");

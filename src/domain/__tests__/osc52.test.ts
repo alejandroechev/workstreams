@@ -53,4 +53,23 @@ describe("handleOsc52", () => {
     const ok = await handleOsc52(`c;${b64}`);
     expect(ok).toBe(false);
   });
+
+  it("returns false when decoded text is empty", async () => {
+    const ok = await handleOsc52("c;"); // empty base64 → empty string
+    expect(ok).toBe(false);
+    expect(writeMock).not.toHaveBeenCalled();
+  });
+
+  it("falls back to raw bytes when TextDecoder is unavailable", async () => {
+    const orig = globalThis.TextDecoder;
+    delete (globalThis as { TextDecoder?: unknown }).TextDecoder;
+    try {
+      const b64 = btoa("plain ascii");
+      const ok = await handleOsc52(`c;${b64}`);
+      expect(ok).toBe(true);
+      expect(writeMock).toHaveBeenCalledWith("plain ascii");
+    } finally {
+      globalThis.TextDecoder = orig;
+    }
+  });
 });

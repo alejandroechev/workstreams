@@ -332,9 +332,13 @@ mod tests {
         tx.send(b"abcdefgh".to_vec()).unwrap();
         // Below threshold — should not have flushed yet
         std::thread::sleep(Duration::from_millis(50));
-        assert_eq!(emitted.lock().unwrap().len(), 0, "must not flush below threshold");
+        assert_eq!(
+            emitted.lock().unwrap().len(),
+            0,
+            "must not flush below threshold"
+        );
         tx.send(b"ijklmnop".to_vec()).unwrap(); // total = 16 bytes, hits threshold
-        // Give batcher a tick to consume + emit
+                                                // Give batcher a tick to consume + emit
         std::thread::sleep(Duration::from_millis(50));
         let out = emitted.lock().unwrap();
         assert_eq!(out.len(), 1, "expected size-triggered flush");
@@ -396,6 +400,10 @@ mod tests {
         });
         drop(tx);
         handle.join().unwrap();
-        assert_eq!(emitted.lock().unwrap().len(), 0, "no flush when nothing was sent");
+        assert_eq!(
+            emitted.lock().unwrap().len(),
+            0,
+            "no flush when nothing was sent"
+        );
     }
 }

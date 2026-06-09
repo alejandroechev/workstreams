@@ -147,6 +147,24 @@ describe("mergeViewState", () => {
     const out = mergeViewState("{not json", "repo_explorer", { activeTab: "files" });
     expect(JSON.parse(out)).toEqual({ viewState: { activeTab: "files" } });
   });
+
+  it("treats non-object parsed input (e.g. array) as empty base", () => {
+    const out = mergeViewState("[1,2,3]", "repo_explorer", { activeTab: "files" });
+    expect(JSON.parse(out)).toEqual({ viewState: { activeTab: "files" } });
+  });
+});
+
+describe("parseViewState edge cases", () => {
+  it("returns empty when parsed JSON is not an object (e.g. array)", () => {
+    expect(parseViewState("[1,2]", "repo_explorer")).toEqual({});
+  });
+
+  it("plan: rejects unknown historySubTab values", () => {
+    const config = JSON.stringify({
+      viewState: { historySubTab: "bogus" },
+    });
+    expect(parseViewState(config, "plan")).toEqual({});
+  });
 });
 
 describe("round trip", () => {

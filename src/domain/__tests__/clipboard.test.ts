@@ -53,4 +53,22 @@ describe("clipboard helper", () => {
 
     await expect(readTextFromClipboard()).resolves.toBe("from-nav");
   });
+
+  it("read returns empty string when both plugin and navigator unavailable", async () => {
+    mocks.pluginReadText.mockRejectedValueOnce(new Error("no host"));
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: undefined,
+    });
+    await expect(readTextFromClipboard()).resolves.toBe("");
+  });
+
+  it("write is a silent no-op when both plugin and navigator unavailable", async () => {
+    mocks.pluginWriteText.mockRejectedValueOnce(new Error("no host"));
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: undefined,
+    });
+    await expect(writeTextToClipboard("hi")).resolves.toBeUndefined();
+  });
 });

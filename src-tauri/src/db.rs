@@ -55,7 +55,10 @@ fn migrate_legacy_db_if_present(new_path: &Path) {
         None => return,
     };
     if let Err(e) = std::fs::create_dir_all(new_dir) {
-        eprintln!("[workstreams] migrate: could not create {}: {e}", new_dir.display());
+        eprintln!(
+            "[workstreams] migrate: could not create {}: {e}",
+            new_dir.display()
+        );
         return;
     }
     let copy = |from_name: &str, to_name: &str| {
@@ -71,7 +74,11 @@ fn migrate_legacy_db_if_present(new_path: &Path) {
                 to.display()
             );
         } else {
-            eprintln!("[workstreams] migrated {} -> {}", from.display(), to.display());
+            eprintln!(
+                "[workstreams] migrated {} -> {}",
+                from.display(),
+                to.display()
+            );
         }
     };
     copy("copilot-desktop.db", "workstreams.db");
@@ -373,7 +380,10 @@ mod tests {
         } else {
             // Release: uses <data_local_dir>/workstreams/workstreams.db
             assert!(path.ends_with("workstreams.db"));
-            assert!(path.parent().map(|p| p.ends_with("workstreams")).unwrap_or(false));
+            assert!(path
+                .parent()
+                .map(|p| p.ends_with("workstreams"))
+                .unwrap_or(false));
         }
         if let Some(v) = prev {
             std::env::set_var("WORKSTREAMS_DB_PATH", v);
