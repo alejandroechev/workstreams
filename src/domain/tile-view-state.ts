@@ -17,6 +17,7 @@ export interface RepoExplorerViewState {
   currentDir?: string;
   filePath?: string;
   diffMode?: string; // "unstaged" | "last_commit" | "vs_master" | ...
+  diffLayout?: "split" | "unified";
   hookName?: string;
   mdViewMode?: "preview" | "edit";
 }
@@ -112,6 +113,9 @@ function sanitize<K extends AnyViewState["kind"]>(
       str("filePath");
       str("diffMode");
       str("hookName");
+      if (raw.diffLayout === "split" || raw.diffLayout === "unified") {
+        out.diffLayout = raw.diffLayout;
+      }
       if (raw.mdViewMode === "preview" || raw.mdViewMode === "edit") {
         out.mdViewMode = raw.mdViewMode;
       }

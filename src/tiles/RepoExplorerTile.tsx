@@ -185,6 +185,9 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
   const [diffAfter, setDiffAfter] = useState<string>("");
   const [diffFilePath, setDiffFilePath] = useState<string>("");
   const [diffLoading, setDiffLoading] = useState(false);
+  // Diff layout: "split" (default, classic side-by-side) | "unified" (single
+  // pane). Persisted in tile view-state.
+  const [diffLayout, setDiffLayout] = useState<"split" | "unified">("split");
   // Git branch state
   const [currentBranch, setCurrentBranch] = useState<string | null>(null);
   // Git log state
@@ -760,6 +763,7 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
     hydratedRef.current = true;
     const vs = parseViewState(configJson, "repo_explorer");
     if (vs.currentDir) setCurrentDir(vs.currentDir);
+    if (vs.diffLayout) setDiffLayout(vs.diffLayout);
     const tab = vs.activeTab as TabId | undefined;
     if (tab && tab !== "files") {
       if (tab === "diff") {
@@ -797,6 +801,7 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
       currentDir,
       filePath: mode === "view" && filePath && !filePath.startsWith("commit:") ? filePath : undefined,
       diffMode: activeTab === "diff" && activeDiffMode ? activeDiffMode : undefined,
+      diffLayout: activeTab === "diff" ? diffLayout : undefined,
       hookName: activeTab === "hooks" && hookContent ? hookContent.name : undefined,
       mdViewMode: editorViewState?.mode,
     },
@@ -948,9 +953,31 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
         </button>
       ))}
       {activeDiffMode && (
-        <span style={{ marginLeft: "auto", fontSize: 10, color: "#6c7086" }} data-testid="diff-file-count">
-          {diffFiles.length} file{diffFiles.length !== 1 ? "s" : ""} changed
-        </span>
+        <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontSize: 10, color: "#6c7086" }} data-testid="diff-file-count">
+            {diffFiles.length} file{diffFiles.length !== 1 ? "s" : ""} changed
+          </span>
+          <div style={{ display: "flex", gap: 2, border: "1px solid #313244", borderRadius: 3, padding: 1 }}>
+            {(["split", "unified"] as const).map((layout) => (
+              <button
+                key={layout}
+                onClick={() => setDiffLayout(layout)}
+                title={layout === "split" ? "Side-by-side diff" : "Unified diff"}
+                data-testid={`diff-layout-${layout}`}
+                style={{
+                  ...toolbarButtonStyle,
+                  fontSize: 10,
+                  padding: "2px 6px",
+                  borderRadius: 2,
+                  background: diffLayout === layout ? "#45475a" : "transparent",
+                  color: diffLayout === layout ? "#cdd6f4" : "#89b4fa",
+                }}
+              >
+                {layout === "split" ? "Split" : "Unified"}
+              </button>
+            ))}
+          </div>
+        </div>
       )}
     </div>
   );
@@ -1010,7 +1037,7 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
                   fontSize: globalTextFont,
                   fontFamily: "'Cascadia Code', 'Consolas', monospace",
                   scrollBeyondLastLine: false,
-                  renderSideBySide: true,
+                  renderSideBySide: diffLayout === "split",
                   overviewRulerBorder: false,
                 }}
               />

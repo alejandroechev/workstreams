@@ -63,6 +63,21 @@ describe("parseViewState", () => {
     expect(parseViewState(config, "repo_explorer")).toEqual({});
   });
 
+  it("repo_explorer accepts split/unified diffLayout and rejects others", () => {
+    expect(parseViewState(
+      JSON.stringify({ viewState: { diffLayout: "split" } }),
+      "repo_explorer",
+    )).toEqual({ diffLayout: "split" });
+    expect(parseViewState(
+      JSON.stringify({ viewState: { diffLayout: "unified" } }),
+      "repo_explorer",
+    )).toEqual({ diffLayout: "unified" });
+    expect(parseViewState(
+      JSON.stringify({ viewState: { diffLayout: "weird" } }),
+      "repo_explorer",
+    )).toEqual({});
+  });
+
   it("session_meta picks tab/file/dbTable", () => {
     const config = JSON.stringify({
       viewState: { activeTab: "database", filePath: "x.md", dbTable: "todos" },
