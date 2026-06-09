@@ -14,6 +14,7 @@ import { subscribeAddToWorkbench } from "../domain/workbench-events";
 import { workbenchStore } from "../domain/workbench-store-instance";
 import { parseViewState } from "../domain/tile-view-state";
 import { useTileViewStatePersist } from "../domain/useTileViewStatePersist";
+import { FileContextMenu } from "../ui/components/FileContextMenu";
 import AudioPlayer from "./AudioPlayer";
 import {
   PlusIcon,
@@ -93,6 +94,7 @@ export default function WorkbenchTile({ tileId: _tileId, isFocused, configJson, 
   const backend = useBackend();
   const [mode, setMode] = useState<Mode>("list");
   const [viewingPath, setViewingPath] = useState<string | null>(null);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; path: string } | null>(null);
   const [fileContent, setFileContent] = useState<string>("");
   const [loadingFile, setLoadingFile] = useState(false);
   // Audio state: when viewingPath points at an audio file, we hold the
@@ -325,7 +327,26 @@ export default function WorkbenchTile({ tileId: _tileId, isFocused, configJson, 
               *
             </span>
           ) : null}
-          <span style={{ flex: 1 }} />
+          <span
+            data-testid="workbench-open-file-path"
+            onContextMenu={(e) => {
+              e.preventDefault();
+              setContextMenu({ x: e.clientX, y: e.clientY, path: viewingPath });
+            }}
+            title={viewingPath}
+            style={{
+              flex: 1,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+              direction: "rtl",
+              textAlign: "left",
+              color: "#cdd6f4",
+              cursor: "context-menu",
+            }}
+          >
+            {viewingPath}
+          </span>
           {editorViewState && (
             <button
               onClick={editorViewState.toggle}
@@ -403,6 +424,16 @@ export default function WorkbenchTile({ tileId: _tileId, isFocused, configJson, 
             />
           )}
         </div>
+        {contextMenu && (
+          <FileContextMenu
+            x={contextMenu.x}
+            y={contextMenu.y}
+            path={contextMenu.path}
+            workstreamId={workstreamId ?? null}
+            hideAddToWorkbench
+            onClose={() => setContextMenu(null)}
+          />
+        )}
       </div>
     );
   }
@@ -483,6 +514,10 @@ export default function WorkbenchTile({ tileId: _tileId, isFocused, configJson, 
             }}
             onMouseEnter={(e) => { (e.currentTarget as HTMLDivElement).style.background = "#313244"; }}
             onMouseLeave={(e) => { (e.currentTarget as HTMLDivElement).style.background = "transparent"; }}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              setContextMenu({ x: e.clientX, y: e.clientY, path });
+            }}
           >
             <div
               style={{ flex: 1, display: "flex", alignItems: "center", gap: 6, overflow: "hidden" }}
@@ -535,6 +570,16 @@ export default function WorkbenchTile({ tileId: _tileId, isFocused, configJson, 
           );
         })}
       </div>
+      {contextMenu && (
+        <FileContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          path={contextMenu.path}
+          workstreamId={workstreamId ?? null}
+          hideAddToWorkbench
+          onClose={() => setContextMenu(null)}
+        />
+      )}
     </div>
   );
 }

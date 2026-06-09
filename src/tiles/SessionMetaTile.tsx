@@ -12,11 +12,9 @@ import AudioPlayer from "./AudioPlayer";
 import { parseViewState } from "../domain/tile-view-state";
 import { useTileViewStatePersist } from "../domain/useTileViewStatePersist";
 import { debounce } from "../domain/debounce";
-import { dispatchAddToWorkbench } from "../domain/workbench-events";
-import { writeTextToClipboard } from "../domain/clipboard";
-import { openPath } from "@tauri-apps/plugin-opener";
 import type { CopilotConfigItem } from "../domain/types";
 import { SqliteTableView, sessionSqliteOps, type SqliteTable } from "../ui/components/SqliteTableView";
+import { FileContextMenu } from "../ui/components/FileContextMenu";
 import {
   SparklesIcon,
   PuzzlePieceIcon,
@@ -30,10 +28,6 @@ import {
   DocumentIcon,
   FolderIcon,
   TableCellsIcon,
-  ClipboardDocumentListIcon,
-  ClipboardDocumentIcon,
-  BeakerIcon,
-  FolderOpenIcon,
   ChevronUpIcon,
   EyeIcon,
   PencilSquareIcon,
@@ -827,7 +821,7 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
       )}
 
       {contextMenu && (
-        <SessionMetaContextMenu
+        <FileContextMenu
           x={contextMenu.x}
           y={contextMenu.y}
           path={contextMenu.path}
@@ -839,121 +833,3 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
   );
 }
 
-interface SessionMetaContextMenuProps {
-  x: number;
-  y: number;
-  path: string;
-  workstreamId: string | null;
-  onClose: () => void;
-}
-
-function SessionMetaContextMenu({ x, y, path, workstreamId, onClose }: SessionMetaContextMenuProps) {
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const handleClick = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) onClose();
-    };
-    const handleEsc = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
-    const t = setTimeout(() => {
-      document.addEventListener("mousedown", handleClick);
-      document.addEventListener("keydown", handleEsc);
-    }, 0);
-    return () => {
-      clearTimeout(t);
-      document.removeEventListener("mousedown", handleClick);
-      document.removeEventListener("keydown", handleEsc);
-    };
-  }, [onClose]);
-
-  const close = (fn: () => void) => () => { onClose(); fn(); };
-  const name = path.split(/[\\/]/).filter(Boolean).pop() || path;
-
-  const itemStyle: React.CSSProperties = {
-    display: "flex",
-    alignItems: "center",
-    gap: 8,
-    width: "100%",
-    padding: "6px 10px",
-    background: "transparent",
-    border: "none",
-    cursor: "pointer",
-    color: "#cdd6f4",
-    fontSize: 12,
-    textAlign: "left",
-    borderRadius: 4,
-  };
-
-  return (
-    <div
-      ref={ref}
-      data-testid="session-meta-context-menu"
-      data-path={path}
-      role="menu"
-      style={{
-        position: "fixed",
-        top: y,
-        left: x,
-        zIndex: 2000,
-        minWidth: 200,
-        background: "#181825",
-        border: "1px solid #45475a",
-        borderRadius: 6,
-        padding: 4,
-        boxShadow: "0 6px 16px rgba(0,0,0,0.45)",
-        color: "#cdd6f4",
-        fontSize: 12,
-        fontFamily: "inherit",
-      }}
-    >
-      <div
-        style={{
-          padding: "6px 10px 8px",
-          borderBottom: "1px solid #313244",
-          marginBottom: 4,
-          color: "#bac2de",
-          fontWeight: 500,
-          fontSize: 11,
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-          whiteSpace: "nowrap",
-          maxWidth: 320,
-        }}
-      >
-        {name}
-      </div>
-      <button
-        type="button"
-        data-testid="ctx-copy-path"
-        onClick={close(() => { void writeTextToClipboard(path); })}
-        style={itemStyle}
-        onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "#313244"; }}
-        onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "transparent"; }}
-      >
-        <ClipboardDocumentIcon style={{ width: 14, height: 14, color: "#a6adc8", flexShrink: 0 }} />
-        <span>Copy full path</span>
-      </button>
-      <button
-        type="button"
-        data-testid="ctx-open-system"
-        onClick={close(() => { openPath(path).catch(() => {}); })}
-        style={itemStyle}
-        onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "#313244"; }}
-        onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "transparent"; }}
-      >
-        <FolderOpenIcon style={{ width: 14, height: 14, color: "#a6adc8", flexShrink: 0 }} />
-        <span>Open in system</span>
-      </button>
-      <button
-        type="button"
-        data-testid="ctx-add-to-workbench"
-        onClick={close(() => { dispatchAddToWorkbench({ path, workstreamId }); })}
-        style={itemStyle}
-        onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "#313244"; }}
-        onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "transparent"; }}
-      >
-        <BeakerIcon style={{ width: 14, height: 14, color: "#a6adc8", flexShrink: 0 }} />
-        <span>Add to Workbench</span>
-      </button>
-    </div>
-  );
-}

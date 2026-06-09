@@ -10,7 +10,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useBackend } from "../backend/context";
 import { detectLanguage } from "../domain/tile-config";
-import { isAudioFile, isImageFile, makeAudioBlobUrl, makeImageBlobUrl, dirnameOf, classifyLinkTarget, type LinkTargetKind } from "../domain/file-types";
+import { isAudioFile, isImageFile, makeAudioBlobUrl, makeImageBlobUrl, dirnameOf, type LinkTargetKind } from "../domain/file-types";
 import { createNavigationStack, currentPath as navCurrent, canGoBack as navCanBack, canGoForward as navCanFwd, pushPath as navPush, goBack as navBack, goForward as navFwd, type NavigationStack } from "../domain/nav-history";
 import {
   FolderIcon,
@@ -26,15 +26,12 @@ import {
   MusicalNoteIcon,
   EyeIcon,
   PencilSquareIcon,
-  ClipboardDocumentIcon,
-  BeakerIcon,
   ChatBubbleLeftRightIcon,
   TableCellsIcon,
 } from "@heroicons/react/24/outline";
-import { openPath } from "@tauri-apps/plugin-opener";
-import { writeTextToClipboard } from "../domain/clipboard";
-import { dispatchAddToWorkbench } from "../domain/workbench-events";
 import { SqliteTableView, fileSqliteOps } from "../ui/components/SqliteTableView";
+import { FileContextMenu } from "../ui/components/FileContextMenu";
+import { openPath } from "@tauri-apps/plugin-opener";
 import { useFileComments } from "../files/useFileComments";
 import { debounce } from "../domain/debounce";
 import { getAppSettings, subscribeAppSettings } from "../domain/app-settings";
@@ -1651,138 +1648,6 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
       </div>
       {overlays}
     </div>
-  );
-}
-
-// ─── File context menu ───
-
-interface FileContextMenuProps {
-  x: number;
-  y: number;
-  path: string;
-  isDir: boolean;
-  workstreamId: string | null;
-  onClose: () => void;
-}
-
-function FileContextMenu({ x, y, path, isDir, workstreamId, onClose }: FileContextMenuProps) {
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const handleClick = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) onClose();
-    };
-    const handleEsc = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
-    const t = setTimeout(() => {
-      document.addEventListener("mousedown", handleClick);
-      document.addEventListener("keydown", handleEsc);
-    }, 0);
-    return () => {
-      clearTimeout(t);
-      document.removeEventListener("mousedown", handleClick);
-      document.removeEventListener("keydown", handleEsc);
-    };
-  }, [onClose]);
-
-  const close = (fn: () => void) => () => { onClose(); fn(); };
-  const segments = path.split(/[\\/]/).filter(Boolean);
-  const name = segments[segments.length - 1] || path;
-
-  return (
-    <div
-      ref={ref}
-      data-testid="file-context-menu"
-      data-path={path}
-      role="menu"
-      style={{
-        position: "fixed",
-        top: y,
-        left: x,
-        zIndex: 2000,
-        minWidth: 200,
-        background: "#181825",
-        border: "1px solid #45475a",
-        borderRadius: 6,
-        padding: 4,
-        boxShadow: "0 6px 16px rgba(0,0,0,0.45)",
-        color: "#cdd6f4",
-        fontSize: 12,
-        fontFamily: "inherit",
-      }}
-    >
-      <div
-        style={{
-          padding: "6px 10px 8px",
-          borderBottom: "1px solid #313244",
-          marginBottom: 4,
-          color: "#bac2de",
-          fontWeight: 500,
-          fontSize: 11,
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-          whiteSpace: "nowrap",
-          maxWidth: 320,
-        }}
-      >
-        {name}
-      </div>
-      <ContextMenuItem
-        icon={<ClipboardDocumentIcon style={{ width: 14, height: 14, color: "#a6adc8", flexShrink: 0 }} />}
-        label="Copy full path"
-        onClick={close(() => { void writeTextToClipboard(path); })}
-        testid="ctx-copy-path"
-      />
-      <ContextMenuItem
-        icon={<ClipboardDocumentIcon style={{ width: 14, height: 14, color: "#a6adc8", flexShrink: 0 }} />}
-        label={isDir ? "Copy folder name" : "Copy file name"}
-        onClick={close(() => { void writeTextToClipboard(name); })}
-        testid="ctx-copy-name"
-      />
-      <ContextMenuItem
-        icon={<FolderOpenIcon style={{ width: 14, height: 14, color: "#a6adc8", flexShrink: 0 }} />}
-        label="Open in system"
-        onClick={close(() => { openPath(path).catch(() => {}); })}
-        testid="ctx-open-system"
-      />
-      {!isDir && (
-        <ContextMenuItem
-          icon={<BeakerIcon style={{ width: 14, height: 14, color: "#a6adc8", flexShrink: 0 }} />}
-          label="Add to Workbench"
-          onClick={close(() => { dispatchAddToWorkbench({ path, workstreamId }); })}
-          testid="ctx-add-to-workbench"
-        />
-      )}
-    </div>
-  );
-}
-
-function ContextMenuItem({
-  icon, label, onClick, testid,
-}: { icon: React.ReactNode; label: string; onClick: () => void; testid: string }) {
-  return (
-    <button
-      type="button"
-      data-testid={testid}
-      onClick={onClick}
-      style={{
-        display: "flex",
-        alignItems: "center",
-        gap: 8,
-        width: "100%",
-        padding: "6px 10px",
-        background: "transparent",
-        border: "none",
-        cursor: "pointer",
-        color: "#cdd6f4",
-        fontSize: 12,
-        textAlign: "left",
-        borderRadius: 4,
-      }}
-      onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "#313244"; }}
-      onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "transparent"; }}
-    >
-      {icon}
-      <span>{label}</span>
-    </button>
   );
 }
 
