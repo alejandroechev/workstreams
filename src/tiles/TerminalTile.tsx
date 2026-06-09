@@ -16,10 +16,13 @@ interface Props {
   isFocused: boolean;
   /** Bumped on workstream switch so we re-focus even when isFocused didn't change. */
   focusToken?: number;
+  /** True when this tile is the fullscreen tile. See CopilotSessionTile for
+   * the rationale; same atlas-stale issue on geometry-only changes. */
+  isFullscreen?: boolean;
   onStatusChange?: (status: string) => void;
 }
 
-export default function TerminalTile({ tileId, isFocused, focusToken, onStatusChange }: Props) {
+export default function TerminalTile({ tileId, isFocused, focusToken, isFullscreen = false, onStatusChange }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
@@ -302,6 +305,36 @@ export default function TerminalTile({ tileId, isFocused, focusToken, onStatusCh
     const timer = window.setTimeout(focusNow, 50);
     return () => clearTimeout(timer);
   }, [isFocused, focusToken]);
+
+  // See CopilotSessionTile for the rationale: ResizeObserver fires fit on
+  // fullscreen toggle but the canvas atlas can hold stale cell metrics
+  // across a large geometry jump. Force a remeasure + repaint on
+  // isFullscreen transitions.
+  useEffect(() => {
+    const term = termRef.current;
+    if (!term) return;
+    const remeasureAndRepaint = () => {
+      try {
+        const core = (term as unknown as {
+          _core?: { _charSizeService?: { measure?: () => void } };
+        })._core;
+        core?._charSizeService?.measure?.();
+      } catch { /* best effort */ }
+      ptyFitRef.current?.invalidate();
+      ptyFitRef.current?.request();
+      if (term.rows > 0) {
+        try {
+          (term as unknown as {
+            _core?: { _renderService?: { handleResize(c: number, r: number): void } };
+          })._core?._renderService?.handleResize(term.cols, term.rows);
+        } catch { /* best effort */ }
+        term.refresh(0, term.rows - 1);
+      }
+    };
+    remeasureAndRepaint();
+    const t = window.setTimeout(remeasureAndRepaint, 200);
+    return () => window.clearTimeout(t);
+  }, [isFullscreen]);
 
   // Apply font-size changes to xterm + re-fit + tell the PTY about the
   // new cell grid. Idempotent: if the term hasn't been initialised yet

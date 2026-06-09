@@ -28,6 +28,13 @@ interface Props {
   /** When true the workstream already has another linked session, so this
    * tile must not allow linking (workstream → at most one linked session). */
   workstreamHasOtherLinkedSession?: boolean;
+  /** True when this tile is the fullscreen tile in its grid. Triggers a
+   * forced char-size remeasure + buffer repaint when it changes, so the
+   * canvas renderer doesn't end up showing ghost/duplicate rows after the
+   * geometry jumps (the ResizeObserver fires fit + resize_pty, but the
+   * texture atlas can hold stale glyph metrics across a large size change,
+   * especially in the alternate buffer that Copilot CLI uses). */
+  isFullscreen?: boolean;
   onAutoLink?: (sessionId: string, summary?: string) => void;
   onRestart?: () => void;
 }
@@ -44,6 +51,7 @@ export default function CopilotSessionTile({
   onStatsUpdate,
   onLinkSession,
   workstreamHasOtherLinkedSession,
+  isFullscreen = false,
   onAutoLink,
   onRestart,
 }: Props) {
@@ -383,6 +391,41 @@ export default function CopilotSessionTile({
     const timer = window.setTimeout(focusNow, 50);
     return () => clearTimeout(timer);
   }, [isFocused, focusToken]);
+
+  // Force xterm to remeasure cell metrics + repaint the buffer whenever the
+  // fullscreen state of this tile changes. The geometry jump from a small
+  // grid cell to the full window (or back) leaves the canvas renderer's
+  // texture atlas pointing at stale cell offsets, which manifests as
+  // selection picking the wrong characters and ghost/duplicate rows
+  // appearing on text selection. ResizeObserver already triggers a fit +
+  // resize_pty, but that path doesn't invalidate the atlas; we do it here.
+  useEffect(() => {
+    const term = termRef.current;
+    if (!term) return;
+    // Two-pass: immediate + after a settle delay so the deferred fit lands
+    // with the correct cell metrics before the second refresh.
+    const remeasureAndRepaint = () => {
+      try {
+        const core = (term as unknown as {
+          _core?: { _charSizeService?: { measure?: () => void } };
+        })._core;
+        core?._charSizeService?.measure?.();
+      } catch { /* best effort */ }
+      ptyFitRef.current?.invalidate();
+      ptyFitRef.current?.request();
+      if (term.rows > 0) {
+        try {
+          (term as unknown as {
+            _core?: { _renderService?: { handleResize(c: number, r: number): void } };
+          })._core?._renderService?.handleResize(term.cols, term.rows);
+        } catch { /* best effort */ }
+        term.refresh(0, term.rows - 1);
+      }
+    };
+    remeasureAndRepaint();
+    const t = window.setTimeout(remeasureAndRepaint, 200);
+    return () => window.clearTimeout(t);
+  }, [isFullscreen]);
 
   // Live font-size updates from the global terminal font setting.
   useEffect(() => {

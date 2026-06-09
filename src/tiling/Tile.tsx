@@ -166,6 +166,7 @@ function TileWrapperImpl({
           tileId={tile.id}
           isFocused={isFocused}
           focusToken={focusToken}
+          isFullscreen={isFullscreen}
           onStatusChange={setTermStatus}
         />
       );
@@ -191,6 +192,7 @@ function TileWrapperImpl({
           onStatsUpdate={setSessionStats}
           onLinkSession={onLinkSession ? () => onLinkSession(tile.id) : undefined}
           workstreamHasOtherLinkedSession={workstreamHasOtherLinkedSession}
+          isFullscreen={isFullscreen}
           onAutoLink={onAutoLink ? (sid, summary) => onAutoLink(tile.id, sid, summary) : undefined}
           onRestart={onRestart ? () => onRestart(tile.id) : undefined}
         />
