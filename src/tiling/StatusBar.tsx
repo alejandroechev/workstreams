@@ -135,7 +135,7 @@ export default function StatusBar({
                   : "Pick two tiles for side-by-side (Alt+S)"
             }
           >
-            <ViewColumnsIcon style={{ width: 16, height: 16 }} />
+            <ViewColumnsIcon style={{ width: 13, height: 13, display: "block" }} />
           </button>
         )}
         <button
