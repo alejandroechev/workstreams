@@ -51,6 +51,11 @@ export default function App() {
     selectedForSideBySide: Set<string>;
     /** When set, exactly two tile ids that are rendered visibly side-by-side. */
     sideBySideTileIds: string[] | null;
+    /** When true the per-tile selection checkboxes are visible so the user
+     * can pick two tiles to enter side-by-side. Toggled via the status-bar
+     * button (or Alt+S). Auto-clears once 2 tiles are selected and SBS
+     * activates, and on explicit cancel. */
+    sbsSelectionMode: boolean;
   };
   const EMPTY_STATE: WsState = {
     tiles: [],
@@ -59,6 +64,7 @@ export default function App() {
     fullscreenTileId: null,
     selectedForSideBySide: new Set(),
     sideBySideTileIds: null,
+    sbsSelectionMode: false,
   };
   const [wsStates, setWsStates] = useState<Map<string, WsState>>(new Map());
   // Focus token bumped on every workstream switch so per-tile effects know to
@@ -73,6 +79,7 @@ export default function App() {
   const fullscreenTileId = activeState.fullscreenTileId;
   const selectedForSideBySide = activeState.selectedForSideBySide;
   const sideBySideTileIds = activeState.sideBySideTileIds;
+  const sbsSelectionMode = activeState.sbsSelectionMode;
 
   // Update helpers that act on the active workstream
   const updateActiveState = useCallback((updater: (prev: WsState) => WsState) => {
@@ -101,31 +108,60 @@ export default function App() {
     [updateActiveState],
   );
 
-  /** Toggle a tile's side-by-side selection. Cap is enforced at click time. */
+  /**
+   * Toggle a tile's side-by-side selection. When the user picks the
+   * 2nd tile (so total == 2), immediately commit: enter side-by-side
+   * with those two tiles, in tile-order, and exit selection mode. This
+   * matches the "click → checkboxes appear → pick two → done" flow.
+   */
   const toggleSideBySideSelect = useCallback((tileId: string) => {
     updateActiveState((s) => {
       const next = new Set(s.selectedForSideBySide);
-      if (next.has(tileId)) next.delete(tileId);
-      else next.add(tileId);
+      if (next.has(tileId)) {
+        next.delete(tileId);
+        return { ...s, selectedForSideBySide: next };
+      }
+      next.add(tileId);
+      if (next.size === 2) {
+        // Preserve tile order: pair appears left = earlier-in-tileOrder.
+        const ids = s.tileOrder.filter((id) => next.has(id));
+        if (ids.length === 2) {
+          return {
+            ...s,
+            selectedForSideBySide: new Set(),
+            sideBySideTileIds: ids,
+            sbsSelectionMode: false,
+            fullscreenTileId: null,
+          };
+        }
+      }
       return { ...s, selectedForSideBySide: next };
     });
   }, [updateActiveState]);
 
   /**
-   * Toggle side-by-side mode. If currently active → exit (clear selection).
-   * If exactly two tiles selected → enter with them. Otherwise no-op.
+   * Status-bar SBS button.
+   * - If currently in side-by-side → exit (clear ids + selection).
+   * - Else → toggle selection mode (show/hide per-tile checkboxes).
+   *   Always enabled; the actual SBS entry happens via
+   *   toggleSideBySideSelect when the 2nd tile is checked.
    */
   const toggleSideBySide = useCallback(() => {
     updateActiveState((s) => {
       if (s.sideBySideTileIds) {
-        return { ...s, sideBySideTileIds: null, selectedForSideBySide: new Set() };
+        return {
+          ...s,
+          sideBySideTileIds: null,
+          selectedForSideBySide: new Set(),
+          sbsSelectionMode: false,
+        };
       }
-      if (s.selectedForSideBySide.size !== 2) return s;
-      // Preserve tile order: pair appears left=earlier-in-tileOrder.
-      const ids = s.tileOrder.filter((id) => s.selectedForSideBySide.has(id));
-      if (ids.length !== 2) return s;
-      // Entering SBS exits fullscreen so the two modes never collide.
-      return { ...s, sideBySideTileIds: ids, fullscreenTileId: null };
+      return {
+        ...s,
+        sbsSelectionMode: !s.sbsSelectionMode,
+        // Drop any half-baked selection if the user cancels.
+        selectedForSideBySide: !s.sbsSelectionMode ? s.selectedForSideBySide : new Set(),
+      };
     });
   }, [updateActiveState]);
 
@@ -330,6 +366,7 @@ export default function App() {
           fullscreenTileId: layout.fullscreen_tile_id || null,
           selectedForSideBySide: new Set(),
           sideBySideTileIds: null,
+          sbsSelectionMode: false,
         });
         return next;
       });
@@ -1133,6 +1170,7 @@ export default function App() {
                   fullscreenTileId={st.fullscreenTileId}
                   sideBySideTileIds={st.sideBySideTileIds}
                   selectedForSideBySide={st.selectedForSideBySide}
+                  sbsSelectionMode={st.sbsSelectionMode}
                   isVisible={isActive}
                   onToggleSideBySideSelect={isActive ? toggleSideBySideSelect : () => {}}
                   onFocusTile={isActive ? setFocusedIndex : () => {}}
@@ -1208,6 +1246,7 @@ export default function App() {
           fullscreen={fullscreenTileId !== null}
           sideBySide={sideBySideTileIds !== null}
           canEnterSideBySide={selectedForSideBySide.size === 2}
+          sbsSelectionMode={sbsSelectionMode}
           workstreamName={
             workstreams.find((w) => w.id === activeWsId)?.name || ""
           }

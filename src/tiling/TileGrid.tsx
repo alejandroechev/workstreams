@@ -14,6 +14,8 @@ interface Props {
   sideBySideTileIds: string[] | null;
   /** Tile ids currently selected for entering side-by-side. */
   selectedForSideBySide: Set<string>;
+  /** When true, render the per-tile SBS selection checkboxes. */
+  sbsSelectionMode: boolean;
   /**
    * Whether this TileGrid belongs to the currently-active workstream.
    * Hidden grids skip the heavy listen-callback work (fs-change refreshes,
@@ -43,6 +45,7 @@ function TileGridImpl({
   fullscreenTileId,
   sideBySideTileIds,
   selectedForSideBySide,
+  sbsSelectionMode,
   isVisible,
   onToggleSideBySideSelect,
   onFocusTile,
@@ -125,7 +128,7 @@ function TileGridImpl({
           hidden = false;
           gridArea = `t${i}`;
         }
-        const showSelectable = !fullscreenActive && !sideBySideActive;
+        const showSelectable = sbsSelectionMode && !fullscreenActive && !sideBySideActive;
         return (
           <TileWrapper
             key={tile.id}
