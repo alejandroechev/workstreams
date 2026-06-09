@@ -363,7 +363,10 @@ export default function App() {
           tiles: t,
           tileOrder: order,
           focusedIndex: 0,
-          fullscreenTileId: layout.fullscreen_tile_id || null,
+          // Fullscreen is runtime-only: starts at null on every workstream
+          // load even if the prior session persisted a value. The DB column
+          // is left in place for backwards compatibility but no longer read.
+          fullscreenTileId: null,
           selectedForSideBySide: new Set(),
           sideBySideTileIds: null,
           sbsSelectionMode: false,
@@ -1060,11 +1063,6 @@ export default function App() {
           if (count > 0 && orderedTiles[focusedIndex]) {
             const tid = orderedTiles[focusedIndex]!.id;
             setFullscreenTileId((prev) => (prev === tid ? null : tid));
-            if (activeWsId) {
-              backend.updateLayout(activeWsId, {
-                fullscreen_tile_id: fullscreenTileId === tid ? "" : tid,
-              });
-            }
           }
           break;
         case "toggleSideBySide":
