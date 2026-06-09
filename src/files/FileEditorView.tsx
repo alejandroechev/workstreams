@@ -510,10 +510,38 @@ export function FileEditorView({
     await registry.save(canonicalPath);
   }, [registry, showDangerousPathConfirm]);
 
+  // Toggle stored in a ref so handleKeyDown captures the latest closure
+  // without forcing a re-bind on every emit. The effect above already
+  // computes the toggle for markdown files; mirror it here so the
+  // keyboard shortcut works identically.
+  const toggleMarkdownModeRef = useRef<(() => void) | null>(null);
+  useEffect(() => {
+    const isMd = snapshot !== null && renderMarkdownPreview !== undefined && isMarkdown(snapshot.path);
+    const isForcedEdit = snapshot?.state === "conflicted" || snapshot?.state === "save_blocked";
+    if (!isMd || isForcedEdit) {
+      toggleMarkdownModeRef.current = null;
+      return;
+    }
+    toggleMarkdownModeRef.current = () => setModeState({
+      inputPath: path,
+      mode: effectiveMode === "preview" ? "edit" : "preview",
+    });
+  }, [snapshot, effectiveMode, renderMarkdownPreview, path]);
+
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
       event.preventDefault();
       void saveWithDangerousPathGuard();
+      return;
+    }
+    // VS Code parity: Ctrl+Shift+V toggles markdown preview / edit when the
+    // current file is markdown and the host tile provided a preview renderer.
+    if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === "v") {
+      const toggle = toggleMarkdownModeRef.current;
+      if (toggle) {
+        event.preventDefault();
+        toggle();
+      }
     }
   };
 

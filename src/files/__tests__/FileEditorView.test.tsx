@@ -287,6 +287,33 @@ describe("FileEditorView", () => {
     await waitFor(() => expect(registry.save).toHaveBeenCalledWith("C:\\repo\\src\\file.ts"));
   });
 
+  it("Ctrl+Shift+V toggles preview <-> edit for markdown files", async () => {
+    const harness = createRegistryHarness({
+      initialSnapshot: snapshot({ path: "C:\\repo\\README.md" }),
+    });
+    renderEditor(harness, {
+      renderMarkdownPreview: (content: string) => <article>Preview: {content}</article>,
+    });
+    await screen.findByText("Preview: initial content");
+    expect(fakeEditors).toHaveLength(0);
+
+    // Ctrl+Shift+V → edit mode mounts Monaco.
+    fireEvent.keyDown(screen.getByTestId("file-editor-view"), { key: "v", ctrlKey: true, shiftKey: true });
+    await waitFor(() => expect(fakeEditors).toHaveLength(1));
+
+    // Ctrl+Shift+V again → back to preview.
+    fireEvent.keyDown(screen.getByTestId("file-editor-view"), { key: "v", ctrlKey: true, shiftKey: true });
+    await screen.findByText("Preview: initial content");
+  });
+
+  it("Ctrl+Shift+V is a no-op for non-markdown files", async () => {
+    const { registry } = renderEditor();
+    await screen.findByTestId("file-editor-view");
+    // No throw; save not called either.
+    fireEvent.keyDown(screen.getByTestId("file-editor-view"), { key: "v", ctrlKey: true, shiftKey: true });
+    expect(registry.save).not.toHaveBeenCalled();
+  });
+
   it("opens conflict modal with the current conflict contents", async () => {
     const harness = createRegistryHarness();
     harness.model.value = "mine text";

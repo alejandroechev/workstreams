@@ -108,6 +108,8 @@ All app-level commands are prefixed with **Alt** to avoid conflicts with termina
 | `Alt+F` | Toggle fullscreen for focused tile |
 | `Alt+S` | Toggle side-by-side (when exactly 2 tiles are selected) |
 | `Alt+Arrows` | Navigate between tiles |
+| `Ctrl+S` | Save the focused file editor |
+| `Ctrl+Shift+V` | Toggle markdown preview / edit in the focused file editor (matches VS Code) |
 | `Esc` | Unfocus terminal / close modal |
 
 ## Architecture
