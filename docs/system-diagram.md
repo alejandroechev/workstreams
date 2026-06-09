@@ -31,7 +31,7 @@ graph TB
     end
 
     subgraph Storage["Persistence"]
-        AppDB["copilot-desktop.db<br/>(SQLite — workstreams, tiles, layouts, scrollback)"]
+        AppDB["workstreams.db<br/>(SQLite — workstreams, tiles, layouts, scrollback)"]
         CopilotDB["~/.copilot/session-store.db<br/>(read-only enrichment)"]
     end
 
