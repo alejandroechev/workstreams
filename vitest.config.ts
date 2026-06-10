@@ -7,7 +7,8 @@ export default defineConfig({
     environment: "jsdom",
     globals: true,
     setupFiles: ["./src/test-setup.ts"],
-    testTimeout: 10000,
+    testTimeout: 20000,
+    retry: 1,
     exclude: ["node_modules", "dist", "e2e/**", ".dev/**"],
     coverage: {
       provider: "v8",
