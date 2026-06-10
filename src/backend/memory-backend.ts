@@ -262,14 +262,14 @@ export class MemoryBackend implements Backend {
     }
   }
 
-  async spawnCopilotSession(tileId: string, cwd: string, resumeSessionId?: string | null, rows?: number, cols?: number): Promise<number | null> {
+  async spawnCopilotSession(tileId: string, cwd: string, resumeSessionId?: string | null, rows?: number, cols?: number, command?: string | null): Promise<number | null> {
     this.terminals.add(tileId);
     if (typeof window !== "undefined") {
       const w = window as unknown as { __WS_INVOKE_LOG__?: Array<{ cmd: string; args: Record<string, unknown> }> };
       if (!w.__WS_INVOKE_LOG__) w.__WS_INVOKE_LOG__ = [];
       w.__WS_INVOKE_LOG__.push({
         cmd: "spawn_copilot_session",
-        args: { tileId, cwd, resumeSessionId: resumeSessionId ?? null, rows: rows ?? null, cols: cols ?? null },
+        args: { tileId, cwd, resumeSessionId: resumeSessionId ?? null, rows: rows ?? null, cols: cols ?? null, command: command ?? null },
       });
     }
     return null;

@@ -119,13 +119,14 @@ export class TauriBackend implements Backend {
     });
   }
 
-  async spawnCopilotSession(tileId: string, cwd: string, resumeSessionId?: string | null, rows?: number, cols?: number): Promise<number | null> {
+  async spawnCopilotSession(tileId: string, cwd: string, resumeSessionId?: string | null, rows?: number, cols?: number, command?: string | null): Promise<number | null> {
     const pid = await invoke<number | null>("spawn_copilot_session", {
       tileId,
       cwd,
       resumeSessionId: resumeSessionId ?? null,
       rows: rows ?? 30,
       cols: cols ?? 120,
+      command: command ?? null,
     });
     return pid ?? null;
   }

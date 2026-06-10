@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { hydrateAppSettings } from "./domain/app-settings";
+import { hydrateAppSettings, getAppSettings } from "./domain/app-settings";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { fileBufferRegistry } from "./files/FileBufferRegistry";
@@ -389,7 +389,7 @@ export default function App() {
             const cwd = config.cwd || "C:\\";
             spawnedPtys.current.add(tile.id);
             const sessionId = config.copilot_session_id || config.resume_by_id || null;
-            backend.spawnCopilotSession(tile.id, cwd, sessionId, 30, 120).catch(() => {
+            backend.spawnCopilotSession(tile.id, cwd, sessionId, 30, 120, getAppSettings().copilotCommand).catch(() => {
               spawnedPtys.current.delete(tile.id);
             });
           }
@@ -530,7 +530,7 @@ export default function App() {
 
     // New session — spawn agency.exe and register PID correlation with the poller.
     spawnedPtys.current.add(created.tile.id);
-    backend.spawnCopilotSession(created.tile.id, created.effectiveDirectory, null, 30, 120).catch(() => {
+    backend.spawnCopilotSession(created.tile.id, created.effectiveDirectory, null, 30, 120, getAppSettings().copilotCommand).catch(() => {
       spawnedPtys.current.delete(created.tile.id);
     });
   }, [backend, doCreateWorkstream]);
@@ -650,7 +650,7 @@ export default function App() {
 
     // Spawn agency.exe with --resume
     spawnedPtys.current.add(tile.id);
-    backend.spawnCopilotSession(tile.id, newDir, sessionId, 30, 120).catch(() => {
+    backend.spawnCopilotSession(tile.id, newDir, sessionId, 30, 120, getAppSettings().copilotCommand).catch(() => {
       spawnedPtys.current.delete(tile.id);
     });
   }, [workstreams, backend]);
@@ -771,7 +771,7 @@ export default function App() {
     } else if (tileType === "copilot_session") {
       spawnedPtys.current.add(tile.id);
       // Spawn agency.exe directly — new session, no resume
-      await backend.spawnCopilotSession(tile.id, cwd, null, 30, 120);
+      await backend.spawnCopilotSession(tile.id, cwd, null, 30, 120, getAppSettings().copilotCommand);
     }
 
     setFocusedIndex(tileOrder.length);
@@ -848,7 +848,7 @@ export default function App() {
 
     spawnedPtys.current.add(tile.id);
     // Spawn agency.exe directly with --resume
-    await backend.spawnCopilotSession(tile.id, cwd, session.session_id, 30, 120);
+    await backend.spawnCopilotSession(tile.id, cwd, session.session_id, 30, 120, getAppSettings().copilotCommand);
     setFocusedIndex(tileOrder.length);
   }, [activeWsId, workstreams, tileOrder.length, backend]);
 
@@ -1213,7 +1213,7 @@ export default function App() {
                     try {
                       if (tile.tile_type === "copilot_session") {
                         const sessionId = cfg.copilot_session_id || cfg.resume_by_id || null;
-                        await backend.spawnCopilotSession(tileId, cwd, sessionId, 30, 120);
+                        await backend.spawnCopilotSession(tileId, cwd, sessionId, 30, 120, getAppSettings().copilotCommand);
                       } else if (tile.tile_type === "terminal") {
                         await backend.spawnTerminal(tileId, cwd, cfg.command || undefined, undefined, 30, 120);
                       }
@@ -1338,7 +1338,7 @@ export default function App() {
               }));
               spawnedPtys.current.add(created.tile.id);
               backend
-                .spawnCopilotSession(created.tile.id, created.effectiveDirectory, session.session_id, 30, 120)
+                .spawnCopilotSession(created.tile.id, created.effectiveDirectory, session.session_id, 30, 120, getAppSettings().copilotCommand)
                 .catch(() => spawnedPtys.current.delete(created.tile.id));
               return;
             }
@@ -1363,7 +1363,7 @@ export default function App() {
                 if (!spawnedPtys.current.has(linkingTileId)) {
                   const cwd = cfg.cwd || workstreams.find((w) => w.id === activeWsId)?.directory || "C:\\";
                   spawnedPtys.current.add(linkingTileId);
-                  backend.spawnCopilotSession(linkingTileId, cwd, session.session_id, 30, 120).catch(() => {
+                  backend.spawnCopilotSession(linkingTileId, cwd, session.session_id, 30, 120, getAppSettings().copilotCommand).catch(() => {
                     spawnedPtys.current.delete(linkingTileId);
                   });
                 }
@@ -1385,7 +1385,7 @@ export default function App() {
                 if (!created) return;
                 spawnedPtys.current.add(created.tile.id);
                 backend
-                  .spawnCopilotSession(created.tile.id, created.effectiveDirectory, null, 30, 120)
+                  .spawnCopilotSession(created.tile.id, created.effectiveDirectory, null, 30, 120, getAppSettings().copilotCommand)
                   .catch(() => spawnedPtys.current.delete(created.tile.id));
               })();
               return;

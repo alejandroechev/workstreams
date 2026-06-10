@@ -30,6 +30,7 @@ const SQL_KEYS = {
   textFontSize: "app.font.text",
   markdownFontSize: "app.font.markdown",
   terminalFontSize: "app.font.terminal",
+  copilotCommand: "app.copilot_command",
 } as const;
 
 export interface AppSettings {
@@ -37,6 +38,12 @@ export interface AppSettings {
   textFontSize: number;
   markdownFontSize: number;
   terminalFontSize: number;
+  /** Command line spawned for new Copilot session tiles. Whitespace-split
+   * by the Rust backend into program + args; `--resume=<id>` is appended
+   * automatically for resumed sessions. Default is the internal Microsoft
+   * `agency copilot --yolo` wrapper; can be set to plain `copilot --yolo`
+   * (or any compatible CLI) for external users. */
+  copilotCommand: string;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -44,6 +51,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   textFontSize: 13,
   markdownFontSize: 14,
   terminalFontSize: 14,
+  copilotCommand: "agency copilot --yolo",
 };
 
 export const SCROLL_SPEED_MIN = 0.1;
@@ -99,6 +107,10 @@ export function sanitize(raw: Partial<AppSettings> | null | undefined): AppSetti
       TERMINAL_FONT_SIZE_MAX,
       DEFAULT_SETTINGS.terminalFontSize,
     ),
+    copilotCommand:
+      typeof raw.copilotCommand === "string" && raw.copilotCommand.trim().length > 0
+        ? raw.copilotCommand.trim()
+        : DEFAULT_SETTINGS.copilotCommand,
   };
 }
 
@@ -116,7 +128,13 @@ function parseNumber(raw: string | null): number | undefined {
 
 async function readSqlSettings(): Promise<Partial<AppSettings>> {
   const entries: Partial<AppSettings> = {};
-  const tasks = (Object.keys(SQL_KEYS) as Array<keyof typeof SQL_KEYS>).map(async (k) => {
+  const numberKeys: Array<keyof typeof SQL_KEYS> = [
+    "terminalScrollSpeed",
+    "textFontSize",
+    "markdownFontSize",
+    "terminalFontSize",
+  ];
+  const tasks: Promise<void>[] = numberKeys.map(async (k) => {
     try {
       const raw = await invoke<string | null>("get_setting", { key: SQL_KEYS[k] });
       const n = parseNumber(raw);
@@ -125,11 +143,20 @@ async function readSqlSettings(): Promise<Partial<AppSettings>> {
       /* ignore missing key / not on tauri */
     }
   });
+  // String-typed: copilotCommand.
+  tasks.push((async () => {
+    try {
+      const raw = await invoke<string | null>("get_setting", { key: SQL_KEYS.copilotCommand });
+      if (typeof raw === "string" && raw.trim().length > 0) {
+        entries.copilotCommand = raw;
+      }
+    } catch { /* ignore */ }
+  })());
   await Promise.all(tasks);
   return entries;
 }
 
-async function writeSqlSetting(key: keyof typeof SQL_KEYS, value: number): Promise<void> {
+async function writeSqlSetting(key: keyof typeof SQL_KEYS, value: number | string): Promise<void> {
   try {
     await invoke("set_setting", { key: SQL_KEYS[key], value: String(value) });
   } catch {
@@ -215,13 +242,15 @@ export function setAppSettings(next: Partial<AppSettings>): AppSettings {
   if (merged.textFontSize !== cached.textFontSize) changed.push("textFontSize");
   if (merged.markdownFontSize !== cached.markdownFontSize) changed.push("markdownFontSize");
   if (merged.terminalFontSize !== cached.terminalFontSize) changed.push("terminalFontSize");
+  if (merged.copilotCommand !== cached.copilotCommand) changed.push("copilotCommand");
   cached = merged;
   for (const k of changed) {
-    const v: number =
+    const v: number | string =
       k === "terminalScrollSpeed" ? merged.terminalScrollSpeed
       : k === "textFontSize" ? merged.textFontSize
       : k === "markdownFontSize" ? merged.markdownFontSize
-      : merged.terminalFontSize;
+      : k === "terminalFontSize" ? merged.terminalFontSize
+      : merged.copilotCommand;
     void writeSqlSetting(k, v);
   }
   for (const l of listeners) {

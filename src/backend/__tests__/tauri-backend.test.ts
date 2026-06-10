@@ -180,7 +180,16 @@ describe("TauriBackend", () => {
       resumeSessionId: "sid-abc",
       rows: 24,
       cols: 80,
+      command: null,
     });
+  });
+
+  it("spawnCopilotSession forwards a custom command template", async () => {
+    invoke.mockResolvedValueOnce(7);
+    await backend.spawnCopilotSession("t1", "/cwd", null, 30, 120, "copilot --yolo");
+    expect(invoke).toHaveBeenCalledWith("spawn_copilot_session", expect.objectContaining({
+      command: "copilot --yolo",
+    }));
   });
 
   it("spawnCopilotSession defaults resumeSessionId to null and pid to null", async () => {

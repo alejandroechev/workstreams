@@ -75,6 +75,15 @@ describe("app-settings sanitize", () => {
     expect(sanitize({ terminalFontSize: 7 }).terminalFontSize).toBe(TERMINAL_FONT_SIZE_MIN);
     expect(sanitize({ terminalFontSize: 99 }).terminalFontSize).toBe(TERMINAL_FONT_SIZE_MAX);
   });
+
+  it("copilotCommand: keeps trimmed string, falls back on empty / non-string", () => {
+    expect(sanitize({ copilotCommand: "  copilot --yolo  " }).copilotCommand).toBe("copilot --yolo");
+    expect(sanitize({ copilotCommand: "" }).copilotCommand).toBe(DEFAULT_SETTINGS.copilotCommand);
+    expect(sanitize({ copilotCommand: "   " }).copilotCommand).toBe(DEFAULT_SETTINGS.copilotCommand);
+    expect(sanitize({ copilotCommand: 42 as unknown as string }).copilotCommand).toBe(
+      DEFAULT_SETTINGS.copilotCommand,
+    );
+  });
 });
 
 describe("app-settings hydration", () => {
@@ -189,6 +198,27 @@ describe("app-settings mutate", () => {
     unsub();
     setAppSettings({ terminalFontSize: 18 });
     expect(events).toEqual([16]);
+  });
+
+  it("setAppSettings persists copilotCommand changes to SQLite", async () => {
+    setAppSettings({ copilotCommand: "copilot --yolo" });
+    await Promise.resolve();
+    expect(getAppSettings().copilotCommand).toBe("copilot --yolo");
+    expect(sqlStore.get("app.copilot_command")).toBe("copilot --yolo");
+  });
+});
+
+describe("app-settings copilotCommand hydration", () => {
+  it("hydrate reads app.copilot_command from SQLite", async () => {
+    sqlStore.set("app.copilot_command", "copilot --yolo");
+    const result = await hydrateAppSettings();
+    expect(result.copilotCommand).toBe("copilot --yolo");
+  });
+
+  it("hydrate ignores blank/whitespace-only copilot_command rows", async () => {
+    sqlStore.set("app.copilot_command", "   ");
+    const result = await hydrateAppSettings();
+    expect(result.copilotCommand).toBe(DEFAULT_SETTINGS.copilotCommand);
   });
 });
 

@@ -210,6 +210,45 @@ export default function SettingsModal({ open, onClose }: Props) {
           <div style={{ height: 1, background: "#313244", margin: "18px 0 14px" }} />
 
           <div style={{ fontSize: 11, color: "#89b4fa", marginBottom: 8, textTransform: "uppercase", letterSpacing: 0.5 }}>
+            Copilot CLI
+          </div>
+          <label htmlFor="copilot-command" style={{ display: "block", marginBottom: 4 }}>
+            Copilot command
+            {localValues.copilotCommand !== settings.copilotCommand ? (
+              <span style={{ color: "#f9e2af", marginLeft: 6, fontSize: 11 }}>(pending…)</span>
+            ) : null}
+          </label>
+          <input
+            id="copilot-command"
+            data-testid="settings-copilot-command"
+            type="text"
+            value={localValues.copilotCommand}
+            onChange={(e) => update({ copilotCommand: e.target.value })}
+            spellCheck={false}
+            style={{
+              width: "100%",
+              background: "#11111b",
+              color: "#cdd6f4",
+              border: "1px solid #313244",
+              borderRadius: 3,
+              padding: "4px 6px",
+              fontFamily: "monospace",
+              fontSize: 12,
+              boxSizing: "border-box",
+            }}
+          />
+          <div style={{ marginTop: 4, fontSize: 11, color: "#6c7086" }}>
+            Command line spawned for new Copilot session tiles. Default is
+            the internal <code>agency copilot --yolo</code> wrapper; set to
+            <code> copilot --yolo</code> (or any compatible CLI) to use the
+            public GitHub Copilot CLI directly. The <code>--resume=&lt;id&gt;</code>
+            flag is appended automatically when resuming. Takes effect on
+            the next session tile you spawn.
+          </div>
+
+          <div style={{ height: 1, background: "#313244", margin: "18px 0 14px" }} />
+
+          <div style={{ fontSize: 11, color: "#89b4fa", marginBottom: 8, textTransform: "uppercase", letterSpacing: 0.5 }}>
             App behavior
           </div>
           <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>

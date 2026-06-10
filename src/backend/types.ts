@@ -47,12 +47,17 @@ export interface Backend {
   // PTY
   spawnTerminal(tileId: string, cwd: string, command?: string, args?: string[], rows?: number, cols?: number): Promise<void>;
   /**
-   * Spawn agency.exe for a copilot session and register a pending PID
+   * Spawn a copilot session CLI for a tile and register a pending PID
    * correlation with the backend session poller so it can identify the
    * resulting session-state directory without fuzzy matching.
+   *
+   * `command` is the full command line (e.g. `agency copilot --yolo` or
+   * `copilot --yolo`) — whitespace-split into program + args on the
+   * Rust side. If omitted, the backend uses its compiled-in default.
+   *
    * Returns the child PID (or null on memory backend).
    */
-  spawnCopilotSession(tileId: string, cwd: string, resumeSessionId?: string | null, rows?: number, cols?: number): Promise<number | null>;
+  spawnCopilotSession(tileId: string, cwd: string, resumeSessionId?: string | null, rows?: number, cols?: number, command?: string | null): Promise<number | null>;
   writeToTerminal(tileId: string, data: string): Promise<void>;
   resizeTerminal(tileId: string, rows: number, cols: number): Promise<void>;
   closeTerminal(tileId: string): Promise<void>;
