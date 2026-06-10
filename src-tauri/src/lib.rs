@@ -703,12 +703,89 @@ fn update_layout(
 /// Looks up the workstream id from the tile via the DB. Returns None if the
 /// tile is not found — terminals can still spawn, the env var just won't
 /// be present (matches dev behavior before this was added).
+/// Builds the env-var map passed to a PTY child:
+///   - WORKSTREAMS_ACTIVE_WS / _TILE if the tile is known
+///   - prepends the git-no-verify shim dir to PATH when
+///     `enable_no_verify_block` is true (so `git --no-verify` in the
+///     session is blocked with a clear message rather than silently
+///     bypassing hooks)
+///
+/// Always returns Some(map) so the shim PATH prepend is applied even when
+/// the tile isn't yet registered in the DB.
 fn build_workstream_env(
+    app: &AppHandle,
     state: &State<'_, AppState>,
     tile_id: &str,
+    enable_no_verify_block: bool,
 ) -> Option<std::collections::HashMap<String, String>> {
-    let db = state.db.lock().ok()?;
-    workstream_env_from_db(&db, tile_id)
+    let mut env = std::collections::HashMap::new();
+    if let Ok(db) = state.db.lock() {
+        if let Some(ws) = workstream_env_from_db(&db, tile_id) {
+            env.extend(ws);
+        }
+    }
+    let shim_dir = if enable_no_verify_block {
+        resolve_shim_dir(app)
+    } else {
+        None
+    };
+    apply_no_verify_env(
+        &mut env,
+        enable_no_verify_block,
+        shim_dir.as_deref(),
+        std::env::var("PATH").ok().as_deref(),
+    );
+    Some(env)
+}
+
+/// Pure helper: mutates `env` according to the no-verify settings.
+///   - If blocking is enabled AND a shim dir is provided: prepend it to PATH.
+///   - If blocking is disabled: set GIT_NOVERIFY_BYPASS=1 (belt-and-suspenders
+///     in case the shim ends up on PATH globally somehow).
+fn apply_no_verify_env(
+    env: &mut std::collections::HashMap<String, String>,
+    enable_no_verify_block: bool,
+    shim_dir: Option<&std::path::Path>,
+    current_path: Option<&str>,
+) {
+    if enable_no_verify_block {
+        if let Some(dir) = shim_dir {
+            let sep = if cfg!(windows) { ';' } else { ':' };
+            let new_path = match current_path {
+                Some(p) if !p.is_empty() => format!("{}{}{}", dir.display(), sep, p),
+                _ => dir.display().to_string(),
+            };
+            env.insert("PATH".to_string(), new_path);
+        }
+    } else {
+        env.insert("GIT_NOVERIFY_BYPASS".to_string(), "1".to_string());
+    }
+}
+
+/// Resolve the bundled shim directory via Tauri's resource path.
+/// Returns None (and prints a diagnostic to stderr) if the shim file is
+/// not present at the expected resource location.
+fn resolve_shim_dir(app: &AppHandle) -> Option<std::path::PathBuf> {
+    let shim_exe = match app
+        .path()
+        .resolve("shim/git.exe", tauri::path::BaseDirectory::Resource)
+    {
+        Ok(p) if p.is_file() => p,
+        Ok(p) => {
+            eprintln!(
+                "[git-shim] resolved path is not a file: {} — --no-verify blocking disabled for this session",
+                p.display()
+            );
+            return None;
+        }
+        Err(e) => {
+            eprintln!(
+                "[git-shim] could not resolve shim/git.exe in resources: {e} — --no-verify blocking disabled for this session"
+            );
+            return None;
+        }
+    };
+    shim_exe.parent().map(|p| p.to_path_buf())
 }
 
 /// Pure helper: builds the env-var map from a DB connection + tile id.
@@ -741,8 +818,14 @@ fn spawn_terminal(
     args: Option<Vec<String>>,
     rows: Option<u16>,
     cols: Option<u16>,
+    enable_no_verify_block: Option<bool>,
 ) -> Result<Option<u32>, String> {
-    let env = build_workstream_env(&state, &tile_id);
+    let env = build_workstream_env(
+        &app,
+        &state,
+        &tile_id,
+        enable_no_verify_block.unwrap_or(true),
+    );
     state.pty.spawn(
         &app,
         &tile_id,
@@ -776,6 +859,7 @@ fn spawn_copilot_session(
     rows: Option<u16>,
     cols: Option<u16>,
     command: Option<String>,
+    enable_no_verify_block: Option<bool>,
 ) -> Result<Option<u32>, String> {
     let template = command
         .as_deref()
@@ -791,7 +875,12 @@ fn spawn_copilot_session(
     if let Some(sid) = &resume_session_id {
         args.push(format!("--resume={sid}"));
     }
-    let env = build_workstream_env(&state, &tile_id);
+    let env = build_workstream_env(
+        &app,
+        &state,
+        &tile_id,
+        enable_no_verify_block.unwrap_or(true),
+    );
     let pid = state.pty.spawn(
         &app,
         &tile_id,
@@ -3779,6 +3868,60 @@ Body here.
     fn workstream_env_returns_none_when_tiles_table_missing() {
         let conn = fresh_mem_db();
         assert!(workstream_env_from_db(&conn, "tile-1").is_none());
+    }
+
+    // ── apply_no_verify_env (pure logic, no AppHandle needed) ──────────
+
+    #[test]
+    fn apply_no_verify_prepends_shim_dir_when_enabled() {
+        let mut env = std::collections::HashMap::new();
+        let shim = std::path::PathBuf::from("C:\\ws\\shim");
+        apply_no_verify_env(&mut env, true, Some(&shim), Some("C:\\Windows;C:\\Tools"));
+        let sep = if cfg!(windows) { ';' } else { ':' };
+        let expected = format!("C:\\ws\\shim{sep}C:\\Windows;C:\\Tools");
+        assert_eq!(env.get("PATH"), Some(&expected));
+        assert!(!env.contains_key("GIT_NOVERIFY_BYPASS"));
+    }
+
+    #[test]
+    fn apply_no_verify_uses_shim_only_when_path_empty() {
+        let mut env = std::collections::HashMap::new();
+        let shim = std::path::PathBuf::from("/usr/local/ws/shim");
+        apply_no_verify_env(&mut env, true, Some(&shim), Some(""));
+        assert_eq!(env.get("PATH"), Some(&"/usr/local/ws/shim".to_string()));
+    }
+
+    #[test]
+    fn apply_no_verify_uses_shim_only_when_path_missing() {
+        let mut env = std::collections::HashMap::new();
+        let shim = std::path::PathBuf::from("/x");
+        apply_no_verify_env(&mut env, true, Some(&shim), None);
+        assert_eq!(env.get("PATH"), Some(&"/x".to_string()));
+    }
+
+    #[test]
+    fn apply_no_verify_noops_when_enabled_but_no_shim_dir() {
+        // Resource resolution failure: don't mangle PATH, don't set bypass.
+        let mut env = std::collections::HashMap::new();
+        apply_no_verify_env(&mut env, true, None, Some("C:\\Windows"));
+        assert!(env.is_empty(), "env should remain empty; got {env:?}");
+    }
+
+    #[test]
+    fn apply_no_verify_sets_bypass_when_disabled() {
+        let mut env = std::collections::HashMap::new();
+        let shim = std::path::PathBuf::from("/x");
+        apply_no_verify_env(&mut env, false, Some(&shim), Some("PATH"));
+        assert_eq!(env.get("GIT_NOVERIFY_BYPASS"), Some(&"1".to_string()));
+        // PATH should NOT be modified when blocking is disabled.
+        assert!(!env.contains_key("PATH"));
+    }
+
+    #[test]
+    fn apply_no_verify_disabled_sets_bypass_even_without_shim_dir() {
+        let mut env = std::collections::HashMap::new();
+        apply_no_verify_env(&mut env, false, None, Some("PATH"));
+        assert_eq!(env.get("GIT_NOVERIFY_BYPASS"), Some(&"1".to_string()));
     }
 
     #[test]

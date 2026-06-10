@@ -5,6 +5,9 @@ description = "Project-aware workstream manager with tiling compositor for Copil
 authors = ["alejandroe"]
 edition = "2021"
 
+[workspace]
+members = [".", "git-no-verify"]
+
 [lib]
 name = "workstreams_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]

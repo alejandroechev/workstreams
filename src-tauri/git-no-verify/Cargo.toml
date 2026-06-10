@@ -1,0 +1,13 @@
+[package]
+name = "git-no-verify"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "git-no-verify"
+path = "src/main.rs"
+
+[dependencies]
+
+[dev-dependencies]
+tempfile = "3"
