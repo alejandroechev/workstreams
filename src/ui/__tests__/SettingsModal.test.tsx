@@ -13,6 +13,7 @@ import {
   getAppSettings,
   setAppSettings,
 } from "../../domain/app-settings";
+import { _setFeatureFlagOverrideForTests } from "../../domain/feature-flags";
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -22,6 +23,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
+  _setFeatureFlagOverrideForTests(null);
 });
 
 import { afterEach } from "vitest";
@@ -90,7 +92,14 @@ describe("SettingsModal", () => {
     expect(closed).toBe(true);
   });
 
-  it("no-verify blocking checkbox reflects current setting and toggles it", () => {
+  it("no-verify blocking checkbox is hidden when feature flag is off", () => {
+    _setFeatureFlagOverrideForTests(false);
+    render(<SettingsModal open onClose={() => {}} />);
+    expect(screen.queryByTestId("settings-no-verify-blocking")).toBeNull();
+  });
+
+  it("no-verify blocking checkbox reflects current setting and toggles it (flag on)", () => {
+    _setFeatureFlagOverrideForTests(true);
     render(<SettingsModal open onClose={() => {}} />);
     const cb = screen.getByTestId("settings-no-verify-blocking") as HTMLInputElement;
     expect(cb.checked).toBe(true); // default

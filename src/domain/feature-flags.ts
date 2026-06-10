@@ -12,9 +12,9 @@
  * we keep one source of truth.
  */
 
-export type FeatureId = "diff-review" | "plan-tile";
+export type FeatureId = "diff-review" | "plan-tile" | "no-verify-blocking";
 
-export const FEATURE_IDS: readonly FeatureId[] = ["diff-review", "plan-tile"] as const;
+export const FEATURE_IDS: readonly FeatureId[] = ["diff-review", "plan-tile", "no-verify-blocking"] as const;
 
 interface FeatureDescriptor {
   id: FeatureId;
@@ -36,6 +36,12 @@ const FEATURES: Record<FeatureId, FeatureDescriptor> = {
     label: "Plan",
     requires:
       "Requires the Copilot CLI plan/todo subsystem with the discipline-guardian extension. Not enabled in this build.",
+  },
+  "no-verify-blocking": {
+    id: "no-verify-blocking",
+    label: "Block git --no-verify in sessions",
+    requires:
+      "Requires the bundled git-no-verify shim that intercepts --no-verify in PTY sessions. Not enabled in this build.",
   },
 };
 

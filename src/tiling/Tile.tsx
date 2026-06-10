@@ -146,7 +146,8 @@ function TileWrapperImpl({
         command: config.command || null,
         rows: 30,
         cols: 120,
-        enableNoVerifyBlock: getAppSettings().noVerifyBlockingEnabled,
+        enableNoVerifyBlock:
+          isFeatureEnabled("no-verify-blocking") && getAppSettings().noVerifyBlockingEnabled,
       });
       setTermStatus("running");
     } catch {

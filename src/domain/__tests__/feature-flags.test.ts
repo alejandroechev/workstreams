@@ -12,6 +12,7 @@ describe("feature-flags", () => {
   it("exposes a stable id list", () => {
     expect(FEATURE_IDS).toContain("diff-review");
     expect(FEATURE_IDS).toContain("plan-tile");
+    expect(FEATURE_IDS).toContain("no-verify-blocking");
   });
 
   it("returns a stable boolean for every flag at module load (build-time gated)", () => {
@@ -29,11 +30,13 @@ describe("feature-flags", () => {
     _setFeatureFlagOverrideForTests(true);
     expect(isFeatureEnabled("diff-review")).toBe(true);
     expect(isFeatureEnabled("plan-tile")).toBe(true);
+    expect(isFeatureEnabled("no-verify-blocking")).toBe(true);
   });
 
   it("test override flips every flag to false explicitly", () => {
     _setFeatureFlagOverrideForTests(false);
     expect(isFeatureEnabled("diff-review")).toBe(false);
+    expect(isFeatureEnabled("no-verify-blocking")).toBe(false);
   });
 
   it("featureDescriptor returns label + requires for every id", () => {

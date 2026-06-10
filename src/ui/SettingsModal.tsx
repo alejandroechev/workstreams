@@ -17,6 +17,7 @@ import {
   type AppSettings,
 } from "../domain/app-settings";
 import { debounce } from "../domain/debounce";
+import { isFeatureEnabled } from "../domain/feature-flags";
 
 interface Props {
   open: boolean;
@@ -274,23 +275,27 @@ export default function SettingsModal({ open, onClose }: Props) {
             always trigger a separate prompt regardless of this setting.
           </div>
 
-          <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 14, marginBottom: 4 }}>
-            <input
-              type="checkbox"
-              data-testid="settings-no-verify-blocking"
-              checked={localValues.noVerifyBlockingEnabled}
-              onChange={(e) => update({ noVerifyBlockingEnabled: e.target.checked })}
-            />
-            <span>Block <code>git --no-verify</code> in agent sessions</span>
-          </label>
-          <div style={{ marginTop: 4, fontSize: 11, color: "#6c7086" }}>
-            When on (default), terminals and Copilot sessions launched from
-            Workstreams refuse <code>git commit --no-verify</code> /
-            <code>git push --no-verify</code> and surface a message asking
-            the agent to consult you before bypassing pre-commit /
-            pre-push hooks. Takes effect on the next session tile you
-            spawn.
-          </div>
+          {isFeatureEnabled("no-verify-blocking") ? (
+            <>
+              <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 14, marginBottom: 4 }}>
+                <input
+                  type="checkbox"
+                  data-testid="settings-no-verify-blocking"
+                  checked={localValues.noVerifyBlockingEnabled}
+                  onChange={(e) => update({ noVerifyBlockingEnabled: e.target.checked })}
+                />
+                <span>Block <code>git --no-verify</code> in agent sessions</span>
+              </label>
+              <div style={{ marginTop: 4, fontSize: 11, color: "#6c7086" }}>
+                When on (default), terminals and Copilot sessions launched from
+                Workstreams refuse <code>git commit --no-verify</code> /
+                <code>git push --no-verify</code> and surface a message asking
+                the agent to consult you before bypassing pre-commit /
+                pre-push hooks. Takes effect on the next session tile you
+                spawn.
+              </div>
+            </>
+          ) : null}
 
           <div style={{ marginTop: 14, textAlign: "right" }}>
             <button
