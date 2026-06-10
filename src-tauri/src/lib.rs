@@ -766,6 +766,7 @@ fn spawn_terminal(
 ///
 /// If `resume_session_id` is Some, the CLI is invoked with `--resume=<id>`.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 fn spawn_copilot_session(
     app: AppHandle,
     state: State<'_, AppState>,
