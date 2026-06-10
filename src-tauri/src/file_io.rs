@@ -221,9 +221,14 @@ pub fn read_text_file_with(
 
     let bytes = provider.read(path).map_err(fs_error_to_string)?;
     let hash_hex = hash_bytes_hex(&bytes);
+    // Only NUL bytes in the first sniff window mean "definitely binary".
+    // Files with stray non-UTF-8 bytes (e.g. plain text saved as
+    // Windows-1252 with a smart quote or em-dash) get decoded lossily
+    // below — replacement chars are preferable to refusing to open a
+    // plainly textual file.
     let sniff_len = bytes.len().min(BINARY_SNIFF_BYTES);
     let sniff = &bytes[..sniff_len];
-    let sniffed_binary = sniff.contains(&0) || std::str::from_utf8(sniff).is_err();
+    let sniffed_binary = sniff.contains(&0);
     if sniffed_binary {
         return Ok(ReadTextFileResult {
             content: String::new(),
@@ -236,7 +241,10 @@ pub fn read_text_file_with(
         });
     }
 
-    let content = String::from_utf8(bytes).map_err(|_| "binary".to_string())?;
+    // Lossy decode so callers (Monaco editor) always receive a valid
+    // String; invalid byte sequences become U+FFFD () the way VS Code,
+    // Notepad++, and most other editors render them.
+    let content = String::from_utf8_lossy(&bytes).into_owned();
     let line_ending = detect_line_ending(&content);
     let has_trailing_newline = content.ends_with('\n');
 
@@ -759,13 +767,19 @@ mod tests {
     }
 
     #[test]
-    fn read_text_file_sniffs_invalid_utf8_as_binary() {
+    fn read_text_file_decodes_invalid_utf8_lossily_not_as_binary() {
+        // Windows-1252 em-dash byte (0x97) embedded in otherwise ASCII text.
+        // Should be decoded with U+FFFD replacement chars, not flagged as
+        // binary — otherwise files saved with the wrong code page become
+        // un-viewable in the editor.
         let fs = InMemoryFileSystemProvider::new();
-        let path = PathBuf::from("C:\\repo\\bin.dat");
-        fs.write_atomic(&path, &[0xff, 0xfe, b'a']).unwrap();
+        let path = PathBuf::from("C:\\repo\\mojibake.md");
+        fs.write_atomic(&path, b"hello \x97 world").unwrap();
         let result = read_text_file_with(&fs, &path).unwrap();
-        assert!(result.sniffed_binary);
-        assert_eq!(result.content, "");
+        assert!(!result.sniffed_binary);
+        assert!(result.content.starts_with("hello "));
+        assert!(result.content.ends_with(" world"));
+        assert!(result.content.contains('\u{FFFD}'));
     }
 
     #[test]

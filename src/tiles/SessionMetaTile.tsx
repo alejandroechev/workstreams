@@ -1,5 +1,5 @@
 // @test-skip: pre-existing tile shell, domain logic tested separately
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { MarkdownView } from "../ui/MarkdownView";
@@ -9,10 +9,12 @@ import { makeAudioBlobUrl } from "../domain/file-types";
 import { FileEditorView } from "../files/FileEditorView";
 import type { BufferSnapshot } from "../files/FileBufferRegistry";
 import AudioPlayer from "./AudioPlayer";
-import { dispatchAddToWorkbench } from "../domain/workbench-events";
-import { writeTextToClipboard } from "../domain/clipboard";
-import { openPath } from "@tauri-apps/plugin-opener";
+import { parseViewState } from "../domain/tile-view-state";
+import { useTileViewStatePersist } from "../domain/useTileViewStatePersist";
+import { debounce } from "../domain/debounce";
 import type { CopilotConfigItem } from "../domain/types";
+import { SqliteTableView, sessionSqliteOps, type SqliteTable } from "../ui/components/SqliteTableView";
+import { FileContextMenu } from "../ui/components/FileContextMenu";
 import {
   SparklesIcon,
   PuzzlePieceIcon,
@@ -26,14 +28,6 @@ import {
   DocumentIcon,
   FolderIcon,
   TableCellsIcon,
-  BoltIcon,
-  ArrowLeftIcon,
-  ClipboardDocumentListIcon,
-  ClipboardDocumentIcon,
-  FlagIcon,
-  SignalIcon,
-  BeakerIcon,
-  FolderOpenIcon,
   ChevronUpIcon,
   EyeIcon,
   PencilSquareIcon,
@@ -45,24 +39,15 @@ interface Props {
   workstreamDir?: string;
   linkedSessionIds?: string[];
   workstreamId?: string;
+  workstreamVisible?: boolean;
+  configJson?: string;
+  onConfigChange?: (configJson: string) => void;
 }
 
 interface CategoryMeta {
   label: string;
   icon: React.ComponentType<React.SVGProps<SVGSVGElement>>;
   color: string;
-}
-
-interface SessionFileEntry {
-  file_path: string;
-  tool_name: string | null;
-  turn_index: number | null;
-}
-
-interface GitHookEntry {
-  name: string;
-  path: string;
-  content_preview: string;
 }
 
 const CATEGORY_META: Record<string, CategoryMeta> = {
@@ -72,38 +57,14 @@ const CATEGORY_META: Record<string, CategoryMeta> = {
   mcp_server: { label: "MCP Servers", icon: ServerIcon, color: "#cba6f7" },
   instruction: { label: "Instructions", icon: DocumentTextIcon, color: "#fab387" },
   plugin: { label: "Plugins", icon: CubeIcon, color: "#94e2d5" },
-  git_hook: { label: "Git Hooks", icon: BoltIcon, color: "#f5c2e7" },
 };
 
-const CATEGORY_ORDER = ["skill", "extension", "agent", "mcp_server", "instruction", "git_hook"];
+const CATEGORY_ORDER = ["skill", "extension", "agent", "mcp_server", "instruction"];
 const AUDIO_EXTS = new Set(["wav", "mp3", "ogg", "flac"]);
 const IMAGE_EXTS = new Set(["png", "jpg", "jpeg", "gif", "webp", "bmp", "ico"]);
 const BINARY_EXTS = new Set(["mp4", "mov", "webm", "pdf", "zip", "gz", "tar", "7z", "exe", "dll", "so", "dylib"]);
 
-type TabId = "config" | "files" | "database" | "checkpoints" | "events";
-
-interface SessionCheckpoint {
-  number: number;
-  title: string;
-  fileName: string;
-}
-
-interface SessionEvent {
-  type: string;
-  timestamp: string;
-  tool?: string;
-  summary?: string;
-}
-
-interface SessionDbTable {
-  name: string;
-  row_count: number;
-}
-
-interface SessionDbTableData {
-  columns: string[];
-  rows: unknown[][];
-}
+type TabId = "config" | "state" | "database";
 
 const SKIP_PREFIXES = [".git/", ".git\\", "node_modules/", "node_modules\\"];
 const SKIP_PATTERNS = [/[/\\]\.git[/\\]/, /[/\\]node_modules[/\\]/];
@@ -119,30 +80,26 @@ function isRelevantFile(filePath: string): boolean {
   return true;
 }
 
-export default function SessionMetaTile({ tileId: _tileId, isFocused, workstreamDir, linkedSessionIds, workstreamId }: Props) {
+export default function SessionMetaTile({ tileId: _tileId, isFocused, workstreamDir, linkedSessionIds, workstreamId, workstreamVisible = true, configJson, onConfigChange }: Props) {
   const backend = useBackend();
   const [items, setItems] = useState<CopilotConfigItem[]>([]);
-  const [files, setFiles] = useState<SessionFileEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [activeTab, setActiveTab] = useState<TabId>("config");
   // Config content viewer
   const [viewingContent, setViewingContent] = useState<{ name: string; content: string } | null>(null);
-  // File viewer
-  const [viewingFile, setViewingFile] = useState<{ path: string; content: string } | null>(null);
-  // Database explorer
-  const [dbTables, setDbTables] = useState<SessionDbTable[]>([]);
+  // Database explorer: counts shown in the tab label come from a lightweight
+  // list call; the table/grid UI is owned by SqliteTableView via sessionSqliteOps.
+  const [dbTables, setDbTables] = useState<SqliteTable[]>([]);
   const [selectedTable, setSelectedTable] = useState<string | null>(null);
-  const [tableData, setTableData] = useState<SessionDbTableData | null>(null);
   const [dbLoading, setDbLoading] = useState(false);
-  // Plan content removed: see PlanTile.
-  // Checkpoints
-  const [checkpoints, setCheckpoints] = useState<SessionCheckpoint[]>([]);
-  const [checkpointContent, setCheckpointContent] = useState<{ title: string; content: string } | null>(null);
-  // Events
-  const [events, setEvents] = useState<SessionEvent[]>([]);
-  const [eventsLoading, setEventsLoading] = useState(false);
+  // Session State browser
+  const [stateRootDir, setStateRootDir] = useState<string | null>(null);
+  const [stateCurrentDir, setStateCurrentDir] = useState<string | null>(null);
+  const [stateEntries, setStateEntries] = useState<Array<{ name: string; is_dir: boolean; full_path: string }>>([]);
+  const [stateLoading, setStateLoading] = useState(false);
+  const [stateError, setStateError] = useState<string | null>(null);
   // Content viewer (for configs and files). For audio entries we store the
   // Blob URL + raw bytes so <AudioPlayer> can drive playback + waveform.
   const [viewContent, setViewContent] = useState<{
@@ -167,146 +124,148 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
     return () => { if (prev) URL.revokeObjectURL(prev); };
   }, [viewContent?.audioUrl]);
 
-  const loadConfig = useCallback(async () => {
-    setLoading(true);
-    setError(null);
+  const loadConfig = useCallback(async (silent = false) => {
+    if (!silent) {
+      setLoading(true);
+      setError(null);
+    }
     try {
       const result = await backend.discoverCopilotConfig(workstreamDir);
-      // Also load git hooks if we have a workstream directory
-      if (workstreamDir) {
-        try {
-          const hooks = await invoke<GitHookEntry[]>("list_git_hooks", { directory: workstreamDir });
-          const hookItems: CopilotConfigItem[] = hooks.map((h) => ({
-            name: h.name,
-            category: "git_hook",
-            source: "repo",
-            path: h.path,
-            description: h.content_preview,
-          }));
-          setItems([...result, ...hookItems]);
-        } catch {
-          setItems(result);
-        }
-      } else {
-        setItems(result);
-      }
+      // Equality-check via JSON: payload is small (handful of items per
+      // category) and stable across noisy session-state writes, so most
+      // watcher-driven refreshes will be no-ops at the render level.
+      setItems((prev) => JSON.stringify(prev) === JSON.stringify(result) ? prev : result);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      if (!silent) setError(e instanceof Error ? e.message : String(e));
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, [backend, workstreamDir]);
 
-  const loadSessionData = useCallback(async () => {
-    if (!linkedSessionIds || linkedSessionIds.length === 0) {
-      setFiles([]);
-      return;
-    }
-    const allFiles: SessionFileEntry[] = [];
+  // Stable string key for the linked-session list. Using the array directly
+  // as a dep would trigger every parent re-render (App.tsx recomputes the
+  // array on many state changes), causing the State-tab reset effect below
+  // to fight against in-flight loadStateDir() calls and flicker between
+  // "shows entries" and "empty directory".
+  const linkedSessionsKey = (linkedSessionIds ?? []).join("|");
+
+  // Resolve the absolute path of the session-state folder for the first
+  // linked session. Cached in stateRootDir.
+  const resolveStateRoot = useCallback(async (): Promise<string | null> => {
+    if (!linkedSessionIds || linkedSessionIds.length === 0) return null;
     for (const sid of linkedSessionIds) {
       try {
-        const f = await invoke<SessionFileEntry[]>("query_session_files", { sessionId: sid });
-        allFiles.push(...f);
-      } catch { /* ignore */ }
+        const dir = await invoke<string>("session_state_dir", { sessionId: sid });
+        return dir;
+      } catch { /* try next */ }
     }
-    setFiles(allFiles);
-  }, [linkedSessionIds]);
+    return null;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [linkedSessionsKey]);
 
-  const loadDbTables = useCallback(async () => {
+  // Use a ref so loadStateDir's identity doesn't change every time the
+  // resolved root is set — otherwise the file-watcher effect (which has
+  // loadStateDir as a dep) would tear down + re-install its listener on
+  // every successful load, racing with in-flight calls.
+  const stateRootRef = useRef<string | null>(null);
+  useEffect(() => { stateRootRef.current = stateRootDir; }, [stateRootDir]);
+
+  const loadStateDir = useCallback(async (subdir: string | null, silent = false) => {
+    if (!silent) {
+      setStateLoading(true);
+      setStateError(null);
+    }
+    try {
+      const root = stateRootRef.current ?? await resolveStateRoot();
+      if (!root) {
+        setStateRootDir(null);
+        setStateEntries([]);
+        return;
+      }
+      if (root !== stateRootRef.current) {
+        stateRootRef.current = root;
+        setStateRootDir(root);
+      }
+      const target = subdir ? `${root}\\${subdir.replace(/\//g, "\\")}` : root;
+      const entries = await backend.listDirectory(target);
+      const sep = target.endsWith("\\") ? "" : "\\";
+      const next = entries.map((e) => ({
+        name: e.name,
+        is_dir: e.is_dir,
+        full_path: `${target}${sep}${e.name}`,
+      }));
+      setStateEntries((prev) => JSON.stringify(prev) === JSON.stringify(next) ? prev : next);
+      setStateCurrentDir(subdir);
+    } catch (e) {
+      if (!silent) {
+        setStateError(e instanceof Error ? e.message : String(e));
+        setStateEntries([]);
+      }
+    } finally {
+      if (!silent) setStateLoading(false);
+    }
+  }, [backend, resolveStateRoot]);
+
+  const loadDbTables = useCallback(async (silent = false) => {
     if (!linkedSessionIds || linkedSessionIds.length === 0) {
       setDbTables([]);
       return;
     }
-    setDbLoading(true);
-    const allTables: SessionDbTable[] = [];
+    if (!silent) setDbLoading(true);
+    const allTables: SqliteTable[] = [];
     for (const sid of linkedSessionIds) {
       try {
-        const tables = await invoke<SessionDbTable[]>("list_session_db_tables", { sessionId: sid });
+        const tables = await invoke<SqliteTable[]>("list_session_db_tables", { sessionId: sid });
         allTables.push(...tables);
       } catch { /* ignore */ }
     }
-    setDbTables(allTables);
-    setDbLoading(false);
-  }, [linkedSessionIds]);
+    setDbTables((prev) => JSON.stringify(prev) === JSON.stringify(allTables) ? prev : allTables);
+    if (!silent) setDbLoading(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [linkedSessionsKey]);
 
-  const loadTableData = useCallback(async (tableName: string) => {
-    if (!linkedSessionIds || linkedSessionIds.length === 0) return;
-    setDbLoading(true);
-    setSelectedTable(tableName);
-    // Use first linked session that has this table
-    for (const sid of linkedSessionIds) {
-      try {
-        const data = await invoke<SessionDbTableData>("query_session_db_table", { sessionId: sid, tableName, limit: 200 });
-        setTableData(data);
-        setDbLoading(false);
-        return;
-      } catch { /* ignore */ }
-    }
-    setTableData(null);
-    setDbLoading(false);
-  }, [linkedSessionIds]);
+  // SqliteTableView ops, memoised so the component's effect doesn't re-fire
+  // unless the underlying session list actually changed.
+  const dbOps = useMemo(
+    () => sessionSqliteOps(linkedSessionIds ?? []),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [linkedSessionsKey],
+  );
 
   useEffect(() => {
     loadConfig();
   }, [loadConfig]);
 
   useEffect(() => {
-    loadSessionData();
-  }, [loadSessionData]);
+    if (activeTab === "state") {
+      void loadStateDir(stateCurrentDir);
+    }
+    // We intentionally exclude loadStateDir + stateCurrentDir from deps so
+    // navigation triggers a single fresh fetch rather than re-fetching on
+    // every state change. Navigation handlers below call loadStateDir
+    // directly with the new subdir.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab]);
 
   useEffect(() => {
     if (activeTab === "database") loadDbTables();
   }, [activeTab, loadDbTables]);
 
+  useEffect(() => {
+    stateRootRef.current = null;
+    setStateRootDir(null);
+    setStateCurrentDir(null);
+    setStateEntries([]);
+  }, [linkedSessionsKey]);
+
   // Load plan.md when plan tab is selected — removed (now in PlanTile).
   const loadPlan = useCallback(async () => {}, []);
 
-  const loadCheckpoints = useCallback(async () => {
-    if (!linkedSessionIds || linkedSessionIds.length === 0) {
-      setCheckpoints([]);
-      return;
-    }
-    const all: SessionCheckpoint[] = [];
-    for (const sid of linkedSessionIds) {
-      try {
-        const cps = await invoke<Array<{ number: number; title: string; file_name: string }>>("list_session_checkpoints", { sessionId: sid });
-        all.push(...cps.map((c) => ({ number: c.number, title: c.title, fileName: c.file_name })));
-      } catch { /* ignore */ }
-    }
-    setCheckpoints(all);
-  }, [linkedSessionIds]);
-
-  useEffect(() => {
-    if (activeTab === "checkpoints") loadCheckpoints();
-  }, [activeTab, loadCheckpoints]);
-
-  const loadEvents = useCallback(async () => {
-    if (!linkedSessionIds || linkedSessionIds.length === 0) {
-      setEvents([]);
-      return;
-    }
-    setEventsLoading(true);
-    const all: SessionEvent[] = [];
-    for (const sid of linkedSessionIds) {
-      try {
-        const evts = await invoke<Array<{ event_type: string; timestamp: string; tool: string | null; summary: string | null }>>("list_session_events", { sessionId: sid, limit: 200 });
-        all.push(...evts.map((e) => ({
-          type: e.event_type,
-          timestamp: e.timestamp,
-          tool: e.tool || undefined,
-          summary: e.summary || undefined,
-        })));
-      } catch { /* ignore */ }
-    }
-    setEvents(all);
-    setEventsLoading(false);
-  }, [linkedSessionIds]);
-
-  useEffect(() => {
-    if (activeTab === "events") loadEvents();
-  }, [activeTab, loadEvents]);
-
-  // Watch filesystem for live updates (debounced to prevent flicker)
+  // Watch filesystem for live updates. Mirrors RepoExplorerTile's pattern:
+  // per-loader 200ms JS-side debounce, silent refreshers (no Loading… flash),
+  // and content-equality check skips no-op renders. DB refresh narrows to
+  // session.db writes so steady SELECT-COUNT pressure from `session.db-journal`
+  // / `inuse.<pid>.lock` chatter doesn't wake the COUNT(*) loop.
   useEffect(() => {
     const watchPaths: string[] = [];
     if (workstreamDir) watchPaths.push(workstreamDir);
@@ -320,27 +279,30 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
       invoke("watch_directory", { path: p }).catch(() => {});
     }
 
-    let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+    const refreshConfig = debounce(() => { void loadConfig(true); }, 200);
+    const refreshState = debounce(() => { void loadStateDir(stateCurrentDir, true); }, 200);
+    const refreshDb = debounce(() => { void loadDbTables(true); }, 200);
+
     const unlisten = listen<{ path: string }>("fs-change", (event) => {
+      if (!workstreamVisible) return;
       const changedPath = event.payload.path.replace(/\//g, "\\").toLowerCase();
-      // Skip events.jsonl changes (too frequent, handled by session poller)
+      // Skip events.jsonl writes — the session poller writes here on every
+      // turn / tool call; nothing in Meta needs to react to that.
       if (changedPath.endsWith("events.jsonl")) return;
-      // Debounce: wait 1s after last change before refreshing
-      if (debounceTimer) clearTimeout(debounceTimer);
-      debounceTimer = setTimeout(() => {
-        if (activeTab === "config") loadConfig();
-        if (activeTab === "files") loadSessionData();
-        if (activeTab === "database") loadDbTables();
-      }, 1000);
+      if (activeTab === "config") refreshConfig();
+      else if (activeTab === "state") refreshState();
+      else if (activeTab === "database" && changedPath.endsWith("session.db")) refreshDb();
     });
     return () => {
-      if (debounceTimer) clearTimeout(debounceTimer);
+      refreshConfig.cancel();
+      refreshState.cancel();
+      refreshDb.cancel();
       for (const p of watchPaths) {
         invoke("unwatch_directory", { path: p }).catch(() => {});
       }
       unlisten.then((u) => u());
     };
-  }, [workstreamDir, linkedSessionIds, activeTab, loadConfig, loadSessionData, loadPlan, loadDbTables]);
+  }, [workstreamDir, linkedSessionsKey, activeTab, loadConfig, loadStateDir, stateCurrentDir, loadPlan, loadDbTables, workstreamVisible]);
 
   // Open a file in the content viewer
   const viewFile = useCallback(async (path: string, title: string) => {
@@ -411,9 +373,37 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
 
   const refresh = useCallback(() => {
     loadConfig();
-    loadSessionData();
+    if (activeTab === "state") void loadStateDir(stateCurrentDir);
     if (activeTab === "database") loadDbTables();
-  }, [loadConfig, loadSessionData, loadDbTables, activeTab]);
+  }, [loadConfig, loadStateDir, stateCurrentDir, loadDbTables, activeTab]);
+
+  const hydratedRef = useRef(false);
+  useEffect(() => {
+    if (!workstreamVisible || hydratedRef.current) return;
+    hydratedRef.current = true;
+    const vs = parseViewState(configJson, "session_meta");
+    if (vs.activeTab) setActiveTab(vs.activeTab as TabId);
+    if (vs.filePath) {
+      const name = vs.filePath.split(/[\\/]/).pop() || vs.filePath;
+      void viewFile(vs.filePath, name);
+    }
+    if (vs.dbTable) {
+      // SqliteTableView reads its initial table from props; just stash it.
+      setSelectedTable(vs.dbTable);
+    }
+  }, [workstreamVisible, configJson, viewFile]);
+
+  useTileViewStatePersist(
+    configJson,
+    "session_meta",
+    {
+      activeTab,
+      filePath: viewContent?.path,
+      dbTable: selectedTable ?? undefined,
+    },
+    onConfigChange,
+    { enabled: hydratedRef.current },
+  );
 
   const toggleCategory = (cat: string) => {
     setCollapsed((prev) => {
@@ -429,17 +419,9 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
     items: items.filter((i) => i.category === cat),
   })).filter((g) => g.items.length > 0);
 
-  // Deduplicate files by path (keep first occurrence)
-  const uniqueFiles = files.reduce<SessionFileEntry[]>((acc, f) => {
-    if (!acc.some((e) => e.file_path === f.file_path)) acc.push(f);
-    return acc;
-  }, []);
-
   const tabs: { id: TabId; label: string; icon: React.ComponentType<React.SVGProps<SVGSVGElement>>; count: number }[] = [
     { id: "config", label: "Config", icon: SparklesIcon, count: items.length },
-    { id: "files", label: "Files", icon: FolderIcon, count: uniqueFiles.length },
-    { id: "checkpoints", label: "CP", icon: FlagIcon, count: checkpoints.length },
-    { id: "events", label: "Events", icon: SignalIcon, count: events.length },
+    { id: "state", label: "State", icon: FolderIcon, count: stateEntries.length },
     { id: "database", label: "DB", icon: TableCellsIcon, count: dbTables.reduce((s, t) => s + t.row_count, 0) },
   ];
 
@@ -634,233 +616,103 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
             );
           })}
 
-        {/* Files tab */}
-        {activeTab === "files" && (
+        {/* Session State tab — browse ~/.copilot/session-state/<id> like Repo Explorer */}
+        {activeTab === "state" && (
           <>
             {(!linkedSessionIds || linkedSessionIds.length === 0) && (
               <div style={{ padding: 12, color: "#585b70", textAlign: "center" }}>
-                No linked sessions — link a copilot session to see its files
+                No linked sessions — link a copilot session to browse its state folder
               </div>
             )}
-            {linkedSessionIds && linkedSessionIds.length > 0 && uniqueFiles.length === 0 && (
-              <div style={{ padding: 12, color: "#585b70", textAlign: "center" }}>
-                No files found in linked sessions
-              </div>
-            )}
-            {uniqueFiles.map((f, i) => {
-              const fileName = f.file_path.split(/[/\\]/).pop() || f.file_path;
-              return (
-                <div
-                  key={`${f.file_path}-${i}`}
-                  onClick={() => viewFile(f.file_path, fileName)}
-                  onContextMenu={(e) => {
-                    e.preventDefault();
-                    setContextMenu({ x: e.clientX, y: e.clientY, path: f.file_path });
-                  }}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 6,
-                    padding: "3px 8px",
-                    color: "#cdd6f4",
-                    cursor: "pointer",
-                  }}
-                  title={`Click to view · ${f.file_path}`}
-                  onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "#313244"; }}
-                  onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "transparent"; }}
-                >
-                  <DocumentIcon style={{ width: 12, height: 12, color: "#89b4fa", flexShrink: 0 }} />
-                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                    {fileName}
-                  </span>
-                  {f.tool_name && (
-                    <span style={{ color: "#585b70", fontSize: 10, flexShrink: 0 }}>
-                      {f.tool_name}
-                    </span>
-                  )}
-                </div>
-              );
-            })}
-          </>
-        )}
-
-        {/* Checkpoints tab */}
-        {activeTab === "checkpoints" && (
-          <>
-            {(!linkedSessionIds || linkedSessionIds.length === 0) && (
-              <div style={{ padding: 12, color: "#585b70", textAlign: "center" }}>
-                No linked sessions
-              </div>
-            )}
-            {linkedSessionIds && linkedSessionIds.length > 0 && checkpoints.length === 0 && (
-              <div style={{ padding: 12, color: "#585b70", textAlign: "center" }}>
-                No checkpoints found
-              </div>
-            )}
-            {checkpointContent ? (
+            {linkedSessionIds && linkedSessionIds.length > 0 && (
               <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "4px 8px", borderBottom: "1px solid #313244", flexShrink: 0 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "4px 8px", borderBottom: "1px solid #313244", flexShrink: 0, fontSize: 11 }}>
                   <button
-                    onClick={() => setCheckpointContent(null)}
-                    style={{ background: "none", border: "none", color: "#89b4fa", cursor: "pointer", fontSize: 11, padding: "2px 4px", display: "flex", alignItems: "center", gap: 2 }}
+                    onClick={() => loadStateDir(null)}
+                    disabled={!stateCurrentDir}
+                    title="Back to session root"
+                    style={{
+                      background: "none",
+                      border: "none",
+                      color: stateCurrentDir ? "#89b4fa" : "#45475a",
+                      cursor: stateCurrentDir ? "pointer" : "default",
+                      padding: "2px 4px",
+                      display: "flex",
+                      alignItems: "center",
+                    }}
                   >
-                    <ArrowLeftIcon style={{ width: 12, height: 12 }} /> Back
+                    <ChevronUpIcon style={{ width: 14, height: 14 }} />
                   </button>
-                  <span style={{ color: "#cdd6f4", fontWeight: 600, fontSize: 11 }}>{checkpointContent.title}</span>
+                  <span style={{ color: "#6c7086", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}
+                    title={stateRootDir ? `${stateRootDir}${stateCurrentDir ? `\\${stateCurrentDir}` : ""}` : "session-state"}>
+                    .copilot/session-state/{(stateRootDir?.split(/[\\/]/).pop()) || "…"}
+                    {stateCurrentDir ? `/${stateCurrentDir.replace(/\\/g, "/")}` : ""}
+                  </span>
                 </div>
                 <div style={{ flex: 1, overflow: "auto" }}>
-                  <MarkdownView>{checkpointContent.content}</MarkdownView>
+                  {stateLoading && (
+                    <div style={{ padding: 12, color: "#585b70", textAlign: "center" }}>Loading…</div>
+                  )}
+                  {stateError && (
+                    <div style={{ padding: 12, color: "#f38ba8", fontSize: 11 }}>{stateError}</div>
+                  )}
+                  {!stateLoading && !stateError && stateEntries.length === 0 && (
+                    <div style={{ padding: 12, color: "#585b70", textAlign: "center" }}>(empty directory)</div>
+                  )}
+                  {stateEntries.map((entry) => (
+                    <div
+                      key={entry.full_path}
+                      onClick={() => {
+                        if (entry.is_dir) {
+                          const nextRel = stateCurrentDir ? `${stateCurrentDir}\\${entry.name}` : entry.name;
+                          void loadStateDir(nextRel);
+                        } else {
+                          void viewFile(entry.full_path, entry.name);
+                        }
+                      }}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 6,
+                        padding: "3px 8px",
+                        cursor: "pointer",
+                        color: entry.is_dir ? "#89b4fa" : "#cdd6f4",
+                        fontSize: 12,
+                      }}
+                      onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "#313244"; }}
+                      onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "transparent"; }}
+                    >
+                      {entry.is_dir
+                        ? <FolderIcon style={{ width: 12, height: 12, color: "#89b4fa", flexShrink: 0 }} />
+                        : <DocumentIcon style={{ width: 12, height: 12, color: "#cdd6f4", flexShrink: 0 }} />
+                      }
+                      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {entry.name}
+                      </span>
+                    </div>
+                  ))}
                 </div>
               </div>
-            ) : (
-              checkpoints.map((cp) => (
-                <div
-                  key={cp.number}
-                  onClick={async () => {
-                    if (!linkedSessionIds) return;
-                    for (const sid of linkedSessionIds) {
-                      try {
-                        const content = await invoke<string>("read_session_file", { sessionId: sid, relativePath: `checkpoints/${cp.fileName}` });
-                        setCheckpointContent({ title: `#${cp.number} — ${cp.title}`, content });
-                        return;
-                      } catch { /* try next */ }
-                    }
-                  }}
-                  style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 12px", cursor: "pointer", borderBottom: "1px solid #181825" }}
-                  onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "#313244"; }}
-                  onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "transparent"; }}
-                >
-                  <FlagIcon style={{ width: 14, height: 14, color: "#f9e2af", flexShrink: 0 }} />
-                  <span style={{ color: "#585b70", fontSize: 11, flexShrink: 0 }}>#{cp.number}</span>
-                  <span style={{ color: "#cdd6f4", fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{cp.title}</span>
-                </div>
-              ))
             )}
-          </>
-        )}
-
-        {/* Events tab */}
-        {activeTab === "events" && (
-          <>
-            {(!linkedSessionIds || linkedSessionIds.length === 0) && (
-              <div style={{ padding: 12, color: "#585b70", textAlign: "center" }}>
-                No linked sessions
-              </div>
-            )}
-            {eventsLoading && (
-              <div style={{ padding: 12, color: "#585b70", textAlign: "center" }}>Loading events…</div>
-            )}
-            {!eventsLoading && events.length === 0 && linkedSessionIds && linkedSessionIds.length > 0 && (
-              <div style={{ padding: 12, color: "#585b70", textAlign: "center" }}>
-                No events found
-              </div>
-            )}
-            {!eventsLoading && events.map((evt, i) => {
-              const typeColors: Record<string, string> = {
-                "user.message": "#89b4fa",
-                "assistant.message": "#a6e3a1",
-                "assistant.turn_start": "#a6e3a1",
-                "assistant.turn_end": "#585b70",
-                "tool.execution_start": "#f9e2af",
-                "tool.execution_complete": "#f9e2af",
-                "session.start": "#cba6f7",
-                "session.resume": "#cba6f7",
-                "subagent.started": "#f5c2e7",
-                "subagent.completed": "#f5c2e7",
-                "skill.invoked": "#94e2d5",
-              };
-              const color = typeColors[evt.type] || "#585b70";
-              const time = evt.timestamp.split("T")[1]?.split(".")[0] || evt.timestamp;
-              return (
-                <div
-                  key={`${evt.timestamp}-${i}`}
-                  style={{ display: "flex", alignItems: "center", gap: 6, padding: "2px 8px", fontSize: 10, fontFamily: "monospace" }}
-                >
-                  <span style={{ color: "#45475a", flexShrink: 0, width: 55 }}>{time}</span>
-                  <span style={{ color, flexShrink: 0, width: 140, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{evt.type}</span>
-                  {evt.tool && <span style={{ color: "#f9e2af", flexShrink: 0 }}>[{evt.tool}]</span>}
-                  {evt.summary && <span style={{ color: "#6c7086", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{evt.summary}</span>}
-                </div>
-              );
-            })}
           </>
         )}
 
         {/* Database tab */}
         {activeTab === "database" && (
           <>
-            {(!linkedSessionIds || linkedSessionIds.length === 0) && (
+            {(!linkedSessionIds || linkedSessionIds.length === 0) ? (
               <div style={{ padding: 12, color: "#585b70", textAlign: "center" }}>
                 No linked sessions — link a copilot session to explore its database
               </div>
-            )}
-            {dbLoading && (
+            ) : dbLoading && dbTables.length === 0 ? (
               <div style={{ padding: 12, color: "#585b70", textAlign: "center" }}>Loading…</div>
-            )}
-            {!dbLoading && !selectedTable && linkedSessionIds && linkedSessionIds.length > 0 && (
-              <>
-                {dbTables.length === 0 && (
-                  <div style={{ padding: 12, color: "#585b70", textAlign: "center" }}>
-                    No session database found
-                  </div>
-                )}
-                {dbTables.map((t) => (
-                  <div
-                    key={t.name}
-                    onClick={() => loadTableData(t.name)}
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 8,
-                      padding: "6px 12px",
-                      cursor: "pointer",
-                      color: "#cdd6f4",
-                    }}
-                    onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "#313244"; }}
-                    onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "transparent"; }}
-                  >
-                    <TableCellsIcon style={{ width: 14, height: 14, color: "#89b4fa", flexShrink: 0 }} />
-                    <span style={{ flex: 1 }}>{t.name}</span>
-                    <span style={{ fontSize: 10, color: "#585b70" }}>{t.row_count} rows</span>
-                  </div>
-                ))}
-              </>
-            )}
-            {!dbLoading && selectedTable && tableData && (
-              <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "4px 8px", borderBottom: "1px solid #313244", flexShrink: 0 }}>
-                  <button
-                    onClick={() => { setSelectedTable(null); setTableData(null); }}
-                    style={{ background: "none", border: "none", color: "#89b4fa", cursor: "pointer", fontSize: 11, padding: "2px 4px" }}
-                  >← Tables</button>
-                  <span style={{ color: "#cdd6f4", fontWeight: 600, fontSize: 11 }}>{selectedTable}</span>
-                  <span style={{ color: "#585b70", fontSize: 10 }}>({tableData.rows.length} rows)</span>
-                </div>
-                <div style={{ flex: 1, overflow: "auto" }}>
-                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 10, fontFamily: "monospace" }}>
-                    <thead>
-                      <tr>
-                        {tableData.columns.map((col) => (
-                          <th key={col} style={{ padding: "4px 6px", borderBottom: "1px solid #313244", color: "#89b4fa", textAlign: "left", fontWeight: 600, whiteSpace: "nowrap", position: "sticky", top: 0, background: "#181825" }}>
-                            {col}
-                          </th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {tableData.rows.map((row, ri) => (
-                        <tr key={ri} style={{ borderBottom: "1px solid #1e1e2e" }}>
-                          {row.map((val, ci) => (
-                            <td key={ci} style={{ padding: "3px 6px", color: "#cdd6f4", maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={val != null ? String(val) : ""}>
-                              {val === null ? <span style={{ color: "#585b70" }}>null</span> : String(val)}
-                            </td>
-                          ))}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
+            ) : (
+              <SqliteTableView
+                ops={dbOps}
+                initialTable={selectedTable}
+                onSelectTable={setSelectedTable}
+                limit={200}
+              />
             )}
           </>
         )}
@@ -969,7 +821,7 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
       )}
 
       {contextMenu && (
-        <SessionMetaContextMenu
+        <FileContextMenu
           x={contextMenu.x}
           y={contextMenu.y}
           path={contextMenu.path}
@@ -981,121 +833,3 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
   );
 }
 
-interface SessionMetaContextMenuProps {
-  x: number;
-  y: number;
-  path: string;
-  workstreamId: string | null;
-  onClose: () => void;
-}
-
-function SessionMetaContextMenu({ x, y, path, workstreamId, onClose }: SessionMetaContextMenuProps) {
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const handleClick = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) onClose();
-    };
-    const handleEsc = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
-    const t = setTimeout(() => {
-      document.addEventListener("mousedown", handleClick);
-      document.addEventListener("keydown", handleEsc);
-    }, 0);
-    return () => {
-      clearTimeout(t);
-      document.removeEventListener("mousedown", handleClick);
-      document.removeEventListener("keydown", handleEsc);
-    };
-  }, [onClose]);
-
-  const close = (fn: () => void) => () => { onClose(); fn(); };
-  const name = path.split(/[\\/]/).filter(Boolean).pop() || path;
-
-  const itemStyle: React.CSSProperties = {
-    display: "flex",
-    alignItems: "center",
-    gap: 8,
-    width: "100%",
-    padding: "6px 10px",
-    background: "transparent",
-    border: "none",
-    cursor: "pointer",
-    color: "#cdd6f4",
-    fontSize: 12,
-    textAlign: "left",
-    borderRadius: 4,
-  };
-
-  return (
-    <div
-      ref={ref}
-      data-testid="session-meta-context-menu"
-      data-path={path}
-      role="menu"
-      style={{
-        position: "fixed",
-        top: y,
-        left: x,
-        zIndex: 2000,
-        minWidth: 200,
-        background: "#181825",
-        border: "1px solid #45475a",
-        borderRadius: 6,
-        padding: 4,
-        boxShadow: "0 6px 16px rgba(0,0,0,0.45)",
-        color: "#cdd6f4",
-        fontSize: 12,
-        fontFamily: "inherit",
-      }}
-    >
-      <div
-        style={{
-          padding: "6px 10px 8px",
-          borderBottom: "1px solid #313244",
-          marginBottom: 4,
-          color: "#bac2de",
-          fontWeight: 500,
-          fontSize: 11,
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-          whiteSpace: "nowrap",
-          maxWidth: 320,
-        }}
-      >
-        {name}
-      </div>
-      <button
-        type="button"
-        data-testid="ctx-copy-path"
-        onClick={close(() => { void writeTextToClipboard(path); })}
-        style={itemStyle}
-        onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "#313244"; }}
-        onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "transparent"; }}
-      >
-        <ClipboardDocumentIcon style={{ width: 14, height: 14, color: "#a6adc8", flexShrink: 0 }} />
-        <span>Copy full path</span>
-      </button>
-      <button
-        type="button"
-        data-testid="ctx-open-system"
-        onClick={close(() => { openPath(path).catch(() => {}); })}
-        style={itemStyle}
-        onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "#313244"; }}
-        onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "transparent"; }}
-      >
-        <FolderOpenIcon style={{ width: 14, height: 14, color: "#a6adc8", flexShrink: 0 }} />
-        <span>Open in system</span>
-      </button>
-      <button
-        type="button"
-        data-testid="ctx-add-to-workbench"
-        onClick={close(() => { dispatchAddToWorkbench({ path, workstreamId }); })}
-        style={itemStyle}
-        onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "#313244"; }}
-        onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "transparent"; }}
-      >
-        <BeakerIcon style={{ width: 14, height: 14, color: "#a6adc8", flexShrink: 0 }} />
-        <span>Add to Workbench</span>
-      </button>
-    </div>
-  );
-}

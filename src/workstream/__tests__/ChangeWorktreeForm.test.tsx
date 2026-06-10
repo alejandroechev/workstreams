@@ -111,11 +111,11 @@ describe("ChangeWorktreeForm", () => {
     await waitFor(() => expect(onSubmit).toHaveBeenCalledWith("create_new", { branchName: "alejandroe/feat-x", folderName: "feat-x" }));
   });
 
-  it("shows restart warning only when restartable tiles are present", () => {
+  it("never shows restart warning (restarts removed per UX decision)", () => {
     const { rerender } = render(
       <ChangeWorktreeForm workstream={workstream} tiles={[tile("t1", "terminal"), tile("t2", "copilot_session")]} onCancel={vi.fn()} onSubmit={vi.fn()} />,
     );
-    expect(screen.getByText("2 session tile(s) will be restarted in the new directory.")).toBeTruthy();
+    expect(screen.queryByText(/will be restarted/i)).toBeNull();
 
     rerender(<ChangeWorktreeForm workstream={workstream} tiles={[tile("t3", "code_viewer")]} onCancel={vi.fn()} onSubmit={vi.fn()} />);
     expect(screen.queryByText(/will be restarted/i)).toBeNull();

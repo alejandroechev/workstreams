@@ -10,6 +10,8 @@ import {
   makeImageBlobUrl,
   resolveRelativePath,
   dirnameOf,
+  classifyLinkTarget,
+  isMarkdownFile,
 } from "../file-types";
 
 describe("file-types", () => {
@@ -189,6 +191,32 @@ describe("file-types", () => {
     });
     it("handles trailing separators on the base", () => {
       expect(resolveRelativePath("/a/b/", "c.png")).toBe("/a/b/c.png");
+    });
+    it("returns the input unchanged when relative path is empty", () => {
+      expect(resolveRelativePath("/a/b", "")).toBe("");
+    });
+    it("returns protocol-relative URLs unchanged", () => {
+      expect(resolveRelativePath("/a/b", "//cdn.example.com/x.png")).toBe("//cdn.example.com/x.png");
+    });
+    it("does not pop below the root when too many '..' segments are present", () => {
+      // Should not throw; we just stop popping once empty.
+      expect(resolveRelativePath("/a", "../../../x.png")).toBe("x.png");
+    });
+  });
+
+  describe("isMarkdownFile + classifyLinkTarget", () => {
+    it("isMarkdownFile detects .md / .mdx / .markdown", () => {
+      expect(isMarkdownFile("README.md")).toBe(true);
+      expect(isMarkdownFile("notes.mdx")).toBe(true);
+      expect(isMarkdownFile("doc.markdown")).toBe(true);
+      expect(isMarkdownFile("script.ts")).toBe(false);
+    });
+    it("classifyLinkTarget routes by extension", () => {
+      expect(classifyLinkTarget("a.md")).toBe("markdown");
+      expect(classifyLinkTarget("a.png")).toBe("image");
+      expect(classifyLinkTarget("a.mp3")).toBe("audio");
+      expect(classifyLinkTarget("a.ts")).toBe("file");
+      expect(classifyLinkTarget("noext")).toBe("file");
     });
   });
 });

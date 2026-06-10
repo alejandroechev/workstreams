@@ -3,7 +3,6 @@ import type { TileType, Direction } from "./types";
 
 export type KeyAction =
   | { type: "escape" }
-  | { type: "switchWorkstream"; index: number }
   | { type: "navigate"; direction: Direction }
   | { type: "addTile"; tileType: TileType; extraConfig?: Record<string, string> }
   | { type: "closeTile" }
@@ -37,7 +36,7 @@ type MonacoEditorRegistry = {
   getEditors?: () => MonacoTextFocusEditor[];
 };
 
-const tileCreationShortcutKeys = new Set(["b", "g", "m", "p", "r", "s", "t", "w"]);
+const tileCreationShortcutKeys = new Set(["b", "c", "g", "m", "p", "r", "t", "w"]);
 
 function isAltTileCreationShortcut(altKey: boolean, key: string): boolean {
   return altKey && tileCreationShortcutKeys.has(key.toLowerCase());
@@ -71,7 +70,7 @@ function isMonacoFocused(activeElement: Element | null): boolean {
  * terminal (Ctrl+C/V/etc) and editor (Ctrl+F/P/etc) shortcuts.
  *
  * Tile-creation shortcuts:
- *   Alt+S  copilot_session
+ *   Alt+C  copilot_session
  *   Alt+T  terminal (PowerShell)
  *   Alt+W  terminal with shell=wsl
  *   Alt+R  file_explorer (Repo Explorer)
@@ -83,9 +82,8 @@ function isMonacoFocused(activeElement: Element | null): boolean {
  * Tile management:
  *   Alt+Q  close focused tile
  *   Alt+F  toggle fullscreen
- *   Alt+C  toggle side-by-side (when exactly 2 tiles are selected)
+ *   Alt+S  toggle side-by-side (when exactly 2 tiles are selected)
  *   Alt+ArrowKeys  navigate between tiles
- *   Alt+1..9  switch workstream
  */
 export function parseKeyAction(opts: ParseKeyActionOpts): KeyAction | null {
   const { altKey, key } = opts;
@@ -116,7 +114,7 @@ export function parseKeyAction(opts: ParseKeyActionOpts): KeyAction | null {
         return { type: "addTile", tileType: "terminal" };
       case "w":
         return { type: "addTile", tileType: "terminal", extraConfig: { shell: "wsl" } };
-      case "s":
+      case "c":
         return { type: "addTile", tileType: "copilot_session" };
       case "r":
         return { type: "addTile", tileType: "file_explorer" };
@@ -133,13 +131,8 @@ export function parseKeyAction(opts: ParseKeyActionOpts): KeyAction | null {
         return { type: "closeTile" };
       case "f":
         return { type: "toggleFullscreen" };
-      case "c":
+      case "s":
         return { type: "toggleSideBySide" };
-    }
-
-    // Alt+1-9 switches workstreams
-    if (key >= "1" && key <= "9") {
-      return { type: "switchWorkstream", index: parseInt(key) - 1 };
     }
   }
 

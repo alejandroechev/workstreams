@@ -7,15 +7,10 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { parseCopilotSessionConfig } from "../domain/tile-config";
 import { createPtyFitController } from "./pty-fit";
-import { getAppSettings, createWheelLineAccumulator } from "../domain/app-settings";
+import { getAppSettings, subscribeAppSettings, createWheelLineAccumulator } from "../domain/app-settings";
 import { writeTextToClipboard, readTextFromClipboard } from "../domain/clipboard";
 import { handleOsc52 } from "../domain/osc52";
 import { playBell, notifySessionIdle } from "../domain/notifications";
-import {
-  keyToZoomAction,
-  nextFontSize,
-  TERMINAL_DEFAULT_FONT_SIZE,
-} from "../domain/terminal-zoom";
 import type { CopilotSessionStats } from "../domain/types";
 
 interface Props {
@@ -30,6 +25,16 @@ interface Props {
   onStatusChange?: (status: string) => void;
   onStatsUpdate?: (stats: CopilotSessionStats) => void;
   onLinkSession?: () => void;
+  /** When true the workstream already has another linked session, so this
+   * tile must not allow linking (workstream → at most one linked session). */
+  workstreamHasOtherLinkedSession?: boolean;
+  /** True when this tile is the fullscreen tile in its grid. Triggers a
+   * forced char-size remeasure + buffer repaint when it changes, so the
+   * canvas renderer doesn't end up showing ghost/duplicate rows after the
+   * geometry jumps (the ResizeObserver fires fit + resize_pty, but the
+   * texture atlas can hold stale glyph metrics across a large size change,
+   * especially in the alternate buffer that Copilot CLI uses). */
+  isFullscreen?: boolean;
   onAutoLink?: (sessionId: string, summary?: string) => void;
   onRestart?: () => void;
 }
@@ -45,6 +50,8 @@ export default function CopilotSessionTile({
   onStatusChange,
   onStatsUpdate,
   onLinkSession,
+  workstreamHasOtherLinkedSession,
+  isFullscreen = false,
   onAutoLink,
   onRestart,
 }: Props) {
@@ -55,8 +62,6 @@ export default function CopilotSessionTile({
   const serializeRef = useRef<SerializeAddon | null>(null);
   const prevActivityRef = useRef<string>("idle");
   const [status, setStatus] = useState<string>(isResuming ? "resuming" : "starting");
-  // Live font size, controlled by Ctrl+= / Ctrl+- / Ctrl+0 while focused.
-  const [fontSize, setFontSize] = useState<number>(TERMINAL_DEFAULT_FONT_SIZE);
 
   const config = parseCopilotSessionConfig(configJson);
 
@@ -80,7 +85,7 @@ export default function CopilotSessionTile({
     const term = new Terminal({
       cursorBlink: true,
       altClickMovesCursor: true,
-      fontSize: TERMINAL_DEFAULT_FONT_SIZE,
+      fontSize: getAppSettings().terminalFontSize,
       fontFamily: "'Cascadia Code', 'Consolas', monospace",
       scrollback: 999999,
       scrollOnUserInput: true,
@@ -185,9 +190,14 @@ export default function CopilotSessionTile({
       return true;
     });
 
-    // Handle BEL character — play notification sound + flash window
+    // Handle BEL character — play notification sound + raise the sidebar
+    // bell on the workstream row (only for Copilot session tiles; the
+    // sidebar listener ignores the event when the workstream is focused).
     term.onBell(() => {
       playBell();
+      if (workstreamId) {
+        window.dispatchEvent(new CustomEvent("workstream-bell", { detail: { workstreamId } }));
+      }
     });
 
     // Handle OSC 52 — TUI apps (copilot CLI, vim, tmux) emit this to put
@@ -204,7 +214,15 @@ export default function CopilotSessionTile({
     });
 
     const unlistenExit = listen(`pty-exit-${tileId}`, () => {
-      term.write("\r\n\x1b[90m[Session ended]\x1b[0m\r\n");
+      const intentional = (window as unknown as { __wsIntentionalRestartIds?: Set<string> })
+        .__wsIntentionalRestartIds?.has(tileId) ?? false;
+      if (intentional) {
+        term.write("\r\n\x1b[90m[Restarting…]\x1b[0m\r\n");
+        (window as unknown as { __wsIntentionalRestartIds?: Set<string> })
+          .__wsIntentionalRestartIds?.delete(tileId);
+      } else {
+        term.write("\r\n\x1b[90m[Session ended]\x1b[0m\r\n");
+      }
       updateStatus("exited");
     });
 
@@ -223,8 +241,10 @@ export default function CopilotSessionTile({
       }
       prevActivityRef.current = newActivity;
 
-      // Auto-link: if tile has no linked session and poller found one, link it
-      if (!autoLinked.done && event.payload.session_id && onAutoLink) {
+      // Auto-link: if tile has no linked session and poller found one, link it.
+      // Skip when the workstream already has another linked session (enforced
+      // one-session-per-workstream policy).
+      if (!autoLinked.done && event.payload.session_id && onAutoLink && !workstreamHasOtherLinkedSession) {
         const currentConfig = parseCopilotSessionConfig(configJson);
         if (!currentConfig.copilot_session_id) {
           autoLinked.done = true;
@@ -364,42 +384,61 @@ export default function CopilotSessionTile({
       ) as HTMLTextAreaElement | null;
       textarea?.focus();
     };
-    const timers = [50, 150, 300, 600].map((d) => window.setTimeout(focusNow, d));
-    return () => {
-      for (const t of timers) clearTimeout(t);
-    };
+    // Single deferred focus — was previously 4 staggered timers (50, 150, 300,
+    // 600 ms), which under rapid ws-switches piled up redundant term.refresh()
+    // full-buffer repaints. One frame is enough in practice; if layout has
+    // not settled by then the next render's effect re-runs with a fresh token.
+    const timer = window.setTimeout(focusNow, 50);
+    return () => clearTimeout(timer);
   }, [isFocused, focusToken]);
 
-  // Apply font-size changes to xterm + re-fit + tell the PTY about the
-  // new cell grid.
+  // Force xterm to remeasure cell metrics + repaint the buffer whenever the
+  // fullscreen state of this tile changes. The geometry jump from a small
+  // grid cell to the full window (or back) leaves the canvas renderer's
+  // texture atlas pointing at stale cell offsets, which manifests as
+  // selection picking the wrong characters and ghost/duplicate rows
+  // appearing on text selection. ResizeObserver already triggers a fit +
+  // resize_pty, but that path doesn't invalidate the atlas; we do it here.
   useEffect(() => {
     const term = termRef.current;
     if (!term) return;
-    term.options.fontSize = fontSize;
-    // Force the controller to re-send dims (cell grid may have changed even if
-    // pixel size of the tile didn't).
-    ptyFitRef.current?.invalidate();
-    ptyFitRef.current?.request();
-  }, [fontSize, tileId]);
-
-  // Zoom shortcuts (Ctrl+= / Ctrl+- / Ctrl+0) — active only while focused.
-  useEffect(() => {
-    if (!isFocused) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (!e.ctrlKey || e.shiftKey || e.altKey || e.metaKey) return;
-      const action = keyToZoomAction(e.key);
-      if (!action) return;
-      const tgt = e.target as HTMLElement | null;
-      const tag = tgt?.tagName;
-      if (tag === "INPUT" || (tag === "TEXTAREA" && !tgt?.classList.contains("xterm-helper-textarea"))) {
-        return;
+    // Two-pass: immediate + after a settle delay so the deferred fit lands
+    // with the correct cell metrics before the second refresh.
+    const remeasureAndRepaint = () => {
+      try {
+        const core = (term as unknown as {
+          _core?: { _charSizeService?: { measure?: () => void } };
+        })._core;
+        core?._charSizeService?.measure?.();
+      } catch { /* best effort */ }
+      ptyFitRef.current?.invalidate();
+      ptyFitRef.current?.request();
+      if (term.rows > 0) {
+        try {
+          (term as unknown as {
+            _core?: { _renderService?: { handleResize(c: number, r: number): void } };
+          })._core?._renderService?.handleResize(term.cols, term.rows);
+        } catch { /* best effort */ }
+        term.refresh(0, term.rows - 1);
       }
-      e.preventDefault();
-      setFontSize((s) => nextFontSize(s, action));
     };
-    window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
-  }, [isFocused]);
+    remeasureAndRepaint();
+    const t = window.setTimeout(remeasureAndRepaint, 200);
+    return () => window.clearTimeout(t);
+  }, [isFullscreen]);
+
+  // Live font-size updates from the global terminal font setting.
+  useEffect(() => {
+    return subscribeAppSettings((s) => {
+      const term = termRef.current;
+      if (!term) return;
+      if (term.options.fontSize !== s.terminalFontSize) {
+        term.options.fontSize = s.terminalFontSize;
+        ptyFitRef.current?.invalidate();
+        ptyFitRef.current?.request();
+      }
+    });
+  }, []);
 
   const hasLinkedSession = !!(config.copilot_session_id || (config as unknown as Record<string, unknown>).resume_by_id);
 
@@ -426,45 +465,36 @@ export default function CopilotSessionTile({
             ◉ Starting...
           </span>
         )}
-        {/* Restart button — only when session has exited */}
-        {status === "exited" && onRestart && (
-          <button
-            onClick={(e) => { e.stopPropagation(); onRestart(); }}
-            style={{
-              background: "#a6e3a1",
-              color: "#1e1e2e",
-              border: "none",
-              borderRadius: 4,
-              padding: "4px 10px",
-              fontSize: 11,
-              cursor: "pointer",
-              fontWeight: 600,
-            }}
-            title="Restart the copilot session"
-          >
-            ▶ Restart
-          </button>
-        )}
-        {/* Link session button — manual override for auto-link */}
-        {onLinkSession && (
+        {/* Link session button — manual override for auto-link.
+            States:
+              - linked        : "🔗 Linked"
+              - spawned, not linked yet (auto-link pending): "🔗 New"
+              - not spawned   : "🔗 Link" */}
+        {onLinkSession && !(workstreamHasOtherLinkedSession && !hasLinkedSession) && (
           <button
             onClick={(e) => { e.stopPropagation(); onLinkSession(); }}
             style={{
               background: "#313244",
-              color: hasLinkedSession ? "#a6e3a1" : "#585b70",
+              color: hasLinkedSession ? "#a6e3a1" : alreadyRunning ? "#f9e2af" : "#585b70",
               border: "none",
               borderRadius: 4,
               padding: "4px 10px",
               fontSize: 11,
               cursor: "pointer",
             }}
-            title={hasLinkedSession ? `Linked: ${config.copilot_session_id || ""}` : "Link an existing Copilot session"}
+            title={
+              hasLinkedSession
+                ? `Linked: ${config.copilot_session_id || ""}`
+                : alreadyRunning
+                  ? "New session — type a prompt to identify it. Link will attach automatically."
+                  : "Link an existing Copilot session"
+            }
           >
-            {hasLinkedSession ? "🔗 Linked" : "🔗 Link"}
+            {hasLinkedSession ? "🔗 Linked" : alreadyRunning ? "🔗 New" : "🔗 Link"}
           </button>
         )}
       </div>
-      <div ref={containerRef} onMouseEnter={() => termRef.current?.focus()} style={{ width: "100%", height: "100%", overflow: "hidden" }} />
+      <div ref={containerRef} onMouseDown={() => termRef.current?.focus()} style={{ width: "100%", height: "100%", overflow: "hidden" }} />
     </div>
   );
 }

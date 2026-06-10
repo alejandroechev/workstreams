@@ -12,6 +12,8 @@ export default defineConfig({
       include: ["src/domain/**", "src/backend/**"],
       exclude: [
         "src/domain/types.ts",
+        "src/domain/file-comments.ts",
+        "src/domain/workbench-store-instance.ts",
         "src/backend/types.ts",
         "**/*.test.ts",
         "**/*.test.tsx",

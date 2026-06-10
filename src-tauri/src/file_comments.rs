@@ -308,8 +308,7 @@ mod tests {
         insert_user(&conn, "ws-1", "C:\\a.ts", 10, 10, "second");
         insert_user(&conn, "ws-1", "C:\\a.ts", 5, 7, "first");
         insert_user(&conn, "ws-1", "C:\\b.ts", 1, 1, "other file");
-        let comments =
-            list_file_comments_with_conn(&conn, "ws-1", "C:\\a.ts").unwrap();
+        let comments = list_file_comments_with_conn(&conn, "ws-1", "C:\\a.ts").unwrap();
         assert_eq!(comments.len(), 2);
         assert_eq!(comments[0].body_md, "first");
         assert_eq!(comments[1].body_md, "second");
@@ -345,8 +344,7 @@ mod tests {
         assert_eq!(insert("c-1", "first"), 1);
         assert_eq!(insert("c-1", "duplicate"), 0); // skipped by UNIQUE INDEX
         assert_eq!(insert("c-2", "second"), 1);
-        let comments =
-            list_file_comments_with_conn(&conn, "ws-1", "C:\\a.ts").unwrap();
+        let comments = list_file_comments_with_conn(&conn, "ws-1", "C:\\a.ts").unwrap();
         assert_eq!(comments.len(), 2);
     }
 

@@ -3,13 +3,12 @@ import { useState, useRef, useEffect } from "react";
 import { listen } from "@tauri-apps/api/event";
 import type { Project, Workstream } from "../domain/types";
 import {
-  CheckCircleIcon,
-  Cog6ToothIcon,
-  ExclamationTriangleIcon,
-  EyeIcon,
-  ArchiveBoxIcon,
   BellAlertIcon,
   EllipsisHorizontalIcon,
+  MoonIcon,
+  PlusIcon,
+  ChevronDownIcon,
+  ChevronRightIcon,
 } from "@heroicons/react/20/solid";
 import { PROJECT_PRESET_COLORS, isCustomProjectColor } from "../domain/colors";
 import { reorderById } from "../domain/reorder";
@@ -21,6 +20,10 @@ interface Props {
   activeWsId: string | null;
   /** Optional: map of wsId → linked-session summary (from pinned tile config). */
   sessionInfoByWs?: Record<string, string | undefined>;
+  /** Optional: set of workstream ids that have been loaded into the app's
+   * `wsStates` map (i.e. tiles + activity wired up). Workstreams not in this
+   * set render a "stopped" indicator (gray hollow square). */
+  loadedWsIds?: Set<string>;
   onSelectWorkstream: (id: string) => void;
   onCreateProject: () => void;
   onImportProject: () => void;
@@ -39,26 +42,66 @@ interface Props {
   onChangeWorktree?: (ws: Workstream) => void;
 }
 
-type WorkstreamStatus = Workstream['status'];
+// Activity slot in the sidebar row. Replaces the previous status icon +
+// inline activity dot. Four states:
+//   - bell:    agent finished while the workstream was unfocused
+//   - working: any Copilot session in the workstream is non-idle
+//   - stopped: workstream hasn't been loaded yet (gray hollow square)
+//   - idle:    nothing rendered (preserves spacing via a fixed-width slot)
+const ACTIVE_ACTIVITIES = new Set(["thinking", "tool_use", "responding", "background_task"]);
 
-const STATUS_META: Record<WorkstreamStatus, { color: string; label: string }> = {
-  active:    { color: "#a6e3a1", label: "Active" },
-  working:   { color: "#89b4fa", label: "Working" },
-  blocked:   { color: "#f38ba8", label: "Blocked" },
-  in_review: { color: "#f9e2af", label: "In Review" },
-  archived:  { color: "#585b70", label: "Archived" },
+// Shared style for the sidebar's "+" affordances (Workstreams / Repos
+// section headers). Larger hit area + hover background so the action is
+// obvious without crowding the header.
+const addButtonStyle: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  width: 22,
+  height: 22,
+  background: "transparent",
+  border: "none",
+  color: "#a6adc8",
+  cursor: "pointer",
+  borderRadius: 4,
+  padding: 0,
+  transition: "background 0.1s, color 0.1s",
 };
 
-function StatusIcon({ status, size = 14 }: { status: WorkstreamStatus; size?: number }) {
-  const s = { width: size, height: size, color: STATUS_META[status]?.color ?? "#585b70" };
-  switch (status) {
-    case "active":    return <CheckCircleIcon style={s} />;
-    case "working":   return <Cog6ToothIcon style={s} />;
-    case "blocked":   return <ExclamationTriangleIcon style={s} />;
-    case "in_review": return <EyeIcon style={s} />;
-    case "archived":  return <ArchiveBoxIcon style={s} />;
-    default:          return <CheckCircleIcon style={{ ...s, color: "#585b70" }} />;
+function ActivityIndicator({ bell, active, stopped }: { bell: boolean; active: boolean; stopped: boolean }) {
+  // Fixed 14×14 slot so rows don't reflow as state changes.
+  const slot: React.CSSProperties = { width: 14, height: 14, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 };
+  if (bell) {
+    return (
+      <span style={slot} title="Agent finished" data-testid="ws-indicator-bell">
+        <BellAlertIcon style={{ width: 14, height: 14, color: "#f9e2af", animation: "pulse-dot 1s ease-in-out 3" }} />
+      </span>
+    );
   }
+  if (active) {
+    return (
+      <span style={slot} title="Working" data-testid="ws-indicator-working">
+        <span
+          style={{
+            width: 8,
+            height: 8,
+            borderRadius: "50%",
+            background: "#89b4fa",
+            animation: "pulse-dot 1.5s ease-in-out infinite",
+            boxShadow: "0 0 6px #89b4fa",
+          }}
+        />
+      </span>
+    );
+  }
+  if (stopped) {
+    return (
+      <span style={slot} title="Stopped (not loaded)" data-testid="ws-indicator-stopped">
+        <MoonIcon style={{ width: 12, height: 12, color: "#6c7086" }} />
+      </span>
+    );
+  }
+  return <span style={slot} data-testid="ws-indicator-idle" />;
 }
 
 export default function WorkstreamSidebar({
@@ -66,6 +109,7 @@ export default function WorkstreamSidebar({
   workstreams,
   activeWsId,
   sessionInfoByWs,
+  loadedWsIds,
   onSelectWorkstream,
   onCreateProject,
   onImportProject,
@@ -91,6 +135,7 @@ export default function WorkstreamSidebar({
   const [draggedWsId, setDraggedWsId] = useState<string | null>(null);
   const [dragOverWsId, setDragOverWsId] = useState<string | null>(null);
   const [showRepoMenu, setShowRepoMenu] = useState(false);
+  const [reposCollapsed, setReposCollapsed] = useState(false);
   const repoMenuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -120,6 +165,31 @@ export default function WorkstreamSidebar({
       });
     }
   }, [activeWsId]);
+
+  // Direct BEL signal from Copilot session tiles: a window-level
+  // CustomEvent("workstream-bell", { detail: { workstreamId } }) raises the
+  // sidebar bell on the matching row when that workstream isn't focused.
+  // The activity-poller path below ALSO raises the bell (on active→idle), so
+  // the two triggers coexist: BEL fires immediately when the agent emits \a;
+  // active→idle fires when it finishes a turn without BEL.
+  const activeWsIdRef = useRef(activeWsId);
+  useEffect(() => { activeWsIdRef.current = activeWsId; }, [activeWsId]);
+  useEffect(() => {
+    const onBell = (e: Event) => {
+      const detail = (e as CustomEvent).detail as { workstreamId?: string } | undefined;
+      const wsId = detail?.workstreamId;
+      if (!wsId) return;
+      if (wsId === activeWsIdRef.current) return;
+      setWsBell((prev) => {
+        if (prev.has(wsId)) return prev;
+        const next = new Set(prev);
+        next.add(wsId);
+        return next;
+      });
+    };
+    window.addEventListener("workstream-bell", onBell);
+    return () => window.removeEventListener("workstream-bell", onBell);
+  }, []);
 
   // Listen for workstream activity events
   useEffect(() => {
@@ -216,18 +286,12 @@ export default function WorkstreamSidebar({
         <button
           data-testid="new-workstream-button"
           onClick={() => onCreateWorkstream()}
-          style={{
-            background: "none",
-            border: "none",
-            color: "#585b70",
-            cursor: "pointer",
-            fontSize: 14,
-            padding: 0,
-            lineHeight: 1,
-          }}
+          style={addButtonStyle}
+          onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "#313244"; (e.currentTarget as HTMLElement).style.color = "#cdd6f4"; }}
+          onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "transparent"; (e.currentTarget as HTMLElement).style.color = "#a6adc8"; }}
           title="New workstream"
         >
-          +
+          <PlusIcon style={{ width: 16, height: 16 }} />
         </button>
       </div>
 
@@ -292,42 +356,11 @@ export default function WorkstreamSidebar({
                   flex: 1,
                   minWidth: 0,
                 }}>
-                  <span
-                    style={{ flexShrink: 0, display: "flex", alignItems: "center" }}
-                    title={STATUS_META[ws.status]?.label ?? ws.status}
-                  >
-                    {wsBell.has(ws.id) ? (
-                      <BellAlertIcon style={{ width: 14, height: 14, color: "#f9e2af", animation: "pulse-dot 1s ease-in-out 3" }} />
-                    ) : (
-                      <StatusIcon status={ws.status} size={14} />
-                    )}
-                  </span>
-                  {/* Live activity indicator from session poller */}
-                  {(() => {
-                    const activity = wsActivity[ws.id];
-                    if (!activity || activity === "idle" || activity === "offline") return null;
-                    const activityColors: Record<string, string> = {
-                      thinking: "#a6e3a1",
-                      tool_use: "#89b4fa",
-                      responding: "#a6e3a1",
-                      background_task: "#cba6f7",
-                    };
-                    const color = activityColors[activity] || "#a6e3a1";
-                    return (
-                      <span
-                        style={{
-                          width: 8,
-                          height: 8,
-                          borderRadius: "50%",
-                          background: color,
-                          flexShrink: 0,
-                          animation: "pulse-dot 1.5s ease-in-out infinite",
-                          boxShadow: `0 0 6px ${color}`,
-                        }}
-                        title={activity === "tool_use" ? "Running tool" : activity === "thinking" ? "Thinking" : activity === "background_task" ? "Background task" : "Active"}
-                      />
-                    );
-                  })()}
+                  <ActivityIndicator
+                    bell={wsBell.has(ws.id)}
+                    active={ACTIVE_ACTIVITIES.has(wsActivity[ws.id] ?? "")}
+                    stopped={!!loadedWsIds && !loadedWsIds.has(ws.id)}
+                  />
                   {renamingWsId === ws.id ? (
                     <input
                       ref={renameInputRef}
@@ -530,22 +563,40 @@ export default function WorkstreamSidebar({
         justifyContent: "space-between",
         alignItems: "center",
       }}>
-        <span>Repos</span>
+        <button
+          data-testid="repos-toggle"
+          onClick={() => setReposCollapsed((v) => !v)}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 4,
+            background: "none",
+            border: "none",
+            color: "#585b70",
+            cursor: "pointer",
+            padding: 0,
+            fontSize: 10,
+            fontWeight: 600,
+            textTransform: "uppercase",
+            letterSpacing: 1,
+            fontFamily: "inherit",
+          }}
+          title={reposCollapsed ? "Show repos" : "Hide repos"}
+        >
+          {reposCollapsed
+            ? <ChevronRightIcon style={{ width: 12, height: 12 }} />
+            : <ChevronDownIcon style={{ width: 12, height: 12 }} />}
+          Repos
+        </button>
         <div ref={repoMenuRef} style={{ position: "relative" }}>
           <button
             onClick={() => setShowRepoMenu((v) => !v)}
-            style={{
-              background: "none",
-              border: "none",
-              color: "#585b70",
-              cursor: "pointer",
-              fontSize: 14,
-              padding: 0,
-              lineHeight: 1,
-            }}
+            style={addButtonStyle}
+            onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "#313244"; (e.currentTarget as HTMLElement).style.color = "#cdd6f4"; }}
+            onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "transparent"; (e.currentTarget as HTMLElement).style.color = "#a6adc8"; }}
             title="Add repo"
           >
-            +
+            <PlusIcon style={{ width: 16, height: 16 }} />
           </button>
           {showRepoMenu && (
             <div
@@ -604,13 +655,14 @@ export default function WorkstreamSidebar({
         </div>
       </div>
 
+      {!reposCollapsed && (
       <div style={{ overflowY: "auto", padding: "0 4px 8px", maxHeight: "40vh", minHeight: 120 }}>
         {projects.length === 0 && (
           <div style={{ padding: "4px 8px", color: "#45475a", fontSize: 11 }}>
             No repos yet
           </div>
         )}
-        {projects.map((p) => (
+        {[...projects].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" })).map((p) => (
           <div
             key={p.id}
             onClick={() => {
@@ -649,6 +701,7 @@ export default function WorkstreamSidebar({
           </div>
         ))}
       </div>
+      )}
 
       {/* Repo edit modal */}
       {editingProject && (

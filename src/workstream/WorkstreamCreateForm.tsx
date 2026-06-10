@@ -41,10 +41,10 @@ export default function WorkstreamCreateForm({ project: initialProject, projects
   const [directory, setDirectory] = useState(project?.directory || "");
   const [branchName, setBranchName] = useState("");
   const [worktreeInfo, setWorktreeInfo] = useState<WorktreeInfo | null>(null);
-  // Import Worktree always uses an existing session; others default to "new".
-  const sessionChoice: SessionChoice = repoChoice === "import_worktree" ? "existing" : "new";
+  // Session choice is fully independent of repo source — importing an
+  // existing worktree does NOT require linking to an existing session.
   const [sessionPref, setSessionPref] = useState<SessionChoice>("new");
-  const effectiveSession: SessionChoice = repoChoice === "import_worktree" ? "existing" : sessionPref;
+  const effectiveSession: SessionChoice = sessionPref;
 
   // Project changed: reset defaults
   const handleProjectChange = (projectId: string | null) => {
@@ -116,8 +116,6 @@ export default function WorkstreamCreateForm({ project: initialProject, projects
     { value: "existing", label: "Existing Session", desc: "Pick one of your prior sessions" },
   ];
 
-  const sessionLocked = repoChoice === "import_worktree";
-
   return (
     <div
       data-testid="ws-create-form"
@@ -176,7 +174,7 @@ export default function WorkstreamCreateForm({ project: initialProject, projects
           }}
         >
           <option value="">None</option>
-          {projects.map((p) => (
+          {[...projects].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" })).map((p) => (
             <option key={p.id} value={p.id}>
               {p.name}
             </option>
@@ -361,7 +359,7 @@ export default function WorkstreamCreateForm({ project: initialProject, projects
         <label style={{ fontSize: 11, color: "#a6adc8", display: "block", marginBottom: 6 }}>Session</label>
         <div style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 14 }}>
           {sessionOptions.map((opt) => {
-            const isSelected = (sessionLocked ? sessionChoice : sessionPref) === opt.value;
+            const isSelected = sessionPref === opt.value;
             return (
               <label
                 key={opt.value}
@@ -372,8 +370,7 @@ export default function WorkstreamCreateForm({ project: initialProject, projects
                   gap: 8,
                   padding: "6px 10px",
                   borderRadius: 4,
-                  cursor: sessionLocked ? "not-allowed" : "pointer",
-                  opacity: sessionLocked && !isSelected ? 0.5 : 1,
+                  cursor: "pointer",
                   background: isSelected ? "#313244" : "transparent",
                   border: isSelected ? "1px solid #45475a" : "1px solid transparent",
                 }}
@@ -383,17 +380,11 @@ export default function WorkstreamCreateForm({ project: initialProject, projects
                   name="sessionChoice"
                   value={opt.value}
                   checked={isSelected}
-                  disabled={sessionLocked}
                   onChange={() => setSessionPref(opt.value)}
                   style={{ accentColor: "#89b4fa" }}
                 />
                 <div>
-                  <div style={{ fontSize: 12, color: "#cdd6f4" }}>
-                    {opt.label}
-                    {sessionLocked && opt.value === "existing" && (
-                      <span style={{ marginLeft: 6, fontSize: 10, color: "#f9e2af" }}>(required for Import)</span>
-                    )}
-                  </div>
+                  <div style={{ fontSize: 12, color: "#cdd6f4" }}>{opt.label}</div>
                   <div style={{ fontSize: 10, color: "#6c7086" }}>{opt.desc}</div>
                 </div>
               </label>

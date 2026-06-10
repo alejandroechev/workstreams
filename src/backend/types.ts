@@ -47,12 +47,17 @@ export interface Backend {
   // PTY
   spawnTerminal(tileId: string, cwd: string, command?: string, args?: string[], rows?: number, cols?: number): Promise<void>;
   /**
-   * Spawn agency.exe for a copilot session and register a pending PID
+   * Spawn a copilot session CLI for a tile and register a pending PID
    * correlation with the backend session poller so it can identify the
    * resulting session-state directory without fuzzy matching.
+   *
+   * `command` is the full command line (e.g. `agency copilot --yolo` or
+   * `copilot --yolo`) — whitespace-split into program + args on the
+   * Rust side. If omitted, the backend uses its compiled-in default.
+   *
    * Returns the child PID (or null on memory backend).
    */
-  spawnCopilotSession(tileId: string, cwd: string, resumeSessionId?: string | null, rows?: number, cols?: number): Promise<number | null>;
+  spawnCopilotSession(tileId: string, cwd: string, resumeSessionId?: string | null, rows?: number, cols?: number, command?: string | null): Promise<number | null>;
   writeToTerminal(tileId: string, data: string): Promise<void>;
   resizeTerminal(tileId: string, rows: number, cols: number): Promise<void>;
   closeTerminal(tileId: string): Promise<void>;
@@ -70,10 +75,14 @@ export interface Backend {
   // Git diff
   gitDiffFiles(directory: string, mode: string): Promise<string[]>;
   gitDiffFile(directory: string, filePath: string, mode: string): Promise<string>;
+  gitDiffFilesWithStatus(directory: string, mode: string): Promise<Array<{ path: string; status: "A" | "M" | "D" | "R" }>>;
+  gitDiffFileSides(directory: string, filePath: string, mode: string): Promise<{ before: string; after: string }>;
   // Git log & branch
   gitLog(directory: string, limit?: number): Promise<Array<{ hash: string; short_hash: string; message: string; author: string; date: string }>>;
   gitShowCommit(directory: string, hash: string): Promise<string>;
   gitCurrentBranch(directory: string): Promise<string>;
+  /** Returns ahead/behind counts vs origin/<currentBranch> + remote head short hash. */
+  gitBranchTrackingInfo(directory: string): Promise<{ ahead: number; behind: number; remoteHeadShort: string }>;
   // Copilot config discovery
   discoverCopilotConfig(workstreamDir?: string): Promise<CopilotConfigItem[]>;
   // Plan / todo introspection of a Copilot session's session.db

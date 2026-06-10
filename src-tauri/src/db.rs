@@ -4,9 +4,15 @@ use std::path::{Path, PathBuf};
 /// Resolves the workstreams DB path with the following precedence:
 /// 1. `WORKSTREAMS_DB_PATH` env var (absolute or relative path)
 /// 2. Debug builds → `<cwd>/.dev/workstreams-dev.db`
-/// 3. Release builds → `<data_local_dir>/copilot-desktop/copilot-desktop.db`
+/// 3. Release builds → `<data_local_dir>/workstreams/workstreams.db`
 ///
 /// Always isolates dev work from the production database.
+///
+/// Migration: builds prior to v0.2.0 stored the release DB at
+/// `<data_local_dir>/copilot-desktop/copilot-desktop.db`. If the new
+/// location doesn't exist yet but the old one does, we copy the .db /
+/// .db-wal / .db-shm files into the new folder on first launch so the
+/// upgrade is transparent. The original is left in place as a backup.
 pub fn resolve_db_path() -> PathBuf {
     if let Ok(p) = std::env::var("WORKSTREAMS_DB_PATH") {
         if !p.trim().is_empty() {
@@ -19,10 +25,65 @@ pub fn resolve_db_path() -> PathBuf {
             .join(".dev")
             .join("workstreams-dev.db");
     }
-    dirs::data_local_dir()
+    let new_path = dirs::data_local_dir()
         .unwrap_or_else(|| PathBuf::from("."))
-        .join("copilot-desktop")
-        .join("copilot-desktop.db")
+        .join("workstreams")
+        .join("workstreams.db");
+    migrate_legacy_db_if_present(&new_path);
+    new_path
+}
+
+/// One-shot copy from the pre-v0.2.0 `copilot-desktop/copilot-desktop.db`
+/// location to `workstreams/workstreams.db`. Runs only when the new
+/// location is missing and the legacy one exists. Best-effort: copy
+/// failures fall through and the caller will simply open an empty DB
+/// at the new path (so a corrupted legacy file can never block boot).
+fn migrate_legacy_db_if_present(new_path: &Path) {
+    if new_path.exists() {
+        return;
+    }
+    let legacy_dir = match dirs::data_local_dir() {
+        Some(d) => d.join("copilot-desktop"),
+        None => return,
+    };
+    let legacy_db = legacy_dir.join("copilot-desktop.db");
+    if !legacy_db.exists() {
+        return;
+    }
+    let new_dir = match new_path.parent() {
+        Some(d) => d,
+        None => return,
+    };
+    if let Err(e) = std::fs::create_dir_all(new_dir) {
+        eprintln!(
+            "[workstreams] migrate: could not create {}: {e}",
+            new_dir.display()
+        );
+        return;
+    }
+    let copy = |from_name: &str, to_name: &str| {
+        let from = legacy_dir.join(from_name);
+        if !from.exists() {
+            return;
+        }
+        let to = new_dir.join(to_name);
+        if let Err(e) = std::fs::copy(&from, &to) {
+            eprintln!(
+                "[workstreams] migrate: copy {} -> {} failed: {e}",
+                from.display(),
+                to.display()
+            );
+        } else {
+            eprintln!(
+                "[workstreams] migrated {} -> {}",
+                from.display(),
+                to.display()
+            );
+        }
+    };
+    copy("copilot-desktop.db", "workstreams.db");
+    copy("copilot-desktop.db-wal", "workstreams.db-wal");
+    copy("copilot-desktop.db-shm", "workstreams.db-shm");
 }
 
 /// Initialize the database schema. Creates all tables if they don't exist.
@@ -316,10 +377,40 @@ mod tests {
         if cfg!(debug_assertions) {
             assert!(path.ends_with("workstreams-dev.db"));
             assert!(path.to_string_lossy().contains(".dev"));
+        } else {
+            // Release: uses <data_local_dir>/workstreams/workstreams.db
+            assert!(path.ends_with("workstreams.db"));
+            assert!(path
+                .parent()
+                .map(|p| p.ends_with("workstreams"))
+                .unwrap_or(false));
         }
         if let Some(v) = prev {
             std::env::set_var("WORKSTREAMS_DB_PATH", v);
         }
+    }
+
+    #[test]
+    fn migrate_legacy_db_is_noop_when_new_path_exists() {
+        let tmp = std::env::temp_dir().join(format!(
+            "ws-migrate-noop-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let new_dir = tmp.join("new");
+        std::fs::create_dir_all(&new_dir).unwrap();
+        let new_path = new_dir.join("workstreams.db");
+        std::fs::write(&new_path, b"existing content").unwrap();
+
+        super::migrate_legacy_db_if_present(&new_path);
+
+        // File untouched.
+        let after = std::fs::read(&new_path).unwrap();
+        assert_eq!(after, b"existing content");
+        std::fs::remove_dir_all(&tmp).ok();
     }
 
     #[test]

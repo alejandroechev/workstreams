@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { hydrateAppSettings, getAppSettings } from "./domain/app-settings";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { fileBufferRegistry } from "./files/FileBufferRegistry";
@@ -14,11 +15,11 @@ import StatusBar from "./tiling/StatusBar";
 import SessionPicker, { type CopilotSession } from "./tiles/SessionPicker";
 import SettingsModal from "./ui/SettingsModal";
 import DiffReviewPickerModal from "./ui/components/DiffReviewPickerModal";
+import ConfirmCloseDialog from "./ui/components/ConfirmCloseDialog";
 import { navigateFocus } from "./domain/layout";
 import { parseKeyAction } from "./domain/keyboard";
 import { createTerminalConfig, createCopilotSessionConfig } from "./domain/tile-config";
 import { createWorkstreamFlow } from "./domain/workstream-create";
-import { summarizeTilesToRestart } from "./domain/worktree-change";
 import { workbenchStore } from "./domain/workbench-store-instance";
 import { setWorkbenchStoreForDispatcher } from "./domain/workbench-events";
 import { useBackend } from "./backend/context";
@@ -50,6 +51,11 @@ export default function App() {
     selectedForSideBySide: Set<string>;
     /** When set, exactly two tile ids that are rendered visibly side-by-side. */
     sideBySideTileIds: string[] | null;
+    /** When true the per-tile selection checkboxes are visible so the user
+     * can pick two tiles to enter side-by-side. Toggled via the status-bar
+     * button (or Alt+S). Auto-clears once 2 tiles are selected and SBS
+     * activates, and on explicit cancel. */
+    sbsSelectionMode: boolean;
   };
   const EMPTY_STATE: WsState = {
     tiles: [],
@@ -58,6 +64,7 @@ export default function App() {
     fullscreenTileId: null,
     selectedForSideBySide: new Set(),
     sideBySideTileIds: null,
+    sbsSelectionMode: false,
   };
   const [wsStates, setWsStates] = useState<Map<string, WsState>>(new Map());
   // Focus token bumped on every workstream switch so per-tile effects know to
@@ -72,6 +79,7 @@ export default function App() {
   const fullscreenTileId = activeState.fullscreenTileId;
   const selectedForSideBySide = activeState.selectedForSideBySide;
   const sideBySideTileIds = activeState.sideBySideTileIds;
+  const sbsSelectionMode = activeState.sbsSelectionMode;
 
   // Update helpers that act on the active workstream
   const updateActiveState = useCallback((updater: (prev: WsState) => WsState) => {
@@ -100,31 +108,60 @@ export default function App() {
     [updateActiveState],
   );
 
-  /** Toggle a tile's side-by-side selection. Cap is enforced at click time. */
+  /**
+   * Toggle a tile's side-by-side selection. When the user picks the
+   * 2nd tile (so total == 2), immediately commit: enter side-by-side
+   * with those two tiles, in tile-order, and exit selection mode. This
+   * matches the "click → checkboxes appear → pick two → done" flow.
+   */
   const toggleSideBySideSelect = useCallback((tileId: string) => {
     updateActiveState((s) => {
       const next = new Set(s.selectedForSideBySide);
-      if (next.has(tileId)) next.delete(tileId);
-      else next.add(tileId);
+      if (next.has(tileId)) {
+        next.delete(tileId);
+        return { ...s, selectedForSideBySide: next };
+      }
+      next.add(tileId);
+      if (next.size === 2) {
+        // Preserve tile order: pair appears left = earlier-in-tileOrder.
+        const ids = s.tileOrder.filter((id) => next.has(id));
+        if (ids.length === 2) {
+          return {
+            ...s,
+            selectedForSideBySide: new Set(),
+            sideBySideTileIds: ids,
+            sbsSelectionMode: false,
+            fullscreenTileId: null,
+          };
+        }
+      }
       return { ...s, selectedForSideBySide: next };
     });
   }, [updateActiveState]);
 
   /**
-   * Toggle side-by-side mode. If currently active → exit (clear selection).
-   * If exactly two tiles selected → enter with them. Otherwise no-op.
+   * Status-bar SBS button.
+   * - If currently in side-by-side → exit (clear ids + selection).
+   * - Else → toggle selection mode (show/hide per-tile checkboxes).
+   *   Always enabled; the actual SBS entry happens via
+   *   toggleSideBySideSelect when the 2nd tile is checked.
    */
   const toggleSideBySide = useCallback(() => {
     updateActiveState((s) => {
       if (s.sideBySideTileIds) {
-        return { ...s, sideBySideTileIds: null, selectedForSideBySide: new Set() };
+        return {
+          ...s,
+          sideBySideTileIds: null,
+          selectedForSideBySide: new Set(),
+          sbsSelectionMode: false,
+        };
       }
-      if (s.selectedForSideBySide.size !== 2) return s;
-      // Preserve tile order: pair appears left=earlier-in-tileOrder.
-      const ids = s.tileOrder.filter((id) => s.selectedForSideBySide.has(id));
-      if (ids.length !== 2) return s;
-      // Entering SBS exits fullscreen so the two modes never collide.
-      return { ...s, sideBySideTileIds: ids, fullscreenTileId: null };
+      return {
+        ...s,
+        sbsSelectionMode: !s.sbsSelectionMode,
+        // Drop any half-baked selection if the user cancels.
+        selectedForSideBySide: !s.sbsSelectionMode ? s.selectedForSideBySide : new Set(),
+      };
     });
   }, [updateActiveState]);
 
@@ -162,6 +199,16 @@ export default function App() {
   const [noActiveReviewHint, setNoActiveReviewHint] = useState(false);
   // Track which tile IDs have active PTYs to avoid double-spawning
   const spawnedPtys = useRef<Set<string>>(new Set());
+  // Tile ids whose PTY exit was triggered by our own restart code path.
+  // Used by CopilotSessionTile / TerminalTile to swap the "[Session ended]"
+  // banner for "[Restarting…]" when we know the exit was intentional.
+  const intentionalRestartIds = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    // Expose to tiles via a window global to avoid plumbing yet another
+    // prop through Tile → Tile children for what is purely a UI hint.
+    (window as unknown as { __wsIntentionalRestartIds?: Set<string> }).__wsIntentionalRestartIds =
+      intentionalRestartIds.current;
+  }, []);
   const previousWsTiles = useRef<Map<string, { tiles: Tile[]; order: string[] }>>(new Map());
 
   const getDirtyFileBuffers = useCallback(() => fileBufferRegistry.listAll().filter((snapshot) => snapshot.dirty), []);
@@ -172,14 +219,35 @@ export default function App() {
     return window.confirm(`You have unsaved changes in ${dirtyCount} file(s). Discard and ${action}?`);
   }, [getDirtyFileBuffers]);
 
+  const [confirmCloseOpen, setConfirmCloseOpen] = useState(false);
+  const confirmCloseFinalizeRef = useRef<(() => Promise<void>) | null>(null);
+
   useEffect(() => {
     const unsub = (async () => {
       const win = getCurrentWindow();
       const unlisten = await win.onCloseRequested(async (event) => {
         const dirty = getDirtyFileBuffers();
-        if (dirty.length === 0) {
-          // No unsaved work; explicitly destroy so we don't depend on the
-          // framework's "no preventDefault → auto destroy" path.
+        // Dirty buffers get their own (more informative) confirm.
+        if (dirty.length > 0) {
+          event.preventDefault();
+          const list = dirty.map((snapshot) => `  • ${snapshot.path}`).join("\n");
+          const ok = window.confirm(`You have unsaved changes in ${dirty.length} file(s):\n\n${list}\n\nClose anyway and discard?`);
+          if (ok) {
+            try { await win.destroy(); }
+            catch (err) { console.error("window.destroy failed:", err); }
+          }
+          return;
+        }
+
+        // Generic confirm-close gate. Respects the "Don't ask again"
+        // setting under app.confirm-close-disabled.
+        let disabled = false;
+        try {
+          const raw = await invoke<string | null>("get_setting", { key: "app.confirm-close-disabled" });
+          disabled = raw === "1";
+        } catch { /* default to ask */ }
+
+        if (disabled) {
           event.preventDefault();
           try { await win.destroy(); }
           catch (err) { console.error("window.destroy failed (check capabilities/default.json for core:window:allow-destroy):", err); }
@@ -187,18 +255,39 @@ export default function App() {
         }
 
         event.preventDefault();
-        const list = dirty.map((snapshot) => `  • ${snapshot.path}`).join("\n");
-        const ok = window.confirm(`You have unsaved changes in ${dirty.length} file(s):\n\n${list}\n\nClose anyway and discard?`);
-        if (ok) {
+        confirmCloseFinalizeRef.current = async () => {
           try { await win.destroy(); }
           catch (err) { console.error("window.destroy failed:", err); }
-        }
+        };
+        setConfirmCloseOpen(true);
       });
       return unlisten;
     })();
 
     return () => { unsub.then((unlisten) => unlisten?.()).catch(() => {}); };
   }, [getDirtyFileBuffers]);
+
+  const handleConfirmClose = useCallback(async (dontAskAgain: boolean) => {
+    setConfirmCloseOpen(false);
+    if (dontAskAgain) {
+      try { await invoke("set_setting", { key: "app.confirm-close-disabled", value: "1" }); }
+      catch (err) { console.error("set_setting failed:", err); }
+    }
+    const finalize = confirmCloseFinalizeRef.current;
+    confirmCloseFinalizeRef.current = null;
+    if (finalize) await finalize();
+  }, []);
+
+  const handleCancelClose = useCallback(() => {
+    setConfirmCloseOpen(false);
+    confirmCloseFinalizeRef.current = null;
+  }, []);
+
+  // Hydrate app-level settings (font sizes, scroll speed) from SQLite
+  // before tiles render so the first paint uses real values.
+  useEffect(() => {
+    void hydrateAppSettings();
+  }, []);
 
   // Load projects and workstreams on mount (with saved order)
   useEffect(() => {
@@ -274,9 +363,13 @@ export default function App() {
           tiles: t,
           tileOrder: order,
           focusedIndex: 0,
-          fullscreenTileId: layout.fullscreen_tile_id || null,
+          // Fullscreen is runtime-only: starts at null on every workstream
+          // load even if the prior session persisted a value. The DB column
+          // is left in place for backwards compatibility but no longer read.
+          fullscreenTileId: null,
           selectedForSideBySide: new Set(),
           sideBySideTileIds: null,
+          sbsSelectionMode: false,
         });
         return next;
       });
@@ -296,7 +389,7 @@ export default function App() {
             const cwd = config.cwd || "C:\\";
             spawnedPtys.current.add(tile.id);
             const sessionId = config.copilot_session_id || config.resume_by_id || null;
-            backend.spawnCopilotSession(tile.id, cwd, sessionId, 30, 120).catch(() => {
+            backend.spawnCopilotSession(tile.id, cwd, sessionId, 30, 120, getAppSettings().copilotCommand).catch(() => {
               spawnedPtys.current.delete(tile.id);
             });
           }
@@ -311,17 +404,6 @@ export default function App() {
     if (!confirmDiscardDirtyFileBuffers("switch workstreams")) return;
     setActiveWsId(id);
   }, [activeWsId, confirmDiscardDirtyFileBuffers]);
-
-  // Switch workstream by index (Ctrl+1-9)
-  const switchWorkstream = useCallback(
-    (index: number) => {
-      const ws = workstreams[index];
-      if (ws) {
-        selectWorkstream(ws.id);
-      }
-    },
-    [workstreams, selectWorkstream]
-  );
 
   // Workstream commands stored per-workstream for terminal spawning
   const wsCommands = useRef<Map<string, string>>(new Map());
@@ -400,7 +482,18 @@ export default function App() {
       }
     } catch { /* ignore */ }
 
-    setWorkstreams((prev) => [ws, ...prev]);
+    setWorkstreams((prev) => {
+      const next = [ws, ...prev];
+      // Persist the new order so reopen places the new WS first (matches
+      // the visible position right after creation). Without this the
+      // saved workstream_order (only updated on drag-reorder) doesn't
+      // include the new id, and the load effect appends it to the end.
+      invoke("set_setting", {
+        key: "workstream_order",
+        value: JSON.stringify(next.map((w) => w.id)),
+      }).catch(() => {});
+      return next;
+    });
     setActiveWsId(ws.id);
     setTiles([tile]);
     setTileOrder([tile.id]);
@@ -437,7 +530,7 @@ export default function App() {
 
     // New session — spawn agency.exe and register PID correlation with the poller.
     spawnedPtys.current.add(created.tile.id);
-    backend.spawnCopilotSession(created.tile.id, created.effectiveDirectory, null, 30, 120).catch(() => {
+    backend.spawnCopilotSession(created.tile.id, created.effectiveDirectory, null, 30, 120, getAppSettings().copilotCommand).catch(() => {
       spawnedPtys.current.delete(created.tile.id);
     });
   }, [backend, doCreateWorkstream]);
@@ -542,7 +635,14 @@ export default function App() {
     }
 
     // Switch to new workstream
-    setWorkstreams((prev) => [newWs, ...prev]);
+    setWorkstreams((prev) => {
+      const next = [newWs, ...prev];
+      invoke("set_setting", {
+        key: "workstream_order",
+        value: JSON.stringify(next.map((w) => w.id)),
+      }).catch(() => {});
+      return next;
+    });
     setActiveWsId(newWs.id);
     setTiles([tile]);
     setTileOrder([tile.id]);
@@ -550,31 +650,10 @@ export default function App() {
 
     // Spawn agency.exe with --resume
     spawnedPtys.current.add(tile.id);
-    backend.spawnCopilotSession(tile.id, newDir, sessionId, 30, 120).catch(() => {
+    backend.spawnCopilotSession(tile.id, newDir, sessionId, 30, 120, getAppSettings().copilotCommand).catch(() => {
       spawnedPtys.current.delete(tile.id);
     });
   }, [workstreams, backend]);
-
-  const restartTileInDirectory = useCallback(async (tile: Tile, directory: string) => {
-    if (tile.tile_type !== "terminal" && tile.tile_type !== "copilot_session") return;
-
-    const cfg = JSON.parse(tile.config_json || "{}");
-    spawnedPtys.current.delete(tile.id);
-    await backend.closeTerminal(tile.id).catch(() => {});
-    spawnedPtys.current.add(tile.id);
-
-    try {
-      if (tile.tile_type === "terminal") {
-        await backend.spawnTerminal(tile.id, directory, cfg.command || undefined, undefined, 30, 120);
-      } else {
-        const sessionId = cfg.copilot_session_id || cfg.resume_by_id || null;
-        await backend.spawnCopilotSession(tile.id, directory, sessionId, 30, 120);
-      }
-    } catch (error) {
-      spawnedPtys.current.delete(tile.id);
-      throw error;
-    }
-  }, [backend]);
 
   const handleChangeWorktreeSubmit = useCallback(async (
     mode: "switch_existing" | "create_new",
@@ -582,7 +661,7 @@ export default function App() {
   ) => {
     if (!changeWorktreeTarget) return;
 
-    const { workstream, affectedTileIds } = await backend.changeWorkstreamWorktree(changeWorktreeTarget.id, mode, opts);
+    const { workstream } = await backend.changeWorkstreamWorktree(changeWorktreeTarget.id, mode, opts);
     const updatedTiles = await backend.listTiles(workstream.id);
     const updatedTilesById = new Map(updatedTiles.map((tile) => [tile.id, tile]));
 
@@ -597,11 +676,11 @@ export default function App() {
       return next;
     });
 
-    const restartDirectory = workstream.directory || "C:\\";
-    for (const tileId of affectedTileIds) {
-      const tile = updatedTilesById.get(tileId);
-      if (tile) await restartTileInDirectory(tile, restartDirectory);
-    }
+    // Intentionally do NOT restart any tiles here. The Rust command has
+    // already rewritten each restartable tile's config_json.cwd, so the new
+    // directory will take effect on the next manual restart / app relaunch.
+    // Restarting on worktree-switch was killing scrollback for no benefit
+    // (cd inside the running session must be done by the user / agent).
 
     const latestWorkstreams = await backend.listWorkstreams();
     setWorkstreams((prev) => {
@@ -617,9 +696,8 @@ export default function App() {
     });
 
     setChangeWorktreeTarget(null);
-    const restartSummary = summarizeTilesToRestart(updatedTiles.filter((tile) => affectedTileIds.includes(tile.id)));
-    console.info(`Changed worktree for ${workstream.name}; restarted ${restartSummary.count} tile(s).`);
-  }, [backend, changeWorktreeTarget, restartTileInDirectory]);
+    console.info(`Changed worktree for ${workstream.name} (tiles left running; new dir applies on next restart).`);
+  }, [backend, changeWorktreeTarget]);
 
   const addTile = useCallback(async (tileType: TileType, extraConfig?: Record<string, string>) => {
     if (!activeWsId) return;
@@ -693,7 +771,7 @@ export default function App() {
     } else if (tileType === "copilot_session") {
       spawnedPtys.current.add(tile.id);
       // Spawn agency.exe directly — new session, no resume
-      await backend.spawnCopilotSession(tile.id, cwd, null, 30, 120);
+      await backend.spawnCopilotSession(tile.id, cwd, null, 30, 120, getAppSettings().copilotCommand);
     }
 
     setFocusedIndex(tileOrder.length);
@@ -770,7 +848,7 @@ export default function App() {
 
     spawnedPtys.current.add(tile.id);
     // Spawn agency.exe directly with --resume
-    await backend.spawnCopilotSession(tile.id, cwd, session.session_id, 30, 120);
+    await backend.spawnCopilotSession(tile.id, cwd, session.session_id, 30, 120, getAppSettings().copilotCommand);
     setFocusedIndex(tileOrder.length);
   }, [activeWsId, workstreams, tileOrder.length, backend]);
 
@@ -910,6 +988,11 @@ export default function App() {
       .filter((id): id is string => !!id);
   }, [tiles]);
 
+  // Workstreams that have been "loaded" (have an entry in wsStates so tiles
+  // are mounted + listeners are active). Workstreams the user hasn't opened
+  // yet this session show a "stopped" indicator in the sidebar.
+  const loadedWsIds = useMemo(() => new Set(wsStates.keys()), [wsStates]);
+
   // Keyboard shortcuts
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -936,10 +1019,6 @@ export default function App() {
           }
           break;
         }
-        case "switchWorkstream":
-          e.preventDefault();
-          switchWorkstream(action.index);
-          break;
         case "navigate": {
           e.preventDefault();
           // Blur current active element so focus moves to new tile
@@ -984,11 +1063,6 @@ export default function App() {
           if (count > 0 && orderedTiles[focusedIndex]) {
             const tid = orderedTiles[focusedIndex]!.id;
             setFullscreenTileId((prev) => (prev === tid ? null : tid));
-            if (activeWsId) {
-              backend.updateLayout(activeWsId, {
-                fullscreen_tile_id: fullscreenTileId === tid ? "" : tid,
-              });
-            }
           }
           break;
         case "toggleSideBySide":
@@ -1003,7 +1077,7 @@ export default function App() {
 
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [tiles, tileOrder, focusedIndex, fullscreenTileId, activeWsId, addTile, closeTile, switchWorkstream, backend, toggleSideBySide]);
+  }, [tiles, tileOrder, focusedIndex, fullscreenTileId, activeWsId, addTile, closeTile, backend, toggleSideBySide]);
 
   const orderedTiles = tileOrder
     .map((id) => tiles.find((t) => t.id === id))
@@ -1027,6 +1101,7 @@ export default function App() {
         workstreams={workstreams}
         activeWsId={activeWsId}
         sessionInfoByWs={sessionInfoByWs}
+        loadedWsIds={loadedWsIds}
         onSelectWorkstream={selectWorkstream}
         onCreateProject={() => setShowRepoCreate(true)}
         onImportProject={() => setShowProjectCreate(true)}
@@ -1093,6 +1168,8 @@ export default function App() {
                   fullscreenTileId={st.fullscreenTileId}
                   sideBySideTileIds={st.sideBySideTileIds}
                   selectedForSideBySide={st.selectedForSideBySide}
+                  sbsSelectionMode={st.sbsSelectionMode}
+                  isVisible={isActive}
                   onToggleSideBySideSelect={isActive ? toggleSideBySideSelect : () => {}}
                   onFocusTile={isActive ? setFocusedIndex : () => {}}
                   onCloseTile={isActive ? closeTile : () => {}}
@@ -1124,14 +1201,26 @@ export default function App() {
                     }
                   } : undefined}
                   onRestart={isActive ? async (tileId) => {
-                    const tile = tiles.find((t) => t.id === tileId);
+                    const tile = st.tiles.find((t) => t.id === tileId);
                     if (!tile) return;
                     const cfg = JSON.parse(tile.config_json || "{}");
-                    const cwd = cfg.cwd || workstreams.find((w) => w.id === activeWsId)?.directory || "C:\\";
+                    const cwd = cfg.cwd || workstreams.find((w) => w.id === wsId)?.directory || "C:\\";
+                    // Mark "we initiated this" so the PTY-exit handler in
+                    // the tile writes [Restarting…] instead of [Session ended].
+                    intentionalRestartIds.current.add(tileId);
                     await backend.closeTerminal(tileId).catch(() => {});
                     spawnedPtys.current.add(tileId);
-                    const sessionId = cfg.copilot_session_id || cfg.resume_by_id || null;
-                    await backend.spawnCopilotSession(tileId, cwd, sessionId, 30, 120);
+                    try {
+                      if (tile.tile_type === "copilot_session") {
+                        const sessionId = cfg.copilot_session_id || cfg.resume_by_id || null;
+                        await backend.spawnCopilotSession(tileId, cwd, sessionId, 30, 120, getAppSettings().copilotCommand);
+                      } else if (tile.tile_type === "terminal") {
+                        await backend.spawnTerminal(tileId, cwd, cfg.command || undefined, undefined, 30, 120);
+                      }
+                    } catch {
+                      spawnedPtys.current.delete(tileId);
+                      intentionalRestartIds.current.delete(tileId);
+                    }
                   } : undefined}
                   onUpdateTileConfig={isActive ? async (tileId, configJson) => {
                     await backend.updateTileConfig(tileId, configJson);
@@ -1155,6 +1244,7 @@ export default function App() {
           fullscreen={fullscreenTileId !== null}
           sideBySide={sideBySideTileIds !== null}
           canEnterSideBySide={selectedForSideBySide.size === 2}
+          sbsSelectionMode={sbsSelectionMode}
           workstreamName={
             workstreams.find((w) => w.id === activeWsId)?.name || ""
           }
@@ -1178,6 +1268,11 @@ export default function App() {
       </div>
 
       <SettingsModal open={showSettings} onClose={() => setShowSettings(false)} />
+      <ConfirmCloseDialog
+        open={confirmCloseOpen}
+        onConfirm={handleConfirmClose}
+        onCancel={handleCancelClose}
+      />
 
       {showDiffReviewPicker && (
         <DiffReviewPickerModal
@@ -1226,6 +1321,7 @@ export default function App() {
       {/* Session picker modal */}
       {showSessionPicker && (
         <SessionPicker
+          activeWorkstreamDir={workstreams.find((w) => w.id === activeWsId)?.directory ?? undefined}
           onSelect={async (session) => {
             setShowSessionPicker(false);
             // Case A: user started "new WS + existing session" — create the
@@ -1242,7 +1338,7 @@ export default function App() {
               }));
               spawnedPtys.current.add(created.tile.id);
               backend
-                .spawnCopilotSession(created.tile.id, created.effectiveDirectory, session.session_id, 30, 120)
+                .spawnCopilotSession(created.tile.id, created.effectiveDirectory, session.session_id, 30, 120, getAppSettings().copilotCommand)
                 .catch(() => spawnedPtys.current.delete(created.tile.id));
               return;
             }
@@ -1267,7 +1363,7 @@ export default function App() {
                 if (!spawnedPtys.current.has(linkingTileId)) {
                   const cwd = cfg.cwd || workstreams.find((w) => w.id === activeWsId)?.directory || "C:\\";
                   spawnedPtys.current.add(linkingTileId);
-                  backend.spawnCopilotSession(linkingTileId, cwd, session.session_id, 30, 120).catch(() => {
+                  backend.spawnCopilotSession(linkingTileId, cwd, session.session_id, 30, 120, getAppSettings().copilotCommand).catch(() => {
                     spawnedPtys.current.delete(linkingTileId);
                   });
                 }
@@ -1289,7 +1385,7 @@ export default function App() {
                 if (!created) return;
                 spawnedPtys.current.add(created.tile.id);
                 backend
-                  .spawnCopilotSession(created.tile.id, created.effectiveDirectory, null, 30, 120)
+                  .spawnCopilotSession(created.tile.id, created.effectiveDirectory, null, 30, 120, getAppSettings().copilotCommand)
                   .catch(() => spawnedPtys.current.delete(created.tile.id));
               })();
               return;

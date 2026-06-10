@@ -21,7 +21,7 @@ required the user to close their working session.
    `db::resolve_db_path()`:
    - `WORKSTREAMS_DB_PATH` env var (if set and non-empty) wins.
    - Otherwise, in debug builds → `./.dev/workstreams-dev.db` (gitignored).
-   - Otherwise, release builds → `<data_local_dir>/copilot-desktop/copilot-desktop.db`.
+   - Otherwise, release builds → `<data_local_dir>/workstreams/workstreams.db`.
 
 2. **CDP is dev-only.** `src-tauri/tauri.conf.json` does **not** include
    `additionalBrowserArgs`, so the production-shipped binary has no remote

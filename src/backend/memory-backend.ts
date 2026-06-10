@@ -262,14 +262,14 @@ export class MemoryBackend implements Backend {
     }
   }
 
-  async spawnCopilotSession(tileId: string, cwd: string, resumeSessionId?: string | null, rows?: number, cols?: number): Promise<number | null> {
+  async spawnCopilotSession(tileId: string, cwd: string, resumeSessionId?: string | null, rows?: number, cols?: number, command?: string | null): Promise<number | null> {
     this.terminals.add(tileId);
     if (typeof window !== "undefined") {
       const w = window as unknown as { __WS_INVOKE_LOG__?: Array<{ cmd: string; args: Record<string, unknown> }> };
       if (!w.__WS_INVOKE_LOG__) w.__WS_INVOKE_LOG__ = [];
       w.__WS_INVOKE_LOG__.push({
         cmd: "spawn_copilot_session",
-        args: { tileId, cwd, resumeSessionId: resumeSessionId ?? null, rows: rows ?? null, cols: cols ?? null },
+        args: { tileId, cwd, resumeSessionId: resumeSessionId ?? null, rows: rows ?? null, cols: cols ?? null, command: command ?? null },
       });
     }
     return null;
@@ -345,6 +345,14 @@ export class MemoryBackend implements Backend {
     return "";
   }
 
+  async gitDiffFilesWithStatus(_directory: string, _mode: string): Promise<Array<{ path: string; status: "A" | "M" | "D" | "R" }>> {
+    return [];
+  }
+
+  async gitDiffFileSides(_directory: string, _filePath: string, _mode: string): Promise<{ before: string; after: string }> {
+    return { before: "", after: "" };
+  }
+
   async gitLog(_directory: string, _limit?: number): Promise<Array<{ hash: string; short_hash: string; message: string; author: string; date: string }>> {
     return [
       { hash: "abc1234567890", short_hash: "abc1234", message: "Initial commit", author: "Dev", date: "2 days ago" },
@@ -358,6 +366,10 @@ export class MemoryBackend implements Backend {
 
   async gitCurrentBranch(_directory: string): Promise<string> {
     return "main";
+  }
+
+  async gitBranchTrackingInfo(_directory: string): Promise<{ ahead: number; behind: number; remoteHeadShort: string }> {
+    return { ahead: 0, behind: 0, remoteHeadShort: "" };
   }
 
   async discoverCopilotConfig(_workstreamDir?: string): Promise<CopilotConfigItem[]> {

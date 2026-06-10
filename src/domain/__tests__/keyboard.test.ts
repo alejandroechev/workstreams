@@ -65,7 +65,7 @@ describe("parseKeyAction", () => {
     expect(parseKeyAction({ key: "w", ...alt })).toEqual({
       type: "addTile", tileType: "terminal", extraConfig: { shell: "wsl" },
     });
-    expect(parseKeyAction({ key: "s", ...alt })).toEqual({ type: "addTile", tileType: "copilot_session" });
+    expect(parseKeyAction({ key: "c", ...alt })).toEqual({ type: "addTile", tileType: "copilot_session" });
     expect(parseKeyAction({ key: "r", ...alt })).toEqual({ type: "addTile", tileType: "file_explorer" });
     expect(parseKeyAction({ key: "p", ...alt })).toEqual({ type: "addTile", tileType: "plan" });
     expect(parseKeyAction({ key: "g", ...alt })).toEqual({ type: "addTile", tileType: "diff_review" });
@@ -89,7 +89,7 @@ describe("parseKeyAction", () => {
       editor: { getEditors: () => [{ hasTextFocus: () => true }] },
     } as never);
 
-    for (const key of ["s", "t", "w", "r", "m", "b", "p", "g"]) {
+    for (const key of ["c", "t", "w", "r", "m", "b", "p", "g"]) {
       expect(parseKeyAction({ key, ...alt })).toBeNull();
     }
   });
@@ -136,15 +136,13 @@ describe("parseKeyAction", () => {
     expect(parseKeyAction({ key: "f", ...alt })).toEqual({ type: "toggleFullscreen" });
   });
 
-  it("returns toggleSideBySide for Alt+C", () => {
-    expect(parseKeyAction({ key: "c", ...alt })).toEqual({ type: "toggleSideBySide" });
+  it("returns toggleSideBySide for Alt+S", () => {
+    expect(parseKeyAction({ key: "s", ...alt })).toEqual({ type: "toggleSideBySide" });
   });
 
-  it("returns switchWorkstream for Alt+1-9", () => {
+  it("returns null for Alt+1-9 (no shortcut for workstream switching)", () => {
     for (let i = 1; i <= 9; i++) {
-      expect(parseKeyAction({ key: String(i), ...alt })).toEqual({
-        type: "switchWorkstream", index: i - 1,
-      });
+      expect(parseKeyAction({ key: String(i), ...alt })).toBeNull();
     }
   });
 

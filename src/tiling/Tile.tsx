@@ -1,5 +1,5 @@
 // @test-skip: Thin React wrapper; pure border logic in tile-border.ts is tested
-import { ReactNode, createElement, useEffect, useMemo, useRef, useState } from "react";
+import { ReactNode, createElement, memo, useEffect, useMemo, useRef, useState } from "react";
 import TerminalTile from "../tiles/TerminalTile";
 import CopilotSessionTile from "../tiles/CopilotSessionTile";
 import RepoExplorerTile from "../tiles/RepoExplorerTile";
@@ -7,6 +7,26 @@ import SessionMetaTile from "../tiles/SessionMetaTile";
 import WorkbenchTile from "../tiles/WorkbenchTile";
 import PlanTile from "../tiles/PlanTile";
 import DiffReviewTile from "../tiles/DiffReviewTile";
+import { isFeatureEnabled, featureDescriptor } from "../domain/feature-flags";
+
+function DisabledFeaturePlaceholder({ label, requires }: { label: string; requires: string }) {
+  return (
+    <div style={{
+      padding: 24,
+      display: "flex",
+      flexDirection: "column",
+      alignItems: "center",
+      justifyContent: "center",
+      gap: 8,
+      height: "100%",
+      color: "#a6adc8",
+      textAlign: "center",
+    }}>
+      <div style={{ fontSize: 13, fontWeight: 600, color: "#f9e2af" }}>{label} tile is disabled</div>
+      <div style={{ fontSize: 11, color: "#6c7086", maxWidth: 360 }}>{requires}</div>
+    </div>
+  );
+}
 import type { Tile } from "../workstream/types";
 import type { CopilotSessionStats } from "../domain/types";
 import { invoke } from "@tauri-apps/api/core";
@@ -25,6 +45,12 @@ interface TileProps {
   isSideBySide?: boolean;
   /** When true the tile renders into the DOM but is invisible (display:none). */
   hidden?: boolean;
+  /**
+   * Whether this tile's owning workstream is currently visible (active).
+   * Tiles use this to early-return from event-listen callbacks (fs-change,
+   * etc.) when the user can't see the result of the work anyway.
+   */
+  workstreamVisible?: boolean;
   /** When true the side-by-side selection checkbox is rendered in the header. */
   selectable?: boolean;
   /** Whether this tile is currently selected for side-by-side. */
@@ -44,7 +70,11 @@ interface TileProps {
   linkedSessionIds?: string[];
 }
 
-export default function TileWrapper({
+export default function TileWrapper(props: Parameters<typeof TileWrapperImpl>[0]) {
+  return <MemoTileWrapper {...props} />;
+}
+
+function TileWrapperImpl({
   tile,
   index,
   gridArea,
@@ -53,6 +83,7 @@ export default function TileWrapper({
   isFullscreen = false,
   isSideBySide = false,
   hidden = false,
+  workstreamVisible = true,
   selectable = false,
   isSelected = false,
   onToggleSelect,
@@ -92,6 +123,20 @@ export default function TileWrapper({
 
   const handleRestart = async (e: React.MouseEvent) => {
     e.stopPropagation();
+    // Delegate restart to App.tsx's onRestart callback so the correct
+    // spawn command runs per tile type (copilot_session → spawnCopilotSession
+    // preserving the linked session id; terminal → spawn_terminal preserving
+    // command + cwd). Previously this function always called spawn_terminal,
+    // which left copilot session tiles stuck and required a second click on
+    // the in-tile Restart button.
+    if (onRestart) {
+      onRestart(tile.id);
+      setTermStatus("running");
+      return;
+    }
+    // Fallback (no parent-provided handler): plain spawn_terminal — kept
+    // for safety, but shouldn't ever fire since App always provides
+    // onRestart for active workstreams.
     try {
       await invoke("close_terminal", { tileId: tile.id }).catch(() => {});
       const config = JSON.parse(tile.config_json || "{}");
@@ -123,12 +168,19 @@ export default function TileWrapper({
           tileId={tile.id}
           isFocused={isFocused}
           focusToken={focusToken}
+          isFullscreen={isFullscreen}
           onStatusChange={setTermStatus}
         />
       );
       break;
     case "copilot_session": {
       const cfg = JSON.parse(tile.config_json || "{}");
+      const thisLinkedId = (cfg.copilot_session_id || cfg.resume_by_id || null) as string | null;
+      // Workstream policy: at most one linked Copilot session per workstream.
+      // Other linked = any id in linkedSessionIds that isn't this tile's own.
+      const workstreamHasOtherLinkedSession = !!linkedSessionIds?.some(
+        (id) => id && id !== thisLinkedId,
+      );
       content = (
         <CopilotSessionTile
           tileId={tile.id}
@@ -141,6 +193,8 @@ export default function TileWrapper({
           onStatusChange={setTermStatus}
           onStatsUpdate={setSessionStats}
           onLinkSession={onLinkSession ? () => onLinkSession(tile.id) : undefined}
+          workstreamHasOtherLinkedSession={workstreamHasOtherLinkedSession}
+          isFullscreen={isFullscreen}
           onAutoLink={onAutoLink ? (sid, summary) => onAutoLink(tile.id, sid, summary) : undefined}
           onRestart={onRestart ? () => onRestart(tile.id) : undefined}
         />
@@ -158,6 +212,9 @@ export default function TileWrapper({
           rootDir={workstreamDir || "C:\\"}
           initialPath={cfg.filePath}
           workstreamId={workstreamId}
+          workstreamVisible={workstreamVisible}
+          configJson={tile.config_json}
+          onConfigChange={(c) => onUpdateTileConfig?.(tile.id, c)}
         />
       );
       break;
@@ -169,6 +226,9 @@ export default function TileWrapper({
           isFocused={isFocused}
           rootDir={workstreamDir || "C:\\"}
           workstreamId={workstreamId}
+          workstreamVisible={workstreamVisible}
+          configJson={tile.config_json}
+          onConfigChange={(c) => onUpdateTileConfig?.(tile.id, c)}
         />
       );
       break;
@@ -180,6 +240,9 @@ export default function TileWrapper({
           workstreamDir={workstreamDir}
           linkedSessionIds={linkedSessionIds}
           workstreamId={workstreamId}
+          workstreamVisible={workstreamVisible}
+          configJson={tile.config_json}
+          onConfigChange={(c) => onUpdateTileConfig?.(tile.id, c)}
         />
       );
       break;
@@ -191,19 +254,33 @@ export default function TileWrapper({
           configJson={tile.config_json}
           onConfigChange={(cfg) => onUpdateTileConfig?.(tile.id, cfg)}
           workstreamId={workstreamId}
+          workstreamVisible={workstreamVisible}
         />
       );
       break;
     case "plan":
-      content = (
-        <PlanTile
-          tileId={tile.id}
-          isFocused={isFocused}
-          linkedSessionIds={linkedSessionIds}
-        />
-      );
+      if (!isFeatureEnabled("plan-tile")) {
+        const d = featureDescriptor("plan-tile");
+        content = <DisabledFeaturePlaceholder label={d.label} requires={d.requires} />;
+      } else {
+        content = (
+          <PlanTile
+            tileId={tile.id}
+            isFocused={isFocused}
+            linkedSessionIds={linkedSessionIds}
+            configJson={tile.config_json}
+            onConfigChange={(c) => onUpdateTileConfig?.(tile.id, c)}
+            workstreamVisible={workstreamVisible}
+          />
+        );
+      }
       break;
     case "diff_review": {
+      if (!isFeatureEnabled("diff-review")) {
+        const d = featureDescriptor("diff-review");
+        content = <DisabledFeaturePlaceholder label={d.label} requires={d.requires} />;
+        break;
+      }
       const cfg = JSON.parse(tile.config_json || "{}");
       if (!cfg.reviewId) {
         content = (
@@ -300,7 +377,7 @@ export default function TileWrapper({
               checked={isSelected}
               onChange={() => onToggleSelect?.(tile.id)}
               onClick={(e) => e.stopPropagation()}
-              title="Select for side-by-side (Alt+C)"
+              title="Select for side-by-side (Alt+S)"
               style={{
                 width: 13,
                 height: 13,
@@ -430,3 +507,11 @@ export default function TileWrapper({
     </div>
   );
 }
+
+// Memo wrapper: with the mount-all-workstreams strategy in App.tsx, every
+// setState in App can otherwise re-render every Tile across every loaded
+// workstream. React.memo with default shallow prop equality is enough
+// because most props are stable (tile object, ids, callbacks created
+// once); the isFocused/hidden/focusToken trio captures the per-tile
+// reasons to actually re-render.
+const MemoTileWrapper = memo(TileWrapperImpl);

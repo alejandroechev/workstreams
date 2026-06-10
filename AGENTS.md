@@ -9,6 +9,19 @@ Workstream manager with tiling compositor for Copilot CLI — manage projects, p
 ### Pre-Development
 - **Read ADRs** Before starting any development work, read all Architecture Decision Records in `docs/adrs/` to understand existing design decisions and constraints. Do not contradict or duplicate existing ADRs without explicit user approval.
 
+### ⚠️ Process safety — never kill by name
+- The dev build (`cargo tauri dev`) and the production build both ship as
+  `workstreams.exe` (Cargo derives the binary name from the package name).
+  The user usually has the production app running locally.
+- **Never** run `Stop-Process -Name workstreams`, `taskkill /IM workstreams.exe`,
+  or any other name-based termination. Doing so will kill the user's
+  production app and any work in flight there.
+- To stop the dev instance spawned by `scripts/cdp-feature.mjs`, run
+  `npm run dev:kill`. It reads `.dev/dev.pids` and uses `taskkill /T /PID`
+  on that specific PID only after verifying CDP :9223 is alive.
+- The same rule applies to `cargo`, `cargo-tauri`, `rustc`, and `link.exe`:
+  always kill by explicit PID, never by name.
+
 ### Architecture
 - **TypeScript + Rust** Use TypeScript for the frontend (React) and Rust for the backend (Tauri). Domain logic that doesn't need native APIs should live in TypeScript.
 - **Domain Logic Separation** Separate domain logic from UI. Core workstream/tile/session management should be testable without rendering.

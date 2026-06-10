@@ -1,4 +1,5 @@
 // @test-skip: Thin React rendering wrapper; layout logic tested in layout.test.ts
+import { memo } from "react";
 import type { Tile } from "../workstream/types";
 import { computeLayout, computeSideBySideLayout } from "../domain/layout";
 import TileWrapper from "./Tile";
@@ -13,6 +14,15 @@ interface Props {
   sideBySideTileIds: string[] | null;
   /** Tile ids currently selected for entering side-by-side. */
   selectedForSideBySide: Set<string>;
+  /** When true, render the per-tile SBS selection checkboxes. */
+  sbsSelectionMode: boolean;
+  /**
+   * Whether this TileGrid belongs to the currently-active workstream.
+   * Hidden grids skip the heavy listen-callback work (fs-change refreshes,
+   * etc.) since the user can't see results anyway. Subscribers remain
+   * mounted so xterm/PTY state survives switching back.
+   */
+  isVisible: boolean;
   onToggleSideBySideSelect: (tileId: string) => void;
   onFocusTile: (index: number) => void;
   onCloseTile: (tileId: string) => void;
@@ -27,7 +37,7 @@ interface Props {
   linkedSessionIds?: string[];
 }
 
-export default function TileGrid({
+function TileGridImpl({
   tiles,
   tileOrder,
   focusedIndex,
@@ -35,6 +45,8 @@ export default function TileGrid({
   fullscreenTileId,
   sideBySideTileIds,
   selectedForSideBySide,
+  sbsSelectionMode,
+  isVisible,
   onToggleSideBySideSelect,
   onFocusTile,
   onCloseTile,
@@ -116,7 +128,7 @@ export default function TileGrid({
           hidden = false;
           gridArea = `t${i}`;
         }
-        const showSelectable = !fullscreenActive && !sideBySideActive;
+        const showSelectable = sbsSelectionMode && !fullscreenActive && !sideBySideActive;
         return (
           <TileWrapper
             key={tile.id}
@@ -128,6 +140,7 @@ export default function TileGrid({
             isFullscreen={isFs}
             isSideBySide={isInSbs}
             hidden={hidden}
+            workstreamVisible={isVisible}
             selectable={showSelectable}
             isSelected={selectedForSideBySide.has(tile.id)}
             onToggleSelect={onToggleSideBySideSelect}
@@ -148,3 +161,9 @@ export default function TileGrid({
     </div>
   );
 }
+
+// Memoize so App.tsx state changes that don't actually alter the props
+// (e.g. selectWorkstream when this WS isn't the target, modal toggles,
+// notifications) don't re-render every Tile subtree.
+const TileGrid = memo(TileGridImpl);
+export default TileGrid;

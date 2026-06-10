@@ -42,4 +42,12 @@ describe("buildTodoDepsMermaid", () => {
     expect(src).not.toContain("ghost");
     expect(src).not.toMatch(/ghost --> a/);
   });
+
+  it("falls back to the pending color when status is unknown", () => {
+    const src = buildTodoDepsMermaid(
+      [{ id: "x", title: "X", description: null, status: "unknown" as never, plan_id: null }],
+      [],
+    );
+    expect(src).toMatch(/style x fill:#6b7280/);
+  });
 });

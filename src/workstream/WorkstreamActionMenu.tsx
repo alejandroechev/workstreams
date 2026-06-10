@@ -4,25 +4,18 @@ import type { Workstream } from "../domain/types";
 import {
   PencilSquareIcon,
   ArrowsRightLeftIcon,
-  ArrowsUpDownIcon,
   ArrowTopRightOnSquareIcon,
   ArchiveBoxIcon,
 } from "@heroicons/react/20/solid";
 
 type WorkstreamStatus = Workstream["status"];
 
-const STATUS_OPTIONS: Array<{ value: WorkstreamStatus; label: string; color: string }> = [
-  { value: "active", label: "Active", color: "#a6e3a1" },
-  { value: "working", label: "Working", color: "#89b4fa" },
-  { value: "in_review", label: "In Review", color: "#f9e2af" },
-  { value: "blocked", label: "Blocked", color: "#f38ba8" },
-];
-
 export interface WorkstreamActionMenuProps {
   workstream: Workstream;
   onClose: () => void;
   onRename: () => void;
-  onChangeStatus: (status: WorkstreamStatus) => void;
+  /** @deprecated kept for prop compatibility; UI no longer surfaces this. */
+  onChangeStatus?: (status: WorkstreamStatus) => void;
   onChangeWorktree?: () => void;
   onFork?: () => void;
   onArchive: () => void;
@@ -38,7 +31,7 @@ export function WorkstreamActionMenu({
   workstream,
   onClose,
   onRename,
-  onChangeStatus,
+  onChangeStatus: _onChangeStatus,
   onChangeWorktree,
   onFork,
   onArchive,
@@ -104,33 +97,6 @@ export function WorkstreamActionMenu({
           testid="action-fork"
         />
       )}
-
-      <Divider />
-
-      <div style={sectionLabelStyle}>
-        <ArrowsUpDownIcon style={{ width: 12, height: 12, color: "#6c7086" }} />
-        Status
-      </div>
-      {STATUS_OPTIONS.map((opt) => {
-        const isCurrent = workstream.status === opt.value;
-        return (
-          <button
-            key={opt.value}
-            type="button"
-            data-testid={`action-status-${opt.value}`}
-            onClick={close(() => onChangeStatus(opt.value))}
-            style={{
-              ...itemStyle,
-              background: isCurrent ? "#313244" : "transparent",
-              fontWeight: isCurrent ? 500 : 400,
-            }}
-          >
-            <span style={{ ...statusDotStyle, background: opt.color }} />
-            <span>{opt.label}</span>
-            {isCurrent && <span style={{ marginLeft: "auto", color: "#6c7086", fontSize: 10 }}>current</span>}
-          </button>
-        );
-      })}
 
       <Divider />
 
@@ -217,24 +183,6 @@ const itemStyle: CSSProperties = {
 };
 
 const iconStyle: CSSProperties = { width: 14, height: 14, color: "#a6adc8", flexShrink: 0 };
-
-const sectionLabelStyle: CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  gap: 6,
-  padding: "8px 10px 4px",
-  fontSize: 10,
-  textTransform: "uppercase",
-  letterSpacing: 0.5,
-  color: "#6c7086",
-};
-
-const statusDotStyle: CSSProperties = {
-  width: 8,
-  height: 8,
-  borderRadius: "50%",
-  flexShrink: 0,
-};
 
 const dividerStyle: CSSProperties = {
   height: 1,

@@ -7,33 +7,28 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { playBell, flashWindow } from "../domain/notifications";
 import { createPtyFitController } from "./pty-fit";
-import { getAppSettings, createWheelLineAccumulator } from "../domain/app-settings";
+import { getAppSettings, subscribeAppSettings, createWheelLineAccumulator } from "../domain/app-settings";
 import { writeTextToClipboard, readTextFromClipboard } from "../domain/clipboard";
 import { handleOsc52 } from "../domain/osc52";
-import {
-  keyToZoomAction,
-  nextFontSize,
-  TERMINAL_DEFAULT_FONT_SIZE,
-} from "../domain/terminal-zoom";
 
 interface Props {
   tileId: string;
   isFocused: boolean;
   /** Bumped on workstream switch so we re-focus even when isFocused didn't change. */
   focusToken?: number;
+  /** True when this tile is the fullscreen tile. See CopilotSessionTile for
+   * the rationale; same atlas-stale issue on geometry-only changes. */
+  isFullscreen?: boolean;
   onStatusChange?: (status: string) => void;
 }
 
-export default function TerminalTile({ tileId, isFocused, focusToken, onStatusChange }: Props) {
+export default function TerminalTile({ tileId, isFocused, focusToken, isFullscreen = false, onStatusChange }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const ptyFitRef = useRef<ReturnType<typeof createPtyFitController> | null>(null);
   const serializeRef = useRef<SerializeAddon | null>(null);
   const [status, setStatus] = useState<"spawning" | "running" | "exited" | "failed">("spawning");
-  // Live font size, controlled by Ctrl+= / Ctrl+- / Ctrl+0 while focused.
-  // Not persisted across remounts on purpose (per UX decision).
-  const [fontSize, setFontSize] = useState<number>(TERMINAL_DEFAULT_FONT_SIZE);
 
   const updateStatus = useCallback((s: typeof status) => {
     setStatus(s);
@@ -52,34 +47,13 @@ export default function TerminalTile({ tileId, isFocused, focusToken, onStatusCh
     }
   }, [tileId]);
 
-  // Restart terminal (kill existing + respawn)
-  const restart = useCallback(async () => {
-    try {
-      await invoke("close_terminal", { tileId }).catch(() => {});
-      updateStatus("spawning");
-      // Re-read tile config to get cwd/command
-      const tiles = await invoke<Array<{id: string; config_json: string}>>("list_tiles", { workstreamId: "" }).catch(() => []);
-      // Default respawn with pwsh
-      await invoke("spawn_terminal", {
-        tileId,
-        cwd: "C:\\",
-        rows: 30,
-        cols: 120,
-        enableNoVerifyBlock: getAppSettings().noVerifyBlockingEnabled,
-      });
-      updateStatus("running");
-    } catch {
-      updateStatus("failed");
-    }
-  }, [tileId, updateStatus]);
-
   useEffect(() => {
     if (!containerRef.current) return;
 
     const term = new Terminal({
       cursorBlink: true,
       altClickMovesCursor: true,
-      fontSize: TERMINAL_DEFAULT_FONT_SIZE,
+      fontSize: getAppSettings().terminalFontSize,
       fontFamily: "'Cascadia Code', 'Consolas', monospace",
       scrollback: 999999,
       scrollOnUserInput: true,
@@ -200,7 +174,15 @@ export default function TerminalTile({ tileId, isFocused, focusToken, onStatusCh
 
     // Listen for PTY exit
     const unlistenExit = listen(`pty-exit-${tileId}`, () => {
-      term.write("\r\n\x1b[90m[Process exited]\x1b[0m\r\n");
+      const intentional = (window as unknown as { __wsIntentionalRestartIds?: Set<string> })
+        .__wsIntentionalRestartIds?.has(tileId) ?? false;
+      if (intentional) {
+        term.write("\r\n\x1b[90m[Restarting…]\x1b[0m\r\n");
+        (window as unknown as { __wsIntentionalRestartIds?: Set<string> })
+          .__wsIntentionalRestartIds?.delete(tileId);
+      } else {
+        term.write("\r\n\x1b[90m[Process exited]\x1b[0m\r\n");
+      }
       updateStatus("exited");
     });
 
@@ -316,70 +298,69 @@ export default function TerminalTile({ tileId, isFocused, focusToken, onStatusCh
       ) as HTMLTextAreaElement | null;
       textarea?.focus();
     };
-    // Schedule across a few ticks: WebView2 sometimes blurs back to body
-    // immediately after a click event, so we retry until something sticks.
-    const timers = [50, 150, 300, 600].map((d) => window.setTimeout(focusNow, d));
-    return () => {
-      for (const t of timers) clearTimeout(t);
-    };
+    // Single deferred focus — was previously 4 staggered timers (50, 150,
+    // 300, 600 ms) which under rapid ws-switches stacked redundant full-
+    // buffer term.refresh() calls. One frame is enough; the effect re-runs
+    // on the next focusToken bump if it didn't stick.
+    const timer = window.setTimeout(focusNow, 50);
+    return () => clearTimeout(timer);
   }, [isFocused, focusToken]);
 
-  // Apply font-size changes to xterm + re-fit + tell the PTY about the
-  // new cell grid. Idempotent: if the term hasn't been initialised yet
-  // (still in the cold-spawn window) the effect re-runs harmlessly.
+  // See CopilotSessionTile for the rationale: ResizeObserver fires fit on
+  // fullscreen toggle but the canvas atlas can hold stale cell metrics
+  // across a large geometry jump. Force a remeasure + repaint on
+  // isFullscreen transitions.
   useEffect(() => {
     const term = termRef.current;
     if (!term) return;
-    term.options.fontSize = fontSize;
-    ptyFitRef.current?.invalidate();
-    ptyFitRef.current?.request();
-  }, [fontSize, tileId]);
-
-  // Zoom shortcuts. Only listen while focused so other tiles don't see
-  // them (each terminal/session tile owns its own font size).
-  useEffect(() => {
-    if (!isFocused) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (!e.ctrlKey || e.shiftKey || e.altKey || e.metaKey) return;
-      const action = keyToZoomAction(e.key);
-      if (!action) return;
-      // Don't hijack if the user is typing in an unrelated input/textarea.
-      const tgt = e.target as HTMLElement | null;
-      const tag = tgt?.tagName;
-      if (tag === "INPUT" || (tag === "TEXTAREA" && !tgt?.classList.contains("xterm-helper-textarea"))) {
-        return;
+    const remeasureAndRepaint = () => {
+      try {
+        const core = (term as unknown as {
+          _core?: { _charSizeService?: { measure?: () => void } };
+        })._core;
+        core?._charSizeService?.measure?.();
+      } catch { /* best effort */ }
+      ptyFitRef.current?.invalidate();
+      ptyFitRef.current?.request();
+      if (term.rows > 0) {
+        try {
+          (term as unknown as {
+            _core?: { _renderService?: { handleResize(c: number, r: number): void } };
+          })._core?._renderService?.handleResize(term.cols, term.rows);
+        } catch { /* best effort */ }
+        term.refresh(0, term.rows - 1);
       }
-      e.preventDefault();
-      setFontSize((s) => nextFontSize(s, action));
     };
-    window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
-  }, [isFocused]);
+    remeasureAndRepaint();
+    const t = window.setTimeout(remeasureAndRepaint, 200);
+    return () => window.clearTimeout(t);
+  }, [isFullscreen]);
+
+  // Apply font-size changes to xterm + re-fit + tell the PTY about the
+  // new cell grid. Idempotent: if the term hasn't been initialised yet
+  // Live font-size updates from the global terminal font setting.
+  useEffect(() => {
+    return subscribeAppSettings((s) => {
+      const term = termRef.current;
+      if (!term) return;
+      if (term.options.fontSize !== s.terminalFontSize) {
+        term.options.fontSize = s.terminalFontSize;
+        ptyFitRef.current?.invalidate();
+        ptyFitRef.current?.request();
+      }
+    });
+  }, []);
 
   return (
     <div style={{ width: "100%", height: "100%", position: "relative", overflow: "hidden" }}>
-      {status === "exited" && (
-        <div
-          style={{
-            position: "absolute",
-            top: 4,
-            right: 4,
-            zIndex: 10,
-            background: "#313244",
-            borderRadius: 4,
-            padding: "4px 10px",
-            fontSize: 11,
-            color: "#f9e2af",
-            cursor: "pointer",
-          }}
-          onClick={restart}
-        >
-          ↻ Restart
-        </div>
-      )}
       <div
         ref={containerRef}
-        onMouseEnter={() => termRef.current?.focus()}
+        onMouseDown={() => {
+          // Focus the xterm textarea on intentional click so typing goes
+          // to the terminal. Hover does NOT focus (that was the cause of
+          // accidental focus stealing between session+terminal tiles).
+          termRef.current?.focus();
+        }}
         style={{ width: "100%", height: "100%", overflow: "hidden" }}
       />
     </div>

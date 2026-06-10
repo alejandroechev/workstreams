@@ -23,7 +23,7 @@ const mocks = vi.hoisted(() => {
   });
 
   return {
-    invoke: vi.fn(async () => null),
+    invoke: vi.fn(async (..._args: unknown[]) => null as unknown),
     listAll: vi.fn<() => Array<{ path: string; dirty: boolean }>>(() => []),
     getCloseHandler: () => closeHandler,
     resetCloseHandler: () => { closeHandler = null; },
@@ -158,9 +158,12 @@ function createBackend(): Backend {
     cancelSearches: vi.fn(),
     gitDiffFiles: vi.fn(),
     gitDiffFile: vi.fn(),
+    gitDiffFilesWithStatus: vi.fn(async () => []),
+    gitDiffFileSides: vi.fn(async () => ({ before: "", after: "" })),
     gitLog: vi.fn(),
     gitShowCommit: vi.fn(),
     gitCurrentBranch: vi.fn(),
+    gitBranchTrackingInfo: vi.fn(async () => ({ ahead: 0, behind: 0, remoteHeadShort: "" })),
     discoverCopilotConfig: vi.fn(),
     listSessionPlans: vi.fn(),
     getCurrentSessionPlan: vi.fn(),
@@ -261,7 +264,7 @@ describe("dirty file buffer close confirmations", () => {
     expect(backend.updateWorkstream).not.toHaveBeenCalled();
   });
 
-  it("destroys the window on close when no buffers are dirty", async () => {
+  it("opens the confirm-close dialog on close when no buffers are dirty and the pref is not disabled", async () => {
     await renderApp();
     const preventDefault = vi.fn();
 
@@ -270,7 +273,30 @@ describe("dirty file buffer close confirmations", () => {
     expect(getCurrentWindow).toHaveBeenCalled();
     expect(preventDefault).toHaveBeenCalledOnce();
     expect(window.confirm).not.toHaveBeenCalled();
-    expect(mocks.destroy).toHaveBeenCalledOnce();
+    // The dialog is opened; destroy fires only after user confirms it.
+    expect(mocks.destroy).not.toHaveBeenCalled();
+    expect(await screen.findByTestId("confirm-close-dialog")).toBeTruthy();
+    // User confirms.
+    fireEvent.click(screen.getByTestId("confirm-close-confirm"));
+    await waitFor(() => expect(mocks.destroy).toHaveBeenCalledOnce());
+  });
+
+  it("skips the confirm-close dialog and destroys immediately when the pref is disabled", async () => {
+    mocks.invoke.mockImplementation(async (cmd: unknown, args?: unknown) => {
+      if (cmd === "get_setting" && (args as { key?: string } | undefined)?.key === "app.confirm-close-disabled") {
+        return "1";
+      }
+      return null;
+    });
+    await renderApp();
+    const preventDefault = vi.fn();
+
+    await mocks.getCloseHandler()?.({ preventDefault });
+
+    expect(preventDefault).toHaveBeenCalledOnce();
+    expect(window.confirm).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("confirm-close-dialog")).toBeNull();
+    await waitFor(() => expect(mocks.destroy).toHaveBeenCalledOnce());
   });
 
   it("prevents app quit and destroys the window when dirty buffers are discarded", async () => {

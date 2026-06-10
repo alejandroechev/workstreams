@@ -82,6 +82,15 @@ async function ensureDevTauri({ cold }) {
   child.on("exit", (code) => {
     console.log(`[cdp] cargo tauri dev exited with ${code}`);
   });
+  // Persist the PID so dev-kill.mjs can stop ONLY the dev process tree,
+  // never the user's running prod app (which shares the workstreams.exe
+  // binary name because Cargo derives it from the package name).
+  try {
+    const pidFile = path.join(DEV_DIR, "dev.pids");
+    fs.writeFileSync(pidFile, String(child.pid ?? ""), "utf8");
+  } catch (err) {
+    console.warn(`[cdp] could not write dev.pids: ${err.message}`);
+  }
   await waitForCdp({ timeoutMs: 480_000, intervalMs: 2000 });
   console.log(`[cdp] dev instance is ready on :${CDP_PORT}`);
   return { spawned: child };

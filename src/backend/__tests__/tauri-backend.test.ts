@@ -180,6 +180,15 @@ describe("TauriBackend", () => {
       resumeSessionId: "sid-abc",
       rows: 24,
       cols: 80,
+      command: null,
+    }));
+  });
+
+  it("spawnCopilotSession forwards a custom command template", async () => {
+    invoke.mockResolvedValueOnce(7);
+    await backend.spawnCopilotSession("t1", "/cwd", null, 30, 120, "copilot --yolo");
+    expect(invoke).toHaveBeenCalledWith("spawn_copilot_session", expect.objectContaining({
+      command: "copilot --yolo",
     }));
   });
 
@@ -327,10 +336,26 @@ describe("TauriBackend", () => {
     expect(invoke).toHaveBeenCalledWith("git_diff_files", { directory: "/", mode: "unstaged" });
     await backend.gitDiffFile("/", "f.ts", "unstaged");
     expect(invoke).toHaveBeenCalledWith("git_diff_file", { directory: "/", filePath: "f.ts", mode: "unstaged" });
+    invoke.mockResolvedValueOnce([["a.ts", "A"], ["b.ts", "M"], ["c.ts", "X"]]);
+    const statusFiles = await backend.gitDiffFilesWithStatus("/", "unstaged");
+    expect(invoke).toHaveBeenCalledWith("git_diff_files_with_status", { directory: "/", mode: "unstaged" });
+    expect(statusFiles).toEqual([
+      { path: "a.ts", status: "A" },
+      { path: "b.ts", status: "M" },
+      { path: "c.ts", status: "M" }, // unknown -> M fallback
+    ]);
+    invoke.mockResolvedValueOnce(["before-text", "after-text"]);
+    const sides = await backend.gitDiffFileSides("/", "f.ts", "unstaged");
+    expect(invoke).toHaveBeenCalledWith("git_diff_file_sides", { directory: "/", filePath: "f.ts", mode: "unstaged" });
+    expect(sides).toEqual({ before: "before-text", after: "after-text" });
     await backend.gitShowCommit("/", "abc");
     expect(invoke).toHaveBeenCalledWith("git_show_commit", { directory: "/", hash: "abc" });
     await backend.gitCurrentBranch("/");
     expect(invoke).toHaveBeenCalledWith("git_current_branch", { directory: "/" });
+    invoke.mockResolvedValueOnce([2, 3, "abc1234"]);
+    const tracking = await backend.gitBranchTrackingInfo("/");
+    expect(invoke).toHaveBeenCalledWith("git_branch_tracking_info", { directory: "/" });
+    expect(tracking).toEqual({ ahead: 2, behind: 3, remoteHeadShort: "abc1234" });
   });
 
   it("discoverCopilotConfig passes workstreamDir", async () => {

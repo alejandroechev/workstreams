@@ -18,6 +18,32 @@ pub struct FsWatcher {
     _watcher: Mutex<Option<notify_debouncer_mini::Debouncer<notify::RecommendedWatcher>>>,
 }
 
+/// Returns true when a changed path is inside a directory we should ignore
+/// for fs-change broadcasts (build artifacts, dependency dumps, git
+/// internals). Pure helper, unit-tested below.
+///
+/// Match semantics: the path is split on Windows/Unix separators and any
+/// segment matching one of the exclude names triggers the filter. This
+/// catches both top-level `./node_modules/foo.js` and nested
+/// `./packages/x/node_modules/y.js`.
+pub fn is_excluded_path(path: &str) -> bool {
+    const EXCLUDED_SEGMENTS: &[&str] = &[
+        "node_modules",
+        ".git",
+        "target",
+        "dist",
+        ".next",
+        ".turbo",
+        ".dev",
+    ];
+    for segment in path.split(['\\', '/']) {
+        if EXCLUDED_SEGMENTS.contains(&segment) {
+            return true;
+        }
+    }
+    false
+}
+
 impl FsWatcher {
     pub fn new() -> Self {
         Self {
@@ -34,11 +60,15 @@ impl FsWatcher {
             move |events: Result<Vec<notify_debouncer_mini::DebouncedEvent>, notify::Error>| {
                 match events {
                     Ok(events) => {
-                        // Deduplicate paths
                         let mut seen = HashSet::new();
                         for event in events {
                             if event.kind == DebouncedEventKind::Any {
                                 let path_str = event.path.to_string_lossy().to_string();
+                                // Skip fan-out from build artifacts / deps —
+                                // see is_excluded_path.
+                                if is_excluded_path(&path_str) {
+                                    continue;
+                                }
                                 if seen.insert(path_str.clone()) {
                                     let _ = app_handle.emit(
                                         "fs-change",
@@ -135,5 +165,37 @@ mod tests {
         let parsed: FsChangeEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.path, "/tmp/test.txt");
         assert_eq!(parsed.kind, "any");
+    }
+
+    #[test]
+    fn is_excluded_path_filters_top_level_excludes() {
+        assert!(is_excluded_path("C:\\repo\\node_modules\\foo.js"));
+        assert!(is_excluded_path("C:\\repo\\.git\\HEAD"));
+        assert!(is_excluded_path("C:\\repo\\target\\debug\\x.exe"));
+        assert!(is_excluded_path("/home/u/proj/dist/index.js"));
+        assert!(is_excluded_path("/home/u/proj/.next/cache/foo"));
+    }
+
+    #[test]
+    fn is_excluded_path_filters_nested_excludes() {
+        assert!(is_excluded_path(
+            "C:\\repo\\packages\\a\\node_modules\\b.js"
+        ));
+        assert!(is_excluded_path("/repo/workspaces/x/target/y"));
+    }
+
+    #[test]
+    fn is_excluded_path_does_not_filter_normal_source() {
+        assert!(!is_excluded_path("C:\\repo\\src\\main.rs"));
+        assert!(!is_excluded_path("C:\\repo\\README.md"));
+        assert!(!is_excluded_path("/home/u/proj/lib/foo.ts"));
+    }
+
+    #[test]
+    fn is_excluded_path_does_not_filter_lookalikes() {
+        // Must match the FULL segment, not a substring
+        assert!(!is_excluded_path("C:\\repo\\node_modules_backup\\foo"));
+        assert!(!is_excluded_path("C:\\repo\\targeted\\thing"));
+        assert!(!is_excluded_path("C:\\repo\\.github\\workflows\\ci.yml"));
     }
 }

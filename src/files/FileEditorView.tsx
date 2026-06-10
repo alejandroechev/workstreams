@@ -26,6 +26,7 @@ import {
   type Anchor,
 } from "./comments-layer";
 import type { FileComment } from "../domain/file-comments";
+import { getAppSettings, subscribeAppSettings } from "../domain/app-settings";
 
 const MAX_INLINE_EDIT_SIZE_BYTES = 1024 * 1024;
 const confirmedDangerousWarningKeys = new Set<string>();
@@ -172,6 +173,10 @@ export function FileEditorView({
   /** Imperatively populate the view-zone DOM node for a comment. */
   function renderCommentZone(node: HTMLDivElement, c: FileComment): void {
     node.innerHTML = "";
+    // Monaco's view-zone overlay defaults to pointer-events: none for the
+    // surrounding layer; explicitly opt the comment dom into receiving
+    // hover + click so the buttons are actually interactive.
+    node.style.pointerEvents = "auto";
     const header = document.createElement("div");
     header.style.display = "flex";
     header.style.alignItems = "center";
@@ -201,8 +206,14 @@ export function FileEditorView({
         padding: "1px 6px",
         cursor: "pointer",
         fontSize: "10px",
+        pointerEvents: "auto",
       });
-      editBtn.onclick = () => handleEditClick(c);
+      editBtn.addEventListener("mousedown", (e) => e.stopPropagation());
+      editBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        e.preventDefault();
+        handleEditClick(c);
+      });
       header.appendChild(editBtn);
       const delBtn = document.createElement("button");
       delBtn.textContent = "Delete";
@@ -215,8 +226,14 @@ export function FileEditorView({
         padding: "1px 6px",
         cursor: "pointer",
         fontSize: "10px",
+        pointerEvents: "auto",
       });
-      delBtn.onclick = () => handleDeleteClick(c);
+      delBtn.addEventListener("mousedown", (e) => e.stopPropagation());
+      delBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        e.preventDefault();
+        handleDeleteClick(c);
+      });
       header.appendChild(delBtn);
     } else if (c.origin_url) {
       const link = document.createElement("a");
@@ -354,6 +371,7 @@ export function FileEditorView({
           automaticLayout: false,
           minimap: { enabled: false },
           scrollBeyondLastLine: false,
+          fontSize: getAppSettings().textFontSize,
         });
         editorRef.current = editor;
         setEditorReadyToken((v) => v + 1);
@@ -382,6 +400,14 @@ export function FileEditorView({
     };
   }, [editorPath, editorRetryToken, path, registry]);
 
+  // ─── Live font-size updates from global app settings ──────────────────
+  useEffect(() => {
+    return subscribeAppSettings((s) => {
+      const editor = editorRef.current;
+      if (editor) editor.updateOptions({ fontSize: s.textFontSize });
+    });
+  }, [editorReadyToken]);
+
   // ─── Inline comments: view zones + selection listener ─────────────────
   const zoneIdsRef = useRef<Map<string, string>>(new Map());
   const zoneNodesRef = useRef<Map<string, HTMLDivElement>>(new Map());
@@ -389,15 +415,10 @@ export function FileEditorView({
   // Rebuild view zones whenever the comment list or enabled state changes.
   useEffect(() => {
     const editor = editorRef.current;
-    if (!editor || effectiveMode !== "edit") {
-      // tear down any existing zones
-      const ids = zoneIdsRef.current;
-      if (ids.size > 0 && editor) {
-        editor.changeViewZones((accessor: MonacoNs.editor.IViewZoneChangeAccessor) => {
-          for (const zid of ids.values()) accessor.removeZone(zid);
-        });
-      }
-      ids.clear();
+    if (!editor) {
+      // Editor not mounted yet (or showing markdown preview / error). Tear
+      // down any stale zone tracking.
+      zoneIdsRef.current.clear();
       zoneNodesRef.current.clear();
       return;
     }
@@ -433,7 +454,10 @@ export function FileEditorView({
           afterLineNumber: c.anchor_line_end,
           heightInLines: estimateZoneHeightInLines(c.body_md),
           domNode: dom,
-        });
+          // Let our DOM (with pointer-events: auto) handle mouse events
+          // instead of Monaco eating mousedown as a cursor movement.
+          suppressMouseDown: true,
+        } as MonacoNs.editor.IViewZone);
         zoneIdsRef.current.set(c.id, zid);
       }
     });
@@ -448,12 +472,12 @@ export function FileEditorView({
       ids.clear();
       zoneNodesRef.current.clear();
     };
-  }, [comments, commentsEnabled, editorReadyToken, effectiveMode, handleEditClick, handleDeleteClick]);
+  }, [comments, commentsEnabled, editorReadyToken, handleEditClick, handleDeleteClick]);
 
   // Selection listener -> floating + composer trigger.
   useEffect(() => {
     const editor = editorRef.current;
-    if (!editor || effectiveMode !== "edit" || !commentsEnabled || !onAddComment) {
+    if (!editor || !commentsEnabled || !onAddComment) {
       setSelectionAnchor(null);
       return;
     }
@@ -470,7 +494,7 @@ export function FileEditorView({
       setSelectionAnchor(anchor);
     });
     return () => disposable?.dispose?.();
-  }, [editorReadyToken, effectiveMode, commentsEnabled, onAddComment]);
+  }, [editorReadyToken, commentsEnabled, onAddComment]);
 
   const saveWithDangerousPathGuard = useCallback(async () => {
     const canonicalPath = canonicalPathRef.current;
@@ -486,10 +510,38 @@ export function FileEditorView({
     await registry.save(canonicalPath);
   }, [registry, showDangerousPathConfirm]);
 
+  // Toggle stored in a ref so handleKeyDown captures the latest closure
+  // without forcing a re-bind on every emit. The effect above already
+  // computes the toggle for markdown files; mirror it here so the
+  // keyboard shortcut works identically.
+  const toggleMarkdownModeRef = useRef<(() => void) | null>(null);
+  useEffect(() => {
+    const isMd = snapshot !== null && renderMarkdownPreview !== undefined && isMarkdown(snapshot.path);
+    const isForcedEdit = snapshot?.state === "conflicted" || snapshot?.state === "save_blocked";
+    if (!isMd || isForcedEdit) {
+      toggleMarkdownModeRef.current = null;
+      return;
+    }
+    toggleMarkdownModeRef.current = () => setModeState({
+      inputPath: path,
+      mode: effectiveMode === "preview" ? "edit" : "preview",
+    });
+  }, [snapshot, effectiveMode, renderMarkdownPreview, path]);
+
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
       event.preventDefault();
       void saveWithDangerousPathGuard();
+      return;
+    }
+    // VS Code parity: Ctrl+Shift+V toggles markdown preview / edit when the
+    // current file is markdown and the host tile provided a preview renderer.
+    if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === "v") {
+      const toggle = toggleMarkdownModeRef.current;
+      if (toggle) {
+        event.preventDefault();
+        toggle();
+      }
     }
   };
 

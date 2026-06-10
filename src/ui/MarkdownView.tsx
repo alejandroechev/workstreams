@@ -1,12 +1,71 @@
-import { type CSSProperties, type ReactNode, useEffect, useState, useCallback } from "react";
+import { type CSSProperties, type ReactNode, useEffect, useState, useCallback, useMemo } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
+import { PrismLight as SyntaxHighlighter } from "react-syntax-highlighter";
 import { vscDarkPlus } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { MermaidDiagram } from "./MermaidDiagram";
 import { classifyLinkTarget, isImageFile, makeImageBlobUrl, resolveRelativePath, type LinkTargetKind } from "../domain/file-types";
+import { extractFrontmatter } from "./frontmatter";
+import { getAppSettings, subscribeAppSettings } from "../domain/app-settings";
+
+// Register only the languages we actually use. PrismLight does NOT
+// auto-load grammars at scroll time (that's what made the colors "go
+// dizzy" mid-scroll with the default async Prism build — Prism would
+// re-tokenize when grammar chunks arrived after the initial render).
+// Unknown languages fall back to plaintext via the conditional below.
+import jsLang from "react-syntax-highlighter/dist/esm/languages/prism/javascript";
+import tsLang from "react-syntax-highlighter/dist/esm/languages/prism/typescript";
+import tsxLang from "react-syntax-highlighter/dist/esm/languages/prism/tsx";
+import jsxLang from "react-syntax-highlighter/dist/esm/languages/prism/jsx";
+import jsonLang from "react-syntax-highlighter/dist/esm/languages/prism/json";
+import yamlLang from "react-syntax-highlighter/dist/esm/languages/prism/yaml";
+import bashLang from "react-syntax-highlighter/dist/esm/languages/prism/bash";
+import pwshLang from "react-syntax-highlighter/dist/esm/languages/prism/powershell";
+import rustLang from "react-syntax-highlighter/dist/esm/languages/prism/rust";
+import goLang from "react-syntax-highlighter/dist/esm/languages/prism/go";
+import pyLang from "react-syntax-highlighter/dist/esm/languages/prism/python";
+import csLang from "react-syntax-highlighter/dist/esm/languages/prism/csharp";
+import javaLang from "react-syntax-highlighter/dist/esm/languages/prism/java";
+import sqlLang from "react-syntax-highlighter/dist/esm/languages/prism/sql";
+import markdownLang from "react-syntax-highlighter/dist/esm/languages/prism/markdown";
+import diffLang from "react-syntax-highlighter/dist/esm/languages/prism/diff";
+import protobufLang from "react-syntax-highlighter/dist/esm/languages/prism/protobuf";
+import cssLang from "react-syntax-highlighter/dist/esm/languages/prism/css";
+import dockerLang from "react-syntax-highlighter/dist/esm/languages/prism/docker";
+import tomlLang from "react-syntax-highlighter/dist/esm/languages/prism/toml";
+import iniLang from "react-syntax-highlighter/dist/esm/languages/prism/ini";
+
+const REGISTERED_LANGS: Record<string, unknown> = {
+  javascript: jsLang, js: jsLang,
+  typescript: tsLang, ts: tsLang,
+  tsx: tsxLang,
+  jsx: jsxLang,
+  json: jsonLang,
+  yaml: yamlLang, yml: yamlLang,
+  bash: bashLang, sh: bashLang, shell: bashLang,
+  powershell: pwshLang, pwsh: pwshLang, ps: pwshLang, ps1: pwshLang,
+  rust: rustLang, rs: rustLang,
+  go: goLang, golang: goLang,
+  python: pyLang, py: pyLang,
+  csharp: csLang, cs: csLang, "c#": csLang,
+  java: javaLang,
+  sql: sqlLang,
+  markdown: markdownLang, md: markdownLang,
+  diff: diffLang,
+  patch: diffLang,
+  protobuf: protobufLang, proto: protobufLang,
+  css: cssLang,
+  docker: dockerLang, dockerfile: dockerLang,
+  toml: tomlLang,
+  ini: iniLang,
+};
+for (const [name, grammar] of Object.entries(REGISTERED_LANGS)) {
+  // SyntaxHighlighter's registerLanguage accepts the name + grammar fn.
+  (SyntaxHighlighter as unknown as { registerLanguage: (n: string, g: unknown) => void })
+    .registerLanguage(name, grammar);
+}
 
 interface Props {
   children: string;
@@ -44,9 +103,14 @@ interface Props {
  * blockquote, inline code, etc.) scale proportionally via em units.
  */
 export function MarkdownView({ children, className, style, baseFontSize, basePath, onLinkClick }: Props) {
+  // Subscribe to global markdown font size; per-call baseFontSize prop wins
+  // when explicitly provided (kept for back-compat / tests).
+  const [globalFont, setGlobalFont] = useState<number>(() => getAppSettings().markdownFontSize);
+  useEffect(() => subscribeAppSettings((s) => setGlobalFont(s.markdownFontSize)), []);
+  const effectiveFontSize = baseFontSize ?? globalFont;
   const mergedContainer: CSSProperties = {
     ...containerStyle,
-    ...(baseFontSize ? { fontSize: baseFontSize } : null),
+    fontSize: effectiveFontSize,
     ...style,
   };
 
@@ -109,11 +173,77 @@ export function MarkdownView({ children, className, style, baseFontSize, basePat
     ),
   };
 
+  // Extract a YAML-style frontmatter block (used by Copilot skill .md files,
+  // Jekyll/Obsidian/MkDocs notes, etc.) and render it as a labeled metadata
+  // card above the body. Without this it would land as a huge paragraph of
+  // "name: x description: ..." text in the rendered output.
+  const { fields: frontmatter, body, hasFrontmatter } = useMemo(
+    () => extractFrontmatter(children),
+    [children],
+  );
+
   return (
     <div className={className} style={mergedContainer} data-testid="markdown-content">
+      {hasFrontmatter && frontmatter.length > 0 ? (
+        <FrontmatterCard fields={frontmatter} baseFontSize={effectiveFontSize} />
+      ) : null}
       <Markdown remarkPlugins={[remarkGfm]} components={componentMap}>
-        {children}
+        {body}
       </Markdown>
+    </div>
+  );
+}
+
+function FrontmatterCard({
+  fields,
+  baseFontSize,
+}: {
+  fields: Array<{ key: string; value: string }>;
+  baseFontSize: number;
+}): ReactNode {
+  return (
+    <div
+      data-testid="markdown-frontmatter"
+      style={{
+        margin: "0 0 16px 0",
+        padding: "10px 12px",
+        border: "1px solid #313244",
+        borderRadius: 6,
+        background: "#1a1a23",
+        fontSize: baseFontSize * 0.85,
+        lineHeight: 1.5,
+      }}
+    >
+      <table style={{ borderCollapse: "collapse", width: "100%" }}>
+        <tbody>
+          {fields.map((f) => (
+            <tr key={f.key}>
+              <td
+                style={{
+                  color: "#89b4fa",
+                  fontWeight: 600,
+                  textTransform: "lowercase",
+                  whiteSpace: "nowrap",
+                  verticalAlign: "top",
+                  padding: "2px 12px 2px 0",
+                  width: 1, // shrink-to-fit
+                }}
+              >
+                {f.key}
+              </td>
+              <td
+                style={{
+                  color: "#cdd6f4",
+                  wordBreak: "break-word",
+                  padding: "2px 0",
+                }}
+              >
+                {f.value}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }
@@ -284,7 +414,11 @@ const components = {
     return (
       <div style={codeBlockWrapperStyle}>
         <SyntaxHighlighter
-          language={lang ?? "text"}
+          // Fall back to plaintext for unregistered languages so we don't
+          // pay the "render once then re-tokenize when grammar arrives"
+          // dance that produced visible color shifts mid-scroll. Anything
+          // we actually care about is registered above.
+          language={lang && REGISTERED_LANGS[lang.toLowerCase()] ? lang.toLowerCase() : "text"}
           style={vscDarkPlus}
           PreTag="div"
           customStyle={{

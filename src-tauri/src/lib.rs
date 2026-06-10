@@ -838,12 +838,18 @@ fn spawn_terminal(
     )
 }
 
-/// Spawn an agency.exe copilot session and register a pending PID-based
+/// Spawn a copilot session CLI and register a pending PID-based
 /// correlation with the poller so it can find the resulting
 /// `~/.copilot/session-state/<id>` directory by scanning `inuse.<pid>.lock`.
 ///
-/// If `resume_session_id` is Some, agency is invoked with `--resume=<id>`.
+/// `command` (optional) is a full command line (e.g. `agency copilot --yolo`
+/// or `copilot --yolo`). It is whitespace-split into program + args. When
+/// `None`, the compiled-in default `agency copilot --yolo` is used so
+/// existing callers keep working unchanged.
+///
+/// If `resume_session_id` is Some, the CLI is invoked with `--resume=<id>`.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 fn spawn_copilot_session(
     app: AppHandle,
     state: State<'_, AppState>,
@@ -852,9 +858,20 @@ fn spawn_copilot_session(
     resume_session_id: Option<String>,
     rows: Option<u16>,
     cols: Option<u16>,
+    command: Option<String>,
     enable_no_verify_block: Option<bool>,
 ) -> Result<Option<u32>, String> {
-    let mut args = vec!["copilot".to_string(), "--yolo".to_string()];
+    let template = command
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("agency copilot --yolo");
+    let mut parts = template.split_whitespace();
+    let program = parts
+        .next()
+        .ok_or("empty copilot command template")?
+        .to_string();
+    let mut args: Vec<String> = parts.map(|s| s.to_string()).collect();
     if let Some(sid) = &resume_session_id {
         args.push(format!("--resume={sid}"));
     }
@@ -868,7 +885,7 @@ fn spawn_copilot_session(
         &app,
         &tile_id,
         &cwd,
-        Some("agency.exe"),
+        Some(program.as_str()),
         Some(args),
         rows.unwrap_or(30),
         cols.unwrap_or(120),
@@ -1495,7 +1512,57 @@ fn git_current_branch(directory: String) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
-/// Create a new git worktree with a new branch
+/// Tracking info for the current branch against its origin counterpart.
+/// Returns (ahead, behind, remote_head_short_hash). `remote_head_short_hash`
+/// is empty if origin doesn't have the branch.
+#[tauri::command]
+fn git_branch_tracking_info(directory: String) -> Result<(u32, u32, String), String> {
+    let branch_out = git_cmd()
+        .args(["branch", "--show-current"])
+        .current_dir(&directory)
+        .output()
+        .map_err(|e| format!("Failed to run git: {e}"))?;
+    if !branch_out.status.success() {
+        return Ok((0, 0, String::new()));
+    }
+    let branch = String::from_utf8_lossy(&branch_out.stdout)
+        .trim()
+        .to_string();
+    if branch.is_empty() {
+        return Ok((0, 0, String::new()));
+    }
+    let remote_ref = format!("origin/{branch}");
+    // Check origin/<branch> exists.
+    let exists = git_cmd()
+        .args(["rev-parse", "--verify", &remote_ref])
+        .current_dir(&directory)
+        .output()
+        .map_err(|e| format!("Failed to run git: {e}"))?;
+    if !exists.status.success() {
+        return Ok((0, 0, String::new()));
+    }
+    let remote_hash = String::from_utf8_lossy(&exists.stdout).trim().to_string();
+    let short = remote_hash.chars().take(7).collect::<String>();
+    // ahead/behind via rev-list --left-right --count <remote>...<local>
+    let counts = git_cmd()
+        .args([
+            "rev-list",
+            "--left-right",
+            "--count",
+            &format!("{remote_ref}...HEAD"),
+        ])
+        .current_dir(&directory)
+        .output()
+        .map_err(|e| format!("Failed to run git: {e}"))?;
+    if !counts.status.success() {
+        return Ok((0, 0, short));
+    }
+    let raw = String::from_utf8_lossy(&counts.stdout);
+    let mut parts = raw.split_whitespace();
+    let behind: u32 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+    let ahead: u32 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+    Ok((ahead, behind, short))
+}
 #[tauri::command]
 fn create_worktree(
     project_directory: String,
@@ -1735,7 +1802,151 @@ fn git_diff_file(directory: String, file_path: String, mode: String) -> Result<S
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
-/// Detect git repo info from a directory
+/// Returns the full content of a file at a specific git revision, or empty
+/// string if the file doesn't exist at that revision.
+fn read_git_show(directory: &str, revision: &str, file_path: &str) -> Result<String, String> {
+    let spec = format!("{revision}:{file_path}");
+    let output = git_cmd()
+        .args(["show", &spec])
+        .current_dir(directory)
+        .output()
+        .map_err(|e| format!("Failed to run git show: {e}"))?;
+    if !output.status.success() {
+        return Ok(String::new());
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+/// Returns both sides of a diff (before/after) as full file contents so the
+/// frontend can render them in a regular DiffEditor without synthesising
+/// from a unified-diff text.
+#[tauri::command]
+fn git_diff_file_sides(
+    directory: String,
+    file_path: String,
+    mode: String,
+) -> Result<(String, String), String> {
+    match mode.as_str() {
+        "unstaged" => {
+            let before = read_git_show(&directory, "HEAD", &file_path)?;
+            let abs = std::path::Path::new(&directory).join(&file_path);
+            let after = std::fs::read_to_string(&abs).unwrap_or_default();
+            Ok((before, after))
+        }
+        "last_commit" => {
+            let before = read_git_show(&directory, "HEAD~1", &file_path)?;
+            let after = read_git_show(&directory, "HEAD", &file_path)?;
+            Ok((before, after))
+        }
+        "branch_vs_master" => {
+            let mut before = read_git_show(&directory, "master", &file_path)?;
+            if before.is_empty() {
+                // Distinguish "no master branch" from "file not on master".
+                // Try main; if that also empty, leave before as "".
+                before = read_git_show(&directory, "main", &file_path)?;
+            }
+            let after = read_git_show(&directory, "HEAD", &file_path)?;
+            Ok((before, after))
+        }
+        _ => Err(format!("Unknown diff mode: {mode}")),
+    }
+}
+
+/// Returns the changed files along with their status: "A" added, "M"
+/// modified, "D" deleted, "R" renamed.
+#[tauri::command]
+fn git_diff_files_with_status(
+    directory: String,
+    mode: String,
+) -> Result<Vec<(String, String)>, String> {
+    fn parse_name_status(out: &str) -> Vec<(String, String)> {
+        let mut v = Vec::new();
+        for line in out.lines() {
+            let line = line.trim_end();
+            if line.is_empty() {
+                continue;
+            }
+            let mut parts = line.split('\t');
+            let raw_status = parts.next().unwrap_or("");
+            let status_char = raw_status.chars().next().unwrap_or('M');
+            let kind = match status_char {
+                'A' => "A",
+                'D' => "D",
+                'R' => "R",
+                'C' => "R",
+                _ => "M",
+            }
+            .to_string();
+            let path = if status_char == 'R' || status_char == 'C' {
+                parts.nth(1).unwrap_or("").to_string()
+            } else {
+                parts.next().unwrap_or("").to_string()
+            };
+            if !path.is_empty() {
+                v.push((path, kind));
+            }
+        }
+        v
+    }
+
+    let args_owned: Vec<String> = match mode.as_str() {
+        "unstaged" => {
+            let tracked = git_cmd()
+                .args(["diff", "--name-status"])
+                .current_dir(&directory)
+                .output()
+                .map_err(|e| format!("Failed to run git: {e}"))?;
+            if !tracked.status.success() {
+                return Err(format!(
+                    "git error: {}",
+                    String::from_utf8_lossy(&tracked.stderr)
+                ));
+            }
+            let mut files = parse_name_status(&String::from_utf8_lossy(&tracked.stdout));
+            let untracked = git_cmd()
+                .args(["ls-files", "--others", "--exclude-standard"])
+                .current_dir(&directory)
+                .output()
+                .map_err(|e| format!("Failed to run git: {e}"))?;
+            if untracked.status.success() {
+                for line in String::from_utf8_lossy(&untracked.stdout).lines() {
+                    let p = line.trim();
+                    if !p.is_empty() && !files.iter().any(|(pp, _)| pp == p) {
+                        files.push((p.to_string(), "A".to_string()));
+                    }
+                }
+            }
+            files.sort_by(|a, b| a.0.cmp(&b.0));
+            return Ok(files);
+        }
+        "last_commit" => vec!["diff".into(), "HEAD~1".into(), "--name-status".into()],
+        "branch_vs_master" => {
+            let output = git_cmd()
+                .args(["diff", "master...HEAD", "--name-status"])
+                .current_dir(&directory)
+                .output()
+                .map_err(|e| format!("Failed to run git: {e}"))?;
+            if output.status.success() {
+                return Ok(parse_name_status(&String::from_utf8_lossy(&output.stdout)));
+            }
+            vec!["diff".into(), "main...HEAD".into(), "--name-status".into()]
+        }
+        _ => return Err(format!("Unknown diff mode: {mode}")),
+    };
+    let arg_refs: Vec<&str> = args_owned.iter().map(String::as_str).collect();
+    let output = git_cmd()
+        .args(&arg_refs)
+        .current_dir(&directory)
+        .output()
+        .map_err(|e| format!("Failed to run git: {e}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "git error: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    Ok(parse_name_status(&String::from_utf8_lossy(&output.stdout)))
+}
 #[tauri::command]
 fn detect_git_info(directory: String) -> Result<(Option<String>, Option<String>), String> {
     let dir = std::path::Path::new(&directory);
@@ -2395,6 +2606,22 @@ fn read_session_file(session_id: String, relative_path: String) -> Result<String
     std::fs::read_to_string(&file_path).map_err(|e| format!("Cannot read {}: {}", relative_path, e))
 }
 
+/// Returns the absolute path of `~/.copilot/session-state/<id>` so the
+/// frontend can list it with the regular list_directory + read_file APIs.
+/// Errors if the directory doesn't exist.
+#[tauri::command]
+fn session_state_dir(session_id: String) -> Result<String, String> {
+    let home = dirs::home_dir().ok_or("No home directory")?;
+    let dir = home
+        .join(".copilot")
+        .join("session-state")
+        .join(&session_id);
+    if !dir.is_dir() {
+        return Err(format!("session-state dir not found for {session_id}"));
+    }
+    Ok(dir.to_string_lossy().to_string())
+}
+
 /// List checkpoints for a session
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct CheckpointEntry {
@@ -2826,6 +3053,17 @@ pub struct SessionDbTableData {
     pub rows: Vec<Vec<serde_json::Value>>,
 }
 
+fn open_db_readonly(path: &std::path::Path) -> Result<Connection, String> {
+    if !path.exists() {
+        return Err(format!("File not found: {}", path.display()));
+    }
+    Connection::open_with_flags(
+        path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .map_err(|e| e.to_string())
+}
+
 fn open_session_db(session_id: &str) -> Result<Connection, String> {
     let home = dirs::home_dir().ok_or("No home directory")?;
     let session_db_path = home
@@ -2837,17 +3075,10 @@ fn open_session_db(session_id: &str) -> Result<Connection, String> {
     if !session_db_path.exists() {
         return Err("No session.db found".into());
     }
-
-    Connection::open_with_flags(
-        &session_db_path,
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    )
-    .map_err(|e| e.to_string())
+    open_db_readonly(&session_db_path)
 }
 
-#[tauri::command]
-fn list_session_db_tables(session_id: String) -> Result<Vec<SessionDbTable>, String> {
-    let conn = open_session_db(&session_id)?;
+fn list_db_tables_at(conn: &Connection) -> Result<Vec<SessionDbTable>, String> {
     let mut stmt = conn
         .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
         .map_err(|e| e.to_string())?;
@@ -2873,16 +3104,11 @@ fn list_session_db_tables(session_id: String) -> Result<Vec<SessionDbTable>, Str
     Ok(tables)
 }
 
-#[tauri::command]
-fn query_session_db_table(
-    session_id: String,
-    table_name: String,
-    limit: Option<i64>,
+fn query_db_table_at(
+    conn: &Connection,
+    table_name: &str,
+    limit: i64,
 ) -> Result<SessionDbTableData, String> {
-    let conn = open_session_db(&session_id)?;
-    let limit_val = limit.unwrap_or(100);
-
-    // Get column names
     let col_stmt = conn
         .prepare(&format!("SELECT * FROM [{}] LIMIT 0", table_name))
         .map_err(|e| e.to_string())?;
@@ -2893,12 +3119,8 @@ fn query_session_db_table(
         .collect();
     drop(col_stmt);
 
-    // Get rows
     let mut stmt = conn
-        .prepare(&format!(
-            "SELECT * FROM [{}] LIMIT {}",
-            table_name, limit_val
-        ))
+        .prepare(&format!("SELECT * FROM [{}] LIMIT {}", table_name, limit))
         .map_err(|e| e.to_string())?;
     let col_count = columns.len();
     let mut rows_out = Vec::new();
@@ -2924,6 +3146,56 @@ fn query_session_db_table(
         columns,
         rows: rows_out,
     })
+}
+
+#[tauri::command]
+fn list_session_db_tables(session_id: String) -> Result<Vec<SessionDbTable>, String> {
+    let conn = open_session_db(&session_id)?;
+    list_db_tables_at(&conn)
+}
+
+#[tauri::command]
+fn query_session_db_table(
+    session_id: String,
+    table_name: String,
+    limit: Option<i64>,
+) -> Result<SessionDbTableData, String> {
+    let conn = open_session_db(&session_id)?;
+    query_db_table_at(&conn, &table_name, limit.unwrap_or(100))
+}
+
+/// Read-only SQLite browsing for arbitrary files (used by Repo Explorer).
+#[tauri::command]
+fn list_db_tables(path: String) -> Result<Vec<SessionDbTable>, String> {
+    let conn = open_db_readonly(std::path::Path::new(&path))?;
+    list_db_tables_at(&conn)
+}
+
+#[tauri::command]
+fn query_db_table(
+    path: String,
+    table_name: String,
+    limit: Option<i64>,
+) -> Result<SessionDbTableData, String> {
+    let conn = open_db_readonly(std::path::Path::new(&path))?;
+    query_db_table_at(&conn, &table_name, limit.unwrap_or(100))
+}
+
+/// Sniff the SQLite magic header ("SQLite format 3\0") at offset 0 to
+/// confirm whether a file is a SQLite database. Cheap (16 bytes read),
+/// catches files with non-standard extensions.
+#[tauri::command]
+fn is_sqlite_file(path: String) -> Result<bool, String> {
+    use std::io::Read;
+    let mut file = match std::fs::File::open(&path) {
+        Ok(f) => f,
+        Err(_) => return Ok(false),
+    };
+    let mut header = [0u8; 16];
+    match file.read_exact(&mut header) {
+        Ok(()) => Ok(&header == b"SQLite format 3\0"),
+        Err(_) => Ok(false),
+    }
 }
 
 // ── App Setup ──────────────────────────────────────────────────────────
@@ -3016,10 +3288,13 @@ pub fn run() {
             // Git diff
             git_diff_files,
             git_diff_file,
+            git_diff_files_with_status,
+            git_diff_file_sides,
             // Copilot config
             discover_copilot_config,
             // Session files & todos & DB
             read_session_file,
+            session_state_dir,
             list_session_checkpoints,
             list_session_events,
             query_session_files,
@@ -3029,8 +3304,12 @@ pub fn run() {
             query_session_todo_deps,
             list_session_db_tables,
             query_session_db_table,
+            list_db_tables,
+            query_db_table,
+            is_sqlite_file,
             // Git log & branch
             git_log,
+            git_branch_tracking_info,
             git_show_commit,
             git_current_branch,
             create_worktree,
@@ -3694,6 +3973,153 @@ Body here.
             diff.contains("brand-new.txt") && diff.contains("hello"),
             "untracked diff should contain filename + content; got: {diff}"
         );
+
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn git_diff_files_with_status_and_sides() {
+        let tmp = std::env::temp_dir().join(format!(
+            "ws-gitsides-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let dir_str = tmp.to_string_lossy().to_string();
+        let run = |args: &[&str]| {
+            std::process::Command::new("git")
+                .args(args)
+                .current_dir(&tmp)
+                .output()
+                .expect("git invoke")
+        };
+        assert!(run(&["init", "-q"]).status.success());
+        run(&["config", "user.email", "t@t"]);
+        run(&["config", "user.name", "t"]);
+        std::fs::write(tmp.join("kept.txt"), "v1\nshared\n").unwrap();
+        run(&["add", "kept.txt"]);
+        run(&["commit", "-q", "-m", "init"]);
+        std::fs::write(tmp.join("kept.txt"), "v2\nshared\n").unwrap();
+        std::fs::write(tmp.join("new.txt"), "brand new\n").unwrap();
+
+        let files =
+            git_diff_files_with_status(dir_str.clone(), "unstaged".into()).expect("with_status");
+        let kept = files.iter().find(|(p, _)| p == "kept.txt").expect("kept");
+        assert_eq!(kept.1, "M");
+        let added = files.iter().find(|(p, _)| p == "new.txt").expect("new");
+        assert_eq!(added.1, "A");
+
+        let (before, after) =
+            git_diff_file_sides(dir_str.clone(), "kept.txt".into(), "unstaged".into())
+                .expect("sides");
+        assert!(before.contains("v1") && !before.contains("v2"));
+        assert!(after.contains("v2") && !after.contains("v1"));
+
+        let (before2, after2) =
+            git_diff_file_sides(dir_str.clone(), "new.txt".into(), "unstaged".into())
+                .expect("sides untracked");
+        assert_eq!(before2, "");
+        assert!(after2.contains("brand new"));
+
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn git_branch_tracking_info_reports_ahead_behind_and_remote_head() {
+        let tmp = std::env::temp_dir().join(format!(
+            "ws-tracking-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let dir_str = tmp.to_string_lossy().to_string();
+        let run = |cwd: &std::path::Path, args: &[&str]| {
+            std::process::Command::new("git")
+                .args(args)
+                .current_dir(cwd)
+                .output()
+                .expect("git invoke")
+        };
+
+        // Set up bare remote + local clone simulating "origin".
+        let remote = tmp.join("remote.git");
+        std::fs::create_dir_all(&remote).unwrap();
+        assert!(run(&remote, &["init", "--bare", "-q"]).status.success());
+
+        let local = tmp.join("local");
+        std::fs::create_dir_all(&local).unwrap();
+        assert!(run(&local, &["init", "-q", "-b", "main"]).status.success());
+        run(&local, &["config", "user.email", "t@t"]);
+        run(&local, &["config", "user.name", "t"]);
+        std::fs::write(local.join("a.txt"), "1\n").unwrap();
+        run(&local, &["add", "."]);
+        run(&local, &["commit", "-q", "-m", "c1"]);
+        run(
+            &local,
+            &["remote", "add", "origin", remote.to_string_lossy().as_ref()],
+        );
+        run(&local, &["push", "-q", "-u", "origin", "main"]);
+
+        // Now local is even with origin/main.
+        let (ahead, behind, short) =
+            git_branch_tracking_info(local.to_string_lossy().to_string()).expect("tracking");
+        assert_eq!(ahead, 0);
+        assert_eq!(behind, 0);
+        assert_eq!(short.len(), 7);
+
+        // Add one local commit -> ahead 1, behind 0.
+        std::fs::write(local.join("a.txt"), "2\n").unwrap();
+        run(&local, &["add", "."]);
+        run(&local, &["commit", "-q", "-m", "c2"]);
+        let (ahead2, behind2, _) =
+            git_branch_tracking_info(local.to_string_lossy().to_string()).expect("tracking");
+        assert_eq!(ahead2, 1);
+        assert_eq!(behind2, 0);
+
+        // No-branch directory returns empty short hash.
+        let empty = tmp.join("empty");
+        std::fs::create_dir_all(&empty).unwrap();
+        run(&empty, &["init", "-q"]);
+        let (_, _, short_empty) =
+            git_branch_tracking_info(empty.to_string_lossy().to_string()).expect("tracking");
+        assert_eq!(short_empty, "");
+
+        std::fs::remove_dir_all(&tmp).ok();
+        let _ = dir_str; // silence unused warning
+    }
+
+    #[test]
+    fn is_sqlite_file_detects_magic_header() {
+        let tmp = std::env::temp_dir().join(format!(
+            "ws-sqlite-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        let real_db = tmp.join("real.db");
+        std::fs::write(&real_db, b"SQLite format 3\0extra payload").unwrap();
+        assert!(is_sqlite_file(real_db.to_string_lossy().to_string()).unwrap());
+
+        let plain = tmp.join("plain.txt");
+        std::fs::write(&plain, b"# just markdown\nhello").unwrap();
+        assert!(!is_sqlite_file(plain.to_string_lossy().to_string()).unwrap());
+
+        let too_short = tmp.join("short.bin");
+        std::fs::write(&too_short, b"abc").unwrap();
+        assert!(!is_sqlite_file(too_short.to_string_lossy().to_string()).unwrap());
+
+        // Non-existent path returns Ok(false) instead of an error.
+        assert!(!is_sqlite_file(tmp.join("missing").to_string_lossy().to_string()).unwrap());
 
         std::fs::remove_dir_all(&tmp).ok();
     }

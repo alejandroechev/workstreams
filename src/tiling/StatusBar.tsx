@@ -1,13 +1,17 @@
 // @test-skip: Thin layout wrapper; AddTileMenu (the only logic-bearing child) has its own tests.
+import { ViewColumnsIcon } from "@heroicons/react/24/outline";
 import AddTileMenu from "./AddTileMenu";
+import { isFeatureEnabled } from "../domain/feature-flags";
 
 interface Props {
   tileCount: number;
   focusedLabel: string;
   fullscreen: boolean;
   sideBySide: boolean;
-  /** True only when a side-by-side toggle is currently valid. */
+  /** @deprecated kept for prop compatibility; the button is always enabled now. */
   canEnterSideBySide: boolean;
+  /** When true the SBS selection checkboxes are visible across tiles. */
+  sbsSelectionMode?: boolean;
   workstreamName?: string;
   onAddSession?: () => void;
   onAddTerminal?: () => void;
@@ -21,17 +25,6 @@ interface Props {
   onToggleSideBySide?: () => void;
   onOpenSettings?: () => void;
 }
-
-const btnStyle: React.CSSProperties = {
-  background: "#313244",
-  border: "none",
-  borderRadius: 3,
-  color: "#a6adc8",
-  cursor: "pointer",
-  fontSize: 11,
-  padding: "2px 8px",
-  fontFamily: "monospace",
-};
 
 // Icon-only chrome buttons (settings, fullscreen, side-by-side) — beefier
 // contrast: lighter background + brighter icon color so the affordance is
@@ -53,7 +46,8 @@ export default function StatusBar({
   focusedLabel,
   fullscreen,
   sideBySide,
-  canEnterSideBySide,
+  canEnterSideBySide: _canEnterSideBySide,
+  sbsSelectionMode = false,
   workstreamName,
   onAddSession,
   onAddTerminal,
@@ -67,18 +61,18 @@ export default function StatusBar({
   onToggleSideBySide,
   onOpenSettings,
 }: Props) {
-  const rawItems: Array<{ key: string; label: string; icon: "session" | "terminal" | "folder" | "info" | "beaker" | "plan" | "bug"; shortcut?: string; onSelect?: () => void }> = [
-    { key: "session", label: "Copilot Session", icon: "session", shortcut: "Alt+S", onSelect: onAddSession },
+  const rawItems: Array<{ key: string; label: string; icon: "session" | "terminal" | "folder" | "info" | "beaker" | "plan" | "bug"; shortcut?: string; onSelect?: () => void; gated?: boolean }> = [
+    { key: "session", label: "Copilot Session", icon: "session", shortcut: "Alt+C", onSelect: onAddSession },
     { key: "terminal", label: "PowerShell", icon: "terminal", shortcut: "Alt+T", onSelect: onAddTerminal },
     { key: "wsl", label: "WSL Terminal", icon: "terminal", shortcut: "Alt+W", onSelect: onAddWslTerminal },
     { key: "explorer", label: "Repo Explorer", icon: "folder", shortcut: "Alt+R", onSelect: onAddExplorer },
     { key: "meta", label: "Session Meta", icon: "info", shortcut: "Alt+M", onSelect: onAddSessionMeta },
     { key: "workbench", label: "Workbench", icon: "beaker", shortcut: "Alt+B", onSelect: onAddWorkbench },
-    { key: "plan", label: "Plan", icon: "plan", shortcut: "Alt+P", onSelect: onAddPlan },
-    { key: "diff-review", label: "Diff Review", icon: "bug", shortcut: "Alt+G", onSelect: onAddDiffReview },
+    { key: "plan", label: "Plan", icon: "plan", shortcut: "Alt+P", onSelect: onAddPlan, gated: !isFeatureEnabled("plan-tile") },
+    { key: "diff-review", label: "Diff Review", icon: "bug", shortcut: "Alt+G", onSelect: onAddDiffReview, gated: !isFeatureEnabled("diff-review") },
   ];
   const menuItems = rawItems
-    .filter((it) => typeof it.onSelect === "function")
+    .filter((it) => typeof it.onSelect === "function" && !it.gated)
     .map((it) => ({ key: it.key, label: it.label, icon: it.icon, shortcut: it.shortcut, onSelect: it.onSelect! }));
 
   return (
@@ -125,25 +119,23 @@ export default function StatusBar({
         {onToggleSideBySide && (
           <button
             data-testid="toggle-sbs"
-            disabled={!sideBySide && !canEnterSideBySide}
             style={{
               ...iconBtnStyle,
-              color: sideBySide ? "#cba6f7" : !canEnterSideBySide ? "#6c7086" : "#cdd6f4",
-              borderColor: sideBySide ? "#cba6f7" : iconBtnStyle.border?.toString().includes("#585b70") ? "#585b70" : "#585b70",
-              background: sideBySide ? "#3a2f4f" : iconBtnStyle.background,
-              cursor: !sideBySide && !canEnterSideBySide ? "default" : "pointer",
-              opacity: !sideBySide && !canEnterSideBySide ? 0.55 : 1,
+              color: sideBySide ? "#cba6f7" : sbsSelectionMode ? "#f9e2af" : "#cdd6f4",
+              borderColor: sideBySide ? "#cba6f7" : sbsSelectionMode ? "#f9e2af" : "#585b70",
+              background: sideBySide ? "#3a2f4f" : sbsSelectionMode ? "#3a3520" : iconBtnStyle.background,
+              cursor: "pointer",
             }}
             onClick={onToggleSideBySide}
             title={
               sideBySide
-                ? "Exit side-by-side (Alt+C)"
-                : canEnterSideBySide
-                  ? "Enter side-by-side with selected tiles (Alt+C)"
-                  : "Select two tiles to enable side-by-side"
+                ? "Exit side-by-side (Alt+S)"
+                : sbsSelectionMode
+                  ? "Cancel side-by-side selection (Alt+S)"
+                  : "Pick two tiles for side-by-side (Alt+S)"
             }
           >
-            ⊟
+            <ViewColumnsIcon style={{ width: 13, height: 13, display: "block" }} />
           </button>
         )}
         <button
