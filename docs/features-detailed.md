@@ -108,23 +108,6 @@ Monaco-backed editor with:
 
 See [ADR 006](adrs/006-editable-text-files.md).
 
-## Diff Review tile *(optional — gated by `VITE_ENABLE_OPTIONAL_FEATURES=1` at build time)*
-
-Exhaustive agent-driven diff walkthroughs paired with the user-level
-`diff-grok` skill. The skill (running in an adjacent terminal tile) plans
-semantic-cluster chunks from `git diff <base>...HEAD`, a GitHub PR, or the
-working tree, then drives a 3-pane Monaco diff + question + comments tile.
-
-The tile opens automatically when the diff-grok skill plans a review, or
-manually via the Add Tile menu (`Alt+G`) which picks from active reviews.
-Reviews persist in SQLite (resumable across crashes); drift against re-diffs
-is detected by hunk hashes; on completion the review is exported as
-`review.json` + `action-plan.md` under `.copilot-reviews/<id>/` for handoff
-to an actioning agent.
-
-Offline CLI smoke: `npm run diff-grok:smoke`. See
-[ADR 007](adrs/007-diff-grok-integration.md).
-
 ## Inline file comments
 
 Per-workstream comments anchored to line ranges in any file viewable in Repo
@@ -132,13 +115,10 @@ Explorer.
 
 Toolbar toggle (chat-bubble icon) shows / hides them as Monaco view zones
 below the anchored line. Select lines → click the floating `+ Comment`
-button → write markdown → Save. User comments get inline Edit / Delete;
-imported (read-only) comments from ADO PRs show author + PR # + status.
+button → write markdown → Save. Comments get inline Edit / Delete.
 
 Stored in `file_comments` (workstream-scoped SQLite); persistent across app
-restarts. ADO PR import is agent-driven through the `import_pr_comments` MCP
-tool (the app stays ADO-blind — the agent fetches and shapes the data). See
-[ADR 009](adrs/009-inline-file-comments.md).
+restarts. See [ADR 009](adrs/009-inline-file-comments.md).
 
 ## Session Meta tile
 
@@ -150,15 +130,6 @@ Inspects the linked Copilot session via three tabs:
   into subfolders just like Repo Explorer and opens files in the embedded
   Monaco / image / audio viewer
 - **DB** — read-only SQLite table browser scoped to the session DB
-
-## Plan tile *(optional — gated by `VITE_ENABLE_OPTIONAL_FEATURES=1`)*
-
-Per-session viewer (Alt+P) of the linked Copilot session's plan:
-
-- Rendered `plan.md`
-- Current-plan todos grouped by status
-- Mermaid dependency graph of `todo_deps`
-- Plan / todo history sourced from the `plans` table snapshots
 
 ## Workbench tile
 

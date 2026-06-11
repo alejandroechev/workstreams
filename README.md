@@ -1,7 +1,7 @@
 # Workstreams
 
-> A desktop tiling compositor for **Copilot CLI** — manage projects, persist
-> sessions, embed terminals, browse code, and review diffs side-by-side.
+> An Integrated Agentic Coding Envionment for **Copilot CLI** — manage projects, persist
+> sessions, embed terminals, browse/edit code, and review diffs side-by-side.
 
 ![Workstreams demo](docs/assets/workstreams-demo.gif)
 
@@ -15,10 +15,9 @@ project-aware workspace:
 - A **sidebar** of projects and their workstreams (branches / worktrees).
 - A **tiling canvas** per workstream that adapts as you add tiles.
 - **Tiles for the things you actually do**: Copilot sessions, terminals,
-  repo browser, file editor, doc viewer, diff review, plan tracker, scratch
-  workbench.
+  repo browser, file editor, doc viewer, scratch workbench.
 - **Everything persists**: layouts, terminal scrollback, open files, view
-  state, even pending diff reviews. Crash the app — pick up where you left
+  state. Crash the app — pick up where you left
   off.
 
 ## Highlights
@@ -36,7 +35,7 @@ project-aware workspace:
 - 📝 **Markdown with extras** — GFM, syntax-highlighted code, on-disk image
   references, inline Mermaid diagrams with zoom / pan, inter-file links.
 - 💬 **Inline file comments** — Per-workstream comments anchored to line
-  ranges; ADO PR comments importable via MCP.
+  ranges; persisted in SQLite.
 - ⌨️ **Keyboard-driven** — `Alt+<letter>` for every tile type, `Alt+Arrows`
   to move focus, `Alt+S` for side-by-side compare.
 - 💾 **Survives restarts** — workstreams, tile layouts, scrollback, opened
@@ -83,8 +82,6 @@ All app-level commands use **Alt** to avoid conflicts with terminal
 | `Alt+R` | New Repo Explorer tile |
 | `Alt+M` | New Session Meta tile |
 | `Alt+B` | New Workbench tile |
-| `Alt+P` | New Plan tile *(optional build)* |
-| `Alt+G` | New Diff Review tile *(optional build)* |
 | `Alt+Q` | Close focused tile |
 | `Alt+F` | Toggle fullscreen for focused tile |
 | `Alt+S` | Toggle side-by-side (when exactly 2 tiles are selected) |

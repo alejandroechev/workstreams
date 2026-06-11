@@ -9,9 +9,9 @@ If you only have 30 seconds, here's the mental model:
 
 > **Project** → has many → **Workstreams** → each has many → **Tiles**.
 > A *workstream* is "this branch / this worktree / this session". A *tile*
-> is a Copilot CLI session, a terminal, a repo explorer, a plan viewer, a
-> diff review, or a doc/code viewer. The compositor lays them out for you;
-> all state survives crashes and restarts.
+> is a Copilot CLI session, a terminal, a repo explorer, a workbench, or a
+> doc/code viewer. The compositor lays them out for you; all state survives
+> crashes and restarts.
 
 ---
 
@@ -135,8 +135,6 @@ keyboard shortcuts). Here's the full menu:
 | **Repo Explorer** | `Alt+R` | Multi-tab repo browser: Files / Diff / Log / Hooks. Ctrl+P filename search, Ctrl+Shift+F content search, Monaco viewer, file-edit support. The Diff tab's **Unstaged** view shows both modified tracked files *and* new (untracked) files — see [ADR 004](../adrs/004-repo-explorer-tile.md). |
 | **Session Meta** | `Alt+M` | Sidebar of the active Copilot session: turn history, plan, context %. |
 | **Workbench** | `Alt+B` | Catch-all editor pane for inbox / scratch files. |
-| **Plan** | `Alt+P` | Renders `plan.md`, the current-plan todos (grouped by status), a Mermaid dependency graph of `todo_deps`, and plan-history snapshots from the `plans` table. |
-| **Diff Review** | `Alt+G` | The `diff-grok` agent tile (see §8). |
 
 Tile management:
 
@@ -171,7 +169,6 @@ Everything saves automatically:
 - Per-workstream tile layout + focus
 - Terminal scrollback (replayed on restart)
 - Open Copilot session ids (re-attached via `copilot --resume <id>`)
-- Linked plan / review state
 
 Crash the app, kill the process, restart your machine — when you launch
 again, your workstreams are still there. Click one, and the tiles
@@ -207,55 +204,26 @@ manually relaunch.
 
 ---
 
-## 8. Diff Reviews (the `diff-grok` skill)
-
-The **Diff Review** tile pairs with the user-level [`diff-grok`
-skill](https://github.com/alejandroechev/diff-grok). The flow:
-
-1. In a Copilot session tile, run `/diff-grok <base-ref-or-PR>`.
-2. The skill plans semantic chunks from `git diff <base>...HEAD`.
-3. A Diff Review tile auto-opens beside the session. It has three
-   panes: Monaco diff (left), the agent's question (top-right), and
-   your comments (bottom-right).
-4. For each chunk: read the agent's question, click **Approve** /
-   **Done with comments**, type a comment if you have feedback, repeat.
-5. When the last chunk is acknowledged, the skill exports
-   `review.json` + `action-plan.md` under
-   `.copilot-reviews/<review-id>/` and the tile closes.
-
-You can also list active reviews with `Alt+G`. If there are multiple, a
-picker modal opens.
-
-See [ADR 007](../adrs/007-diff-grok-integration.md) for the architecture
-and [ADR 008](../adrs/008-mcp-bridge-for-skills.md) for the MCP bridge
-that exposes Workstreams tile operations to the skill.
-
----
-
-## 9. Settings
+## 8. Settings
 
 Click the gear icon in the status bar (bottom-right) for app preferences:
 
 ![Settings modal](images/06-settings-modal.png)
 
+- **Code editor / Markdown / Terminal font size** — three independent sliders
+  for Monaco source viewers, rendered markdown, and xterm cell grid.
 - **Terminal scroll speed** (0.1×–5×, default 0.5×) — mouse-wheel
   multiplier for terminal + Copilot session tiles. Lower for fine
   control, higher to skim long log output.
-- **Mermaid font size** (8–24 px, default 12 px) — text size inside
-  rendered Mermaid diagrams in doc viewers and the Plan tile.
+- **Copilot command** — full command line spawned for new Copilot session
+  tiles. Default `agency copilot --yolo`; set to `copilot --yolo` to use
+  the public GitHub Copilot CLI.
 
-Settings persist in `localStorage` and apply immediately.
+Settings persist in SQLite and apply immediately.
 
 ---
 
-## 10. Common Workflows
-
-### "I want to review a PR"
-
-1. New workstream pointing at the repo (or reuse one).
-2. Open a Copilot session tile (`Alt+C`).
-3. In it: `/diff-grok pull/1234`.
-4. Walk through the auto-opened Diff Review tile.
+## 9. Common Workflows
 
 ### "I want to try a fix on a new branch without losing my current work"
 
@@ -278,7 +246,7 @@ tracked ones, rendered as full-file diffs.
 
 ---
 
-## 11. Where to go next
+## 10. Where to go next
 
 - **Architecture overview** → [`docs/system-diagram.md`](../system-diagram.md)
 - **All ADRs** → [`docs/adrs/`](../adrs/)
