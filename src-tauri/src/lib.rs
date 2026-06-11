@@ -140,6 +140,7 @@ fn get_workstream_by_id(db: &Connection, id: &str) -> Result<Workstream, String>
 
 /// Create a git Command that doesn't show a console window on Windows
 fn git_cmd() -> std::process::Command {
+    #[allow(unused_mut)]
     let mut cmd = std::process::Command::new("git");
     #[cfg(windows)]
     {
