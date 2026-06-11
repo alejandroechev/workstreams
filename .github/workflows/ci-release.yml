@@ -76,7 +76,7 @@ jobs:
           fi
 
   unit-tests:
-    name: Unit tests (vitest)
+    name: Unit tests (vitest + coverage)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -88,8 +88,86 @@ jobs:
         run: npm ci
       - name: Type check
         run: npx tsc --noEmit
-      - name: Run vitest
-        run: npm test
+      - name: Run vitest with coverage (90% threshold)
+        run: npx vitest run --coverage
+
+  lint-discipline:
+    name: Lint + discipline checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+      - name: Install dependencies
+        run: npm ci
+      - name: ESLint (full src tree)
+        run: npx eslint src
+      - name: Test-file existence check
+        run: node scripts/check-test-files.mjs
+
+  rust-quality:
+    name: Rust quality (fmt + clippy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - name: Install Linux build deps (Tauri)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-3-dev \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libsoup-3.0-dev \
+            libjavascriptcoregtk-4.1-dev \
+            pkg-config
+      - name: Cache cargo registry + target
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "src-tauri -> target"
+          shared-key: "rust-quality"
+      - name: cargo fmt --check
+        working-directory: src-tauri
+        run: cargo fmt --check
+      - name: cargo clippy -D warnings
+        working-directory: src-tauri
+        run: cargo clippy --all-targets -- -D warnings
+
+  smart-doc-gate:
+    name: Smart doc gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check doc-vs-source delta
+        shell: bash
+        run: |
+          set -euo pipefail
+          # On push to master, compare HEAD against its parent. Falls back
+          # to the previous tag if running on a tag push.
+          base=$(git rev-parse HEAD~1 2>/dev/null || echo "")
+          if [ -z "$base" ]; then
+            echo "::notice::No parent commit (first commit?), skipping doc gate"
+            exit 0
+          fi
+          RANGE="${base}..HEAD"
+          SOURCE_LINES=$(git diff --numstat $RANGE -- 'src/*' 'src-tauri/src/*' | awk '{ sum += $1 + $2 } END { print sum+0 }')
+          DOC_CHANGES=$(git diff --name-only $RANGE -- 'README.md' 'docs/' 2>/dev/null | wc -l | awk '{print $1+0}')
+          BYPASS=$(git log $RANGE --format='%B' | grep -c '\[no-docs:' || echo 0)
+          echo "Source lines: $SOURCE_LINES, doc files: $DOC_CHANGES, bypass markers: $BYPASS"
+          if [ "$SOURCE_LINES" -gt 200 ] && [ "$DOC_CHANGES" -eq 0 ] && [ "$BYPASS" -eq 0 ]; then
+            echo "::error::Smart doc gate: $SOURCE_LINES lines of source changed but no docs touched"
+            echo "::error::Update README.md, docs/system-diagram.md, or docs/adrs/ — or add '[no-docs: <reason>]' in a commit message"
+            exit 1
+          fi
+          echo "✅ Smart doc gate passed"
 
   rust-tests:
     name: Rust unit tests (cargo test)
@@ -142,7 +220,7 @@ jobs:
 
   build-windows:
     name: Build Windows release
-    needs: [decide-release, unit-tests, e2e-tests, rust-tests]
+    needs: [decide-release, unit-tests, lint-discipline, rust-quality, smart-doc-gate, e2e-tests, rust-tests]
     if: needs.decide-release.outputs.should_release == 'true'
     runs-on: windows-latest
     outputs:
