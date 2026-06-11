@@ -118,4 +118,4 @@ See `docs/system-diagram.md` for the full architecture diagram and `docs/adrs/` 
 
 ## License
 
-Private use.
+MIT — see [LICENSE](LICENSE).

@@ -4,6 +4,7 @@ version = "0.2.0"
 description = "Project-aware workstream manager with tiling compositor for Copilot CLI"
 authors = ["alejandroe"]
 edition = "2021"
+license = "MIT"
 
 [lib]
 name = "workstreams_lib"
