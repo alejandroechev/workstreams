@@ -66,9 +66,7 @@ For every user-facing feature, before considering it complete:
 └─────────────────────────────┘
 ```
 
-### Validation — Automated Enforcement (5-Layer Defense)
-
-See `docs/adrs/002-discipline-enforcement.md` for the full design rationale.
+### Validation — Automated Enforcement
 
 1. **CDP visual validation** — `scripts/cdp-validate.mjs` connects to Tauri via port 9222, screenshots, fails on console errors. Used as `npm run validate-feature <name>`.
 
@@ -79,34 +77,10 @@ See `docs/adrs/002-discipline-enforcement.md` for the full design rationale.
 
 3. **CI mirrors the hooks** (`.github/workflows/ci-release.yml`): every check the pre-push hook runs also runs in CI, plus Playwright E2E, Rust unit tests, and the Tauri release build. CI is the authoritative gate; bypassing local hooks does not bypass CI.
 
-4. **Discipline Guardian extension** (`.github/extensions/discipline-guardian/`):
-   - `onSessionStart`: Installs SQLite triggers + runs `scripts/discipline-audit.mjs` and injects results
-   - `onPostToolUse` (edit/create): Tracks source/test/doc edit ratios, injects warnings when ratio degrades
-   - `onUserPromptSubmitted`: Intercepts done/complete/finished keywords, injects Definition of Done checklist
-   - `onPostToolUse` (git commit): Reminds to run CDP validation after UI commits
-
-5. **SQLite triggers** (auto-installed by extension):
-   - `auto_inject_feature_todos`: Inserting a todo with `category='feature'` auto-creates test/visual/docs sub-todos + dependencies
-   - `block_done_with_pending_children`: Marking a parent `done` is blocked while child deps are not all done
-   - `auto_tag_plan_id`: Every new todo automatically gets the current `plan_id` from `current_plan`
-   - `maybe_rollover_plan`: Detects plan boundaries from activity patterns (>15min gap + completed work in old plan). Auto-supersedes the old plan and archives its pending todos.
-
-**Plan tracking model**: The `plans` and `current_plan` tables track which todos belong to which plan. Use `INSERT INTO todos (...)` as normal — `plan_id` is auto-populated. When you start a meaningfully new plan after a work gap, the rollover trigger fires automatically. Plan.md snapshots are archived to `~/.copilot/session-state/<id>/plan-history/` by the extension when it detects `[[PLAN]]` in your prompt.
-
-6. **Session-start audit**: Same extension runs `scripts/discipline-audit.mjs` at every session start. Reports missing tests, missing docs, stale screenshots, pending feature children.
-
 **Test file requirement**: Every changed source file must have a corresponding test (`__tests__/X.test.ts(x)` for TS, `#[cfg(test)]` block for Rust). Skip exceptions: type-only files, configs, CSS, `__tests__/` themselves, `main.rs`, or `// @test-skip: <reason>` marker in first 5 lines.
 
-**Feature todo convention**: When planning new feature work, insert the todo with `category='feature'`. The SQLite trigger automatically creates 3 sub-todos:
-- `<id>-test` — TDD: write failing test first
-- `<id>-visual` — CDP screenshot + clean console
-- `<id>-docs` — README / system-diagram / ADR if applicable
-
-The trigger also blocks marking the parent `done` until all 3 sub-todos are done.
-
-**Bypass mechanisms** (use sparingly):
+**Bypass mechanisms** (use sparingly, only after asking the user):
 - `[no-docs: <reason>]` in a commit message → skips smart doc gate
-- `[no-cdp: <reason>]` in a commit message → skips CDP visual validation
 - `// @test-skip: <reason>` in first 5 lines of source → skips test-file-exists check
 
 ### Documentation
