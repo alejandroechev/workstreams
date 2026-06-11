@@ -66,9 +66,6 @@ Pre-built Windows installers are attached to every
 4. Open the settings dialog (gear icon) to tune font sizes, terminal scroll
    speed, and the Copilot command.
 
-The [beginner's tutorial](docs/tutorial/tutorial.md) is an annotated
-walkthrough from first launch to productive use.
-
 ## Keyboard shortcuts
 
 All app-level commands use **Alt** to avoid conflicts with terminal
@@ -104,10 +101,8 @@ All app-level commands use **Alt** to avoid conflicts with terminal
 
 ## Documentation
 
-- [**Beginner's tutorial**](docs/tutorial/tutorial.md) — first launch to
-  productive use, annotated screenshots.
 - [**Features deep dive**](docs/features-detailed.md) — long-form reference
-  for every feature.
+  for every feature, with screenshots.
 - [**Contributor guide**](docs/contributor-guide.md) — setup, commands,
   tests, hooks, CI.
 - [**Architecture diagram**](docs/system-diagram.md) — system-level mermaid.

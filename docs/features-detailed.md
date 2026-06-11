@@ -25,6 +25,8 @@ A workstream allows at most one linked Copilot session; secondary Copilot
 session tiles hide the "🔗 Link" button so only the first tile becomes the
 linked one.
 
+![New Workstream dialog](assets/feature-workstream-create.png)
+
 ## Repo creation
 
 Add repos via two flows, both surfaced via a dropdown menu under the sidebar `+`:
@@ -34,6 +36,8 @@ Add repos via two flows, both surfaced via a dropdown menu under the sidebar `+`
 - **Create new repo** — scaffold a folder with README + .gitignore, run
   `git init -b master`, make initial commit, and optionally create a private
   or public GitHub remote via `gh repo create`.
+
+![Create New Repo dialog](assets/feature-repo-create.png)
 
 ## Adaptive tiling
 
@@ -49,6 +53,13 @@ The fullscreen tile has a distinct yellow border to make the mode obvious at
 a glance. Each tile shows a Heroicon in its header (per-type default,
 override via config) and a double-click on the title renames it inline.
 
+![Four-tile adaptive grid: Copilot session + Repo Explorer + Session Meta + Terminal](assets/feature-tiling-grid.png)
+
+A **side-by-side** mode is available when exactly two tiles are selected
+(`Alt+S`) for focused compare workflows:
+
+![Side-by-side mode: Repo Explorer + Session Meta](assets/feature-side-by-side.png)
+
 ## Terminal tiles
 
 Full interactive terminals via xterm.js + portable-pty (ConPTY on Windows).
@@ -57,6 +68,8 @@ Full interactive terminals via xterm.js + portable-pty (ConPTY on Windows).
 
 Monaco Editor with syntax highlighting for 20+ languages, plus the editable
 behaviour described under "Editable text files".
+
+![Monaco editor with TypeScript syntax highlighting](assets/feature-code-editor.png)
 
 ## Doc viewer tiles
 
@@ -71,6 +84,8 @@ VS Code-style markdown renderer with:
   preview, and `http(s)://` links delegate to the system browser
 - Repo Explorer hosts a back / forward history for navigating between
   previewed files
+
+![Rendered markdown in fullscreen mode](assets/feature-doc-viewer.png)
 
 ## Repo Explorer tile
 
@@ -94,6 +109,8 @@ Multi-tab repo browser (Files / Diff / Log / Hooks):
 A stand-alone CLI scenario (`node scripts/repo-explorer-cli.mjs <dir>
 <query>`) mirrors the same filename search logic without launching the
 desktop app.
+
+![Diff tab showing split-mode unstaged changes](assets/feature-diff.png)
 
 ## Editable text files
 
