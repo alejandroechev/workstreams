@@ -1,0 +1,50 @@
+#!/bin/sh
+#
+# Pre-push hook for workstreams (repo-managed, see scripts/install-hooks.mjs).
+# Authoritative gate — same checks CI runs (minus the slow build + E2E).
+#
+# AGENT POLICY (see AGENTS.md):
+#   Do NOT bypass this hook with `git push --no-verify` without first
+#   asking the user. CI will reject the same failures anyway.
+#
+
+set -e
+
+fail() {
+  msg="$1"
+  printf '\n============================================================\n'
+  printf '❌ Pre-push FAILED: %s\n' "$msg"
+  printf '============================================================\n'
+  printf '⚠️  AGENT NOTICE\n'
+  printf '   This is a repo-managed quality gate that mirrors CI.\n'
+  printf '   Do NOT bypass with `git push --no-verify` without first\n'
+  printf '   asking the user. CI will reject the same failures.\n'
+  printf '============================================================\n\n'
+  exit 1
+}
+
+echo "🔍 Pre-push: TypeScript check (incremental)..."
+npx tsc --noEmit --incremental || fail "TypeScript errors"
+
+echo "🔍 Pre-push: Vitest + coverage (90% threshold)..."
+npx vitest run --coverage || fail "tests failed or coverage below threshold"
+
+echo "🔍 Pre-push: Rust clippy..."
+( cd src-tauri && cargo clippy --all-targets -- -D warnings ) || fail "clippy errors"
+
+# ── Smart doc gate ──────────────────────────────────────────────────
+echo "🔍 Pre-push: Smart doc gate..."
+REMOTE_REF=$(git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null || echo "")
+if [ -n "$REMOTE_REF" ]; then
+  RANGE="$REMOTE_REF..HEAD"
+  SOURCE_LINES=$(git diff --numstat $RANGE -- 'src/*' 'src-tauri/src/*' | awk '{ sum += $1 + $2 } END { print sum+0 }')
+  DOC_CHANGES=$(git diff --name-only $RANGE -- 'README.md' 'docs/' 2>/dev/null | wc -l | awk '{print $1+0}')
+  BYPASS=$(git log $RANGE --format='%B' | grep -c '\[no-docs:' || echo 0)
+  if [ "$SOURCE_LINES" -gt 200 ] && [ "$DOC_CHANGES" -eq 0 ] && [ "$BYPASS" -eq 0 ]; then
+    echo "   Source lines: $SOURCE_LINES, doc files: $DOC_CHANGES, bypass: $BYPASS"
+    fail "Smart doc gate: $SOURCE_LINES lines of source changed but no docs touched. Update README.md / docs/system-diagram.md / docs/adrs/ — or add '[no-docs: <reason>]' to a commit message"
+  fi
+  echo "   Source lines: $SOURCE_LINES, doc files: $DOC_CHANGES, bypass: $BYPASS"
+fi
+
+echo "✅ Pre-push checks passed"

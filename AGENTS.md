@@ -70,19 +70,22 @@ For every user-facing feature, before considering it complete:
 
 See `docs/adrs/002-discipline-enforcement.md` for the full design rationale.
 
-1. **CDP visual validation** — `scripts/cdp-validate.mjs` connects to Tauri via port 9222, screenshots, fails on console errors. Used by pre-push and as `npm run validate-feature <name>`.
+1. **CDP visual validation** — `scripts/cdp-validate.mjs` connects to Tauri via port 9222, screenshots, fails on console errors. Used as `npm run validate-feature <name>`.
 
-2. **Git hooks** (`.git/hooks/`):
-   - **Pre-commit (fast)**: `tsc --noEmit` + `eslint` + `vitest run --coverage` (90% threshold) + `cargo check` (warnings=errors) + `cargo fmt --check` + test-file-exists
-   - **Pre-push (slow)**: `cargo clippy` + smart doc gate (>200 lines source → require doc touch or `[no-docs: reason]` bypass) + CDP visual validation for UI changes (require Tauri running + clean console, or `[no-cdp: reason]` bypass) + Playwright E2E
+2. **Git hooks** (versioned in `.githooks/`, wired via `git config core.hooksPath` from `scripts/install-hooks.mjs`, run automatically by `npm` postinstall):
+   - **Pre-commit (fast, incremental)**: ESLint on staged files only, `vitest run --changed`, test-file-exists, `cargo fmt --check`
+   - **Pre-push (authoritative, mirrors CI)**: `tsc --noEmit --incremental`, `vitest run --coverage` (90% threshold), `cargo clippy -D warnings`, smart doc gate (>200 lines source → require doc touch or `[no-docs: reason]` bypass)
+   - **AGENT POLICY**: Never bypass these hooks with `git commit --no-verify` or `git push --no-verify` without first asking the user. Each hook prints a clear "AGENT NOTICE" block on failure. Fix the underlying issue, or surface it for review.
 
-3. **Discipline Guardian extension** (`.github/extensions/discipline-guardian/`):
+3. **CI mirrors the hooks** (`.github/workflows/ci-release.yml`): every check the pre-push hook runs also runs in CI, plus Playwright E2E, Rust unit tests, and the Tauri release build. CI is the authoritative gate; bypassing local hooks does not bypass CI.
+
+4. **Discipline Guardian extension** (`.github/extensions/discipline-guardian/`):
    - `onSessionStart`: Installs SQLite triggers + runs `scripts/discipline-audit.mjs` and injects results
    - `onPostToolUse` (edit/create): Tracks source/test/doc edit ratios, injects warnings when ratio degrades
    - `onUserPromptSubmitted`: Intercepts done/complete/finished keywords, injects Definition of Done checklist
    - `onPostToolUse` (git commit): Reminds to run CDP validation after UI commits
 
-4. **SQLite triggers** (auto-installed by extension):
+5. **SQLite triggers** (auto-installed by extension):
    - `auto_inject_feature_todos`: Inserting a todo with `category='feature'` auto-creates test/visual/docs sub-todos + dependencies
    - `block_done_with_pending_children`: Marking a parent `done` is blocked while child deps are not all done
    - `auto_tag_plan_id`: Every new todo automatically gets the current `plan_id` from `current_plan`
@@ -90,7 +93,7 @@ See `docs/adrs/002-discipline-enforcement.md` for the full design rationale.
 
 **Plan tracking model**: The `plans` and `current_plan` tables track which todos belong to which plan. Use `INSERT INTO todos (...)` as normal — `plan_id` is auto-populated. When you start a meaningfully new plan after a work gap, the rollover trigger fires automatically. Plan.md snapshots are archived to `~/.copilot/session-state/<id>/plan-history/` by the extension when it detects `[[PLAN]]` in your prompt.
 
-5. **Session-start audit**: Same extension runs `scripts/discipline-audit.mjs` at every session start. Reports missing tests, missing docs, stale screenshots, pending feature children.
+6. **Session-start audit**: Same extension runs `scripts/discipline-audit.mjs` at every session start. Reports missing tests, missing docs, stale screenshots, pending feature children.
 
 **Test file requirement**: Every changed source file must have a corresponding test (`__tests__/X.test.ts(x)` for TS, `#[cfg(test)]` block for Rust). Skip exceptions: type-only files, configs, CSS, `__tests__/` themselves, `main.rs`, or `// @test-skip: <reason>` marker in first 5 lines.
 

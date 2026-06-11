@@ -1,0 +1,44 @@
+#!/bin/sh
+#
+# Pre-commit hook for workstreams (repo-managed, see scripts/install-hooks.mjs).
+# Fast incremental checks against staged changes only.
+# Full-tree checks (tsc, full vitest+coverage, clippy) run in pre-push and CI.
+#
+# AGENT POLICY (see AGENTS.md):
+#   Do NOT bypass this hook with `git commit --no-verify` without first
+#   asking the user. Fix the underlying issue or surface it for review.
+#
+
+set -e
+
+fail() {
+  msg="$1"
+  printf '\n============================================================\n'
+  printf '❌ Pre-commit FAILED: %s\n' "$msg"
+  printf '============================================================\n'
+  printf '⚠️  AGENT NOTICE\n'
+  printf '   This is a repo-managed quality gate. Do NOT bypass it with\n'
+  printf '   `git commit --no-verify` without first asking the user.\n'
+  printf '   Fix the underlying issue, or surface it for review.\n'
+  printf '============================================================\n\n'
+  exit 1
+}
+
+echo "🔍 Pre-commit: ESLint (staged files only)..."
+STAGED=$(git diff --cached --name-only --diff-filter=ACMR -- '*.ts' '*.tsx' '*.js' '*.jsx' | grep '^src/' || true)
+if [ -n "$STAGED" ]; then
+  echo "$STAGED" | xargs npx eslint || fail "ESLint errors in staged files"
+else
+  echo "   (no staged TS/JS files in src/, skipping)"
+fi
+
+echo "🔍 Pre-commit: Vitest (changed files only)..."
+npx vitest run --changed || fail "vitest run --changed reported failures"
+
+echo "🔍 Pre-commit: Test file existence..."
+node scripts/check-test-files.mjs || fail "one or more changed source files have no matching test"
+
+echo "🔍 Pre-commit: Rust format check..."
+( cd src-tauri && cargo fmt --check ) || fail "Rust formatting drift — run 'cargo fmt' inside src-tauri/"
+
+echo "✅ Pre-commit checks passed"
