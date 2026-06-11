@@ -2,15 +2,22 @@
 
 ## Commit message convention
 
-This repo uses **[Conventional Commits](https://www.conventionalcommits.org/)** to drive automated SemVer bumps. Every push to `master` runs CI (`.github/workflows/ci-release.yml`), which reads the commit log since the last `v*` tag and decides what to do.
+This repo uses **[Conventional Commits](https://www.conventionalcommits.org/)**. Pushing to `master` runs the [CI workflow](.github/workflows/ci.yml) — tests, lint, coverage gate, doc gate, E2E. No tag, no release.
 
-### Bump rules
+Releases are **manual**: GitHub → Actions → **Release** → *Run workflow*. The [release workflow](.github/workflows/release.yml) accepts an optional `version` input:
+
+- **Leave blank** → the next semver tag is auto-computed from your commit messages since the previous tag (`feat:` → minor, `fix:` → patch, `BREAKING CHANGE` → major).
+- **Enter `v0.3.0` (or similar)** → forces that exact tag.
+
+The job stamps the version into `package.json` + `tauri.conf.json`, runs `tauri build` on `windows-latest`, creates the git tag, and publishes a GitHub Release with the NSIS installer, MSI installer, and raw `workstreams-vX.Y.Z.exe` attached.
+
+### Bump rules (when auto-computing)
 
 | Commit prefix | Bump kind | Example |
 |---|---|---|
 | `feat:` / `feat(scope):` | **minor** | `feat(repo): add Diff tab filter` |
 | `fix:` / `perf:` / `refactor:` / `chore:` / `test:` / `style:` / `build:` / `ci:` / `revert:` | **patch** | `fix(window): grant allow-destroy permission` |
-| `docs:` | **none** — release is skipped entirely | `docs: update tutorial` |
+| `docs:` only | **none** — auto-compute will refuse to release (set `version` explicitly to override) | `docs: update tutorial` |
 | `<any-type>!:` or body contains `BREAKING CHANGE:` | **major** | `feat!: rewrite tile persistence schema` |
 | Anything else (no recognised prefix) | **patch** (safe default) | — |
 
@@ -21,33 +28,17 @@ The **strongest** bump across the range wins. If multiple commits are batched (`
 ```
 v0.1.0 → fix: …                      → v0.1.1
 v0.1.1 → feat: …                     → v0.2.0
-v0.2.0 → docs: …                     → (no release)
+v0.2.0 → docs: …                     → auto-compute refuses (use explicit version)
 v0.2.0 → docs: …    + fix: …         → v0.2.1
 v0.2.0 → feat: …    + fix: …         → v0.3.0
 v0.2.0 → feat!: …                    → v1.0.0
 ```
 
-### What if I forget the prefix?
-
-Unprefixed commits fall through to **patch**. That's intentional — it's safer to over-release than to miss a fix. But please use the prefixes.
-
-### What if I'm doing a manual release?
-
-Manual `workflow_dispatch` runs from `master` execute the test suites + build but **skip** the tag/release step. To force a specific tag, push a commit that triggers the desired bump and let CI do it.
-
 ## Source-of-truth files
 
-- `package.json` `"version"` and `src-tauri/tauri.conf.json` `"version"` are **decorative** — they're stamped at build time from the computed tag. Don't bother bumping them by hand; the CI workflow overwrites them in the build job. Their committed value (`0.1.0` baseline) is what the dev binary reports until the first release.
+- `package.json` `"version"` and `src-tauri/tauri.conf.json` `"version"` are **decorative** — they're stamped at release time from the resolved tag. Their committed value is what the dev binary reports between releases.
 - Git tags `v<major>.<minor>.<patch>` are the actual source of truth.
 
 ## Local testing
 
-Before pushing:
-
-```bash
-npm test               # vitest (unit)
-npm run test:e2e       # Playwright (in-memory backend)
-npx tsc --noEmit       # type check
-```
-
-The pre-push git hook also runs Rust clippy, smart doc gate, and CDP visual validation when a Tauri dev instance is running.
+The pre-push hook is the canonical local gate and mirrors CI. See `docs/contributor-guide.md` for details on hooks, commands, and the test pyramid.

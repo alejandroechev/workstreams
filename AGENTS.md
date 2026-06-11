@@ -75,7 +75,7 @@ For every user-facing feature, before considering it complete:
    - **Pre-push (authoritative, mirrors CI)**: `tsc --noEmit --incremental`, `vitest run --coverage` (90% threshold), `cargo clippy -D warnings`, smart doc gate (>200 lines source → require doc touch or `[no-docs: reason]` bypass)
    - **AGENT POLICY**: Never bypass these hooks with `git commit --no-verify` or `git push --no-verify` without first asking the user. Each hook prints a clear "AGENT NOTICE" block on failure. Fix the underlying issue, or surface it for review.
 
-3. **CI mirrors the hooks** (`.github/workflows/ci-release.yml`): every check the pre-push hook runs also runs in CI, plus Playwright E2E, Rust unit tests, and the Tauri release build. CI is the authoritative gate; bypassing local hooks does not bypass CI.
+3. **CI mirrors the hooks** (`.github/workflows/ci.yml`): every check the pre-push hook runs also runs in CI, plus Playwright E2E and Rust unit tests. CI is the authoritative gate; bypassing local hooks does not bypass CI. CI never builds the release installer or creates tags — releases are manual via `.github/workflows/release.yml` ("Run workflow" button on GitHub Actions).
 
 **Test file requirement**: Every changed source file must have a corresponding test (`__tests__/X.test.ts(x)` for TS, `#[cfg(test)]` block for Rust). Skip exceptions: type-only files, configs, CSS, `__tests__/` themselves, `main.rs`, or `// @test-skip: <reason>` marker in first 5 lines.
 

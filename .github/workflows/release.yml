@@ -1,0 +1,242 @@
+name: Release
+
+# Manual one-click release: bumps the version, builds the Windows installer,
+# tags the commit, and publishes a GitHub Release with the artifacts.
+#
+# Usage: GitHub → Actions → "Release" → "Run workflow" → enter version
+# (e.g. v0.3.0) OR leave blank to auto-compute from conventional commits.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Target tag (e.g. v0.3.0). Leave blank to auto-compute from conventional commits since the last tag.'
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  resolve-version:
+    name: Resolve version
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+      bump: ${{ steps.resolve.outputs.bump }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Resolve target tag
+        id: resolve
+        shell: bash
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+
+          if [ -n "$INPUT_VERSION" ]; then
+            tag="$INPUT_VERSION"
+            # Normalise: prepend v if missing
+            case "$tag" in
+              v*) ;;
+              *) tag="v$tag" ;;
+            esac
+            # Sanity: matches v<num>.<num>.<num>(-pre)?
+            if ! echo "$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$'; then
+              echo "::error::version must be a semver tag like v0.3.0 or v1.2.3-beta.1 (got '$tag')"
+              exit 1
+            fi
+            if git rev-parse "refs/tags/$tag" >/dev/null 2>&1; then
+              echo "::error::Tag $tag already exists. Pick a different version."
+              exit 1
+            fi
+            echo "tag=$tag" >> "$GITHUB_OUTPUT"
+            echo "bump=manual" >> "$GITHUB_OUTPUT"
+            echo "::notice::Manual release tag: $tag"
+            exit 0
+          fi
+
+          # Auto-compute
+          last_tag=$(git tag --list 'v*' --sort=-v:refname | head -n 1 || true)
+          if [ -z "$last_tag" ]; then
+            range_spec="HEAD"
+            echo "No prior tag found; reading all commits on HEAD."
+          else
+            range_spec="${last_tag}..HEAD"
+            echo "Last tag: $last_tag"
+          fi
+          mapfile -d $'\0' -t messages < <(git log --format=%B%x00 "$range_spec")
+
+          result=$(node --input-type=module -e "
+            import { computeNextVersion } from './scripts/compute-next-version.mjs';
+            const last = process.argv[1] || null;
+            const msgs = process.argv.slice(2);
+            const out = computeNextVersion(last, msgs, { fallback: 'v0.1.0' });
+            process.stdout.write(JSON.stringify(out));
+          " "$last_tag" "${messages[@]}")
+
+          if [ "$result" = "null" ]; then
+            echo "::error::No release-worthy commits since $last_tag (only docs:/chore:?). Set 'version' explicitly to override."
+            exit 1
+          fi
+
+          autoTag=$(node -e "console.log(JSON.parse(process.argv[1]).tag)" "$result")
+          autoBump=$(node -e "console.log(JSON.parse(process.argv[1]).bump)" "$result")
+
+          if git rev-parse "refs/tags/$autoTag" >/dev/null 2>&1; then
+            echo "::error::Computed tag $autoTag already exists. Set 'version' explicitly to pick a different one."
+            exit 1
+          fi
+
+          echo "tag=$autoTag" >> "$GITHUB_OUTPUT"
+          echo "bump=$autoBump" >> "$GITHUB_OUTPUT"
+          echo "::notice::Auto-computed release tag: $autoTag ($autoBump bump)"
+
+  build-windows:
+    name: Build Windows release
+    needs: resolve-version
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache cargo registry + target
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "src-tauri -> target"
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Stamp computed version into manifests for the build
+        shell: bash
+        env:
+          TAG: ${{ needs.resolve-version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          ver="${TAG#v}"
+          echo "Stamping version $ver into package.json + tauri.conf.json"
+          node -e "
+            const fs = require('fs');
+            for (const p of ['package.json', 'src-tauri/tauri.conf.json']) {
+              const j = JSON.parse(fs.readFileSync(p, 'utf8'));
+              j.version = process.argv[1];
+              fs.writeFileSync(p, JSON.stringify(j, null, 2) + '\n');
+            }
+          " "$ver"
+
+      - name: Build Tauri app
+        run: npx tauri build
+
+      - name: Stage artifacts
+        shell: bash
+        env:
+          TAG: ${{ needs.resolve-version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p staging
+          nsis=$(find src-tauri/target/release/bundle/nsis -name "*.exe" -print -quit 2>/dev/null || true)
+          if [ -z "$nsis" ]; then
+            echo "::error::NSIS installer not found under src-tauri/target/release/bundle/nsis"
+            ls -la src-tauri/target/release/bundle/ || true
+            exit 1
+          fi
+          cp "$nsis" staging/
+
+          msi=$(find src-tauri/target/release/bundle/msi -name "*.msi" -print -quit 2>/dev/null || true)
+          if [ -z "$msi" ]; then
+            echo "::error::MSI installer not found under src-tauri/target/release/bundle/msi"
+            exit 1
+          fi
+          cp "$msi" staging/
+
+          if [ ! -f src-tauri/target/release/workstreams.exe ]; then
+            echo "::error::Raw workstreams.exe not found under src-tauri/target/release"
+            exit 1
+          fi
+          cp src-tauri/target/release/workstreams.exe "staging/workstreams-${TAG}.exe"
+
+          echo "Staged artifacts:"
+          ls -la staging/
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-release-${{ needs.resolve-version.outputs.tag }}
+          path: staging/*
+          retention-days: 30
+
+  publish-release:
+    name: Tag + GitHub Release
+    needs: [resolve-version, build-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download Windows artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-release-${{ needs.resolve-version.outputs.tag }}
+          path: dist/
+
+      - name: Create tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.resolve-version.outputs.tag }}
+          BUMP: ${{ needs.resolve-version.outputs.bump }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch --tags origin
+          if git rev-parse "refs/tags/$TAG" >/dev/null 2>&1; then
+            echo "::error::Tag $TAG already exists. Aborting to avoid clobbering."
+            exit 1
+          fi
+          git tag -a "$TAG" -m "Release $TAG ($BUMP bump from ${{ github.sha }})"
+          git push origin "$TAG"
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.resolve-version.outputs.tag }}
+          BUMP: ${{ needs.resolve-version.outputs.bump }}
+        run: |
+          set -euo pipefail
+          notes_file=$(mktemp)
+          {
+            echo "Manual release for commit ${{ github.sha }}"
+            echo
+            echo "**Bump kind:** \`${BUMP}\`"
+            echo "**Built on:** \`windows-latest\` from \`master\`"
+            echo
+            echo "## Commit log since previous tag"
+            prev_tag=$(git tag --list 'v*' --sort=-v:refname | grep -v "^${TAG}$" | head -n 1 || true)
+            if [ -n "$prev_tag" ]; then
+              git log "${prev_tag}..${{ github.sha }}" --pretty=format:"- %s (%h)"
+            else
+              git log --pretty=format:"- %s (%h)" -20
+            fi
+          } > "$notes_file"
+
+          gh release create "$TAG" \
+            --title "$TAG" \
+            --notes-file "$notes_file" \
+            dist/*

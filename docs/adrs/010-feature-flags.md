@@ -32,7 +32,7 @@ A **build-time** feature-flag module keyed off a Vite env var.
 - Local dev/release builds set the var in `.env.local` (gitignored;
   `.env.local.example` ships as a template).
 - CI release pipeline doesn't set the var, so the public NSIS/MSI shipped
-  from `ci-release.yml` defaults to all optional features off.
+  from `release.yml` defaults to all optional features off.
 
 ## Where flags are consulted
 

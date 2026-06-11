@@ -88,15 +88,24 @@ loud "AGENT NOTICE" block on failure with the same warning.
 
 ## CI
 
-`.github/workflows/ci-release.yml` runs every check the pre-push hook runs,
-plus:
+Two workflows, with strictly separated responsibilities:
 
-- Playwright E2E
-- `cargo test --lib`
-- Tauri Windows release build (NSIS + MSI + raw .exe) on `master`
+- **`.github/workflows/ci.yml`** runs on every push to `master` (and on PRs).
+  It executes every check the pre-push hook runs, plus Playwright E2E and
+  `cargo test --lib`. It does **not** build the Tauri installer and does
+  **not** create tags or releases.
 
-A semver tag is computed from conventional-commit history; if every commit
-since the previous tag is `docs:`, the release is skipped.
+- **`.github/workflows/release.yml`** is **manual**. Trigger it via
+  GitHub → Actions → "Release" → "Run workflow":
+  - Leave the `version` input blank to auto-compute the next semver tag
+    from conventional-commit history since the last tag (`feat:` → minor,
+    `fix:` → patch, `BREAKING CHANGE` → major).
+  - Or enter an explicit tag like `v0.3.0` to override.
+
+  The workflow stamps the version into `package.json` + `tauri.conf.json`,
+  runs `tauri build` on `windows-latest`, creates the git tag, and publishes
+  a GitHub Release with the NSIS installer, MSI installer, and raw
+  `workstreams-vX.Y.Z.exe` attached.
 
 ## Process safety — never kill by name
 
