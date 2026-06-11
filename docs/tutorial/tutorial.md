@@ -46,10 +46,6 @@ you're never dropped into "whatever was last archived".
 
 ![Startup screen — sidebar populated, no workstream auto-selected](images/01-startup.png)
 
-> 💡 **Bug fix lineage**: earlier versions would auto-select the first row,
-> which sometimes surfaced an archived workstream. Now you click in
-> explicitly — see the workstream list, pick one.
-
 ---
 
 ## 2. Concepts
