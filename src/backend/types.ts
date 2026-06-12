@@ -90,6 +90,23 @@ export interface Backend {
   getCurrentSessionPlan(sessionId: string): Promise<string | null>;
   listSessionTodoDeps(sessionId: string): Promise<SessionTodoDep[]>;
   listSessionTodos(sessionId: string): Promise<SessionTodo[]>;
+  /**
+   * Per-feature summary for the redesigned Plan tile. Joins
+   * `<session>/files/features/<name>/` folder state with the session
+   * SQLite `plans` + `todos` tables to produce one row per feature
+   * (whichever side surfaces it). See [ADR forthcoming] and
+   * `docs/features-detailed.md`.
+   */
+  listSessionFeatures(sessionId: string): Promise<SessionFeaturesPayload>;
+  /**
+   * Subscribe the backend to fs-changes under
+   * `<session>/files/features/` AND to mtime advances on the session
+   * SQLite file. Coalesced into a single `session-features-changed`
+   * Tauri event with `{ sessionId }` payload. Idempotent: calling
+   * twice for the same sessionId is a no-op. Memory backend is a no-op.
+   */
+  watchSessionFeatures(sessionId: string): Promise<void>;
+  unwatchSessionFeatures(sessionId: string): Promise<void>;
   // Diff Review (ADR 007)
   createDiffReview(workstreamId: string, diffSource: DiffSource, sourceRef: string | null): Promise<DiffReview>;
   listActiveDiffReviews(workstreamId: string): Promise<DiffReview[]>;
@@ -141,4 +158,75 @@ export interface SessionTodo {
   description: string | null;
   status: string;
   plan_id: string | null;
+}
+
+/**
+ * One feature in the linked Copilot session. Produced by joining
+ * folder state (`<session>/files/features/<name>/`) with the session
+ * SQLite `plans` + `todos` tables. `derivedStatus` reconciles the two.
+ *
+ * - `drafting`  — folder exists, no `plans` row yet (grill-me phase).
+ * - `active`/`completed`/`archived` — folder + plan row, mirrors
+ *   `plans.status`.
+ * - `orphan`    — `plans` row exists but the folder is missing on
+ *   disk (rare; usually means the user deleted the folder).
+ */
+export type FeatureDerivedStatus =
+  | "drafting"
+  | "active"
+  | "completed"
+  | "archived"
+  | "orphan";
+
+export interface FeatureSummary {
+  /** Folder name under `<session>/files/features/`. Doubles as display name. */
+  name: string;
+  /** True when `<feature>/grill-me.md` exists on disk. */
+  hasGrillMe: boolean;
+  /** True when `<feature>/plan.md` exists on disk. */
+  hasPlan: boolean;
+  /** Absolute path to `grill-me.md`, or null when absent. */
+  grillMePath: string | null;
+  /** Absolute path to `plan.md`, or null when absent. */
+  planPath: string | null;
+  /** From `plans.id`. Null when the folder is in drafting state. */
+  planId: string | null;
+  /** From `plans.title`. Null when no `plans` row exists. */
+  planTitle: string | null;
+  /** From `plans.status`. Null when no `plans` row exists. */
+  planStatus: "active" | "completed" | "archived" | null;
+  /** From `plans.created_at`, ISO-8601. Null when no `plans` row. */
+  planCreatedAt: string | null;
+  /** Reconciles folder + plan state into a single status. */
+  derivedStatus: FeatureDerivedStatus;
+  /** Total todos for this plan, 0 when no plan exists. */
+  todosTotal: number;
+  /** Todos with `status='done'`. */
+  todosDone: number;
+  /** Todos with `status='in_progress'`. */
+  todosInProgress: number;
+  /** Todos with `status='blocked'`. */
+  todosBlocked: number;
+  /**
+   * Most recent mtime across {plan.md, grill-me.md, latest todos
+   * updated_at for this plan_id}. ISO-8601. Used as the default sort
+   * key. Falls back to plans.created_at, then "" (sorts last) when
+   * nothing is available.
+   */
+  lastTouchedAt: string;
+}
+
+export interface SessionFeaturesPayload {
+  /**
+   * Features in the linked session. Order is insertion-order from the
+   * backend; the frontend re-sorts. Empty array when the session has
+   * no `files/features/` directory and no `plans` rows.
+   */
+  features: FeatureSummary[];
+  /**
+   * Value of `session_state.current_plan_id` in the session SQLite,
+   * or null when unset. May not match any feature in `features` —
+   * the user can have legacy non-feature plans active.
+   */
+  currentPlanId: string | null;
 }

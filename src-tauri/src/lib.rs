@@ -79,6 +79,20 @@ struct AppState {
     fs_watcher: Arc<FsWatcher>,
     /// Monotonic counter shared by every search; bumping this cancels in-flight searches.
     search_epoch: Arc<std::sync::atomic::AtomicU64>,
+    /// Per-session polling threads for the redesigned Plan tile. Stats
+    /// `<session>/files/features/` + the session DB every 1s and emits
+    /// `session-features-changed` when either advances. See ADR forthcoming.
+    features_watchers: Arc<Mutex<std::collections::HashMap<String, FeaturesWatcherHandle>>>,
+}
+
+struct FeaturesWatcherHandle {
+    stop: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl Drop for FeaturesWatcherHandle {
+    fn drop(&mut self) {
+        self.stop.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
 }
 
 fn now() -> String {
@@ -2951,6 +2965,510 @@ fn query_session_todo_deps_impl(conn: &Connection) -> Result<Vec<TodoDepEntry>, 
     Ok(entries)
 }
 
+// ── Session features (Plan tile redesign) ──────────────────────────────
+
+/// Per-feature summary the redesigned Plan tile renders. Joins folder
+/// state under `<session>/files/features/<name>/` with the session's
+/// `plans` + `todos` SQLite tables. Field names are camelCase via serde
+/// to match the TS `FeatureSummary` interface.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct FeatureSummary {
+    pub name: String,
+    pub has_grill_me: bool,
+    pub has_plan: bool,
+    pub grill_me_path: Option<String>,
+    pub plan_path: Option<String>,
+    pub plan_id: Option<String>,
+    pub plan_title: Option<String>,
+    pub plan_status: Option<String>,
+    pub plan_created_at: Option<String>,
+    pub derived_status: String,
+    pub todos_total: i64,
+    pub todos_done: i64,
+    pub todos_in_progress: i64,
+    pub todos_blocked: i64,
+    pub last_touched_at: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionFeaturesPayload {
+    pub features: Vec<FeatureSummary>,
+    pub current_plan_id: Option<String>,
+}
+
+/// Raw plan row read from the session DB. We keep the parsed shape
+/// internal so the reconciliation logic can operate on simple types.
+#[derive(Debug, Clone)]
+struct RawPlanRow {
+    id: String,
+    feature_name: String,
+    title: String,
+    status: String,
+    created_at: String,
+    todos_last_updated_at: Option<String>,
+    todos_total: i64,
+    todos_done: i64,
+    todos_in_progress: i64,
+    todos_blocked: i64,
+}
+
+/// Raw folder row stat'd from disk.
+#[derive(Debug, Clone)]
+struct RawFolderRow {
+    name: String,
+    has_grill_me: bool,
+    has_plan: bool,
+    grill_me_path: Option<String>,
+    plan_path: Option<String>,
+    files_last_mtime: Option<String>,
+}
+
+fn column_exists(conn: &Connection, table: &str, column: &str) -> bool {
+    let q = format!(
+        "SELECT COUNT(*) > 0 FROM pragma_table_info('{}') WHERE name = ?1",
+        table
+    );
+    conn.query_row(&q, [column], |row| row.get::<_, bool>(0))
+        .unwrap_or(false)
+}
+
+/// Reads `plans` joined with todo status counts. Returns empty when the
+/// `plans` table doesn't exist OR the `feature_name` column hasn't been
+/// added yet (only the feature-plan skill creates it; pre-skill DBs
+/// don't have it).
+fn read_session_plans(conn: &Connection) -> Vec<RawPlanRow> {
+    if !table_exists(conn, "plans") {
+        return Vec::new();
+    }
+    if !column_exists(conn, "plans", "feature_name") {
+        return Vec::new();
+    }
+    let has_todos = table_exists(conn, "todos");
+    let mut stmt = match conn.prepare(
+        "SELECT id, feature_name, title, status, created_at FROM plans WHERE feature_name IS NOT NULL",
+    ) {
+        Ok(s) => s,
+        Err(_) => return Vec::new(),
+    };
+    let rows = stmt.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, Option<String>>(1)?,
+            row.get::<_, Option<String>>(2)?,
+            row.get::<_, Option<String>>(3)?,
+            row.get::<_, Option<String>>(4)?,
+        ))
+    });
+    let mut out = Vec::new();
+    let iter = match rows {
+        Ok(it) => it,
+        Err(_) => return out,
+    };
+    for r in iter.flatten() {
+        let (id, feature_name, title, status, created_at) = r;
+        let Some(feature_name) = feature_name else {
+            continue;
+        };
+        let row = RawPlanRow {
+            id: id.clone(),
+            feature_name,
+            title: title.unwrap_or_else(|| id.clone()),
+            status: status.unwrap_or_else(|| "active".to_string()),
+            created_at: created_at.unwrap_or_default(),
+            todos_last_updated_at: None,
+            todos_total: 0,
+            todos_done: 0,
+            todos_in_progress: 0,
+            todos_blocked: 0,
+        };
+        out.push(row);
+    }
+    if has_todos {
+        for row in out.iter_mut() {
+            populate_todo_counts(conn, row);
+        }
+    }
+    out
+}
+
+fn populate_todo_counts(conn: &Connection, row: &mut RawPlanRow) {
+    // status counts
+    let mut stmt = match conn
+        .prepare("SELECT status, COUNT(*) FROM todos WHERE plan_id = ?1 GROUP BY status")
+    {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+    let iter = stmt.query_map([&row.id], |r| {
+        Ok((r.get::<_, Option<String>>(0)?, r.get::<_, i64>(1)?))
+    });
+    if let Ok(it) = iter {
+        for r in it.flatten() {
+            let (status, count) = r;
+            row.todos_total += count;
+            match status.as_deref() {
+                Some("done") => row.todos_done += count,
+                Some("in_progress") => row.todos_in_progress += count,
+                Some("blocked") => row.todos_blocked += count,
+                _ => {}
+            }
+        }
+    }
+    // latest updated_at (column may not exist on legacy todos tables)
+    if column_exists(conn, "todos", "updated_at") {
+        if let Ok(latest) = conn.query_row::<Option<String>, _, _>(
+            "SELECT MAX(updated_at) FROM todos WHERE plan_id = ?1",
+            [&row.id],
+            |r| r.get(0),
+        ) {
+            row.todos_last_updated_at = latest;
+        }
+    }
+}
+
+/// Resolves `current_plan_id` from `session_state` (feature-plan skill)
+/// or falls back to `current_plan.plan_id` (legacy discipline extension).
+fn read_current_plan_id(conn: &Connection) -> Option<String> {
+    if table_exists(conn, "session_state") {
+        if let Ok(v) = conn.query_row::<Option<String>, _, _>(
+            "SELECT value FROM session_state WHERE key = 'current_plan_id'",
+            [],
+            |r| r.get(0),
+        ) {
+            if v.is_some() {
+                return v;
+            }
+        }
+    }
+    query_session_current_plan_impl(conn)
+}
+
+/// Walks `<session>/files/features/*` and returns one row per directory.
+fn list_feature_folders(features_dir: &std::path::Path) -> Vec<RawFolderRow> {
+    let mut out = Vec::new();
+    let entries = match std::fs::read_dir(features_dir) {
+        Ok(e) => e,
+        Err(_) => return out,
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let Some(name) = path.file_name().and_then(|n| n.to_str()).map(String::from) else {
+            continue;
+        };
+        let grill = path.join("grill-me.md");
+        let plan = path.join("plan.md");
+        let has_grill_me = grill.is_file();
+        let has_plan = plan.is_file();
+        let grill_me_path = if has_grill_me {
+            Some(grill.to_string_lossy().to_string())
+        } else {
+            None
+        };
+        let plan_path = if has_plan {
+            Some(plan.to_string_lossy().to_string())
+        } else {
+            None
+        };
+        let files_last_mtime = newest_mtime_iso(&[&grill, &plan]);
+        out.push(RawFolderRow {
+            name,
+            has_grill_me,
+            has_plan,
+            grill_me_path,
+            plan_path,
+            files_last_mtime,
+        });
+    }
+    out
+}
+
+fn newest_mtime_iso(paths: &[&std::path::Path]) -> Option<String> {
+    let mut newest: Option<std::time::SystemTime> = None;
+    for p in paths {
+        if let Ok(meta) = std::fs::metadata(p) {
+            if let Ok(m) = meta.modified() {
+                newest = Some(match newest {
+                    Some(prev) if prev > m => prev,
+                    _ => m,
+                });
+            }
+        }
+    }
+    newest.and_then(system_time_to_iso)
+}
+
+fn system_time_to_iso(t: std::time::SystemTime) -> Option<String> {
+    let dur = t.duration_since(std::time::UNIX_EPOCH).ok()?;
+    let secs = dur.as_secs() as i64;
+    let nanos = dur.subsec_nanos();
+    // Minimal ISO-8601 UTC; same string-compare ordering as the TS side.
+    let (year, month, day, hour, min, sec) = epoch_to_ymd_hms(secs);
+    Some(format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z",
+        year,
+        month,
+        day,
+        hour,
+        min,
+        sec,
+        nanos / 1_000_000
+    ))
+}
+
+/// Pure helper: epoch seconds → (year, month, day, hour, min, sec) in UTC.
+/// Hand-rolled because we don't want a `chrono` dependency for one timestamp.
+fn epoch_to_ymd_hms(secs: i64) -> (i32, u32, u32, u32, u32, u32) {
+    let days = secs.div_euclid(86_400);
+    let seconds_in_day = secs.rem_euclid(86_400) as u32;
+    let hour = seconds_in_day / 3600;
+    let min = (seconds_in_day % 3600) / 60;
+    let sec = seconds_in_day % 60;
+    // Days since 1970-01-01 → civil date (Howard Hinnant's algorithm)
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097) as u64;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    let year = if m <= 2 { y + 1 } else { y } as i32;
+    (year, m, d, hour, min, sec)
+}
+
+/// Reconciles folder list + plan list into the final summaries.
+/// Mirrors the TS `reconcileFeatures` in `src/domain/feature-discovery.ts`.
+fn reconcile_features(folders: Vec<RawFolderRow>, plans: Vec<RawPlanRow>) -> Vec<FeatureSummary> {
+    // Latest-wins per feature_name.
+    let mut latest: std::collections::HashMap<String, RawPlanRow> =
+        std::collections::HashMap::new();
+    for p in plans {
+        let key = p.feature_name.clone();
+        if let Some(existing) = latest.get(&key) {
+            if p.created_at > existing.created_at {
+                latest.insert(key, p);
+            }
+        } else {
+            latest.insert(key, p);
+        }
+    }
+    let folder_names: std::collections::HashSet<String> =
+        folders.iter().map(|f| f.name.clone()).collect();
+
+    let mut sorted_folders = folders;
+    sorted_folders.sort_by(|a, b| a.name.cmp(&b.name));
+
+    let mut out = Vec::new();
+    for folder in &sorted_folders {
+        let plan = latest.get(&folder.name).cloned();
+        out.push(make_summary(folder, plan.as_ref()));
+    }
+    let mut orphans: Vec<RawPlanRow> = latest
+        .into_values()
+        .filter(|p| !folder_names.contains(&p.feature_name))
+        .collect();
+    orphans.sort_by(|a, b| a.feature_name.cmp(&b.feature_name));
+    for p in orphans {
+        out.push(make_orphan_summary(&p));
+    }
+    out
+}
+
+fn make_summary(folder: &RawFolderRow, plan: Option<&RawPlanRow>) -> FeatureSummary {
+    let derived_status = match plan.map(|p| p.status.as_str()) {
+        Some("completed") => "completed",
+        Some("archived") => "archived",
+        Some("active") | Some(_) if plan.is_some() => "active",
+        _ => "drafting",
+    }
+    .to_string();
+    let last_touched_at = compute_last_touched(folder.files_last_mtime.as_deref(), plan);
+    FeatureSummary {
+        name: folder.name.clone(),
+        has_grill_me: folder.has_grill_me,
+        has_plan: folder.has_plan,
+        grill_me_path: folder.grill_me_path.clone(),
+        plan_path: folder.plan_path.clone(),
+        plan_id: plan.map(|p| p.id.clone()),
+        plan_title: plan.map(|p| p.title.clone()),
+        plan_status: plan.map(|p| p.status.clone()),
+        plan_created_at: plan.map(|p| p.created_at.clone()),
+        derived_status,
+        todos_total: plan.map(|p| p.todos_total).unwrap_or(0),
+        todos_done: plan.map(|p| p.todos_done).unwrap_or(0),
+        todos_in_progress: plan.map(|p| p.todos_in_progress).unwrap_or(0),
+        todos_blocked: plan.map(|p| p.todos_blocked).unwrap_or(0),
+        last_touched_at,
+    }
+}
+
+fn make_orphan_summary(p: &RawPlanRow) -> FeatureSummary {
+    FeatureSummary {
+        name: p.feature_name.clone(),
+        has_grill_me: false,
+        has_plan: false,
+        grill_me_path: None,
+        plan_path: None,
+        plan_id: Some(p.id.clone()),
+        plan_title: Some(p.title.clone()),
+        plan_status: Some(p.status.clone()),
+        plan_created_at: Some(p.created_at.clone()),
+        derived_status: "orphan".to_string(),
+        todos_total: p.todos_total,
+        todos_done: p.todos_done,
+        todos_in_progress: p.todos_in_progress,
+        todos_blocked: p.todos_blocked,
+        last_touched_at: p
+            .todos_last_updated_at
+            .clone()
+            .unwrap_or_else(|| p.created_at.clone()),
+    }
+}
+
+fn compute_last_touched(files_mtime: Option<&str>, plan: Option<&RawPlanRow>) -> String {
+    let candidates: Vec<&str> = [
+        files_mtime,
+        plan.and_then(|p| p.todos_last_updated_at.as_deref()),
+        plan.map(|p| p.created_at.as_str()),
+    ]
+    .into_iter()
+    .flatten()
+    .filter(|s| !s.is_empty())
+    .collect();
+    if candidates.is_empty() {
+        return String::new();
+    }
+    candidates
+        .into_iter()
+        .max()
+        .map(String::from)
+        .unwrap_or_default()
+}
+
+#[tauri::command]
+fn list_session_features(session_id: String) -> Result<SessionFeaturesPayload, String> {
+    let home = dirs::home_dir().ok_or("No home directory")?;
+    let session_dir = home
+        .join(".copilot")
+        .join("session-state")
+        .join(&session_id);
+    if !session_dir.is_dir() {
+        return Ok(SessionFeaturesPayload {
+            features: Vec::new(),
+            current_plan_id: None,
+        });
+    }
+    let features_dir = session_dir.join("files").join("features");
+    let folders = if features_dir.is_dir() {
+        list_feature_folders(&features_dir)
+    } else {
+        Vec::new()
+    };
+    let (plans, current_plan_id) = match open_session_db_ro(&session_id) {
+        Some(conn) => (read_session_plans(&conn), read_current_plan_id(&conn)),
+        None => (Vec::new(), None),
+    };
+    let features = reconcile_features(folders, plans);
+    Ok(SessionFeaturesPayload {
+        features,
+        current_plan_id,
+    })
+}
+
+/// Highest mtime across the features dir tree + the session DB. Used by
+/// the per-session polling loop to detect "something changed".
+fn session_features_signature(session_id: &str) -> Option<std::time::SystemTime> {
+    let home = dirs::home_dir()?;
+    let session_dir = home.join(".copilot").join("session-state").join(session_id);
+    let mut newest: Option<std::time::SystemTime> = None;
+    let mut bump = |t: std::time::SystemTime| {
+        newest = Some(match newest {
+            Some(prev) if prev > t => prev,
+            _ => t,
+        });
+    };
+    // Session DB mtime.
+    let db = session_dir.join("session.db");
+    if let Ok(meta) = std::fs::metadata(&db) {
+        if let Ok(m) = meta.modified() {
+            bump(m);
+        }
+    }
+    // Features dir tree: just iterate the immediate folder + 1 level
+    // of files (grill-me.md, plan.md). That covers the skill's writes
+    // without paying for a recursive walk.
+    let features_dir = session_dir.join("files").join("features");
+    if let Ok(entries) = std::fs::read_dir(&features_dir) {
+        for e in entries.flatten() {
+            if let Ok(meta) = std::fs::metadata(e.path()) {
+                if let Ok(m) = meta.modified() {
+                    bump(m);
+                }
+            }
+            if let Ok(inner) = std::fs::read_dir(e.path()) {
+                for f in inner.flatten() {
+                    if let Ok(meta) = std::fs::metadata(f.path()) {
+                        if let Ok(m) = meta.modified() {
+                            bump(m);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    newest
+}
+
+#[tauri::command]
+fn watch_session_features(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    session_id: String,
+) -> Result<(), String> {
+    let mut guard = state.features_watchers.lock().unwrap();
+    if guard.contains_key(&session_id) {
+        return Ok(()); // idempotent
+    }
+    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let stop_clone = stop.clone();
+    let session = session_id.clone();
+    let app_clone = app.clone();
+    std::thread::spawn(move || {
+        // Baseline so the first tick doesn't emit if nothing has changed
+        // since the watcher was started.
+        let mut last = session_features_signature(&session);
+        while !stop_clone.load(std::sync::atomic::Ordering::SeqCst) {
+            std::thread::sleep(std::time::Duration::from_secs(1));
+            if stop_clone.load(std::sync::atomic::Ordering::SeqCst) {
+                break;
+            }
+            let current = session_features_signature(&session);
+            if current != last {
+                last = current;
+                let _ = app_clone.emit(
+                    "session-features-changed",
+                    serde_json::json!({ "sessionId": session.clone() }),
+                );
+            }
+        }
+    });
+    guard.insert(session_id, FeaturesWatcherHandle { stop });
+    Ok(())
+}
+
+#[tauri::command]
+fn unwatch_session_features(state: State<'_, AppState>, session_id: String) -> Result<(), String> {
+    let mut guard = state.features_watchers.lock().unwrap();
+    guard.remove(&session_id); // Drop impl signals the thread to stop
+    Ok(())
+}
+
 // ── Session DB Explorer ────────────────────────────────────────────────
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -3129,6 +3647,7 @@ pub fn run() {
         session_poller: poller.clone(),
         fs_watcher,
         search_epoch: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        features_watchers: Arc::new(Mutex::new(std::collections::HashMap::new())),
     };
 
     tauri::Builder::default()
@@ -3214,6 +3733,9 @@ pub fn run() {
             query_session_plans,
             query_session_current_plan,
             query_session_todo_deps,
+            list_session_features,
+            watch_session_features,
+            unwatch_session_features,
             list_session_db_tables,
             query_session_db_table,
             list_db_tables,
@@ -3980,5 +4502,332 @@ Body here.
         assert!(!is_sqlite_file(tmp.join("missing").to_string_lossy().to_string()).unwrap());
 
         std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    // ── list_session_features tests ────────────────────────────────────
+
+    fn fresh_features_db() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        // Mimics what the feature-plan skill creates on first run.
+        conn.execute_batch(
+            "CREATE TABLE plans (
+                id TEXT PRIMARY KEY,
+                title TEXT,
+                status TEXT,
+                created_at TEXT,
+                superseded_at TEXT,
+                plan_md_snapshot TEXT,
+                feature_name TEXT,
+                updated_at TEXT
+             );
+             CREATE TABLE todos (
+                id TEXT PRIMARY KEY,
+                title TEXT,
+                description TEXT,
+                status TEXT,
+                plan_id TEXT,
+                updated_at TEXT
+             );
+             CREATE TABLE session_state (key TEXT PRIMARY KEY, value TEXT);
+             CREATE TABLE current_plan (id INTEGER PRIMARY KEY, plan_id TEXT);",
+        )
+        .unwrap();
+        conn
+    }
+
+    #[test]
+    fn read_session_plans_returns_empty_when_table_missing() {
+        let conn = Connection::open_in_memory().unwrap();
+        assert!(read_session_plans(&conn).is_empty());
+    }
+
+    #[test]
+    fn read_session_plans_returns_empty_when_feature_name_column_missing() {
+        let conn = Connection::open_in_memory().unwrap();
+        // Schema that pre-dates the feature-plan skill ALTER.
+        conn.execute_batch(
+            "CREATE TABLE plans (id TEXT PRIMARY KEY, title TEXT, status TEXT,
+             created_at TEXT, superseded_at TEXT, plan_md_snapshot TEXT);
+             INSERT INTO plans VALUES ('legacy','x','active','2026-01-01',NULL,NULL);",
+        )
+        .unwrap();
+        assert!(read_session_plans(&conn).is_empty());
+    }
+
+    #[test]
+    fn read_session_plans_skips_rows_with_null_feature_name() {
+        let conn = fresh_features_db();
+        conn.execute_batch(
+            "INSERT INTO plans (id,title,status,created_at,feature_name)
+             VALUES ('a','tit','active','2026-01-01',NULL),
+                    ('b','tit2','active','2026-01-02','beta');",
+        )
+        .unwrap();
+        let rows = read_session_plans(&conn);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, "b");
+    }
+
+    #[test]
+    fn read_session_plans_populates_todo_counts() {
+        let conn = fresh_features_db();
+        conn.execute_batch(
+            "INSERT INTO plans (id,title,status,created_at,feature_name)
+                 VALUES ('p1','t','active','2026-01-01','alpha');
+             INSERT INTO todos (id,title,status,plan_id,updated_at) VALUES
+                 ('t1','a','pending','p1','2026-01-02'),
+                 ('t2','b','done','p1','2026-01-03'),
+                 ('t3','c','in_progress','p1','2026-01-04'),
+                 ('t4','d','blocked','p1','2026-01-05');",
+        )
+        .unwrap();
+        let rows = read_session_plans(&conn);
+        assert_eq!(rows.len(), 1);
+        let r = &rows[0];
+        assert_eq!(r.todos_total, 4);
+        assert_eq!(r.todos_done, 1);
+        assert_eq!(r.todos_in_progress, 1);
+        assert_eq!(r.todos_blocked, 1);
+        assert_eq!(r.todos_last_updated_at.as_deref(), Some("2026-01-05"));
+    }
+
+    #[test]
+    fn read_current_plan_id_prefers_session_state() {
+        let conn = fresh_features_db();
+        conn.execute_batch(
+            "INSERT INTO session_state VALUES ('current_plan_id', 'new-plan');
+             INSERT INTO current_plan VALUES (1, 'legacy-plan');",
+        )
+        .unwrap();
+        assert_eq!(read_current_plan_id(&conn).as_deref(), Some("new-plan"));
+    }
+
+    #[test]
+    fn read_current_plan_id_falls_back_to_legacy_current_plan() {
+        let conn = fresh_features_db();
+        conn.execute_batch("INSERT INTO current_plan VALUES (1, 'legacy-plan');")
+            .unwrap();
+        assert_eq!(read_current_plan_id(&conn).as_deref(), Some("legacy-plan"));
+    }
+
+    #[test]
+    fn read_current_plan_id_returns_none_when_neither_set() {
+        let conn = fresh_features_db();
+        assert_eq!(read_current_plan_id(&conn), None);
+    }
+
+    #[test]
+    fn reconcile_features_drafting_when_folder_only() {
+        let folders = vec![RawFolderRow {
+            name: "alpha".into(),
+            has_grill_me: true,
+            has_plan: false,
+            grill_me_path: Some("/x/alpha/grill-me.md".into()),
+            plan_path: None,
+            files_last_mtime: Some("2026-06-01T00:00:00.000Z".into()),
+        }];
+        let out = reconcile_features(folders, Vec::new());
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].derived_status, "drafting");
+        assert!(out[0].plan_id.is_none());
+    }
+
+    #[test]
+    fn reconcile_features_orphan_when_plan_only() {
+        let plans = vec![RawPlanRow {
+            id: "p1".into(),
+            feature_name: "ghost".into(),
+            title: "Ghost".into(),
+            status: "active".into(),
+            created_at: "2026-06-01T00:00:00.000Z".into(),
+            todos_last_updated_at: None,
+            todos_total: 3,
+            todos_done: 1,
+            todos_in_progress: 0,
+            todos_blocked: 0,
+        }];
+        let out = reconcile_features(Vec::new(), plans);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].derived_status, "orphan");
+        assert_eq!(out[0].todos_total, 3);
+    }
+
+    #[test]
+    fn reconcile_features_mirrors_plan_status() {
+        let folders = vec![
+            RawFolderRow {
+                name: "a".into(),
+                has_grill_me: true,
+                has_plan: true,
+                grill_me_path: None,
+                plan_path: None,
+                files_last_mtime: None,
+            },
+            RawFolderRow {
+                name: "b".into(),
+                has_grill_me: true,
+                has_plan: true,
+                grill_me_path: None,
+                plan_path: None,
+                files_last_mtime: None,
+            },
+        ];
+        let plans = vec![
+            RawPlanRow {
+                id: "pa".into(),
+                feature_name: "a".into(),
+                title: "A".into(),
+                status: "completed".into(),
+                created_at: "2026-01-01".into(),
+                todos_last_updated_at: None,
+                todos_total: 0,
+                todos_done: 0,
+                todos_in_progress: 0,
+                todos_blocked: 0,
+            },
+            RawPlanRow {
+                id: "pb".into(),
+                feature_name: "b".into(),
+                title: "B".into(),
+                status: "archived".into(),
+                created_at: "2026-01-02".into(),
+                todos_last_updated_at: None,
+                todos_total: 0,
+                todos_done: 0,
+                todos_in_progress: 0,
+                todos_blocked: 0,
+            },
+        ];
+        let out = reconcile_features(folders, plans);
+        assert_eq!(out[0].derived_status, "completed");
+        assert_eq!(out[1].derived_status, "archived");
+    }
+
+    #[test]
+    fn reconcile_features_latest_wins_for_duplicate_feature_name() {
+        let folders = vec![RawFolderRow {
+            name: "alpha".into(),
+            has_grill_me: true,
+            has_plan: true,
+            grill_me_path: None,
+            plan_path: None,
+            files_last_mtime: None,
+        }];
+        let plans = vec![
+            RawPlanRow {
+                id: "old".into(),
+                feature_name: "alpha".into(),
+                title: "old".into(),
+                status: "active".into(),
+                created_at: "2026-01-01".into(),
+                todos_last_updated_at: None,
+                todos_total: 0,
+                todos_done: 0,
+                todos_in_progress: 0,
+                todos_blocked: 0,
+            },
+            RawPlanRow {
+                id: "new".into(),
+                feature_name: "alpha".into(),
+                title: "new".into(),
+                status: "active".into(),
+                created_at: "2026-12-01".into(),
+                todos_last_updated_at: None,
+                todos_total: 0,
+                todos_done: 0,
+                todos_in_progress: 0,
+                todos_blocked: 0,
+            },
+        ];
+        let out = reconcile_features(folders, plans);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].plan_id.as_deref(), Some("new"));
+        assert_eq!(out[0].plan_title.as_deref(), Some("new"));
+    }
+
+    #[test]
+    fn reconcile_features_matches_feature_names_case_sensitively() {
+        let folders = vec![RawFolderRow {
+            name: "user-auth".into(),
+            has_grill_me: true,
+            has_plan: false,
+            grill_me_path: None,
+            plan_path: None,
+            files_last_mtime: None,
+        }];
+        let plans = vec![RawPlanRow {
+            id: "p".into(),
+            feature_name: "User-Auth".into(),
+            title: "X".into(),
+            status: "active".into(),
+            created_at: "2026-01-01".into(),
+            todos_last_updated_at: None,
+            todos_total: 0,
+            todos_done: 0,
+            todos_in_progress: 0,
+            todos_blocked: 0,
+        }];
+        let out = reconcile_features(folders, plans);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].name, "user-auth");
+        assert_eq!(out[0].derived_status, "drafting");
+        assert_eq!(out[1].name, "User-Auth");
+        assert_eq!(out[1].derived_status, "orphan");
+    }
+
+    #[test]
+    fn list_feature_folders_skips_files_and_handles_missing_dir() {
+        let tmp = std::env::temp_dir().join(format!(
+            "ws-feat-folders-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&tmp).ok();
+        // Missing features dir → empty list, no error.
+        let missing = tmp.join("missing");
+        assert!(list_feature_folders(&missing).is_empty());
+
+        let features = tmp.join("features");
+        std::fs::create_dir_all(features.join("alpha")).unwrap();
+        std::fs::write(features.join("alpha").join("grill-me.md"), b"a").unwrap();
+        std::fs::write(features.join("alpha").join("plan.md"), b"a").unwrap();
+        std::fs::create_dir_all(features.join("beta")).unwrap();
+        std::fs::write(features.join("beta").join("grill-me.md"), b"b").unwrap();
+        // A bare file → ignored.
+        std::fs::write(features.join("loose.md"), b"x").unwrap();
+
+        let mut folders = list_feature_folders(&features);
+        folders.sort_by(|a, b| a.name.cmp(&b.name));
+        assert_eq!(folders.len(), 2);
+        assert_eq!(folders[0].name, "alpha");
+        assert!(folders[0].has_grill_me && folders[0].has_plan);
+        assert_eq!(folders[1].name, "beta");
+        assert!(folders[1].has_grill_me && !folders[1].has_plan);
+        assert!(folders[1].plan_path.is_none());
+
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn list_session_features_returns_empty_for_missing_session() {
+        let out = list_session_features("nonexistent-session-id-xyz-99999".into()).unwrap();
+        assert!(out.features.is_empty());
+        assert!(out.current_plan_id.is_none());
+    }
+
+    #[test]
+    fn epoch_to_ymd_hms_unix_epoch_is_1970_01_01() {
+        assert_eq!(epoch_to_ymd_hms(0), (1970, 1, 1, 0, 0, 0));
+    }
+
+    #[test]
+    fn epoch_to_ymd_hms_handles_year_2026_correctly() {
+        // 2026-06-12T00:00:00Z is 1781481600
+        let secs = 1_781_481_600;
+        let (y, m, d, _, _, _) = epoch_to_ymd_hms(secs);
+        assert_eq!((y, m, d), (2026, 6, 12));
     }
 }

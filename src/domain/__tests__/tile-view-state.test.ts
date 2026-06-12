@@ -96,15 +96,13 @@ describe("parseViewState", () => {
     expect(parseViewState(config, "workbench")).toEqual({ viewingPath: "C:\\a.ts" });
   });
 
-  it("plan picks tab + selectedHistoryPlanId + historySubTab", () => {
+  it("plan picks activeTab only (legacy history fields silently dropped)", () => {
     const config = JSON.stringify({
-      viewState: { activeTab: "history", selectedHistoryPlanId: "p1", historySubTab: "todos" },
+      viewState: { activeTab: "overview", selectedHistoryPlanId: "p1", historySubTab: "todos" },
     });
-    expect(parseViewState(config, "plan")).toEqual({
-      activeTab: "history",
-      selectedHistoryPlanId: "p1",
-      historySubTab: "todos",
-    });
+    // selectedHistoryPlanId + historySubTab were dropped in the
+    // plan-tile-redesign refactor — they're now ignored.
+    expect(parseViewState(config, "plan")).toEqual({ activeTab: "overview" });
   });
 });
 
@@ -159,7 +157,7 @@ describe("parseViewState edge cases", () => {
     expect(parseViewState("[1,2]", "repo_explorer")).toEqual({});
   });
 
-  it("plan: rejects unknown historySubTab values", () => {
+  it("plan: silently drops historySubTab (legacy key, removed in redesign)", () => {
     const config = JSON.stringify({
       viewState: { historySubTab: "bogus" },
     });

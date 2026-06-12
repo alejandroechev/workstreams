@@ -59,9 +59,28 @@ export class MemoryBackend implements Backend {
   private diffComments = new Map<string, DiffComment[]>();
   private invalidatedChunks = new Map<string, Set<string>>();
   private fileComments = new Map<string, FileComment>();
+  /**
+   * Test/dev seed for listSessionFeatures. Maps sessionId → payload.
+   * Populated via {@link seedSessionFeatures}. Default per-session
+   * payload is empty features + null currentPlanId.
+   */
+  private sessionFeatures = new Map<string, import("./types").SessionFeaturesPayload>();
 
   seedFile(path: string, content: string): void {
     this.files.set(path, content);
+  }
+
+  /**
+   * Test helper: pre-populate the in-memory `listSessionFeatures`
+   * response for a session id. Mirrors the {@link seedDiffReview}
+   * pattern. The frontend Plan tile tests use this to drive the
+   * shimmed backend without standing up real session-state folders.
+   */
+  seedSessionFeatures(
+    sessionId: string,
+    payload: import("./types").SessionFeaturesPayload,
+  ): void {
+    this.sessionFeatures.set(sessionId, payload);
   }
 
   async listProjects(): Promise<Project[]> {
@@ -390,6 +409,18 @@ export class MemoryBackend implements Backend {
 
   async listSessionTodos(_sessionId: string): Promise<import("./types").SessionTodo[]> {
     return [];
+  }
+
+  async listSessionFeatures(sessionId: string): Promise<import("./types").SessionFeaturesPayload> {
+    return this.sessionFeatures.get(sessionId) ?? { features: [], currentPlanId: null };
+  }
+
+  async watchSessionFeatures(_sessionId: string): Promise<void> {
+    // No-op: in-memory backend doesn't emit events.
+  }
+
+  async unwatchSessionFeatures(_sessionId: string): Promise<void> {
+    // No-op.
   }
 
   // --- Diff Review (ADR 007) ---

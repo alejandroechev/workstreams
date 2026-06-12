@@ -34,8 +34,6 @@ export interface WorkbenchViewState {
 
 export interface PlanViewState {
   activeTab?: string;
-  selectedHistoryPlanId?: string;
-  historySubTab?: "plan" | "todos";
 }
 
 export type AnyViewState =
@@ -129,11 +127,10 @@ function sanitize<K extends AnyViewState["kind"]>(
       str("viewingPath");
       break;
     case "plan":
+      // Note: selectedHistoryPlanId + historySubTab were dropped in the
+      // Plan tile redesign (plan-tile-redesign-f3457c). Old persisted
+      // configs are silently ignored — only activeTab survives.
       str("activeTab");
-      str("selectedHistoryPlanId");
-      if (raw.historySubTab === "plan" || raw.historySubTab === "todos") {
-        out.historySubTab = raw.historySubTab;
-      }
       break;
   }
   return out as Extract<AnyViewState, { kind: K }>["state"];

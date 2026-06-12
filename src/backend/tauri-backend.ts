@@ -229,6 +229,18 @@ export class TauriBackend implements Backend {
     return invoke<import("./types").SessionTodo[]>("query_session_todos", { sessionId });
   }
 
+  async listSessionFeatures(sessionId: string): Promise<import("./types").SessionFeaturesPayload> {
+    return invoke<import("./types").SessionFeaturesPayload>("list_session_features", { sessionId });
+  }
+
+  async watchSessionFeatures(sessionId: string): Promise<void> {
+    await invoke("watch_session_features", { sessionId });
+  }
+
+  async unwatchSessionFeatures(sessionId: string): Promise<void> {
+    await invoke("unwatch_session_features", { sessionId });
+  }
+
   async createDiffReview(workstreamId: string, diffSource: DiffSource, sourceRef: string | null): Promise<DiffReview> {
     return invoke<DiffReview>("create_diff_review", { workstreamId, diffSource, sourceRef });
   }
