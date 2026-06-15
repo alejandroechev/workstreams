@@ -152,8 +152,11 @@ export class MemoryBackend implements Backend {
   async changeWorkstreamWorktree(
     wsId: string,
     mode: "switch_existing" | "create_new",
-    opts: { directory?: string; branchName?: string; folderName?: string }
+    opts: { directory?: string; branchName?: string; folderName?: string; pullBaseFirst?: boolean }
   ): Promise<{ workstream: Workstream; affectedTileIds: string[] }> {
+    // pullBaseFirst is metadata-only in the memory backend (there's no
+    // real git). Acknowledged for type parity.
+    void opts.pullBaseFirst;
     const ws = this.workstreams.get(wsId);
     if (!ws) throw new Error(`Workstream not found: ${wsId}`);
 

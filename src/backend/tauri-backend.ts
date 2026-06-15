@@ -49,7 +49,7 @@ export class TauriBackend implements Backend {
   async changeWorkstreamWorktree(
     wsId: string,
     mode: "switch_existing" | "create_new",
-    opts: { directory?: string; branchName?: string; folderName?: string }
+    opts: { directory?: string; branchName?: string; folderName?: string; pullBaseFirst?: boolean }
   ): Promise<{ workstream: Workstream; affectedTileIds: string[] }> {
     const raw = await invoke<{ workstream: Workstream; affected_tile_ids: string[] }>("change_workstream_worktree", {
       wsId,
@@ -57,6 +57,7 @@ export class TauriBackend implements Backend {
       directory: opts.directory ?? null,
       branchName: opts.branchName ?? null,
       folderName: opts.folderName ?? null,
+      pullBaseFirst: opts.pullBaseFirst ?? null,
     });
     return { workstream: raw.workstream, affectedTileIds: raw.affected_tile_ids };
   }

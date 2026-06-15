@@ -24,6 +24,11 @@ interface Props {
     worktreeBranch?: string;
     sessionChoice: SessionChoice;
     baseBranch?: string;
+    /** When the new worktree is branching off a base, first `git fetch`
+     *  + fast-forward the local base ref to its remote tip. Avoids
+     *  starting a new branch from a stale local copy. Ignored for
+     *  non-worktree flows. Default true (form pre-checks). */
+    pullBaseFirst?: boolean;
   }) => void;
   onCancel: () => void;
 }
@@ -45,6 +50,10 @@ export default function WorkstreamCreateForm({ project: initialProject, projects
   // existing worktree does NOT require linking to an existing session.
   const [sessionPref, setSessionPref] = useState<SessionChoice>("new");
   const effectiveSession: SessionChoice = sessionPref;
+  // Default ON for the common case: branching off the local base risks
+  // starting stale; a fetch+ff is cheap when up-to-date and harmless
+  // when the user is offline (backend treats failures as non-fatal).
+  const [pullBaseFirst, setPullBaseFirst] = useState(true);
 
   // Project changed: reset defaults
   const handleProjectChange = (projectId: string | null) => {
@@ -102,6 +111,7 @@ export default function WorkstreamCreateForm({ project: initialProject, projects
         repoChoice === "import_worktree" ? worktreeInfo?.branch || undefined :
         undefined,
       sessionChoice: effectiveSession,
+      pullBaseFirst: repoChoice === "worktree" ? pullBaseFirst : undefined,
     });
   };
 
@@ -272,9 +282,18 @@ export default function WorkstreamCreateForm({ project: initialProject, projects
                 fontFamily: "monospace",
                 outline: "none",
                 boxSizing: "border-box",
-                marginBottom: 14,
+                marginBottom: 8,
               }}
             />
+            <label style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 14, cursor: "pointer", fontSize: 11, color: "#a6adc8" }}>
+              <input
+                data-testid="ws-create-pull-base"
+                type="checkbox"
+                checked={pullBaseFirst}
+                onChange={(e) => setPullBaseFirst(e.target.checked)}
+              />
+              <span>Pull latest base branch first (recommended)</span>
+            </label>
           </>
         )}
 

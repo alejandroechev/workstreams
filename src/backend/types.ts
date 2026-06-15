@@ -29,7 +29,7 @@ export interface Backend {
   changeWorkstreamWorktree(
     wsId: string,
     mode: "switch_existing" | "create_new",
-    opts: { directory?: string; branchName?: string; folderName?: string }
+    opts: { directory?: string; branchName?: string; folderName?: string; pullBaseFirst?: boolean }
   ): Promise<{ workstream: Workstream; affectedTileIds: string[] }>;
   deleteWorkstream(id: string): Promise<void>;
   // Tiles

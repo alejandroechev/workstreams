@@ -10,7 +10,14 @@ export interface ChangeWorktreeFormProps {
   onCancel: () => void;
   onSubmit: (
     mode: "switch_existing" | "create_new",
-    opts: { directory?: string; branchName?: string; folderName?: string },
+    opts: {
+      directory?: string;
+      branchName?: string;
+      folderName?: string;
+      /** create_new only: fetch + fast-forward local base before
+       *  branching from it. Backend treats failures as non-fatal. */
+      pullBaseFirst?: boolean;
+    },
   ) => Promise<void>;
 }
 
@@ -85,6 +92,7 @@ export function ChangeWorktreeForm({ workstream, tiles, onCancel, onSubmit }: Ch
   const [worktreeInfo, setWorktreeInfo] = useState<WorktreeInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [pullBaseFirst, setPullBaseFirst] = useState(true);
 
   const derivedFolderName = deriveFolderName(branchName);
   const effectiveFolderName = folderNameOverride.trim() || derivedFolderName;
@@ -119,6 +127,7 @@ export function ChangeWorktreeForm({ workstream, tiles, onCancel, onSubmit }: Ch
         await onSubmit("create_new", {
           branchName: branchName.trim(),
           folderName: effectiveFolderName,
+          pullBaseFirst,
         });
       }
       onCancel();
@@ -251,8 +260,17 @@ export function ChangeWorktreeForm({ workstream, tiles, onCancel, onSubmit }: Ch
               onChange={(event) => setFolderNameOverride(event.target.value)}
               onKeyDown={(event) => event.stopPropagation()}
               placeholder={derivedFolderName || "feature-name"}
-              style={{ ...inputStyle, marginBottom: 14 }}
+              style={{ ...inputStyle, marginBottom: 10 }}
             />
+            <label style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 14, cursor: "pointer", fontSize: 11, color: "#a6adc8" }}>
+              <input
+                data-testid="cwt-pull-base"
+                type="checkbox"
+                checked={pullBaseFirst}
+                onChange={(e) => setPullBaseFirst(e.target.checked)}
+              />
+              <span>Pull latest base branch first (recommended)</span>
+            </label>
           </>
         )}
 

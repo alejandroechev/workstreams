@@ -64,7 +64,7 @@ describe("createWorkstreamFlow", () => {
       { ...baseInput, workstreamType: "worktree", worktreeBranch: "alejandroe/feature-x", sessionChoice: "new" },
       createWorktree,
     );
-    expect(createWorktree).toHaveBeenCalledWith("C:\\repo", "alejandroe/feature-x", null);
+    expect(createWorktree).toHaveBeenCalledWith("C:\\repo", "alejandroe/feature-x", null, false);
     expect(result.effectiveDirectory).toBe("C:\\repo-worktrees\\feature-x");
     expect(result.workstream.directory).toBe("C:\\repo-worktrees\\feature-x");
     const cfg = JSON.parse(result.pinnedTile.config_json);
@@ -79,7 +79,18 @@ describe("createWorkstreamFlow", () => {
       { ...baseInput, workstreamType: "worktree", worktreeBranch: "f", baseBranch: "main", sessionChoice: "new" },
       createWorktree,
     );
-    expect(createWorktree).toHaveBeenCalledWith("C:\\repo", "f", "main");
+    expect(createWorktree).toHaveBeenCalledWith("C:\\repo", "f", "main", false);
+  });
+
+  it("forwards pullBaseFirst=true when the user opts in", async () => {
+    const backend = new MemoryBackend();
+    const createWorktree = vi.fn(async () => "C:\\repo-worktrees\\f");
+    await createWorkstreamFlow(
+      backend,
+      { ...baseInput, workstreamType: "worktree", worktreeBranch: "f", baseBranch: "main", pullBaseFirst: true, sessionChoice: "new" },
+      createWorktree,
+    );
+    expect(createWorktree).toHaveBeenCalledWith("C:\\repo", "f", "main", true);
   });
 
   it("throws if worktree branch is missing for workstream_type=worktree", async () => {

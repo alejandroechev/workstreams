@@ -418,6 +418,7 @@ fn change_workstream_worktree(
     directory: Option<String>,
     branch_name: Option<String>,
     folder_name: Option<String>,
+    pull_base_first: Option<bool>,
 ) -> Result<ChangeWorktreeResult, String> {
     let (final_dir, final_branch) = match mode.as_str() {
         "switch_existing" => {
@@ -445,7 +446,8 @@ fn change_workstream_worktree(
             } else {
                 return Err("workstream is not in a git repo, cannot create worktree".into());
             };
-            let created_dir = create_worktree(repo_root, branch.clone(), folder_name)?;
+            let created_dir =
+                create_worktree(repo_root, branch.clone(), folder_name, pull_base_first)?;
             (created_dir, Some(branch))
         }
         _ => return Err(format!("Unknown worktree change mode: {mode}")),
@@ -1494,6 +1496,7 @@ fn create_worktree(
     project_directory: String,
     branch_name: String,
     base_branch: Option<String>,
+    pull_base_first: Option<bool>,
 ) -> Result<String, String> {
     // Determine worktree path: sibling of existing worktrees
     let project_dir = std::path::Path::new(&project_directory);
@@ -1532,6 +1535,22 @@ fn create_worktree(
         project_directory.clone()
     };
 
+    // Optionally fast-forward the local base branch to its remote tip
+    // before creating the worktree, so the new branch starts from latest.
+    // Failures here are non-fatal: we log a warning to stderr but still
+    // proceed so a missing/offline remote doesn't block the workstream.
+    if pull_base_first.unwrap_or(false) {
+        let effective_base = base_branch
+            .clone()
+            .or_else(|| detect_default_remote_branch(&git_root))
+            .or_else(|| detect_local_default_branch(&git_root));
+        if let Some(base) = effective_base {
+            if let Err(e) = fetch_and_fast_forward_local_branch(&git_root, &base) {
+                eprintln!("[create_worktree] base pull skipped: {e}");
+            }
+        }
+    }
+
     // Build worktree add command
     let mut args = vec![
         "worktree".to_string(),
@@ -1556,6 +1575,122 @@ fn create_worktree(
     }
 
     Ok(worktree_path.to_string_lossy().to_string())
+}
+
+/// Resolves `origin/HEAD` to the remote's default branch name (e.g.
+/// `master`, `main`, `trunk`). Returns None when there's no remote or
+/// the ref isn't set (e.g. fresh clone without `git remote set-head`).
+fn detect_default_remote_branch(git_root: &str) -> Option<String> {
+    let out = git_cmd()
+        .args([
+            "symbolic-ref",
+            "--quiet",
+            "--short",
+            "refs/remotes/origin/HEAD",
+        ])
+        .current_dir(git_root)
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let raw = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    // strip the "origin/" prefix
+    raw.strip_prefix("origin/").map(String::from).or(Some(raw))
+}
+
+/// Falls back to local-only HEAD detection when no remote is set.
+fn detect_local_default_branch(git_root: &str) -> Option<String> {
+    // Try `main` then `master` — the two common defaults. We don't try
+    // to read git config because it's the same answer in 99% of cases.
+    for candidate in ["main", "master"] {
+        let out = git_cmd()
+            .args(["rev-parse", "--verify", "--quiet", candidate])
+            .current_dir(git_root)
+            .output()
+            .ok()?;
+        if out.status.success() {
+            return Some(candidate.to_string());
+        }
+    }
+    None
+}
+
+/// `git fetch origin <branch>` then advance the local `<branch>` ref to
+/// `origin/<branch>` if it's strictly fast-forwardable. Uses `update-ref`
+/// directly so this works even when the branch isn't currently checked
+/// out (the common case — we'll check out a different branch in the new
+/// worktree). Diverged branches are left untouched (caller sees stderr).
+fn fetch_and_fast_forward_local_branch(git_root: &str, branch: &str) -> Result<(), String> {
+    let fetch = git_cmd()
+        .args(["fetch", "origin", branch])
+        .current_dir(git_root)
+        .output()
+        .map_err(|e| format!("git fetch failed: {e}"))?;
+    if !fetch.status.success() {
+        return Err(format!(
+            "git fetch origin {branch} failed: {}",
+            String::from_utf8_lossy(&fetch.stderr).trim()
+        ));
+    }
+    // Check that origin/<branch> is an ancestor of itself (sanity) and
+    // that local <branch> is reachable from origin/<branch>.
+    let local_ref = format!("refs/heads/{branch}");
+    let remote_ref = format!("refs/remotes/origin/{branch}");
+    // If local doesn't exist, create it pointing at origin/<branch>.
+    let local_exists = git_cmd()
+        .args(["rev-parse", "--verify", "--quiet", &local_ref])
+        .current_dir(git_root)
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    if !local_exists {
+        let create = git_cmd()
+            .args(["branch", branch, &remote_ref])
+            .current_dir(git_root)
+            .output()
+            .map_err(|e| format!("git branch failed: {e}"))?;
+        if !create.status.success() {
+            return Err(format!(
+                "creating local {branch} failed: {}",
+                String::from_utf8_lossy(&create.stderr).trim()
+            ));
+        }
+        return Ok(());
+    }
+    // Local exists. Is it fast-forwardable to origin/<branch>?
+    let merge_base = git_cmd()
+        .args(["merge-base", "--is-ancestor", &local_ref, &remote_ref])
+        .current_dir(git_root)
+        .status()
+        .map_err(|e| format!("git merge-base failed: {e}"))?;
+    if !merge_base.success() {
+        return Err(format!(
+            "local {branch} diverged from origin/{branch}; skipping fast-forward"
+        ));
+    }
+    // Fast-forward via update-ref so it works without checking out.
+    let new_sha = git_cmd()
+        .args(["rev-parse", &remote_ref])
+        .current_dir(git_root)
+        .output()
+        .map_err(|e| format!("git rev-parse failed: {e}"))?;
+    if !new_sha.status.success() {
+        return Err("could not resolve remote sha".into());
+    }
+    let sha = String::from_utf8_lossy(&new_sha.stdout).trim().to_string();
+    let update = git_cmd()
+        .args(["update-ref", &local_ref, &sha])
+        .current_dir(git_root)
+        .output()
+        .map_err(|e| format!("git update-ref failed: {e}"))?;
+    if !update.status.success() {
+        return Err(format!(
+            "git update-ref failed: {}",
+            String::from_utf8_lossy(&update.stderr).trim()
+        ));
+    }
+    Ok(())
 }
 
 /// List branches for a git repository

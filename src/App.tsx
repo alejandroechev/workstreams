@@ -428,6 +428,7 @@ export default function App() {
     workstreamType: "import_worktree" | "base_repo" | "worktree";
     worktreeBranch?: string;
     baseBranch?: string;
+    pullBaseFirst?: boolean;
   };
   const [pendingCreate, setPendingCreate] = useState<PendingCreate | null>(null);
 
@@ -447,9 +448,10 @@ export default function App() {
           worktreeBranch: payload.worktreeBranch,
           baseBranch: payload.baseBranch,
           sessionChoice: presetSessionId ? "existing" : "new",
+          pullBaseFirst: payload.pullBaseFirst,
         },
-        (projectDirectory, branchName, baseBranch) =>
-          invoke<string>("create_worktree", { projectDirectory, branchName, baseBranch }),
+        (projectDirectory, branchName, baseBranch, pullBaseFirst) =>
+          invoke<string>("create_worktree", { projectDirectory, branchName, baseBranch, pullBaseFirst }),
       );
     } catch (e) {
       const msg = typeof e === "string" ? e : (e as Error)?.message || String(e);
@@ -503,7 +505,7 @@ export default function App() {
   const handleCreateWorkstream = useCallback(async (
     name: string,
     directory: string,
-    opts: { projectId?: string; workstreamType: string; worktreeBranch?: string; sessionChoice?: "new" | "existing"; baseBranch?: string },
+    opts: { projectId?: string; workstreamType: string; worktreeBranch?: string; sessionChoice?: "new" | "existing"; baseBranch?: string; pullBaseFirst?: boolean },
   ) => {
     const payload: PendingCreate = {
       name,
@@ -512,6 +514,7 @@ export default function App() {
       workstreamType: opts.workstreamType as PendingCreate["workstreamType"],
       worktreeBranch: opts.worktreeBranch,
       baseBranch: opts.baseBranch,
+      pullBaseFirst: opts.pullBaseFirst,
     };
 
     if (opts.sessionChoice === "existing") {
@@ -598,6 +601,7 @@ export default function App() {
         projectDirectory: sourceWs.directory,
         branchName: opts.branchName,
         baseBranch: opts.baseBranch,
+        pullBaseFirst: false,
       });
     } catch (e) {
       console.error("Failed to create worktree:", e);
@@ -657,7 +661,7 @@ export default function App() {
 
   const handleChangeWorktreeSubmit = useCallback(async (
     mode: "switch_existing" | "create_new",
-    opts: { directory?: string; branchName?: string; folderName?: string },
+    opts: { directory?: string; branchName?: string; folderName?: string; pullBaseFirst?: boolean },
   ) => {
     if (!changeWorktreeTarget) return;
 

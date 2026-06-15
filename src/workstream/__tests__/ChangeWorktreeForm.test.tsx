@@ -108,7 +108,16 @@ describe("ChangeWorktreeForm", () => {
     fireEvent.click(getRadio("cwt-mode-create_new"));
     fireEvent.change(screen.getByTestId("cwt-branch-name"), { target: { value: "alejandroe/feat-x" } });
     fireEvent.click(screen.getByTestId("cwt-submit"));
-    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith("create_new", { branchName: "alejandroe/feat-x", folderName: "feat-x" }));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith("create_new", { branchName: "alejandroe/feat-x", folderName: "feat-x", pullBaseFirst: true }));
+  });
+
+  it("submits create_new with pullBaseFirst=false when the user unticks the box", async () => {
+    const { onSubmit } = renderForm();
+    fireEvent.click(getRadio("cwt-mode-create_new"));
+    fireEvent.change(screen.getByTestId("cwt-branch-name"), { target: { value: "alejandroe/feat-y" } });
+    fireEvent.click(screen.getByTestId("cwt-pull-base"));
+    fireEvent.click(screen.getByTestId("cwt-submit"));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith("create_new", { branchName: "alejandroe/feat-y", folderName: "feat-y", pullBaseFirst: false }));
   });
 
   it("never shows restart warning (restarts removed per UX decision)", () => {

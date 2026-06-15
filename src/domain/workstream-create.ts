@@ -21,6 +21,10 @@ export interface CreateWorkstreamInput {
   worktreeBranch?: string;
   baseBranch?: string;
   sessionChoice: "new" | "existing";
+  /** When workstreamType is "worktree", first fetch + fast-forward the
+   *  local base branch so the new worktree starts from latest. Default
+   *  false (form passes the user's checkbox value). */
+  pullBaseFirst?: boolean;
 }
 
 export interface CreateWorkstreamResult {
@@ -33,6 +37,7 @@ export type CreateWorktreeFn = (
   projectDirectory: string,
   branchName: string,
   baseBranch: string | null,
+  pullBaseFirst: boolean,
 ) => Promise<string>;
 
 export async function createWorkstreamFlow(
@@ -49,6 +54,7 @@ export async function createWorkstreamFlow(
       input.directory,
       input.worktreeBranch,
       input.baseBranch ?? null,
+      input.pullBaseFirst ?? false,
     );
   }
 
