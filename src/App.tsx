@@ -10,6 +10,7 @@ import RepoCreateForm from "./workstream/RepoCreateForm";
 import WorkstreamCreateForm from "./workstream/WorkstreamCreateForm";
 import ForkWorkstreamForm from "./workstream/ForkWorkstreamForm";
 import { ChangeWorktreeForm } from "./workstream/ChangeWorktreeForm";
+import { WorktreeCreationOverlay } from "./ui/WorktreeCreationOverlay";
 import TileGrid from "./tiling/TileGrid";
 import StatusBar from "./tiling/StatusBar";
 import SessionPicker, { type CopilotSession } from "./tiles/SessionPicker";
@@ -193,6 +194,9 @@ export default function App() {
   const [showWsCreate, setShowWsCreate] = useState<{ show: boolean; projectId?: string }>({ show: false });
   const [showForkWs, setShowForkWs] = useState<{ show: boolean; wsId?: string }>({ show: false });
   const [changeWorktreeTarget, setChangeWorktreeTarget] = useState<Workstream | null>(null);
+  /** Lifts the global blocking overlay during long-running git ops
+   *  (create worktree, optional base pull). null = idle. */
+  const [worktreeOverlay, setWorktreeOverlay] = useState<{ title: string } | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [showDiffReviewPicker, setShowDiffReviewPicker] = useState(false);
   const [diffReviewPickerReviews, setDiffReviewPickerReviews] = useState<DiffReview[]>([]);
@@ -436,8 +440,12 @@ export default function App() {
     payload: PendingCreate,
     presetSessionId: string | null,
   ): Promise<{ ws: Workstream; tile: Tile; effectiveDirectory: string } | null> => {
+    const needsWorktree = payload.workstreamType === "worktree";
     let result;
     try {
+      if (needsWorktree) {
+        setWorktreeOverlay({ title: `Creating workstream "${payload.name}"…` });
+      }
       result = await createWorkstreamFlow(
         backend,
         {
@@ -454,9 +462,12 @@ export default function App() {
           invoke<string>("create_worktree", { projectDirectory, branchName, baseBranch, pullBaseFirst }),
       );
     } catch (e) {
+      setWorktreeOverlay(null);
       const msg = typeof e === "string" ? e : (e as Error)?.message || String(e);
       alert(`Failed to create workstream: ${msg}`);
       return null;
+    } finally {
+      if (needsWorktree) setWorktreeOverlay(null);
     }
 
     const { workstream: ws, pinnedTile: tile, effectiveDirectory } = result;
@@ -596,6 +607,7 @@ export default function App() {
 
     // Create the git worktree
     let newDir: string;
+    setWorktreeOverlay({ title: `Forking workstream into "${opts.name}"…` });
     try {
       newDir = await invoke<string>("create_worktree", {
         projectDirectory: sourceWs.directory,
@@ -605,7 +617,10 @@ export default function App() {
       });
     } catch (e) {
       console.error("Failed to create worktree:", e);
+      setWorktreeOverlay(null);
       return;
+    } finally {
+      setWorktreeOverlay(null);
     }
 
     // Create new workstream
@@ -665,7 +680,16 @@ export default function App() {
   ) => {
     if (!changeWorktreeTarget) return;
 
-    const { workstream } = await backend.changeWorkstreamWorktree(changeWorktreeTarget.id, mode, opts);
+    const willCreate = mode === "create_new";
+    if (willCreate) {
+      setWorktreeOverlay({ title: `Creating worktree for "${opts.branchName ?? ""}"…` });
+    }
+    let workstream;
+    try {
+      ({ workstream } = await backend.changeWorkstreamWorktree(changeWorktreeTarget.id, mode, opts));
+    } finally {
+      if (willCreate) setWorktreeOverlay(null);
+    }
     const updatedTiles = await backend.listTiles(workstream.id);
     const updatedTilesById = new Map(updatedTiles.map((tile) => [tile.id, tile]));
 
@@ -1448,6 +1472,12 @@ export default function App() {
           onCancel={() => setChangeWorktreeTarget(null)}
         />
       )}
+
+      {/* Blocking overlay while a worktree is being created (pull + add). */}
+      <WorktreeCreationOverlay
+        open={worktreeOverlay !== null}
+        title={worktreeOverlay?.title ?? ""}
+      />
 
       {/* Fork workstream modal */}
       {showForkWs.show && showForkWs.wsId && (() => {

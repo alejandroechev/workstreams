@@ -412,6 +412,7 @@ fn delete_workstream(state: State<'_, AppState>, id: String) -> Result<(), Strin
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 fn change_workstream_worktree(
+    app: AppHandle,
     state: State<'_, AppState>,
     ws_id: String,
     mode: String,
@@ -447,7 +448,7 @@ fn change_workstream_worktree(
                 return Err("workstream is not in a git repo, cannot create worktree".into());
             };
             let created_dir =
-                create_worktree(repo_root, branch.clone(), folder_name, pull_base_first)?;
+                create_worktree(app, repo_root, branch.clone(), folder_name, pull_base_first)?;
             (created_dir, Some(branch))
         }
         _ => return Err(format!("Unknown worktree change mode: {mode}")),
@@ -1493,11 +1494,20 @@ fn git_branch_tracking_info(directory: String) -> Result<(u32, u32, String), Str
 }
 #[tauri::command]
 fn create_worktree(
+    app: AppHandle,
     project_directory: String,
     branch_name: String,
     base_branch: Option<String>,
     pull_base_first: Option<bool>,
 ) -> Result<String, String> {
+    let emit_step = |step: &str, detail: &str| {
+        let _ = app.emit(
+            "worktree-progress",
+            serde_json::json!({ "step": step, "detail": detail }),
+        );
+    };
+    emit_step("resolving", "Resolving repository root");
+
     // Determine worktree path: sibling of existing worktrees
     let project_dir = std::path::Path::new(&project_directory);
 
@@ -1545,11 +1555,23 @@ fn create_worktree(
             .or_else(|| detect_default_remote_branch(&git_root))
             .or_else(|| detect_local_default_branch(&git_root));
         if let Some(base) = effective_base {
+            emit_step(
+                "pulling-base",
+                &format!("Pulling latest {base} from origin"),
+            );
             if let Err(e) = fetch_and_fast_forward_local_branch(&git_root, &base) {
                 eprintln!("[create_worktree] base pull skipped: {e}");
+                emit_step("pull-skipped", &e);
+            } else {
+                emit_step("pulled-base", &format!("Local {base} now at origin tip"));
             }
         }
     }
+
+    emit_step(
+        "creating",
+        &format!("git worktree add → {}", worktree_path.display()),
+    );
 
     // Build worktree add command
     let mut args = vec![
@@ -1574,6 +1596,7 @@ fn create_worktree(
         return Err(format!("git worktree add failed: {stderr}"));
     }
 
+    emit_step("created", &worktree_path.to_string_lossy());
     Ok(worktree_path.to_string_lossy().to_string())
 }
 
