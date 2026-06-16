@@ -143,6 +143,8 @@ function createBackend(): Backend {
     updateLayout: vi.fn(),
     readFile: vi.fn(),
     listDirectory: vi.fn(),
+    createFile: vi.fn(),
+    createDirectory: vi.fn(),
     detectGitInfo: vi.fn(),
     spawnTerminal: vi.fn(),
     spawnCopilotSession: vi.fn(),

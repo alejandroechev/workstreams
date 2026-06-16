@@ -43,6 +43,10 @@ export interface Backend {
   // Files
   readFile(path: string): Promise<string>;
   listDirectory(path: string): Promise<Array<{ name: string; is_dir: boolean; modified_epoch: number; size: number }>>;
+  /** Create a new empty file. Rejects if the path already exists. */
+  createFile(path: string): Promise<void>;
+  /** Create a new directory (and any missing parents). Rejects if the path already exists. */
+  createDirectory(path: string): Promise<void>;
   detectGitInfo(directory: string): Promise<{ repo: string | null; branch: string | null }>;
   // PTY
   spawnTerminal(tileId: string, cwd: string, command?: string, args?: string[], rows?: number, cols?: number): Promise<void>;

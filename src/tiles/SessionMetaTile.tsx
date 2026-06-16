@@ -117,7 +117,7 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
   const [editorSnapshot, setEditorSnapshot] = useState<BufferSnapshot | null>(null);
   const [editorViewState, setEditorViewState] = useState<{ mode: "preview" | "edit"; toggle: () => void } | null>(null);
   // Right-click context menu on file rows (files-only).
-  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; path: string } | null>(null);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; path: string; createDir?: string } | null>(null);
 
   // Revoke any object URL the previous audio entry created.
   useEffect(() => {
@@ -206,6 +206,32 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
       if (!silent) setStateLoading(false);
     }
   }, [backend, resolveStateRoot]);
+
+  // Absolute path of the directory currently shown in the State tab.
+  const stateAbsoluteDir = stateRootDir
+    ? (stateCurrentDir ? `${stateRootDir}\\${stateCurrentDir.replace(/\//g, "\\")}` : stateRootDir)
+    : null;
+
+  // Create a new file/folder in the State tab's current directory, prompting
+  // for a name and refreshing the listing afterwards.
+  const createStateEntry = useCallback(async (dir: string, kind: "file" | "folder") => {
+    const name = window.prompt(kind === "file" ? "New file name:" : "New folder name:");
+    if (name === null) return;
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    const sep = dir.endsWith("\\") || dir.endsWith("/") ? "" : "\\";
+    const target = `${dir}${sep}${trimmed}`;
+    try {
+      if (kind === "file") {
+        await backend.createFile(target);
+      } else {
+        await backend.createDirectory(target);
+      }
+      await loadStateDir(stateCurrentDir);
+    } catch (e) {
+      setStateError(e instanceof Error ? e.message : String(e));
+    }
+  }, [backend, loadStateDir, stateCurrentDir]);
 
   const loadDbTables = useCallback(async (silent = false) => {
     if (!linkedSessionIds || linkedSessionIds.length === 0) {
@@ -650,7 +676,14 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
                     {stateCurrentDir ? `/${stateCurrentDir.replace(/\\/g, "/")}` : ""}
                   </span>
                 </div>
-                <div style={{ flex: 1, overflow: "auto" }}>
+                <div
+                  style={{ flex: 1, overflow: "auto" }}
+                  onContextMenu={stateAbsoluteDir ? (e) => {
+                    if (e.target !== e.currentTarget) return;
+                    e.preventDefault();
+                    setContextMenu({ x: e.clientX, y: e.clientY, path: stateAbsoluteDir, createDir: stateAbsoluteDir });
+                  } : undefined}
+                >
                   {stateLoading && (
                     <div style={{ padding: 12, color: "#585b70", textAlign: "center" }}>Loading…</div>
                   )}
@@ -658,7 +691,14 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
                     <div style={{ padding: 12, color: "#f38ba8", fontSize: 11 }}>{stateError}</div>
                   )}
                   {!stateLoading && !stateError && stateEntries.length === 0 && (
-                    <div style={{ padding: 12, color: "#585b70", textAlign: "center" }}>(empty directory)</div>
+                    <div
+                      style={{ padding: 12, color: "#585b70", textAlign: "center" }}
+                      onContextMenu={stateAbsoluteDir ? (e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setContextMenu({ x: e.clientX, y: e.clientY, path: stateAbsoluteDir, createDir: stateAbsoluteDir });
+                      } : undefined}
+                    >(empty directory)</div>
                   )}
                   {stateEntries.map((entry) => (
                     <div
@@ -671,9 +711,15 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
                           void viewFile(entry.full_path, entry.name);
                         }
                       }}
-                      onContextMenu={entry.is_dir ? undefined : (e) => {
+                      onContextMenu={(e) => {
                         e.preventDefault();
-                        setContextMenu({ x: e.clientX, y: e.clientY, path: entry.full_path });
+                        e.stopPropagation();
+                        setContextMenu({
+                          x: e.clientX,
+                          y: e.clientY,
+                          path: entry.full_path,
+                          createDir: entry.is_dir ? entry.full_path : (stateAbsoluteDir ?? undefined),
+                        });
                       }}
                       style={{
                         display: "flex",
@@ -830,6 +876,8 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
           path={contextMenu.path}
           workstreamId={workstreamId ?? null}
           onClose={() => setContextMenu(null)}
+          onNewFile={contextMenu.createDir ? () => createStateEntry(contextMenu.createDir!, "file") : undefined}
+          onNewFolder={contextMenu.createDir ? () => createStateEntry(contextMenu.createDir!, "folder") : undefined}
         />
       )}
     </div>

@@ -270,7 +270,30 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
     }
   }, [backend]);
 
-  // Helper for audio open path. Reads the file as base64, converts to a
+  // Create a new file or folder inside `dir`, prompting for the name, then
+  // refresh the listing so it appears immediately. Errors surface via
+  // setDirError (e.g. name collision). Used by the empty-space / entry
+  // context menu in browse mode.
+  const createEntry = useCallback(async (dir: string, kind: "file" | "folder") => {
+    const name = window.prompt(kind === "file" ? "New file name:" : "New folder name:");
+    if (name === null) return;
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    const sep = dir.endsWith("\\") || dir.endsWith("/") ? "" : "\\";
+    const target = `${dir}${sep}${trimmed}`;
+    try {
+      if (kind === "file") {
+        await backend.createFile(target);
+      } else {
+        await backend.createDirectory(target);
+      }
+      await loadDir(dir);
+    } catch (e) {
+      setDirError(String(e));
+    }
+  }, [backend, loadDir]);
+
+
   // Blob with the right MIME, and creates an object URL. The shared
   // makeAudioBlobUrl helper is also used by Meta and Workbench tiles.
   const loadAudioFile = useCallback(async (audioPath: string): Promise<{ url: string; bytes: ArrayBuffer; size: number }> => {
@@ -924,6 +947,8 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
           isDir={contextMenu.isDir}
           workstreamId={workstreamId ?? null}
           onClose={() => setContextMenu(null)}
+          onNewFile={() => createEntry(contextMenu.isDir ? contextMenu.path : currentDir, "file")}
+          onNewFolder={() => createEntry(contextMenu.isDir ? contextMenu.path : currentDir, "folder")}
         />
       )}
     </>
@@ -1581,7 +1606,15 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
       </div>
 
       {/* File list */}
-      <div style={{ flex: 1, overflowY: "auto", padding: "4px 0" }}>
+      <div
+        style={{ flex: 1, overflowY: "auto", padding: "4px 0" }}
+        onContextMenu={(e) => {
+          // Only when the click is on the empty list background, not an entry.
+          if (e.target !== e.currentTarget) return;
+          e.preventDefault();
+          setContextMenu({ x: e.clientX, y: e.clientY, path: currentDir, isDir: true });
+        }}
+      >
         {dirLoading && (
           <div style={{ padding: "8px 12px", color: "#585b70" }}>Loading...</div>
         )}
@@ -1589,7 +1622,14 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
           <div style={{ padding: "8px 12px", color: "#f38ba8", fontSize: 11 }}>{dirError}</div>
         )}
         {!dirLoading && filteredEntries.length === 0 && !dirError && (
-          <div style={{ padding: "8px 12px", color: "#585b70" }}>
+          <div
+            style={{ padding: "8px 12px", color: "#585b70" }}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              setContextMenu({ x: e.clientX, y: e.clientY, path: currentDir, isDir: true });
+            }}
+          >
             {searchFilter ? "No matches" : "Empty directory"}
           </div>
         )}
@@ -1601,6 +1641,7 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
             onClick={() => handleEntryClick(entry)}
             onContextMenu={(e) => {
               e.preventDefault();
+              e.stopPropagation();
               setContextMenu({ x: e.clientX, y: e.clientY, path: entry.fullPath, isDir: entry.isDir });
             }}
             style={{

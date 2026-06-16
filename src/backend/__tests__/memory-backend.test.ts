@@ -600,6 +600,17 @@ describe("MemoryBackend", () => {
       expect(big?.size).toBe(2048);
       expect(small?.is_dir).toBe(false);
     });
+
+    it("createFile adds a new empty file and rejects duplicates", async () => {
+      await backend.createFile("/new/file.txt");
+      expect(await backend.readFile("/new/file.txt")).toBe("");
+      await expect(backend.createFile("/new/file.txt")).rejects.toThrow("already exists");
+    });
+
+    it("createDirectory creates a dir and rejects duplicates", async () => {
+      await backend.createDirectory("/new/folder");
+      await expect(backend.createDirectory("/new/folder")).rejects.toThrow("already exists");
+    });
   });
 
   describe("layout + git stubs", () => {

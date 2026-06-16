@@ -42,6 +42,35 @@ describe("FileContextMenu", () => {
     expect(screen.getByTestId("ctx-copy-name").textContent).toContain("folder");
   });
 
+  it("omits New file / New folder when no create callbacks are provided", () => {
+    render(<FileContextMenu x={0} y={0} path="C:/a/b.txt" workstreamId={null} onClose={() => {}} />);
+    expect(screen.queryByTestId("ctx-new-file")).toBeNull();
+    expect(screen.queryByTestId("ctx-new-folder")).toBeNull();
+  });
+
+  it("shows and fires New file / New folder when callbacks are provided", () => {
+    const onNewFile = vi.fn();
+    const onNewFolder = vi.fn();
+    const onClose = vi.fn();
+    render(
+      <FileContextMenu
+        x={0}
+        y={0}
+        path="C:/a"
+        isDir
+        workstreamId={null}
+        onClose={onClose}
+        onNewFile={onNewFile}
+        onNewFolder={onNewFolder}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("ctx-new-file"));
+    expect(onNewFile).toHaveBeenCalled();
+    expect(onClose).toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId("ctx-new-folder"));
+    expect(onNewFolder).toHaveBeenCalled();
+  });
+
   it("fires copy-path and closes", () => {
     const onClose = vi.fn();
     render(<FileContextMenu x={0} y={0} path="C:/a/b.txt" workstreamId="w1" onClose={onClose} />);

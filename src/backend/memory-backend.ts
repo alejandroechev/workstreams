@@ -52,6 +52,7 @@ export class MemoryBackend implements Backend {
   private layouts = new Map<string, WorkstreamLayout>();
   private scrollbacks = new Map<string, string>();
   private files = new Map<string, string>();
+  private dirs = new Set<string>();
   private terminals = new Set<string>();
   private diffReviews = new Map<string, DiffReview>();
   private diffChunks = new Map<string, DiffChunk>();
@@ -266,6 +267,19 @@ export class MemoryBackend implements Backend {
       modified_epoch: 0,
       size: content.length,
     }));
+  }
+
+  async createFile(path: string): Promise<void> {
+    if (this.files.has(path)) throw new Error(`A file or folder already exists at ${path}`);
+    this.files.set(path, "");
+  }
+
+  async createDirectory(path: string): Promise<void> {
+    const key = `${path}/.dir`;
+    if (this.dirs.has(path)) throw new Error(`A file or folder already exists at ${path}`);
+    this.dirs.add(path);
+    // Track via a marker so listings/round-trips can observe the directory.
+    if (!this.files.has(key)) this.files.set(key, "");
   }
 
   async detectGitInfo(_directory: string): Promise<{ repo: string | null; branch: string | null }> {

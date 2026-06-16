@@ -1104,6 +1104,37 @@ fn list_directory(path: String) -> Result<Vec<DirEntry>, String> {
     Ok(dirs)
 }
 
+/// Create a new, empty file at `path`. Fails if the file already exists so
+/// the user never silently clobbers existing content. Parent directories
+/// must already exist.
+#[tauri::command]
+fn create_file(path: String) -> Result<(), String> {
+    let p = std::path::Path::new(&path);
+    if p.exists() {
+        return Err(format!("A file or folder already exists at {path}"));
+    }
+    if let Some(parent) = p.parent() {
+        if !parent.as_os_str().is_empty() && !parent.exists() {
+            return Err(format!(
+                "Parent directory does not exist: {}",
+                parent.display()
+            ));
+        }
+    }
+    std::fs::write(p, b"").map_err(|e| format!("Cannot create file: {e}"))
+}
+
+/// Create a new directory at `path` (and any missing parents). Fails if the
+/// path already exists.
+#[tauri::command]
+fn create_directory(path: String) -> Result<(), String> {
+    let p = std::path::Path::new(&path);
+    if p.exists() {
+        return Err(format!("A file or folder already exists at {path}"));
+    }
+    std::fs::create_dir_all(p).map_err(|e| format!("Cannot create directory: {e}"))
+}
+
 // ── File search ─────────────────────────────────────────────────────────
 //
 // Both `search_files` (filename match) and `search_in_files` (content match)
@@ -4064,6 +4095,8 @@ pub fn run() {
             read_file_base64,
             path_exists,
             list_directory,
+            create_file,
+            create_directory,
             detect_git_info,
             create_git_repo,
             detect_worktree_info,
@@ -4196,6 +4229,41 @@ mod tests {
     fn rewrite_tile_cwd_errors_on_malformed_json() {
         let err = rewrite_tile_cwd("{ not json", "terminal", "C:/new").unwrap_err();
         assert!(err.contains("Invalid tile config JSON"));
+    }
+
+    #[test]
+    fn create_file_creates_empty_file_and_rejects_duplicates() {
+        let mut dir = std::env::temp_dir();
+        dir.push(format!("ws_create_file_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("new.txt");
+        let target_str = target.to_string_lossy().to_string();
+
+        create_file(target_str.clone()).expect("first create should succeed");
+        assert!(target.exists());
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "");
+
+        let err = create_file(target_str).unwrap_err();
+        assert!(err.contains("already exists"));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn create_directory_creates_dir_and_rejects_duplicates() {
+        let mut dir = std::env::temp_dir();
+        dir.push(format!("ws_create_dir_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("sub").join("nested");
+        let target_str = target.to_string_lossy().to_string();
+
+        create_directory(target_str.clone()).expect("first create should succeed");
+        assert!(target.is_dir());
+
+        let err = create_directory(target_str).unwrap_err();
+        assert!(err.contains("already exists"));
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

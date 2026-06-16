@@ -3,6 +3,8 @@ import {
   ClipboardDocumentIcon,
   FolderOpenIcon,
   BeakerIcon,
+  DocumentPlusIcon,
+  FolderPlusIcon,
 } from "@heroicons/react/24/outline";
 import { openPath } from "@tauri-apps/plugin-opener";
 import { writeTextToClipboard } from "../../domain/clipboard";
@@ -20,6 +22,10 @@ interface Props {
   /** Hide "Add to Workbench" even for files (e.g. when invoked from the
    * Workbench tile itself, where it's a no-op). */
   hideAddToWorkbench?: boolean;
+  /** When provided, a "New file" item is shown that invokes this callback. */
+  onNewFile?: () => void;
+  /** When provided, a "New folder" item is shown that invokes this callback. */
+  onNewFolder?: () => void;
 }
 
 /**
@@ -36,6 +42,8 @@ export function FileContextMenu({
   workstreamId,
   onClose,
   hideAddToWorkbench = false,
+  onNewFile,
+  onNewFolder,
 }: Props) {
   const ref = useRef<HTMLDivElement>(null);
 
@@ -104,6 +112,26 @@ export function FileContextMenu({
         onClick={close(() => { void writeTextToClipboard(path); })}
         testid="ctx-copy-path"
       />
+      {(onNewFile || onNewFolder) && (
+        <>
+          {onNewFile && (
+            <Item
+              icon={<DocumentPlusIcon style={iconStyle} />}
+              label="New file…"
+              onClick={close(() => onNewFile())}
+              testid="ctx-new-file"
+            />
+          )}
+          {onNewFolder && (
+            <Item
+              icon={<FolderPlusIcon style={iconStyle} />}
+              label="New folder…"
+              onClick={close(() => onNewFolder())}
+              testid="ctx-new-folder"
+            />
+          )}
+        </>
+      )}
       <Item
         icon={<ClipboardDocumentIcon style={iconStyle} />}
         label={isDir ? "Copy folder name" : "Copy file name"}
