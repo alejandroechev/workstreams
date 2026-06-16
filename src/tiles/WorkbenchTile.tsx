@@ -15,6 +15,7 @@ import { workbenchStore } from "../domain/workbench-store-instance";
 import { parseViewState } from "../domain/tile-view-state";
 import { useTileViewStatePersist } from "../domain/useTileViewStatePersist";
 import { FileContextMenu } from "../ui/components/FileContextMenu";
+import { ZoomableImage } from "../ui/components/ZoomableImage";
 import AudioPlayer from "./AudioPlayer";
 import {
   PlusIcon,
@@ -384,14 +385,11 @@ export default function WorkbenchTile({ tileId: _tileId, isFocused, configJson, 
               isFocused={isFocused}
             />
           ) : imageDataUrl ? (
-            <div style={{ height: "100%", overflow: "auto", display: "grid", placeItems: "center", padding: 12 }}>
-              <img
-                data-testid="workbench-image-preview"
-                src={imageDataUrl}
-                alt={fileName(viewingPath)}
-                style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }}
-              />
-            </div>
+            <ZoomableImage
+              testid="workbench-image-preview"
+              src={imageDataUrl}
+              alt={fileName(viewingPath)}
+            />
           ) : isBinaryFallbackFile(viewingPath) ? (
             <Editor
               height="100%"

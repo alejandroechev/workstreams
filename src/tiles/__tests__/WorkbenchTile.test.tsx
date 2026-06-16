@@ -150,7 +150,8 @@ describe("WorkbenchTile editable files", () => {
 
     fireEvent.click(await screen.findByText("image.png"));
 
-    const image = await screen.findByTestId("workbench-image-preview") as HTMLImageElement;
+    const container = await screen.findByTestId("workbench-image-preview");
+    const image = container.querySelector("img") as HTMLImageElement;
     expect(image.src).toBe("data:image/png;base64,AA==");
     expect(screen.queryByTestId("file-editor-view")).toBeNull();
   });

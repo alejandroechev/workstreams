@@ -31,6 +31,7 @@ import {
 } from "@heroicons/react/24/outline";
 import { SqliteTableView, fileSqliteOps } from "../ui/components/SqliteTableView";
 import { FileContextMenu } from "../ui/components/FileContextMenu";
+import { ZoomableImage } from "../ui/components/ZoomableImage";
 import { openPath } from "@tauri-apps/plugin-opener";
 import { useFileComments } from "../files/useFileComments";
 import { debounce } from "../domain/debounce";
@@ -1345,30 +1346,7 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
           </div>
         </div>
         {imageUrl ? (
-          <div
-            data-testid="image-preview"
-            style={{
-              flex: 1,
-              overflow: "auto",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              padding: 12,
-              background: "#181825",
-            }}
-          >
-            <img
-              src={imageUrl}
-              alt={filePath}
-              style={{
-                maxWidth: "100%",
-                maxHeight: "100%",
-                objectFit: "contain",
-                borderRadius: 4,
-                boxShadow: "0 2px 12px rgba(0,0,0,0.5)",
-              }}
-            />
-          </div>
+          <ZoomableImage testid="image-preview" src={imageUrl} alt={filePath} />
         ) : (
           <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "#585b70" }}>
             {fileLoading ? "Loading image…" : fileError ? fileError : "No image loaded"}

@@ -15,6 +15,7 @@ import { debounce } from "../domain/debounce";
 import type { CopilotConfigItem } from "../domain/types";
 import { SqliteTableView, sessionSqliteOps, type SqliteTable } from "../ui/components/SqliteTableView";
 import { FileContextMenu } from "../ui/components/FileContextMenu";
+import { ZoomableImage } from "../ui/components/ZoomableImage";
 import {
   SparklesIcon,
   PuzzlePieceIcon,
@@ -802,13 +803,11 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
             />
           )}
           {viewContent.type === "image" && (
-            <div style={{ flex: 1, overflow: "auto", display: "flex", alignItems: "center", justifyContent: "center", padding: 12 }}>
-              <img
-                src={`data:${viewContent.mimeType};base64,${viewContent.content}`}
-                alt={viewContent.title}
-                style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain", borderRadius: 4 }}
-              />
-            </div>
+            <ZoomableImage
+              testid="session-meta-image-preview"
+              src={`data:${viewContent.mimeType};base64,${viewContent.content}`}
+              alt={viewContent.title}
+            />
           )}
           {viewContent.type === "audio" && viewContent.audioUrl && (
             <div style={{ flex: 1, display: "flex", overflow: "hidden" }}>
