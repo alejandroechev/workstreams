@@ -17,6 +17,7 @@ import {
   type FileBufferRegistry,
 } from "./FileBufferRegistry";
 import { classifyDangerousPath, type DangerHit } from "./dangerousPaths";
+import { ZoomableImage } from "../ui/components/ZoomableImage";
 import { loadMonaco } from "./loadMonaco";
 import {
   selectionToAnchor,
@@ -103,6 +104,15 @@ function fileNameFor(path: string): string {
 function isMarkdown(path: string): boolean {
   const extension = path.split(/[\\/.]/).pop()?.toLowerCase() ?? "";
   return extension === "md" || extension === "markdown";
+}
+
+function isSvg(path: string): boolean {
+  return (path.split(/[\\/.]/).pop()?.toLowerCase() ?? "") === "svg";
+}
+
+/** Build a data URL for rendering SVG source as an image (no script exec). */
+function svgDataUrl(content: string): string {
+  return `data:image/svg+xml;utf8,${encodeURIComponent(content)}`;
 }
 
 function isNonEditable(snapshot: BufferSnapshot): boolean {
@@ -320,9 +330,8 @@ export function FileEditorView({
 
   const shouldShowPreview =
     snapshot !== null &&
-    renderMarkdownPreview !== undefined &&
-    isMarkdown(snapshot.path) &&
-    effectiveMode === "preview";
+    effectiveMode === "preview" &&
+    ((renderMarkdownPreview !== undefined && isMarkdown(snapshot.path)) || isSvg(snapshot.path));
 
   const shouldShowEditor = snapshot !== null && !isNonEditable(snapshot) && !shouldShowPreview;
   const editorPath = shouldShowEditor ? snapshot?.path ?? null : null;
@@ -334,9 +343,9 @@ export function FileEditorView({
   // `null` so the toolbar doesn't show a useless toggle.
   useEffect(() => {
     if (!onViewStateChange) return;
-    const isMd = snapshot !== null && renderMarkdownPreview !== undefined && isMarkdown(snapshot.path);
+    const canPreview = snapshot !== null && ((renderMarkdownPreview !== undefined && isMarkdown(snapshot.path)) || isSvg(snapshot.path));
     const isForcedEdit = snapshot?.state === "conflicted" || snapshot?.state === "save_blocked";
-    if (!isMd || isForcedEdit) {
+    if (!canPreview || isForcedEdit) {
       onViewStateChange(null);
       return;
     }
@@ -516,9 +525,9 @@ export function FileEditorView({
   // keyboard shortcut works identically.
   const toggleMarkdownModeRef = useRef<(() => void) | null>(null);
   useEffect(() => {
-    const isMd = snapshot !== null && renderMarkdownPreview !== undefined && isMarkdown(snapshot.path);
+    const canPreview = snapshot !== null && ((renderMarkdownPreview !== undefined && isMarkdown(snapshot.path)) || isSvg(snapshot.path));
     const isForcedEdit = snapshot?.state === "conflicted" || snapshot?.state === "save_blocked";
-    if (!isMd || isForcedEdit) {
+    if (!canPreview || isForcedEdit) {
       toggleMarkdownModeRef.current = null;
       return;
     }
@@ -642,7 +651,17 @@ export function FileEditorView({
 
     if (shouldShowPreview) {
       const content = registry.getModel(snapshot.path)?.getValue() ?? "";
-      return <div style={{ height: "100%", overflow: "auto", padding: 16 }}>{renderMarkdownPreview(content)}</div>;
+      if (isSvg(snapshot.path)) {
+        return (
+          <ZoomableImage
+            testid="svg-preview"
+            src={svgDataUrl(content)}
+            alt={fileNameFor(snapshot.path)}
+            background="#1e1e2e"
+          />
+        );
+      }
+      return <div style={{ height: "100%", overflow: "auto", padding: 16 }}>{renderMarkdownPreview?.(content)}</div>;
     }
 
     if (editorError !== null) {

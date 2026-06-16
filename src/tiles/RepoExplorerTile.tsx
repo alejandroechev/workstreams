@@ -10,7 +10,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useBackend } from "../backend/context";
 import { detectLanguage } from "../domain/tile-config";
-import { isAudioFile, isImageFile, makeAudioBlobUrl, makeImageBlobUrl, dirnameOf, type LinkTargetKind } from "../domain/file-types";
+import { isAudioFile, isImageFile, isSvgFile, makeAudioBlobUrl, makeImageBlobUrl, dirnameOf, type LinkTargetKind } from "../domain/file-types";
 import { createNavigationStack, currentPath as navCurrent, canGoBack as navCanBack, canGoForward as navCanFwd, pushPath as navPush, goBack as navBack, goForward as navFwd, type NavigationStack } from "../domain/nav-history";
 import {
   FolderIcon,
@@ -307,7 +307,8 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
     setCommitDiffHash("");
 
     // Image branch — fast path: read base64, render <img>.
-    if (isImageFile(trimmedPath)) {
+    // SVGs are excluded here so they flow to the file editor (view/edit toggle).
+    if (isImageFile(trimmedPath) && !isSvgFile(trimmedPath)) {
       try {
         const b64 = await invoke<string>("read_file_base64", { path: trimmedPath });
         const r = makeImageBlobUrl(trimmedPath, b64);
@@ -1125,7 +1126,7 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
           <button
             onClick={editorViewState.toggle}
             style={{ background: "none", border: "none", color: "#89b4fa", cursor: "pointer", display: "flex", alignItems: "center", padding: "2px 4px" }}
-            title={editorViewState.mode === "preview" ? "Edit (raw markdown)" : "Preview (rendered)"}
+            title={editorViewState.mode === "preview" ? "Edit (raw source)" : "Preview (rendered)"}
             data-testid="repo-explorer-md-toggle"
           >
             {editorViewState.mode === "preview"

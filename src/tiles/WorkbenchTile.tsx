@@ -360,7 +360,7 @@ export default function WorkbenchTile({ tileId: _tileId, isFocused, configJson, 
                 alignItems: "center",
                 padding: "2px 4px",
               }}
-              title={editorViewState.mode === "preview" ? "Edit (raw markdown)" : "Preview (rendered)"}
+              title={editorViewState.mode === "preview" ? "Edit (raw source)" : "Preview (rendered)"}
               data-testid="workbench-md-toggle"
             >
               {editorViewState.mode === "preview"

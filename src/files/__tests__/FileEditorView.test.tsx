@@ -196,6 +196,30 @@ describe("FileEditorView", () => {
     expect(screen.getByTestId("file-editor-monaco")).toBeTruthy();
   });
 
+  it("renders an SVG preview (no markdown renderer needed) for .svg files", async () => {
+    const harness = createRegistryHarness({
+      initialSnapshot: snapshot({ path: "C:\\repo\\icon.svg" }),
+    });
+
+    renderEditor(harness);
+
+    const preview = await screen.findByTestId("svg-preview");
+    expect(preview).toBeTruthy();
+    expect(screen.queryByTestId("file-editor-monaco")).toBeNull();
+  });
+
+  it("switches SVG preview to the text editor when Edit is clicked", async () => {
+    const harness = createRegistryHarness({
+      initialSnapshot: snapshot({ path: "C:\\repo\\icon.svg" }),
+    });
+
+    renderEditor(harness);
+    fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+
+    await waitFor(() => expect(fakeEditors).toHaveLength(1));
+    expect(screen.getByTestId("file-editor-monaco")).toBeTruthy();
+  });
+
   it("keeps markdown in preview mode when the buffer becomes dirty (user can manually toggle)", async () => {
     const harness = createRegistryHarness({
       initialSnapshot: snapshot({ path: "C:\\repo\\README.md" }),

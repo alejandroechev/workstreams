@@ -6,6 +6,8 @@ import {
   base64ToBytes,
   makeAudioBlobUrl,
   isImageFile,
+  isSvgFile,
+  isRasterImageFile,
   mimeForImage,
   makeImageBlobUrl,
   resolveRelativePath,
@@ -127,6 +129,24 @@ describe("file-types", () => {
       expect(isImageFile("song.mp3")).toBe(false);
       expect(isImageFile("video.mp4")).toBe(false);
       expect(isImageFile("Makefile")).toBe(false);
+    });
+  });
+
+  describe("isSvgFile", () => {
+    it("returns true only for .svg", () => {
+      expect(isSvgFile("icon.svg")).toBe(true);
+      expect(isSvgFile("C:\\a\\logo.SVG")).toBe(true);
+      expect(isSvgFile("pic.png")).toBe(false);
+      expect(isSvgFile("doc.md")).toBe(false);
+    });
+  });
+
+  describe("isRasterImageFile", () => {
+    it("is true for raster images but false for svg", () => {
+      expect(isRasterImageFile("pic.png")).toBe(true);
+      expect(isRasterImageFile("pic.jpg")).toBe(true);
+      expect(isRasterImageFile("icon.svg")).toBe(false);
+      expect(isRasterImageFile("doc.md")).toBe(false);
     });
   });
 

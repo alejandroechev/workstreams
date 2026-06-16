@@ -91,6 +91,21 @@ export function isImageFile(path: string): boolean {
   return IMAGE_EXTS.has(getExt(path));
 }
 
+/** True if the path is an SVG. SVGs are also images, but they have a
+ * text source and so support a view (render) / edit (XML) toggle. */
+export function isSvgFile(path: string): boolean {
+  return getExt(path) === "svg";
+}
+
+/**
+ * True if the path is a raster (non-SVG) image. Tiles route these to the
+ * zoomable image viewer; SVGs instead go through the file editor so they
+ * can be previewed *and* edited as text.
+ */
+export function isRasterImageFile(path: string): boolean {
+  return isImageFile(path) && !isSvgFile(path);
+}
+
 /** MIME type for an image path, or null when the extension isn't known. */
 export function mimeForImage(path: string): string | null {
   const ext = getExt(path);
