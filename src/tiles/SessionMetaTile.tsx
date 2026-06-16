@@ -670,6 +670,10 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
                           void viewFile(entry.full_path, entry.name);
                         }
                       }}
+                      onContextMenu={entry.is_dir ? undefined : (e) => {
+                        e.preventDefault();
+                        setContextMenu({ x: e.clientX, y: e.clientY, path: entry.full_path });
+                      }}
                       style={{
                         display: "flex",
                         alignItems: "center",

@@ -158,4 +158,30 @@ describe("PlanTile shell", () => {
     const row = screen.getByTestId("feature-row-alpha");
     expect(row.querySelector('[data-testid="feature-progress-bar"]')).toBeNull();
   });
+
+  it("shows a Complete plan button for active features and calls the backend on confirm", async () => {
+    const backend = setup({ features: [feat("alpha")], currentPlanId: "alpha-plan" });
+    const spy = vi.spyOn(backend, "completeSessionPlan");
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    await waitFor(() => expect(screen.getByTestId("plan-complete-button")).toBeTruthy());
+    fireEvent.click(screen.getByTestId("plan-complete-button"));
+    await waitFor(() => expect(spy).toHaveBeenCalledWith("sess-1", "alpha-plan"));
+    confirmSpy.mockRestore();
+  });
+
+  it("does not call the backend when the confirm is declined", async () => {
+    const backend = setup({ features: [feat("alpha")], currentPlanId: "alpha-plan" });
+    const spy = vi.spyOn(backend, "completeSessionPlan");
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+    await waitFor(() => expect(screen.getByTestId("plan-complete-button")).toBeTruthy());
+    fireEvent.click(screen.getByTestId("plan-complete-button"));
+    expect(spy).not.toHaveBeenCalled();
+    confirmSpy.mockRestore();
+  });
+
+  it("hides the Complete plan button for drafting and completed features", async () => {
+    setup({ features: [feat("draft", { derivedStatus: "drafting", planId: null, planStatus: null })], currentPlanId: null });
+    await waitFor(() => expect(screen.getByTestId("feature-row-draft")).toBeTruthy());
+    expect(screen.queryByTestId("plan-complete-button")).toBeNull();
+  });
 });

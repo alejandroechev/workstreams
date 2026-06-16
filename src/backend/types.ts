@@ -98,6 +98,10 @@ export interface Backend {
    * `docs/features-detailed.md`.
    */
   listSessionFeatures(sessionId: string): Promise<SessionFeaturesPayload>;
+  /** Mark a feature plan completed (flips plans.status, clears the
+   *  active-plan pointer, rewrites plan.md front-matter). Mirrors the
+   *  complete-feature-plan skill. */
+  completeSessionPlan(sessionId: string, planId: string): Promise<void>;
   /**
    * Subscribe the backend to fs-changes under
    * `<session>/files/features/` AND to mtime advances on the session

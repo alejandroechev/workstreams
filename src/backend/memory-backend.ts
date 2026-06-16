@@ -418,6 +418,21 @@ export class MemoryBackend implements Backend {
     return this.sessionFeatures.get(sessionId) ?? { features: [], currentPlanId: null };
   }
 
+  async completeSessionPlan(sessionId: string, planId: string): Promise<void> {
+    // Reflect the completion in any seeded payload so the tile re-render
+    // shows the new state in component tests.
+    const payload = this.sessionFeatures.get(sessionId);
+    if (!payload) return;
+    this.sessionFeatures.set(sessionId, {
+      currentPlanId: payload.currentPlanId === planId ? null : payload.currentPlanId,
+      features: payload.features.map((f) =>
+        f.planId === planId
+          ? { ...f, planStatus: "completed", derivedStatus: "completed" as const }
+          : f,
+      ),
+    });
+  }
+
   async watchSessionFeatures(_sessionId: string): Promise<void> {
     // No-op: in-memory backend doesn't emit events.
   }

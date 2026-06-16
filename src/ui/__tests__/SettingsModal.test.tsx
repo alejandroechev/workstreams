@@ -78,9 +78,9 @@ describe("SettingsModal", () => {
     render(<SettingsModal open onClose={() => {}} />);
     fireEvent.click(screen.getByTestId("settings-reset"));
     expect(getAppSettings().terminalScrollSpeed).toBe(0.5);
-    expect(getAppSettings().textFontSize).toBe(13);
-    expect(getAppSettings().markdownFontSize).toBe(14);
-    expect(getAppSettings().terminalFontSize).toBe(14);
+    expect(getAppSettings().textFontSize).toBe(12);
+    expect(getAppSettings().markdownFontSize).toBe(12);
+    expect(getAppSettings().terminalFontSize).toBe(12);
   });
 
   it("close button fires onClose", () => {

@@ -170,6 +170,7 @@ function createBackend(): Backend {
     listSessionTodoDeps: vi.fn(),
     listSessionTodos: vi.fn(),
     listSessionFeatures: vi.fn(async () => ({ features: [], currentPlanId: null })),
+    completeSessionPlan: vi.fn(),
     watchSessionFeatures: vi.fn(),
     unwatchSessionFeatures: vi.fn(),
     createDiffReview: vi.fn(),

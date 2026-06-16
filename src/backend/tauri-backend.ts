@@ -234,6 +234,10 @@ export class TauriBackend implements Backend {
     return invoke<import("./types").SessionFeaturesPayload>("list_session_features", { sessionId });
   }
 
+  async completeSessionPlan(sessionId: string, planId: string): Promise<void> {
+    await invoke("complete_session_plan", { sessionId, planId });
+  }
+
   async watchSessionFeatures(sessionId: string): Promise<void> {
     await invoke("watch_session_features", { sessionId });
   }

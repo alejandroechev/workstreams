@@ -11,6 +11,7 @@ import WorkstreamCreateForm from "./workstream/WorkstreamCreateForm";
 import ForkWorkstreamForm from "./workstream/ForkWorkstreamForm";
 import { ChangeWorktreeForm } from "./workstream/ChangeWorktreeForm";
 import { WorktreeCreationOverlay } from "./ui/WorktreeCreationOverlay";
+import { ArchiveWorkstreamDialog } from "./workstream/ArchiveWorkstreamDialog";
 import TileGrid from "./tiling/TileGrid";
 import StatusBar from "./tiling/StatusBar";
 import SessionPicker, { type CopilotSession } from "./tiles/SessionPicker";
@@ -194,6 +195,8 @@ export default function App() {
   const [showWsCreate, setShowWsCreate] = useState<{ show: boolean; projectId?: string }>({ show: false });
   const [showForkWs, setShowForkWs] = useState<{ show: boolean; wsId?: string }>({ show: false });
   const [changeWorktreeTarget, setChangeWorktreeTarget] = useState<Workstream | null>(null);
+  /** Pending archive awaiting the confirm dialog (offers worktree delete). */
+  const [archiveConfirm, setArchiveConfirm] = useState<{ ws: Workstream } | null>(null);
   /** Lifts the global blocking overlay during long-running git ops
    *  (create worktree, optional base pull). null = idle. */
   const [worktreeOverlay, setWorktreeOverlay] = useState<{ title: string } | null>(null);
@@ -563,29 +566,44 @@ export default function App() {
     const ws = workstreams.find((w) => w.id === id);
     if (!ws) return;
 
-    if (ws.status !== "archived" && !confirmDiscardDirtyFileBuffers("archive workstream")) return;
-
+    // Unarchive is immediate, no dialog.
     if (ws.status === "archived") {
-      // Unarchive
       await backend.updateWorkstream(id, { status: "active" });
       setWorkstreams((prev) => prev.map((w) => w.id === id ? { ...w, status: "active" } : w));
-    } else {
-      // Archive: close PTYs for tiles in this workstream
-      const wsTiles = tiles.filter((t) => t.workstream_id === id);
-      for (const t of wsTiles) {
-        spawnedPtys.current.delete(t.id);
-        await backend.closeTerminal(t.id).catch(() => {});
-      }
-      await backend.updateWorkstream(id, { status: "archived" });
-      setWorkstreams((prev) => prev.map((w) => w.id === id ? { ...w, status: "archived" } : w));
-      if (activeWsId === id) {
-        const remaining = workstreams.filter((w) => w.id !== id && w.status !== "archived");
-        setActiveWsId(remaining.length > 0 ? remaining[0].id : null);
-        setTiles([]);
-        setTileOrder([]);
+      return;
+    }
+
+    if (!confirmDiscardDirtyFileBuffers("archive workstream")) return;
+    // Defer to the confirmation dialog (offers worktree deletion).
+    setArchiveConfirm({ ws });
+  }, [workstreams, backend, confirmDiscardDirtyFileBuffers]);
+
+  const performArchive = useCallback(async (ws: Workstream, deleteWorktree: boolean) => {
+    const id = ws.id;
+    // Archive: close PTYs for tiles in this workstream
+    const wsTiles = tiles.filter((t) => t.workstream_id === id);
+    for (const t of wsTiles) {
+      spawnedPtys.current.delete(t.id);
+      await backend.closeTerminal(t.id).catch(() => {});
+    }
+    await backend.updateWorkstream(id, { status: "archived" });
+    setWorkstreams((prev) => prev.map((w) => w.id === id ? { ...w, status: "archived" } : w));
+    if (activeWsId === id) {
+      const remaining = workstreams.filter((w) => w.id !== id && w.status !== "archived");
+      setActiveWsId(remaining.length > 0 ? remaining[0].id : null);
+      setTiles([]);
+      setTileOrder([]);
+    }
+    // Best-effort worktree removal — never blocks the archive itself.
+    if (deleteWorktree && ws.workstream_type === "worktree" && ws.directory) {
+      try {
+        await invoke("remove_worktree", { directory: ws.directory });
+      } catch (e) {
+        console.error("Failed to remove worktree:", e);
+        alert(`Workstream archived, but the worktree could not be deleted:\n${typeof e === "string" ? e : (e as Error)?.message}`);
       }
     }
-  }, [workstreams, activeWsId, tiles, backend, confirmDiscardDirtyFileBuffers]);
+  }, [workstreams, activeWsId, tiles, backend]);
 
   const handleForkWorkstream = useCallback(async (
     sourceWsId: string,
@@ -1478,6 +1496,20 @@ export default function App() {
         open={worktreeOverlay !== null}
         title={worktreeOverlay?.title ?? ""}
       />
+
+      {/* Archive confirmation (offers worktree deletion). */}
+      {archiveConfirm && (
+        <ArchiveWorkstreamDialog
+          workstreamName={archiveConfirm.ws.name}
+          isWorktree={archiveConfirm.ws.workstream_type === "worktree"}
+          onCancel={() => setArchiveConfirm(null)}
+          onConfirm={(deleteWorktree) => {
+            const target = archiveConfirm.ws;
+            setArchiveConfirm(null);
+            void performArchive(target, deleteWorktree);
+          }}
+        />
+      )}
 
       {/* Fork workstream modal */}
       {showForkWs.show && showForkWs.wsId && (() => {

@@ -69,7 +69,7 @@ describe("app-settings sanitize", () => {
       DEFAULT_SETTINGS.textFontSize,
     );
 
-    expect(sanitize({ markdownFontSize: 9 }).markdownFontSize).toBe(MARKDOWN_FONT_SIZE_MIN);
+    expect(sanitize({ markdownFontSize: 5 }).markdownFontSize).toBe(MARKDOWN_FONT_SIZE_MIN);
     expect(sanitize({ markdownFontSize: 30 }).markdownFontSize).toBe(MARKDOWN_FONT_SIZE_MAX);
 
     expect(sanitize({ terminalFontSize: 7 }).terminalFontSize).toBe(TERMINAL_FONT_SIZE_MIN);

@@ -48,20 +48,24 @@ export interface AppSettings {
 
 export const DEFAULT_SETTINGS: AppSettings = {
   terminalScrollSpeed: 0.5,
-  textFontSize: 13,
-  markdownFontSize: 14,
-  terminalFontSize: 14,
+  textFontSize: 12,
+  markdownFontSize: 12,
+  terminalFontSize: 12,
   copilotCommand: "agency copilot --yolo",
 };
 
 export const SCROLL_SPEED_MIN = 0.1;
 export const SCROLL_SPEED_MAX = 5;
-export const TEXT_FONT_SIZE_MIN = 8;
-export const TEXT_FONT_SIZE_MAX = 24;
-export const MARKDOWN_FONT_SIZE_MIN = 10;
-export const MARKDOWN_FONT_SIZE_MAX = 24;
-export const TERMINAL_FONT_SIZE_MIN = 8;
-export const TERMINAL_FONT_SIZE_MAX = 24;
+// Unified font-size range shared by code editor, markdown body, and
+// terminal cell grid so the three sliders feel consistent.
+export const FONT_SIZE_MIN = 8;
+export const FONT_SIZE_MAX = 24;
+export const TEXT_FONT_SIZE_MIN = FONT_SIZE_MIN;
+export const TEXT_FONT_SIZE_MAX = FONT_SIZE_MAX;
+export const MARKDOWN_FONT_SIZE_MIN = FONT_SIZE_MIN;
+export const MARKDOWN_FONT_SIZE_MAX = FONT_SIZE_MAX;
+export const TERMINAL_FONT_SIZE_MIN = FONT_SIZE_MIN;
+export const TERMINAL_FONT_SIZE_MAX = FONT_SIZE_MAX;
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));

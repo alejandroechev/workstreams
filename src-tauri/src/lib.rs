@@ -1515,20 +1515,6 @@ fn create_worktree(
     let parent = project_dir
         .parent()
         .ok_or("Cannot determine parent directory")?;
-    // Derive folder name from branch: alejandroe/feature-x → feature-x
-    let folder_name = branch_name
-        .rsplit('/')
-        .next()
-        .unwrap_or(&branch_name)
-        .to_string();
-    let worktree_path = parent.join(&folder_name);
-
-    if worktree_path.exists() {
-        return Err(format!(
-            "Directory already exists: {}",
-            worktree_path.display()
-        ));
-    }
 
     // Find the git root (for running worktree commands)
     let git_root_output = git_cmd()
@@ -1544,6 +1530,31 @@ fn create_worktree(
     } else {
         project_directory.clone()
     };
+
+    // Derive the base repo name (canonical, even when project_directory is
+    // itself a worktree) and prefix it onto the folder so sibling worktree
+    // dirs are unambiguous: `<repo>-<branch-suffix>`.
+    let base_repo_name = canonical_repo_name(&git_root, project_dir);
+    // Derive folder name from branch: alejandroe/feature-x → feature-x
+    let branch_suffix = branch_name
+        .rsplit('/')
+        .next()
+        .unwrap_or(&branch_name)
+        .to_string();
+    let folder_name = match &base_repo_name {
+        Some(repo) if !branch_suffix.starts_with(&format!("{repo}-")) => {
+            format!("{repo}-{branch_suffix}")
+        }
+        _ => branch_suffix.clone(),
+    };
+    let worktree_path = parent.join(&folder_name);
+
+    if worktree_path.exists() {
+        return Err(format!(
+            "Directory already exists: {}",
+            worktree_path.display()
+        ));
+    }
 
     // Optionally fast-forward the local base branch to its remote tip
     // before creating the worktree, so the new branch starts from latest.
@@ -1598,6 +1609,64 @@ fn create_worktree(
 
     emit_step("created", &worktree_path.to_string_lossy());
     Ok(worktree_path.to_string_lossy().to_string())
+}
+
+/// Removes a git worktree directory (used when archiving a workstream
+/// with "delete worktree" checked). Runs `git worktree remove --force`
+/// from the parent repo so it works even when the worktree has untracked
+/// or modified files. Errors are returned but treated as non-fatal by
+/// the caller (the workstream still archives).
+#[tauri::command]
+fn remove_worktree(directory: String) -> Result<(), String> {
+    let info = detect_worktree_info(directory.clone())?;
+    if !info.is_worktree {
+        return Err(format!("Not a worktree directory: {directory}"));
+    }
+    let repo_root = info
+        .parent_repo_path
+        .ok_or("worktree parent repo path was not detected")?;
+    let out = git_cmd()
+        .args(["worktree", "remove", "--force", &directory])
+        .current_dir(&repo_root)
+        .output()
+        .map_err(|e| format!("git worktree remove failed: {e}"))?;
+    if !out.status.success() {
+        return Err(format!(
+            "git worktree remove failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+    Ok(())
+}
+
+/// Resolves the canonical repository name for folder-naming. Uses
+/// `git rev-parse --git-common-dir` to find the **main** worktree's
+/// `.git` (works even when `project_dir` is itself a linked worktree),
+/// then takes that repo directory's folder name. Falls back to the
+/// git_root's own folder name, then `project_dir`'s.
+fn canonical_repo_name(git_root: &str, project_dir: &std::path::Path) -> Option<String> {
+    let common = git_cmd()
+        .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
+        .current_dir(git_root)
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
+    if let Some(common_dir) = common {
+        // common_dir is `<main-repo>/.git`; its parent is the repo dir.
+        if let Some(repo_dir) = std::path::Path::new(&common_dir).parent() {
+            if let Some(name) = repo_dir.file_name().and_then(|n| n.to_str()) {
+                if !name.is_empty() && name != ".git" {
+                    return Some(name.to_string());
+                }
+            }
+        }
+    }
+    std::path::Path::new(git_root)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .or_else(|| project_dir.file_name().and_then(|n| n.to_str()))
+        .map(String::from)
 }
 
 /// Resolves `origin/HEAD` to the remote's default branch name (e.g.
@@ -3627,6 +3696,139 @@ fn unwatch_session_features(state: State<'_, AppState>, session_id: String) -> R
     Ok(())
 }
 
+/// Marks a feature plan completed from the Plan tile: flips
+/// `plans.status` to 'completed', clears `session_state.current_plan_id`
+/// when it points at this plan, and rewrites the `plan.md` front-matter
+/// (`status: completed` + `completed_at`). Mirrors the
+/// `complete-feature-plan` skill so the UI button and the skill stay in
+/// sync. Best-effort on the file rewrite — a missing plan.md doesn't
+/// fail the SQL update.
+#[tauri::command]
+fn complete_session_plan(session_id: String, plan_id: String) -> Result<(), String> {
+    let home = dirs::home_dir().ok_or("No home directory")?;
+    let db_path = home
+        .join(".copilot")
+        .join("session-state")
+        .join(&session_id)
+        .join("session.db");
+    if !db_path.exists() {
+        return Err("No session.db found".into());
+    }
+    let conn = Connection::open(&db_path).map_err(|e| format!("DB error: {e}"))?;
+
+    // Resolve the feature_name (for the plan.md path) before mutating.
+    let feature_name: Option<String> = if column_exists(&conn, "plans", "feature_name") {
+        conn.query_row(
+            "SELECT feature_name FROM plans WHERE id = ?1",
+            [&plan_id],
+            |row| row.get(0),
+        )
+        .ok()
+        .flatten()
+    } else {
+        None
+    };
+
+    conn.execute(
+        "UPDATE plans SET status = 'completed' WHERE id = ?1",
+        [&plan_id],
+    )
+    .map_err(|e| format!("DB error: {e}"))?;
+    // Touch updated_at if the column exists (feature-plan schema).
+    if column_exists(&conn, "plans", "updated_at") {
+        let _ = conn.execute(
+            "UPDATE plans SET updated_at = datetime('now') WHERE id = ?1",
+            [&plan_id],
+        );
+    }
+
+    // Clear the active-plan pointer if it points at this plan.
+    if table_exists(&conn, "session_state") {
+        let _ = conn.execute(
+            "DELETE FROM session_state WHERE key = 'current_plan_id' AND value = ?1",
+            [&plan_id],
+        );
+    }
+
+    // Best-effort plan.md front-matter rewrite.
+    if let Some(feature) = feature_name {
+        let plan_md = home
+            .join(".copilot")
+            .join("session-state")
+            .join(&session_id)
+            .join("files")
+            .join("features")
+            .join(&feature)
+            .join("plan.md");
+        if let Ok(contents) = std::fs::read_to_string(&plan_md) {
+            let updated = mark_plan_md_completed(&contents);
+            let _ = std::fs::write(&plan_md, updated);
+        }
+    }
+
+    Ok(())
+}
+
+/// Pure helper: rewrite a plan.md YAML front-matter block to set
+/// `status: completed` and add a `completed_at` line. Leaves the body
+/// untouched. If there's no recognizable front-matter, returns the
+/// input unchanged.
+fn mark_plan_md_completed(contents: &str) -> String {
+    let now = {
+        // Reuse the same minimal ISO-8601 UTC formatter used elsewhere.
+        let secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        let (y, m, d, hh, mm, ss) = epoch_to_ymd_hms(secs);
+        format!("{y:04}-{m:02}-{d:02}T{hh:02}:{mm:02}:{ss:02}Z")
+    };
+    if !contents.starts_with("---") {
+        return contents.to_string();
+    }
+    // Split into front-matter and body on the second `---` line.
+    let mut lines = contents.lines();
+    let _ = lines.next(); // opening ---
+    let mut fm: Vec<String> = Vec::new();
+    let mut found_close = false;
+    let mut body_start_idx = 0usize;
+    for (i, line) in contents.lines().enumerate().skip(1) {
+        if line.trim() == "---" {
+            found_close = true;
+            body_start_idx = i + 1;
+            break;
+        }
+        fm.push(line.to_string());
+    }
+    if !found_close {
+        return contents.to_string();
+    }
+    // Rewrite status, append completed_at if absent.
+    let mut has_completed_at = false;
+    for line in fm.iter_mut() {
+        if line.trim_start().starts_with("status:") {
+            *line = "status: completed".to_string();
+        }
+        if line.trim_start().starts_with("completed_at:") {
+            *line = format!("completed_at: {now}");
+            has_completed_at = true;
+        }
+    }
+    if !has_completed_at {
+        fm.push(format!("completed_at: {now}"));
+    }
+    let body: Vec<&str> = contents.lines().skip(body_start_idx).collect();
+    let mut out = String::from("---\n");
+    out.push_str(&fm.join("\n"));
+    out.push_str("\n---\n");
+    out.push_str(&body.join("\n"));
+    // Preserve a trailing newline if the original had one.
+    if contents.ends_with('\n') && !out.ends_with('\n') {
+        out.push('\n');
+    }
+    out
+}
+
 // ── Session DB Explorer ────────────────────────────────────────────────
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -3894,6 +4096,7 @@ pub fn run() {
             list_session_features,
             watch_session_features,
             unwatch_session_features,
+            complete_session_plan,
             list_session_db_tables,
             query_session_db_table,
             list_db_tables,
@@ -3905,6 +4108,7 @@ pub fn run() {
             git_show_commit,
             git_current_branch,
             create_worktree,
+            remove_worktree,
             git_list_branches,
             // Settings
             get_setting,
@@ -4987,5 +5191,38 @@ Body here.
         let secs = 1_781_481_600;
         let (y, m, d, _, _, _) = epoch_to_ymd_hms(secs);
         assert_eq!((y, m, d), (2026, 6, 12));
+    }
+
+    #[test]
+    fn mark_plan_md_completed_flips_status_and_adds_completed_at() {
+        let input = "---\nid: foo-abc123\nfeature: foo\nstatus: active\n---\n\n# Foo\n\nbody\n";
+        let out = mark_plan_md_completed(input);
+        assert!(out.contains("status: completed"));
+        assert!(out.contains("completed_at: "));
+        assert!(out.contains("# Foo"));
+        assert!(out.contains("body"));
+        // status: active must be gone
+        assert!(!out.contains("status: active"));
+    }
+
+    #[test]
+    fn mark_plan_md_completed_replaces_existing_completed_at() {
+        let input = "---\nstatus: active\ncompleted_at: 2020-01-01T00:00:00Z\n---\nbody\n";
+        let out = mark_plan_md_completed(input);
+        assert!(!out.contains("2020-01-01"));
+        // exactly one completed_at line
+        assert_eq!(out.matches("completed_at:").count(), 1);
+    }
+
+    #[test]
+    fn mark_plan_md_completed_noop_without_frontmatter() {
+        let input = "# Just a heading\n\nno front matter here\n";
+        assert_eq!(mark_plan_md_completed(input), input);
+    }
+
+    #[test]
+    fn mark_plan_md_completed_noop_without_closing_fence() {
+        let input = "---\nstatus: active\nno closing fence\n";
+        assert_eq!(mark_plan_md_completed(input), input);
     }
 }

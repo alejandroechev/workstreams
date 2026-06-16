@@ -182,9 +182,9 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
   const [diffAfter, setDiffAfter] = useState<string>("");
   const [diffFilePath, setDiffFilePath] = useState<string>("");
   const [diffLoading, setDiffLoading] = useState(false);
-  // Diff layout: "split" (default, classic side-by-side) | "unified" (single
-  // pane). Persisted in tile view-state.
-  const [diffLayout, setDiffLayout] = useState<"split" | "unified">("split");
+  // Diff layout: "unified" (default, single pane) | "split" (classic
+  // side-by-side). Persisted in tile view-state.
+  const [diffLayout, setDiffLayout] = useState<"split" | "unified">("unified");
   // Git branch state
   const [currentBranch, setCurrentBranch] = useState<string | null>(null);
   // Git log state

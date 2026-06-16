@@ -445,7 +445,19 @@ export default function PlanTile({ linkedSessionIds, configJson, onConfigChange,
               </div>
               <div style={{ flex: 1, overflow: "auto", minHeight: 0 }}>
                 {activeTab === "overview" && (
-                  <OverviewTab feature={selected} todos={todosForPlan(todos, selected.planId)} />
+                  <OverviewTab
+                    feature={selected}
+                    todos={todosForPlan(todos, selected.planId)}
+                    onComplete={
+                      selected.planId && selected.derivedStatus === "active"
+                        ? async () => {
+                            if (!sessionId || !selected.planId) return;
+                            await backend.completeSessionPlan(sessionId, selected.planId).catch(() => {});
+                            await load();
+                          }
+                        : undefined
+                    }
+                  />
                 )}
                 {activeTab === "plan" && (
                   <div style={{ padding: 12 }}>
@@ -495,19 +507,45 @@ export default function PlanTile({ linkedSessionIds, configJson, onConfigChange,
   );
 }
 
-function OverviewTab({ feature, todos }: { feature: FeatureSummary; todos: SessionTodo[] }) {
+function OverviewTab({ feature, todos, onComplete }: { feature: FeatureSummary; todos: SessionTodo[]; onComplete?: () => void }) {
   const doneIds = new Set(todos.filter((t) => t.status === "done").map((t) => t.id));
   const ready = todos.filter((t) => t.status === "pending");
   // We don't filter by deps here (would need todo_deps); a future
   // enhancement can scope to "no incomplete deps".
   const inProgress = todos.filter((t) => t.status === "in_progress");
   const recentlyDone = todos.filter((t) => doneIds.has(t.id)).slice(-3).reverse();
+  const openCount = feature.todosTotal - feature.todosDone;
 
   return (
     <div style={{ padding: 16, color: "#eee", fontSize: 13 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
         <h2 style={{ margin: 0, fontSize: 16 }}>{feature.planTitle ?? feature.name}</h2>
         <StatusPill status={feature.derivedStatus} />
+        {onComplete && (
+          <button
+            data-testid="plan-complete-button"
+            onClick={() => {
+              const msg = openCount > 0
+                ? `Mark this plan completed? ${openCount} todo(s) are still open.`
+                : "Mark this plan completed?";
+              if (typeof window !== "undefined" && !window.confirm(msg)) return;
+              onComplete();
+            }}
+            style={{
+              marginLeft: "auto",
+              background: "#1f4d2b",
+              color: "#a6e3a1",
+              border: "1px solid #2e6b3c",
+              borderRadius: 4,
+              padding: "4px 10px",
+              fontSize: 11,
+              cursor: "pointer",
+            }}
+            title="Flip plan status to completed (mirrors the complete-feature-plan skill)"
+          >
+            Complete plan
+          </button>
+        )}
       </div>
       <div style={{ marginBottom: 12 }}>
         <ProgressBar done={feature.todosDone} total={feature.todosTotal} />
