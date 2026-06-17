@@ -216,7 +216,7 @@ export default function App() {
   const [showForkWs, setShowForkWs] = useState<{ show: boolean; wsId?: string }>({ show: false });
   const [changeWorktreeTarget, setChangeWorktreeTarget] = useState<Workstream | null>(null);
   /** Pending archive awaiting the confirm dialog (offers worktree delete). */
-  const [archiveConfirm, setArchiveConfirm] = useState<{ ws: Workstream } | null>(null);
+  const [archiveConfirm, setArchiveConfirm] = useState<{ ws: Workstream; isWorktree: boolean } | null>(null);
   /** Lifts the global blocking overlay during long-running git ops
    *  (create worktree, optional base pull). null = idle. */
   const [worktreeOverlay, setWorktreeOverlay] = useState<{ title: string } | null>(null);
@@ -630,8 +630,20 @@ export default function App() {
     }
 
     if (!confirmDiscardDirtyFileBuffers("archive workstream")) return;
+    // Detect whether the directory is *actually* a git worktree at runtime
+    // (the same check remove_worktree uses). We can't rely on the stored
+    // workstream_type string — older/imported/forked workstreams may not
+    // have it set to "worktree" even when their directory is a real
+    // worktree. Default to false on any detection failure.
+    let isWorktree = false;
+    if (ws.directory) {
+      try {
+        const info = await invoke<{ is_worktree: boolean }>("detect_worktree_info", { directory: ws.directory });
+        isWorktree = !!info?.is_worktree;
+      } catch { /* not a git dir / detection failed → no checkbox */ }
+    }
     // Defer to the confirmation dialog (offers worktree deletion).
-    setArchiveConfirm({ ws });
+    setArchiveConfirm({ ws, isWorktree });
   }, [workstreams, backend, confirmDiscardDirtyFileBuffers]);
 
   const performArchive = useCallback(async (ws: Workstream, deleteWorktree: boolean) => {
@@ -651,7 +663,10 @@ export default function App() {
       setTileOrder([]);
     }
     // Best-effort worktree removal — never blocks the archive itself.
-    if (deleteWorktree && ws.workstream_type === "worktree" && ws.directory) {
+    // The dialog only surfaces the delete option when the directory is a
+    // real worktree (detected at open time); remove_worktree re-validates
+    // and errors if not, so we don't re-check workstream_type here.
+    if (deleteWorktree && ws.directory) {
       try {
         await invoke("remove_worktree", { directory: ws.directory });
       } catch (e) {
@@ -1559,7 +1574,7 @@ export default function App() {
       {archiveConfirm && (
         <ArchiveWorkstreamDialog
           workstreamName={archiveConfirm.ws.name}
-          isWorktree={archiveConfirm.ws.workstream_type === "worktree"}
+          isWorktree={archiveConfirm.isWorktree}
           onCancel={() => setArchiveConfirm(null)}
           onConfirm={(deleteWorktree) => {
             const target = archiveConfirm.ws;

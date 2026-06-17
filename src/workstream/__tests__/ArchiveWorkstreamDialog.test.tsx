@@ -7,7 +7,7 @@ afterEach(() => cleanup());
 describe("ArchiveWorkstreamDialog", () => {
   it("renders the workstream name and Archive/Cancel buttons", () => {
     render(<ArchiveWorkstreamDialog workstreamName="My WS" isWorktree onConfirm={vi.fn()} onCancel={vi.fn()} />);
-    expect(screen.getByText("My WS")).toBeTruthy();
+    expect(screen.getByText(/My WS/)).toBeTruthy();
     expect(screen.getByTestId("archive-confirm")).toBeTruthy();
     expect(screen.getByTestId("archive-cancel")).toBeTruthy();
   });

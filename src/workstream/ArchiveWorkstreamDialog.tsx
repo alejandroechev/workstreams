@@ -21,12 +21,14 @@ export function ArchiveWorkstreamDialog({ workstreamName, isWorktree, onConfirm,
   return (
     <div
       data-testid="archive-workstream-dialog"
+      role="dialog"
+      aria-modal="true"
       onClick={onCancel}
       style={{
         position: "fixed",
         inset: 0,
-        background: "rgba(0,0,0,0.6)",
-        zIndex: 9999,
+        background: "rgba(0,0,0,0.5)",
+        zIndex: 2000,
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
@@ -36,31 +38,32 @@ export function ArchiveWorkstreamDialog({ workstreamName, isWorktree, onConfirm,
         onClick={(e) => e.stopPropagation()}
         style={{
           background: "#1e1e2e",
-          color: "#cdd6f4",
-          border: "1px solid #313244",
+          border: "1px solid #45475a",
           borderRadius: 6,
-          padding: 18,
-          minWidth: 360,
-          maxWidth: 460,
-          fontFamily: "monospace",
-          fontSize: 13,
+          padding: 20,
+          minWidth: 320,
+          maxWidth: 480,
+          color: "#cdd6f4",
+          boxShadow: "0 6px 30px rgba(0,0,0,0.6)",
         }}
       >
-        <div style={{ fontSize: 14, color: "#89b4fa", marginBottom: 10 }}>Archive workstream</div>
-        <div style={{ marginBottom: 14 }}>
-          Archive <strong>{workstreamName}</strong>? It will move to the archived
-          section and its tiles will be closed.
+        <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 8 }}>
+          Archive &ldquo;{workstreamName}&rdquo;?
+        </div>
+        <div style={{ fontSize: 12, color: "#a6adc8", marginBottom: 16 }}>
+          It will move to the archived section and its tiles will be closed.
+          Running processes will be stopped; state is preserved.
         </div>
 
         {isWorktree && (
-          <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14, cursor: "pointer" }}>
+          <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "#a6adc8", marginBottom: 16 }}>
             <input
               data-testid="archive-delete-worktree"
               type="checkbox"
               checked={deleteWorktree}
               onChange={(e) => setDeleteWorktree(e.target.checked)}
             />
-            <span>Also delete the worktree directory on disk</span>
+            Also delete the worktree directory on disk
           </label>
         )}
 
@@ -69,11 +72,11 @@ export function ArchiveWorkstreamDialog({ workstreamName, isWorktree, onConfirm,
             data-testid="archive-cancel"
             onClick={onCancel}
             style={{
-              background: "#313244",
-              color: "#a6adc8",
-              border: "none",
+              background: "transparent",
+              border: "1px solid #45475a",
+              color: "#cdd6f4",
               borderRadius: 4,
-              padding: "6px 14px",
+              padding: "4px 12px",
               cursor: "pointer",
               fontSize: 12,
             }}
@@ -83,14 +86,16 @@ export function ArchiveWorkstreamDialog({ workstreamName, isWorktree, onConfirm,
           <button
             data-testid="archive-confirm"
             onClick={() => onConfirm(isWorktree && deleteWorktree)}
+            autoFocus
             style={{
-              background: "#45475a",
-              color: "#f9e2af",
-              border: "none",
+              background: "#f38ba8",
+              border: "1px solid #f38ba8",
+              color: "#1e1e2e",
               borderRadius: 4,
-              padding: "6px 16px",
+              padding: "4px 12px",
               cursor: "pointer",
               fontSize: 12,
+              fontWeight: 600,
             }}
           >
             Archive
