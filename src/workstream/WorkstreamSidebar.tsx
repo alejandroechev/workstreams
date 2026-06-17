@@ -123,7 +123,6 @@ export default function WorkstreamSidebar({
   onChangeWorktree,
 }: Props) {
   const [showArchived, setShowArchived] = useState(false);
-  const [archiveConfirm, setArchiveConfirm] = useState<string | null>(null);
   const [renamingWsId, setRenamingWsId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const renameInputRef = useRef<HTMLInputElement>(null);
@@ -425,7 +424,7 @@ export default function WorkstreamSidebar({
                   onChangeStatus={(status) => onChangeStatus(ws.id, status)}
                   onChangeWorktree={onChangeWorktree ? () => onChangeWorktree(ws) : undefined}
                   onFork={onForkWorkstream ? () => onForkWorkstream(ws.id) : undefined}
-                  onArchive={() => setArchiveConfirm(ws.id)}
+                  onArchive={() => onArchiveWorkstream(ws.id)}
                 />
               )}
 
@@ -842,47 +841,8 @@ export default function WorkstreamSidebar({
         </div>
       )}
 
-      {/* Archive confirmation dialog */}
-      {archiveConfirm && (
-        <div style={{
-          position: "fixed",
-          top: 0, left: 0, right: 0, bottom: 0,
-          background: "rgba(0,0,0,0.5)",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          zIndex: 2000,
-        }} onClick={(e) => e.stopPropagation()}>
-          <div onClick={(e) => e.stopPropagation()} style={{
-            background: "#1e1e2e",
-            border: "1px solid #313244",
-            borderRadius: 8,
-            padding: "16px 20px",
-            width: 320,
-          }}>
-            <div style={{ color: "#cdd6f4", fontSize: 13, marginBottom: 8 }}>
-              Archive "{workstreams.find((w) => w.id === archiveConfirm)?.name}"?
-            </div>
-            <div style={{ color: "#6c7086", fontSize: 11, marginBottom: 14 }}>
-              Running processes will be stopped. State is preserved.
-            </div>
-            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-              <button
-                onClick={() => setArchiveConfirm(null)}
-                style={{ padding: "6px 14px", background: "#313244", color: "#a6adc8", border: "none", borderRadius: 4, cursor: "pointer", fontSize: 12 }}
-              >
-                Cancel
-              </button>
-              <button
-                onClick={() => { onArchiveWorkstream(archiveConfirm); setArchiveConfirm(null); }}
-                style={{ padding: "6px 14px", background: "#f38ba8", color: "#1e1e2e", border: "none", borderRadius: 4, cursor: "pointer", fontSize: 12, fontWeight: 600 }}
-              >
-                Archive
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Archive confirmation is handled by the parent (App) via
+          ArchiveWorkstreamDialog, which also offers worktree deletion. */}
     </div>
   );
 }
