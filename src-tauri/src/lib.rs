@@ -939,6 +939,47 @@ fn get_copilot_sessions(limit: Option<u32>) -> Result<Vec<CopilotSessionInfo>, S
         .map_err(|e| format!("Query error: {e}"))
 }
 
+/// Read a single Copilot CLI session's current info by id from
+/// session-store.db. Returns None when the store or the session is
+/// missing. Used to re-sync a linked session's (possibly renamed)
+/// summary when a workstream is opened.
+#[tauri::command]
+fn get_copilot_session_by_id(session_id: String) -> Result<Option<CopilotSessionInfo>, String> {
+    let home = dirs::home_dir().ok_or("No home directory")?;
+    let db_path = home.join(".copilot").join("session-store.db");
+    if !db_path.exists() {
+        return Ok(None);
+    }
+
+    let conn = Connection::open_with_flags(
+        &db_path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .map_err(|e| format!("Cannot read session-store.db: {e}"))?;
+
+    let result = conn.query_row(
+        "SELECT id, cwd, repository, branch, summary, created_at, updated_at
+         FROM sessions WHERE id = ?1",
+        [&session_id],
+        |row| {
+            Ok(CopilotSessionInfo {
+                session_id: row.get(0)?,
+                cwd: row.get(1)?,
+                repository: row.get(2)?,
+                branch: row.get(3)?,
+                summary: row.get(4)?,
+                created_at: row.get(5)?,
+                updated_at: row.get(6)?,
+            })
+        },
+    );
+    match result {
+        Ok(info) => Ok(Some(info)),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(e) => Err(format!("DB error: {e}")),
+    }
+}
+
 /// Link a tile to a Copilot CLI session (best-effort match)
 #[tauri::command]
 fn link_copilot_session(
@@ -4085,6 +4126,7 @@ pub fn run() {
             load_scrollback,
             // Session enrichment
             get_copilot_sessions,
+            get_copilot_session_by_id,
             link_copilot_session,
             get_copilot_link,
             // Session poller

@@ -20,6 +20,7 @@ import DiffReviewPickerModal from "./ui/components/DiffReviewPickerModal";
 import ConfirmCloseDialog from "./ui/components/ConfirmCloseDialog";
 import { navigateFocus } from "./domain/layout";
 import { toggleFullscreenForTile as toggleFullscreenForTileState, shiftSelectTile as shiftSelectTileState } from "./domain/tile-layout-mode";
+import { computeSessionNameSync } from "./domain/session-name-sync";
 import { parseKeyAction } from "./domain/keyboard";
 import { createTerminalConfig, createCopilotSessionConfig } from "./domain/tile-config";
 import { createWorkstreamFlow } from "./domain/workstream-create";
@@ -364,6 +365,36 @@ export default function App() {
     });
   }, []);
 
+  // Re-sync linked Copilot session names against the session store. For
+  // each copilot_session tile with a linked session id, read the current
+  // summary and, if it changed since link time, update the tile's stored
+  // name + (auto-derived) title and the sidebar label. Best-effort: any
+  // per-tile failure is swallowed so one bad tile can't break the sync.
+  const syncLinkedSessionNames = useCallback(async (wsId: string, wsTiles: Tile[]) => {
+    for (const tile of wsTiles) {
+      if (tile.tile_type !== "copilot_session") continue;
+      let cfg: Record<string, unknown>;
+      try { cfg = JSON.parse(tile.config_json || "{}"); } catch { continue; }
+      const sessionId = (cfg.copilot_session_id || cfg.resume_by_id) as string | undefined;
+      if (!sessionId) continue;
+      try {
+        const info = await invoke<{ summary: string | null } | null>(
+          "get_copilot_session_by_id",
+          { sessionId },
+        );
+        const update = computeSessionNameSync(tile.config_json, tile.title, info?.summary ?? null);
+        if (!update) continue;
+        await backend.updateTileConfig(tile.id, update.configJson, update.title);
+        upsertTileLocally({
+          ...tile,
+          config_json: update.configJson,
+          title: update.title ?? tile.title,
+        });
+        setSessionInfoByWs((prev) => ({ ...prev, [wsId]: update.label }));
+      } catch { /* ignore per-tile failures */ }
+    }
+  }, [backend, upsertTileLocally]);
+
   // Load tiles + layout for a workstream on first visit. After loading,
   // the state lives in wsStates and persists across switches. Components
   // stay mounted (just hidden via CSS) so xterm/PTY state stays coherent.
@@ -421,6 +452,12 @@ export default function App() {
           }
         }
       }
+
+      // Re-sync linked Copilot session names: a session may have been
+      // renamed since it was first linked. Read its current summary from
+      // the session store and update the tile's name if it changed. Runs
+      // in the background so it never blocks the workstream from rendering.
+      void syncLinkedSessionNames(activeWsId, t);
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeWsId]);
