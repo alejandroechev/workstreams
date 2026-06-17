@@ -56,6 +56,10 @@ interface TileProps {
   isSelected?: boolean;
   /** Toggle the side-by-side selection for this tile. */
   onToggleSelect?: (tileId: string) => void;
+  /** Toggle fullscreen for this tile (double-click on the header bar). */
+  onToggleFullscreen?: (tileId: string) => void;
+  /** Shift-click handler: enter side-by-side with the focused tile + this one. */
+  onShiftSelect?: (tileId: string) => void;
   onFocus: () => void;
   onClose: () => void;
   onOpenFile?: (path: string) => void;
@@ -86,6 +90,8 @@ function TileWrapperImpl({
   selectable = false,
   isSelected = false,
   onToggleSelect,
+  onToggleFullscreen,
+  onShiftSelect,
   onFocus,
   onClose,
   onOpenFile,
@@ -346,13 +352,28 @@ function TileWrapperImpl({
         background: "#1e1e2e",
         transition: "border-color 0.15s",
       }}
-      onMouseDownCapture={() => {
+      onMouseDownCapture={(e) => {
+        // Shift-click → enter side-by-side with the currently-focused tile
+        // and this one. We deliberately skip the normal focus change so the
+        // previously-focused tile becomes the left pane.
+        if (e.shiftKey && onShiftSelect) {
+          e.preventDefault();
+          onShiftSelect(tile.id);
+          return;
+        }
         // Focus this tile on any click within it (capture phase fires before children)
         onFocus();
       }}
     >
       {/* Tile header */}
       <div
+        onDoubleClick={(e) => {
+          // Double-clicking the header bar toggles fullscreen for this tile.
+          // The title span stops propagation so its own double-click (rename)
+          // doesn't also trigger fullscreen.
+          e.stopPropagation();
+          onToggleFullscreen?.(tile.id);
+        }}
         style={{
           display: "flex",
           alignItems: "center",
@@ -365,6 +386,7 @@ function TileWrapperImpl({
           userSelect: "none",
           minHeight: 28,
           flexShrink: 0,
+          cursor: "default",
         }}
       >
         <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0, flex: 1 }}>
@@ -432,7 +454,7 @@ function TileWrapperImpl({
             [{index + 1}]
           </span>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 4 }} onDoubleClick={(e) => e.stopPropagation()}>
           {isTermLike && (
             <>
               <button

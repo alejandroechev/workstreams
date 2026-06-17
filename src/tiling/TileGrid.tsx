@@ -24,6 +24,8 @@ interface Props {
    */
   isVisible: boolean;
   onToggleSideBySideSelect: (tileId: string) => void;
+  onToggleFullscreen?: (tileId: string) => void;
+  onShiftSelectTile?: (tileId: string) => void;
   onFocusTile: (index: number) => void;
   onCloseTile: (tileId: string) => void;
   onOpenFile?: (path: string) => void;
@@ -48,6 +50,8 @@ function TileGridImpl({
   sbsSelectionMode,
   isVisible,
   onToggleSideBySideSelect,
+  onToggleFullscreen,
+  onShiftSelectTile,
   onFocusTile,
   onCloseTile,
   onOpenFile,
@@ -144,6 +148,8 @@ function TileGridImpl({
             selectable={showSelectable}
             isSelected={selectedForSideBySide.has(tile.id)}
             onToggleSelect={onToggleSideBySideSelect}
+            onToggleFullscreen={onToggleFullscreen}
+            onShiftSelect={onShiftSelectTile}
             onFocus={() => onFocusTile(i)}
             onClose={() => onCloseTile(tile.id)}
             onOpenFile={onOpenFile}

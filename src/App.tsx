@@ -19,6 +19,7 @@ import SettingsModal from "./ui/SettingsModal";
 import DiffReviewPickerModal from "./ui/components/DiffReviewPickerModal";
 import ConfirmCloseDialog from "./ui/components/ConfirmCloseDialog";
 import { navigateFocus } from "./domain/layout";
+import { toggleFullscreenForTile as toggleFullscreenForTileState, shiftSelectTile as shiftSelectTileState } from "./domain/tile-layout-mode";
 import { parseKeyAction } from "./domain/keyboard";
 import { createTerminalConfig, createCopilotSessionConfig } from "./domain/tile-config";
 import { createWorkstreamFlow } from "./domain/workstream-create";
@@ -109,6 +110,24 @@ export default function App() {
     updateActiveState((s) => ({ ...s, fullscreenTileId: typeof v === "function" ? v(s.fullscreenTileId) : v })),
     [updateActiveState],
   );
+
+  /**
+   * Toggle fullscreen for a specific tile (double-click on its header).
+   * Entering fullscreen clears any active side-by-side so the modes don't
+   * fight; clicking the same tile again exits.
+   */
+  const toggleFullscreenForTile = useCallback((tileId: string) => {
+    updateActiveState((s) => toggleFullscreenForTileState(s, tileId));
+  }, [updateActiveState]);
+
+  /**
+   * Shift-click on a tile → enter side-by-side with the currently-focused
+   * tile (left pane) and the shift-clicked tile (right pane). If the
+   * clicked tile is already the focused one, this is a no-op focus change.
+   */
+  const shiftSelectTile = useCallback((tileId: string) => {
+    updateActiveState((s) => shiftSelectTileState(s, tileId));
+  }, [updateActiveState]);
 
   /**
    * Toggle a tile's side-by-side selection. When the user picks the
@@ -1217,6 +1236,8 @@ export default function App() {
                   sbsSelectionMode={st.sbsSelectionMode}
                   isVisible={isActive}
                   onToggleSideBySideSelect={isActive ? toggleSideBySideSelect : () => {}}
+                  onToggleFullscreen={isActive ? toggleFullscreenForTile : undefined}
+                  onShiftSelectTile={isActive ? shiftSelectTile : undefined}
                   onFocusTile={isActive ? setFocusedIndex : () => {}}
                   onCloseTile={isActive ? closeTile : () => {}}
                   workstreamDir={workstreams.find((w) => w.id === wsId)?.directory || undefined}

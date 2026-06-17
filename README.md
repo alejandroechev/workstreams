@@ -87,6 +87,12 @@ All app-level commands use **Alt** to avoid conflicts with terminal
 | `Ctrl+Shift+V` | Toggle markdown preview / edit (VS Code parity) |
 | `Esc` | Unfocus terminal / close modal |
 
+### Mouse interactions
+
+- **Double-click a tile's header bar** to toggle fullscreen for that tile.
+- **Shift-click another tile** while one is focused to compare the two
+  side-by-side (the focused tile becomes the left pane).
+
 ## Tech stack
 
 | Component | Technology |
