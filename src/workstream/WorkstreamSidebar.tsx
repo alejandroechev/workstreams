@@ -131,6 +131,7 @@ export default function WorkstreamSidebar({
   const [editProjectColor, setEditProjectColor] = useState("");
   const [actionMenuWsId, setActionMenuWsId] = useState<string | null>(null);
   const [actionMenuAnchor, setActionMenuAnchor] = useState<{ top: number; left: number }>({ top: 0, left: 0 });
+  const [hoveredWsId, setHoveredWsId] = useState<string | null>(null);
   const [draggedWsId, setDraggedWsId] = useState<string | null>(null);
   const [dragOverWsId, setDragOverWsId] = useState<string | null>(null);
   const [showRepoMenu, setShowRepoMenu] = useState(false);
@@ -318,6 +319,8 @@ export default function WorkstreamSidebar({
               onDrop={(e) => handleDrop(e, ws.id)}
               onDragEnd={handleDragEnd}
               onClick={() => onSelectWorkstream(ws.id)}
+              onMouseEnter={() => setHoveredWsId(ws.id)}
+              onMouseLeave={() => setHoveredWsId((h) => (h === ws.id ? null : h))}
               style={{
                 padding: "6px 8px",
                 marginBottom: 1,
@@ -395,7 +398,7 @@ export default function WorkstreamSidebar({
                     </span>
                   )}
                 </div>
-                {isActive && renamingWsId !== ws.id && (
+                {renamingWsId !== ws.id && (
                   <button
                     type="button"
                     aria-label="Workstream actions"
@@ -406,7 +409,16 @@ export default function WorkstreamSidebar({
                       setActionMenuAnchor({ top: rect.bottom + 4, left: Math.max(8, rect.right - 220) });
                       setActionMenuWsId(actionMenuWsId === ws.id ? null : ws.id);
                     }}
-                    style={sidebarBtnStyle}
+                    style={{
+                      ...sidebarBtnStyle,
+                      // Reveal on hover, when this row is active, or while its
+                      // menu is open — so any workstream's actions (archive,
+                      // rename, …) are reachable without opening it first.
+                      visibility:
+                        isActive || hoveredWsId === ws.id || actionMenuWsId === ws.id
+                          ? "visible"
+                          : "hidden",
+                    }}
                     title="Actions"
                   >
                     <EllipsisHorizontalIcon style={{ width: 14, height: 14 }} />
