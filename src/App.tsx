@@ -21,6 +21,7 @@ import ConfirmCloseDialog from "./ui/components/ConfirmCloseDialog";
 import { navigateFocus } from "./domain/layout";
 import { toggleFullscreenForTile as toggleFullscreenForTileState, shiftSelectTile as shiftSelectTileState } from "./domain/tile-layout-mode";
 import { computeSessionNameSync } from "./domain/session-name-sync";
+import { deriveLinkedSessionIds } from "./domain/linked-sessions";
 import { parseKeyAction } from "./domain/keyboard";
 import { createTerminalConfig, createCopilotSessionConfig } from "./domain/tile-config";
 import { createWorkstreamFlow } from "./domain/workstream-create";
@@ -1093,17 +1094,18 @@ export default function App() {
     return wsStates.get(changeWorktreeTarget.id)?.tiles ?? [];
   }, [changeWorktreeTarget, wsStates]);
 
-  const linkedSessionIds = useMemo(() => {
-    return tiles
-      .filter((t) => t.tile_type === "copilot_session")
-      .map((t) => {
-        try {
-          const cfg = JSON.parse(t.config_json || "{}");
-          return (cfg.copilot_session_id || cfg.resume_by_id || null) as string | null;
-        } catch { return null; }
-      })
-      .filter((id): id is string => !!id);
-  }, [tiles]);
+  // Per-workstream linked-session ids. Every mounted workstream's tiles
+  // need their *own* list — passing the active workstream's list to all
+  // mounted grids makes hidden SessionMetaTiles reset their browse state
+  // (keyed on the linked-session list) whenever the user switches
+  // workstreams, surfacing as an empty session-state folder on return.
+  const linkedSessionIdsByWs = useMemo(() => {
+    const map = new Map<string, string[]>();
+    for (const [wsId, st] of wsStates.entries()) {
+      map.set(wsId, deriveLinkedSessionIds(st.tiles));
+    }
+    return map;
+  }, [wsStates]);
 
   // Workstreams that have been "loaded" (have an entry in wsStates so tiles
   // are mounted + listeners are active). Workstreams the user hasn't opened
@@ -1348,7 +1350,7 @@ export default function App() {
                     ));
                   } : undefined}
                   spawnedPtyIds={spawnedPtys.current}
-                  linkedSessionIds={linkedSessionIds}
+                  linkedSessionIds={linkedSessionIdsByWs.get(wsId) ?? []}
                 />
               </div>
             );
