@@ -6,6 +6,9 @@ authors = ["alejandroe"]
 edition = "2021"
 license = "MIT"
 
+[workspace]
+members = [".", "git-no-verify"]
+
 [lib]
 name = "workstreams_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]

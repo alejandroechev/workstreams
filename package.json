@@ -5,7 +5,10 @@
   "license": "MIT",
   "type": "module",
   "scripts": {
+    "build:shim": "cargo build --release -p git-no-verify --manifest-path src-tauri/Cargo.toml && node scripts/copy-shim.mjs",
+    "predev": "npm run build:shim",
     "dev": "vite",
+    "prebuild": "npm run build:shim",
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",

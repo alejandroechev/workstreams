@@ -270,4 +270,23 @@ describe("createWheelLineAccumulator", () => {
     const out = acc(-240);
     expect(out).toBeLessThan(0);
   });
+
+  it("sanitize defaults noVerifyBlockingEnabled to true when missing or invalid", () => {
+    expect(sanitize({}).noVerifyBlockingEnabled).toBe(true);
+    expect(sanitize(null).noVerifyBlockingEnabled).toBe(true);
+    expect(sanitize({ noVerifyBlockingEnabled: "yes" as unknown as boolean }).noVerifyBlockingEnabled)
+      .toBe(true);
+  });
+
+  it("sanitize preserves explicit noVerifyBlockingEnabled=false", () => {
+    expect(sanitize({ noVerifyBlockingEnabled: false }).noVerifyBlockingEnabled).toBe(false);
+    expect(sanitize({ noVerifyBlockingEnabled: true }).noVerifyBlockingEnabled).toBe(true);
+  });
+
+  it("setAppSettings toggles noVerifyBlockingEnabled and persists to SQL store", async () => {
+    setAppSettings({ noVerifyBlockingEnabled: false });
+    expect(getAppSettings().noVerifyBlockingEnabled).toBe(false);
+    await Promise.resolve();
+    expect(sqlStore.get("app.no_verify_blocking_enabled")).toBe("false");
+  });
 });

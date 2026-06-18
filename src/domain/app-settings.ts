@@ -31,6 +31,7 @@ const SQL_KEYS = {
   markdownFontSize: "app.font.markdown",
   terminalFontSize: "app.font.terminal",
   copilotCommand: "app.copilot_command",
+  noVerifyBlockingEnabled: "app.no_verify_blocking_enabled",
 } as const;
 
 export interface AppSettings {
@@ -44,6 +45,10 @@ export interface AppSettings {
    * `agency copilot --yolo` wrapper; can be set to plain `copilot --yolo`
    * (or any compatible CLI) for external users. */
   copilotCommand: string;
+  /** When true (default), terminals and Copilot sessions launched from
+   * Workstreams refuse `git commit --no-verify` / `git push --no-verify`
+   * by prepending a bundled git-shim to PATH. */
+  noVerifyBlockingEnabled: boolean;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -52,6 +57,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   markdownFontSize: 14,
   terminalFontSize: 14,
   copilotCommand: "agency copilot --yolo",
+  noVerifyBlockingEnabled: true,
 };
 
 export const SCROLL_SPEED_MIN = 0.1;
@@ -111,6 +117,10 @@ export function sanitize(raw: Partial<AppSettings> | null | undefined): AppSetti
       typeof raw.copilotCommand === "string" && raw.copilotCommand.trim().length > 0
         ? raw.copilotCommand.trim()
         : DEFAULT_SETTINGS.copilotCommand,
+    noVerifyBlockingEnabled:
+      typeof raw.noVerifyBlockingEnabled === "boolean"
+        ? raw.noVerifyBlockingEnabled
+        : DEFAULT_SETTINGS.noVerifyBlockingEnabled,
   };
 }
 
@@ -150,6 +160,14 @@ async function readSqlSettings(): Promise<Partial<AppSettings>> {
       if (typeof raw === "string" && raw.trim().length > 0) {
         entries.copilotCommand = raw;
       }
+    } catch { /* ignore */ }
+  })());
+  // Boolean-typed: noVerifyBlockingEnabled (stored as "true"/"false").
+  tasks.push((async () => {
+    try {
+      const raw = await invoke<string | null>("get_setting", { key: SQL_KEYS.noVerifyBlockingEnabled });
+      if (raw === "true") entries.noVerifyBlockingEnabled = true;
+      else if (raw === "false") entries.noVerifyBlockingEnabled = false;
     } catch { /* ignore */ }
   })());
   await Promise.all(tasks);
@@ -243,6 +261,7 @@ export function setAppSettings(next: Partial<AppSettings>): AppSettings {
   if (merged.markdownFontSize !== cached.markdownFontSize) changed.push("markdownFontSize");
   if (merged.terminalFontSize !== cached.terminalFontSize) changed.push("terminalFontSize");
   if (merged.copilotCommand !== cached.copilotCommand) changed.push("copilotCommand");
+  if (merged.noVerifyBlockingEnabled !== cached.noVerifyBlockingEnabled) changed.push("noVerifyBlockingEnabled");
   cached = merged;
   for (const k of changed) {
     const v: number | string =
@@ -250,7 +269,8 @@ export function setAppSettings(next: Partial<AppSettings>): AppSettings {
       : k === "textFontSize" ? merged.textFontSize
       : k === "markdownFontSize" ? merged.markdownFontSize
       : k === "terminalFontSize" ? merged.terminalFontSize
-      : merged.copilotCommand;
+      : k === "copilotCommand" ? merged.copilotCommand
+      : String(merged.noVerifyBlockingEnabled);
     void writeSqlSetting(k, v);
   }
   for (const l of listeners) {

@@ -30,6 +30,7 @@ function DisabledFeaturePlaceholder({ label, requires }: { label: string; requir
 import type { Tile } from "../workstream/types";
 import type { CopilotSessionStats } from "../domain/types";
 import { invoke } from "@tauri-apps/api/core";
+import { getAppSettings } from "../domain/app-settings";
 import { computeTileBorder } from "./tile-border";
 import { resolveTileIcon } from "./tile-icons";
 
@@ -145,6 +146,8 @@ function TileWrapperImpl({
         command: config.command || null,
         rows: 30,
         cols: 120,
+        enableNoVerifyBlock:
+          isFeatureEnabled("no-verify-blocking") && getAppSettings().noVerifyBlockingEnabled,
       });
       setTermStatus("running");
     } catch {

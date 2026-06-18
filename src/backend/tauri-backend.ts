@@ -1,5 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { Project, Workstream, Tile, TileType, WorkstreamLayout, CopilotConfigItem } from "../domain/types";
+import { getAppSettings } from "../domain/app-settings";
+import { isFeatureEnabled } from "../domain/feature-flags";
 import type {
   ChunkInput,
   ChunkWithDetails,
@@ -116,6 +118,8 @@ export class TauriBackend implements Backend {
       args: args ?? null,
       rows: rows ?? 30,
       cols: cols ?? 120,
+      enableNoVerifyBlock:
+        isFeatureEnabled("no-verify-blocking") && getAppSettings().noVerifyBlockingEnabled,
     });
   }
 
@@ -127,6 +131,8 @@ export class TauriBackend implements Backend {
       rows: rows ?? 30,
       cols: cols ?? 120,
       command: command ?? null,
+      enableNoVerifyBlock:
+        isFeatureEnabled("no-verify-blocking") && getAppSettings().noVerifyBlockingEnabled,
     });
     return pid ?? null;
   }
