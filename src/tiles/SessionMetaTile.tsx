@@ -32,6 +32,7 @@ import {
   ChevronUpIcon,
   EyeIcon,
   PencilSquareIcon,
+  PresentationChartBarIcon,
 } from "@heroicons/react/24/outline";
 
 interface Props {
@@ -813,6 +814,16 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
                 {editorViewState.mode === "preview"
                   ? <PencilSquareIcon style={{ width: 14, height: 14 }} />
                   : <EyeIcon style={{ width: 14, height: 14 }} />}
+              </button>
+            )}
+            {editorViewState?.canPresent && (
+              <button
+                data-testid="meta-present-toggle"
+                onClick={editorViewState.mode === "present" ? editorViewState.exitPresent : editorViewState.enterPresent}
+                title={editorViewState.mode === "present" ? "Exit present mode (Esc)" : "Present as slides"}
+                style={{ background: editorViewState.mode === "present" ? "#313244" : "none", border: "none", color: editorViewState.mode === "present" ? "#a6e3a1" : "#89b4fa", cursor: "pointer", padding: "2px 4px", display: "flex", alignItems: "center", borderRadius: 3 }}
+              >
+                <PresentationChartBarIcon style={{ width: 14, height: 14 }} />
               </button>
             )}
           </div>

@@ -43,6 +43,34 @@ vi.mock("../../files/FileEditorView", () => ({
         >
           dirty
         </button>
+        <button
+          data-testid="emit-md-viewstate"
+          onClick={() => props.onViewStateChange?.({
+            mode: "preview",
+            toggle: () => {},
+            canPresent: true,
+            enterPresent: () => {},
+            exitPresent: () => {},
+            slideIndex: 0,
+            setSlideIndex: () => {},
+          })}
+        >
+          emit-md
+        </button>
+        <button
+          data-testid="emit-nonmd-viewstate"
+          onClick={() => props.onViewStateChange?.({
+            mode: "preview",
+            toggle: () => {},
+            canPresent: false,
+            enterPresent: () => {},
+            exitPresent: () => {},
+            slideIndex: 0,
+            setSlideIndex: () => {},
+          })}
+        >
+          emit-nonmd
+        </button>
       </div>
     );
   },
@@ -157,6 +185,20 @@ describe("RepoExplorerTile editor wiring", () => {
     expect(await screen.findByTestId("file-editor-view")).toHaveAttribute("data-path", "C:\\repo\\README.md");
     const lastCall = fileEditorMock.mock.calls[fileEditorMock.mock.calls.length - 1];
     expect(lastCall[0].renderMarkdownPreview).toEqual(expect.any(Function));
+  });
+
+  it("shows the Present button only when the editor reports canPresent (markdown)", async () => {
+    renderTile();
+    await openFile("README.md");
+    await screen.findByTestId("file-editor-view");
+
+    // Non-markdown view-state → no Present button.
+    fireEvent.click(screen.getByTestId("emit-nonmd-viewstate"));
+    expect(screen.queryByTestId("repo-explorer-present-toggle")).toBeNull();
+
+    // Markdown view-state → Present button appears.
+    fireEvent.click(screen.getByTestId("emit-md-viewstate"));
+    expect(await screen.findByTestId("repo-explorer-present-toggle")).toBeInTheDocument();
   });
 
   it("shows a dirty dot and star in the tile file title when the editor snapshot is dirty", async () => {

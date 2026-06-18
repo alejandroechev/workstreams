@@ -26,6 +26,7 @@ import {
   MusicalNoteIcon,
   EyeIcon,
   PencilSquareIcon,
+  PresentationChartBarIcon,
   ChatBubbleLeftRightIcon,
   TableCellsIcon,
 } from "@heroicons/react/24/outline";
@@ -1157,6 +1158,16 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
             {editorViewState.mode === "preview"
               ? <PencilSquareIcon style={{ width: 14, height: 14 }} />
               : <EyeIcon style={{ width: 14, height: 14 }} />}
+          </button>
+        )}
+        {editorViewState?.canPresent && (
+          <button
+            onClick={editorViewState.mode === "present" ? editorViewState.exitPresent : editorViewState.enterPresent}
+            style={{ background: editorViewState.mode === "present" ? "#313244" : "none", border: "none", color: editorViewState.mode === "present" ? "#a6e3a1" : "#89b4fa", cursor: "pointer", display: "flex", alignItems: "center", padding: "2px 4px", borderRadius: 3 }}
+            title={editorViewState.mode === "present" ? "Exit present mode (Esc)" : "Present as slides"}
+            data-testid="repo-explorer-present-toggle"
+          >
+            <PresentationChartBarIcon style={{ width: 14, height: 14 }} />
           </button>
         )}
         {workstreamId && filePath ? (
