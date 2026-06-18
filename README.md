@@ -34,6 +34,9 @@ project-aware workspace:
   detection, conflict diffs.
 - 📝 **Markdown with extras** — GFM, syntax-highlighted code, on-disk image
   references, inline Mermaid diagrams with zoom / pan, inter-file links.
+- 🖥️ **Present markdown as slides** — any `.md` has a third "Present" mode
+  (alongside preview / edit): split on `---`, navigate with arrows / Space /
+  click, fullscreen with `Alt+F`.
 - 💬 **Inline file comments** — Per-workstream comments anchored to line
   ranges; persisted in SQLite.
 - ⌨️ **Keyboard-driven** — `Alt+<letter>` for every tile type, `Alt+Arrows`
@@ -92,6 +95,23 @@ All app-level commands use **Alt** to avoid conflicts with terminal
 - **Double-click a tile's header bar** to toggle fullscreen for that tile.
 - **Shift-click another tile** while one is focused to compare the two
   side-by-side (the focused tile becomes the left pane).
+
+### Present mode (markdown slides)
+
+Any markdown file opened in Repo Explorer, Workbench, or Session Meta can be
+presented as a slide deck:
+
+- Click the **Present** button (📊) in the file toolbar — next to the
+  preview / edit toggle (markdown only). `Ctrl+Shift+V` still flips
+  preview ⇄ edit.
+- Slides are split on `---` thematic breaks. A leading YAML frontmatter block
+  is treated as deck config (e.g. `fontScale: 1.5`), not a slide.
+- Navigate with `→` / `Space` / `PageDown` (next), `←` / `PageUp` (prev),
+  `Home` / `End`, or click the right / left half of the slide. An
+  auto-dimming control cluster shows the slide counter and a progress bar.
+- `Alt+F` (or double-click the tile header) goes fullscreen; `Esc` exits
+  present mode back to preview. Slides render the live editor buffer, so
+  editing a slide and flipping back to Present reflects changes immediately.
 
 ## Tech stack
 

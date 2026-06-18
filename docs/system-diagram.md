@@ -9,7 +9,7 @@ graph TB
             TileGrid["TileGrid<br/>Adaptive tiling layout"]
             Terminal["TerminalTile<br/>xterm.js + FitAddon + SerializeAddon"]
             CodeView["CodeViewerTile<br/>Monaco Editor (read-only)"]
-            DocView["DocViewerTile<br/>MarkdownView (VS Code style)<br/>+ Mermaid + Prism highlighting"]
+            DocView["DocViewerTile<br/>MarkdownView (VS Code style)<br/>+ Mermaid + Prism highlighting<br/>+ Present (slides) mode"]
             RepoExplorer["RepoExplorerTile<br/>Files / Diff / Log / Hooks"]
             SessionMeta["SessionMetaTile<br/>Session + file detail"]
             Workbench["WorkbenchTile<br/>Workbench file detail"]
