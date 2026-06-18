@@ -428,6 +428,8 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
       activeTab,
       filePath: viewContent?.path,
       dbTable: selectedTable ?? undefined,
+      mdViewMode: editorViewState?.mode,
+      slideIndex: editorViewState?.mode === "present" ? editorViewState?.slideIndex : undefined,
     },
     onConfigChange,
     { enabled: hydratedRef.current },

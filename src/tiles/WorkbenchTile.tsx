@@ -241,7 +241,11 @@ export default function WorkbenchTile({ tileId: _tileId, isFocused, configJson, 
   useTileViewStatePersist(
     configJson,
     "workbench",
-    { viewingPath: mode === "view" ? viewingPath ?? undefined : undefined },
+    {
+      viewingPath: mode === "view" ? viewingPath ?? undefined : undefined,
+      mdViewMode: editorViewState?.mode,
+      slideIndex: editorViewState?.mode === "present" ? editorViewState?.slideIndex : undefined,
+    },
     onConfigChange,
     { enabled: hydratedRef.current },
   );

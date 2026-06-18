@@ -781,6 +781,11 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
   }, [activeTab, activateDiffMode, openGitLog, openGitHooks]);
 
   const hydratedRef = useRef(false);
+  // Captures persisted markdown mode/slide for the hydrated file so the
+  // FileEditorView can restore present mode + slide on first open. Applies
+  // only to the restored file (cleared implicitly once another file opens,
+  // since we match on path).
+  const restoredMdRef = useRef<{ path: string; mode: "preview" | "edit" | "present"; slideIndex?: number } | null>(null);
   useEffect(() => {
     if (!workstreamVisible || hydratedRef.current) return;
     hydratedRef.current = true;
@@ -799,6 +804,9 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
       }
     }
     if (vs.filePath && (!tab || tab === "files")) {
+      if (vs.mdViewMode) {
+        restoredMdRef.current = { path: vs.filePath, mode: vs.mdViewMode, slideIndex: vs.slideIndex };
+      }
       void openFile(vs.filePath, "none").catch(() => {});
     }
   }, [workstreamVisible, configJson, activateDiffMode, openGitLog, openGitHooks, openFile]);
@@ -827,6 +835,7 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
       diffLayout: activeTab === "diff" ? diffLayout : undefined,
       hookName: activeTab === "hooks" && hookContent ? hookContent.name : undefined,
       mdViewMode: editorViewState?.mode,
+      slideIndex: editorViewState?.mode === "present" ? editorViewState?.slideIndex : undefined,
     },
     onConfigChange,
     { enabled: hydratedRef.current },
@@ -1203,6 +1212,8 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
               path={filePath}
               onBack={handleBackToBrowse}
               showHeader={false}
+              initialViewMode={restoredMdRef.current?.path === filePath ? restoredMdRef.current.mode : undefined}
+              initialSlideIndex={restoredMdRef.current?.path === filePath ? restoredMdRef.current.slideIndex : undefined}
               renderMarkdownPreview={(markdownContent) => (
                 <MarkdownView
                   style={markdownContainerStyle}

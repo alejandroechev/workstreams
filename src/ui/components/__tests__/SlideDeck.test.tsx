@@ -47,6 +47,20 @@ describe("SlideDeck — rendering", () => {
     render(<SlideDeck source={"   "} slideIndex={0} onIndexChange={() => {}} />);
     expect(screen.getByTestId("slide-content")).toBeTruthy();
   });
+
+  it("reports a clamped index back via onIndexChange when the persisted index is out of range", () => {
+    // Simulates a deck that shrank (e.g. after an edit/hot-reload) leaving a
+    // persisted slideIndex past the end — SlideDeck clamps and notifies.
+    const onIndexChange = vi.fn();
+    render(<SlideDeck source={DECK} slideIndex={10} onIndexChange={onIndexChange} />);
+    expect(onIndexChange).toHaveBeenCalledWith(2);
+  });
+
+  it("does not report back when the index is already in range", () => {
+    const onIndexChange = vi.fn();
+    render(<SlideDeck source={DECK} slideIndex={1} onIndexChange={onIndexChange} />);
+    expect(onIndexChange).not.toHaveBeenCalled();
+  });
 });
 
 describe("SlideDeck — navigation", () => {
