@@ -63,6 +63,43 @@ describe("parseViewState", () => {
     expect(parseViewState(config, "repo_explorer")).toEqual({});
   });
 
+  it("repo_explorer accepts mdViewMode 'present' and a valid slideIndex", () => {
+    expect(parseViewState(
+      JSON.stringify({ viewState: { mdViewMode: "present", slideIndex: 3 } }),
+      "repo_explorer",
+    )).toEqual({ mdViewMode: "present", slideIndex: 3 });
+  });
+
+  it("repo_explorer accepts slideIndex 0 and rejects negative / non-integer", () => {
+    expect(parseViewState(
+      JSON.stringify({ viewState: { slideIndex: 0 } }),
+      "repo_explorer",
+    )).toEqual({ slideIndex: 0 });
+    expect(parseViewState(
+      JSON.stringify({ viewState: { slideIndex: -1 } }),
+      "repo_explorer",
+    )).toEqual({});
+    expect(parseViewState(
+      JSON.stringify({ viewState: { slideIndex: 2.5 } }),
+      "repo_explorer",
+    )).toEqual({});
+    expect(parseViewState(
+      JSON.stringify({ viewState: { slideIndex: "3" } }),
+      "repo_explorer",
+    )).toEqual({});
+  });
+
+  it("session_meta and workbench accept mdViewMode 'present' + slideIndex", () => {
+    expect(parseViewState(
+      JSON.stringify({ viewState: { mdViewMode: "present", slideIndex: 1 } }),
+      "session_meta",
+    )).toEqual({ mdViewMode: "present", slideIndex: 1 });
+    expect(parseViewState(
+      JSON.stringify({ viewState: { mdViewMode: "edit", slideIndex: 2 } }),
+      "workbench",
+    )).toEqual({ mdViewMode: "edit", slideIndex: 2 });
+  });
+
   it("repo_explorer accepts split/unified diffLayout and rejects others", () => {
     expect(parseViewState(
       JSON.stringify({ viewState: { diffLayout: "split" } }),

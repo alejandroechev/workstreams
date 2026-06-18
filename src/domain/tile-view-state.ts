@@ -19,17 +19,23 @@ export interface RepoExplorerViewState {
   diffMode?: string; // "unstaged" | "last_commit" | "vs_master" | ...
   diffLayout?: "split" | "unified";
   hookName?: string;
-  mdViewMode?: "preview" | "edit";
+  mdViewMode?: "preview" | "edit" | "present";
+  /** Current slide when mdViewMode === "present". */
+  slideIndex?: number;
 }
 
 export interface SessionMetaViewState {
   activeTab?: string; // "config" | "files" | "checkpoints" | "events" | "database"
   filePath?: string;
   dbTable?: string;
+  mdViewMode?: "preview" | "edit" | "present";
+  slideIndex?: number;
 }
 
 export interface WorkbenchViewState {
   viewingPath?: string;
+  mdViewMode?: "preview" | "edit" | "present";
+  slideIndex?: number;
 }
 
 export interface PlanViewState {
@@ -104,6 +110,16 @@ function sanitize<K extends AnyViewState["kind"]>(
     const v = raw[k];
     if (typeof v === "string" && v.length > 0) out[k] = v;
   };
+  // Shared markdown present-mode fields, used by every tile that hosts the
+  // markdown viewer (repo_explorer, session_meta, workbench).
+  const mdPresentFields = () => {
+    if (raw.mdViewMode === "preview" || raw.mdViewMode === "edit" || raw.mdViewMode === "present") {
+      out.mdViewMode = raw.mdViewMode;
+    }
+    if (typeof raw.slideIndex === "number" && Number.isInteger(raw.slideIndex) && raw.slideIndex >= 0) {
+      out.slideIndex = raw.slideIndex;
+    }
+  };
   switch (kind) {
     case "repo_explorer":
       str("activeTab");
@@ -114,17 +130,17 @@ function sanitize<K extends AnyViewState["kind"]>(
       if (raw.diffLayout === "split" || raw.diffLayout === "unified") {
         out.diffLayout = raw.diffLayout;
       }
-      if (raw.mdViewMode === "preview" || raw.mdViewMode === "edit") {
-        out.mdViewMode = raw.mdViewMode;
-      }
+      mdPresentFields();
       break;
     case "session_meta":
       str("activeTab");
       str("filePath");
       str("dbTable");
+      mdPresentFields();
       break;
     case "workbench":
       str("viewingPath");
+      mdPresentFields();
       break;
     case "plan":
       // Note: selectedHistoryPlanId + historySubTab were dropped in the
