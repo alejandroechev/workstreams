@@ -2439,20 +2439,34 @@ fn list_git_hooks(directory: String) -> Result<Vec<GitHookEntry>, String> {
             }
         });
 
-    // Find .git/hooks directory (fallback)
-    let git_path = dir.join(".git");
-    let default_hooks_dir = if git_path.is_dir() {
-        Some(git_path.join("hooks"))
-    } else if git_path.is_file() {
-        let content =
-            std::fs::read_to_string(&git_path).map_err(|e| format!("Cannot read .git: {e}"))?;
-        content
-            .trim()
-            .strip_prefix("gitdir: ")
-            .map(|gitdir| std::path::PathBuf::from(gitdir).join("hooks"))
-    } else {
-        None
-    };
+    // Find the effective .git/hooks directory (fallback). Use
+    // `git rev-parse --git-path hooks`, which correctly resolves to the
+    // *common* git dir's hooks even inside a linked worktree (where .git
+    // is a file pointing at <main>/.git/worktrees/<name> and that per-
+    // worktree dir has no hooks/ of its own). Fall back to manual .git
+    // parsing only if git isn't available.
+    let default_hooks_dir = git_cmd()
+        .args(["rev-parse", "--path-format=absolute", "--git-path", "hooks"])
+        .current_dir(&directory)
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| std::path::PathBuf::from(String::from_utf8_lossy(&o.stdout).trim().to_string()))
+        .or_else(|| {
+            let git_path = dir.join(".git");
+            if git_path.is_dir() {
+                Some(git_path.join("hooks"))
+            } else if git_path.is_file() {
+                std::fs::read_to_string(&git_path).ok().and_then(|content| {
+                    content
+                        .trim()
+                        .strip_prefix("gitdir: ")
+                        .map(|gitdir| std::path::PathBuf::from(gitdir).join("hooks"))
+                })
+            } else {
+                None
+            }
+        });
 
     // Also check .husky directory (common hook manager)
     let husky_dir = dir.join(".husky");
@@ -4306,6 +4320,89 @@ mod tests {
         assert!(err.contains("already exists"));
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn list_git_hooks_finds_common_dir_hooks_from_a_worktree() {
+        // Regression: in a linked worktree, .git is a file pointing at
+        // <main>/.git/worktrees/<name> (which has no hooks/ of its own).
+        // list_git_hooks must resolve to the common dir's hooks via
+        // `git rev-parse --git-path hooks` and still find the hook.
+        let base = std::env::temp_dir().join(format!("ws_hooks_wt_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let main = base.join("main");
+        std::fs::create_dir_all(&main).unwrap();
+
+        let run = |args: &[&str], cwd: &std::path::Path| {
+            git_cmd()
+                .args(args)
+                .current_dir(cwd)
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false)
+        };
+
+        // Init a repo with one commit so a worktree can be added.
+        if !run(&["init"], &main)
+            || !run(&["config", "user.email", "t@t.t"], &main)
+            || !run(&["config", "user.name", "t"], &main)
+        {
+            std::fs::remove_dir_all(&base).ok();
+            return; // git unavailable — skip
+        }
+        std::fs::write(main.join("README.md"), b"x").unwrap();
+        run(&["add", "."], &main);
+        if !run(&["commit", "-m", "init"], &main) {
+            std::fs::remove_dir_all(&base).ok();
+            return;
+        }
+
+        // Write a hook into the common hooks dir (the place git uses).
+        let hooks_dir = git_cmd()
+            .args(["rev-parse", "--path-format=absolute", "--git-path", "hooks"])
+            .current_dir(&main)
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| {
+                std::path::PathBuf::from(String::from_utf8_lossy(&o.stdout).trim().to_string())
+            });
+        let hooks_dir = match hooks_dir {
+            Some(d) => d,
+            None => {
+                std::fs::remove_dir_all(&base).ok();
+                return;
+            }
+        };
+        std::fs::create_dir_all(&hooks_dir).unwrap();
+        std::fs::write(hooks_dir.join("pre-commit"), b"#!/bin/sh\necho hi\n").unwrap();
+
+        // Add a linked worktree on a new branch.
+        let wt = base.join("wt");
+        if !run(
+            &[
+                "worktree",
+                "add",
+                "-b",
+                "feature",
+                &wt.to_string_lossy(),
+                "HEAD",
+            ],
+            &main,
+        ) {
+            std::fs::remove_dir_all(&base).ok();
+            return;
+        }
+
+        let hooks = list_git_hooks(wt.to_string_lossy().to_string())
+            .expect("list_git_hooks should succeed for a worktree");
+        assert!(
+            hooks.iter().any(|h| h.name == "pre-commit"),
+            "expected pre-commit hook to be discovered from the worktree, got: {:?}",
+            hooks.iter().map(|h| &h.name).collect::<Vec<_>>()
+        );
+
+        std::fs::remove_dir_all(&base).ok();
     }
 
     #[test]
