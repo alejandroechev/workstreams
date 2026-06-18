@@ -6,7 +6,7 @@ import { MarkdownView } from "../ui/MarkdownView";
 import { dirnameOf } from "../domain/file-types";
 import { useBackend } from "../backend/context";
 import { makeAudioBlobUrl } from "../domain/file-types";
-import { FileEditorView } from "../files/FileEditorView";
+import { FileEditorView, type MarkdownViewState } from "../files/FileEditorView";
 import type { BufferSnapshot } from "../files/FileBufferRegistry";
 import AudioPlayer from "./AudioPlayer";
 import { parseViewState } from "../domain/tile-view-state";
@@ -115,7 +115,7 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
     audioSize?: number;
   } | null>(null);
   const [editorSnapshot, setEditorSnapshot] = useState<BufferSnapshot | null>(null);
-  const [editorViewState, setEditorViewState] = useState<{ mode: "preview" | "edit"; toggle: () => void } | null>(null);
+  const [editorViewState, setEditorViewState] = useState<MarkdownViewState | null>(null);
   // Right-click context menu on file rows (files-only).
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; path: string; createDir?: string } | null>(null);
 

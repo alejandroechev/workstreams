@@ -18,6 +18,17 @@ vi.mock("../loadMonaco", () => ({
   loadMonaco: loadMonacoMock,
 }));
 
+// Stub SlideDeck so present-mode tests stay focused on FileEditorView wiring
+// (real SlideDeck renders MarkdownView). Echo the source + a nav button.
+vi.mock("../../ui/components/SlideDeck", () => ({
+  SlideDeck: ({ source, slideIndex, onIndexChange }: { source: string; slideIndex: number; onIndexChange: (i: number) => void }) => (
+    <div data-testid="slide-deck-stub" data-index={slideIndex}>
+      <div data-testid="slide-source">{source}</div>
+      <button data-testid="slide-stub-next" onClick={() => onIndexChange(slideIndex + 1)}>next</button>
+    </div>
+  ),
+}));
+
 type SnapshotListener = (snapshot: BufferSnapshot) => void;
 
 type FakeModel = {
@@ -218,6 +229,54 @@ describe("FileEditorView", () => {
 
     await waitFor(() => expect(fakeEditors).toHaveLength(1));
     expect(screen.getByTestId("file-editor-monaco")).toBeTruthy();
+  });
+
+  it("enters present mode for a markdown file and renders SlideDeck from the live buffer", async () => {
+    const harness = createRegistryHarness({
+      initialSnapshot: snapshot({ path: "C:\\repo\\deck.md" }),
+    });
+    harness.model.value = "# Slide A\n\n---\n\n# Slide B";
+    let latest: { canPresent?: boolean; enterPresent?: () => void } | null = null;
+    renderEditor(harness, { onViewStateChange: (s) => { latest = s as typeof latest; } });
+
+    await screen.findByText(/initial|Slide A/, undefined, { timeout: 2000 }).catch(() => {});
+    await waitFor(() => expect(latest?.canPresent).toBe(true));
+    act(() => { latest!.enterPresent!(); });
+
+    const deck = await screen.findByTestId("slide-deck-stub");
+    expect(deck).toBeTruthy();
+    expect(screen.getByTestId("slide-source").textContent).toContain("# Slide A");
+    expect(screen.queryByTestId("file-editor-monaco")).toBeNull();
+  });
+
+  it("does not offer present for SVG files", async () => {
+    const harness = createRegistryHarness({
+      initialSnapshot: snapshot({ path: "C:\\repo\\icon.svg" }),
+    });
+    let latest: { canPresent?: boolean } | null = null;
+    renderEditor(harness, { onViewStateChange: (s) => { latest = s as typeof latest; } });
+
+    // SVG emits a view-state (preview/edit) but never canPresent.
+    await waitFor(() => expect(latest).not.toBeNull());
+    expect(latest!.canPresent ?? false).toBe(false);
+  });
+
+  it("exits present back to preview on Escape", async () => {
+    const harness = createRegistryHarness({
+      initialSnapshot: snapshot({ path: "C:\\repo\\deck.md" }),
+    });
+    let latest: { canPresent?: boolean; enterPresent?: () => void; mode?: string } | null = null;
+    renderEditor(harness, {
+      renderMarkdownPreview: (content: string) => <article>Preview: {content}</article>,
+      onViewStateChange: (s) => { latest = s as typeof latest; },
+    });
+
+    await waitFor(() => expect(latest?.canPresent).toBe(true));
+    act(() => { latest!.enterPresent!(); });
+    expect(await screen.findByTestId("slide-deck-stub")).toBeTruthy();
+
+    fireEvent.keyDown(screen.getByTestId("slide-deck-stub").closest("[data-testid='file-editor-view']") ?? document.body, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByTestId("slide-deck-stub")).toBeNull());
   });
 
   it("keeps markdown in preview mode when the buffer becomes dirty (user can manually toggle)", async () => {

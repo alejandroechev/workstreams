@@ -8,7 +8,7 @@ import { listen } from "@tauri-apps/api/event";
 import { useBackend } from "../backend/context";
 import { detectLanguage } from "../domain/tile-config";
 import { makeAudioBlobUrl } from "../domain/file-types";
-import { FileEditorView } from "../files/FileEditorView";
+import { FileEditorView, type MarkdownViewState } from "../files/FileEditorView";
 import type { BufferSnapshot } from "../files/FileBufferRegistry";
 import { subscribeAddToWorkbench } from "../domain/workbench-events";
 import { workbenchStore } from "../domain/workbench-store-instance";
@@ -105,7 +105,7 @@ export default function WorkbenchTile({ tileId: _tileId, isFocused, configJson, 
   const [audioSize, setAudioSize] = useState(0);
   const [imageDataUrl, setImageDataUrl] = useState<string | null>(null);
   const [editorSnapshot, setEditorSnapshot] = useState<BufferSnapshot | null>(null);
-  const [editorViewState, setEditorViewState] = useState<{ mode: "preview" | "edit"; toggle: () => void } | null>(null);
+  const [editorViewState, setEditorViewState] = useState<MarkdownViewState | null>(null);
   const hydratedRef = useRef(false);
 
   // Files are sourced from the persistent per-workstream Workbench store

@@ -18,6 +18,7 @@ import {
 } from "./FileBufferRegistry";
 import { classifyDangerousPath, type DangerHit } from "./dangerousPaths";
 import { ZoomableImage } from "../ui/components/ZoomableImage";
+import { SlideDeck } from "../ui/components/SlideDeck";
 import { loadMonaco } from "./loadMonaco";
 import {
   selectionToAnchor,
@@ -32,7 +33,25 @@ import { getAppSettings, subscribeAppSettings } from "../domain/app-settings";
 const MAX_INLINE_EDIT_SIZE_BYTES = 1024 * 1024;
 const confirmedDangerousWarningKeys = new Set<string>();
 
-type ViewMode = "preview" | "edit";
+type ViewMode = "preview" | "edit" | "present";
+
+/**
+ * View-state descriptor emitted to host tiles so they can render an external
+ * toolbar with a preview/edit toggle and a Present button. Shared so the
+ * three markdown-hosting tiles (Repo Explorer, Workbench, Session Meta) all
+ * type their `editorViewState` identically.
+ */
+export interface MarkdownViewState {
+  mode: ViewMode;
+  /** Swap preview⇄edit (from present, returns to preview). */
+  toggle: () => void;
+  /** True for markdown files (present is markdown-only). */
+  canPresent: boolean;
+  enterPresent: () => void;
+  exitPresent: () => void;
+  slideIndex: number;
+  setSlideIndex: (index: number) => void;
+}
 
 export interface FileEditorViewProps {
   /** Absolute path (NOT yet canonicalized — component will canonicalize via registry.acquire). */
@@ -55,10 +74,18 @@ export interface FileEditorViewProps {
   showHeader?: boolean;
   /**
    * Called whenever the markdown view state changes so a parent toolbar
-   * can render its own preview/edit toggle. Fires `null` when the file
-   * isn't a markdown file (no toggle needed) and an object otherwise.
+   * can render its own preview/edit toggle and Present button. Fires `null`
+   * when the file isn't a markdown/svg file (no toggle needed).
+   * - `toggle` swaps preview⇄edit (from present it returns to preview).
+   * - `canPresent` is true for markdown files; `enterPresent`/`exitPresent`
+   *   drive the third mode, and `slideIndex`/`setSlideIndex` reflect/persist
+   *   the current slide.
    */
-  onViewStateChange?: (state: { mode: "preview" | "edit"; toggle: () => void } | null) => void;
+  onViewStateChange?: (state: MarkdownViewState | null) => void;
+  /** Initial view mode to restore from persisted tile state (default preview). */
+  initialViewMode?: "preview" | "edit" | "present";
+  /** Initial slide index to restore when starting in present mode. */
+  initialSlideIndex?: number;
   /**
    * Inline file comments to render as Monaco view zones below their anchor.
    * Only used when `commentsEnabled` is true and the editor is mounted.
@@ -101,6 +128,12 @@ function fileNameFor(path: string): string {
   return path.split(/[\\/]/).filter(Boolean).pop() ?? path;
 }
 
+/** Directory portion of a path (for resolving relative slide images). */
+function dirnameForPath(path: string): string {
+  const idx = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+  return idx < 0 ? "" : path.slice(0, idx);
+}
+
 function isMarkdown(path: string): boolean {
   const extension = path.split(/[\\/.]/).pop()?.toLowerCase() ?? "";
   return extension === "md" || extension === "markdown";
@@ -132,6 +165,8 @@ export function FileEditorView({
   onSnapshotChange,
   showHeader = true,
   onViewStateChange,
+  initialViewMode,
+  initialSlideIndex,
   comments = [],
   commentsEnabled = false,
   onAddComment,
@@ -153,7 +188,8 @@ export function FileEditorView({
     message: string;
   } | null>(null);
   const [editorRetryToken, setEditorRetryToken] = useState(0);
-  const [modeState, setModeState] = useState<{ inputPath: string; mode: ViewMode }>({ inputPath: path, mode: "preview" });
+  const [modeState, setModeState] = useState<{ inputPath: string; mode: ViewMode }>({ inputPath: path, mode: initialViewMode ?? "preview" });
+  const [slideState, setSlideState] = useState<{ inputPath: string; index: number }>({ inputPath: path, index: initialSlideIndex ?? 0 });
   const [dismissedConflictKey, setDismissedConflictKey] = useState<string | null>(null);
   // Bumped each time the Monaco editor instance is (re)created so dependent
   // effects can react without polluting the main editor effect.
@@ -273,6 +309,7 @@ export function FileEditorView({
       ? editorErrorState.message
       : null;
   const localMode = modeState.inputPath === path ? modeState.mode : "preview";
+  const localSlideIndex = slideState.inputPath === path ? slideState.index : 0;
   // Conflict + save_blocked always force the editor so the user can
   // resolve. Plain "dirty" no longer forces edit mode — the user can
   // freely toggle back to preview (it reads from the Monaco model so
@@ -333,7 +370,13 @@ export function FileEditorView({
     effectiveMode === "preview" &&
     ((renderMarkdownPreview !== undefined && isMarkdown(snapshot.path)) || isSvg(snapshot.path));
 
-  const shouldShowEditor = snapshot !== null && !isNonEditable(snapshot) && !shouldShowPreview;
+  // Present mode: markdown only, rendered slide-by-slide via SlideDeck from
+  // the LIVE buffer. Does not require the renderMarkdownPreview callback.
+  const shouldShowPresent =
+    snapshot !== null && effectiveMode === "present" && isMarkdown(snapshot.path);
+
+  const shouldShowEditor =
+    snapshot !== null && !isNonEditable(snapshot) && !shouldShowPreview && !shouldShowPresent;
   const editorPath = shouldShowEditor ? snapshot?.path ?? null : null;
 
   // Notify parent of view state so it can render its own preview/edit
@@ -343,9 +386,12 @@ export function FileEditorView({
   // `null` so the toolbar doesn't show a useless toggle.
   useEffect(() => {
     if (!onViewStateChange) return;
-    const canPreview = snapshot !== null && ((renderMarkdownPreview !== undefined && isMarkdown(snapshot.path)) || isSvg(snapshot.path));
+    const isMd = snapshot !== null && isMarkdown(snapshot.path);
+    const canPreview = snapshot !== null && ((renderMarkdownPreview !== undefined && isMd) || isSvg(snapshot.path));
     const isForcedEdit = snapshot?.state === "conflicted" || snapshot?.state === "save_blocked";
-    if (!canPreview || isForcedEdit) {
+    // The toolbar should appear whenever there is a preview/edit toggle OR a
+    // Present action (markdown). Forced-edit (conflict) suppresses it.
+    if ((!canPreview && !isMd) || isForcedEdit) {
       onViewStateChange(null);
       return;
     }
@@ -353,11 +399,17 @@ export function FileEditorView({
       mode: effectiveMode,
       toggle: () => setModeState({
         inputPath: path,
+        // From present, the preview/edit toggle returns to preview.
         mode: effectiveMode === "preview" ? "edit" : "preview",
       }),
+      canPresent: isMd,
+      enterPresent: () => { if (isMd) setModeState({ inputPath: path, mode: "present" }); },
+      exitPresent: () => setModeState({ inputPath: path, mode: "preview" }),
+      slideIndex: localSlideIndex,
+      setSlideIndex: (index: number) => setSlideState({ inputPath: path, index }),
     });
     return () => onViewStateChange(null);
-  }, [onViewStateChange, snapshot, effectiveMode, renderMarkdownPreview, path]);
+  }, [onViewStateChange, snapshot, effectiveMode, renderMarkdownPreview, path, localSlideIndex]);
 
   useEffect(() => {
     if (editorPath === null || editorHostRef.current === null) return undefined;
@@ -538,6 +590,14 @@ export function FileEditorView({
   }, [snapshot, effectiveMode, renderMarkdownPreview, path]);
 
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    // In present mode, Escape exits back to preview. Stop propagation so the
+    // app's global Esc (which would also exit fullscreen) doesn't double-fire.
+    if (event.key === "Escape" && effectiveMode === "present") {
+      event.preventDefault();
+      event.stopPropagation();
+      setModeState({ inputPath: path, mode: "preview" });
+      return;
+    }
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
       event.preventDefault();
       void saveWithDangerousPathGuard();
@@ -645,6 +705,18 @@ export function FileEditorView({
         <MessageWithBack
           message="This file is too large or appears to be binary. Open in another editor."
           onBack={onBack}
+        />
+      );
+    }
+
+    if (shouldShowPresent) {
+      const content = registry.getModel(snapshot.path)?.getValue() ?? "";
+      return (
+        <SlideDeck
+          source={content}
+          basePath={dirnameForPath(snapshot.path)}
+          slideIndex={localSlideIndex}
+          onIndexChange={(index) => setSlideState({ inputPath: path, index })}
         />
       );
     }

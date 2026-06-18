@@ -2,7 +2,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import Editor, { DiffEditor } from "@monaco-editor/react";
 import { MarkdownView } from "../ui/MarkdownView";
-import { FileEditorView } from "../files/FileEditorView";
+import { FileEditorView, type MarkdownViewState } from "../files/FileEditorView";
 import type { BufferSnapshot } from "../files/FileBufferRegistry";
 import AudioPlayer from "./AudioPlayer";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -200,7 +200,7 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
   const [editorSnapshot, setEditorSnapshot] = useState<BufferSnapshot | null>(null);
   // Markdown view/edit toggle from FileEditorView. Null when the current
   // file isn't markdown or no toggle is meaningful (conflict, save_blocked).
-  const [editorViewState, setEditorViewState] = useState<{ mode: "preview" | "edit"; toggle: () => void } | null>(null);
+  const [editorViewState, setEditorViewState] = useState<MarkdownViewState | null>(null);
   // Inline file-comments toggle. Persisted per-workstream via settings.
   const [commentsEnabled, setCommentsEnabled] = useState(false);
   useEffect(() => {
