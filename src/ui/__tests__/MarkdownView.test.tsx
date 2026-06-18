@@ -74,6 +74,17 @@ describe("MarkdownView", () => {
       expect(invokeMock).not.toHaveBeenCalled();
     });
 
+    it("surfaces a visible error when an image fails to load in the webview", () => {
+      invokeMock.mockClear();
+      const md = "![alt](https://example.com/x.png)";
+      const { container, getByTestId } = render(<MarkdownView basePath="/repo">{md}</MarkdownView>);
+      const img = container.querySelector("img") as HTMLImageElement;
+      // Simulate the WebView failing to load the image (network / blocked).
+      fireEvent.error(img);
+      const err = getByTestId("markdown-image-error");
+      expect(err.textContent).toContain("https://example.com/x.png");
+    });
+
     it("resolves a relative image path against basePath via read_file_base64", async () => {
       invokeMock.mockReset();
       invokeMock.mockImplementation((cmd: string, args: { path: string }) => {

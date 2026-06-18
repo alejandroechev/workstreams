@@ -293,12 +293,25 @@ function ResolvedImg({ src, alt, basePath }: { src?: string; alt?: string; baseP
   }, [src, resolved]);
 
   if (errored) {
-    return <span style={imgErrorStyle}>⚠ Failed to load image: {alt || src}</span>;
+    return (
+      <span data-testid="markdown-image-error" style={imgErrorStyle}>
+        ⚠ Failed to load image: {resolved || src || alt}
+      </span>
+    );
   }
   // 1x1 transparent png as placeholder while loading — avoids React's
   // "empty string src" warning + an extra network round-trip in DOM.
   const PLACEHOLDER = "data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==";
-  return <img src={blobUrl ?? PLACEHOLDER} alt={alt} style={imgStyle} />;
+  return (
+    <img
+      src={blobUrl ?? PLACEHOLDER}
+      alt={alt}
+      style={imgStyle}
+      // Surface a real load failure (network for URLs, decode for blobs).
+      // Without this a broken image is silent — the user just sees nothing.
+      onError={() => setErrored(true)}
+    />
+  );
 }
 
 const containerStyle: CSSProperties = {
