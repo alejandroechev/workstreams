@@ -551,6 +551,33 @@ export default function App() {
     if (params) fireCreateWorktree(wsId, params);
   }, [fireCreateWorktree]);
 
+  // Stashed worktree directory per ws id so a failed archive-removal can be
+  // retried.
+  const removeDirRef = useRef<Map<string, string>>(new Map());
+
+  /** Fire the non-blocking worktree removal for an archived workstream. */
+  const fireRemoveWorktree = useCallback((wsId: string, directory: string) => {
+    removeDirRef.current.set(wsId, directory);
+    setProvisioning((prev) => new Map(prev).set(wsId, initialArchivingState()));
+    setWorkstreams((prev) => prev.map((w) => w.id === wsId ? { ...w, status: "archiving" } : w));
+    invoke("remove_worktree", { workstreamId: wsId, directory }).catch((e) => {
+      setProvisioning((prev) => {
+        const cur = prev.get(wsId) ?? initialArchivingState();
+        return new Map(prev).set(wsId, applyWorktreeEvent(cur, {
+          workstreamId: wsId, op: "archive", phase: "remove-failed",
+          detail: typeof e === "string" ? e : String(e), status: "error",
+        }));
+      });
+      setWorkstreams((prev) => prev.map((w) => w.id === wsId ? { ...w, status: "archived" } : w));
+    });
+  }, []);
+
+  /** Retry a failed worktree removal for an archived workstream. */
+  const handleRetryRemove = useCallback((wsId: string) => {
+    const dir = removeDirRef.current.get(wsId);
+    if (dir) fireRemoveWorktree(wsId, dir);
+  }, [fireRemoveWorktree]);
+
   /** Discard a workstream whose worktree create failed (removes the record). */
   const handleDiscardWorkstream = useCallback(async (wsId: string) => {
     provisionParamsRef.current.delete(wsId);
@@ -689,8 +716,9 @@ export default function App() {
         if (next === cur) return prev;
         const map = new Map(prev);
         map.set(ev.workstreamId, next);
-        // On a terminal create state, reflect it on the workstream row.
-        if (cur.status !== next.status && (next.status === "active" || next.status === "create_failed")) {
+        // On a terminal state, reflect it on the workstream row.
+        if (cur.status !== next.status &&
+            (next.status === "active" || next.status === "create_failed" || next.status === "archived")) {
           setWorkstreams((wsPrev) => wsPrev.map((w) =>
             w.id === ev.workstreamId ? { ...w, status: next.status } : w));
           backend.updateWorkstream(ev.workstreamId, { status: next.status }).catch(() => {});
@@ -786,26 +814,26 @@ export default function App() {
       spawnedPtys.current.delete(t.id);
       await backend.closeTerminal(t.id).catch(() => {});
     }
+    const willRemove = deleteWorktree && !!ws.directory;
+    // When deleting the worktree, the row drops into the archived list in an
+    // `archiving` sub-state (spinner); the background remove flips it to
+    // `archived` (or leaves a non-intrusive warning on failure). Otherwise
+    // archive straight to `archived`.
+    const archivedStatus = willRemove ? "archiving" : "archived";
     await backend.updateWorkstream(id, { status: "archived" });
-    setWorkstreams((prev) => prev.map((w) => w.id === id ? { ...w, status: "archived" } : w));
+    setWorkstreams((prev) => prev.map((w) => w.id === id ? { ...w, status: archivedStatus } : w));
     if (activeWsId === id) {
-      const remaining = workstreams.filter((w) => w.id !== id && w.status !== "archived");
+      const remaining = workstreams.filter((w) => w.id !== id && w.status !== "archived" && w.status !== "archiving");
       setActiveWsId(remaining.length > 0 ? remaining[0].id : null);
       setTiles([]);
       setTileOrder([]);
     }
-    // Best-effort worktree removal — non-blocking. remove_worktree now runs
-    // on a background thread and reports via id-keyed worktree-progress
-    // events; the call returns instantly. Full progress/retry UX is wired in
-    // the archive-UX work. (re-validates the worktree internally.)
-    if (deleteWorktree && ws.directory) {
-      try {
-        await invoke("remove_worktree", { workstreamId: ws.id, directory: ws.directory });
-      } catch (e) {
-        console.error("Failed to start worktree removal:", e);
-      }
+    // Best-effort, non-blocking worktree removal. remove_worktree runs on a
+    // background thread and reports via id-keyed worktree-progress events.
+    if (willRemove) {
+      fireRemoveWorktree(id, ws.directory!);
     }
-  }, [workstreams, activeWsId, tiles, backend]);
+  }, [workstreams, activeWsId, tiles, backend, fireRemoveWorktree]);
 
   const handleForkWorkstream = useCallback(async (
     sourceWsId: string,
@@ -1355,6 +1383,7 @@ export default function App() {
         onSelectWorkstream={selectWorkstream}
         provisioning={provisioning}
         onRetryCreate={handleRetryCreate}
+        onRetryRemove={handleRetryRemove}
         onDiscardWorkstream={handleDiscardWorkstream}
         onCreateProject={() => setShowRepoCreate(true)}
         onImportProject={() => setShowProjectCreate(true)}

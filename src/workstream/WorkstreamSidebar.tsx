@@ -45,6 +45,8 @@ interface Props {
   provisioning?: Map<string, ProvisioningState>;
   /** Retry a failed worktree create. */
   onRetryCreate?: (id: string) => void;
+  /** Retry a failed worktree removal (archive housekeeping). */
+  onRetryRemove?: (id: string) => void;
   /** Discard a workstream whose worktree create failed (removes it). */
   onDiscardWorkstream?: (id: string) => void;
 }
@@ -130,6 +132,7 @@ export default function WorkstreamSidebar({
   onChangeWorktree,
   provisioning,
   onRetryCreate,
+  onRetryRemove,
   onDiscardWorkstream,
 }: Props) {
   const [showArchived, setShowArchived] = useState(false);
@@ -263,8 +266,10 @@ export default function WorkstreamSidebar({
   };
   const handleDragEnd = () => { setDraggedWsId(null); setDragOverWsId(null); };
 
-  const activeWorkstreams = workstreams.filter((ws) => ws.status !== "archived");
-  const archivedWorkstreams = workstreams.filter((ws) => ws.status === "archived");
+  // `archiving` rows belong in the archived section (the workstream is
+  // logically archived; only its worktree dir is still being cleaned up).
+  const activeWorkstreams = workstreams.filter((ws) => ws.status !== "archived" && ws.status !== "archiving");
+  const archivedWorkstreams = workstreams.filter((ws) => ws.status === "archived" || ws.status === "archiving");
 
   const getProject = (projectId: string | null) =>
     projectId ? projects.find((p) => p.id === projectId) : undefined;
@@ -570,40 +575,64 @@ export default function WorkstreamSidebar({
             {showArchived ? "▾" : "▸"} Archived ({archivedWorkstreams.length})
           </div>
         )}
-        {showArchived && archivedWorkstreams.map((ws) => (
+        {showArchived && archivedWorkstreams.map((ws) => {
+          const prov = provisioning?.get(ws.id);
+          const removeWarning = prov?.warning && ws.status === "archived" ? prov.warning : null;
+          return (
           <div
             key={ws.id}
             style={{
               padding: "4px 8px",
               marginBottom: 1,
               borderRadius: 4,
-              opacity: 0.5,
+              opacity: ws.status === "archiving" ? 0.7 : 0.5,
               fontSize: 11,
               color: "#585b70",
-              display: "flex",
-              justifyContent: "space-between",
-              alignItems: "center",
             }}
           >
-            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-              {ws.name}
-            </span>
-            <button
-              onClick={() => onArchiveWorkstream(ws.id)}
-              style={{
-                background: "none",
-                border: "none",
-                color: "#585b70",
-                cursor: "pointer",
-                fontSize: 10,
-                padding: "0 4px",
-              }}
-              title="Unarchive"
-            >
-              ↩
-            </button>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <span style={{ display: "flex", alignItems: "center", gap: 5, overflow: "hidden" }}>
+                {ws.status === "archiving" && (
+                  <span data-testid={`ws-archiving-${ws.id}`} style={{ display: "inline-block", color: "#89b4fa", animation: "ws-spin 0.9s linear infinite" }}>◍</span>
+                )}
+                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {ws.name}
+                </span>
+              </span>
+              {ws.status === "archived" && (
+                <button
+                  onClick={() => onArchiveWorkstream(ws.id)}
+                  style={{
+                    background: "none",
+                    border: "none",
+                    color: "#585b70",
+                    cursor: "pointer",
+                    fontSize: 10,
+                    padding: "0 4px",
+                  }}
+                  title="Unarchive"
+                >
+                  ↩
+                </button>
+              )}
+            </div>
+            {removeWarning && (
+              <div data-testid={`ws-remove-warning-${ws.id}`} style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 2 }}>
+                <span style={{ fontSize: 10, color: "#f9e2af", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={removeWarning}>
+                  ⚠ {removeWarning}
+                </span>
+                <button
+                  data-testid={`ws-retry-remove-${ws.id}`}
+                  onClick={(e) => { e.stopPropagation(); onRetryRemove?.(ws.id); }}
+                  style={{ background: "#313244", color: "#a6e3a1", border: "none", borderRadius: 3, padding: "0 8px", cursor: "pointer", fontSize: 10, flexShrink: 0 }}
+                >
+                  Retry
+                </button>
+              </div>
+            )}
           </div>
-        ))}
+          );
+        })}
       </div>
 
       {/* Divider */}
