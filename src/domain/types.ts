@@ -9,6 +9,21 @@ export interface Project {
   updated_at: string;
 }
 
+/**
+ * Workstream status. The first five are persisted user-facing states; the
+ * last three are transient provisioning states used while a worktree is being
+ * created or its directory deleted on archive (see worktree-provisioning.ts).
+ */
+export type WorkstreamStatus =
+  | 'active'
+  | 'working'
+  | 'blocked'
+  | 'in_review'
+  | 'archived'
+  | 'creating'
+  | 'create_failed'
+  | 'archiving';
+
 export interface Workstream {
   id: string;
   name: string;
@@ -16,7 +31,7 @@ export interface Workstream {
   directory: string | null;
   git_repo: string | null;
   git_branch: string | null;
-  status: 'active' | 'working' | 'blocked' | 'in_review' | 'archived';
+  status: WorkstreamStatus;
   project_id: string | null;
   workstream_type: string;
   worktree_branch: string | null;
