@@ -84,6 +84,9 @@ graph TB
     LibRS -- "emit: diff-review:chunk-active/done/drift" --> DiffReview
     LibRS -- "emit: tile-created<br/>(create_tile / create_or_focus_diff_review_tile)" --> App
     App -- "listen: tile-created<br/>route by tile.workstream_id" --> TileGrid
+    Sidebar -- "invoke: create_worktree / remove_worktree<br/>(fire-and-forget, background thread)" --> LibRS
+    LibRS -- "emit: worktree-progress<br/>{workstreamId, op, phase, status}" --> App
+    App -- "listen: worktree-progress<br/>reduce → sidebar provisioning/archiving UI" --> Sidebar
     LibRS --> DiffRunner
     DiffRunner -- "git diff / gh pr diff" --> FileSystem
 ```

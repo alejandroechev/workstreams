@@ -43,6 +43,10 @@ project-aware workspace:
   to move focus, `Alt+S` for side-by-side compare.
 - 💾 **Survives restarts** — workstreams, tile layouts, scrollback, opened
   files, view state.
+- ⚡ **Non-blocking worktree ops** — creating or archiving a workstream runs
+  its git work (pull, worktree add/remove) on a background thread, so the UI
+  never freezes. The sidebar row itself shows live provisioning / archiving
+  progress; failures surface inline with Retry / Discard.
 
 Full feature reference: [docs/features-detailed.md](docs/features-detailed.md).
 
