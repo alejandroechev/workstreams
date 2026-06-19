@@ -2,6 +2,7 @@
 import { useState, useRef, useEffect } from "react";
 import { listen } from "@tauri-apps/api/event";
 import type { Project, Workstream } from "../domain/types";
+import type { ProvisioningState } from "../domain/worktree-provisioning";
 import {
   BellAlertIcon,
   EllipsisHorizontalIcon,
@@ -40,6 +41,12 @@ interface Props {
   onChangeStatus: (id: string, status: Workstream['status']) => void;
   onForkWorkstream?: (id: string) => void;
   onChangeWorktree?: (ws: Workstream) => void;
+  /** Per-workstream worktree provisioning state (create/archive progress). */
+  provisioning?: Map<string, ProvisioningState>;
+  /** Retry a failed worktree create. */
+  onRetryCreate?: (id: string) => void;
+  /** Discard a workstream whose worktree create failed (removes it). */
+  onDiscardWorkstream?: (id: string) => void;
 }
 
 // Activity slot in the sidebar row. Replaces the previous status icon +
@@ -121,6 +128,9 @@ export default function WorkstreamSidebar({
   onChangeStatus,
   onForkWorkstream,
   onChangeWorktree,
+  provisioning,
+  onRetryCreate,
+  onDiscardWorkstream,
 }: Props) {
   const [showArchived, setShowArchived] = useState(false);
   const [renamingWsId, setRenamingWsId] = useState<string | null>(null);
@@ -425,6 +435,43 @@ export default function WorkstreamSidebar({
                   </button>
                 )}
               </div>
+
+              {/* Worktree provisioning indicator (create) */}
+              {ws.status === "creating" && (
+                <div
+                  data-testid={`ws-provisioning-${ws.id}`}
+                  style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 3, fontSize: 10, color: "#89b4fa" }}
+                >
+                  <span style={{ display: "inline-block", animation: "ws-spin 0.9s linear infinite" }}>◍</span>
+                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {provisioning?.get(ws.id)?.phase ?? "Provisioning worktree…"}
+                  </span>
+                </div>
+              )}
+              {ws.status === "create_failed" && (
+                <div data-testid={`ws-create-failed-${ws.id}`} style={{ marginTop: 3 }}>
+                  <div style={{ fontSize: 10, color: "#f38ba8", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                    title={provisioning?.get(ws.id)?.error ?? "Worktree creation failed"}>
+                    ⚠ {provisioning?.get(ws.id)?.error ?? "Worktree creation failed"}
+                  </div>
+                  <div style={{ display: "flex", gap: 6, marginTop: 2 }}>
+                    <button
+                      data-testid={`ws-retry-create-${ws.id}`}
+                      onClick={(e) => { e.stopPropagation(); onRetryCreate?.(ws.id); }}
+                      style={{ background: "#313244", color: "#a6e3a1", border: "none", borderRadius: 3, padding: "1px 8px", cursor: "pointer", fontSize: 10 }}
+                    >
+                      Retry
+                    </button>
+                    <button
+                      data-testid={`ws-discard-create-${ws.id}`}
+                      onClick={(e) => { e.stopPropagation(); onDiscardWorkstream?.(ws.id); }}
+                      style={{ background: "#313244", color: "#f38ba8", border: "none", borderRadius: 3, padding: "1px 8px", cursor: "pointer", fontSize: 10 }}
+                    >
+                      Discard
+                    </button>
+                  </div>
+                </div>
+              )}
 
               {/* Action menu */}
               {actionMenuWsId === ws.id && (

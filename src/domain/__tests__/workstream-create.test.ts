@@ -15,7 +15,7 @@
  * does next (spawn vs picker). We cover that branch via the unit tests on
  * `WorkstreamCreateForm` and through behavior assertions on the tile config.
  */
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect } from "vitest";
 import { MemoryBackend } from "../../backend/memory-backend";
 import { createWorkstreamFlow } from "../workstream-create";
 
@@ -26,10 +26,6 @@ const baseInput = {
   worktreeBranch: undefined as string | undefined,
   baseBranch: undefined as string | undefined,
 };
-
-const noWorktree = vi.fn(async () => {
-  throw new Error("create_worktree should not be called for this type");
-});
 
 describe("createWorkstreamFlow", () => {
   it.each([
@@ -42,7 +38,6 @@ describe("createWorkstreamFlow", () => {
     const result = await createWorkstreamFlow(
       backend,
       { ...baseInput, workstreamType: repoType, sessionChoice },
-      noWorktree,
     );
     expect(result.workstream.name).toBe("Feature X");
     expect(result.workstream.workstream_type).toBe(repoType);
@@ -56,41 +51,39 @@ describe("createWorkstreamFlow", () => {
     expect(JSON.parse(layout!.tile_order_json)).toEqual([result.pinnedTile.id]);
   });
 
-  it("calls create_worktree and uses returned directory for workstream_type=worktree", async () => {
+  it("creates a worktree WS at the pre-derived directory in a 'creating' state", async () => {
     const backend = new MemoryBackend();
-    const createWorktree = vi.fn(async () => "C:\\repo-worktrees\\feature-x");
     const result = await createWorkstreamFlow(
       backend,
-      { ...baseInput, workstreamType: "worktree", worktreeBranch: "alejandroe/feature-x", sessionChoice: "new" },
-      createWorktree,
+      {
+        ...baseInput,
+        workstreamType: "worktree",
+        worktreeBranch: "alejandroe/feature-x",
+        effectiveDirectory: "C:\\repo-worktrees\\feature-x",
+        initialStatus: "creating",
+        sessionChoice: "new",
+      },
     );
-    expect(createWorktree).toHaveBeenCalledWith("C:\\repo", "alejandroe/feature-x", null, false);
+    // The flow no longer creates the worktree itself (that runs non-blocking
+    // afterwards); it records the ws with the pre-derived directory + status.
     expect(result.effectiveDirectory).toBe("C:\\repo-worktrees\\feature-x");
     expect(result.workstream.directory).toBe("C:\\repo-worktrees\\feature-x");
+    expect(result.workstream.status).toBe("creating");
     const cfg = JSON.parse(result.pinnedTile.config_json);
     expect(cfg.cwd).toBe("C:\\repo-worktrees\\feature-x");
+    // Persisted status is creating.
+    const stored = (await backend.listWorkstreams()).find((w) => w.id === result.workstream.id);
+    expect(stored?.status).toBe("creating");
   });
 
-  it("forwards baseBranch when provided for worktree creation", async () => {
+  it("defaults effectiveDirectory to directory and status to active", async () => {
     const backend = new MemoryBackend();
-    const createWorktree = vi.fn(async () => "C:\\repo-worktrees\\f");
-    await createWorkstreamFlow(
+    const result = await createWorkstreamFlow(
       backend,
-      { ...baseInput, workstreamType: "worktree", worktreeBranch: "f", baseBranch: "main", sessionChoice: "new" },
-      createWorktree,
+      { ...baseInput, workstreamType: "base_repo", sessionChoice: "new" },
     );
-    expect(createWorktree).toHaveBeenCalledWith("C:\\repo", "f", "main", false);
-  });
-
-  it("forwards pullBaseFirst=true when the user opts in", async () => {
-    const backend = new MemoryBackend();
-    const createWorktree = vi.fn(async () => "C:\\repo-worktrees\\f");
-    await createWorkstreamFlow(
-      backend,
-      { ...baseInput, workstreamType: "worktree", worktreeBranch: "f", baseBranch: "main", pullBaseFirst: true, sessionChoice: "new" },
-      createWorktree,
-    );
-    expect(createWorktree).toHaveBeenCalledWith("C:\\repo", "f", "main", true);
+    expect(result.effectiveDirectory).toBe("C:\\repo");
+    expect(result.workstream.status).toBe("active");
   });
 
   it("throws if worktree branch is missing for workstream_type=worktree", async () => {
@@ -99,22 +92,7 @@ describe("createWorkstreamFlow", () => {
       createWorkstreamFlow(
         backend,
         { ...baseInput, workstreamType: "worktree", sessionChoice: "new" },
-        noWorktree,
       ),
     ).rejects.toThrow(/worktreeBranch is required/);
-  });
-
-  it("propagates create_worktree failures (does not create a WS)", async () => {
-    const backend = new MemoryBackend();
-    const createWorktree = vi.fn(async () => { throw new Error("git worktree add failed: branch exists"); });
-    await expect(
-      createWorkstreamFlow(
-        backend,
-        { ...baseInput, workstreamType: "worktree", worktreeBranch: "f", sessionChoice: "new" },
-        createWorktree,
-      ),
-    ).rejects.toThrow(/git worktree add failed/);
-    const list = await backend.listWorkstreams();
-    expect(list).toHaveLength(0);
   });
 });

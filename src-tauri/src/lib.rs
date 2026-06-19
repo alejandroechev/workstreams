@@ -447,8 +447,14 @@ fn change_workstream_worktree(
             } else {
                 return Err("workstream is not in a git repo, cannot create worktree".into());
             };
-            let created_dir =
-                create_worktree(app, repo_root, branch.clone(), folder_name, pull_base_first)?;
+            let created_dir = create_worktree_inner(
+                &app,
+                &ws_id,
+                &repo_root,
+                &branch,
+                folder_name.as_deref(),
+                pull_base_first.unwrap_or(false),
+            )?;
             (created_dir, Some(branch))
         }
         _ => return Err(format!("Unknown worktree change mode: {mode}")),
@@ -1622,50 +1628,52 @@ fn derive_worktree_path(
     })
 }
 
-#[tauri::command]
-fn create_worktree(
-    app: AppHandle,
-    project_directory: String,
-    branch_name: String,
-    base_branch: Option<String>,
-    pull_base_first: Option<bool>,
+/// Synchronous worktree-creation work (optional base fast-forward, then
+/// `git worktree add`), emitting id-keyed `worktree-progress` running events.
+/// Returns the created worktree path. Extracted so the non-blocking command
+/// and any future reconciliation share one implementation.
+fn create_worktree_inner(
+    app: &AppHandle,
+    workstream_id: &str,
+    project_directory: &str,
+    branch_name: &str,
+    base_branch: Option<&str>,
+    pull_base_first: bool,
 ) -> Result<String, String> {
-    let emit_step = |step: &str, detail: &str| {
+    let emit = |phase: &str, detail: &str, status: &str| {
         let _ = app.emit(
             "worktree-progress",
-            serde_json::json!({ "step": step, "detail": detail }),
+            serde_json::json!({
+                "workstreamId": workstream_id,
+                "op": "create",
+                "phase": phase,
+                "detail": detail,
+                "status": status,
+            }),
         );
     };
-    emit_step("resolving", "Resolving repository root");
+    emit("resolving", "Resolving repository root", "running");
 
-    // Determine worktree path: sibling of existing worktrees
-    let project_dir = std::path::Path::new(&project_directory);
-
-    // Use the parent directory of the project to place the new worktree alongside
+    let project_dir = std::path::Path::new(project_directory);
     let parent = project_dir
         .parent()
         .ok_or("Cannot determine parent directory")?;
 
-    // Find the git root (for running worktree commands)
     let git_root_output = git_cmd()
         .args(["rev-parse", "--show-toplevel"])
-        .current_dir(&project_directory)
+        .current_dir(project_directory)
         .output()
         .map_err(|e| format!("git rev-parse failed: {e}"))?;
-
     let git_root = if git_root_output.status.success() {
         String::from_utf8_lossy(&git_root_output.stdout)
             .trim()
             .to_string()
     } else {
-        project_directory.clone()
+        project_directory.to_string()
     };
 
-    // Derive the base repo name (canonical, even when project_directory is
-    // itself a worktree) and prefix it onto the folder so sibling worktree
-    // dirs are unambiguous: `<repo>-<branch-suffix>`.
     let base_repo_name = canonical_repo_name(&git_root, project_dir);
-    let folder_name = derive_worktree_folder_name(base_repo_name.as_deref(), &branch_name);
+    let folder_name = derive_worktree_folder_name(base_repo_name.as_deref(), branch_name);
     let worktree_path = parent.join(&folder_name);
 
     if worktree_path.exists() {
@@ -1675,44 +1683,47 @@ fn create_worktree(
         ));
     }
 
-    // Optionally fast-forward the local base branch to its remote tip
-    // before creating the worktree, so the new branch starts from latest.
-    // Failures here are non-fatal: we log a warning to stderr but still
-    // proceed so a missing/offline remote doesn't block the workstream.
-    if pull_base_first.unwrap_or(false) {
+    // Optional fast-forward of the local base branch. Non-fatal: a missing /
+    // offline remote logs a warning and proceeds from the local base.
+    if pull_base_first {
         let effective_base = base_branch
-            .clone()
+            .map(|s| s.to_string())
             .or_else(|| detect_default_remote_branch(&git_root))
             .or_else(|| detect_local_default_branch(&git_root));
         if let Some(base) = effective_base {
-            emit_step(
+            emit(
                 "pulling-base",
                 &format!("Pulling latest {base} from origin"),
+                "running",
             );
             if let Err(e) = fetch_and_fast_forward_local_branch(&git_root, &base) {
                 eprintln!("[create_worktree] base pull skipped: {e}");
-                emit_step("pull-skipped", &e);
+                emit("pull-skipped", &e, "running");
             } else {
-                emit_step("pulled-base", &format!("Local {base} now at origin tip"));
+                emit(
+                    "pulled-base",
+                    &format!("Local {base} now at origin tip"),
+                    "running",
+                );
             }
         }
     }
 
-    emit_step(
+    emit(
         "creating",
         &format!("git worktree add → {}", worktree_path.display()),
+        "running",
     );
 
-    // Build worktree add command
     let mut args = vec![
         "worktree".to_string(),
         "add".to_string(),
         worktree_path.to_string_lossy().to_string(),
         "-b".to_string(),
-        branch_name.clone(),
+        branch_name.to_string(),
     ];
-    if let Some(base) = &base_branch {
-        args.push(base.clone());
+    if let Some(base) = base_branch {
+        args.push(base.to_string());
     }
 
     let output = git_cmd()
@@ -1720,14 +1731,57 @@ fn create_worktree(
         .current_dir(&git_root)
         .output()
         .map_err(|e| format!("git worktree add failed: {e}"))?;
-
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("git worktree add failed: {stderr}"));
+        return Err(format!(
+            "git worktree add failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
     }
 
-    emit_step("created", &worktree_path.to_string_lossy());
     Ok(worktree_path.to_string_lossy().to_string())
+}
+
+/// Creates a git worktree. **Non-blocking**: returns immediately and runs the
+/// fetch + `git worktree add` on a background thread, emitting id-keyed
+/// `worktree-progress` events ending in a terminal `created` (done) or
+/// `create-failed` (error). The caller derives the path up front (via
+/// `derive_worktree_path`) and creates the workstream record in a `creating`
+/// state before invoking this.
+#[tauri::command]
+fn create_worktree(
+    app: AppHandle,
+    workstream_id: String,
+    project_directory: String,
+    branch_name: String,
+    base_branch: Option<String>,
+    pull_base_first: Option<bool>,
+) -> Result<(), String> {
+    std::thread::spawn(move || {
+        let emit = |phase: &str, detail: &str, status: &str| {
+            let _ = app.emit(
+                "worktree-progress",
+                serde_json::json!({
+                    "workstreamId": workstream_id,
+                    "op": "create",
+                    "phase": phase,
+                    "detail": detail,
+                    "status": status,
+                }),
+            );
+        };
+        match create_worktree_inner(
+            &app,
+            &workstream_id,
+            &project_directory,
+            &branch_name,
+            base_branch.as_deref(),
+            pull_base_first.unwrap_or(false),
+        ) {
+            Ok(path) => emit("created", &path, "done"),
+            Err(e) => emit("create-failed", &e, "error"),
+        }
+    });
+    Ok(())
 }
 
 /// Synchronous worktree removal — the actual `git worktree remove --force`

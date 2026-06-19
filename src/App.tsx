@@ -25,6 +25,13 @@ import { deriveLinkedSessionIds } from "./domain/linked-sessions";
 import { parseKeyAction } from "./domain/keyboard";
 import { createTerminalConfig, createCopilotSessionConfig } from "./domain/tile-config";
 import { createWorkstreamFlow } from "./domain/workstream-create";
+import {
+  applyWorktreeEvent,
+  initialCreatingState,
+  initialArchivingState,
+  type ProvisioningState,
+  type WorktreeProgressEvent,
+} from "./domain/worktree-provisioning";
 import { workbenchStore } from "./domain/workbench-store-instance";
 import { setWorkbenchStoreForDispatcher } from "./domain/workbench-events";
 import { useBackend } from "./backend/context";
@@ -221,6 +228,9 @@ export default function App() {
   /** Lifts the global blocking overlay during long-running git ops
    *  (create worktree, optional base pull). null = idle. */
   const [worktreeOverlay, setWorktreeOverlay] = useState<{ title: string } | null>(null);
+  /** Per-workstream worktree provisioning state (create/archive), keyed by ws
+   *  id, driven by id-keyed `worktree-progress` events through the reducer. */
+  const [provisioning, setProvisioning] = useState<Map<string, ProvisioningState>>(new Map());
   const [showSettings, setShowSettings] = useState(false);
   const [showDiffReviewPicker, setShowDiffReviewPicker] = useState(false);
   const [diffReviewPickerReviews, setDiffReviewPickerReviews] = useState<DiffReview[]>([]);
@@ -465,9 +475,13 @@ export default function App() {
 
   const selectWorkstream = useCallback((id: string) => {
     if (id === activeWsId) return;
+    // A worktree still provisioning (or failed to provision) has no working
+    // directory yet — its row is a no-op until it becomes ready.
+    const target = workstreams.find((w) => w.id === id);
+    if (target && (target.status === "creating" || target.status === "create_failed")) return;
     if (!confirmDiscardDirtyFileBuffers("switch workstreams")) return;
     setActiveWsId(id);
-  }, [activeWsId, confirmDiscardDirtyFileBuffers]);
+  }, [activeWsId, workstreams, confirmDiscardDirtyFileBuffers]);
 
   // Workstream commands stored per-workstream for terminal spawning
   const wsCommands = useRef<Map<string, string>>(new Map());
@@ -496,16 +510,91 @@ export default function App() {
   };
   const [pendingCreate, setPendingCreate] = useState<PendingCreate | null>(null);
 
+  // Stashed provisioning params per ws id so a failed create can be retried
+  // without re-entering the form.
+  const provisionParamsRef = useRef<Map<string, {
+    projectDirectory: string; branchName: string; baseBranch: string | null; pullBaseFirst: boolean;
+  }>>(new Map());
+
+  // Fire the non-blocking worktree provisioning for a workstream that already
+  // exists in `creating` state. Seeds provisioning state and flips the row to
+  // create_failed if the command can't even start. Shared by create / fork /
+  // retry.
+  const fireCreateWorktree = useCallback((
+    wsId: string,
+    params: { projectDirectory: string; branchName: string; baseBranch: string | null; pullBaseFirst: boolean },
+  ) => {
+    provisionParamsRef.current.set(wsId, params);
+    setProvisioning((prev) => new Map(prev).set(wsId, initialCreatingState()));
+    setWorkstreams((prev) => prev.map((w) => w.id === wsId ? { ...w, status: "creating" } : w));
+    invoke("create_worktree", {
+      workstreamId: wsId,
+      projectDirectory: params.projectDirectory,
+      branchName: params.branchName,
+      baseBranch: params.baseBranch,
+      pullBaseFirst: params.pullBaseFirst,
+    }).catch((e) => {
+      setProvisioning((prev) => {
+        const cur = prev.get(wsId) ?? initialCreatingState();
+        return new Map(prev).set(wsId, applyWorktreeEvent(cur, {
+          workstreamId: wsId, op: "create", phase: "create-failed",
+          detail: typeof e === "string" ? e : String(e), status: "error",
+        }));
+      });
+      setWorkstreams((prev) => prev.map((w) => w.id === wsId ? { ...w, status: "create_failed" } : w));
+    });
+  }, []);
+
+  /** Retry a failed worktree create using the stashed params. */
+  const handleRetryCreate = useCallback((wsId: string) => {
+    const params = provisionParamsRef.current.get(wsId);
+    if (params) fireCreateWorktree(wsId, params);
+  }, [fireCreateWorktree]);
+
+  /** Discard a workstream whose worktree create failed (removes the record). */
+  const handleDiscardWorkstream = useCallback(async (wsId: string) => {
+    provisionParamsRef.current.delete(wsId);
+    setProvisioning((prev) => { const m = new Map(prev); m.delete(wsId); return m; });
+    setWorkstreams((prev) => prev.filter((w) => w.id !== wsId));
+    await backend.deleteWorkstream(wsId).catch(() => {});
+  }, [backend]);
+
+
   const doCreateWorkstream = useCallback(async (
     payload: PendingCreate,
     presetSessionId: string | null,
-  ): Promise<{ ws: Workstream; tile: Tile; effectiveDirectory: string } | null> => {
+  ): Promise<{ ws: Workstream; tile: Tile; effectiveDirectory: string; pendingProvision: boolean } | null> => {
     const needsWorktree = payload.workstreamType === "worktree";
+
+    // For worktree creation, derive the final directory up front (fast: one
+    // local `git rev-parse`, no fetch) so the workstream record can be created
+    // immediately in a `creating` state. The slow `git worktree add` then runs
+    // non-blocking in the background.
+    let effectiveDirectory = payload.directory;
+    if (needsWorktree) {
+      if (!payload.worktreeBranch) {
+        alert("A branch name is required to create a worktree workstream.");
+        return null;
+      }
+      try {
+        const derived = await invoke<{ path: string; exists: boolean }>("derive_worktree_path", {
+          projectDirectory: payload.directory,
+          branchName: payload.worktreeBranch,
+        });
+        if (derived.exists) {
+          alert(`Cannot create worktree: a directory already exists at\n${derived.path}`);
+          return null;
+        }
+        effectiveDirectory = derived.path;
+      } catch (e) {
+        const msg = typeof e === "string" ? e : (e as Error)?.message || String(e);
+        alert(`Failed to prepare worktree: ${msg}`);
+        return null;
+      }
+    }
+
     let result;
     try {
-      if (needsWorktree) {
-        setWorktreeOverlay({ title: `Creating workstream "${payload.name}"…` });
-      }
       result = await createWorkstreamFlow(
         backend,
         {
@@ -517,20 +606,17 @@ export default function App() {
           baseBranch: payload.baseBranch,
           sessionChoice: presetSessionId ? "existing" : "new",
           pullBaseFirst: payload.pullBaseFirst,
+          effectiveDirectory,
+          initialStatus: needsWorktree ? "creating" : "active",
         },
-        (projectDirectory, branchName, baseBranch, pullBaseFirst) =>
-          invoke<string>("create_worktree", { projectDirectory, branchName, baseBranch, pullBaseFirst }),
       );
     } catch (e) {
-      setWorktreeOverlay(null);
       const msg = typeof e === "string" ? e : (e as Error)?.message || String(e);
       alert(`Failed to create workstream: ${msg}`);
       return null;
-    } finally {
-      if (needsWorktree) setWorktreeOverlay(null);
     }
 
-    const { workstream: ws, pinnedTile: tile, effectiveDirectory } = result;
+    const { workstream: ws, pinnedTile: tile } = result;
 
     // If a session was pre-selected, bake its id into the tile config now so
     // the tile mounts already linked and the poller takes the fast path.
@@ -546,31 +632,73 @@ export default function App() {
       } catch { /* ignore */ }
     }
 
-    try {
-      const { repo, branch } = await backend.detectGitInfo(effectiveDirectory);
-      if (repo || branch) {
-        await backend.updateWorkstream(ws.id, {});
-        ws.git_repo = repo;
-        ws.git_branch = branch;
-      }
-    } catch { /* ignore */ }
+    // Detect git info only when the directory exists already (non-worktree);
+    // for a pending worktree the dir doesn't exist yet — it's filled on done.
+    if (!needsWorktree) {
+      try {
+        const { repo, branch } = await backend.detectGitInfo(effectiveDirectory);
+        if (repo || branch) {
+          await backend.updateWorkstream(ws.id, {});
+          ws.git_repo = repo;
+          ws.git_branch = branch;
+        }
+      } catch { /* ignore */ }
+    }
 
     setWorkstreams((prev) => {
       const next = [ws, ...prev];
-      // Persist the new order so reopen places the new WS first (matches
-      // the visible position right after creation). Without this the
-      // saved workstream_order (only updated on drag-reorder) doesn't
-      // include the new id, and the load effect appends it to the end.
       invoke("set_setting", {
         key: "workstream_order",
         value: JSON.stringify(next.map((w) => w.id)),
       }).catch(() => {});
       return next;
     });
+
+    if (needsWorktree) {
+      // Seed provisioning state and kick off the non-blocking worktree add.
+      // Do NOT auto-select or spawn — the row stays in `creating` until the
+      // background thread emits a terminal event (handled by the global
+      // worktree-progress listener).
+      fireCreateWorktree(ws.id, {
+        projectDirectory: payload.directory,
+        branchName: payload.worktreeBranch!,
+        baseBranch: payload.baseBranch ?? null,
+        pullBaseFirst: payload.pullBaseFirst ?? false,
+      });
+      return { ws, tile, effectiveDirectory, pendingProvision: true };
+    }
+
     setActiveWsId(ws.id);
     setTiles([tile]);
     setTileOrder([tile.id]);
-    return { ws, tile, effectiveDirectory };
+    return { ws, tile, effectiveDirectory, pendingProvision: false };
+  }, [backend, fireCreateWorktree]);
+
+  // Global listener for id-keyed worktree provisioning progress. Routes each
+  // event through the pure reducer to update the per-ws provisioning state,
+  // and on a terminal state flips the workstream row's status (creating →
+  // active / create_failed; archiving → archived) and persists it.
+  useEffect(() => {
+    const unlisten = listen<WorktreeProgressEvent>("worktree-progress", (event) => {
+      const ev = event.payload;
+      if (!ev || !ev.workstreamId) return;
+      setProvisioning((prev) => {
+        const cur = prev.get(ev.workstreamId)
+          ?? (ev.op === "archive" ? initialArchivingState() : initialCreatingState());
+        const next = applyWorktreeEvent(cur, ev);
+        if (next === cur) return prev;
+        const map = new Map(prev);
+        map.set(ev.workstreamId, next);
+        // On a terminal create state, reflect it on the workstream row.
+        if (cur.status !== next.status && (next.status === "active" || next.status === "create_failed")) {
+          setWorkstreams((wsPrev) => wsPrev.map((w) =>
+            w.id === ev.workstreamId ? { ...w, status: next.status } : w));
+          backend.updateWorkstream(ev.workstreamId, { status: next.status }).catch(() => {});
+        }
+        return map;
+      });
+    });
+    return () => { unlisten.then((f) => f()).catch(() => {}); };
   }, [backend]);
 
   const handleCreateWorkstream = useCallback(async (
@@ -601,6 +729,9 @@ export default function App() {
     setShowWsCreate({ show: false });
     const created = await doCreateWorkstream(payload, null);
     if (!created) return;
+    // A pending worktree provisions in the background and is not selected; its
+    // session spawns when the user opens the ready workstream. Skip immediate spawn.
+    if (created.pendingProvision) return;
 
     // New session — spawn agency.exe and register PID correlation with the poller.
     spawnedPtys.current.add(created.tile.id);
@@ -694,30 +825,33 @@ export default function App() {
       } catch { /* ignore */ }
     }
 
-    // Create the git worktree
+    // Derive the worktree path up front (fast), then create the forked
+    // workstream record in a `creating` state and provision in the background.
+    if (!sourceWs.directory) return;
     let newDir: string;
-    setWorktreeOverlay({ title: `Forking workstream into "${opts.name}"…` });
     try {
-      newDir = await invoke<string>("create_worktree", {
+      const derived = await invoke<{ path: string; exists: boolean }>("derive_worktree_path", {
         projectDirectory: sourceWs.directory,
         branchName: opts.branchName,
-        baseBranch: opts.baseBranch,
-        pullBaseFirst: false,
       });
+      if (derived.exists) {
+        alert(`Cannot fork: a directory already exists at\n${derived.path}`);
+        return;
+      }
+      newDir = derived.path;
     } catch (e) {
-      console.error("Failed to create worktree:", e);
-      setWorktreeOverlay(null);
+      console.error("Failed to prepare fork worktree:", e);
       return;
-    } finally {
-      setWorktreeOverlay(null);
     }
 
-    // Create new workstream
+    // Create new workstream record (creating) at the derived directory.
     const newWs = await backend.createWorkstream(opts.name, newDir, {
       projectId: sourceWs.project_id || undefined,
       workstreamType: "worktree",
       worktreeBranch: opts.branchName,
     });
+    await backend.updateWorkstream(newWs.id, { status: "creating" });
+    newWs.status = "creating";
 
     // Create copilot_session tile with the same session ID (resume)
     const config = JSON.stringify({
@@ -729,8 +863,8 @@ export default function App() {
       is_resumed: !!sessionId,
       created_at: new Date().toISOString(),
     });
-    const tile = await backend.createTile(newWs.id, "copilot_session", opts.name, config);
-    await backend.updateLayout(newWs.id, { tile_order_json: JSON.stringify([tile.id]) });
+    await backend.createTile(newWs.id, "copilot_session", opts.name, config);
+    await backend.updateLayout(newWs.id, { tile_order_json: JSON.stringify([(await backend.listTiles(newWs.id))[0]?.id]) });
 
     // Optionally archive old workstream
     if (opts.archiveOld) {
@@ -742,7 +876,8 @@ export default function App() {
       setWorkstreams((prev) => prev.map((w) => w.id === sourceWsId ? { ...w, status: "archived" } : w));
     }
 
-    // Switch to new workstream
+    // Insert the forked ws in the sidebar (creating). Do NOT auto-select or
+    // spawn — it provisions in the background like a normal worktree create.
     setWorkstreams((prev) => {
       const next = [newWs, ...prev];
       invoke("set_setting", {
@@ -751,17 +886,14 @@ export default function App() {
       }).catch(() => {});
       return next;
     });
-    setActiveWsId(newWs.id);
-    setTiles([tile]);
-    setTileOrder([tile.id]);
     setShowForkWs({ show: false });
-
-    // Spawn agency.exe with --resume
-    spawnedPtys.current.add(tile.id);
-    backend.spawnCopilotSession(tile.id, newDir, sessionId, 30, 120, getAppSettings().copilotCommand).catch(() => {
-      spawnedPtys.current.delete(tile.id);
+    fireCreateWorktree(newWs.id, {
+      projectDirectory: sourceWs.directory,
+      branchName: opts.branchName,
+      baseBranch: opts.baseBranch ?? null,
+      pullBaseFirst: false,
     });
-  }, [workstreams, backend]);
+  }, [workstreams, backend, fireCreateWorktree]);
 
   const handleChangeWorktreeSubmit = useCallback(async (
     mode: "switch_existing" | "create_new",
@@ -1221,6 +1353,9 @@ export default function App() {
         sessionInfoByWs={sessionInfoByWs}
         loadedWsIds={loadedWsIds}
         onSelectWorkstream={selectWorkstream}
+        provisioning={provisioning}
+        onRetryCreate={handleRetryCreate}
+        onDiscardWorkstream={handleDiscardWorkstream}
         onCreateProject={() => setShowRepoCreate(true)}
         onImportProject={() => setShowProjectCreate(true)}
         onCreateWorkstream={(projectId) => setShowWsCreate({ show: true, projectId })}
@@ -1456,6 +1591,8 @@ export default function App() {
                 ...prev,
                 [created.ws.id]: session.summary || session.session_id.slice(0, 8),
               }));
+              // Pending worktrees provision in the background; defer spawn.
+              if (created.pendingProvision) return;
               spawnedPtys.current.add(created.tile.id);
               backend
                 .spawnCopilotSession(created.tile.id, created.effectiveDirectory, session.session_id, 30, 120, getAppSettings().copilotCommand)
@@ -1503,6 +1640,7 @@ export default function App() {
               void (async () => {
                 const created = await doCreateWorkstream(payload, null);
                 if (!created) return;
+                if (created.pendingProvision) return;
                 spawnedPtys.current.add(created.tile.id);
                 backend
                   .spawnCopilotSession(created.tile.id, created.effectiveDirectory, null, 30, 120, getAppSettings().copilotCommand)
