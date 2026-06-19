@@ -373,6 +373,40 @@ export default function App() {
         }
         setSessionInfoByWs(map);
       })();
+
+      // Reconcile transient provisioning states left over from a previous run
+      // (the app died mid-create / mid-archive). For `creating`: promote to
+      // `active` if the worktree dir is now valid, else mark `create_failed`.
+      // For `archiving`: re-attempt the background removal.
+      void (async () => {
+        for (const w of ws) {
+          if (w.status === "creating") {
+            let ready: boolean;
+            try {
+              const info = await invoke<{ is_worktree: boolean }>("detect_worktree_info", { directory: w.directory });
+              ready = !!info?.is_worktree;
+            } catch { ready = false; }
+            const newStatus = ready ? "active" : "create_failed";
+            await backend.updateWorkstream(w.id, { status: newStatus }).catch(() => {});
+            setWorkstreams((prev) => prev.map((x) => x.id === w.id ? { ...x, status: newStatus } : x));
+            if (!ready) {
+              setProvisioning((prev) => new Map(prev).set(w.id, {
+                status: "create_failed", phase: null, steps: [],
+                error: "Worktree was not created (interrupted). Discard to remove.",
+                warning: null,
+              }));
+            }
+          } else if (w.status === "archiving") {
+            if (w.directory) {
+              setProvisioning((prev) => new Map(prev).set(w.id, initialArchivingState()));
+              invoke("remove_worktree", { workstreamId: w.id, directory: w.directory }).catch(() => {});
+            } else {
+              await backend.updateWorkstream(w.id, { status: "archived" }).catch(() => {});
+              setWorkstreams((prev) => prev.map((x) => x.id === w.id ? { ...x, status: "archived" } : x));
+            }
+          }
+        }
+      })();
     });
   }, []);
 
