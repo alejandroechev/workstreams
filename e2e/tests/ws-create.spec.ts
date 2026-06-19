@@ -10,8 +10,26 @@ async function configureInvokeHandlers(page: Page) {
     const handlers: Record<string, (a: Args) => unknown> = {
       get_setting: () => null,
       set_setting: () => null,
-      create_worktree: (a: Args) =>
-        `C:\\worktrees\\${String((a.branchName as string) ?? "branch").replace(/[^a-z0-9-]/gi, "-")}`,
+      derive_worktree_path: (a: Args) => ({
+        path: `C:\\worktrees\\${String((a.branchName as string) ?? "branch").replace(/[^a-z0-9-]/gi, "-")}`,
+        exists: false,
+      }),
+      create_worktree: (a: Args) => {
+        // Simulate the background thread completing: emit a terminal event so
+        // the workstream flips creating -> active.
+        const path = `C:\\worktrees\\${String((a.branchName as string) ?? "branch").replace(/[^a-z0-9-]/gi, "-")}`;
+        const w = window as unknown as { __WS_EMIT__?: (e: string, p?: unknown) => void };
+        setTimeout(() => {
+          w.__WS_EMIT__?.("worktree-progress", {
+            workstreamId: a.workstreamId,
+            op: "create",
+            phase: "created",
+            detail: path,
+            status: "done",
+          });
+        }, 0);
+        return null;
+      },
       detect_worktree_info: () => ({
         is_worktree: true,
         parent_repo_path: "C:\\repos\\demo",
@@ -106,19 +124,24 @@ test.describe("Workstream creation flow", () => {
     expect(branch).toBe("alejandroe/feature-c");
   });
 
-  test("new worktree submit invokes create_worktree with the derived branch", async ({ page }) => {
+  test("new worktree submit invokes create_worktree and provisions in the background", async ({ page }) => {
     await openWsCreateForm(page);
     await page.locator('[data-testid="ws-create-name"]').fill("Feature D");
     await page.locator('[data-testid="ws-create-repo-worktree"] input').click();
     await page.locator('[data-testid="ws-create-submit"]').click();
     await expect(page.locator('[data-testid="ws-create-form"]')).toHaveCount(0);
-    // The flow should have invoked create_worktree with the right args
+    // The flow should have invoked create_worktree with the right args.
     const log = await readInvokeLog(page);
     const call = log.find((e) => e.cmd === "create_worktree");
     expect(call, "create_worktree should be invoked").toBeTruthy();
     expect(call!.args.projectDirectory).toBe("C:\\repos\\demo");
     expect(call!.args.branchName).toBe("alejandroe/feature-d");
-    // Pinned tile is present with the cwd from create_worktree's return value
+    // The workstream appears in the sidebar (provisioning happens in the
+    // background; the shim emits a terminal event so it becomes selectable).
+    const item = page.locator('[data-testid="workstream-item"]', { hasText: "Feature D" });
+    await expect(item).toBeVisible();
+    // Selecting the now-ready workstream shows its pinned session tile.
+    await item.click();
     await expect(page.locator('[data-testid^="tile-pinned-"]')).toBeVisible();
   });
 
