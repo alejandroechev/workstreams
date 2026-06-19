@@ -663,16 +663,15 @@ export default function App() {
       setTiles([]);
       setTileOrder([]);
     }
-    // Best-effort worktree removal — never blocks the archive itself.
-    // The dialog only surfaces the delete option when the directory is a
-    // real worktree (detected at open time); remove_worktree re-validates
-    // and errors if not, so we don't re-check workstream_type here.
+    // Best-effort worktree removal — non-blocking. remove_worktree now runs
+    // on a background thread and reports via id-keyed worktree-progress
+    // events; the call returns instantly. Full progress/retry UX is wired in
+    // the archive-UX work. (re-validates the worktree internally.)
     if (deleteWorktree && ws.directory) {
       try {
-        await invoke("remove_worktree", { directory: ws.directory });
+        await invoke("remove_worktree", { workstreamId: ws.id, directory: ws.directory });
       } catch (e) {
-        console.error("Failed to remove worktree:", e);
-        alert(`Workstream archived, but the worktree could not be deleted:\n${typeof e === "string" ? e : (e as Error)?.message}`);
+        console.error("Failed to start worktree removal:", e);
       }
     }
   }, [workstreams, activeWsId, tiles, backend]);

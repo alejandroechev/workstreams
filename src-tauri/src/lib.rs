@@ -1730,14 +1730,12 @@ fn create_worktree(
     Ok(worktree_path.to_string_lossy().to_string())
 }
 
-/// Removes a git worktree directory (used when archiving a workstream
-/// with "delete worktree" checked). Runs `git worktree remove --force`
-/// from the parent repo so it works even when the worktree has untracked
-/// or modified files. Errors are returned but treated as non-fatal by
-/// the caller (the workstream still archives).
-#[tauri::command]
-fn remove_worktree(directory: String) -> Result<(), String> {
-    let info = detect_worktree_info(directory.clone())?;
+/// Synchronous worktree removal — the actual `git worktree remove --force`
+/// work. Extracted so both the non-blocking command and startup
+/// reconciliation can reuse it. Runs from the parent repo so it works even
+/// when the worktree has untracked / modified files.
+fn remove_worktree_inner(directory: &str) -> Result<(), String> {
+    let info = detect_worktree_info(directory.to_string())?;
     if !info.is_worktree {
         return Err(format!("Not a worktree directory: {directory}"));
     }
@@ -1745,7 +1743,7 @@ fn remove_worktree(directory: String) -> Result<(), String> {
         .parent_repo_path
         .ok_or("worktree parent repo path was not detected")?;
     let out = git_cmd()
-        .args(["worktree", "remove", "--force", &directory])
+        .args(["worktree", "remove", "--force", directory])
         .current_dir(&repo_root)
         .output()
         .map_err(|e| format!("git worktree remove failed: {e}"))?;
@@ -1755,6 +1753,36 @@ fn remove_worktree(directory: String) -> Result<(), String> {
             String::from_utf8_lossy(&out.stderr).trim()
         ));
     }
+    Ok(())
+}
+
+/// Removes a git worktree directory (used when archiving a workstream with
+/// "delete worktree" checked). **Non-blocking**: returns immediately and runs
+/// the git work on a background thread, emitting id-keyed `worktree-progress`
+/// events (`removing` → `removed` / `remove-failed`). The archive itself has
+/// already happened in the DB; this is best-effort housekeeping, so failure is
+/// surfaced as a non-fatal warning on the row (never blocks the UI).
+#[tauri::command]
+fn remove_worktree(app: AppHandle, workstream_id: String, directory: String) -> Result<(), String> {
+    std::thread::spawn(move || {
+        let emit = |phase: &str, detail: &str, status: &str| {
+            let _ = app.emit(
+                "worktree-progress",
+                serde_json::json!({
+                    "workstreamId": workstream_id,
+                    "op": "archive",
+                    "phase": phase,
+                    "detail": detail,
+                    "status": status,
+                }),
+            );
+        };
+        emit("removing", &directory, "running");
+        match remove_worktree_inner(&directory) {
+            Ok(()) => emit("removed", &directory, "done"),
+            Err(e) => emit("remove-failed", &e, "error"),
+        }
+    });
     Ok(())
 }
 
@@ -4477,6 +4505,64 @@ mod tests {
             "expected pre-commit hook to be discovered from the worktree, got: {:?}",
             hooks.iter().map(|h| &h.name).collect::<Vec<_>>()
         );
+
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn remove_worktree_inner_removes_a_linked_worktree() {
+        let base = std::env::temp_dir().join(format!("ws_rm_wt_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let main = base.join("main");
+        std::fs::create_dir_all(&main).unwrap();
+
+        let run = |args: &[&str], cwd: &std::path::Path| {
+            git_cmd()
+                .args(args)
+                .current_dir(cwd)
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false)
+        };
+
+        if !run(&["init"], &main)
+            || !run(&["config", "user.email", "t@t.t"], &main)
+            || !run(&["config", "user.name", "t"], &main)
+        {
+            std::fs::remove_dir_all(&base).ok();
+            return; // git unavailable — skip
+        }
+        std::fs::write(main.join("README.md"), b"x").unwrap();
+        run(&["add", "."], &main);
+        if !run(&["commit", "-m", "init"], &main) {
+            std::fs::remove_dir_all(&base).ok();
+            return;
+        }
+
+        let wt = base.join("wt");
+        if !run(
+            &[
+                "worktree",
+                "add",
+                "-b",
+                "feature",
+                &wt.to_string_lossy(),
+                "HEAD",
+            ],
+            &main,
+        ) {
+            std::fs::remove_dir_all(&base).ok();
+            return;
+        }
+        assert!(wt.exists());
+
+        remove_worktree_inner(&wt.to_string_lossy())
+            .expect("remove_worktree_inner should remove the worktree");
+        assert!(!wt.exists(), "worktree dir should be gone after removal");
+
+        // Removing a non-worktree directory is rejected.
+        let err = remove_worktree_inner(&main.to_string_lossy()).unwrap_err();
+        assert!(err.contains("Not a worktree"));
 
         std::fs::remove_dir_all(&base).ok();
     }
