@@ -1564,6 +1564,64 @@ fn git_branch_tracking_info(directory: String) -> Result<(u32, u32, String), Str
     let ahead: u32 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
     Ok((ahead, behind, short))
 }
+
+/// Pure folder-naming rule for worktrees, shared by `create_worktree` and
+/// `derive_worktree_path`. Mirrors `deriveWorktreeFolderName` in
+/// `src/domain/worktree-path.ts`. The branch suffix is the last
+/// `/`-separated segment; the repo name is prefixed unless the suffix
+/// already starts with `<repo>-`.
+fn derive_worktree_folder_name(base_repo_name: Option<&str>, branch_name: &str) -> String {
+    let branch_suffix = branch_name.rsplit('/').next().unwrap_or(branch_name);
+    match base_repo_name {
+        Some(repo) if !repo.is_empty() && !branch_suffix.starts_with(&format!("{repo}-")) => {
+            format!("{repo}-{branch_suffix}")
+        }
+        _ => branch_suffix.to_string(),
+    }
+}
+
+/// Fast, non-blocking derivation of the worktree directory a `create_worktree`
+/// call *would* produce, so the UI can create the workstream record with its
+/// final directory up front (before the slow fetch + `git worktree add`). Runs
+/// only a single local `git rev-parse` (microseconds, no network), then pure
+/// path math. Returns the absolute path and whether something already exists
+/// there.
+#[derive(Debug, Serialize, Deserialize)]
+struct DerivedWorktreePath {
+    path: String,
+    exists: bool,
+}
+
+#[tauri::command]
+fn derive_worktree_path(
+    project_directory: String,
+    branch_name: String,
+) -> Result<DerivedWorktreePath, String> {
+    let project_dir = std::path::Path::new(&project_directory);
+    let parent = project_dir
+        .parent()
+        .ok_or("Cannot determine parent directory")?;
+    let git_root_output = git_cmd()
+        .args(["rev-parse", "--show-toplevel"])
+        .current_dir(&project_directory)
+        .output()
+        .map_err(|e| format!("git rev-parse failed: {e}"))?;
+    let git_root = if git_root_output.status.success() {
+        String::from_utf8_lossy(&git_root_output.stdout)
+            .trim()
+            .to_string()
+    } else {
+        project_directory.clone()
+    };
+    let base_repo_name = canonical_repo_name(&git_root, project_dir);
+    let folder_name = derive_worktree_folder_name(base_repo_name.as_deref(), &branch_name);
+    let worktree_path = parent.join(&folder_name);
+    Ok(DerivedWorktreePath {
+        exists: worktree_path.exists(),
+        path: worktree_path.to_string_lossy().to_string(),
+    })
+}
+
 #[tauri::command]
 fn create_worktree(
     app: AppHandle,
@@ -1607,18 +1665,7 @@ fn create_worktree(
     // itself a worktree) and prefix it onto the folder so sibling worktree
     // dirs are unambiguous: `<repo>-<branch-suffix>`.
     let base_repo_name = canonical_repo_name(&git_root, project_dir);
-    // Derive folder name from branch: alejandroe/feature-x → feature-x
-    let branch_suffix = branch_name
-        .rsplit('/')
-        .next()
-        .unwrap_or(&branch_name)
-        .to_string();
-    let folder_name = match &base_repo_name {
-        Some(repo) if !branch_suffix.starts_with(&format!("{repo}-")) => {
-            format!("{repo}-{branch_suffix}")
-        }
-        _ => branch_suffix.clone(),
-    };
+    let folder_name = derive_worktree_folder_name(base_repo_name.as_deref(), &branch_name);
     let worktree_path = parent.join(&folder_name);
 
     if worktree_path.exists() {
@@ -4197,6 +4244,7 @@ pub fn run() {
             git_show_commit,
             git_current_branch,
             create_worktree,
+            derive_worktree_path,
             remove_worktree,
             git_list_branches,
             // Settings
@@ -4285,6 +4333,34 @@ mod tests {
     fn rewrite_tile_cwd_errors_on_malformed_json() {
         let err = rewrite_tile_cwd("{ not json", "terminal", "C:/new").unwrap_err();
         assert!(err.contains("Invalid tile config JSON"));
+    }
+
+    #[test]
+    fn derive_worktree_folder_name_rules() {
+        // Repo prefix added.
+        assert_eq!(
+            derive_worktree_folder_name(Some("workstreams"), "feature-x"),
+            "workstreams-feature-x"
+        );
+        // Only the last branch segment is used.
+        assert_eq!(
+            derive_worktree_folder_name(Some("workstreams"), "alejandroe/feature-x"),
+            "workstreams-feature-x"
+        );
+        // No double-prefix when the suffix already starts with `<repo>-`.
+        assert_eq!(
+            derive_worktree_folder_name(Some("workstreams"), "workstreams-feature-x"),
+            "workstreams-feature-x"
+        );
+        // No repo name → bare suffix.
+        assert_eq!(
+            derive_worktree_folder_name(None, "alejandroe/feature-x"),
+            "feature-x"
+        );
+        assert_eq!(
+            derive_worktree_folder_name(Some(""), "feature-x"),
+            "feature-x"
+        );
     }
 
     #[test]
