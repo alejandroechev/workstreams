@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, afterAll } from "vitest";
+import { useReducer } from "react";
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { MarkdownView } from "../MarkdownView";
 
@@ -83,6 +84,45 @@ describe("MarkdownView", () => {
       fireEvent.error(img);
       const err = getByTestId("markdown-image-error");
       expect(err.textContent).toContain("https://example.com/x.png");
+    });
+
+    it("does not remount the image (re-invoke read_file_base64) when the parent re-renders", async () => {
+      invokeMock.mockReset();
+      invokeMock.mockImplementation((cmd: string) => {
+        if (cmd === "read_file_base64") return Promise.resolve("aGVsbG8=");
+        return Promise.resolve("");
+      });
+
+      // Wrapper that can force MarkdownView to re-render with identical props,
+      // simulating a host tile that re-renders frequently. The image's async
+      // resolution must survive — otherwise ResolvedImg remounts and the load
+      // restarts forever (the flicker bug).
+      function Harness() {
+        const [, force] = useReducer((n: number) => n + 1, 0);
+        return (
+          <div>
+            <button data-testid="force" onClick={() => force()}>force</button>
+            <MarkdownView basePath="/repo/docs">{"![alt](images/01.png)"}</MarkdownView>
+          </div>
+        );
+      }
+
+      const { container, getByTestId } = render(<Harness />);
+      await waitFor(() => {
+        expect((container.querySelector("img") as HTMLImageElement).src).toBe("blob:test-img");
+      });
+      const callsAfterLoad = invokeMock.mock.calls.filter((c) => c[0] === "read_file_base64").length;
+
+      // Force several parent re-renders.
+      fireEvent.click(getByTestId("force"));
+      fireEvent.click(getByTestId("force"));
+      fireEvent.click(getByTestId("force"));
+
+      // The image must still be resolved (not reset to placeholder) and the
+      // backend must NOT have been hit again.
+      expect((container.querySelector("img") as HTMLImageElement).src).toBe("blob:test-img");
+      const callsNow = invokeMock.mock.calls.filter((c) => c[0] === "read_file_base64").length;
+      expect(callsNow).toBe(callsAfterLoad);
     });
 
     it("resolves a relative image path against basePath via read_file_base64", async () => {

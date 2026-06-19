@@ -155,7 +155,13 @@ export function MarkdownView({ children, className, style, baseFontSize, basePat
     [basePath, onLinkClick],
   );
 
-  const componentMap = {
+  // Memoize the component map so the custom `img`/`a` renderers keep stable
+  // function identities across re-renders. Without this, every host re-render
+  // hands react-markdown brand-new component functions, which React treats as
+  // new component *types* and remounts — restarting ResolvedImg's async image
+  // load (and revoking its blob) on a loop. That produced blank, flickering
+  // images that never settled.
+  const componentMap = useMemo(() => ({
     ...components,
     ...(basePath
       ? { img: (props: { src?: string; alt?: string }) => <ResolvedImg {...props} basePath={basePath} /> }
@@ -171,7 +177,7 @@ export function MarkdownView({ children, className, style, baseFontSize, basePat
         {c}
       </a>
     ),
-  };
+  }), [basePath, handleLinkClick]);
 
   // Extract a YAML-style frontmatter block (used by Copilot skill .md files,
   // Jekyll/Obsidian/MkDocs notes, etc.) and render it as a labeled metadata
