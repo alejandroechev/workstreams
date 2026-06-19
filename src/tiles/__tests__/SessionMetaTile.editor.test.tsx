@@ -157,4 +157,14 @@ describe("SessionMetaTile editable live files (State tab)", () => {
     });
     await waitFor(() => expect(screen.getByTestId("meta-file-dirty-indicator")).toHaveTextContent("*"));
   });
+
+  it("closes the open file view when switching to another tab", async () => {
+    renderTile([{ name: "app.ts", is_dir: false }]);
+    await openLiveFile("app.ts");
+    expect(await screen.findByTestId("file-editor-view")).toBeInTheDocument();
+
+    // Switch to the Config tab — the file view must be dismissed.
+    fireEvent.click(screen.getByRole("button", { name: /Config/i }));
+    await waitFor(() => expect(screen.queryByTestId("file-editor-view")).toBeNull());
+  });
 });

@@ -482,7 +482,14 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
           return (
             <button
               key={tab.id}
-              onClick={() => setActiveTab(tab.id)}
+              onClick={() => {
+                if (tab.id !== activeTab) {
+                  setViewContent(null);
+                  setEditorSnapshot(null);
+                  setEditorViewState(null);
+                }
+                setActiveTab(tab.id);
+              }}
               style={{
                 display: "flex",
                 alignItems: "center",
