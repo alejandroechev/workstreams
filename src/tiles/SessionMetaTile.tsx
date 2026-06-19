@@ -30,10 +30,8 @@ import {
   FolderIcon,
   TableCellsIcon,
   ChevronUpIcon,
-  EyeIcon,
-  PencilSquareIcon,
-  PresentationChartBarIcon,
 } from "@heroicons/react/24/outline";
+import { MarkdownModeSelector } from "../ui/components/MarkdownModeSelector";
 
 interface Props {
   tileId: string;
@@ -807,26 +805,7 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
             )}
             <div style={{ flex: 1 }} />
             {editorViewState && (
-              <button
-                data-testid="meta-md-toggle"
-                onClick={editorViewState.toggle}
-                title={editorViewState.mode === "preview" ? "Edit" : "View"}
-                style={{ background: "none", border: "none", color: "#89b4fa", cursor: "pointer", padding: "2px 4px", display: "flex", alignItems: "center" }}
-              >
-                {editorViewState.mode === "preview"
-                  ? <PencilSquareIcon style={{ width: 14, height: 14 }} />
-                  : <EyeIcon style={{ width: 14, height: 14 }} />}
-              </button>
-            )}
-            {editorViewState?.canPresent && (
-              <button
-                data-testid="meta-present-toggle"
-                onClick={editorViewState.mode === "present" ? editorViewState.exitPresent : editorViewState.enterPresent}
-                title={editorViewState.mode === "present" ? "Exit present mode (Esc)" : "Present as slides"}
-                style={{ background: editorViewState.mode === "present" ? "#313244" : "none", border: "none", color: editorViewState.mode === "present" ? "#a6e3a1" : "#89b4fa", cursor: "pointer", padding: "2px 4px", display: "flex", alignItems: "center", borderRadius: 3 }}
-              >
-                <PresentationChartBarIcon style={{ width: 14, height: 14 }} />
-              </button>
+              <MarkdownModeSelector viewState={editorViewState} testIdPrefix="meta" />
             )}
           </div>
           {viewContent.type === "unsupported" && (

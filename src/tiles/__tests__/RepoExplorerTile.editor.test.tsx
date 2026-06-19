@@ -47,6 +47,7 @@ vi.mock("../../files/FileEditorView", () => ({
           data-testid="emit-md-viewstate"
           onClick={() => props.onViewStateChange?.({
             mode: "preview",
+            setMode: () => {},
             toggle: () => {},
             canPresent: true,
             enterPresent: () => {},
@@ -61,6 +62,7 @@ vi.mock("../../files/FileEditorView", () => ({
           data-testid="emit-nonmd-viewstate"
           onClick={() => props.onViewStateChange?.({
             mode: "preview",
+            setMode: () => {},
             toggle: () => {},
             canPresent: false,
             enterPresent: () => {},

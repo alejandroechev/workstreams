@@ -27,10 +27,8 @@ import {
   FolderOpenIcon,
   MusicalNoteIcon,
   ExclamationTriangleIcon,
-  EyeIcon,
-  PencilSquareIcon,
-  PresentationChartBarIcon,
 } from "@heroicons/react/24/outline";
+import { MarkdownModeSelector } from "../ui/components/MarkdownModeSelector";
 
 interface Props {
   tileId: string;
@@ -354,43 +352,7 @@ export default function WorkbenchTile({ tileId: _tileId, isFocused, configJson, 
             {viewingPath}
           </span>
           {editorViewState && (
-            <button
-              onClick={editorViewState.toggle}
-              style={{
-                background: "none",
-                border: "none",
-                color: "#89b4fa",
-                cursor: "pointer",
-                display: "flex",
-                alignItems: "center",
-                padding: "2px 4px",
-              }}
-              title={editorViewState.mode === "preview" ? "Edit (raw source)" : "Preview (rendered)"}
-              data-testid="workbench-md-toggle"
-            >
-              {editorViewState.mode === "preview"
-                ? <PencilSquareIcon style={{ width: 14, height: 14 }} />
-                : <EyeIcon style={{ width: 14, height: 14 }} />}
-            </button>
-          )}
-          {editorViewState?.canPresent && (
-            <button
-              onClick={editorViewState.mode === "present" ? editorViewState.exitPresent : editorViewState.enterPresent}
-              style={{
-                background: editorViewState.mode === "present" ? "#313244" : "none",
-                border: "none",
-                color: editorViewState.mode === "present" ? "#a6e3a1" : "#89b4fa",
-                cursor: "pointer",
-                display: "flex",
-                alignItems: "center",
-                padding: "2px 4px",
-                borderRadius: 3,
-              }}
-              title={editorViewState.mode === "present" ? "Exit present mode (Esc)" : "Present as slides"}
-              data-testid="workbench-present-toggle"
-            >
-              <PresentationChartBarIcon style={{ width: 14, height: 14 }} />
-            </button>
+            <MarkdownModeSelector viewState={editorViewState} testIdPrefix="workbench" />
           )}
         </div>
 

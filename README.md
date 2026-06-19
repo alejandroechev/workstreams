@@ -35,9 +35,9 @@ project-aware workspace:
   detection, conflict diffs.
 - 📝 **Markdown with extras** — GFM, syntax-highlighted code, on-disk image
   references, inline Mermaid diagrams with zoom / pan, inter-file links.
-- 🖥️ **Present markdown as slides** — any `.md` has a third "Present" mode
-  (alongside preview / edit): split on `---`, navigate with arrows / Space /
-  click, fullscreen with `Alt+F`.
+- 🖥️ **Present markdown as slides** — any `.md` has a third "Slides" mode,
+  picked from a three-way Edit / Preview / Slides selector: split on `---`,
+  navigate with arrows / Space / click, fullscreen with `Alt+F`.
 - 💬 **Inline file comments** — Per-workstream comments anchored to line
   ranges; persisted in SQLite.
 - ⌨️ **Keyboard-driven** — `Alt+<letter>` for every tile type, `Alt+Arrows`
@@ -106,9 +106,9 @@ All app-level commands use **Alt** to avoid conflicts with terminal
 Any markdown file opened in Repo Explorer, Workbench, or Session Meta can be
 presented as a slide deck:
 
-- Click the **Present** button (📊) in the file toolbar — next to the
-  preview / edit toggle (markdown only). `Ctrl+Shift+V` still flips
-  preview ⇄ edit.
+- Use the three-way **mode selector** (Edit / Preview / Slides) in the file
+  toolbar to jump straight to any mode in one click (the Slides segment shows
+  for markdown only). `Ctrl+Shift+V` still flips preview ⇄ edit.
 - Slides are split on `---` thematic breaks. A leading YAML frontmatter block
   is treated as deck config (e.g. `fontScale: 1.5`), not a slide.
 - Navigate with `→` / `Space` / `PageDown` (next), `←` / `PageUp` (prev),

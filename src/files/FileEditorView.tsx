@@ -33,16 +33,18 @@ import { getAppSettings, subscribeAppSettings } from "../domain/app-settings";
 const MAX_INLINE_EDIT_SIZE_BYTES = 1024 * 1024;
 const confirmedDangerousWarningKeys = new Set<string>();
 
-type ViewMode = "preview" | "edit" | "present";
+export type ViewMode = "preview" | "edit" | "present";
 
 /**
  * View-state descriptor emitted to host tiles so they can render an external
- * toolbar with a preview/edit toggle and a Present button. Shared so the
- * three markdown-hosting tiles (Repo Explorer, Workbench, Session Meta) all
- * type their `editorViewState` identically.
+ * toolbar with a three-way mode selector (Edit / Preview / Slides). Shared so
+ * the three markdown-hosting tiles (Repo Explorer, Workbench, Session Meta)
+ * all type their `editorViewState` identically.
  */
 export interface MarkdownViewState {
   mode: ViewMode;
+  /** Jump directly to a specific mode. `present` is ignored unless canPresent. */
+  setMode: (mode: ViewMode) => void;
   /** Swap preview⇄edit (from present, returns to preview). */
   toggle: () => void;
   /** True for markdown files (present is markdown-only). */
@@ -397,6 +399,10 @@ export function FileEditorView({
     }
     onViewStateChange({
       mode: effectiveMode,
+      setMode: (mode: ViewMode) => {
+        if (mode === "present" && !isMd) return;
+        setModeState({ inputPath: path, mode });
+      },
       toggle: () => setModeState({
         inputPath: path,
         // From present, the preview/edit toggle returns to preview.

@@ -3,6 +3,7 @@ import { useState, useEffect, useCallback, useRef, type CSSProperties } from "re
 import Editor, { DiffEditor } from "@monaco-editor/react";
 import { MarkdownView } from "../ui/MarkdownView";
 import { FileEditorView, type MarkdownViewState } from "../files/FileEditorView";
+import { MarkdownModeSelector } from "../ui/components/MarkdownModeSelector";
 import type { BufferSnapshot } from "../files/FileBufferRegistry";
 import AudioPlayer from "./AudioPlayer";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -24,9 +25,7 @@ import {
   ClockIcon,
   BoltIcon,
   MusicalNoteIcon,
-  EyeIcon,
   PencilSquareIcon,
-  PresentationChartBarIcon,
   ChatBubbleLeftRightIcon,
   TableCellsIcon,
   CheckIcon,
@@ -1205,26 +1204,7 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
           </span>
         </div>
         {editorViewState && (
-          <button
-            onClick={editorViewState.toggle}
-            style={{ background: "none", border: "none", color: "#89b4fa", cursor: "pointer", display: "flex", alignItems: "center", padding: "2px 4px" }}
-            title={editorViewState.mode === "preview" ? "Edit (raw source)" : "Preview (rendered)"}
-            data-testid="repo-explorer-md-toggle"
-          >
-            {editorViewState.mode === "preview"
-              ? <PencilSquareIcon style={{ width: 14, height: 14 }} />
-              : <EyeIcon style={{ width: 14, height: 14 }} />}
-          </button>
-        )}
-        {editorViewState?.canPresent && (
-          <button
-            onClick={editorViewState.mode === "present" ? editorViewState.exitPresent : editorViewState.enterPresent}
-            style={{ background: editorViewState.mode === "present" ? "#313244" : "none", border: "none", color: editorViewState.mode === "present" ? "#a6e3a1" : "#89b4fa", cursor: "pointer", display: "flex", alignItems: "center", padding: "2px 4px", borderRadius: 3 }}
-            title={editorViewState.mode === "present" ? "Exit present mode (Esc)" : "Present as slides"}
-            data-testid="repo-explorer-present-toggle"
-          >
-            <PresentationChartBarIcon style={{ width: 14, height: 14 }} />
-          </button>
+          <MarkdownModeSelector viewState={editorViewState} testIdPrefix="repo-explorer" />
         )}
         {workstreamId && filePath ? (
           <button
