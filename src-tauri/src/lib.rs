@@ -2974,6 +2974,36 @@ fn read_session_file(session_id: String, relative_path: String) -> Result<String
     std::fs::read_to_string(&file_path).map_err(|e| format!("Cannot read {}: {}", relative_path, e))
 }
 
+/// Write a file within a session-state directory. Rejects paths that try to
+/// escape the session-state root via `..` components.
+#[tauri::command]
+fn write_session_file(
+    session_id: String,
+    relative_path: String,
+    contents: String,
+) -> Result<(), String> {
+    if relative_path
+        .split(|c| c == '/' || c == '\\')
+        .any(|seg| seg == "..")
+    {
+        return Err("Invalid relative path".to_string());
+    }
+    let home = dirs::home_dir().ok_or("No home directory")?;
+    let file_path = home
+        .join(".copilot")
+        .join("session-state")
+        .join(&session_id)
+        .join(&relative_path);
+
+    if let Some(parent) = file_path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("Cannot create dir for {}: {}", relative_path, e))?;
+    }
+
+    std::fs::write(&file_path, contents)
+        .map_err(|e| format!("Cannot write {}: {}", relative_path, e))
+}
+
 /// Returns the absolute path of `~/.copilot/session-state/<id>` so the
 /// frontend can list it with the regular list_directory + read_file APIs.
 /// Errors if the directory doesn't exist.
@@ -4303,6 +4333,7 @@ pub fn run() {
             discover_copilot_config,
             // Session files & todos & DB
             read_session_file,
+            write_session_file,
             session_state_dir,
             list_session_checkpoints,
             list_session_events,
@@ -4956,6 +4987,32 @@ Body here.
         let result = query_session_files("nonexistent-session-id-67890".to_string());
         assert!(result.is_ok());
         assert_eq!(result.unwrap().len(), 0);
+    }
+
+    #[test]
+    fn write_session_file_roundtrips_and_creates_dirs() {
+        let session_id = format!("ws_write_test_{}", std::process::id());
+        let home = dirs::home_dir().expect("home dir");
+        let rel = "files/features/demo/grill-me.md";
+        write_session_file(session_id.clone(), rel.to_string(), "# edited".to_string()).unwrap();
+        let read = read_session_file(session_id.clone(), rel.to_string()).unwrap();
+        assert_eq!(read, "# edited");
+        std::fs::remove_dir_all(
+            home.join(".copilot")
+                .join("session-state")
+                .join(&session_id),
+        )
+        .ok();
+    }
+
+    #[test]
+    fn write_session_file_rejects_path_traversal() {
+        let result = write_session_file(
+            "any-session".to_string(),
+            "../../escape.md".to_string(),
+            "x".to_string(),
+        );
+        assert!(result.is_err());
     }
 
     // ── Plan-tile backend tests ─────────────────────────────────────────

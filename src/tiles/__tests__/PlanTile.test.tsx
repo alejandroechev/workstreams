@@ -145,8 +145,61 @@ describe("PlanTile shell", () => {
     await waitFor(() => expect(screen.getAllByTestId("md").length).toBeGreaterThan(0));
   });
 
-  it("StatusPill testid encodes the derivedStatus", async () => {
-    setup({ features: [feat("alpha", { derivedStatus: "orphan" })], currentPlanId: null });
+  it("renders tabs with Grill second (right of Overview)", async () => {
+    setup({ features: [feat("alpha")], currentPlanId: null });
+    await waitFor(() => expect(screen.getByTestId("plan-tab-overview")).toBeTruthy());
+    const tabIds = Array.from(document.querySelectorAll('[data-testid^="plan-tab-"]'))
+      .map((t) => t.getAttribute("data-testid"));
+    expect(tabIds).toEqual([
+      "plan-tab-overview",
+      "plan-tab-grill",
+      "plan-tab-plan",
+      "plan-tab-todos",
+      "plan-tab-graph",
+    ]);
+  });
+
+  it("edits the grill file and saves via write_session_file", async () => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
+    setup({ features: [feat("alpha")], currentPlanId: null });
+    await waitFor(() => expect(screen.getByTestId("plan-tab-grill")).toBeTruthy());
+    fireEvent.click(screen.getByTestId("plan-tab-grill"));
+    await waitFor(() => expect(screen.getByTestId("grill-edit")).toBeTruthy());
+    fireEvent.click(screen.getByTestId("grill-edit"));
+    const editor = screen.getByTestId("grill-editor") as HTMLTextAreaElement;
+    fireEvent.change(editor, { target: { value: "# new grill body" } });
+    fireEvent.click(screen.getByTestId("grill-save"));
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("write_session_file", {
+        sessionId: "sess-1",
+        relativePath: "files/features/alpha/grill-me.md",
+        contents: "# new grill body",
+      }),
+    );
+    // Returns to preview with the saved content.
+    await waitFor(() => expect(screen.getByTestId("grill-edit")).toBeTruthy());
+    expect(screen.getByTestId("md").textContent).toBe("# new grill body");
+  });
+
+  it("cancel discards grill edits without saving", async () => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
+    setup({ features: [feat("alpha")], currentPlanId: null });
+    await waitFor(() => expect(screen.getByTestId("plan-tab-grill")).toBeTruthy());
+    fireEvent.click(screen.getByTestId("plan-tab-grill"));
+    await waitFor(() => expect(screen.getByTestId("grill-edit")).toBeTruthy());
+    fireEvent.click(screen.getByTestId("grill-edit"));
+    fireEvent.change(screen.getByTestId("grill-editor"), { target: { value: "throwaway" } });
+    fireEvent.click(screen.getByTestId("grill-cancel"));
+    await waitFor(() => expect(screen.getByTestId("grill-edit")).toBeTruthy());
+    expect(invokeMock).not.toHaveBeenCalledWith(
+      "write_session_file",
+      expect.anything(),
+    );
+  });
+
+  it("StatusPill testid encodes the derivedStatus", async () => {    setup({ features: [feat("alpha", { derivedStatus: "orphan" })], currentPlanId: null });
     await waitFor(() => expect(screen.getByTestId("feature-row-alpha")).toBeTruthy());
     expect(screen.getAllByTestId("feature-status-pill-orphan").length).toBeGreaterThan(0);
   });
