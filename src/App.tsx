@@ -516,6 +516,11 @@ export default function App() {
     projectDirectory: string; branchName: string; baseBranch: string | null; pullBaseFirst: boolean;
   }>>(new Map());
 
+  // Per-ws in-flight guard: a second trigger (e.g. double-clicking Retry)
+  // while a provisioning/removal is running is a no-op. Cleared on the
+  // terminal event by the global worktree-progress listener.
+  const inFlightRef = useRef<Set<string>>(new Set());
+
   // Fire the non-blocking worktree provisioning for a workstream that already
   // exists in `creating` state. Seeds provisioning state and flips the row to
   // create_failed if the command can't even start. Shared by create / fork /
@@ -524,6 +529,8 @@ export default function App() {
     wsId: string,
     params: { projectDirectory: string; branchName: string; baseBranch: string | null; pullBaseFirst: boolean },
   ) => {
+    if (inFlightRef.current.has(wsId)) return; // already provisioning
+    inFlightRef.current.add(wsId);
     provisionParamsRef.current.set(wsId, params);
     setProvisioning((prev) => new Map(prev).set(wsId, initialCreatingState()));
     setWorkstreams((prev) => prev.map((w) => w.id === wsId ? { ...w, status: "creating" } : w));
@@ -534,6 +541,7 @@ export default function App() {
       baseBranch: params.baseBranch,
       pullBaseFirst: params.pullBaseFirst,
     }).catch((e) => {
+      inFlightRef.current.delete(wsId);
       setProvisioning((prev) => {
         const cur = prev.get(wsId) ?? initialCreatingState();
         return new Map(prev).set(wsId, applyWorktreeEvent(cur, {
@@ -557,10 +565,13 @@ export default function App() {
 
   /** Fire the non-blocking worktree removal for an archived workstream. */
   const fireRemoveWorktree = useCallback((wsId: string, directory: string) => {
+    if (inFlightRef.current.has(wsId)) return; // already removing
+    inFlightRef.current.add(wsId);
     removeDirRef.current.set(wsId, directory);
     setProvisioning((prev) => new Map(prev).set(wsId, initialArchivingState()));
     setWorkstreams((prev) => prev.map((w) => w.id === wsId ? { ...w, status: "archiving" } : w));
     invoke("remove_worktree", { workstreamId: wsId, directory }).catch((e) => {
+      inFlightRef.current.delete(wsId);
       setProvisioning((prev) => {
         const cur = prev.get(wsId) ?? initialArchivingState();
         return new Map(prev).set(wsId, applyWorktreeEvent(cur, {
@@ -719,6 +730,7 @@ export default function App() {
         // On a terminal state, reflect it on the workstream row.
         if (cur.status !== next.status &&
             (next.status === "active" || next.status === "create_failed" || next.status === "archived")) {
+          inFlightRef.current.delete(ev.workstreamId);
           setWorkstreams((wsPrev) => wsPrev.map((w) =>
             w.id === ev.workstreamId ? { ...w, status: next.status } : w));
           backend.updateWorkstream(ev.workstreamId, { status: next.status }).catch(() => {});
