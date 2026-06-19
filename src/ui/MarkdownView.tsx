@@ -1,4 +1,4 @@
-import { type CSSProperties, type ReactNode, useEffect, useState, useCallback, useMemo } from "react";
+import { type CSSProperties, type ReactNode, useEffect, useRef, useState, useCallback, useMemo } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { PrismLight as SyntaxHighlighter } from "react-syntax-highlighter";
@@ -108,6 +108,11 @@ export function MarkdownView({ children, className, style, baseFontSize, basePat
   const [globalFont, setGlobalFont] = useState<number>(() => getAppSettings().markdownFontSize);
   useEffect(() => subscribeAppSettings((s) => setGlobalFont(s.markdownFontSize)), []);
   const effectiveFontSize = baseFontSize ?? globalFont;
+  // Keep the latest onLinkClick in a ref so handleLinkClick (and thus the
+  // memoized componentMap) stays identity-stable even when callers pass a
+  // fresh inline handler on every render.
+  const onLinkClickRef = useRef(onLinkClick);
+  onLinkClickRef.current = onLinkClick;
   const mergedContainer: CSSProperties = {
     ...containerStyle,
     fontSize: effectiveFontSize,
@@ -146,13 +151,16 @@ export function MarkdownView({ children, className, style, baseFontSize, basePat
       }
       // Internal relative path — needs basePath + a host handler. Without
       // either, fall through to native (broken) behaviour so we don't
-      // regress unrelated callsites.
+      // regress unrelated callsites. We read onLinkClick through a ref so
+      // an unstable inline handler prop doesn't churn this callback's
+      // identity (which would rebuild componentMap and remount images).
+      const onLinkClick = onLinkClickRef.current;
       if (!basePath || !onLinkClick) return;
       e.preventDefault();
       const resolved = resolveRelativePath(basePath, href);
       onLinkClick(resolved, classifyLinkTarget(resolved));
     },
-    [basePath, onLinkClick],
+    [basePath],
   );
 
   // Memoize the component map so the custom `img`/`a` renderers keep stable

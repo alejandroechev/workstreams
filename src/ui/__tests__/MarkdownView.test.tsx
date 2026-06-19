@@ -125,6 +125,46 @@ describe("MarkdownView", () => {
       expect(callsNow).toBe(callsAfterLoad);
     });
 
+    it("does not remount the image when the parent passes a fresh inline onLinkClick each render", async () => {
+      invokeMock.mockReset();
+      invokeMock.mockImplementation((cmd: string) => {
+        if (cmd === "read_file_base64") return Promise.resolve("aGVsbG8=");
+        return Promise.resolve("");
+      });
+
+      // Reproduces the preview-tile scenario: tiles (RepoExplorer / Workbench /
+      // SessionMeta) render MarkdownView with an inline onLinkClick whose
+      // identity changes every render. A naive handleLinkClick dependency on
+      // onLinkClick would rebuild componentMap and remount ResolvedImg in a
+      // loop. SlideDeck didn't pass onLinkClick, which is why presentation
+      // mode worked but preview didn't.
+      function Harness() {
+        const [, force] = useReducer((n: number) => n + 1, 0);
+        return (
+          <div>
+            <button data-testid="force" onClick={() => force()}>force</button>
+            <MarkdownView basePath="/repo/docs" onLinkClick={() => { /* new identity each render */ }}>
+              {"![alt](images/01.png)"}
+            </MarkdownView>
+          </div>
+        );
+      }
+
+      const { container, getByTestId } = render(<Harness />);
+      await waitFor(() => {
+        expect((container.querySelector("img") as HTMLImageElement).src).toBe("blob:test-img");
+      });
+      const callsAfterLoad = invokeMock.mock.calls.filter((c) => c[0] === "read_file_base64").length;
+
+      fireEvent.click(getByTestId("force"));
+      fireEvent.click(getByTestId("force"));
+      fireEvent.click(getByTestId("force"));
+
+      expect((container.querySelector("img") as HTMLImageElement).src).toBe("blob:test-img");
+      const callsNow = invokeMock.mock.calls.filter((c) => c[0] === "read_file_base64").length;
+      expect(callsNow).toBe(callsAfterLoad);
+    });
+
     it("resolves a relative image path against basePath via read_file_base64", async () => {
       invokeMock.mockReset();
       invokeMock.mockImplementation((cmd: string, args: { path: string }) => {
