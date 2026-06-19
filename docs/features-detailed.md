@@ -103,6 +103,9 @@ Multi-tab repo browser (Files / Diff / Log / Hooks):
   side-by-side and inline layouts (persisted per tile)
 - **Log** tab: ahead / behind counts against `origin/<current-branch>`, with
   an `origin/<branch>` badge + accent border on the matching commit
+- **Hooks** tab: lists active git hooks; the selected hook opens in a Monaco
+  editor with shell syntax highlighting (auto-detected from the shebang for
+  extensionless hooks) and an inline Edit / Save / Cancel flow
 - Search overlays are scoped inside the tile with arrow-key + Enter
   navigation
 

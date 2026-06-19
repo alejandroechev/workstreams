@@ -30,6 +30,7 @@ project-aware workspace:
   the public CLI).
 - 🗂️ **Built-in repo browser** — Files / Diff / Log / Hooks tabs. Diff has
   split / unified toggle. Audio, images, and SQLite databases preview inline.
+  Git hooks open in a syntax-highlighted editor with inline editing.
 - ✏️ **Editable Monaco** — Ctrl+S + 10 s auto-save, external-modification
   detection, conflict diffs.
 - 📝 **Markdown with extras** — GFM, syntax-highlighted code, on-disk image

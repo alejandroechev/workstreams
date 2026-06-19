@@ -163,3 +163,27 @@ export function detectLanguage(filePath: string): string {
   const ext = filePath.split(".").pop()?.toLowerCase() || "";
   return LANGUAGE_MAP[ext] || "plaintext";
 }
+
+/**
+ * Detect the Monaco language for a git hook. Hooks are usually extensionless
+ * (e.g. `pre-commit`), so we first honour any real extension, then fall back
+ * to the shebang line, and finally default to `shell` since the overwhelming
+ * majority of git hooks are POSIX shell / bash scripts.
+ */
+export function detectHookLanguage(name: string, content: string): string {
+  if (name.includes(".")) {
+    const byExt = detectLanguage(name);
+    if (byExt !== "plaintext") return byExt;
+  }
+  const firstLine = content.split("\n", 1)[0] ?? "";
+  if (firstLine.startsWith("#!")) {
+    const shebang = firstLine.toLowerCase();
+    if (/\b(bash|sh|zsh|dash|ksh)\b/.test(shebang)) return "shell";
+    if (/\b(pwsh|powershell)\b/.test(shebang)) return "powershell";
+    if (/\bnode\b/.test(shebang)) return "javascript";
+    if (/\bpython[0-9.]*\b/.test(shebang)) return "python";
+    if (/\b(perl)\b/.test(shebang)) return "perl";
+    if (/\b(ruby)\b/.test(shebang)) return "ruby";
+  }
+  return "shell";
+}

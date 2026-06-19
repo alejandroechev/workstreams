@@ -3,6 +3,7 @@ import {
   createTerminalConfig,
   parseTerminalConfig,
   detectLanguage,
+  detectHookLanguage,
   createCopilotSessionConfig,
   parseCopilotSessionConfig,
   buildCopilotCommand,
@@ -133,6 +134,31 @@ describe("detectLanguage", () => {
 
   it("handles paths with multiple dots", () => {
     expect(detectLanguage("my.component.test.tsx")).toBe("typescript");
+  });
+});
+
+describe("detectHookLanguage", () => {
+  it("defaults extensionless hooks to shell", () => {
+    expect(detectHookLanguage("pre-commit", "")).toBe("shell");
+    expect(detectHookLanguage("pre-push", "echo hi")).toBe("shell");
+  });
+
+  it("honours a real extension when present", () => {
+    expect(detectHookLanguage("pre-commit.ps1", "")).toBe("powershell");
+    expect(detectHookLanguage("hook.py", "")).toBe("python");
+  });
+
+  it("reads the shebang for extensionless hooks", () => {
+    expect(detectHookLanguage("pre-commit", "#!/usr/bin/env bash\n")).toBe("shell");
+    expect(detectHookLanguage("pre-commit", "#!/bin/sh\n")).toBe("shell");
+    expect(detectHookLanguage("pre-commit", "#!/usr/bin/env node\n")).toBe("javascript");
+    expect(detectHookLanguage("pre-commit", "#!/usr/bin/python3\n")).toBe("python");
+    expect(detectHookLanguage("pre-commit", "#!/usr/bin/pwsh\n")).toBe("powershell");
+    expect(detectHookLanguage("pre-commit", "#!/usr/bin/env ruby\n")).toBe("ruby");
+  });
+
+  it("falls back to shell for unknown shebangs", () => {
+    expect(detectHookLanguage("pre-commit", "#!/some/weird/thing\n")).toBe("shell");
   });
 });
 
