@@ -91,3 +91,19 @@ describe("WorkstreamSidebar actions menu (non-active workstreams)", () => {
     cleanup();
   });
 });
+
+describe("WorkstreamSidebar workstreams collapse", () => {
+  it("hides the workstream list when the header toggle is clicked", () => {
+    const { getByTestId, queryByTestId, getAllByTestId } = renderWith();
+    // Expanded by default: both workstream rows visible.
+    expect(getAllByTestId("workstream-item").length).toBe(2);
+
+    fireEvent.click(getByTestId("workstreams-toggle"));
+    expect(queryByTestId("workstream-item")).toBeNull();
+
+    // Toggling again restores the list.
+    fireEvent.click(getByTestId("workstreams-toggle"));
+    expect(getAllByTestId("workstream-item").length).toBe(2);
+    cleanup();
+  });
+});

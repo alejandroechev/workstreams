@@ -149,6 +149,7 @@ export default function WorkstreamSidebar({
   const [dragOverWsId, setDragOverWsId] = useState<string | null>(null);
   const [showRepoMenu, setShowRepoMenu] = useState(false);
   const [reposCollapsed, setReposCollapsed] = useState(false);
+  const [workstreamsCollapsed, setWorkstreamsCollapsed] = useState(false);
   const repoMenuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -297,7 +298,31 @@ export default function WorkstreamSidebar({
         justifyContent: "space-between",
         alignItems: "center",
       }}>
-        <span>Workstreams</span>
+        <button
+          data-testid="workstreams-toggle"
+          onClick={() => setWorkstreamsCollapsed((v) => !v)}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 4,
+            background: "none",
+            border: "none",
+            color: "#585b70",
+            cursor: "pointer",
+            padding: 0,
+            fontSize: 10,
+            fontWeight: 600,
+            textTransform: "uppercase",
+            letterSpacing: 1,
+            fontFamily: "inherit",
+          }}
+          title={workstreamsCollapsed ? "Show workstreams" : "Hide workstreams"}
+        >
+          {workstreamsCollapsed
+            ? <ChevronRightIcon style={{ width: 12, height: 12 }} />
+            : <ChevronDownIcon style={{ width: 12, height: 12 }} />}
+          Workstreams
+        </button>
         <button
           data-testid="new-workstream-button"
           onClick={() => onCreateWorkstream()}
@@ -310,6 +335,8 @@ export default function WorkstreamSidebar({
         </button>
       </div>
 
+      {workstreamsCollapsed && <div style={{ flex: 1 }} />}
+      {!workstreamsCollapsed && (
       <div style={{ flex: 1, overflowY: "auto", padding: "0 4px" }}>
         {activeWorkstreams.length === 0 && (
           <div style={{ padding: "8px 8px", color: "#45475a", fontSize: 11 }}>
@@ -634,6 +661,7 @@ export default function WorkstreamSidebar({
           );
         })}
       </div>
+      )}
 
       {/* Divider */}
       <div style={{ borderTop: "1px solid #313244", margin: "4px 8px" }} />
