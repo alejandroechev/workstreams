@@ -171,6 +171,22 @@ export function MarkdownView({ children, className, style, baseFontSize, basePat
   // images that never settled.
   const componentMap = useMemo(() => ({
     ...components,
+    // Override `code` so mermaid diagrams receive the host's effective font
+    // size (preview uses the global markdown size; SlideDeck passes a large
+    // present-mode size). MermaidDiagram bakes font-size into its SVG, so it
+    // needs the host size to shrink large present fonts to fit node boxes.
+    // Non-mermaid code blocks defer to the module-level renderer.
+    code: (codeProps: { inline?: boolean; className?: string; children?: ReactNode }) => {
+      const t = extractText(codeProps.children).replace(/\n$/, "");
+      const m = /language-([\w-]+)/.exec(codeProps.className ?? "");
+      if (m?.[1] === "mermaid") {
+        // Pass the markdown body font (not the large present-scaled size) so
+        // mermaid renders identically in preview and slides; MermaidDiagram
+        // clamps and applies it with a px unit.
+        return <MermaidDiagram source={t} baseFontSize={globalFont} />;
+      }
+      return components.code(codeProps);
+    },
     ...(basePath
       ? { img: (props: { src?: string; alt?: string }) => <ResolvedImg {...props} basePath={basePath} /> }
       : null),
@@ -185,7 +201,7 @@ export function MarkdownView({ children, className, style, baseFontSize, basePat
         {c}
       </a>
     ),
-  }), [basePath, handleLinkClick]);
+  }), [basePath, handleLinkClick, globalFont]);
 
   // Extract a YAML-style frontmatter block (used by Copilot skill .md files,
   // Jekyll/Obsidian/MkDocs notes, etc.) and render it as a labeled metadata

@@ -11,11 +11,15 @@ import { preprocessMermaidCode } from "./preprocessMermaid";
 
 interface Props {
   source: string;
+  /** Markdown body font size (px) used to size mermaid labels. Mermaid is
+   * container-independent, so this is passed explicitly (NOT the large
+   * present-mode scaled size) and clamped, so preview and slides match. */
+  baseFontSize?: number;
 }
 
 let diagramCounter = 0;
 
-export function MermaidDiagram({ source }: Props) {
+export function MermaidDiagram({ source, baseFontSize }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const panzoomInstanceRef = useRef<{
     dispose?: () => void;
@@ -39,11 +43,26 @@ export function MermaidDiagram({ source }: Props) {
         // Re-initialize with current font size before each render. Mermaid
         // bakes the font-size into every <text> element it emits, so changing
         // it requires a fresh render.
+        // Mermaid is independent of the host/container font: it pins label
+        // sizes via an injected `.nodeLabel { font-size: … }` rule and lays out
+        // node boxes to match. The diagram is then zoom-fitted to the container
+        // by panzoom, so the *absolute* font size is cosmetic — what matters is
+        // that the value is a valid CSS length WITH a unit. A bare number (e.g.
+        // "14") is invalid CSS: the box is laid out for that size but the label
+        // text falls back to *inheriting* the container font (30px in present
+        // mode), producing the "text wider than box" overflow. Always include
+        // "px". We render at the markdown body font (clamped) so preview and
+        // slides look identical regardless of the large present-mode scaling.
+        const fontPx = Math.min(Math.max(Math.round(baseFontSize ?? 16), 11), 18);
+
         mermaid.initialize({
           startOnLoad: false,
           theme: "dark",
           securityLevel: "loose",
           fontFamily: "'Segoe UI', system-ui, sans-serif",
+          themeVariables: {
+            fontSize: `${fontPx}px`,
+          },
         });
         const code = preprocessMermaidCode(source);
         const { svg } = await mermaid.render(`${idRef.current}-svg`, code);
@@ -78,7 +97,11 @@ export function MermaidDiagram({ source }: Props) {
             const cw = container.clientWidth;
             const ch = container.clientHeight;
             if (svgBox.width > 0 && svgBox.height > 0 && cw > 0 && ch > 0) {
-              const scale = Math.min(cw / svgBox.width, ch / svgBox.height) * 0.9;
+              // Use a slightly larger padding factor than before so wrapped
+              // multiline text has a bit more room and doesn't clip by a
+              // hair. 0.95 gives a comfortable margin without wasting space.
+              const paddingFactor = 0.95;
+              const scale = Math.min(cw / svgBox.width, ch / svgBox.height) * paddingFactor;
               if (scale > 0 && scale < 1) {
                 instance.zoom?.(scale, { animate: false });
               }
@@ -118,7 +141,7 @@ export function MermaidDiagram({ source }: Props) {
       cleanup?.();
       panzoomInstanceRef.current = null;
     };
-  }, [source, fullscreen]);
+  }, [source, fullscreen, baseFontSize]);
 
   const handleReset = () => {
     panzoomInstanceRef.current?.reset?.();
@@ -228,6 +251,11 @@ const canvasStyle: React.CSSProperties = {
   alignItems: "center",
   justifyContent: "center",
   cursor: "grab",
+  // Reset typography inherited from the host (MarkdownView sets line-height
+  // 1.6). Mermaid measures multiline foreignObject label height with a tight
+  // line-height and sizes boxes to match; if the labels inherit 1.6 they grow
+  // past the box bottom, clipping the last line of multiline nodes.
+  lineHeight: "normal",
 };
 
 const canvasStyleFs: React.CSSProperties = {
@@ -237,6 +265,7 @@ const canvasStyleFs: React.CSSProperties = {
   alignItems: "center",
   justifyContent: "center",
   cursor: "grab",
+  lineHeight: "normal",
 };
 
 const hintStyle: React.CSSProperties = {
