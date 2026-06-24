@@ -2982,10 +2982,7 @@ fn write_session_file(
     relative_path: String,
     contents: String,
 ) -> Result<(), String> {
-    if relative_path
-        .split(|c| c == '/' || c == '\\')
-        .any(|seg| seg == "..")
-    {
+    if relative_path.split(['/', '\\']).any(|seg| seg == "..") {
         return Err("Invalid relative path".to_string());
     }
     let home = dirs::home_dir().ok_or("No home directory")?;
@@ -4585,8 +4582,10 @@ mod tests {
 
         let hooks = list_git_hooks(wt.to_string_lossy().to_string())
             .expect("list_git_hooks should succeed for a worktree");
+        // The hook name carries a " (source)" suffix indicating where it was
+        // found (e.g. "pre-commit (git)" for the common .git/hooks dir).
         assert!(
-            hooks.iter().any(|h| h.name == "pre-commit"),
+            hooks.iter().any(|h| h.name.starts_with("pre-commit")),
             "expected pre-commit hook to be discovered from the worktree, got: {:?}",
             hooks.iter().map(|h| &h.name).collect::<Vec<_>>()
         );
@@ -5667,8 +5666,8 @@ Body here.
 
     #[test]
     fn epoch_to_ymd_hms_handles_year_2026_correctly() {
-        // 2026-06-12T00:00:00Z is 1781481600
-        let secs = 1_781_481_600;
+        // 2026-06-12T00:00:00Z is 1781222400
+        let secs = 1_781_222_400;
         let (y, m, d, _, _, _) = epoch_to_ymd_hms(secs);
         assert_eq!((y, m, d), (2026, 6, 12));
     }

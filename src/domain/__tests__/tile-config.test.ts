@@ -155,6 +155,16 @@ describe("detectHookLanguage", () => {
     expect(detectHookLanguage("pre-commit", "#!/usr/bin/python3\n")).toBe("python");
     expect(detectHookLanguage("pre-commit", "#!/usr/bin/pwsh\n")).toBe("powershell");
     expect(detectHookLanguage("pre-commit", "#!/usr/bin/env ruby\n")).toBe("ruby");
+    expect(detectHookLanguage("pre-commit", "#!/usr/bin/perl\n")).toBe("perl");
+  });
+
+  it("falls through to the shebang when a dotted name has no known extension", () => {
+    // Name contains a dot but the extension is unknown → detectLanguage
+    // returns "plaintext", so we must not early-return and should honour the
+    // shebang instead.
+    expect(detectHookLanguage("pre-commit.local", "#!/usr/bin/env node\n")).toBe("javascript");
+    // Dotted name, unknown extension, no shebang → default shell.
+    expect(detectHookLanguage("pre-commit.local", "echo hi\n")).toBe("shell");
   });
 
   it("falls back to shell for unknown shebangs", () => {
