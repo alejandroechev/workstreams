@@ -11,6 +11,8 @@ import {
 import type * as MonacoNs from "monaco-editor";
 
 import { ConflictResolutionModal } from "./ConflictResolutionModal";
+import ReactDOM from "react-dom/client";
+import { splitSlides } from "../domain/slides";
 import {
   fileBufferRegistry,
   type BufferSnapshot,
@@ -18,6 +20,7 @@ import {
 } from "./FileBufferRegistry";
 import { classifyDangerousPath, type DangerHit } from "./dangerousPaths";
 import { ZoomableImage } from "../ui/components/ZoomableImage";
+import { MarkdownView } from "../ui/MarkdownView";
 import { SlideDeck } from "../ui/components/SlideDeck";
 import { loadMonaco } from "./loadMonaco";
 import {
@@ -582,6 +585,104 @@ export function FileEditorView({
   // computes the toggle for markdown files; mirror it here so the
   // keyboard shortcut works identically.
   const toggleMarkdownModeRef = useRef<(() => void) | null>(null);
+
+  // Export as PDF (print-dialog MVP). Renders preview or all slides into a
+  // temporary offscreen DOM, inlines any blob/object images as data URLs,
+  // opens a new window with print-friendly CSS and invokes window.print().
+  const exportAsPdf = async (): Promise<void> => {
+    const snap = snapshot;
+    if (!snap) return;
+    const content = registry.getModel(snap.path)?.getValue() ?? "";
+    const basePathForResolve = dirnameForPath(snap.path);
+
+    // Build an array of slide markdown bodies for present mode, or a single
+    // item for preview mode.
+    const slides: string[] = effectiveMode === "present" ? splitSlides(content).slides : [content];
+
+    // Create offscreen container where MarkdownView instances will be mounted.
+    const tmp = document.createElement("div");
+    tmp.style.position = "fixed";
+    tmp.style.left = "-9999px";
+    tmp.style.top = "-9999px";
+    tmp.style.opacity = "0";
+    document.body.appendChild(tmp);
+
+    const roots: Array<ReturnType<typeof ReactDOM.createRoot>> = [];
+    try {
+      const slideHtmls: string[] = [];
+      // Render each slide into its own wrapper div.
+      for (const s of slides) {
+        const wrapper = document.createElement("div");
+        tmp.appendChild(wrapper);
+        const root = ReactDOM.createRoot(wrapper);
+        roots.push(root);
+        root.render(
+          <div style={{ background: "transparent" }}>
+            <MarkdownView basePath={basePathForResolve}>{s}</MarkdownView>
+          </div>,
+        );
+      }
+
+      // Wait briefly for async components (mermaid, images) to settle.
+      await new Promise((r) => setTimeout(r, 700));
+
+      // Inline any non-data images by fetching their blobs and converting to data URLs.
+      for (const wrapper of Array.from(tmp.children)) {
+        const imgs = (wrapper as Element).querySelectorAll("img");
+        for (const img of Array.from(imgs)) {
+          const src = (img as HTMLImageElement).src;
+          if (!src) continue;
+          if (src.startsWith("data:")) continue;
+          try {
+            const resp = await fetch(src);
+            const blob = await resp.blob();
+            const dataUrl = await new Promise<string>((res) => {
+              const fr = new FileReader();
+              fr.onload = () => res(fr.result as string);
+              fr.readAsDataURL(blob);
+            });
+            (img as HTMLImageElement).src = dataUrl;
+          } catch {
+            // If inlining fails, leave the original src — print may still fetch it.
+          }
+        }
+        slideHtmls.push((wrapper as HTMLElement).innerHTML);
+      }
+
+      // Compose printable HTML: each slide wrapped in a .slide that becomes a page.
+      const css = `
+        <style>
+          @page { size: auto; margin: 12mm; }
+          html,body { height: 100%; }
+          body { margin: 0; background: #1e1e2e; color: #cdd6f4; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; }
+          .slide { page-break-after: always; display: flex; align-items: center; justify-content: center; }
+          .slide .content { width: 1100px; max-width: 100%; box-sizing: border-box; padding: 48px 64px; }
+          /* Ensure mermaid SVGs scale to fit the content box */
+          .slide .content svg { max-width: 100%; height: auto; }
+          /* Preserve code block styling */
+          pre { background: #1e1e1e; color: #cdd6f4; }
+          /* Print exact colors where possible */
+          * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+        </style>
+      `;
+
+      const bodyHtml = slideHtmls.map((h) => `<div class="slide"><div class="content">${h}</div></div>`).join("");
+      const html = `<!doctype html><html><head><meta charset="utf-8">${css}</head><body>${bodyHtml}</body></html>`;
+
+      const w = window.open("", "_blank");
+      if (!w) throw new Error("Failed to open print window");
+      w.document.open();
+      w.document.write(html);
+      w.document.close();
+      w.focus();
+      // Wait for the new window to finish layout and load external resources.
+      setTimeout(() => { try { w.print(); } catch { /* ignore */ } }, 500);
+    } finally {
+      // Teardown
+      for (const r of roots) try { r.unmount(); } catch { /* ignore */ }
+      tmp.remove();
+    }
+  };
   useEffect(() => {
     const canPreview = snapshot !== null && ((renderMarkdownPreview !== undefined && isMarkdown(snapshot.path)) || isSvg(snapshot.path));
     const isForcedEdit = snapshot?.state === "conflicted" || snapshot?.state === "save_blocked";
@@ -670,10 +771,15 @@ export function FileEditorView({
             {title}{dirtyMark}
           </div>
           {shouldShowPreview ? (
-            <button aria-label="Edit" onClick={() => setModeState({ inputPath: path, mode: "edit" })} style={headerButtonStyle}>
-              <PencilIcon style={{ width: 16, height: 16 }} />
-              <span>Edit</span>
-            </button>
+            <>
+              <button aria-label="Edit" onClick={() => setModeState({ inputPath: path, mode: "edit" })} style={headerButtonStyle}>
+                <PencilIcon style={{ width: 16, height: 16 }} />
+                <span>Edit</span>
+              </button>
+              <button aria-label="Export as PDF" onClick={() => { void exportAsPdf(); }} style={headerButtonStyle}>
+                <span>Export as PDF</span>
+              </button>
+            </>
           ) : null}
         </div>
       ) : null}
