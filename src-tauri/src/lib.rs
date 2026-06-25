@@ -4849,6 +4849,54 @@ mod tests {
     }
 
     #[test]
+    fn search_in_files_respects_gitignore() {
+        // The ignore-crate engine must honor .gitignore: a gitignored file and a
+        // gitignored directory are excluded, while a tracked file is found.
+        let tmp = std::env::temp_dir().join(format!("rxs-gitignore-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(tmp.join(".git")).unwrap(); // mark as a repo root
+        std::fs::write(tmp.join(".gitignore"), "ignored.txt\nbuilddir/\n").unwrap();
+        std::fs::write(tmp.join("kept.txt"), "needle here").unwrap();
+        std::fs::write(tmp.join("ignored.txt"), "needle here").unwrap();
+        std::fs::create_dir_all(tmp.join("builddir")).unwrap();
+        std::fs::write(tmp.join("builddir").join("x.txt"), "needle here").unwrap();
+
+        let never_cancel = || false;
+        let res = search_in_files_impl(tmp.to_str().unwrap(), "needle", 200, &never_cancel);
+        assert!(
+            res.iter().any(|m| m.path.contains("kept.txt")),
+            "tracked file should be found"
+        );
+        assert!(
+            !res.iter().any(|m| m.path.contains("ignored.txt")),
+            "gitignored file should be excluded"
+        );
+        assert!(
+            !res.iter().any(|m| m.path.contains("builddir")),
+            "gitignored directory should be excluded"
+        );
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn search_in_files_force_skips_node_modules() {
+        // node_modules is force-skipped even when there is no .gitignore.
+        let tmp = std::env::temp_dir().join(format!("rxs-nm-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(tmp.join("node_modules")).unwrap();
+        std::fs::write(tmp.join("node_modules").join("junk.txt"), "needle").unwrap();
+        std::fs::write(tmp.join("src.txt"), "needle").unwrap();
+        let never_cancel = || false;
+        let res = search_in_files_impl(tmp.to_str().unwrap(), "needle", 200, &never_cancel);
+        assert!(res.iter().any(|m| m.path.contains("src.txt")));
+        assert!(
+            !res.iter().any(|m| m.path.contains("node_modules")),
+            "node_modules must be force-skipped"
+        );
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
     fn search_files_skips_hidden_and_skip_dirs() {
         let tmp = std::env::temp_dir().join(format!("rxs-skipdirs-{}", std::process::id()));
         let nested = tmp.join("node_modules");
