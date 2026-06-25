@@ -3,10 +3,12 @@ import { useEffect, useRef, useCallback, useState } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { SerializeAddon } from "@xterm/addon-serialize";
+import { WebglAddon } from "@xterm/addon-webgl";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { parseCopilotSessionConfig } from "../domain/tile-config";
 import { createPtyFitController } from "./pty-fit";
+import { createWebglController } from "./webgl-renderer";
 import { getAppSettings, subscribeAppSettings, createWheelLineAccumulator } from "../domain/app-settings";
 import { writeTextToClipboard, readTextFromClipboard } from "../domain/clipboard";
 import { handleOsc52 } from "../domain/osc52";
@@ -60,6 +62,7 @@ export default function CopilotSessionTile({
   const fitRef = useRef<FitAddon | null>(null);
   const ptyFitRef = useRef<ReturnType<typeof createPtyFitController> | null>(null);
   const serializeRef = useRef<SerializeAddon | null>(null);
+  const webglRef = useRef<ReturnType<typeof createWebglController> | null>(null);
   const prevActivityRef = useRef<string>("idle");
   const [status, setStatus] = useState<string>(isResuming ? "resuming" : "starting");
 
@@ -116,6 +119,18 @@ export default function CopilotSessionTile({
 
     term.open(containerRef.current);
     fitAddon.fit();
+
+    // GPU-accelerated rendering via the WebGL addon. Loaded through a
+    // controller that only initialises when the container is visible+sized
+    // (persist-by-hide leaves inactive tiles at 0×0) and that gracefully falls
+    // back to the DOM renderer on WebGL context loss, re-creating on reveal.
+    const webgl = createWebglController({
+      createAddon: () => new WebglAddon(),
+      loadAddon: (addon) => term.loadAddon(addon as unknown as Parameters<typeof term.loadAddon>[0]),
+      getContainer: () => containerRef.current,
+    });
+    webglRef.current = webgl;
+    webgl.tryLoad();
 
     // Expose terminal instance on container for dev/E2E probes.
     (containerRef.current as unknown as { __wsTerm?: unknown }).__wsTerm = term;
@@ -276,6 +291,9 @@ export default function CopilotSessionTile({
     const visibilityObserver = new IntersectionObserver((entries) => {
       for (const entry of entries) {
         if (entry.isIntersecting) {
+          // Now that the tile is visible+sized, (re)load WebGL if it never
+          // initialised while hidden or its context was lost.
+          webgl.tryLoad();
           // Force xterm to remeasure cell metrics — when this element was
           // display:none, CharSizeService cached zero/stale cell dimensions
           // and the next fit would propose a tiny cols/rows pair (cols≈11)
@@ -348,6 +366,8 @@ export default function CopilotSessionTile({
       visibilityObserver.disconnect();
       ptyFit.dispose();
       ptyFitRef.current = null;
+      webgl.dispose();
+      webglRef.current = null;
       unlistenOutput.then((u) => u());
       unlistenExit.then((u) => u());
       unlistenStats.then((u) => u());
