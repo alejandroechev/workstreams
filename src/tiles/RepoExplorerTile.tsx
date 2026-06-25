@@ -270,8 +270,9 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
   // Monaco editor ref (to trigger find widget programmatically)
   const editorRef = useRef<unknown>(null);
   // Line to reveal once the next opened file's editor mounts (set when a
-  // content-search result is opened; consumed by the editor onMount).
-  const pendingRevealLineRef = useRef<number | null>(null);
+  // content-search result is opened; matched by path so it only applies to
+  // that file).
+  const pendingRevealLineRef = useRef<{ path: string; line: number } | null>(null);
 
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -1269,6 +1270,7 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
               showHeader={false}
               initialViewMode={restoredMdRef.current?.path === filePath ? restoredMdRef.current.mode : undefined}
               initialSlideIndex={restoredMdRef.current?.path === filePath ? restoredMdRef.current.slideIndex : undefined}
+              initialRevealLine={pendingRevealLineRef.current?.path === filePath ? pendingRevealLineRef.current.line : undefined}
               renderMarkdownPreview={(markdownContent) => (
                 <MarkdownView
                   style={markdownContainerStyle}
@@ -1560,7 +1562,7 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
           <RepoContentSearch
             currentDir={currentDir}
             onOpenMatch={(path, line) => {
-              pendingRevealLineRef.current = line;
+              pendingRevealLineRef.current = { path, line };
               void openFile(path);
             }}
           />

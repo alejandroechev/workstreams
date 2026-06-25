@@ -92,6 +92,12 @@ export interface FileEditorViewProps {
   /** Initial slide index to restore when starting in present mode. */
   initialSlideIndex?: number;
   /**
+   * 1-based line to reveal + select once the Monaco editor mounts (e.g. when
+   * opened from a content-search result). Applied once per editor mount; has no
+   * effect for files that open in a non-editor preview (markdown/SVG/image).
+   */
+  initialRevealLine?: number | null;
+  /**
    * Inline file comments to render as Monaco view zones below their anchor.
    * Only used when `commentsEnabled` is true and the editor is mounted.
    */
@@ -172,6 +178,7 @@ export function FileEditorView({
   onViewStateChange,
   initialViewMode,
   initialSlideIndex,
+  initialRevealLine,
   comments = [],
   commentsEnabled = false,
   onAddComment,
@@ -469,6 +476,19 @@ export function FileEditorView({
       setEditorReadyToken(0);
     };
   }, [editorPath, editorRetryToken, path, registry]);
+
+  // Reveal a requested line once the editor is mounted (opened from a
+  // content-search match). Re-runs if the line changes for an already-open file
+  // (clicking a different match in the same file) — without recreating Monaco.
+  useEffect(() => {
+    const editor = editorRef.current;
+    if (!editor) return;
+    if (typeof initialRevealLine === "number" && initialRevealLine > 0) {
+      const line = Math.max(1, Math.floor(initialRevealLine));
+      editor.revealLineInCenter(line);
+      editor.setPosition({ lineNumber: line, column: 1 });
+    }
+  }, [initialRevealLine, editorReadyToken]);
 
   // ─── Live font-size updates from global app settings ──────────────────
   useEffect(() => {

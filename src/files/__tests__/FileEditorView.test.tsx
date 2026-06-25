@@ -40,6 +40,8 @@ type FakeEditor = {
   options: Record<string, unknown>;
   layout: ReturnType<typeof vi.fn>;
   dispose: ReturnType<typeof vi.fn>;
+  revealLineInCenter: ReturnType<typeof vi.fn>;
+  setPosition: ReturnType<typeof vi.fn>;
 };
 
 function snapshot(overrides: Partial<BufferSnapshot> = {}): BufferSnapshot {
@@ -138,6 +140,8 @@ beforeEach(() => {
           options,
           layout: vi.fn(),
           dispose: vi.fn(),
+          revealLineInCenter: vi.fn(),
+          setPosition: vi.fn(),
         };
         fakeEditors.push(editor);
         return editor;
@@ -182,6 +186,20 @@ describe("FileEditorView", () => {
     expect(screen.getByTestId("file-editor-monaco")).toBeTruthy();
     expect(fakeEditors[0].options).toMatchObject({ theme: "vs-dark", readOnly: false });
     expect(fakeEditors[0].options.model).toBeTruthy();
+  });
+
+  it("reveals the requested line when initialRevealLine is provided", async () => {
+    renderEditor(createRegistryHarness(), { initialRevealLine: 7 });
+
+    await waitFor(() => expect(fakeEditors).toHaveLength(1));
+    await waitFor(() => expect(fakeEditors[0].revealLineInCenter).toHaveBeenCalledWith(7));
+    expect(fakeEditors[0].setPosition).toHaveBeenCalledWith({ lineNumber: 7, column: 1 });
+  });
+
+  it("does not reveal a line when initialRevealLine is omitted", async () => {
+    renderEditor();
+    await waitFor(() => expect(fakeEditors).toHaveLength(1));
+    expect(fakeEditors[0].revealLineInCenter).not.toHaveBeenCalled();
   });
 
   it("renders markdown preview first when a renderer is provided", async () => {
