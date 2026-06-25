@@ -10,6 +10,10 @@ interface Props {
   onOpenMatch: (path: string, line: number) => void;
   /** Search tuning (debounce/minLength/limit). Mainly for tests. */
   options?: UseContentSearchOptions;
+  /** Seed the query on mount (restored from persisted view-state). */
+  initialQuery?: string;
+  /** Notified whenever the query changes, so the host can persist it. */
+  onQueryChange?: (query: string) => void;
 }
 
 /**
@@ -21,8 +25,16 @@ interface Props {
  * All heavy lifting (debounce, cancellation, the off-thread backend walk) lives
  * in `useContentSearch`; this component is presentation + keyboard nav only.
  */
-export function RepoContentSearch({ currentDir, onOpenMatch, options }: Props) {
-  const { query, setQuery, results, loading, truncated } = useContentSearch(currentDir, options);
+export function RepoContentSearch({ currentDir, onOpenMatch, options, initialQuery, onQueryChange }: Props) {
+  const { query, setQuery, results, loading, truncated } = useContentSearch(currentDir, {
+    ...options,
+    initialQuery: options?.initialQuery ?? initialQuery,
+  });
+
+  // Report query changes upward so the host can persist the last query.
+  useEffect(() => {
+    onQueryChange?.(query);
+  }, [query, onQueryChange]);
 
   const groups = useMemo(() => groupMatchesByFile(results, currentDir), [results, currentDir]);
 

@@ -99,6 +99,15 @@ describe("useContentSearch", () => {
     expect(result.current.truncated).toBe(true);
   });
 
+  it("seeds the query from initialQuery and searches on mount", async () => {
+    backend.seedFile("/repo/a.ts", "needle here");
+    const { result } = renderHook(() => useContentSearch("/repo", { ...OPTS, initialQuery: "needle" }), {
+      wrapper: wrap(backend),
+    });
+    expect(result.current.query).toBe("needle");
+    await waitFor(() => expect(result.current.results.length).toBe(1));
+  });
+
   it("cancels in-flight search on unmount", async () => {
     backend.seedFile("/repo/a.ts", "needle");
     const cancelSpy = vi.spyOn(backend, "cancelSearches");

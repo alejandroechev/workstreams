@@ -13,12 +13,14 @@
  */
 
 export interface RepoExplorerViewState {
-  activeTab?: string; // "files" | "diff" | "log" | "hooks"
+  activeTab?: string; // "files" | "diff" | "log" | "hooks" | "search"
   currentDir?: string;
   filePath?: string;
   diffMode?: string; // "unstaged" | "last_commit" | "vs_master" | ...
   diffLayout?: "split" | "unified";
   hookName?: string;
+  /** Last content-search query, restored when reopening on the Search tab. */
+  searchQuery?: string;
   mdViewMode?: "preview" | "edit" | "present";
   /** Current slide when mdViewMode === "present". */
   slideIndex?: number;
@@ -127,6 +129,7 @@ function sanitize<K extends AnyViewState["kind"]>(
       str("filePath");
       str("diffMode");
       str("hookName");
+      str("searchQuery");
       if (raw.diffLayout === "split" || raw.diffLayout === "unified") {
         out.diffLayout = raw.diffLayout;
       }

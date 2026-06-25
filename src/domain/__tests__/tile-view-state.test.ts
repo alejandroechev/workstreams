@@ -16,6 +16,17 @@ describe("parseViewState", () => {
     expect(parseViewState(JSON.stringify({ cwd: "C:\\repo" }), "repo_explorer")).toEqual({});
   });
 
+  it("repo_explorer round-trips a searchQuery", () => {
+    const out = mergeViewState(null, "repo_explorer", {
+      activeTab: "search",
+      searchQuery: "needle",
+    });
+    expect(parseViewState(out, "repo_explorer")).toEqual({
+      activeTab: "search",
+      searchQuery: "needle",
+    });
+  });
+
   it("returns the viewState sub-object for repo_explorer", () => {
     const config = JSON.stringify({
       cwd: "C:\\repo",

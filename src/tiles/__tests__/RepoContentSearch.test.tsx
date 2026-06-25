@@ -105,4 +105,25 @@ describe("RepoContentSearch", () => {
     type("zzzzz");
     await waitFor(() => expect(screen.getByTestId("content-search-empty")).toBeInTheDocument());
   });
+
+  it("seeds the input from initialQuery and reports query changes", async () => {
+    const backend = new MemoryBackend();
+    backend.seedFile("/repo/a.ts", "a needle b");
+    const onQueryChange = vi.fn();
+    function Wrapper({ children }: { children: ReactNode }) {
+      return <BackendProvider backend={backend}>{children}</BackendProvider>;
+    }
+    render(
+      <RepoContentSearch
+        currentDir="/repo"
+        onOpenMatch={vi.fn()}
+        options={{ debounceMs: 5, minLength: 2, limit: 1000 }}
+        initialQuery="needle"
+        onQueryChange={onQueryChange}
+      />,
+      { wrapper: Wrapper },
+    );
+    expect((screen.getByTestId("content-search-input") as HTMLInputElement).value).toBe("needle");
+    await waitFor(() => expect(onQueryChange).toHaveBeenCalledWith("needle"));
+  });
 });

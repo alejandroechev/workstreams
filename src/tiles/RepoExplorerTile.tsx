@@ -171,6 +171,8 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
   const [dirError, setDirError] = useState<string | null>(null);
   const [dirLoading, setDirLoading] = useState(false);
   const [searchFilter, setSearchFilter] = useState("");
+  // Last content-search ("search all files") query, persisted in view-state.
+  const [contentSearchQuery, setContentSearchQuery] = useState("");
   // View state
   const [filePath, setFilePath] = useState(initialPath || "");
   const [content, setContent] = useState<string | null>(null);
@@ -874,6 +876,7 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
       } else if (tab === "hooks") {
         void openGitHooks();
       } else if (tab === "search") {
+        if (vs.searchQuery) setContentSearchQuery(vs.searchQuery);
         setMode("search");
       }
     }
@@ -908,6 +911,7 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
       diffMode: activeTab === "diff" && activeDiffMode ? activeDiffMode : undefined,
       diffLayout: activeTab === "diff" ? diffLayout : undefined,
       hookName: activeTab === "hooks" && hookContent ? hookContent.name : undefined,
+      searchQuery: activeTab === "search" && contentSearchQuery ? contentSearchQuery : undefined,
       mdViewMode: editorViewState?.mode,
       slideIndex: editorViewState?.mode === "present" ? editorViewState?.slideIndex : undefined,
     },
@@ -1561,6 +1565,8 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
         <div style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
           <RepoContentSearch
             currentDir={currentDir}
+            initialQuery={contentSearchQuery}
+            onQueryChange={setContentSearchQuery}
             onOpenMatch={(path, line) => {
               pendingRevealLineRef.current = { path, line };
               void openFile(path);

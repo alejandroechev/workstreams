@@ -9,6 +9,8 @@ export interface UseContentSearchOptions {
   minLength?: number;
   /** Max total results requested from the backend (truncation cap). Default 1000. */
   limit?: number;
+  /** Seed the query on first mount (e.g. restored from persisted view-state). */
+  initialQuery?: string;
 }
 
 export interface UseContentSearchResult {
@@ -43,7 +45,7 @@ export function useContentSearch(
   const minLength = options?.minLength ?? DEFAULT_MIN_LENGTH;
   const limit = options?.limit ?? DEFAULT_LIMIT;
 
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useState(options?.initialQuery ?? "");
   const [results, setResults] = useState<FileSearchMatch[]>([]);
   const [loading, setLoading] = useState(false);
   const [truncated, setTruncated] = useState(false);
