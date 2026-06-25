@@ -10,7 +10,7 @@ graph TB
             Terminal["TerminalTile<br/>xterm.js + FitAddon + SerializeAddon"]
             CodeView["CodeViewerTile<br/>Monaco Editor (read-only)"]
             DocView["DocViewerTile<br/>MarkdownView (VS Code style)<br/>+ Mermaid + Prism highlighting<br/>+ Present (slides) mode"]
-            RepoExplorer["RepoExplorerTile<br/>Files / Diff / Log / Hooks"]
+            RepoExplorer["RepoExplorerTile<br/>Files / Diff / Log / Hooks / Search"]
             SessionMeta["SessionMetaTile<br/>Session + file detail"]
             Workbench["WorkbenchTile<br/>Workbench file detail"]
             DiffReview["DiffReviewTile<br/>3-pane diff/question/comments<br/>+ Monaco diff editor"]

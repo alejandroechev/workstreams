@@ -28,9 +28,13 @@ project-aware workspace:
   workstream, with live activity indicator + bell on idle. Configurable CLI
   command (default `agency copilot --yolo`; switch to `copilot --yolo` for
   the public CLI).
-- 🗂️ **Built-in repo browser** — Files / Diff / Log / Hooks tabs. Diff has
-  split / unified toggle. Audio, images, and SQLite databases preview inline.
-  Git hooks open in a syntax-highlighted editor with inline editing.
+- 🗂️ **Built-in repo browser** — Files / Diff / Log / Hooks / Search tabs. Diff
+  has split / unified toggle. Audio, images, and SQLite databases preview
+  inline. Git hooks open in a syntax-highlighted editor with inline editing.
+- 🔎 **Search all files** — the Search tab (or `Ctrl+Shift+F`) runs a fast
+  content search across the repo, grouping matches by file with highlighted
+  previews; click a result to jump straight to that line. `Ctrl+P` still does
+  filename search. Searches run off the UI thread so they never freeze the app.
 - ✏️ **Editable Monaco** — Ctrl+S + 10 s auto-save, external-modification
   detection, conflict diffs.
 - 📝 **Markdown with extras** — GFM, syntax-highlighted code, on-disk image
@@ -92,6 +96,8 @@ All app-level commands use **Alt** to avoid conflicts with terminal
 | `Alt+S` | Toggle side-by-side (when exactly 2 tiles are selected) |
 | `Alt+Arrows` | Navigate between tiles |
 | `Ctrl+S` | Save focused file editor |
+| `Ctrl+P` | Filename search (Repo Explorer) |
+| `Ctrl+Shift+F` | Content search — "search all files" (Repo Explorer) |
 | `Ctrl+Shift+V` | Toggle markdown preview / edit (VS Code parity) |
 | `Esc` | Unfocus terminal / close modal |
 
