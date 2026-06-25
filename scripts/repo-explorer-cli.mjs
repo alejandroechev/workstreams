@@ -29,6 +29,13 @@ const SKIP_DIRS = new Set([
   "__pycache__",
   ".venv",
   "venv",
+  ".turbo",
+  ".cargo",
+  ".dev",
+  "build",
+  "out",
+  ".vite",
+  "coverage",
 ]);
 const MAX_FILE_SIZE = 1_048_576; // 1 MB
 const MAX_PER_FILE = 5;
