@@ -1376,87 +1376,103 @@ async fn search_in_files(
     .map_err(|e| format!("search_in_files task failed: {e}"))
 }
 
-/// Pure helper for `search_in_files`. Tested directly; the tauri command is a thin wrapper.
+/// Pure helper for `search_in_files`. Tested directly; the tauri command is a
+/// thin wrapper. Uses the ripgrep library crates: `ignore` for a `.gitignore`-
+/// aware directory walk and `grep-searcher`/`grep-regex` for fast line matching.
+/// Default behavior is a case-insensitive literal substring match (the query is
+/// regex-escaped), preserving parity with the previous hand-rolled walk.
 pub(crate) fn search_in_files_impl(
     directory: &str,
     query: &str,
     max_total: usize,
     is_cancelled: &dyn Fn() -> bool,
 ) -> Vec<FileSearchMatch> {
-    use std::collections::VecDeque;
-    use std::io::{BufRead, BufReader};
+    use grep_regex::RegexMatcherBuilder;
+    use grep_searcher::sinks::UTF8;
+    use grep_searcher::SearcherBuilder;
 
     if query.trim().is_empty() {
         return Vec::new();
     }
     let max_per_file = 5usize;
     let max_file_size = 1_048_576u64; // 1 MB
-    let query_lower = query.to_lowercase();
     let skip_dirs: std::collections::HashSet<&str> = SEARCH_SKIP_DIRS.iter().copied().collect();
 
-    let mut results: Vec<FileSearchMatch> = Vec::new();
-    let mut queue = VecDeque::new();
-    queue.push_back(std::path::PathBuf::from(directory));
+    // Case-insensitive literal substring: escape the query so regex
+    // metacharacters are matched literally.
+    let matcher = match RegexMatcherBuilder::new()
+        .case_insensitive(true)
+        .build(&regex::escape(query))
+    {
+        Ok(m) => m,
+        Err(_) => return Vec::new(),
+    };
+    let mut searcher = SearcherBuilder::new().line_number(true).build();
 
-    while let Some(dir) = queue.pop_front() {
+    let mut results: Vec<FileSearchMatch> = Vec::new();
+
+    // `ignore` walks respecting .gitignore/.ignore and skip hidden entries
+    // (covers `.git` and dotfiles, matching the old behavior).
+    let walker = ignore::WalkBuilder::new(directory)
+        .hidden(true)
+        .git_ignore(true)
+        .git_global(false)
+        .git_exclude(true)
+        .parents(true)
+        .max_filesize(Some(max_file_size))
+        .build();
+
+    for dent in walker {
         if is_cancelled() || results.len() >= max_total {
             break;
         }
-        let entries = match std::fs::read_dir(&dir) {
-            Ok(e) => e,
+        let dent = match dent {
+            Ok(d) => d,
             Err(_) => continue,
         };
-        for entry in entries.flatten() {
-            if is_cancelled() || results.len() >= max_total {
-                break;
-            }
-            let path = entry.path();
-            let name = entry.file_name();
-            let name_str = name.to_string_lossy();
-            if path.is_dir() {
-                if !skip_dirs.contains(name_str.as_ref()) && !name_str.starts_with('.') {
-                    queue.push_back(path);
-                }
-                continue;
-            }
-            if !is_text_extension(&name_str) {
-                continue;
-            }
-            let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
-            if size > max_file_size {
-                continue;
-            }
-            let file = match std::fs::File::open(&path) {
-                Ok(f) => f,
-                Err(_) => continue,
-            };
-            let reader = BufReader::new(file);
-            let mut in_file_count = 0usize;
-            for (idx, line) in reader.lines().enumerate() {
-                if is_cancelled() {
-                    return results;
-                }
-                let line = match line {
-                    Ok(l) => l,
-                    Err(_) => break,
-                };
-                if line.to_lowercase().contains(&query_lower) {
-                    results.push(FileSearchMatch {
-                        path: path.to_string_lossy().to_string(),
-                        line_number: (idx + 1) as u32,
-                        line_text: if line.len() > 240 {
-                            line.chars().take(240).collect()
-                        } else {
-                            line
-                        },
-                    });
-                    in_file_count += 1;
-                    if in_file_count >= max_per_file || results.len() >= max_total {
-                        break;
-                    }
-                }
-            }
+        if !dent.file_type().map(|t| t.is_file()).unwrap_or(false) {
+            continue;
         }
+        let path = dent.path();
+        // Force-skip known build/output dirs even when not gitignored.
+        if path
+            .components()
+            .any(|c| skip_dirs.contains(c.as_os_str().to_string_lossy().as_ref()))
+        {
+            continue;
+        }
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+        if !is_text_extension(&name) {
+            continue;
+        }
+
+        let path_str = path.to_string_lossy().to_string();
+        let mut in_file_count = 0usize;
+        let _ = searcher.search_path(
+            &matcher,
+            path,
+            UTF8(|lnum, line| {
+                if is_cancelled() || results.len() >= max_total || in_file_count >= max_per_file {
+                    return Ok(false);
+                }
+                let text = line.strip_suffix('\n').unwrap_or(line);
+                let line_text = if text.chars().count() > 240 {
+                    text.chars().take(240).collect()
+                } else {
+                    text.to_string()
+                };
+                results.push(FileSearchMatch {
+                    path: path_str.clone(),
+                    line_number: lnum as u32,
+                    line_text,
+                });
+                in_file_count += 1;
+                Ok(true)
+            }),
+        );
     }
     results
 }
@@ -4790,14 +4806,14 @@ mod tests {
         std::fs::create_dir_all(&tmp).unwrap();
         let f = tmp.join("huge.txt");
         let mut h = std::fs::File::create(&f).unwrap();
-        for i in 0..100_000 {
+        for i in 0..50_000 {
             writeln!(h, "needle {i}").unwrap();
         }
         drop(h);
 
         // Allow ~100 cancellation polls, then trip. Because the walk polls
-        // is_cancelled once per line, it must stop after reading on the order of
-        // 100 lines — far short of the 100k-line file.
+        // is_cancelled once per matching line, it must stop after reading on the
+        // order of 100 lines — far short of the 50k-line file.
         let polls = Cell::new(0u32);
         let is_cancelled = || {
             let n = polls.get() + 1;
@@ -4807,7 +4823,7 @@ mod tests {
         let res = search_in_files_impl(tmp.to_str().unwrap(), "needle", 100_000, &is_cancelled);
         assert!(
             res.len() < 1000,
-            "cancelled search must bail mid-file, not scan 100k lines; got {} matches",
+            "cancelled search must bail mid-file, not scan 50k lines; got {} matches",
             res.len()
         );
         std::fs::remove_dir_all(&tmp).ok();
