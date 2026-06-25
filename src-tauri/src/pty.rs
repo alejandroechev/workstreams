@@ -18,10 +18,59 @@ use tauri::{AppHandle, Emitter};
 const FLUSH_INTERVAL: Duration = Duration::from_millis(16);
 const FLUSH_BYTES: usize = 4096;
 
+/// Returns how many leading bytes of `buf` are safe to emit now such that the
+/// retained remainder (if any) is only an *incomplete trailing* UTF-8 sequence.
+///
+/// - All-valid buffer → its full length (emit everything).
+/// - Ends mid-multibyte-character (truncated tail) → the valid prefix length,
+///   so the caller holds the 1–3 trailing bytes until the rest arrives. This is
+///   what prevents `from_utf8_lossy` from baking `�` into a character that was
+///   merely split across a flush boundary (the frequent TUI glyph corruption).
+/// - Genuinely invalid bytes mid-stream (not a boundary split) → the full
+///   length, so we never stall; `from_utf8_lossy` replaces them as before.
+fn flushable_prefix_len(buf: &[u8]) -> usize {
+    match std::str::from_utf8(buf) {
+        Ok(_) => buf.len(),
+        Err(e) => match e.error_len() {
+            // `None` = the error is an unexpected end of input → truncated
+            // trailing char; hold it back.
+            None => e.valid_up_to(),
+            // `Some(_)` = a real invalid sequence in the middle; flush it all.
+            Some(_) => buf.len(),
+        },
+    }
+}
+
+/// Emit the portion of `acc` that forms complete UTF-8, retaining any
+/// incomplete trailing bytes in `acc` for the next flush. Emits nothing when
+/// `acc` currently holds only an incomplete sequence.
+fn flush_prefix<F>(acc: &mut Vec<u8>, emit: &mut F)
+where
+    F: FnMut(Vec<u8>),
+{
+    let n = flushable_prefix_len(acc);
+    if n == 0 {
+        return;
+    }
+    if n == acc.len() {
+        emit(std::mem::take(acc));
+    } else {
+        let rest = acc.split_off(n); // acc = [..n]; rest = [n..]
+        let prefix = std::mem::replace(acc, rest);
+        emit(prefix);
+    }
+}
+
 /// Drain `rx` of byte chunks, accumulate them, and invoke `emit` either
 /// when the accumulator reaches `flush_bytes` or `flush_interval` has
 /// elapsed since the last flush. Returns when the channel is disconnected;
 /// performs one final flush of any remaining bytes before returning.
+///
+/// Only **complete** UTF-8 is emitted: an incomplete multi-byte character at a
+/// flush boundary is held back until the rest of its bytes arrive, so the
+/// downstream `from_utf8_lossy` never corrupts a split character (the final
+/// flush on disconnect emits whatever remains, lossily, to avoid dropping a
+/// truncated tail).
 ///
 /// Extracted as a standalone function so it can be unit-tested without
 /// a live PTY / Tauri AppHandle (see `tests::run_batcher_*` below).
@@ -45,18 +94,22 @@ pub fn run_batcher<F>(
             Ok(chunk) => {
                 acc.extend_from_slice(&chunk);
                 if acc.len() >= flush_bytes {
-                    emit(std::mem::take(&mut acc));
+                    flush_prefix(&mut acc, &mut emit);
                     last_flush = Instant::now();
                 }
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 if !acc.is_empty() {
-                    emit(std::mem::take(&mut acc));
+                    flush_prefix(&mut acc, &mut emit);
+                    // Reset the timer even if nothing was emitted (acc held only
+                    // an incomplete trailing char) so we wait a full interval for
+                    // its remaining bytes instead of busy-spinning.
                     last_flush = Instant::now();
                 }
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
                 if !acc.is_empty() {
+                    // Final flush: emit everything, including any truncated tail.
                     emit(std::mem::take(&mut acc));
                 }
                 break;
@@ -405,5 +458,73 @@ mod tests {
             0,
             "no flush when nothing was sent"
         );
+    }
+
+    // ── UTF-8 boundary handling ──────────────────────────────────────────
+
+    #[test]
+    fn flushable_prefix_len_handles_boundaries() {
+        // All ASCII → whole buffer.
+        assert_eq!(flushable_prefix_len(b"abc"), 3);
+        // Complete 3-byte char (€ = E2 82 AC) → whole buffer.
+        assert_eq!(flushable_prefix_len(&[0xE2, 0x82, 0xAC]), 3);
+        // Truncated trailing multibyte → only the valid prefix is flushable.
+        assert_eq!(flushable_prefix_len(&[0xE2, 0x82]), 0);
+        assert_eq!(flushable_prefix_len(&[b'a', 0xE2, 0x82]), 1);
+        // Genuinely invalid byte (not a boundary split) → flush all so we never
+        // stall; from_utf8_lossy will replace it downstream.
+        assert_eq!(flushable_prefix_len(&[0xFF]), 1);
+        assert_eq!(flushable_prefix_len(&[0xFF, b'a']), 2);
+    }
+
+    #[test]
+    fn batcher_holds_back_split_multibyte_char() {
+        // '€' (E2 82 AC) arriving split across two reads must be emitted as one
+        // complete character, never corrupted into replacement glyphs.
+        let (tx, rx) = test_mpsc::channel::<Vec<u8>>();
+        let emitted: Arc<TestMutex<Vec<Vec<u8>>>> = Arc::new(TestMutex::new(Vec::new()));
+        let captured = Arc::clone(&emitted);
+        let handle = std::thread::spawn(move || {
+            run_batcher(rx, Duration::from_millis(20), 4096, move |c| {
+                captured.lock().unwrap().push(c);
+            });
+        });
+        tx.send(vec![0xE2, 0x82]).unwrap(); // first 2 bytes of '€'
+        std::thread::sleep(Duration::from_millis(70)); // interval passes: nothing emittable yet
+        assert_eq!(
+            emitted.lock().unwrap().len(),
+            0,
+            "must not emit an incomplete character"
+        );
+        tx.send(vec![0xAC]).unwrap(); // completing byte
+        std::thread::sleep(Duration::from_millis(70));
+        drop(tx);
+        handle.join().unwrap();
+        let out = emitted.lock().unwrap();
+        assert_eq!(out.len(), 1, "expected one event with the complete char");
+        assert_eq!(out[0], vec![0xE2, 0x82, 0xAC]);
+        // And it decodes cleanly with no replacement character.
+        assert_eq!(String::from_utf8_lossy(&out[0]), "€");
+    }
+
+    #[test]
+    fn batcher_flushes_genuinely_invalid_bytes_without_stalling() {
+        // A real invalid byte must still be flushed (it can never "complete"),
+        // so the pipeline never stalls waiting for it.
+        let (tx, rx) = test_mpsc::channel::<Vec<u8>>();
+        let emitted: Arc<TestMutex<Vec<Vec<u8>>>> = Arc::new(TestMutex::new(Vec::new()));
+        let captured = Arc::clone(&emitted);
+        let handle = std::thread::spawn(move || {
+            run_batcher(rx, Duration::from_millis(20), 4096, move |c| {
+                captured.lock().unwrap().push(c);
+            });
+        });
+        tx.send(vec![0xFF]).unwrap();
+        std::thread::sleep(Duration::from_millis(70));
+        drop(tx);
+        handle.join().unwrap();
+        let out = emitted.lock().unwrap();
+        assert_eq!(out.len(), 1, "invalid byte must be flushed, not retained");
+        assert_eq!(out[0], vec![0xFF]);
     }
 }
