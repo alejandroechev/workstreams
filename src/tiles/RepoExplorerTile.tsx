@@ -1065,6 +1065,25 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
           {dm === "unstaged" ? "Unstaged" : dm === "last_commit" ? "Last Commit" : "vs Master"}
         </button>
       ))}
+      {activeDiffMode && diffFilePath && (
+        <span
+          data-testid="diff-current-file"
+          title={diffFilePath}
+          style={{
+            flex: 1,
+            minWidth: 0,
+            marginLeft: 8,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+            fontSize: 11,
+            color: "#cdd6f4",
+            fontWeight: 600,
+          }}
+        >
+          {diffFilePath.split(/[\\/]/).filter(Boolean).pop()}
+        </span>
+      )}
       {activeDiffMode && (
         <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
           <span style={{ fontSize: 10, color: "#6c7086" }} data-testid="diff-file-count">
@@ -1125,12 +1144,18 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
                     fontSize: 11,
                     color: f.path === diffFilePath ? "#cdd6f4" : "#a6adc8",
                     background: f.path === diffFilePath ? "#313244" : "transparent",
+                    // Expand each row to its content width so long paths are
+                    // reachable via horizontal scroll, while still filling the
+                    // panel width for short paths (so hover/selection spans it).
+                    width: "max-content",
+                    minWidth: "100%",
+                    boxSizing: "border-box",
                   }}
                   onMouseEnter={(e) => { if (f.path !== diffFilePath) (e.currentTarget as HTMLElement).style.background = "#1e1e2e"; }}
                   onMouseLeave={(e) => { if (f.path !== diffFilePath) (e.currentTarget as HTMLElement).style.background = "transparent"; }}
                 >
                   <span style={{ color: badgeColor, fontWeight: 600, flexShrink: 0, width: 12, textAlign: "center" }}>{f.status}</span>
-                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.path}</span>
+                  <span style={{ whiteSpace: "nowrap" }}>{f.path}</span>
                 </div>
               );
             })}
@@ -1978,5 +2003,6 @@ const diffFilePanelStyle: React.CSSProperties = {
   borderRight: "1px solid #313244",
   background: "#181825",
   overflowY: "auto",
+  overflowX: "auto",
   flexShrink: 0,
 };
