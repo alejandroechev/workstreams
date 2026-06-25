@@ -1258,8 +1258,15 @@ fn ping() -> Result<u64, String> {
 
 /// Recursively search for files matching a query (case-insensitive filename match).
 /// Cancels on epoch bump. Returns whatever it has found at the cancellation point.
+///
+/// NON-BLOCKING: the actual filesystem walk runs on a blocking worker thread via
+/// `spawn_blocking`, so it never occupies Tauri's main/IPC thread. A synchronous
+/// command would walk inline on that thread and freeze every other
+/// tile/workstream command until the walk finished (the whole-app hang we
+/// explicitly prevent). We only clone the lock-free `search_epoch` Arc out of
+/// `state` here (cheap, on the command thread); the walk holds no shared lock.
 #[tauri::command]
-fn search_files(
+async fn search_files(
     state: State<'_, AppState>,
     directory: String,
     query: String,
@@ -1270,13 +1277,17 @@ fn search_files(
         .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
         + 1;
     let epoch_ref = state.search_epoch.clone();
-    let is_cancelled = move || epoch_ref.load(std::sync::atomic::Ordering::Relaxed) != my_epoch;
-    Ok(search_files_impl(
-        &directory,
-        &query,
-        limit.unwrap_or(200) as usize,
-        &is_cancelled,
-    ))
+    tauri::async_runtime::spawn_blocking(move || {
+        let is_cancelled = move || epoch_ref.load(std::sync::atomic::Ordering::Relaxed) != my_epoch;
+        search_files_impl(
+            &directory,
+            &query,
+            limit.unwrap_or(200) as usize,
+            &is_cancelled,
+        )
+    })
+    .await
+    .map_err(|e| format!("search_files task failed: {e}"))
 }
 
 /// Pure helper for `search_files`. Tested directly; the tauri command is a thin wrapper.
@@ -1331,8 +1342,14 @@ struct FileSearchMatch {
 
 /// Recursively search for content matches inside files (case-insensitive substring).
 /// Restricted to a text-file extension whitelist. Cancels on epoch bump.
+///
+/// NON-BLOCKING: like `search_files`, the walk runs on a blocking worker thread
+/// via `spawn_blocking` so it never occupies Tauri's main/IPC thread — a content
+/// search over a large tree must not freeze unrelated tile/workstream commands.
+/// Only the lock-free `search_epoch` Arc is read from `state` on the command
+/// thread; the walk holds no shared lock.
 #[tauri::command]
-fn search_in_files(
+async fn search_in_files(
     state: State<'_, AppState>,
     directory: String,
     query: String,
@@ -1346,13 +1363,17 @@ fn search_in_files(
         .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
         + 1;
     let epoch_ref = state.search_epoch.clone();
-    let is_cancelled = move || epoch_ref.load(std::sync::atomic::Ordering::Relaxed) != my_epoch;
-    Ok(search_in_files_impl(
-        &directory,
-        &query,
-        limit.unwrap_or(200) as usize,
-        &is_cancelled,
-    ))
+    tauri::async_runtime::spawn_blocking(move || {
+        let is_cancelled = move || epoch_ref.load(std::sync::atomic::Ordering::Relaxed) != my_epoch;
+        search_in_files_impl(
+            &directory,
+            &query,
+            limit.unwrap_or(200) as usize,
+            &is_cancelled,
+        )
+    })
+    .await
+    .map_err(|e| format!("search_in_files task failed: {e}"))
 }
 
 /// Pure helper for `search_in_files`. Tested directly; the tauri command is a thin wrapper.
@@ -4700,6 +4721,95 @@ mod tests {
         let always_cancel = || true;
         let res = search_in_files_impl(tmp.to_str().unwrap(), "needle", 200, &always_cancel);
         assert!(res.is_empty(), "cancellation should yield empty results");
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    // ── No-hang guarantee (phase1-no-hang-test) ───────────────────────────
+    //
+    // The hard requirement: no tile/workstream operation may hang the whole
+    // app. The search commands enforce this by (a) running the filesystem walk
+    // on a `spawn_blocking` worker thread so it never occupies Tauri's main/IPC
+    // thread, and (b) observing cancellation frequently (per line) so a
+    // superseded search stops almost immediately. The two tests below lock in
+    // both properties.
+
+    #[test]
+    fn search_offload_does_not_serialize_blocking_tasks() {
+        // Mechanism behind the no-hang guarantee: the search command offloads
+        // its walk via `spawn_blocking`, so a long-running search runs on its
+        // own blocking thread while a concurrent command still makes progress
+        // (it is NOT queued behind the search). If blocking tasks serialized,
+        // `fast` could not finish while `slow` is still running.
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+
+        let release = Arc::new(AtomicBool::new(false));
+        let slow_done = Arc::new(AtomicBool::new(false));
+        let release_a = release.clone();
+        let slow_done_a = slow_done.clone();
+
+        tauri::async_runtime::block_on(async move {
+            let slow = tauri::async_runtime::spawn_blocking(move || {
+                // Spin until released, with a hard safety cap so a broken
+                // assumption can never hang the test suite.
+                let start = std::time::Instant::now();
+                while !release_a.load(Ordering::Relaxed) {
+                    if start.elapsed() > std::time::Duration::from_secs(5) {
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                }
+                slow_done_a.store(true, Ordering::Relaxed);
+            });
+
+            // A concurrent, unrelated "command" completes immediately even while
+            // `slow` is still spinning.
+            let fast = tauri::async_runtime::spawn_blocking(|| 42u32);
+            let fast_val = fast.await.expect("fast blocking task should join");
+            assert_eq!(fast_val, 42);
+            assert!(
+                !slow_done.load(Ordering::Relaxed),
+                "slow task should still be running; blocking tasks must not serialize"
+            );
+
+            release.store(true, Ordering::Relaxed);
+            slow.await.expect("slow blocking task should join");
+            assert!(slow_done.load(Ordering::Relaxed));
+        });
+    }
+
+    #[test]
+    fn search_in_files_cancellation_observed_mid_file() {
+        // The worst case for a hang is a single enormous file: the walk must
+        // observe cancellation *per line*, not only at file/dir boundaries, so
+        // a superseded search over a huge file bails almost immediately instead
+        // of reading the whole thing.
+        use std::cell::Cell;
+
+        let tmp = std::env::temp_dir().join(format!("rxs-midfile-cancel-{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let f = tmp.join("huge.txt");
+        let mut h = std::fs::File::create(&f).unwrap();
+        for i in 0..100_000 {
+            writeln!(h, "needle {i}").unwrap();
+        }
+        drop(h);
+
+        // Allow ~100 cancellation polls, then trip. Because the walk polls
+        // is_cancelled once per line, it must stop after reading on the order of
+        // 100 lines — far short of the 100k-line file.
+        let polls = Cell::new(0u32);
+        let is_cancelled = || {
+            let n = polls.get() + 1;
+            polls.set(n);
+            n > 100
+        };
+        let res = search_in_files_impl(tmp.to_str().unwrap(), "needle", 100_000, &is_cancelled);
+        assert!(
+            res.len() < 1000,
+            "cancelled search must bail mid-file, not scan 100k lines; got {} matches",
+            res.len()
+        );
         std::fs::remove_dir_all(&tmp).ok();
     }
 
