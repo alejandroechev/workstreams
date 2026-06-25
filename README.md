@@ -32,9 +32,11 @@ project-aware workspace:
   has split / unified toggle. Audio, images, and SQLite databases preview
   inline. Git hooks open in a syntax-highlighted editor with inline editing.
 - 🔎 **Search all files** — the Search tab (or `Ctrl+Shift+F`) runs a fast
-  content search across the repo, grouping matches by file with highlighted
-  previews; click a result to jump straight to that line. `Ctrl+P` still does
+  content search across the repo, respecting `.gitignore`, grouping matches by
+  file with highlighted previews; click a result to jump straight to that line.
+  Toggle case-sensitive (`Aa`) or regex (`.*`) matching. `Ctrl+P` still does
   filename search. Searches run off the UI thread so they never freeze the app.
+  See [ADR 012](docs/adrs/012-repo-content-search.md).
 - ✏️ **Editable Monaco** — Ctrl+S + 10 s auto-save, external-modification
   detection, conflict diffs.
 - 📝 **Markdown with extras** — GFM, syntax-highlighted code, on-disk image
