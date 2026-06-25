@@ -39,7 +39,7 @@ if [ -n "$REMOTE_REF" ]; then
   RANGE="$REMOTE_REF..HEAD"
   SOURCE_LINES=$(git diff --numstat $RANGE -- 'src/*' 'src-tauri/src/*' | awk '{ sum += $1 + $2 } END { print sum+0 }')
   DOC_CHANGES=$(git diff --name-only $RANGE -- 'README.md' 'docs/' 2>/dev/null | wc -l | awk '{print $1+0}')
-  BYPASS=$(git log $RANGE --format='%B' | grep -c '\[no-docs:' || echo 0)
+  BYPASS=$(git log $RANGE --format='%B' | grep -c '\[no-docs:' || true)
   if [ "$SOURCE_LINES" -gt 200 ] && [ "$DOC_CHANGES" -eq 0 ] && [ "$BYPASS" -eq 0 ]; then
     echo "   Source lines: $SOURCE_LINES, doc files: $DOC_CHANGES, bypass: $BYPASS"
     fail "Smart doc gate: $SOURCE_LINES lines of source changed but no docs touched. Update README.md / docs/system-diagram.md / docs/adrs/ — or add '[no-docs: <reason>]' to a commit message"
