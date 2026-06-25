@@ -30,12 +30,14 @@ import {
   TableCellsIcon,
   CheckIcon,
   XMarkIcon,
+  MagnifyingGlassIcon,
 } from "@heroicons/react/24/outline";
 import { SqliteTableView, fileSqliteOps } from "../ui/components/SqliteTableView";
 import { FileContextMenu } from "../ui/components/FileContextMenu";
 import { ZoomableImage } from "../ui/components/ZoomableImage";
 import { openPath } from "@tauri-apps/plugin-opener";
 import { useFileComments } from "../files/useFileComments";
+import { RepoContentSearch } from "./RepoContentSearch";
 import { debounce } from "../domain/debounce";
 import { getAppSettings, subscribeAppSettings } from "../domain/app-settings";
 import { parseViewState } from "../domain/tile-view-state";
@@ -60,7 +62,7 @@ interface DirEntry {
   size: number;
 }
 
-type Mode = "browse" | "view" | "audio" | "image" | "log" | "hooks" | "sqlite";
+type Mode = "browse" | "view" | "audio" | "image" | "log" | "hooks" | "sqlite" | "search";
 type DiffMode = "unstaged" | "last_commit" | "branch_vs_master";
 
 const MARKDOWN_EXTS = new Set(["md", "mdx", "markdown"]);
@@ -267,6 +269,9 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
 
   // Monaco editor ref (to trigger find widget programmatically)
   const editorRef = useRef<unknown>(null);
+  // Line to reveal once the next opened file's editor mounts (set when a
+  // content-search result is opened; consumed by the editor onMount).
+  const pendingRevealLineRef = useRef<number | null>(null);
 
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -514,6 +519,15 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
         setShowFileSearch(true);
         setFileSearchQuery("");
         setFileSearchResults([]);
+      } else if (e.ctrlKey && e.shiftKey && (e.key === "F" || e.key === "f")) {
+        // Ctrl+Shift+F: open the content-search ("search all files") tab.
+        e.preventDefault();
+        e.stopPropagation();
+        setActiveDiffMode(null);
+        setContent(null);
+        setFilePath("");
+        setEditorSnapshot(null);
+        setMode("search");
       }
     };
     window.addEventListener("keydown", handler);
@@ -774,8 +788,9 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
   }, [hookContent, hookDraft]);
 
   // ─── Tabs ────────────────────────────────────────────────────────────
-  type TabId = "files" | "diff" | "log" | "hooks";
+  type TabId = "files" | "diff" | "log" | "hooks" | "search";
   const activeTab: TabId =
+    mode === "search" ? "search" :
     mode === "log" ? "log" :
     mode === "hooks" ? "hooks" :
     activeDiffMode ? "diff" :
@@ -823,6 +838,16 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
         setDiffFilePath("");
         openGitHooks();
         break;
+      case "search":
+        setActiveDiffMode(null);
+        setDiffBefore(""); setDiffAfter("");
+        setDiffFiles([]);
+        setDiffFilePath("");
+        setContent(null);
+        setFilePath("");
+        setEditorSnapshot(null);
+        setMode("search");
+        break;
     }
   }, [activeTab, activateDiffMode, openGitLog, openGitHooks]);
 
@@ -847,6 +872,8 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
         void openGitLog();
       } else if (tab === "hooks") {
         void openGitHooks();
+      } else if (tab === "search") {
+        setMode("search");
       }
     }
     if (vs.filePath && (!tab || tab === "files")) {
@@ -901,6 +928,7 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
     { id: "diff", label: "Diff", icon: CodeBracketSquareIcon },
     { id: "log", label: "Log", icon: ClockIcon },
     { id: "hooks", label: "Hooks", icon: BoltIcon },
+    { id: "search", label: "Search", icon: MagnifyingGlassIcon },
   ];
   const tabBar = (
     <div style={tabBarStyle} data-testid="repo-explorer-tabs">
@@ -1517,6 +1545,25 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
               </div>
             );
           })}
+        </div>
+        {overlays}
+      </div>
+    );
+  }
+
+  // ─── Search mode (content / "search all files") ───
+  if (mode === "search") {
+    return (
+      <div ref={containerRef} style={containerStyle}>
+        {tabBar}
+        <div style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
+          <RepoContentSearch
+            currentDir={currentDir}
+            onOpenMatch={(path, line) => {
+              pendingRevealLineRef.current = line;
+              void openFile(path);
+            }}
+          />
         </div>
         {overlays}
       </div>
