@@ -126,4 +126,27 @@ describe("RepoContentSearch", () => {
     expect((screen.getByTestId("content-search-input") as HTMLInputElement).value).toBe("needle");
     await waitFor(() => expect(onQueryChange).toHaveBeenCalledWith("needle"));
   });
+
+  it("case toggle filters to exact-case matches", async () => {
+    const backend = new MemoryBackend();
+    backend.seedFile("/repo/a.ts", "Needle\nneedle");
+    renderWith(backend);
+    type("needle");
+    // Case-insensitive: both lines match.
+    await waitFor(() => expect(screen.getByTestId("content-search-match-/repo/a.ts-2")).toBeInTheDocument());
+    expect(screen.getByTestId("content-search-match-/repo/a.ts-1")).toBeInTheDocument();
+    // Enable case-sensitive: only the exact "needle" (line 2) remains.
+    fireEvent.click(screen.getByTestId("content-search-case"));
+    await waitFor(() => expect(screen.queryByTestId("content-search-match-/repo/a.ts-1")).not.toBeInTheDocument());
+    expect(screen.getByTestId("content-search-match-/repo/a.ts-2")).toBeInTheDocument();
+  });
+
+  it("regex toggle enables regular-expression matching", async () => {
+    const backend = new MemoryBackend();
+    backend.seedFile("/repo/a.ts", "foo123\nbar");
+    renderWith(backend);
+    fireEvent.click(screen.getByTestId("content-search-regex"));
+    type("foo\\d+");
+    await waitFor(() => expect(screen.getByTestId("content-search-match-/repo/a.ts-1")).toBeInTheDocument());
+  });
 });

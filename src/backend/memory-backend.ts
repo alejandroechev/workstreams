@@ -348,18 +348,35 @@ export class MemoryBackend implements Backend {
     });
   }
 
-  async searchInFiles(_directory: string, query: string, limit?: number): Promise<import("./types").FileSearchMatch[]> {
-    const q = query.toLowerCase();
-    if (!q.trim()) return [];
+  async searchInFiles(_directory: string, query: string, limit?: number, options?: import("./types").ContentSearchOptions): Promise<import("./types").FileSearchMatch[]> {
+    if (!query.trim()) return [];
     const max = limit ?? 200;
     const maxPerFile = 5;
     const results: import("./types").FileSearchMatch[] = [];
+    // Build a matcher mirroring the Rust engine: literal substring by default,
+    // optional regex, case-insensitive unless caseSensitive is set.
+    const flags = options?.caseSensitive ? "" : "i";
+    let test: (line: string) => boolean;
+    if (options?.regex) {
+      let re: RegExp;
+      try {
+        re = new RegExp(query, flags);
+      } catch {
+        return [];
+      }
+      test = (line) => re.test(line);
+    } else if (options?.caseSensitive) {
+      test = (line) => line.includes(query);
+    } else {
+      const q = query.toLowerCase();
+      test = (line) => line.toLowerCase().includes(q);
+    }
     for (const [path, content] of this.files.entries()) {
       if (results.length >= max) break;
       const lines = content.split("\n");
       let perFile = 0;
       for (let i = 0; i < lines.length; i++) {
-        if (lines[i].toLowerCase().includes(q)) {
+        if (test(lines[i])) {
           results.push({ path, line_number: i + 1, line_text: lines[i].slice(0, 240) });
           perFile++;
           if (perFile >= maxPerFile || results.length >= max) break;

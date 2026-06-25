@@ -16,6 +16,12 @@ export interface FileSearchMatch {
   line_text: string;
 }
 
+/** Query semantics for content search. Defaults: case-insensitive, literal. */
+export interface ContentSearchOptions {
+  caseSensitive?: boolean;
+  regex?: boolean;
+}
+
 export interface Backend {
   // Projects
   listProjects(): Promise<Project[]>;
@@ -73,7 +79,7 @@ export interface Backend {
   unwatchSession(tileId: string): Promise<void>;
   // File search
   searchFiles(directory: string, query: string): Promise<string[]>;
-  searchInFiles(directory: string, query: string, limit?: number): Promise<FileSearchMatch[]>;
+  searchInFiles(directory: string, query: string, limit?: number, options?: ContentSearchOptions): Promise<FileSearchMatch[]>;
   /** Bump the global search epoch so any in-flight search bails out on its next iteration. */
   cancelSearches(): Promise<void>;
   // Git diff

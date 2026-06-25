@@ -11,6 +11,10 @@ export interface UseContentSearchOptions {
   limit?: number;
   /** Seed the query on first mount (e.g. restored from persisted view-state). */
   initialQuery?: string;
+  /** Match case-sensitively (default false). */
+  caseSensitive?: boolean;
+  /** Treat the query as a regular expression (default false = literal). */
+  regex?: boolean;
 }
 
 export interface UseContentSearchResult {
@@ -20,6 +24,8 @@ export interface UseContentSearchResult {
   loading: boolean;
   /** True when the backend returned the full `limit` (results were capped). */
   truncated: boolean;
+  /** Set when the search failed (e.g. an invalid regex), else null. */
+  error: string | null;
 }
 
 const DEFAULT_DEBOUNCE_MS = 200;
@@ -44,11 +50,14 @@ export function useContentSearch(
   const debounceMs = options?.debounceMs ?? DEFAULT_DEBOUNCE_MS;
   const minLength = options?.minLength ?? DEFAULT_MIN_LENGTH;
   const limit = options?.limit ?? DEFAULT_LIMIT;
+  const caseSensitive = options?.caseSensitive ?? false;
+  const regex = options?.regex ?? false;
 
   const [query, setQuery] = useState(options?.initialQuery ?? "");
   const [results, setResults] = useState<FileSearchMatch[]>([]);
   const [loading, setLoading] = useState(false);
   const [truncated, setTruncated] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     const trimmed = query.trim();
@@ -57,6 +66,7 @@ export function useContentSearch(
       setResults([]);
       setTruncated(false);
       setLoading(false);
+      setError(null);
       return;
     }
 
@@ -71,15 +81,17 @@ export function useContentSearch(
       }
       if (cancelled) return;
       setLoading(true);
+      setError(null);
       try {
-        const found = await backend.searchInFiles(currentDir, trimmed, limit);
+        const found = await backend.searchInFiles(currentDir, trimmed, limit, { caseSensitive, regex });
         if (cancelled) return;
         setResults(found);
         setTruncated(found.length >= limit);
-      } catch {
+      } catch (e) {
         if (!cancelled) {
           setResults([]);
           setTruncated(false);
+          setError(e instanceof Error ? e.message : String(e));
         }
       } finally {
         if (!cancelled) setLoading(false);
@@ -92,9 +104,9 @@ export function useContentSearch(
       // Bump the epoch immediately so any running walk stops promptly.
       void backend.cancelSearches();
     };
-  }, [query, currentDir, backend, debounceMs, minLength, limit]);
+  }, [query, currentDir, backend, debounceMs, minLength, limit, caseSensitive, regex]);
 
   const setQueryStable = useCallback((q: string) => setQuery(q), []);
 
-  return { query, setQuery: setQueryStable, results, loading, truncated };
+  return { query, setQuery: setQueryStable, results, loading, truncated, error };
 }

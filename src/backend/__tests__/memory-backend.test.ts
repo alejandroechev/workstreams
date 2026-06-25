@@ -325,6 +325,29 @@ describe("MemoryBackend", () => {
       const results = await backend.searchInFiles("/p", "needle", 3);
       expect(results.length).toBe(3);
     });
+
+    it("matches case-sensitively when the option is set", async () => {
+      backend.seedFile("/p/a.ts", "Needle\nneedle\nNEEDLE");
+      const ci = await backend.searchInFiles("/p", "needle");
+      expect(ci.length).toBe(3);
+      const cs = await backend.searchInFiles("/p", "needle", undefined, { caseSensitive: true });
+      expect(cs.map((m) => m.line_number)).toEqual([2]);
+    });
+
+    it("treats the query as a regex when the option is set", async () => {
+      backend.seedFile("/p/a.ts", "foo123\nfooXYZ\nbar123");
+      const res = await backend.searchInFiles("/p", "foo\\d+", undefined, { regex: true });
+      expect(res.map((m) => m.line_number)).toEqual([1]);
+      // Same query as a literal substring → no match.
+      const lit = await backend.searchInFiles("/p", "foo\\d+");
+      expect(lit).toEqual([]);
+    });
+
+    it("returns empty for an invalid regex", async () => {
+      backend.seedFile("/p/a.ts", "anything");
+      const res = await backend.searchInFiles("/p", "(unclosed", undefined, { regex: true });
+      expect(res).toEqual([]);
+    });
   });
 
   describe("gitDiff", () => {

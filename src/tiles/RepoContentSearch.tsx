@@ -26,9 +26,13 @@ interface Props {
  * in `useContentSearch`; this component is presentation + keyboard nav only.
  */
 export function RepoContentSearch({ currentDir, onOpenMatch, options, initialQuery, onQueryChange }: Props) {
-  const { query, setQuery, results, loading, truncated } = useContentSearch(currentDir, {
+  const [caseSensitive, setCaseSensitive] = useState(false);
+  const [regex, setRegex] = useState(false);
+  const { query, setQuery, results, loading, truncated, error } = useContentSearch(currentDir, {
     ...options,
     initialQuery: options?.initialQuery ?? initialQuery,
+    caseSensitive,
+    regex,
   });
 
   // Report query changes upward so the host can persist the last query.
@@ -78,7 +82,20 @@ export function RepoContentSearch({ currentDir, onOpenMatch, options, initialQue
   };
 
   const hasQuery = query.trim().length > 0;
-  const showEmpty = hasQuery && !loading && results.length === 0;
+  const showEmpty = hasQuery && !loading && results.length === 0 && !error;
+
+  const toggleStyle = (active: boolean): CSSProperties => ({
+    background: active ? "#45475a" : "transparent",
+    color: active ? "#cdd6f4" : "#6c7086",
+    border: "1px solid #313244",
+    borderRadius: 3,
+    width: 22,
+    height: 20,
+    cursor: "pointer",
+    fontSize: 11,
+    fontFamily: "monospace",
+    flexShrink: 0,
+  });
 
   return (
     <div style={panelStyle} data-testid="content-search-panel">
@@ -93,11 +110,34 @@ export function RepoContentSearch({ currentDir, onOpenMatch, options, initialQue
           placeholder="Search all files…"
           style={inputStyle}
         />
+        <button
+          data-testid="content-search-case"
+          title="Match case"
+          aria-pressed={caseSensitive}
+          onClick={() => setCaseSensitive((v) => !v)}
+          style={toggleStyle(caseSensitive)}
+        >
+          Aa
+        </button>
+        <button
+          data-testid="content-search-regex"
+          title="Use regular expression"
+          aria-pressed={regex}
+          onClick={() => setRegex((v) => !v)}
+          style={toggleStyle(regex)}
+        >
+          .*
+        </button>
       </div>
 
       <div style={statusRowStyle}>
         {loading && <span data-testid="content-search-loading">Searching…</span>}
-        {!loading && truncated && (
+        {!loading && error && (
+          <span data-testid="content-search-error" style={{ color: "#f38ba8" }}>
+            {error}
+          </span>
+        )}
+        {!loading && !error && truncated && (
           <span data-testid="content-search-truncated" style={{ color: "#f9e2af" }}>
             Showing first {results.length} results — refine your query
           </span>
@@ -133,7 +173,10 @@ export function RepoContentSearch({ currentDir, onOpenMatch, options, initialQue
                 >
                   <span style={lineNoStyle}>{mtch.line_number}</span>
                   <span style={lineTextStyle}>
-                    {computeHighlightSegments(mtch.line_text, query).map((seg, i) =>
+                    {(regex
+                      ? [{ text: mtch.line_text, match: false }]
+                      : computeHighlightSegments(mtch.line_text, query, caseSensitive)
+                    ).map((seg, i) =>
                       seg.match ? (
                         <mark key={i} style={markStyle}>
                           {seg.text}

@@ -241,11 +241,11 @@ describe("TauriBackend", () => {
     expect(invoke).toHaveBeenCalledWith("search_files", { directory: "/", query: "a" });
   });
 
-  it("searchInFiles passes directory, query, and limit", async () => {
+  it("searchInFiles passes directory, query, limit, and options", async () => {
     invoke.mockResolvedValueOnce([{ path: "a.ts", line_number: 1, line_text: "foo" }]);
-    const result = await backend.searchInFiles("/", "foo", 25);
+    const result = await backend.searchInFiles("/", "foo", 25, { caseSensitive: true, regex: false });
     expect(result).toEqual([{ path: "a.ts", line_number: 1, line_text: "foo" }]);
-    expect(invoke).toHaveBeenCalledWith("search_in_files", { directory: "/", query: "foo", limit: 25 });
+    expect(invoke).toHaveBeenCalledWith("search_in_files", { directory: "/", query: "foo", limit: 25, options: { caseSensitive: true, regex: false } });
   });
 
   it("getLayout passes workstreamId", async () => {

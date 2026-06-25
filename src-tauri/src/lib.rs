@@ -1340,8 +1340,20 @@ struct FileSearchMatch {
     line_text: String,
 }
 
-/// Recursively search for content matches inside files (case-insensitive substring).
-/// Restricted to a text-file extension whitelist. Cancels on epoch bump.
+/// Query semantics for content search. Defaults to case-insensitive literal
+/// substring (parity with the original behavior).
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ContentSearchOptions {
+    #[serde(default)]
+    case_sensitive: bool,
+    #[serde(default)]
+    regex: bool,
+}
+
+/// Recursively search for content matches inside files. Default is a
+/// case-insensitive literal substring; `options` enables case-sensitive and/or
+/// regex matching. Cancels on epoch bump.
 ///
 /// NON-BLOCKING: like `search_files`, the walk runs on a blocking worker thread
 /// via `spawn_blocking` so it never occupies Tauri's main/IPC thread — a content
@@ -1354,9 +1366,18 @@ async fn search_in_files(
     directory: String,
     query: String,
     limit: Option<u32>,
+    options: Option<ContentSearchOptions>,
 ) -> Result<Vec<FileSearchMatch>, String> {
     if query.trim().is_empty() {
         return Ok(Vec::new());
+    }
+    let opts = options.unwrap_or_default();
+    // Surface invalid user regex as an error so the UI can show it (rather than
+    // silently returning no results).
+    if opts.regex {
+        if let Err(e) = grep_regex::RegexMatcher::new(&query) {
+            return Err(format!("Invalid regex: {e}"));
+        }
     }
     let my_epoch = state
         .search_epoch
@@ -1365,10 +1386,11 @@ async fn search_in_files(
     let epoch_ref = state.search_epoch.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let is_cancelled = move || epoch_ref.load(std::sync::atomic::Ordering::Relaxed) != my_epoch;
-        search_in_files_impl(
+        search_in_files_impl_opts(
             &directory,
             &query,
             limit.unwrap_or(200) as usize,
+            opts,
             &is_cancelled,
         )
     })
@@ -1376,15 +1398,32 @@ async fn search_in_files(
     .map_err(|e| format!("search_in_files task failed: {e}"))
 }
 
-/// Pure helper for `search_in_files`. Tested directly; the tauri command is a
-/// thin wrapper. Uses the ripgrep library crates: `ignore` for a `.gitignore`-
-/// aware directory walk and `grep-searcher`/`grep-regex` for fast line matching.
-/// Default behavior is a case-insensitive literal substring match (the query is
-/// regex-escaped), preserving parity with the previous hand-rolled walk.
+/// Default-options wrapper (case-insensitive literal substring). Kept so the
+/// many existing tests stay unchanged; only used from tests now.
+#[cfg(test)]
 pub(crate) fn search_in_files_impl(
     directory: &str,
     query: &str,
     max_total: usize,
+    is_cancelled: &dyn Fn() -> bool,
+) -> Vec<FileSearchMatch> {
+    search_in_files_impl_opts(
+        directory,
+        query,
+        max_total,
+        ContentSearchOptions::default(),
+        is_cancelled,
+    )
+}
+
+/// Pure helper for `search_in_files`. Tested directly; the tauri command is a
+/// thin wrapper. Uses the ripgrep library crates: `ignore` for a `.gitignore`-
+/// aware directory walk and `grep-searcher`/`grep-regex` for fast line matching.
+pub(crate) fn search_in_files_impl_opts(
+    directory: &str,
+    query: &str,
+    max_total: usize,
+    options: ContentSearchOptions,
     is_cancelled: &dyn Fn() -> bool,
 ) -> Vec<FileSearchMatch> {
     use grep_regex::RegexMatcherBuilder;
@@ -1398,11 +1437,18 @@ pub(crate) fn search_in_files_impl(
     let max_file_size = 1_048_576u64; // 1 MB
     let skip_dirs: std::collections::HashSet<&str> = SEARCH_SKIP_DIRS.iter().copied().collect();
 
-    // Case-insensitive literal substring: escape the query so regex
-    // metacharacters are matched literally.
+    // Build the matcher. For non-regex queries the query is regex-escaped so it
+    // matches literally; case-insensitive unless the caller opts into
+    // case-sensitive matching. An invalid regex yields no results (the command
+    // validates + surfaces regex errors before reaching here).
+    let pattern = if options.regex {
+        query.to_string()
+    } else {
+        regex::escape(query)
+    };
     let matcher = match RegexMatcherBuilder::new()
-        .case_insensitive(true)
-        .build(&regex::escape(query))
+        .case_insensitive(!options.case_sensitive)
+        .build(&pattern)
     {
         Ok(m) => m,
         Err(_) => return Vec::new(),
@@ -4893,6 +4939,62 @@ mod tests {
             !res.iter().any(|m| m.path.contains("node_modules")),
             "node_modules must be force-skipped"
         );
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn search_in_files_case_sensitive_option() {
+        let tmp = std::env::temp_dir().join(format!("rxs-case-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::fs::write(tmp.join("a.txt"), "Needle\nneedle\nNEEDLE").unwrap();
+        let never = || false;
+
+        // Case-insensitive (default): matches all three lines.
+        let ci = search_in_files_impl(tmp.to_str().unwrap(), "needle", 200, &never);
+        assert_eq!(ci.len(), 3);
+
+        // Case-sensitive: matches only the exact-case "needle" (line 2).
+        let cs = search_in_files_impl_opts(
+            tmp.to_str().unwrap(),
+            "needle",
+            200,
+            ContentSearchOptions {
+                case_sensitive: true,
+                regex: false,
+            },
+            &never,
+        );
+        assert_eq!(cs.len(), 1);
+        assert_eq!(cs[0].line_number, 2);
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn search_in_files_regex_option() {
+        let tmp = std::env::temp_dir().join(format!("rxs-regex-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::fs::write(tmp.join("a.txt"), "foo123\nfooXYZ\nbar123").unwrap();
+        let never = || false;
+
+        // Regex: `foo\d+` matches "foo123" only (line 1).
+        let res = search_in_files_impl_opts(
+            tmp.to_str().unwrap(),
+            r"foo\d+",
+            200,
+            ContentSearchOptions {
+                case_sensitive: false,
+                regex: true,
+            },
+            &never,
+        );
+        assert_eq!(res.len(), 1);
+        assert_eq!(res[0].line_number, 1);
+
+        // Without regex, the same query is a literal substring → no match.
+        let lit = search_in_files_impl(tmp.to_str().unwrap(), r"foo\d+", 200, &never);
+        assert!(lit.is_empty());
         std::fs::remove_dir_all(&tmp).ok();
     }
 
