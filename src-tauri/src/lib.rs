@@ -2475,8 +2475,20 @@ fn detect_git_info(directory: String) -> Result<(Option<String>, Option<String>)
 
 /// Create a new git repository on disk (optionally with a GitHub remote).
 #[allow(clippy::too_many_arguments)]
+/// Create a new git repo in the background. **Non-blocking**: returns
+/// immediately and runs the scaffold + git init/commit + optional GitHub remote
+/// on a background thread, emitting `repo-create-progress` events keyed by
+/// `request_id` (`{ requestId, phase, detail, status }`). A terminal event is
+/// always emitted: on success `status:"done"` with `result`
+/// `{ directory, gitRemote, branch }`; on failure `status:"error"` with the
+/// message in `detail`. The frontend listens (filtered by its request id) and
+/// drives the create modal's per-step UI. Running it off-thread keeps the whole
+/// app responsive during the (potentially slow, network-bound) remote create +
+/// push.
 #[tauri::command]
 fn create_git_repo(
+    app: AppHandle,
+    request_id: String,
     parent: String,
     name: String,
     default_branch: String,
@@ -2486,7 +2498,7 @@ fn create_git_repo(
     create_github_remote: bool,
     github_owner: Option<String>,
     github_visibility: Option<String>,
-) -> Result<repo_create::CreateRepoResult, String> {
+) -> Result<(), String> {
     let opts = repo_create::CreateRepoOptions {
         parent,
         name,
@@ -2498,8 +2510,31 @@ fn create_git_repo(
         github_owner,
         github_visibility,
     };
-    let provider = repo_create::GhCliRemoteProvider;
-    repo_create::create_git_repo_with(&opts, &provider)
+    std::thread::spawn(move || {
+        let emit = |phase: &str,
+                    detail: &str,
+                    status: &str,
+                    result: Option<&repo_create::CreateRepoResult>| {
+            let _ = app.emit(
+                "repo-create-progress",
+                serde_json::json!({
+                    "requestId": request_id,
+                    "phase": phase,
+                    "detail": detail,
+                    "status": status,
+                    "result": result,
+                }),
+            );
+        };
+        let provider = repo_create::GhCliRemoteProvider;
+        let mut running =
+            |phase: &str, detail: &str, status: &str| emit(phase, detail, status, None);
+        match repo_create::create_git_repo_with_progress(&opts, &provider, &mut running) {
+            Ok(result) => emit("done", "Repository created", "done", Some(&result)),
+            Err(e) => emit("create-failed", &e, "error", None),
+        }
+    });
+    Ok(())
 }
 
 /// Detect if a directory is a git worktree and return parent repo info

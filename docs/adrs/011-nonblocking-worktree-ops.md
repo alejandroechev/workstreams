@@ -85,3 +85,13 @@ from id-keyed Tauri events. The sidebar row itself is the progress UI.**
 - New states are free-text only; any code that pattern-matches
   `WorkstreamStatus` must handle the three new variants (selection gating, list
   partitioning, sidebar rendering already do).
+
+## Related
+
+The same off-the-main-thread principle is applied to **new-repo creation**
+(`create_git_repo`): it runs scaffold + `git init`/commit + optional
+`gh repo create --push` on a background thread and emits id-keyed
+`repo-create-progress` events that drive per-step status in the create modal.
+This keeps the app responsive during the network-bound remote create + push.
+Progress logic lives in `create_git_repo_with_progress` (unit-tested with the
+in-memory remote provider).

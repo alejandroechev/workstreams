@@ -67,7 +67,9 @@ Pre-built Windows installers are attached to every
 ## Tour
 
 1. Click `+` in the sidebar → **Import existing repo** (pick a folder) or
-   **Create new repo** (scaffold + optional `gh repo create`).
+   **Create new repo** (scaffold + optional `gh repo create`). Repo creation
+   runs in the background with per-step progress, so the app stays responsive
+   during the (network-bound) remote create + push.
 2. The workstream opens with an empty tile canvas. Add tiles via the
    `+ Add tile` menu or shortcuts:
    - `Alt+C` Copilot session

@@ -1,7 +1,8 @@
 // @test-skip: form component, behavior covered by backend create_git_repo tests
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { PROJECT_PRESET_COLORS, isCustomProjectColor } from "../domain/colors";
 
 interface CreateRepoResult {
@@ -9,6 +10,24 @@ interface CreateRepoResult {
   git_remote: string | null;
   branch: string;
 }
+
+/** Payload of a `repo-create-progress` event emitted by the backend. */
+interface RepoCreateProgress {
+  requestId: string;
+  phase: string;
+  detail: string;
+  status: "running" | "done" | "error";
+  result?: CreateRepoResult | null;
+}
+
+/** Human-readable label for each backend progress phase. */
+const PHASE_LABELS: Record<string, string> = {
+  scaffolding: "Creating project files",
+  init: "Initializing git repository",
+  committing: "Creating initial commit",
+  "creating-remote": "Creating GitHub repository and pushing",
+  done: "Repository created",
+};
 
 interface Props {
   onCreated: (name: string, directory: string, color: string, gitRemote: string | null) => void;
@@ -26,6 +45,12 @@ export default function RepoCreateForm({ onCreated, onCancel }: Props) {
   const [visibility, setVisibility] = useState<"private" | "public">("private");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Ordered list of progress phases seen so far (for the per-step UI).
+  const [steps, setSteps] = useState<Array<{ phase: string; label: string }>>([]);
+  const unlistenRef = useRef<UnlistenFn | null>(null);
+
+  // Tear down any active progress listener on unmount.
+  useEffect(() => () => { unlistenRef.current?.(); }, []);
 
   const nameValid = NAME_PATTERN.test(name.trim()) && name.trim() !== "." && name.trim() !== "..";
   const canSubmit = !submitting && nameValid && parent.trim() !== "" && (!createRemote || owner.trim() !== "");
@@ -39,10 +64,44 @@ export default function RepoCreateForm({ onCreated, onCancel }: Props) {
     if (!canSubmit) return;
     setSubmitting(true);
     setError(null);
+    setSteps([]);
+
+    const requestId = crypto.randomUUID();
+    const nameTrimmed = name.trim();
+
+    // Listen for progress BEFORE invoking so we never miss an early event.
+    const unlisten = await listen<RepoCreateProgress>("repo-create-progress", (event) => {
+      const p = event.payload;
+      if (p.requestId !== requestId) return;
+
+      if (p.status === "error") {
+        setError(p.detail);
+        setSubmitting(false);
+        unlistenRef.current?.();
+        unlistenRef.current = null;
+        return;
+      }
+
+      const label = PHASE_LABELS[p.phase] ?? p.detail ?? p.phase;
+      setSteps((prev) =>
+        prev.some((s) => s.phase === p.phase) ? prev : [...prev, { phase: p.phase, label }],
+      );
+
+      if (p.status === "done" && p.result) {
+        unlistenRef.current?.();
+        unlistenRef.current = null;
+        onCreated(nameTrimmed, p.result.directory, color, p.result.git_remote);
+      }
+    });
+    unlistenRef.current = unlisten;
+
     try {
-      const result = await invoke<CreateRepoResult>("create_git_repo", {
+      // Fire-and-forget: the command returns immediately and the work runs on a
+      // background thread, reporting via repo-create-progress events.
+      await invoke("create_git_repo", {
+        requestId,
         parent: parent.trim(),
-        name: name.trim(),
+        name: nameTrimmed,
         defaultBranch: "master",
         createReadme: true,
         createGitignore: true,
@@ -51,10 +110,11 @@ export default function RepoCreateForm({ onCreated, onCancel }: Props) {
         githubOwner: createRemote ? owner.trim() : null,
         githubVisibility: createRemote ? visibility : null,
       });
-      onCreated(name.trim(), result.directory, color, result.git_remote);
     } catch (e) {
       setError(String(e));
       setSubmitting(false);
+      unlistenRef.current?.();
+      unlistenRef.current = null;
     }
   };
 
@@ -264,6 +324,28 @@ export default function RepoCreateForm({ onCreated, onCancel }: Props) {
             fontFamily: "monospace", whiteSpace: "pre-wrap", maxHeight: 100, overflowY: "auto",
           }}>
             {error}
+          </div>
+        )}
+
+        {/* Progress — per-step status while the repo is created in the background. */}
+        {submitting && steps.length > 0 && (
+          <div
+            data-testid="repo-create-progress"
+            style={{
+              background: "#181825", border: "1px solid #313244", borderRadius: 4,
+              padding: "8px 10px", marginBottom: 12, fontSize: 12,
+            }}
+          >
+            {steps.map((s, i) => {
+              const isLast = i === steps.length - 1;
+              const done = !isLast || s.phase === "done";
+              return (
+                <div key={s.phase} style={{ display: "flex", alignItems: "center", gap: 8, padding: "2px 0", color: done ? "#a6e3a1" : "#cdd6f4" }}>
+                  <span style={{ width: 14, textAlign: "center" }}>{done ? "✓" : "⟳"}</span>
+                  <span>{s.label}</span>
+                </div>
+              );
+            })}
           </div>
         )}
 

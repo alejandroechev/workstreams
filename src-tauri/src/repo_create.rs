@@ -183,9 +183,25 @@ fn git_has_identity() -> bool {
 
 /// Core create-repo logic. Tests inject the provider; the tauri command
 /// uses `GhCliRemoteProvider`.
+/// Convenience wrapper with no progress reporting. Used by tests; the command
+/// path uses `create_git_repo_with_progress` directly.
+#[cfg(test)]
 pub fn create_git_repo_with(
     opts: &CreateRepoOptions,
     provider: &dyn RemoteRepoProvider,
+) -> Result<CreateRepoResult, String> {
+    create_git_repo_with_progress(opts, provider, &mut |_phase, _detail, _status| {})
+}
+
+/// Repo-creation work with progress reporting. `emit(phase, detail, status)` is
+/// called as the work advances (`status` is "running" | "done" | "error"); the
+/// terminal "done"/"error" is emitted by the caller (it owns the result/id), so
+/// this only emits "running" milestones. Pure-ish (only the provider + git/fs
+/// are side-effecting) so it stays unit-testable with the in-memory provider.
+pub fn create_git_repo_with_progress(
+    opts: &CreateRepoOptions,
+    provider: &dyn RemoteRepoProvider,
+    emit: &mut dyn FnMut(&str, &str, &str),
 ) -> Result<CreateRepoResult, String> {
     validate_repo_name(&opts.name)?;
 
@@ -200,6 +216,7 @@ pub fn create_git_repo_with(
             target.display()
         ));
     }
+    emit("scaffolding", "Creating project files", "running");
     std::fs::create_dir_all(&target).map_err(|e| format!("create_dir_all failed: {e}"))?;
 
     if opts.create_readme {
@@ -218,6 +235,7 @@ pub fn create_git_repo_with(
         opts.default_branch.trim().to_string()
     };
 
+    emit("init", "Initializing git repository", "running");
     // git init -b <branch>, falling back to init + symbolic-ref for old git.
     let init_with_b = Command::new("git")
         .current_dir(&target)
@@ -250,6 +268,7 @@ pub fn create_git_repo_with(
     }
 
     if opts.initial_commit {
+        emit("committing", "Creating initial commit", "running");
         let add = Command::new("git")
             .current_dir(&target)
             .args(["add", "-A"])
@@ -291,6 +310,11 @@ pub fn create_git_repo_with(
             .filter(|s| !s.trim().is_empty())
             .ok_or_else(|| "GitHub owner is required when creating a remote".to_string())?;
         let visibility = opts.github_visibility.as_deref().unwrap_or("private");
+        emit(
+            "creating-remote",
+            "Creating GitHub repository and pushing",
+            "running",
+        );
         let url = provider.create_repo(owner, opts.name.trim(), visibility, &target)?;
         remote_url = Some(url);
     }
@@ -379,6 +403,37 @@ mod tests {
         assert!(r.git_remote.is_none());
         let readme = std::fs::read_to_string(dir.join("README.md")).unwrap();
         assert!(readme.contains("# my-repo"));
+        std::fs::remove_dir_all(&parent).ok();
+    }
+
+    #[test]
+    fn emits_progress_phases_in_order() {
+        if !git_available() {
+            eprintln!("skipping: git not available");
+            return;
+        }
+        let parent = temp_parent("progress");
+        let mut opts = base_opts(&parent, "prog-repo");
+        opts.create_github_remote = true;
+        opts.github_owner = Some("octo".into());
+        let provider = InMemoryRemoteProvider::new();
+        let mut phases: Vec<String> = Vec::new();
+        let r = create_git_repo_with_progress(&opts, &provider, &mut |phase, _detail, status| {
+            phases.push(format!("{phase}:{status}"));
+        })
+        .expect("create");
+        // Milestones emitted in order; terminal done/error is emitted by the
+        // command, not this function.
+        assert_eq!(
+            phases,
+            vec![
+                "scaffolding:running",
+                "init:running",
+                "committing:running",
+                "creating-remote:running",
+            ]
+        );
+        assert!(r.git_remote.is_some());
         std::fs::remove_dir_all(&parent).ok();
     }
 
