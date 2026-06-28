@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { groupMatchesByFile, computeHighlightSegments } from "../content-search";
+import {
+  groupMatchesByFile,
+  computeHighlightSegments,
+  CONTENT_SEARCH_MAX_PER_FILE,
+} from "../content-search";
 import type { FileSearchMatch } from "../../backend/types";
 
 function m(path: string, line: number, text: string): FileSearchMatch {
@@ -22,6 +26,18 @@ describe("groupMatchesByFile", () => {
     expect(groups[0].matches).toHaveLength(2);
     expect(groups[1].matches).toHaveLength(1);
     expect(groups[0].matches.map((x) => x.line_number)).toEqual([1, 5]);
+  });
+
+  it("flags a file as capped when it reaches the per-file cap", () => {
+    const under = groupMatchesByFile([m("/repo/a.ts", 1, "x")], "/repo");
+    expect(under[0].capped).toBe(false);
+
+    const atCap = Array.from({ length: CONTENT_SEARCH_MAX_PER_FILE }, (_, i) =>
+      m("/repo/b.ts", i + 1, "x"),
+    );
+    const capped = groupMatchesByFile(atCap, "/repo");
+    expect(capped[0].capped).toBe(true);
+    expect(capped[0].matches).toHaveLength(CONTENT_SEARCH_MAX_PER_FILE);
   });
 
   it("computes a repo-relative path against rootDir (posix separators)", () => {

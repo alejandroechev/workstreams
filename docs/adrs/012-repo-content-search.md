@@ -49,9 +49,14 @@ observed mid-file.
 
 `search_in_files_impl` was rewritten on the ripgrep libraries:
 
-- **`ignore`** (`WalkBuilder`) for a `.gitignore`/`.ignore`-aware walk that also
-  skips hidden entries (covers `.git`) and our `SEARCH_SKIP_DIRS`
-  (`node_modules`, `target`, `dist`, …) even when not gitignored.
+- **`ignore`** (`WalkBuilder::build_parallel`) for a `.gitignore`/`.ignore`-aware
+  **multi-threaded** walk that also skips hidden entries (covers `.git`) and our
+  `SEARCH_SKIP_DIRS` (`node_modules`, `target`, `dist`, …) even when not
+  gitignored. Each worker searches a file into a thread-local Vec, then merges
+  under a Mutex respecting the total cap; cancellation/total-cap stop the whole
+  walk via `WalkState::Quit`. Because parallel traversal yields nondeterministic
+  file order, results are sorted by `(path, line)` at the end so they are stable
+  and grouped per file.
 - **`grep-searcher` + `grep-regex`** for fast line matching.
 
 Default behavior is a **case-insensitive literal substring** (the query is
@@ -60,6 +65,11 @@ case-sensitive and/or regular-expression matching (`case_insensitive(!caseSensit
 raw pattern in regex mode). The command pre-validates a user regex and returns
 `Invalid regex: …` so the UI can surface it. The `FileSearchMatch
 { path, line_number, line_text }` shape is unchanged.
+
+Results are bounded by a **per-file cap** (`CONTENT_SEARCH_MAX_PER_FILE = 50`,
+shared with the frontend + the in-memory backend) and a total cap (1000 from the
+UI). When a file reaches the per-file cap the grouped header shows a highlighted
+`50+` badge so it's clear more matches exist there.
 
 These crates are the standard ripgrep components (pure Rust, widely used). They
 add compile time but no external binary to ship.
@@ -108,8 +118,6 @@ printing `path:line: text`, with its skip-dir list kept in sync with
   unfavorable for now. The blocking-return path is the source of truth; streaming
   can be layered on later behind the same `searchInFiles` surface.
 - Include/exclude globs, whole-word matching, and replace-in-files.
-- Parallel walking (`ignore`'s `build_parallel`) if single-threaded traversal
-  becomes a bottleneck on very large trees.
 
 ## Related
 

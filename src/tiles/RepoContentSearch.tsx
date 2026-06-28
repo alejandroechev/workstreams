@@ -156,7 +156,13 @@ export function RepoContentSearch({ currentDir, onOpenMatch, options, initialQue
               <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                 {g.relPath}
               </span>
-              <span style={countBadgeStyle}>{g.matches.length}</span>
+              <span
+                style={{ ...countBadgeStyle, ...(g.capped ? cappedBadgeStyle : null) }}
+                title={g.capped ? `Showing the first ${g.matches.length} matches in this file` : undefined}
+                data-testid={g.capped ? `content-search-group-capped-${g.relPath}` : undefined}
+              >
+                {g.capped ? `${g.matches.length}+` : g.matches.length}
+              </span>
             </div>
             {g.matches.map((mtch) => {
               const flatIdx = flat.findIndex(
@@ -260,6 +266,14 @@ const countBadgeStyle: CSSProperties = {
   padding: "0 6px",
   fontSize: 10,
   color: "#cdd6f4",
+};
+
+// Highlight a per-file capped count (e.g. "50+") so it's clear more matches
+// exist in that file than are shown.
+const cappedBadgeStyle: CSSProperties = {
+  background: "#f9e2af",
+  color: "#11111b",
+  fontWeight: 600,
 };
 
 const rowStyle: CSSProperties = {

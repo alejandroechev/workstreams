@@ -1212,6 +1212,13 @@ const SEARCH_SKIP_DIRS: &[&str] = &[
     "coverage",
 ];
 
+/// Max content-search matches collected per file. A short/common query matches
+/// many lines in one file; we cap how many we collect per file so a single
+/// noisy file can't crowd out matches from others. The frontend surfaces when a
+/// file hit this cap. Kept in sync with `CONTENT_SEARCH_MAX_PER_FILE` in
+/// src/domain/content-search.ts.
+const CONTENT_SEARCH_MAX_PER_FILE: usize = 50;
+
 /// Extensions we consider safe (and worth) reading line-by-line. Anything
 /// else is treated as binary/noise and skipped by the content search.
 const CONTENT_SEARCH_EXTS: &[&str] = &[
@@ -1405,7 +1412,7 @@ pub(crate) fn search_in_files_impl(
     directory: &str,
     query: &str,
     max_total: usize,
-    is_cancelled: &dyn Fn() -> bool,
+    is_cancelled: &(dyn Fn() -> bool + Sync),
 ) -> Vec<FileSearchMatch> {
     search_in_files_impl_opts(
         directory,
@@ -1424,16 +1431,19 @@ pub(crate) fn search_in_files_impl_opts(
     query: &str,
     max_total: usize,
     options: ContentSearchOptions,
-    is_cancelled: &dyn Fn() -> bool,
+    is_cancelled: &(dyn Fn() -> bool + Sync),
 ) -> Vec<FileSearchMatch> {
     use grep_regex::RegexMatcherBuilder;
     use grep_searcher::sinks::UTF8;
     use grep_searcher::SearcherBuilder;
+    use ignore::WalkState;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
 
     if query.trim().is_empty() {
         return Vec::new();
     }
-    let max_per_file = 5usize;
+    let max_per_file = CONTENT_SEARCH_MAX_PER_FILE;
     let max_file_size = 1_048_576u64; // 1 MB
     let skip_dirs: std::collections::HashSet<&str> = SEARCH_SKIP_DIRS.iter().copied().collect();
 
@@ -1453,12 +1463,16 @@ pub(crate) fn search_in_files_impl_opts(
         Ok(m) => m,
         Err(_) => return Vec::new(),
     };
-    let mut searcher = SearcherBuilder::new().line_number(true).build();
 
-    let mut results: Vec<FileSearchMatch> = Vec::new();
+    let results: Arc<Mutex<Vec<FileSearchMatch>>> = Arc::new(Mutex::new(Vec::new()));
+    let total = Arc::new(AtomicUsize::new(0));
+    let stop = Arc::new(AtomicBool::new(false));
 
-    // `ignore` walks respecting .gitignore/.ignore and skip hidden entries
-    // (covers `.git` and dotfiles, matching the old behavior).
+    // Parallel `.gitignore`-aware walk (ripgrep's `ignore` crate). Each worker
+    // thread searches a file into a thread-local Vec (so a file's matches stay
+    // contiguous and lock hold time is minimal), then merges under a Mutex
+    // respecting `max_total`. Cancellation (epoch bump) and the total cap stop
+    // the whole walk via `WalkState::Quit`.
     let walker = ignore::WalkBuilder::new(directory)
         .hidden(true)
         .git_ignore(true)
@@ -1466,60 +1480,97 @@ pub(crate) fn search_in_files_impl_opts(
         .git_exclude(true)
         .parents(true)
         .max_filesize(Some(max_file_size))
-        .build();
+        .build_parallel();
 
-    for dent in walker {
-        if is_cancelled() || results.len() >= max_total {
-            break;
-        }
-        let dent = match dent {
-            Ok(d) => d,
-            Err(_) => continue,
-        };
-        if !dent.file_type().map(|t| t.is_file()).unwrap_or(false) {
-            continue;
-        }
-        let path = dent.path();
-        // Force-skip known build/output dirs even when not gitignored.
-        if path
-            .components()
-            .any(|c| skip_dirs.contains(c.as_os_str().to_string_lossy().as_ref()))
-        {
-            continue;
-        }
-        let name = path
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_default();
-        if !is_text_extension(&name) {
-            continue;
-        }
+    walker.run(|| {
+        let results = Arc::clone(&results);
+        let total = Arc::clone(&total);
+        let stop = Arc::clone(&stop);
+        let matcher = matcher.clone();
+        let skip_dirs = &skip_dirs;
+        let mut searcher = SearcherBuilder::new().line_number(true).build();
 
-        let path_str = path.to_string_lossy().to_string();
-        let mut in_file_count = 0usize;
-        let _ = searcher.search_path(
-            &matcher,
-            path,
-            UTF8(|lnum, line| {
-                if is_cancelled() || results.len() >= max_total || in_file_count >= max_per_file {
-                    return Ok(false);
+        Box::new(move |dent| {
+            if stop.load(Ordering::Relaxed)
+                || is_cancelled()
+                || total.load(Ordering::Relaxed) >= max_total
+            {
+                stop.store(true, Ordering::Relaxed);
+                return WalkState::Quit;
+            }
+            let dent = match dent {
+                Ok(d) => d,
+                Err(_) => return WalkState::Continue,
+            };
+            if !dent.file_type().map(|t| t.is_file()).unwrap_or(false) {
+                return WalkState::Continue;
+            }
+            let path = dent.path();
+            // Force-skip known build/output dirs even when not gitignored.
+            if path
+                .components()
+                .any(|c| skip_dirs.contains(c.as_os_str().to_string_lossy().as_ref()))
+            {
+                return WalkState::Continue;
+            }
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
+            if !is_text_extension(&name) {
+                return WalkState::Continue;
+            }
+
+            let path_str = path.to_string_lossy().to_string();
+            let mut local: Vec<FileSearchMatch> = Vec::new();
+            let _ = searcher.search_path(
+                &matcher,
+                path,
+                UTF8(|lnum, line| {
+                    if is_cancelled() || local.len() >= max_per_file {
+                        return Ok(false);
+                    }
+                    let text = line.strip_suffix('\n').unwrap_or(line);
+                    let line_text = if text.chars().count() > 240 {
+                        text.chars().take(240).collect()
+                    } else {
+                        text.to_string()
+                    };
+                    local.push(FileSearchMatch {
+                        path: path_str.clone(),
+                        line_number: lnum as u32,
+                        line_text,
+                    });
+                    Ok(true)
+                }),
+            );
+
+            if !local.is_empty() {
+                let mut guard = results.lock().unwrap();
+                let remaining = max_total.saturating_sub(guard.len());
+                if remaining == 0 {
+                    stop.store(true, Ordering::Relaxed);
+                    return WalkState::Quit;
                 }
-                let text = line.strip_suffix('\n').unwrap_or(line);
-                let line_text = if text.chars().count() > 240 {
-                    text.chars().take(240).collect()
-                } else {
-                    text.to_string()
-                };
-                results.push(FileSearchMatch {
-                    path: path_str.clone(),
-                    line_number: lnum as u32,
-                    line_text,
-                });
-                in_file_count += 1;
-                Ok(true)
-            }),
-        );
-    }
+                let take = local.len().min(remaining);
+                guard.extend(local.drain(..take));
+                total.store(guard.len(), Ordering::Relaxed);
+                if guard.len() >= max_total {
+                    stop.store(true, Ordering::Relaxed);
+                    return WalkState::Quit;
+                }
+            }
+            WalkState::Continue
+        })
+    });
+
+    let mut results = Arc::try_unwrap(results)
+        .map(|m| m.into_inner().unwrap())
+        .unwrap_or_else(|arc| std::mem::take(&mut *arc.lock().unwrap()));
+
+    // Parallel traversal yields nondeterministic file order; sort by (path,
+    // line) so results are stable across runs and naturally grouped per file.
+    results.sort_by(|a, b| a.path.cmp(&b.path).then(a.line_number.cmp(&b.line_number)));
     results
 }
 
@@ -4842,11 +4893,13 @@ mod tests {
 
     #[test]
     fn search_in_files_cancellation_observed_mid_file() {
-        // The worst case for a hang is a single enormous file: the walk must
-        // observe cancellation *per line*, not only at file/dir boundaries, so
-        // a superseded search over a huge file bails almost immediately instead
-        // of reading the whole thing.
-        use std::cell::Cell;
+        // The walk must observe cancellation *per line*, not only at file/dir
+        // boundaries, so a superseded search bails early instead of collecting
+        // up to the per-file cap. We trip cancellation after a handful of polls
+        // and assert the result is well under the per-file cap (which it would
+        // hit if cancellation were ignored). Uses an atomic counter so the
+        // closure is `Sync` (required by the parallel walker).
+        use std::sync::atomic::{AtomicU32, Ordering};
 
         let tmp = std::env::temp_dir().join(format!("rxs-midfile-cancel-{}", std::process::id()));
         std::fs::create_dir_all(&tmp).unwrap();
@@ -4857,20 +4910,17 @@ mod tests {
         }
         drop(h);
 
-        // Allow ~100 cancellation polls, then trip. Because the walk polls
-        // is_cancelled once per matching line, it must stop after reading on the
-        // order of 100 lines — far short of the 50k-line file.
-        let polls = Cell::new(0u32);
-        let is_cancelled = || {
-            let n = polls.get() + 1;
-            polls.set(n);
-            n > 100
-        };
+        // Trip cancellation after ~10 polls. Because is_cancelled is checked
+        // once per matching line, the search must stop after ~10 matches — far
+        // below both the 50-per-file cap and the 50k lines in the file.
+        let polls = AtomicU32::new(0);
+        let is_cancelled = || polls.fetch_add(1, Ordering::Relaxed) >= 10;
         let res = search_in_files_impl(tmp.to_str().unwrap(), "needle", 100_000, &is_cancelled);
         assert!(
-            res.len() < 1000,
-            "cancelled search must bail mid-file, not scan 50k lines; got {} matches",
-            res.len()
+            res.len() < CONTENT_SEARCH_MAX_PER_FILE,
+            "cancelled search must bail early (got {} matches, cap is {})",
+            res.len(),
+            CONTENT_SEARCH_MAX_PER_FILE
         );
         std::fs::remove_dir_all(&tmp).ok();
     }
@@ -4995,6 +5045,83 @@ mod tests {
         // Without regex, the same query is a literal substring → no match.
         let lit = search_in_files_impl(tmp.to_str().unwrap(), r"foo\d+", 200, &never);
         assert!(lit.is_empty());
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn search_in_files_caps_matches_per_file() {
+        // A file with more matching lines than the per-file cap returns exactly
+        // the cap (so one noisy file can't crowd out others); the frontend
+        // surfaces the cap via the "NN+" badge.
+        let tmp = std::env::temp_dir().join(format!("rxs-perfile-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        let mut content = String::new();
+        for _ in 0..(CONTENT_SEARCH_MAX_PER_FILE + 25) {
+            content.push_str("needle\n");
+        }
+        std::fs::write(tmp.join("a.txt"), content).unwrap();
+        let never = || false;
+        let res = search_in_files_impl(tmp.to_str().unwrap(), "needle", 10_000, &never);
+        assert_eq!(
+            res.len(),
+            CONTENT_SEARCH_MAX_PER_FILE,
+            "a single file should be capped at CONTENT_SEARCH_MAX_PER_FILE matches"
+        );
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn search_in_files_total_cap_across_files() {
+        // The total cap bounds results across many files even when each file is
+        // under the per-file cap.
+        let tmp = std::env::temp_dir().join(format!("rxs-total-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        for i in 0..20 {
+            let mut content = String::new();
+            for _ in 0..10 {
+                content.push_str("needle\n");
+            }
+            std::fs::write(tmp.join(format!("f{i}.txt")), content).unwrap();
+        }
+        // 20 files * 10 = 200 potential matches; cap the total at 50.
+        let never = || false;
+        let res = search_in_files_impl(tmp.to_str().unwrap(), "needle", 50, &never);
+        assert_eq!(res.len(), 50, "total results must respect max_total");
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn search_in_files_results_are_sorted_by_path_then_line() {
+        // The parallel walk yields nondeterministic file order; results must be
+        // sorted by (path, line) so they are stable and grouped per file.
+        let tmp = std::env::temp_dir().join(format!("rxs-sort-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::fs::write(tmp.join("b.txt"), "x\nneedle\n").unwrap();
+        std::fs::write(tmp.join("a.txt"), "needle\nneedle\n").unwrap();
+        let never = || false;
+        let res = search_in_files_impl(tmp.to_str().unwrap(), "needle", 200, &never);
+        let keys: Vec<(String, u32)> = res
+            .iter()
+            .map(|m| {
+                let name = std::path::Path::new(&m.path)
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .to_string();
+                (name, m.line_number)
+            })
+            .collect();
+        assert_eq!(
+            keys,
+            vec![
+                ("a.txt".to_string(), 1),
+                ("a.txt".to_string(), 2),
+                ("b.txt".to_string(), 2),
+            ]
+        );
         std::fs::remove_dir_all(&tmp).ok();
     }
 

@@ -9,6 +9,7 @@ import type {
   DiffSource,
 } from "../domain/diff-review";
 import type { FileComment, ImportedCommentInput, ImportSummary } from "../domain/file-comments";
+import { CONTENT_SEARCH_MAX_PER_FILE } from "../domain/content-search";
 import type { Backend } from "./types";
 import { rewriteTileCwd } from "../domain/worktree-change";
 
@@ -351,7 +352,9 @@ export class MemoryBackend implements Backend {
   async searchInFiles(_directory: string, query: string, limit?: number, options?: import("./types").ContentSearchOptions): Promise<import("./types").FileSearchMatch[]> {
     if (!query.trim()) return [];
     const max = limit ?? 200;
-    const maxPerFile = 5;
+    // Mirror the Rust engine's per-file cap so the in-memory stub behaves the
+    // same (kept in sync via the shared CONTENT_SEARCH_MAX_PER_FILE constant).
+    const maxPerFile = CONTENT_SEARCH_MAX_PER_FILE;
     const results: import("./types").FileSearchMatch[] = [];
     // Build a matcher mirroring the Rust engine: literal substring by default,
     // optional regex, case-insensitive unless caseSensitive is set.

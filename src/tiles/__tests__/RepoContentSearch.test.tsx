@@ -149,4 +149,15 @@ describe("RepoContentSearch", () => {
     type("foo\\d+");
     await waitFor(() => expect(screen.getByTestId("content-search-match-/repo/a.ts-1")).toBeInTheDocument());
   });
+
+  it("marks a file's count as capped (NN+) when it hits the per-file cap", async () => {
+    const backend = new MemoryBackend();
+    // 60 matching lines > the 50 per-file cap → the backend returns 50 and the
+    // group header shows the capped badge.
+    backend.seedFile("/repo/a.ts", Array.from({ length: 60 }, () => "needle").join("\n"));
+    renderWith(backend);
+    type("needle");
+    await waitFor(() => expect(screen.getByTestId("content-search-group-capped-a.ts")).toBeInTheDocument());
+    expect(screen.getByTestId("content-search-group-capped-a.ts")).toHaveTextContent("50+");
+  });
 });

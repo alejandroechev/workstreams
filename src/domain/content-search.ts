@@ -1,5 +1,12 @@
 import type { FileSearchMatch } from "../backend/types";
 
+/**
+ * Max content-search matches collected per file by the backend. A file whose
+ * match count equals this value was (probably) capped — the UI surfaces that.
+ * Kept in sync with `CONTENT_SEARCH_MAX_PER_FILE` in src-tauri/src/lib.rs.
+ */
+export const CONTENT_SEARCH_MAX_PER_FILE = 50;
+
 /** A file and all its content-search matches, in first-seen order. */
 export interface FileMatchGroup {
   /** Absolute path as returned by the backend. */
@@ -7,6 +14,8 @@ export interface FileMatchGroup {
   /** Path relative to the search root (for display); falls back to `path`. */
   relPath: string;
   matches: FileSearchMatch[];
+  /** True when this file hit the per-file cap (more matches may exist). */
+  capped: boolean;
 }
 
 /** One run of text within a result line, flagged as a match or not. */
@@ -35,11 +44,15 @@ export function groupMatchesByFile(
     }
     bucket.push(match);
   }
-  return order.map((path) => ({
-    path,
-    relPath: relativize(rootDir, path),
-    matches: byPath.get(path) ?? [],
-  }));
+  return order.map((path) => {
+    const fileMatches = byPath.get(path) ?? [];
+    return {
+      path,
+      relPath: relativize(rootDir, path),
+      matches: fileMatches,
+      capped: fileMatches.length >= CONTENT_SEARCH_MAX_PER_FILE,
+    };
+  });
 }
 
 /**
