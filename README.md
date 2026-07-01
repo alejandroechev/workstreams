@@ -46,6 +46,13 @@ project-aware workspace:
   navigate with arrows / Space / click, fullscreen with `Alt+F`.
 - 💬 **Inline file comments** — Per-workstream comments anchored to line
   ranges; persisted in SQLite.
+- 🔎 **Local agent code review** — Review AI-agent code in a tight local
+  reviewer↔agent loop (no ADO round-trips, no PR chatter). Comment on a diff;
+  the agent reads your comments over MCP, replies, and marks them addressed;
+  the tile tracks each comment across the agent's edits (re-anchoring when the
+  code merely shifts, flagging when the commented code actually **changed** and
+  showing the exact per-comment before/after + fixing commit). `Alt+A` opens
+  the Agent Review tile. See [ADR 013](docs/adrs/013-local-agent-review.md).
 - ⌨️ **Keyboard-driven** — `Alt+<letter>` for every tile type, `Alt+Arrows`
   to move focus, `Alt+S` for side-by-side compare.
 - 💾 **Survives restarts** — workstreams, tile layouts, scrollback, opened

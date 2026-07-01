@@ -14,6 +14,7 @@ graph TB
             SessionMeta["SessionMetaTile<br/>Session + file detail"]
             Workbench["WorkbenchTile<br/>Workbench file detail"]
             DiffReview["DiffReviewTile<br/>3-pane diff/question/comments<br/>+ Monaco diff editor"]
+            AgentReview["AgentReviewTile<br/>reviewer↔agent loop (ADR 013)<br/>threads + per-comment before/after"]
             InlineComments["Inline File Comments<br/>(view zones in FileEditorView<br/>+ comments-toggle in viewToolbar)"]
             StatusBar["StatusBar<br/>Shortcuts + metadata"]
             subgraph Files["Files"]
@@ -56,6 +57,7 @@ graph TB
     TileGrid --> SessionMeta
     TileGrid --> Workbench
     TileGrid --> DiffReview
+    TileGrid --> AgentReview
     App --> StatusBar
     App -- "close-requested / switch guard" --> FileBuffers
 
@@ -82,6 +84,9 @@ graph TB
     RemoteProv -- "gh repo create" --> GhCli
     DiffReview -- "invoke: create/get/ack/comment + subscribe events" --> LibRS
     LibRS -- "emit: diff-review:chunk-active/done/drift" --> DiffReview
+    AgentReview -- "invoke: create/add/reply/resolve/submit-round/complete + subscribe events" --> LibRS
+    LibRS -- "emit: review:round-ready / comment-updated" --> AgentReview
+    LibRS -- "agent_review: re-anchor sweep on bg thread<br/>(git diff base..head → binary unchanged/changed)" --> DbRS
     LibRS -- "emit: tile-created<br/>(create_tile / create_or_focus_diff_review_tile)" --> App
     App -- "listen: tile-created<br/>route by tile.workstream_id" --> TileGrid
     Sidebar -- "invoke: create_worktree / remove_worktree<br/>(fire-and-forget, background thread)" --> LibRS
