@@ -283,6 +283,10 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
         "ALTER TABLE file_comments ADD COLUMN anchor_hash TEXT",
         "ALTER TABLE file_comments ADD COLUMN anchor_state TEXT",
         "ALTER TABLE file_comments ADD COLUMN fixing_commit TEXT",
+        // The git ref the comment's anchor line numbers are currently valid
+        // against (updated on each unchanged re-anchor). Keeps consecutive-round
+        // diffs coordinate-consistent (ADR 013 §7).
+        "ALTER TABLE file_comments ADD COLUMN anchor_commit TEXT",
     ];
     for sql in &migrations {
         // SQLite errors if column already exists — ignore that error

@@ -4553,6 +4553,12 @@ pub fn run() {
             file_comments::update_file_comment,
             file_comments::delete_file_comment,
             file_comments::import_pr_comments,
+            agent_review::create_agent_review,
+            agent_review::list_review_comments,
+            agent_review::add_review_comment,
+            agent_review::reply_review_comment,
+            agent_review::set_comment_resolution,
+            agent_review::submit_review_round,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
