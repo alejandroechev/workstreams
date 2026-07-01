@@ -4559,6 +4559,7 @@ pub fn run() {
             agent_review::reply_review_comment,
             agent_review::set_comment_resolution,
             agent_review::submit_review_round,
+            agent_review::complete_agent_review,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

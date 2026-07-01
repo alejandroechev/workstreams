@@ -20,6 +20,7 @@ import {
   basename,
   isOpenThread,
   attentionCount,
+  allThreadsClosed,
   statusLabel,
   type ReviewThread,
 } from "../domain/agent-review-view";
@@ -105,6 +106,23 @@ export default function AgentReviewTile({ workstreamId, reviewId: reviewIdProp }
 
   const threads: ReviewThread[] = useMemo(() => groupThreads(comments), [comments]);
   const attention = attentionCount(threads);
+  const [exportedPath, setExportedPath] = useState<string | null>(null);
+  const completable = allThreadsClosed(threads) && review?.status !== "completed";
+
+  const completeReview = useCallback(async () => {
+    const id = reviewIdRef.current;
+    if (!id) return;
+    setBusy(true);
+    try {
+      const path = await backend.completeAgentReview(id);
+      setExportedPath(path);
+      setReview((r) => (r ? { ...r, status: "completed", exported_path: path } : r));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }, [backend]);
 
   const submitRound = useCallback(async () => {
     const id = reviewIdRef.current;
@@ -194,7 +212,18 @@ export default function AgentReviewTile({ workstreamId, reviewId: reviewIdProp }
         <button style={styles.btn} disabled={busy} onClick={submitRound} title="re-anchor open comments against the latest commit">
           <ArrowPathIcon width={14} height={14} /> Submit round
         </button>
+        {completable && (
+          <button style={styles.btnPrimary} disabled={busy} onClick={completeReview} data-testid="complete-review">
+            Complete
+          </button>
+        )}
       </div>
+
+      {exportedPath && (
+        <div style={styles.exported} data-testid="exported-path">
+          Review complete — summary written to {exportedPath}
+        </div>
+      )}
 
       {error && <div style={styles.error}>{error}</div>}
 
@@ -327,6 +356,7 @@ const styles: Record<string, React.CSSProperties> = {
   btn: { display: "inline-flex", alignItems: "center", gap: 4, background: "#313244", color: "#cdd6f4", border: "none", borderRadius: 6, padding: "3px 8px", cursor: "pointer", fontSize: 12 },
   btnPrimary: { alignSelf: "flex-start", background: "#89b4fa", color: "#1e1e2e", border: "none", borderRadius: 6, padding: "4px 10px", cursor: "pointer", fontWeight: 600 },
   error: { color: "#f38ba8", padding: "6px 10px", fontSize: 12 },
+  exported: { color: "#a6e3a1", padding: "6px 10px", fontSize: 12 },
   addForm: { display: "flex", flexDirection: "column", gap: 6, padding: 10, borderBottom: "1px solid #313244" },
   input: { flex: 1, background: "#181825", color: "#cdd6f4", border: "1px solid #313244", borderRadius: 6, padding: "4px 8px", fontSize: 12 },
   textarea: { minHeight: 60, background: "#181825", color: "#cdd6f4", border: "1px solid #313244", borderRadius: 6, padding: "4px 8px", fontSize: 12, fontFamily: "inherit" },

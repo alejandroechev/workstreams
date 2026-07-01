@@ -384,4 +384,8 @@ export class TauriBackend implements Backend {
   async submitReviewRound(reviewId: string): Promise<void> {
     return invoke("submit_review_round", { reviewId });
   }
+
+  async completeAgentReview(reviewId: string): Promise<string> {
+    return invoke<string>("complete_agent_review", { reviewId });
+  }
 }

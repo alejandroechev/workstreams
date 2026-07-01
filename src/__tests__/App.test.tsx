@@ -198,6 +198,7 @@ function createBackend(): Backend {
     replyReviewComment: vi.fn(),
     setCommentResolution: vi.fn(),
     submitReviewRound: vi.fn(),
+    completeAgentReview: vi.fn(),
   } as Backend;
 }
 

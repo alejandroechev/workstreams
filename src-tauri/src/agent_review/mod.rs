@@ -579,6 +579,129 @@ pub fn submit_review_round(
     Ok(())
 }
 
+// ── Completion + export ──────────────────────────────────────────────────
+
+/// A review is completable only when every root thread is resolved or wontfix.
+/// Returns the number of still-open threads (Err message) if not.
+pub fn assert_completable(comments: &[ReviewComment]) -> Result<(), String> {
+    let open = comments
+        .iter()
+        .filter(|c| c.origin_parent_id.is_none())
+        .filter(|c| {
+            let s = c.status.as_deref().unwrap_or(STATUS_OPEN);
+            s != STATUS_RESOLVED && s != STATUS_WONTFIX
+        })
+        .count();
+    if open > 0 {
+        return Err(format!(
+            "{open} thread(s) still open — resolve or wontfix them before completing"
+        ));
+    }
+    Ok(())
+}
+
+/// Build a clean human-readable review summary (no chatter): one section per
+/// thread with its anchor, decision, fixing commit, and the raised note.
+/// Pure so it's unit-testable. Suitable as PR-description fodder.
+pub fn build_review_summary(review: &AgentReview, comments: &[ReviewComment]) -> String {
+    let mut out = String::new();
+    out.push_str("# Agent Review summary\n\n");
+    out.push_str(&format!(
+        "- Base: `{}`\n- Head: `{}`\n- Rounds: {}\n\n",
+        review.base_ref.as_deref().unwrap_or("(none)"),
+        review.head_ref.as_deref().unwrap_or("(none)"),
+        review.round
+    ));
+    let roots: Vec<&ReviewComment> = comments
+        .iter()
+        .filter(|c| c.origin_parent_id.is_none())
+        .collect();
+    let resolved = roots
+        .iter()
+        .filter(|c| c.status.as_deref() == Some(STATUS_RESOLVED))
+        .count();
+    let wontfix = roots
+        .iter()
+        .filter(|c| c.status.as_deref() == Some(STATUS_WONTFIX))
+        .count();
+    out.push_str(&format!(
+        "**{} threads** — {resolved} resolved, {wontfix} won't-fix.\n\n",
+        roots.len()
+    ));
+    for (i, root) in roots.iter().enumerate() {
+        let file = root
+            .absolute_path
+            .rsplit(['/', '\\'])
+            .next()
+            .unwrap_or(&root.absolute_path);
+        out.push_str(&format!(
+            "## {}. {}:{} — {}\n\n",
+            i + 1,
+            file,
+            root.anchor_line_start,
+            root.status.as_deref().unwrap_or(STATUS_OPEN)
+        ));
+        out.push_str(&format!("{}\n\n", root.body_md.trim()));
+        if let Some(fix) = &root.fixing_commit {
+            out.push_str(&format!("_Addressed in:_ `{fix}`\n\n"));
+        }
+    }
+    out
+}
+
+/// Directory where completed-review summaries are written — outside any repo
+/// (ADR 013 §9: keep the repo/PR clean). Mirrors the DB location choice.
+fn reviews_export_dir(review_id: &str) -> std::path::PathBuf {
+    let base = if cfg!(debug_assertions) {
+        std::env::current_dir()
+            .unwrap_or_else(|_| std::path::PathBuf::from("."))
+            .join(".dev")
+    } else {
+        dirs::data_local_dir()
+            .unwrap_or_else(|| std::path::PathBuf::from("."))
+            .join("workstreams")
+    };
+    base.join("reviews").join(review_id)
+}
+
+/// Complete a review: verify every thread is closed, write a clean summary
+/// outside the repo, flip the review to `completed`, and return the path.
+#[tauri::command]
+pub fn complete_agent_review(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    review_id: String,
+) -> Result<String, String> {
+    let (summary, exported_path) = {
+        let db = state.db.lock().unwrap();
+        let review = get_review(&db, &review_id)
+            .map_err(|e| format!("DB error: {e}"))?
+            .ok_or("review not found")?;
+        let comments =
+            list_comments_with_conn(&db, &review_id).map_err(|e| format!("DB error: {e}"))?;
+        assert_completable(&comments)?;
+        let summary = build_review_summary(&review, &comments);
+        let dir = reviews_export_dir(&review_id);
+        std::fs::create_dir_all(&dir).map_err(|e| format!("create export dir failed: {e}"))?;
+        let path = dir.join("review.md");
+        std::fs::write(&path, &summary).map_err(|e| format!("write summary failed: {e}"))?;
+        let exported = path.to_string_lossy().to_string();
+        let ts = now();
+        db.execute(
+            "UPDATE agent_reviews SET status='completed', exported_path=?2, completed_at=?3, updated_at=?3 WHERE id=?1",
+            params![review_id, exported, ts],
+        )
+        .map_err(|e| format!("DB error: {e}"))?;
+        (summary, exported)
+    };
+    let _ = summary; // written to disk; not echoed
+    let _ = app.emit(
+        events::COMMENT_UPDATED,
+        serde_json::json!({ "reviewId": review_id, "commentId": "" }),
+    );
+    Ok(exported_path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -695,5 +818,60 @@ mod tests {
         assert_eq!(list[0].status.as_deref(), Some("resolved"));
         // Unknown actor rejected.
         assert!(set_resolution_with_conn(&conn, &root, STATUS_OPEN, "bob").is_err());
+    }
+
+    #[test]
+    fn assert_completable_requires_all_threads_closed() {
+        let conn = open();
+        seed_ws(&conn, "w1", "/tmp/x");
+        let r = create_review_with_conn(&conn, "w1", None, None).unwrap();
+        let a = add_comment_row(
+            &conn,
+            &r.id,
+            "w1",
+            "/tmp/x/a.js",
+            4,
+            4,
+            Some("x"),
+            Some("h"),
+            Some("c"),
+            "a",
+            1,
+        )
+        .unwrap();
+        let list = list_comments_with_conn(&conn, &r.id).unwrap();
+        assert!(assert_completable(&list).is_err());
+        set_resolution_with_conn(&conn, &a, STATUS_RESOLVED, "me").unwrap();
+        let list = list_comments_with_conn(&conn, &r.id).unwrap();
+        assert!(assert_completable(&list).is_ok());
+    }
+
+    #[test]
+    fn build_review_summary_is_clean_and_per_thread() {
+        let conn = open();
+        seed_ws(&conn, "w1", "/tmp/x");
+        let r = create_review_with_conn(&conn, "w1", Some("base"), Some("head")).unwrap();
+        let a = add_comment_row(
+            &conn,
+            &r.id,
+            "w1",
+            "/tmp/x/auth.js",
+            4,
+            4,
+            Some("log()"),
+            Some("h"),
+            Some("c"),
+            "remove the console.log",
+            1,
+        )
+        .unwrap();
+        set_resolution_with_conn(&conn, &a, STATUS_RESOLVED, "me").unwrap();
+        let review = get_review(&conn, &r.id).unwrap().unwrap();
+        let comments = list_comments_with_conn(&conn, &r.id).unwrap();
+        let md = build_review_summary(&review, &comments);
+        assert!(md.contains("# Agent Review summary"));
+        assert!(md.contains("auth.js:4"));
+        assert!(md.contains("remove the console.log"));
+        assert!(md.contains("1 resolved"));
     }
 }

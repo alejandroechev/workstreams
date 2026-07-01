@@ -73,4 +73,13 @@ describe("MemoryBackend.agent review", () => {
     const c = await backend.addReviewComment(r.id, "C:/a.js", 1, 1, "second round");
     expect(c.round).toBe(2);
   });
+
+  it("completeAgentReview requires all threads closed, then returns an export path", async () => {
+    const r = await backend.createAgentReview("ws-1");
+    const root = await backend.addReviewComment(r.id, "C:/a.js", 4, 4, "fix");
+    await expect(backend.completeAgentReview(r.id)).rejects.toThrow(/still open/);
+    await backend.setCommentResolution(root.id, "resolved", "me");
+    const path = await backend.completeAgentReview(r.id);
+    expect(path).toContain("review.md");
+  });
 });

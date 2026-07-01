@@ -75,4 +75,32 @@ describe("AgentReviewTile", () => {
     expect(events).toContain("review:comment-updated");
     expect(events).toContain("review:round-ready");
   });
+
+  it("offers Complete only once every thread is closed, then shows the export path", async () => {
+    listenMock.mockResolvedValue(() => {});
+    const backend = new MemoryBackend();
+    renderTile(backend);
+    await screen.findByText("Agent Review");
+
+    fireEvent.click(screen.getByText("Comment"));
+    fireEvent.change(screen.getByPlaceholderText("absolute file path"), {
+      target: { value: "C:/repo/a.js" },
+    });
+    fireEvent.change(screen.getByPlaceholderText("line"), { target: { value: "4" } });
+    fireEvent.change(screen.getByPlaceholderText("comment (markdown)"), {
+      target: { value: "fix this" },
+    });
+    fireEvent.click(screen.getByText("Add comment"));
+    await waitFor(() => expect(screen.getByTestId("review-thread")).toBeTruthy());
+
+    // Not completable while the thread is open.
+    expect(screen.queryByTestId("complete-review")).toBeNull();
+
+    fireEvent.click(screen.getByText("Resolve"));
+    await waitFor(() => expect(screen.getByTestId("complete-review")).toBeTruthy());
+
+    fireEvent.click(screen.getByTestId("complete-review"));
+    await waitFor(() => expect(screen.getByTestId("exported-path")).toBeTruthy());
+    expect(screen.getByTestId("exported-path").textContent).toContain("review.md");
+  });
 });

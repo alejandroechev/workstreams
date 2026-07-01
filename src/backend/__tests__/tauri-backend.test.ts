@@ -496,5 +496,9 @@ describe("TauriBackend", () => {
     invoke.mockResolvedValueOnce(undefined);
     await backend.submitReviewRound("r1");
     expect(invoke).toHaveBeenCalledWith("submit_review_round", { reviewId: "r1" });
+
+    invoke.mockResolvedValueOnce("/p/review.md");
+    await backend.completeAgentReview("r1");
+    expect(invoke).toHaveBeenCalledWith("complete_agent_review", { reviewId: "r1" });
   });
 });

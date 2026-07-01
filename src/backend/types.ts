@@ -168,6 +168,7 @@ export interface Backend {
   replyReviewComment(parentId: string, bodyMd: string, author: string): Promise<ReviewComment>;
   setCommentResolution(commentId: string, status: string, actor: string): Promise<void>;
   submitReviewRound(reviewId: string): Promise<void>;
+  completeAgentReview(reviewId: string): Promise<string>;
 }
 
 export interface SessionPlanEntry {

@@ -948,4 +948,26 @@ export class MemoryBackend implements Backend {
     review.updated_at = now();
     this.agentReviews.set(reviewId, review);
   }
+
+  async completeAgentReview(reviewId: string): Promise<string> {
+    const review = this.agentReviews.get(reviewId);
+    if (!review) throw new Error("review not found");
+    const roots = Array.from(this.reviewComments.values()).filter(
+      (c) => c.review_id === reviewId && c.origin_parent_id === null,
+    );
+    const open = roots.filter((c) => {
+      const s = c.status ?? "open";
+      return s !== "resolved" && s !== "wontfix";
+    }).length;
+    if (open > 0) {
+      throw new Error(`${open} thread(s) still open — resolve or wontfix them before completing`);
+    }
+    const path = `memory://reviews/${reviewId}/review.md`;
+    review.status = "completed";
+    review.exported_path = path;
+    review.completed_at = now();
+    review.updated_at = review.completed_at;
+    this.agentReviews.set(reviewId, review);
+    return path;
+  }
 }
