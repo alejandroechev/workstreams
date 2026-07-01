@@ -180,13 +180,22 @@ Reused `file_comments` columns:
 
 Sanitized identically on both sides (ADR 006 event-name rules).
 
-## MCP tools (planned, ADR 008 bridge pattern)
+## MCP tools (implemented in `~/.copilot/mcp-servers/workstreams-mcp/server.mjs`, ADR 008 bridge)
 
-- `get_review_comments(workstream_id, filter)` — open/unaddressed threads with
-  anchors + code context.
-- `reply_review_comment(comment_id, body_md)`
+The reviewer↔agent loop's "author half". These write to the same SQLite DB as
+the Tauri app (agent_reviews + file_comments, `origin_type='local-review'`):
+
+- `get_review_comments(include_resolved?)` — open threads for the active
+  workstream's active review, each with anchor, note, status,
+  `code_changed_since_raised`, `fixing_commit`, and replies.
+- `reply_review_comment(comment_id, body_md)` — posts an `author='agent'`
+  reply, inheriting the thread from the parent.
 - `resolve_review_comment(comment_id, state, fixing_commit?)` — agent states
-  limited to `addressed` / `wontfix`.
+  limited by the tool's enum to `addressed`/`wontfix` (only the human reviewer
+  can `resolve`).
+
+Validated end-to-end over the real MCP stdio protocol against a temp DB
+(`.dev/mcp-review-smoke.mjs`, 8/8).
 
 ## Consequences
 
