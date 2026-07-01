@@ -445,4 +445,56 @@ describe("TauriBackend", () => {
     await backend.importPrComments("ws-1", items);
     expect(invoke).toHaveBeenCalledWith("import_pr_comments", { workstreamId: "ws-1", items });
   });
+
+  it("agent review commands map to snake_case Tauri commands", async () => {
+    invoke.mockResolvedValueOnce({ id: "r1" });
+    await backend.createAgentReview("ws-1", "base", "head");
+    expect(invoke).toHaveBeenCalledWith("create_agent_review", {
+      workstreamId: "ws-1",
+      baseRef: "base",
+      headRef: "head",
+    });
+
+    invoke.mockResolvedValueOnce({ id: "r1" });
+    await backend.createAgentReview("ws-1");
+    expect(invoke).toHaveBeenCalledWith("create_agent_review", {
+      workstreamId: "ws-1",
+      baseRef: null,
+      headRef: null,
+    });
+
+    invoke.mockResolvedValueOnce([]);
+    await backend.listReviewComments("r1");
+    expect(invoke).toHaveBeenCalledWith("list_review_comments", { reviewId: "r1" });
+
+    invoke.mockResolvedValueOnce({ id: "c1" });
+    await backend.addReviewComment("r1", "C:/a.js", 4, 4, "note");
+    expect(invoke).toHaveBeenCalledWith("add_review_comment", {
+      reviewId: "r1",
+      absolutePath: "C:/a.js",
+      anchorLineStart: 4,
+      anchorLineEnd: 4,
+      bodyMd: "note",
+    });
+
+    invoke.mockResolvedValueOnce({ id: "c2" });
+    await backend.replyReviewComment("c1", "done", "agent");
+    expect(invoke).toHaveBeenCalledWith("reply_review_comment", {
+      parentId: "c1",
+      bodyMd: "done",
+      author: "agent",
+    });
+
+    invoke.mockResolvedValueOnce(undefined);
+    await backend.setCommentResolution("c1", "resolved", "me");
+    expect(invoke).toHaveBeenCalledWith("set_comment_resolution", {
+      commentId: "c1",
+      status: "resolved",
+      actor: "me",
+    });
+
+    invoke.mockResolvedValueOnce(undefined);
+    await backend.submitReviewRound("r1");
+    expect(invoke).toHaveBeenCalledWith("submit_review_round", { reviewId: "r1" });
+  });
 });

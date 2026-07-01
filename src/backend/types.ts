@@ -9,6 +9,7 @@ import type {
   DiffChunk,
 } from "../domain/diff-review";
 import type { FileComment, ImportedCommentInput, ImportSummary } from "../domain/file-comments";
+import type { AgentReview, ReviewComment } from "../domain/agent-review";
 
 export interface FileSearchMatch {
   path: string;
@@ -150,6 +151,23 @@ export interface Backend {
     workstreamId: string,
     items: ImportedCommentInput[],
   ): Promise<ImportSummary>;
+  // Local Agent Review (ADR 013) — reviewer↔agent loop
+  createAgentReview(
+    workstreamId: string,
+    baseRef?: string | null,
+    headRef?: string | null,
+  ): Promise<AgentReview>;
+  listReviewComments(reviewId: string): Promise<ReviewComment[]>;
+  addReviewComment(
+    reviewId: string,
+    absolutePath: string,
+    anchorLineStart: number,
+    anchorLineEnd: number,
+    bodyMd: string,
+  ): Promise<ReviewComment>;
+  replyReviewComment(parentId: string, bodyMd: string, author: string): Promise<ReviewComment>;
+  setCommentResolution(commentId: string, status: string, actor: string): Promise<void>;
+  submitReviewRound(reviewId: string): Promise<void>;
 }
 
 export interface SessionPlanEntry {
