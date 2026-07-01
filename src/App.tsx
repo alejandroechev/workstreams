@@ -1039,6 +1039,7 @@ export default function App() {
       workbench: "Bench",
       plan: "Plan",
       diff_review: "Review",
+      agent_review: "Agent Review",
     };
     // Count by sub-shell (PowerShell vs WSL) so each gets its own
     // numbered sequence.

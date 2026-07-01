@@ -7,6 +7,7 @@ import SessionMetaTile from "../tiles/SessionMetaTile";
 import WorkbenchTile from "../tiles/WorkbenchTile";
 import PlanTile from "../tiles/PlanTile";
 import DiffReviewTile from "../tiles/DiffReviewTile";
+import AgentReviewTile from "../tiles/AgentReviewTile";
 import { isFeatureEnabled, featureDescriptor } from "../domain/feature-flags";
 
 function DisabledFeaturePlaceholder({ label, requires }: { label: string; requires: string }) {
@@ -303,11 +304,29 @@ function TileWrapperImpl({
       }
       break;
     }
+    case "agent_review": {
+      const cfg = JSON.parse(tile.config_json || "{}");
+      if (!workstreamId) {
+        content = (
+          <div style={{ padding: 16, color: "#f38ba8" }}>
+            Agent Review tile requires a workstream.
+          </div>
+        );
+      } else {
+        content = (
+          <AgentReviewTile
+            tileId={tile.id}
+            isFocused={isFocused}
+            workstreamId={workstreamId}
+            reviewId={cfg.reviewId}
+          />
+        );
+      }
+      break;
+    }
     default:
       content = <div>Unknown tile type: {tile.tile_type}</div>;
   }
-
-  // Activity is surfaced via the status bar; no in-header dot anymore.
 
   // Tile-type icon (replaces the old status dot). The icon key can be overridden
   // via `config.icon`; otherwise defaults based on tile_type.

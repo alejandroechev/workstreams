@@ -93,6 +93,8 @@ export function defaultIconForType(tileType: TileType): TileIconKey {
       return "plan";
     case "diff_review":
       return "bug";
+    case "agent_review":
+      return "session";
     default:
       return "puzzle";
   }
