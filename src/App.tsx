@@ -1587,6 +1587,7 @@ export default function App() {
           onAddWorkbench={() => addTile("workbench")}
           onAddPlan={() => addTile("plan")}
           onAddDiffReview={() => addTileDiffReview()}
+          onAddAgentReview={() => addTile("agent_review")}
           onOpenSettings={() => setShowSettings(true)}
           onToggleFullscreen={() => {
             if (orderedTiles.length > 0 && orderedTiles[focusedIndex]) {
