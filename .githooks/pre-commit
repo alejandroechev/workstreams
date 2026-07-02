@@ -41,4 +41,13 @@ node scripts/check-test-files.mjs || fail "one or more changed source files have
 echo "🔍 Pre-commit: Rust format check..."
 ( cd src-tauri && cargo fmt --check ) || fail "Rust formatting drift — run 'cargo fmt' inside src-tauri/"
 
+echo "🔍 Pre-commit: DB model diagram..."
+if git diff --cached --name-only --diff-filter=ACMR -- 'src-tauri/src/db.rs' | grep -q .; then
+  node scripts/gen-db-model.mjs || fail "gen-db-model.mjs failed to regenerate docs/db-model.md"
+  git add docs/db-model.md
+  echo "   (db.rs changed → regenerated + staged docs/db-model.md)"
+else
+  echo "   (db.rs not staged, skipping)"
+fi
+
 echo "✅ Pre-commit checks passed"

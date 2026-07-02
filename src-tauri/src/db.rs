@@ -260,7 +260,6 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
         CREATE INDEX IF NOT EXISTS idx_diff_comments_chunk ON diff_comments(chunk_id);
         CREATE INDEX IF NOT EXISTS idx_diff_review_events_review ON diff_review_events(review_id, id);
         CREATE INDEX IF NOT EXISTS idx_file_comments_ws_path ON file_comments(workstream_id, absolute_path);
-        CREATE INDEX IF NOT EXISTS idx_file_comments_review ON file_comments(review_id, round);
         CREATE INDEX IF NOT EXISTS idx_agent_reviews_ws ON agent_reviews(workstream_id, status);
         CREATE UNIQUE INDEX IF NOT EXISTS idx_file_comments_origin
             ON file_comments(origin_type, origin_pr_id, origin_comment_id)
@@ -292,6 +291,14 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
         // SQLite errors if column already exists — ignore that error
         let _ = conn.execute_batch(sql);
     }
+
+    // Indexes that depend on migration-added columns MUST be created after the
+    // migrations run — otherwise a pre-existing DB (or a fresh one, since the
+    // base file_comments CREATE doesn't include these columns) fails with
+    // "no such column: review_id".
+    conn.execute_batch(
+        "CREATE INDEX IF NOT EXISTS idx_file_comments_review ON file_comments(review_id, round);",
+    )?;
 
     Ok(())
 }
@@ -354,6 +361,60 @@ mod tests {
         // Run init again — should not error
         init_db(&conn).unwrap();
         init_db(&conn).unwrap();
+    }
+
+    #[test]
+    fn init_db_upgrades_a_preexisting_pre_adr013_db() {
+        // Regression (ADR 013 startup panic): a DB created before the
+        // local-agent-review columns existed must upgrade cleanly. The
+        // idx_file_comments_review index references migration-added columns
+        // (review_id, round) and MUST be created only after the ALTER TABLE
+        // migrations run — otherwise init_db panics with "no such column:
+        // review_id".
+        let conn = Connection::open_in_memory().unwrap();
+        // Simulate the OLD file_comments schema (no review_id/round/anchor_* cols).
+        conn.execute_batch(
+            "CREATE TABLE file_comments (
+                id TEXT PRIMARY KEY,
+                workstream_id TEXT NOT NULL,
+                absolute_path TEXT NOT NULL,
+                anchor_line_start INTEGER NOT NULL,
+                anchor_line_end INTEGER NOT NULL,
+                anchor_text TEXT,
+                body_md TEXT NOT NULL,
+                author TEXT NOT NULL,
+                origin_type TEXT NOT NULL,
+                origin_pr_id TEXT,
+                origin_comment_id TEXT,
+                origin_thread_id TEXT,
+                origin_parent_id TEXT,
+                origin_url TEXT,
+                status TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );",
+        )
+        .unwrap();
+
+        // Must not panic and must add the columns + index.
+        init_db(&conn).unwrap();
+
+        let has_review_id: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('file_comments') WHERE name='review_id'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(has_review_id, 1, "review_id column should have been added");
+        let has_index: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='idx_file_comments_review'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(has_index, 1, "idx_file_comments_review should exist");
     }
 
     #[test]
