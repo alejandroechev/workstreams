@@ -1,5 +1,5 @@
 // @test-skip: pre-existing tile shell, individual subcomponents tested separately
-import { useState, useEffect, useCallback, useRef, type CSSProperties } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import Editor, { DiffEditor } from "@monaco-editor/react";
 import { MarkdownView } from "../ui/MarkdownView";
 import { FileEditorView, type MarkdownViewState } from "../files/FileEditorView";
@@ -10,7 +10,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useBackend } from "../backend/context";
-import { detectLanguage, detectHookLanguage } from "../domain/tile-config";
+import { detectLanguage } from "../domain/tile-config";
 import { isAudioFile, isImageFile, isSvgFile, makeAudioBlobUrl, makeImageBlobUrl, dirnameOf, type LinkTargetKind } from "../domain/file-types";
 import { createNavigationStack, currentPath as navCurrent, canGoBack as navCanBack, canGoForward as navCanFwd, pushPath as navPush, goBack as navBack, goForward as navFwd, type NavigationStack } from "../domain/nav-history";
 import {
@@ -25,11 +25,8 @@ import {
   ClockIcon,
   BoltIcon,
   MusicalNoteIcon,
-  PencilSquareIcon,
   ChatBubbleLeftRightIcon,
   TableCellsIcon,
-  CheckIcon,
-  XMarkIcon,
   MagnifyingGlassIcon,
 } from "@heroicons/react/24/outline";
 import { SqliteTableView, fileSqliteOps } from "../ui/components/SqliteTableView";
@@ -97,21 +94,6 @@ function formatBytes(bytes: number): string {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
   return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
-}
-
-function hookBtnStyle(background: string): CSSProperties {
-  return {
-    display: "inline-flex",
-    alignItems: "center",
-    gap: 4,
-    background,
-    color: "#cdd6f4",
-    border: "1px solid #313244",
-    borderRadius: 4,
-    padding: "3px 8px",
-    fontSize: 11,
-    cursor: "pointer",
-  };
 }
 
 function FileIcon({ name, isDir }: { name: string; isDir: boolean }) {
@@ -214,14 +196,11 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
   const [logLoading, setLogLoading] = useState(false);
   const [logTracking, setLogTracking] = useState<{ ahead: number; behind: number; remoteHeadShort: string } | null>(null);
   const [commitDiffHash, setCommitDiffHash] = useState<string>("");
-  // Git hooks state
+  // Git hooks state. Hooks are edited through FileEditorView (same Ctrl+S /
+  // autosave UX as any regular file), so we only track which hook is selected.
   const [hooksList, setHooksList] = useState<Array<{ name: string; path: string; content_preview: string }>>([]);
   const [hooksLoading, setHooksLoading] = useState(false);
-  const [hookContent, setHookContent] = useState<{ name: string; path: string; content: string } | null>(null);
-  const [hookEditing, setHookEditing] = useState(false);
-  const [hookDraft, setHookDraft] = useState("");
-  const [hookSaving, setHookSaving] = useState(false);
-  const [hookError, setHookError] = useState<string | null>(null);
+  const [hookSelection, setHookSelection] = useState<{ name: string; path: string } | null>(null);
   const [editorSnapshot, setEditorSnapshot] = useState<BufferSnapshot | null>(null);
   // Markdown view/edit toggle from FileEditorView. Null when the current
   // file isn't markdown or no toggle is meaningful (conflict, save_blocked).
@@ -744,7 +723,7 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
   const openGitHooks = useCallback(async () => {
     setMode("hooks");
     setHooksLoading(true);
-    setHookContent(null);
+    setHookSelection(null);
     try {
       const hooks = await invoke<Array<{ name: string; path: string; content_preview: string }>>("list_git_hooks", { directory: gitRoot });
       setHooksList(hooks);
@@ -755,40 +734,11 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
     }
   }, [gitRoot]);
 
-  const viewHookContent = useCallback(async (hook: { name: string; path: string }) => {
-    setHookEditing(false);
-    setHookError(null);
-    try {
-      const content = await backend.readFile(hook.path);
-      setHookContent({ name: hook.name, path: hook.path, content });
-    } catch (e) {
-      setHookContent({ name: hook.name, path: hook.path, content: `Error reading hook: ${e}` });
-    }
-  }, [backend]);
-
-  const saveHookContent = useCallback(async () => {
-    if (!hookContent) return;
-    setHookSaving(true);
-    setHookError(null);
-    try {
-      const lineEnding = hookDraft.includes("\r\n") ? "crlf" : "lf";
-      await invoke("write_text_file", {
-        args: {
-          path: hookContent.path,
-          content: hookDraft,
-          expected_hash_hex: null,
-          line_ending: lineEnding,
-          ensure_trailing_newline: true,
-        },
-      });
-      setHookContent({ ...hookContent, content: hookDraft });
-      setHookEditing(false);
-    } catch (e) {
-      setHookError(typeof e === "string" ? e : `Failed to save hook: ${e}`);
-    } finally {
-      setHookSaving(false);
-    }
-  }, [hookContent, hookDraft]);
+  // Selecting a hook opens it in FileEditorView (loads + saves the real file);
+  // we only need to remember which hook is active.
+  const viewHookContent = useCallback((hook: { name: string; path: string }) => {
+    setHookSelection({ name: hook.name, path: hook.path });
+  }, []);
 
   // ─── Tabs ────────────────────────────────────────────────────────────
   type TabId = "files" | "diff" | "log" | "hooks" | "search";
@@ -892,14 +842,14 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
   useEffect(() => {
     if (!hydratedRef.current) return;
     if (mode !== "hooks") return;
-    if (hookContent) return;
+    if (hookSelection) return;
     if (hooksList.length === 0) return;
     const vs = parseViewState(configJson, "repo_explorer");
     if (vs.hookName) {
       const hook = hooksList.find((h) => h.name === vs.hookName);
-      if (hook) void viewHookContent(hook);
+      if (hook) viewHookContent(hook);
     }
-  }, [hooksList, mode, hookContent, configJson, viewHookContent]);
+  }, [hooksList, mode, hookSelection, configJson, viewHookContent]);
 
   useTileViewStatePersist(
     configJson,
@@ -910,7 +860,7 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
       filePath: mode === "view" && filePath && !filePath.startsWith("commit:") ? filePath : undefined,
       diffMode: activeTab === "diff" && activeDiffMode ? activeDiffMode : undefined,
       diffLayout: activeTab === "diff" ? diffLayout : undefined,
-      hookName: activeTab === "hooks" && hookContent ? hookContent.name : undefined,
+      hookName: activeTab === "hooks" && hookSelection ? hookSelection.name : undefined,
       searchQuery: activeTab === "search" && contentSearchQuery ? contentSearchQuery : undefined,
       mdViewMode: editorViewState?.mode,
       slideIndex: editorViewState?.mode === "present" ? editorViewState?.slideIndex : undefined,
@@ -1605,6 +1555,7 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
 
   // ─── Hooks mode ───
   if (mode === "hooks") {
+    const hookDirty = editorSnapshot?.dirty === true;
     return (
       <div ref={containerRef} style={containerStyle}>
       {tabBar}
@@ -1618,7 +1569,7 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
         </div>
         <div style={{ flex: 1, display: "flex", overflow: "hidden" }}>
           {/* Hooks list */}
-          <div style={{ width: hookContent ? 200 : "100%", borderRight: hookContent ? "1px solid #313244" : "none", overflowY: "auto", flexShrink: 0 }}>
+          <div style={{ width: hookSelection ? 200 : "100%", borderRight: hookSelection ? "1px solid #313244" : "none", overflowY: "auto", flexShrink: 0 }}>
             {hooksLoading && (
               <div style={{ padding: "8px 12px", color: "#585b70" }}>Loading hooks...</div>
             )}
@@ -1633,10 +1584,10 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
                   padding: "6px 12px",
                   cursor: "pointer",
                   borderBottom: "1px solid #181825",
-                  background: hookContent?.name === hook.name ? "#313244" : "transparent",
+                  background: hookSelection?.name === hook.name ? "#313244" : "transparent",
                 }}
-                onMouseEnter={(e) => { if (hookContent?.name !== hook.name) (e.currentTarget as HTMLElement).style.background = "#1e1e2e"; }}
-                onMouseLeave={(e) => { if (hookContent?.name !== hook.name) (e.currentTarget as HTMLElement).style.background = "transparent"; }}
+                onMouseEnter={(e) => { if (hookSelection?.name !== hook.name) (e.currentTarget as HTMLElement).style.background = "#1e1e2e"; }}
+                onMouseLeave={(e) => { if (hookSelection?.name !== hook.name) (e.currentTarget as HTMLElement).style.background = "transparent"; }}
               >
                 <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                   <BoltIcon style={{ width: 12, height: 12, color: "#f5c2e7", flexShrink: 0 }} />
@@ -1648,67 +1599,22 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
               </div>
             ))}
           </div>
-          {/* Hook content viewer / editor */}
-          {hookContent && (
+          {/* Hook editor — same FileEditorView (Ctrl+S / autosave) as any file */}
+          {hookSelection && (
             <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", borderBottom: "1px solid #313244" }}>
-                <span style={{ color: "#cdd6f4", fontSize: 12, fontWeight: 500, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                  {hookContent.name}
+                {hookDirty && <span data-testid="repo-explorer-hook-dirty-dot" style={dirtyDotStyle} />}
+                <span data-testid="repo-explorer-hook-title" style={{ color: "#cdd6f4", fontSize: 12, fontWeight: 500, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {hookSelection.name}{hookDirty ? "*" : ""}
                 </span>
-                {hookEditing ? (
-                  <>
-                    {hookError && (
-                      <span data-testid="hook-error" style={{ color: "#f38ba8", fontSize: 11 }}>{hookError}</span>
-                    )}
-                    <button
-                      data-testid="hook-save"
-                      onClick={() => void saveHookContent()}
-                      disabled={hookSaving}
-                      style={hookBtnStyle("#2a3f2a")}
-                    >
-                      <CheckIcon style={{ width: 12, height: 12 }} />
-                      {hookSaving ? "Saving…" : "Save"}
-                    </button>
-                    <button
-                      data-testid="hook-cancel"
-                      onClick={() => { setHookEditing(false); setHookError(null); }}
-                      disabled={hookSaving}
-                      style={hookBtnStyle("transparent")}
-                    >
-                      <XMarkIcon style={{ width: 12, height: 12 }} />
-                      Cancel
-                    </button>
-                  </>
-                ) : (
-                  <button
-                    data-testid="hook-edit"
-                    onClick={() => { setHookDraft(hookContent.content); setHookError(null); setHookEditing(true); }}
-                    style={hookBtnStyle("transparent")}
-                  >
-                    <PencilSquareIcon style={{ width: 12, height: 12 }} />
-                    Edit
-                  </button>
-                )}
               </div>
               <div style={{ flex: 1, minHeight: 0 }}>
-                <Editor
-                  height="100%"
-                  language={detectHookLanguage(hookContent.name, hookEditing ? hookDraft : hookContent.content)}
-                  path={hookContent.path}
-                  value={hookEditing ? hookDraft : hookContent.content}
-                  theme="vs-dark"
-                  onChange={(v) => setHookDraft(v ?? "")}
-                  options={{
-                    readOnly: !hookEditing,
-                    minimap: { enabled: false },
-                    fontSize: globalTextFont,
-                    fontFamily: "'Cascadia Code', 'Consolas', monospace",
-                    scrollBeyondLastLine: false,
-                    wordWrap: "on",
-                    lineNumbers: "on",
-                    renderWhitespace: "none",
-                    overviewRulerBorder: false,
-                  }}
+                <FileEditorView
+                  key={hookSelection.path}
+                  path={hookSelection.path}
+                  onBack={() => setHookSelection(null)}
+                  showHeader={false}
+                  onSnapshotChange={setEditorSnapshot}
                 />
               </div>
             </div>

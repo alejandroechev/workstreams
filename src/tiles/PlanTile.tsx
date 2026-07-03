@@ -4,6 +4,9 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { MarkdownView } from "../ui/MarkdownView";
 import { MermaidDiagram } from "../ui/MermaidDiagram";
+import { FileEditorView, type MarkdownViewState } from "../files/FileEditorView";
+import type { BufferSnapshot } from "../files/FileBufferRegistry";
+import { MarkdownModeSelector } from "../ui/components/MarkdownModeSelector";
 import { useBackend } from "../backend/context";
 import { buildTodoDepsMermaid } from "../domain/todo-deps-mermaid";
 import { parseViewState } from "../domain/tile-view-state";
@@ -27,9 +30,6 @@ import {
   ChartBarSquareIcon,
   ChatBubbleLeftRightIcon,
   ArrowPathIcon,
-  PencilSquareIcon,
-  CheckIcon,
-  XMarkIcon,
 } from "@heroicons/react/24/outline";
 
 interface Props {
@@ -181,11 +181,8 @@ export default function PlanTile({ linkedSessionIds, configJson, onConfigChange,
   const [filter, setFilter] = useState<FeatureFilter>("active");
   const [activeTab, setActiveTab] = useState<TabId>("overview");
   const [planMd, setPlanMd] = useState<string | null>(null);
-  const [grillMd, setGrillMd] = useState<string | null>(null);
-  const [grillEditing, setGrillEditing] = useState(false);
-  const [grillDraft, setGrillDraft] = useState("");
-  const [grillSaving, setGrillSaving] = useState(false);
-  const [grillError, setGrillError] = useState<string | null>(null);
+  const [editorSnapshot, setEditorSnapshot] = useState<BufferSnapshot | null>(null);
+  const [editorViewState, setEditorViewState] = useState<MarkdownViewState | null>(null);
   const [todos, setTodos] = useState<SessionTodo[]>([]);
   const [deps, setDeps] = useState<SessionTodoDep[]>([]);
 
@@ -225,7 +222,6 @@ export default function PlanTile({ linkedSessionIds, configJson, onConfigChange,
     const feat = payload.features.find((f) => f.name === selectedName);
     if (!feat) {
       setPlanMd(null);
-      setGrillMd(null);
       setTodos([]);
       setDeps([]);
       return;
@@ -237,29 +233,16 @@ export default function PlanTile({ linkedSessionIds, configJson, onConfigChange,
             relativePath: `files/features/${feat.name}/plan.md`,
           }).catch(() => null)
         : Promise.resolve(null),
-      feat.hasGrillMe
-        ? invoke<string>("read_session_file", {
-            sessionId,
-            relativePath: `files/features/${feat.name}/grill-me.md`,
-          }).catch(() => null)
-        : Promise.resolve(null),
       backend.listSessionTodos(sessionId).catch(() => [] as SessionTodo[]),
       backend.listSessionTodoDeps(sessionId).catch(() => [] as SessionTodoDep[]),
-    ]).then(([plan, grill, allTodos, allDeps]) => {
+    ]).then(([plan, allTodos, allDeps]) => {
       if (cancelled) return;
       setPlanMd(plan);
-      setGrillMd(grill);
       setTodos(allTodos);
       setDeps(allDeps);
     });
     return () => { cancelled = true; };
   }, [backend, sessionId, selectedName, payload.features]);
-
-  // Reset grill editing whenever the selected feature changes.
-  useEffect(() => {
-    setGrillEditing(false);
-    setGrillError(null);
-  }, [selectedName]);
 
   // View-state hydration (per Q2.9: drop stale keys silently).
   const hydratedRef = useRef(false);
@@ -305,25 +288,6 @@ export default function PlanTile({ linkedSessionIds, configJson, onConfigChange,
   }
 
   const selected = sortedFiltered.find((f) => f.name === selectedName) ?? null;
-
-  const handleGrillSave = async () => {
-    if (!sessionId || !selected) return;
-    setGrillSaving(true);
-    setGrillError(null);
-    try {
-      await invoke("write_session_file", {
-        sessionId,
-        relativePath: `files/features/${selected.name}/grill-me.md`,
-        contents: grillDraft,
-      });
-      setGrillMd(grillDraft);
-      setGrillEditing(false);
-    } catch (err) {
-      setGrillError(typeof err === "string" ? err : "Failed to save grill-me.md");
-    } finally {
-      setGrillSaving(false);
-    }
-  };
 
   return (
     <div data-testid="plan-tile" style={{ display: "flex", flexDirection: "column", height: "100%", color: "#eee" }}>
@@ -518,75 +482,36 @@ export default function PlanTile({ linkedSessionIds, configJson, onConfigChange,
                   </div>
                 )}
                 {activeTab === "grill" && (
-                  <div style={{ padding: 12, height: "100%", display: "flex", flexDirection: "column", minHeight: 0 }}>
-                    {grillEditing ? (
+                  <div style={{ height: "100%", display: "flex", flexDirection: "column", minHeight: 0 }}>
+                    {selected.grillMePath ? (
                       <>
-                        <div style={{ display: "flex", gap: 8, marginBottom: 8, alignItems: "center" }}>
-                          <button
-                            data-testid="grill-save"
-                            onClick={() => void handleGrillSave()}
-                            disabled={grillSaving}
-                            style={grillBtnStyle("#2a3f2a")}
-                          >
-                            <CheckIcon width={14} height={14} />
-                            {grillSaving ? "Saving…" : "Save"}
-                          </button>
-                          <button
-                            data-testid="grill-cancel"
-                            onClick={() => { setGrillEditing(false); setGrillError(null); }}
-                            disabled={grillSaving}
-                            style={grillBtnStyle("transparent")}
-                          >
-                            <XMarkIcon width={14} height={14} />
-                            Cancel
-                          </button>
-                          {grillError && (
-                            <span data-testid="grill-error" style={{ color: "#f38ba8", fontSize: 12 }}>{grillError}</span>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 12px", borderBottom: "1px solid #2a2a2a" }}>
+                          {editorSnapshot?.dirty && (
+                            <span data-testid="grill-dirty-dot" style={grillDirtyDotStyle} />
+                          )}
+                          <span style={{ flex: 1, fontSize: 12, color: "#a6adc8", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                            grill-me.md{editorSnapshot?.dirty ? "*" : ""}
+                          </span>
+                          {editorViewState && (
+                            <MarkdownModeSelector viewState={editorViewState} testIdPrefix="grill" />
                           )}
                         </div>
-                        <textarea
-                          data-testid="grill-editor"
-                          value={grillDraft}
-                          onChange={(e) => setGrillDraft(e.target.value)}
-                          spellCheck={false}
-                          style={{
-                            flex: 1,
-                            minHeight: 0,
-                            width: "100%",
-                            resize: "none",
-                            background: "#0d0d12",
-                            color: "#eee",
-                            border: "1px solid #2a2a2a",
-                            borderRadius: 4,
-                            padding: 8,
-                            fontFamily: "monospace",
-                            fontSize: 13,
-                            lineHeight: 1.5,
-                          }}
-                        />
+                        <div style={{ flex: 1, minHeight: 0 }}>
+                          <FileEditorView
+                            key={selected.grillMePath}
+                            path={selected.grillMePath}
+                            onBack={() => setActiveTab("overview")}
+                            showHeader={false}
+                            renderMarkdownPreview={(content) => <MarkdownView>{content}</MarkdownView>}
+                            onSnapshotChange={setEditorSnapshot}
+                            onViewStateChange={setEditorViewState}
+                          />
+                        </div>
                       </>
-                    ) : grillMd === null ? (
-                      <div style={{ opacity: 0.6, fontSize: 12 }}>
-                        {selected.hasGrillMe
-                          ? "Loading grill-me.md…"
-                          : "No grill-me.md yet — run the grill-me skill in the linked session."}
-                      </div>
                     ) : (
-                      <>
-                        <div style={{ display: "flex", marginBottom: 8 }}>
-                          <button
-                            data-testid="grill-edit"
-                            onClick={() => { setGrillDraft(grillMd ?? ""); setGrillError(null); setGrillEditing(true); }}
-                            style={grillBtnStyle("transparent")}
-                          >
-                            <PencilSquareIcon width={14} height={14} />
-                            Edit
-                          </button>
-                        </div>
-                        <div style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
-                          <MarkdownView>{grillMd}</MarkdownView>
-                        </div>
-                      </>
+                      <div style={{ padding: 12, opacity: 0.6, fontSize: 12 }}>
+                        No grill-me.md yet — run the grill-me skill in the linked session.
+                      </div>
                     )}
                   </div>
                 )}
@@ -599,20 +524,13 @@ export default function PlanTile({ linkedSessionIds, configJson, onConfigChange,
   );
 }
 
-function grillBtnStyle(background: string): React.CSSProperties {
-  return {
-    display: "inline-flex",
-    alignItems: "center",
-    gap: 4,
-    background,
-    color: "#eee",
-    border: "1px solid #2a2a2a",
-    borderRadius: 4,
-    padding: "4px 10px",
-    fontSize: 12,
-    cursor: "pointer",
-  };
-}
+const grillDirtyDotStyle: React.CSSProperties = {
+  width: 8,
+  height: 8,
+  borderRadius: "50%",
+  background: "#f9e2af",
+  flexShrink: 0,
+};
 
 function OverviewTab({ feature, todos, onComplete }: { feature: FeatureSummary; todos: SessionTodo[]; onComplete?: () => void }) {
   const doneIds = new Set(todos.filter((t) => t.status === "done").map((t) => t.id));

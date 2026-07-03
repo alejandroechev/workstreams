@@ -13,6 +13,23 @@ vi.mock("../../ui/MermaidDiagram", () => ({
 vi.mock("../../ui/MarkdownView", () => ({
   MarkdownView: ({ children }: { children: string }) => <div data-testid="md">{children}</div>,
 }));
+const fileEditorMock = vi.hoisted(() => vi.fn());
+vi.mock("../../files/FileEditorView", () => ({
+  // Stub the real Monaco-backed editor: capture props + render the markdown
+  // preview so the grill tab is exercisable in jsdom. Save UX (Ctrl+S/autosave)
+  // is FileEditorView's own concern, covered by its tests.
+  FileEditorView: (props: {
+    path: string;
+    renderMarkdownPreview?: (content: string) => React.ReactNode;
+  }) => {
+    fileEditorMock(props);
+    return (
+      <div data-testid="file-editor-view" data-path={props.path}>
+        {props.renderMarkdownPreview?.("# grill preview")}
+      </div>
+    );
+  },
+}));
 
 function feat(name: string, overrides: Partial<FeatureSummary> = {}): FeatureSummary {
   return {
@@ -159,44 +176,33 @@ describe("PlanTile shell", () => {
     ]);
   });
 
-  it("edits the grill file and saves via write_session_file", async () => {
-    const { invoke } = await import("@tauri-apps/api/core");
-    const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
+  it("opens grill-me.md in FileEditorView at its absolute path (unified save UX)", async () => {
     setup({ features: [feat("alpha")], currentPlanId: null });
     await waitFor(() => expect(screen.getByTestId("plan-tab-grill")).toBeTruthy());
     fireEvent.click(screen.getByTestId("plan-tab-grill"));
-    await waitFor(() => expect(screen.getByTestId("grill-edit")).toBeTruthy());
-    fireEvent.click(screen.getByTestId("grill-edit"));
-    const editor = screen.getByTestId("grill-editor") as HTMLTextAreaElement;
-    fireEvent.change(editor, { target: { value: "# new grill body" } });
-    fireEvent.click(screen.getByTestId("grill-save"));
-    await waitFor(() =>
-      expect(invokeMock).toHaveBeenCalledWith("write_session_file", {
-        sessionId: "sess-1",
-        relativePath: "files/features/alpha/grill-me.md",
-        contents: "# new grill body",
-      }),
+    // Renders through the shared FileEditorView (same Ctrl+S/autosave as any
+    // regular file) pointed at the feature's absolute grill-me.md path — no
+    // bespoke Edit/Save/Cancel buttons.
+    await waitFor(() => expect(screen.getByTestId("file-editor-view")).toBeTruthy());
+    expect(screen.getByTestId("file-editor-view").getAttribute("data-path")).toBe("/x/alpha/grill-me.md");
+    expect(fileEditorMock).toHaveBeenCalledWith(
+      expect.objectContaining({ path: "/x/alpha/grill-me.md" }),
     );
-    // Returns to preview with the saved content.
-    await waitFor(() => expect(screen.getByTestId("grill-edit")).toBeTruthy());
-    expect(screen.getByTestId("md").textContent).toBe("# new grill body");
+    // Legacy edit-mode affordances are gone.
+    expect(screen.queryByTestId("grill-edit")).toBeNull();
+    expect(screen.queryByTestId("grill-save")).toBeNull();
+    expect(screen.queryByTestId("grill-editor")).toBeNull();
   });
 
-  it("cancel discards grill edits without saving", async () => {
-    const { invoke } = await import("@tauri-apps/api/core");
-    const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
-    setup({ features: [feat("alpha")], currentPlanId: null });
+  it("shows a placeholder when the feature has no grill-me.md", async () => {
+    setup({
+      features: [feat("alpha", { hasGrillMe: false, grillMePath: null })],
+      currentPlanId: null,
+    });
     await waitFor(() => expect(screen.getByTestId("plan-tab-grill")).toBeTruthy());
     fireEvent.click(screen.getByTestId("plan-tab-grill"));
-    await waitFor(() => expect(screen.getByTestId("grill-edit")).toBeTruthy());
-    fireEvent.click(screen.getByTestId("grill-edit"));
-    fireEvent.change(screen.getByTestId("grill-editor"), { target: { value: "throwaway" } });
-    fireEvent.click(screen.getByTestId("grill-cancel"));
-    await waitFor(() => expect(screen.getByTestId("grill-edit")).toBeTruthy());
-    expect(invokeMock).not.toHaveBeenCalledWith(
-      "write_session_file",
-      expect.anything(),
-    );
+    await waitFor(() => expect(screen.getByText(/No grill-me\.md yet/)).toBeTruthy());
+    expect(screen.queryByTestId("file-editor-view")).toBeNull();
   });
 
   it("StatusPill testid encodes the derivedStatus", async () => {    setup({ features: [feat("alpha", { derivedStatus: "orphan" })], currentPlanId: null });

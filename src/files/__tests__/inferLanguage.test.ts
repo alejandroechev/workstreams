@@ -49,6 +49,21 @@ describe("inferLanguage", () => {
     expect(inferLanguage("file.xyz")).toBe("plaintext");
   });
 
+  it("resolves extensionless git-hook filenames to shell", () => {
+    expect(inferLanguage("pre-commit")).toBe("shell");
+    expect(inferLanguage("pre-push")).toBe("shell");
+    expect(inferLanguage("commit-msg")).toBe("shell");
+    // With a full path (hooks live under .git/hooks/).
+    expect(inferLanguage("C:/repo/.git/hooks/pre-commit")).toBe("shell");
+    expect(inferLanguage("/repo/.git/hooks/prepare-commit-msg")).toBe("shell");
+  });
+
+  it("does not force shell for hook-named files that carry an extension", () => {
+    // e.g. a sample/backup a user kept — respect the real extension.
+    expect(inferLanguage("pre-commit.ps1")).toBe("powershell");
+    expect(inferLanguage("pre-commit.py")).toBe("python");
+  });
+
   it("is case-insensitive", () => {
     expect(inferLanguage("Program.CS")).toBe("csharp");
     expect(inferLanguage("APP.GO")).toBe("go");

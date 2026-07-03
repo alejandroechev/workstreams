@@ -123,11 +123,49 @@ export interface FileEditorViewProps {
 import { detectLanguage } from "../domain/tile-config";
 
 /**
+ * Canonical git-hook filenames (extensionless). Git only runs a hook if the
+ * file is named exactly one of these, so an extensionless file with one of
+ * these names is a shell script by convention — highlight it as such even
+ * though it has no extension for `detectLanguage` to key off.
+ */
+const GIT_HOOK_NAMES = new Set([
+  "applypatch-msg",
+  "pre-applypatch",
+  "post-applypatch",
+  "pre-commit",
+  "pre-merge-commit",
+  "prepare-commit-msg",
+  "commit-msg",
+  "post-commit",
+  "pre-rebase",
+  "post-checkout",
+  "post-merge",
+  "pre-push",
+  "pre-receive",
+  "update",
+  "proc-receive",
+  "post-receive",
+  "post-update",
+  "reference-transaction",
+  "push-to-checkout",
+  "pre-auto-gc",
+  "post-rewrite",
+  "sendemail-validate",
+  "fsmonitor-watchman",
+  "post-index-change",
+]);
+
+/**
  * Resolve the Monaco language id for a file path. Thin wrapper around the
  * shared {@link detectLanguage} map so Repo Explorer, Plan tile, and any
  * future viewer agree on the same mapping (including .cs, .go, .java, etc.).
+ * Extensionless git-hook files (e.g. `pre-commit`) resolve to `shell`.
  */
 export function inferLanguage(path: string): string {
+  const base = (path.split(/[\\/]/).pop() ?? "").toLowerCase();
+  if (!base.includes(".") && GIT_HOOK_NAMES.has(base)) {
+    return "shell";
+  }
   return detectLanguage(path);
 }
 
