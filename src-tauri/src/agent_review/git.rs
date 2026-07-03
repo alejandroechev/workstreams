@@ -10,9 +10,16 @@ use std::process::Command;
 
 /// Run `git` in `repo` and return trimmed stdout, or an error with stderr.
 pub fn run_git(repo: &Path, args: &[&str]) -> Result<String, String> {
-    let out = Command::new("git")
-        .args(args)
-        .current_dir(repo)
+    #[allow(unused_mut)]
+    let mut cmd = Command::new("git");
+    cmd.args(args).current_dir(repo);
+    // Don't flash a console window on Windows for each git invocation.
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+    let out = cmd
         .output()
         .map_err(|e| format!("git {args:?} failed to spawn: {e}"))?;
     if !out.status.success() {
