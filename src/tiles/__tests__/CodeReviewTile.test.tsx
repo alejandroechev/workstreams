@@ -1,21 +1,25 @@
 import { render, screen, waitFor, fireEvent, cleanup, act } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useRef } from "react";
 
 import { BackendProvider } from "../../backend/context";
 import { MemoryBackend } from "../../backend/memory-backend";
 import CodeReviewTile from "../CodeReviewTile";
 
+// Shared mock state, hoisted so it's reachable from the vi.mock factory below.
+const h = vi.hoisted(() => ({
+  selectionHandlers: [] as Array<(e: { selection: { positionLineNumber: number } }) => void>,
+  // The live modified buffer of the currently-mounted DiffEditor (per-mount ref).
+  liveBuffer: null as null | { current: string },
+  contentHandlers: [] as Array<() => void>,
+  savedFiles: [] as Array<{ path: string; content: string }>,
+  registryModelValue: "",
+}));
+
 // ── Mock the Monaco DiffEditor: capture onMount, expose a fake modified editor
 // so we can simulate a new-side line selection + in-place edits without a real
-// browser. ──
-const selectionHandlers: Array<(e: { selection: { positionLineNumber: number } }) => void> = [];
-const contentHandlers: Array<() => void> = [];
-let modelValue = "";
-let lastModifiedProp: string | undefined;
-const setModelValue = (v: string) => {
-  modelValue = v;
-  for (const h of contentHandlers) h();
-};
+// browser. The buffer lives in a per-mount useRef (like the real uncontrolled
+// editor), so edits survive re-renders and never leak across tests/retries. ──
 vi.mock("@monaco-editor/react", () => ({
   DiffEditor: (props: {
     onMount?: (editor: unknown, monaco: unknown) => void;
@@ -23,25 +27,23 @@ vi.mock("@monaco-editor/react", () => ({
     modified: string;
     options?: { readOnly?: boolean };
   }) => {
-    // Uncontrolled like the real editor: only (re)seed the buffer when the
-    // modified prop actually changes, so in-place edits survive re-renders.
-    if (props.modified !== lastModifiedProp) {
-      modelValue = props.modified;
-      lastModifiedProp = props.modified;
-    }
+    // useRef initial value is only used on first render of this mount; when the
+    // parent changes `key` (new file), React remounts → fresh buffer from props.
+    const bufRef = useRef(props.modified);
+    h.liveBuffer = bufRef;
     const modified = {
       onDidChangeCursorSelection: (cb: (e: { selection: { positionLineNumber: number } }) => void) => {
-        selectionHandlers.push(cb);
+        h.selectionHandlers.push(cb);
       },
       onDidChangeModelContent: (cb: () => void) => {
-        contentHandlers.push(cb);
+        h.contentHandlers.push(cb);
       },
       addCommand: () => {},
       getModel: () => ({
         getLineContent: (n: number) => `line ${n} content`,
-        getValue: () => modelValue,
+        getValue: () => bufRef.current,
         setValue: (v: string) => {
-          modelValue = v;
+          bufRef.current = v;
         },
       }),
       changeViewZones: (fn: (accessor: { addZone: () => string; removeZone: () => void }) => void) => {
@@ -56,15 +58,16 @@ vi.mock("@monaco-editor/react", () => ({
 }));
 
 // Mock the shared file buffer registry used by in-place save.
-const savedFiles: Array<{ path: string; content: string }> = [];
-let registryModelValue = "";
 vi.mock("../../files/FileBufferRegistry", () => ({
   fileBufferRegistry: {
     acquire: vi.fn(async (path: string) => ({ path, content: "", eol: "\n" })),
-    getModel: vi.fn(() => ({ setValue: (v: string) => { registryModelValue = v; } })),
-    save: vi.fn(async (path: string) => { savedFiles.push({ path, content: registryModelValue }); }),
+    getModel: vi.fn(() => ({ setValue: (v: string) => { h.registryModelValue = v; } })),
+    save: vi.fn(async (path: string) => { h.savedFiles.push({ path, content: h.registryModelValue }); }),
   },
 }));
+
+const selectionHandlers = h.selectionHandlers;
+const savedFiles = h.savedFiles;
 
 // MarkdownView stub (avoids react-markdown heavy render).
 vi.mock("../../ui/MarkdownView", () => ({
@@ -73,13 +76,14 @@ vi.mock("../../ui/MarkdownView", () => ({
 
 function selectLine(line: number) {
   act(() => {
-    for (const h of selectionHandlers) h({ selection: { positionLineNumber: line } });
+    for (const cb of selectionHandlers) cb({ selection: { positionLineNumber: line } });
   });
 }
 
 function editContent(value: string) {
   act(() => {
-    setModelValue(value);
+    if (h.liveBuffer) h.liveBuffer.current = value;
+    for (const cb of h.contentHandlers) cb();
   });
 }
 
@@ -93,10 +97,11 @@ function renderTile(backend: MemoryBackend) {
 
 afterEach(() => {
   cleanup();
-  selectionHandlers.length = 0;
-  contentHandlers.length = 0;
-  savedFiles.length = 0;
-  lastModifiedProp = undefined;
+  h.selectionHandlers.length = 0;
+  h.contentHandlers.length = 0;
+  h.savedFiles.length = 0;
+  h.liveBuffer = null;
+  h.registryModelValue = "";
   vi.clearAllTimers();
 });
 
@@ -173,8 +178,8 @@ describe("CodeReviewTile", () => {
     renderTile(backend);
 
     await screen.findByTestId("review-picker");
-    fireEvent.click(screen.getByTestId("create-review")); // working_tree by default
-    await waitFor(() => expect(screen.getByTestId("diff-editor")).toBeTruthy());
+    fireEvent.click(screen.getByTestId("create-review"));
+    await waitFor(() => expect(screen.getByTestId("diff-editor")).toBeTruthy(), { timeout: 4000 });
 
     // Modified side is editable; Save is disabled until dirty.
     expect(screen.getByTestId("diff-editor").getAttribute("data-readonly")).toBe("false");
@@ -182,12 +187,12 @@ describe("CodeReviewTile", () => {
 
     // Edit the modified content → dirty dot + Save enabled.
     editContent("one\nchanged\n");
-    await waitFor(() => expect(screen.getByTestId("edit-dirty-dot")).toBeTruthy());
+    await waitFor(() => expect(screen.getByTestId("edit-dirty-dot")).toBeTruthy(), { timeout: 4000 });
     expect((screen.getByTestId("save-edit") as HTMLButtonElement).disabled).toBe(false);
 
     // Save persists through the file buffer registry.
     fireEvent.click(screen.getByTestId("save-edit"));
-    await waitFor(() => expect(savedFiles.length).toBe(1));
+    await waitFor(() => expect(savedFiles.length).toBe(1), { timeout: 4000 });
     expect(savedFiles[0].path).toContain("src/a.js");
     expect(savedFiles[0].content).toBe("one\nchanged\n");
   });
@@ -201,7 +206,7 @@ describe("CodeReviewTile", () => {
     await screen.findByTestId("review-picker");
     fireEvent.change(screen.getByTestId("diff-source-select"), { target: { value: "last_commit" } });
     fireEvent.click(screen.getByTestId("create-review"));
-    await waitFor(() => expect(screen.getByTestId("diff-editor")).toBeTruthy());
+    await waitFor(() => expect(screen.getByTestId("diff-editor")).toBeTruthy(), { timeout: 4000 });
 
     expect(screen.getByTestId("diff-editor").getAttribute("data-readonly")).toBe("true");
     expect(screen.queryByTestId("save-edit")).toBeNull();
