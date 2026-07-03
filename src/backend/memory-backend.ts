@@ -9,6 +9,7 @@ import type {
   DiffSource,
 } from "../domain/diff-review";
 import type { FileComment, ImportedCommentInput, ImportSummary } from "../domain/file-comments";
+import type { Review, ReviewComment, ChangedFile, DiffSides } from "../domain/code-review";
 import { CONTENT_SEARCH_MAX_PER_FILE } from "../domain/content-search";
 import type { Backend } from "./types";
 import { rewriteTileCwd } from "../domain/worktree-change";
@@ -61,6 +62,12 @@ export class MemoryBackend implements Backend {
   private diffComments = new Map<string, DiffComment[]>();
   private invalidatedChunks = new Map<string, Set<string>>();
   private fileComments = new Map<string, FileComment>();
+  // Code Review (ADR 014) offline stub state.
+  private reviews = new Map<string, Review>();
+  private reviewComments = new Map<string, ReviewComment>();
+  private boundSessions = new Map<string, string | null>();
+  private reviewChangedFiles: ChangedFile[] = [];
+  private reviewDiffSides = new Map<string, DiffSides>();
   /**
    * Test/dev seed for listSessionFeatures. Maps sessionId → payload.
    * Populated via {@link seedSessionFeatures}. Default per-session
@@ -813,5 +820,161 @@ export class MemoryBackend implements Backend {
       inserted += 1;
     }
     return { inserted, skipped };
+  }
+
+  // ── Code Review (ADR 014) — offline stub of the reviewer↔agent loop ──────
+  // Seeds for tests/dev: bound session, the diff's changed files, and per-file
+  // before/after sides. simulateAgentReply lets tests exercise the poll path.
+
+  seedBoundSession(workstreamId: string, sessionId: string | null): void {
+    this.boundSessions.set(workstreamId, sessionId);
+  }
+
+  seedReviewDiff(files: ChangedFile[]): void {
+    this.reviewChangedFiles = files;
+  }
+
+  seedReviewDiffSides(file: string, sides: DiffSides): void {
+    this.reviewDiffSides.set(file, sides);
+  }
+
+  simulateAgentReply(reviewId: string, parentId: string, body: string): ReviewComment {
+    const parent = this.reviewComments.get(parentId);
+    const ts = now();
+    const reply: ReviewComment = {
+      id: generateId(),
+      review_id: reviewId,
+      file: parent?.file ?? "",
+      line: parent?.line ?? 0,
+      side: parent?.side ?? "new",
+      code: null,
+      hunk_header: null,
+      body,
+      author: "agent",
+      parent_id: parentId,
+      status: "open",
+      created_at: ts,
+      updated_at: ts,
+    };
+    this.reviewComments.set(reply.id, reply);
+    if (parent) {
+      parent.status = "addressed";
+      parent.updated_at = ts;
+      this.reviewComments.set(parent.id, parent);
+    }
+    return reply;
+  }
+
+  async resolveWorkstreamSession(workstreamId: string): Promise<string | null> {
+    if (this.boundSessions.has(workstreamId)) return this.boundSessions.get(workstreamId) ?? null;
+    return `mem-session-${workstreamId}`;
+  }
+
+  async codeReviewDiffFiles(_directory: string, _diffSource: string, _baseRef?: string | null): Promise<ChangedFile[]> {
+    return [...this.reviewChangedFiles];
+  }
+
+  async codeReviewDiffFileSides(
+    _directory: string,
+    filePath: string,
+    _diffSource: string,
+    _baseRef?: string | null,
+  ): Promise<DiffSides> {
+    return this.reviewDiffSides.get(filePath) ?? { before: "", after: "" };
+  }
+
+  async createReview(
+    workstreamId: string,
+    diffSource: string,
+    baseRef?: string | null,
+    title?: string | null,
+  ): Promise<Review> {
+    const session = await this.resolveWorkstreamSession(workstreamId);
+    if (!session) throw new Error("no Copilot session linked to this workstream");
+    const ts = now();
+    const review: Review = {
+      id: generateId(),
+      workstream_id: workstreamId,
+      diff_source: diffSource,
+      base_ref: baseRef ?? null,
+      title: title ?? null,
+      status: "open",
+      created_at: ts,
+      updated_at: ts,
+      completed_at: null,
+    };
+    this.reviews.set(review.id, review);
+    return review;
+  }
+
+  async getActiveReview(workstreamId: string): Promise<Review | null> {
+    const rows = Array.from(this.reviews.values()).filter((r) => r.workstream_id === workstreamId);
+    rows.sort((a, b) => b.created_at.localeCompare(a.created_at));
+    return rows[0] ?? null;
+  }
+
+  async listReviews(workstreamId: string): Promise<Review[]> {
+    const rows = Array.from(this.reviews.values()).filter((r) => r.workstream_id === workstreamId);
+    rows.sort((a, b) => b.created_at.localeCompare(a.created_at));
+    return rows;
+  }
+
+  async addReviewComment(
+    workstreamId: string,
+    reviewId: string,
+    file: string,
+    line: number,
+    side: string,
+    code: string | null,
+    hunkHeader: string | null,
+    body: string,
+  ): Promise<ReviewComment> {
+    const ts = now();
+    const comment: ReviewComment = {
+      id: generateId(),
+      review_id: reviewId,
+      file,
+      line,
+      side,
+      code: code ?? null,
+      hunk_header: hunkHeader ?? null,
+      body,
+      author: "reviewer",
+      parent_id: null,
+      status: "open",
+      created_at: ts,
+      updated_at: ts,
+    };
+    this.reviewComments.set(comment.id, comment);
+    return comment;
+  }
+
+  async listReviewComments(_workstreamId: string, reviewId: string): Promise<ReviewComment[]> {
+    const rows = Array.from(this.reviewComments.values()).filter((c) => c.review_id === reviewId);
+    rows.sort((a, b) => {
+      if (a.file !== b.file) return a.file.localeCompare(b.file);
+      if (a.line !== b.line) return a.line - b.line;
+      return a.created_at.localeCompare(b.created_at);
+    });
+    return rows;
+  }
+
+  async setReviewCommentStatus(_workstreamId: string, commentId: string, status: string): Promise<void> {
+    const allowed = ["open", "addressed", "resolved", "wontfix"];
+    if (!allowed.includes(status)) throw new Error(`invalid status '${status}'`);
+    const c = this.reviewComments.get(commentId);
+    if (!c || c.parent_id !== null) throw new Error(`review comment ${commentId} not found`);
+    c.status = status;
+    c.updated_at = now();
+    this.reviewComments.set(commentId, c);
+  }
+
+  async completeCodeReview(_workstreamId: string, reviewId: string): Promise<void> {
+    const r = this.reviews.get(reviewId);
+    if (!r) throw new Error(`review ${reviewId} not found`);
+    r.status = "completed";
+    r.completed_at = now();
+    r.updated_at = r.completed_at;
+    this.reviews.set(reviewId, r);
   }
 }

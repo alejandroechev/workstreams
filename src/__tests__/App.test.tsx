@@ -192,6 +192,16 @@ function createBackend(): Backend {
     updateFileComment: vi.fn(),
     deleteFileComment: vi.fn(),
     importPrComments: vi.fn(),
+    resolveWorkstreamSession: vi.fn().mockResolvedValue(null),
+    codeReviewDiffFiles: vi.fn().mockResolvedValue([]),
+    codeReviewDiffFileSides: vi.fn().mockResolvedValue({ before: "", after: "" }),
+    createReview: vi.fn(),
+    getActiveReview: vi.fn().mockResolvedValue(null),
+    listReviews: vi.fn().mockResolvedValue([]),
+    addReviewComment: vi.fn(),
+    listReviewComments: vi.fn().mockResolvedValue([]),
+    setReviewCommentStatus: vi.fn(),
+    completeCodeReview: vi.fn(),
   } as Backend;
 }
 

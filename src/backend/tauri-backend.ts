@@ -9,6 +9,7 @@ import type {
   DiffChunk,
 } from "../domain/diff-review";
 import type { FileComment, ImportedCommentInput, ImportSummary } from "../domain/file-comments";
+import type { Review, ReviewComment, ChangedFile, DiffSides } from "../domain/code-review";
 import type { Backend } from "./types";
 
 export class TauriBackend implements Backend {
@@ -337,5 +338,90 @@ export class TauriBackend implements Backend {
     items: ImportedCommentInput[],
   ): Promise<ImportSummary> {
     return invoke<ImportSummary>("import_pr_comments", { workstreamId, items });
+  }
+
+  // Code Review (ADR 014)
+  async resolveWorkstreamSession(workstreamId: string): Promise<string | null> {
+    return invoke<string | null>("resolve_workstream_session", { workstreamId });
+  }
+
+  async codeReviewDiffFiles(directory: string, diffSource: string, baseRef?: string | null): Promise<ChangedFile[]> {
+    const rows = await invoke<[string, string][]>("code_review_diff_files", {
+      directory,
+      diffSource,
+      baseRef: baseRef ?? null,
+    });
+    return rows.map(([path, status]) => ({ path, status }));
+  }
+
+  async codeReviewDiffFileSides(
+    directory: string,
+    filePath: string,
+    diffSource: string,
+    baseRef?: string | null,
+  ): Promise<DiffSides> {
+    const [before, after] = await invoke<[string, string]>("code_review_diff_file_sides", {
+      directory,
+      filePath,
+      diffSource,
+      baseRef: baseRef ?? null,
+    });
+    return { before, after };
+  }
+
+  async createReview(
+    workstreamId: string,
+    diffSource: string,
+    baseRef?: string | null,
+    title?: string | null,
+  ): Promise<Review> {
+    return invoke<Review>("create_review", {
+      workstreamId,
+      diffSource,
+      baseRef: baseRef ?? null,
+      title: title ?? null,
+    });
+  }
+
+  async getActiveReview(workstreamId: string): Promise<Review | null> {
+    return invoke<Review | null>("get_active_review", { workstreamId });
+  }
+
+  async listReviews(workstreamId: string): Promise<Review[]> {
+    return invoke<Review[]>("list_reviews", { workstreamId });
+  }
+
+  async addReviewComment(
+    workstreamId: string,
+    reviewId: string,
+    file: string,
+    line: number,
+    side: string,
+    code: string | null,
+    hunkHeader: string | null,
+    body: string,
+  ): Promise<ReviewComment> {
+    return invoke<ReviewComment>("add_review_comment", {
+      workstreamId,
+      reviewId,
+      file,
+      line,
+      side,
+      code,
+      hunkHeader,
+      body,
+    });
+  }
+
+  async listReviewComments(workstreamId: string, reviewId: string): Promise<ReviewComment[]> {
+    return invoke<ReviewComment[]>("list_review_comments", { workstreamId, reviewId });
+  }
+
+  async setReviewCommentStatus(workstreamId: string, commentId: string, status: string): Promise<void> {
+    return invoke("set_review_comment_status", { workstreamId, commentId, status });
+  }
+
+  async completeCodeReview(workstreamId: string, reviewId: string): Promise<void> {
+    return invoke("complete_code_review", { workstreamId, reviewId });
   }
 }

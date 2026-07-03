@@ -9,6 +9,7 @@ import type {
   DiffChunk,
 } from "../domain/diff-review";
 import type { FileComment, ImportedCommentInput, ImportSummary } from "../domain/file-comments";
+import type { Review, ReviewComment, ChangedFile, DiffSides } from "../domain/code-review";
 
 export interface FileSearchMatch {
   path: string;
@@ -150,6 +151,26 @@ export interface Backend {
     workstreamId: string,
     items: ImportedCommentInput[],
   ): Promise<ImportSummary>;
+  // Code Review (ADR 014) — diff-first, session-DB backed, MCP-free
+  resolveWorkstreamSession(workstreamId: string): Promise<string | null>;
+  codeReviewDiffFiles(directory: string, diffSource: string, baseRef?: string | null): Promise<ChangedFile[]>;
+  codeReviewDiffFileSides(directory: string, filePath: string, diffSource: string, baseRef?: string | null): Promise<DiffSides>;
+  createReview(workstreamId: string, diffSource: string, baseRef?: string | null, title?: string | null): Promise<Review>;
+  getActiveReview(workstreamId: string): Promise<Review | null>;
+  listReviews(workstreamId: string): Promise<Review[]>;
+  addReviewComment(
+    workstreamId: string,
+    reviewId: string,
+    file: string,
+    line: number,
+    side: string,
+    code: string | null,
+    hunkHeader: string | null,
+    body: string,
+  ): Promise<ReviewComment>;
+  listReviewComments(workstreamId: string, reviewId: string): Promise<ReviewComment[]>;
+  setReviewCommentStatus(workstreamId: string, commentId: string, status: string): Promise<void>;
+  completeCodeReview(workstreamId: string, reviewId: string): Promise<void>;
 }
 
 export interface SessionPlanEntry {

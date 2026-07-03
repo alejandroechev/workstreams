@@ -445,4 +445,77 @@ describe("TauriBackend", () => {
     await backend.importPrComments("ws-1", items);
     expect(invoke).toHaveBeenCalledWith("import_pr_comments", { workstreamId: "ws-1", items });
   });
+
+  it("code review commands map to snake_case Tauri commands (with tuple mapping)", async () => {
+    invoke.mockResolvedValueOnce("sess-1");
+    expect(await backend.resolveWorkstreamSession("ws-1")).toBe("sess-1");
+    expect(invoke).toHaveBeenCalledWith("resolve_workstream_session", { workstreamId: "ws-1" });
+
+    // Rust returns Vec<(path,status)>; backend maps to ChangedFile[].
+    invoke.mockResolvedValueOnce([["a.js", "M"], ["b.js", "A"]]);
+    const files = await backend.codeReviewDiffFiles("/repo", "branch", "master");
+    expect(invoke).toHaveBeenCalledWith("code_review_diff_files", {
+      directory: "/repo",
+      diffSource: "branch",
+      baseRef: "master",
+    });
+    expect(files).toEqual([{ path: "a.js", status: "M" }, { path: "b.js", status: "A" }]);
+
+    // Rust returns (before, after) tuple; backend maps to DiffSides.
+    invoke.mockResolvedValueOnce(["BEFORE", "AFTER"]);
+    const sides = await backend.codeReviewDiffFileSides("/repo", "a.js", "working_tree");
+    expect(invoke).toHaveBeenCalledWith("code_review_diff_file_sides", {
+      directory: "/repo",
+      filePath: "a.js",
+      diffSource: "working_tree",
+      baseRef: null,
+    });
+    expect(sides).toEqual({ before: "BEFORE", after: "AFTER" });
+
+    invoke.mockResolvedValueOnce({ id: "rv1" });
+    await backend.createReview("ws-1", "branch", "master", "T");
+    expect(invoke).toHaveBeenCalledWith("create_review", {
+      workstreamId: "ws-1",
+      diffSource: "branch",
+      baseRef: "master",
+      title: "T",
+    });
+
+    invoke.mockResolvedValueOnce(null);
+    await backend.getActiveReview("ws-1");
+    expect(invoke).toHaveBeenCalledWith("get_active_review", { workstreamId: "ws-1" });
+
+    invoke.mockResolvedValueOnce([]);
+    await backend.listReviews("ws-1");
+    expect(invoke).toHaveBeenCalledWith("list_reviews", { workstreamId: "ws-1" });
+
+    invoke.mockResolvedValueOnce({ id: "c1" });
+    await backend.addReviewComment("ws-1", "rv1", "a.js", 4, "new", "code", "@@", "note");
+    expect(invoke).toHaveBeenCalledWith("add_review_comment", {
+      workstreamId: "ws-1",
+      reviewId: "rv1",
+      file: "a.js",
+      line: 4,
+      side: "new",
+      code: "code",
+      hunkHeader: "@@",
+      body: "note",
+    });
+
+    invoke.mockResolvedValueOnce([]);
+    await backend.listReviewComments("ws-1", "rv1");
+    expect(invoke).toHaveBeenCalledWith("list_review_comments", { workstreamId: "ws-1", reviewId: "rv1" });
+
+    invoke.mockResolvedValueOnce(undefined);
+    await backend.setReviewCommentStatus("ws-1", "c1", "resolved");
+    expect(invoke).toHaveBeenCalledWith("set_review_comment_status", {
+      workstreamId: "ws-1",
+      commentId: "c1",
+      status: "resolved",
+    });
+
+    invoke.mockResolvedValueOnce(undefined);
+    await backend.completeCodeReview("ws-1", "rv1");
+    expect(invoke).toHaveBeenCalledWith("complete_code_review", { workstreamId: "ws-1", reviewId: "rv1" });
+  });
 });
