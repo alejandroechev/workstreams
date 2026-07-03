@@ -4556,6 +4556,13 @@ pub fn run() {
             code_review::code_review_diff_files,
             code_review::code_review_diff_file_sides,
             code_review::resolve_workstream_session,
+            code_review::create_review,
+            code_review::get_active_review,
+            code_review::list_reviews,
+            code_review::add_review_comment,
+            code_review::list_review_comments,
+            code_review::set_review_comment_status,
+            code_review::complete_code_review,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
