@@ -1,3 +1,4 @@
+mod code_review;
 mod db;
 mod diff_review;
 mod file_comments;
