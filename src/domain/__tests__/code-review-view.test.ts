@@ -8,6 +8,7 @@ import {
   statusLabel,
   basename,
   fileStatusLabel,
+  modifiedEditable,
 } from "../code-review-view";
 import type { ReviewComment } from "../code-review";
 
@@ -78,5 +79,11 @@ describe("code-review-view helpers", () => {
     expect(fileStatusLabel("M")).toBe("modified");
     expect(basename("C:/repo/src/a.js")).toBe("a.js");
     expect(basename("src\\b.ts")).toBe("b.ts");
+  });
+
+  it("modifiedEditable only for working_tree", () => {
+    expect(modifiedEditable("working_tree")).toBe(true);
+    expect(modifiedEditable("last_commit")).toBe(false);
+    expect(modifiedEditable("branch")).toBe(false);
   });
 });

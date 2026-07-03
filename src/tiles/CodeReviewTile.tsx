@@ -11,6 +11,7 @@ import {
 } from "@heroicons/react/24/outline";
 import { useBackend } from "../backend/context";
 import { detectLanguage } from "../domain/tile-config";
+import { fileBufferRegistry } from "../files/FileBufferRegistry";
 import { MarkdownView } from "../ui/MarkdownView";
 import type { Review, ReviewComment, ChangedFile, DiffSource } from "../domain/code-review";
 import {
@@ -22,6 +23,7 @@ import {
   statusLabel,
   basename,
   fileStatusLabel,
+  modifiedEditable,
   type CommentThread,
 } from "../domain/code-review-view";
 
@@ -63,6 +65,15 @@ export default function CodeReviewTile({ workstreamId, workstreamDir, isFocused 
   // Comment composer (anchored to a selected new-side line).
   const [pendingAnchor, setPendingAnchor] = useState<{ file: string; line: number; code: string } | null>(null);
   const [composerBody, setComposerBody] = useState("");
+
+  // In-place editing (ADR 014 §4) — only when the modified side is the working file.
+  const [dirty, setDirty] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const editable = review ? modifiedEditable(review.diff_source) : false;
+  const editableRef = useRef(false);
+  editableRef.current = editable;
+  const sidesAfterRef = useRef("");
+  sidesAfterRef.current = sides.after;
 
   const modifiedEditorRef = useRef<MonacoNs.editor.IStandaloneCodeEditor | null>(null);
   const zoneIdsRef = useRef<string[]>([]);
@@ -131,6 +142,7 @@ export default function CodeReviewTile({ workstreamId, workstreamDir, isFocused 
   // Load the selected file's diff sides.
   useEffect(() => {
     if (!review || !selectedFile) return;
+    setDirty(false);
     let cancelled = false;
     (async () => {
       try {
@@ -178,17 +190,63 @@ export default function CodeReviewTile({ workstreamId, workstreamDir, isFocused 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [threads, selectedFile, sides]);
 
-  const onDiffMount = useCallback((editor: MonacoNs.editor.IStandaloneDiffEditor) => {
-    const modified = editor.getModifiedEditor();
-    modifiedEditorRef.current = modified;
-    modified.onDidChangeCursorSelection((e) => {
-      const line = e.selection.positionLineNumber;
-      const file = selectedFileRef.current;
-      if (!file) return;
-      const code = modified.getModel()?.getLineContent(line) ?? "";
-      setPendingAnchor({ file, line, code });
-    });
-  }, []);
+  const absPath = useCallback(
+    (file: string) => `${dir.replace(/[\\/]+$/, "")}/${file}`,
+    [dir],
+  );
+
+  const saveEdit = useCallback(async () => {
+    const editor = modifiedEditorRef.current;
+    const file = selectedFileRef.current;
+    if (!editor || !file || !editableRef.current) return;
+    const content = editor.getModel()?.getValue() ?? "";
+    setSaving(true);
+    try {
+      // Persist through the shared FileBufferRegistry so the write uses the
+      // same EOL/conflict handling as any file save (ADR 014 §4).
+      const snap = await fileBufferRegistry.acquire(absPath(file));
+      fileBufferRegistry.getModel(snap.path)?.setValue(content);
+      await fileBufferRegistry.save(snap.path);
+      setDirty(false);
+      // Re-diff: the edit may change the diff (e.g. removing an added line).
+      const r = reviewRef.current;
+      if (r) {
+        const s = await backend.codeReviewDiffFileSides(dir, file, r.diff_source, r.base_ref);
+        setSides(s);
+        void loadFiles(r);
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSaving(false);
+    }
+  }, [absPath, backend, dir, loadFiles]);
+  // saveEdit changes identity; hold the latest in a ref for the Monaco command.
+  const saveEditRef = useRef(saveEdit);
+  saveEditRef.current = saveEdit;
+
+  const onDiffMount = useCallback(
+    (editor: MonacoNs.editor.IStandaloneDiffEditor, monaco: typeof MonacoNs) => {
+      const modified = editor.getModifiedEditor();
+      modifiedEditorRef.current = modified;
+      modified.onDidChangeCursorSelection((e) => {
+        const line = e.selection.positionLineNumber;
+        const file = selectedFileRef.current;
+        if (!file) return;
+        const code = modified.getModel()?.getLineContent(line) ?? "";
+        setPendingAnchor({ file, line, code });
+      });
+      // In-place edit: track dirty + Ctrl+S save when the modified side is editable.
+      modified.onDidChangeModelContent(() => {
+        if (!editableRef.current) return;
+        setDirty((modified.getModel()?.getValue() ?? "") !== sidesAfterRef.current);
+      });
+      modified.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
+        void saveEditRef.current();
+      });
+    },
+    [],
+  );
 
   const createReview = useCallback(async () => {
     setBusy(true);
@@ -359,6 +417,18 @@ export default function CodeReviewTile({ workstreamId, workstreamDir, isFocused 
               <>
                 <div style={styles.diffToolbar}>
                   <span style={styles.filePathText}>{selectedFile}</span>
+                  {editable && dirty && <span style={styles.dirtyDot} data-testid="edit-dirty-dot" />}
+                  {editable && (
+                    <button
+                      style={styles.btn}
+                      disabled={saving || !dirty}
+                      onClick={() => void saveEdit()}
+                      data-testid="save-edit"
+                      title="Save edits to the working file (Ctrl+S)"
+                    >
+                      {saving ? "Saving…" : "Save"}
+                    </button>
+                  )}
                   {pendingAnchor && (
                     <span style={styles.muted} data-testid="pending-anchor">line {pendingAnchor.line}</span>
                   )}
@@ -373,7 +443,8 @@ export default function CodeReviewTile({ workstreamId, workstreamDir, isFocused 
                     theme="vs-dark"
                     onMount={onDiffMount}
                     options={{
-                      readOnly: true,
+                      readOnly: !editable,
+                      originalEditable: false,
                       renderSideBySide: true,
                       minimap: { enabled: false },
                       scrollBeyondLastLine: false,
@@ -476,6 +547,7 @@ const styles: Record<string, React.CSSProperties> = {
   diffPane: { flex: 1, display: "flex", flexDirection: "column", minWidth: 0 },
   diffToolbar: { display: "flex", alignItems: "center", gap: 8, padding: "4px 10px", borderBottom: "1px solid #313244" },
   filePathText: { flex: 1, fontFamily: "monospace", fontSize: 11, color: "#89dceb", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
+  dirtyDot: { width: 8, height: 8, borderRadius: "50%", background: "#f9e2af", flexShrink: 0 },
   composer: { borderTop: "1px solid #313244", padding: 8, display: "flex", flexDirection: "column", gap: 6 },
   textarea: { minHeight: 48, background: "#181825", color: "#cdd6f4", border: "1px solid #313244", borderRadius: 6, padding: 6, fontFamily: "inherit", fontSize: 12 },
   commentsPanel: { width: 300, borderLeft: "1px solid #313244", overflowY: "auto", flexShrink: 0, padding: 8, display: "flex", flexDirection: "column", gap: 8 },

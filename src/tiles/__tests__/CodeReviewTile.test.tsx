@@ -6,22 +6,63 @@ import { MemoryBackend } from "../../backend/memory-backend";
 import CodeReviewTile from "../CodeReviewTile";
 
 // ── Mock the Monaco DiffEditor: capture onMount, expose a fake modified editor
-// so we can simulate a new-side line selection without a real browser. ──
+// so we can simulate a new-side line selection + in-place edits without a real
+// browser. ──
 const selectionHandlers: Array<(e: { selection: { positionLineNumber: number } }) => void> = [];
+const contentHandlers: Array<() => void> = [];
+let modelValue = "";
+let lastModifiedProp: string | undefined;
+const setModelValue = (v: string) => {
+  modelValue = v;
+  for (const h of contentHandlers) h();
+};
 vi.mock("@monaco-editor/react", () => ({
-  DiffEditor: (props: { onMount?: (editor: unknown) => void; original: string; modified: string }) => {
+  DiffEditor: (props: {
+    onMount?: (editor: unknown, monaco: unknown) => void;
+    original: string;
+    modified: string;
+    options?: { readOnly?: boolean };
+  }) => {
+    // Uncontrolled like the real editor: only (re)seed the buffer when the
+    // modified prop actually changes, so in-place edits survive re-renders.
+    if (props.modified !== lastModifiedProp) {
+      modelValue = props.modified;
+      lastModifiedProp = props.modified;
+    }
     const modified = {
       onDidChangeCursorSelection: (cb: (e: { selection: { positionLineNumber: number } }) => void) => {
         selectionHandlers.push(cb);
       },
-      getModel: () => ({ getLineContent: (n: number) => `line ${n} content` }),
+      onDidChangeModelContent: (cb: () => void) => {
+        contentHandlers.push(cb);
+      },
+      addCommand: () => {},
+      getModel: () => ({
+        getLineContent: (n: number) => `line ${n} content`,
+        getValue: () => modelValue,
+        setValue: (v: string) => {
+          modelValue = v;
+        },
+      }),
       changeViewZones: (fn: (accessor: { addZone: () => string; removeZone: () => void }) => void) => {
         fn({ addZone: () => "z1", removeZone: () => {} });
       },
     };
     const editor = { getModifiedEditor: () => modified };
-    props.onMount?.(editor);
-    return <div data-testid="diff-editor" data-modified={props.modified} />;
+    const monaco = { KeyMod: { CtrlCmd: 2048 }, KeyCode: { KeyS: 49 } };
+    props.onMount?.(editor, monaco);
+    return <div data-testid="diff-editor" data-modified={props.modified} data-readonly={String(props.options?.readOnly)} />;
+  },
+}));
+
+// Mock the shared file buffer registry used by in-place save.
+const savedFiles: Array<{ path: string; content: string }> = [];
+let registryModelValue = "";
+vi.mock("../../files/FileBufferRegistry", () => ({
+  fileBufferRegistry: {
+    acquire: vi.fn(async (path: string) => ({ path, content: "", eol: "\n" })),
+    getModel: vi.fn(() => ({ setValue: (v: string) => { registryModelValue = v; } })),
+    save: vi.fn(async (path: string) => { savedFiles.push({ path, content: registryModelValue }); }),
   },
 }));
 
@@ -36,6 +77,12 @@ function selectLine(line: number) {
   });
 }
 
+function editContent(value: string) {
+  act(() => {
+    setModelValue(value);
+  });
+}
+
 function renderTile(backend: MemoryBackend) {
   return render(
     <BackendProvider backend={backend}>
@@ -47,6 +94,9 @@ function renderTile(backend: MemoryBackend) {
 afterEach(() => {
   cleanup();
   selectionHandlers.length = 0;
+  contentHandlers.length = 0;
+  savedFiles.length = 0;
+  lastModifiedProp = undefined;
   vi.clearAllTimers();
 });
 
@@ -114,5 +164,46 @@ describe("CodeReviewTile", () => {
     await waitFor(() => expect(screen.getByTestId("complete-review")).toBeTruthy());
     fireEvent.click(screen.getByTestId("complete-review"));
     await waitFor(() => expect(screen.getByTestId("review-completed")).toBeTruthy());
+  });
+
+  it("makes the modified side editable for working_tree and saves in place", async () => {
+    const backend = new MemoryBackend();
+    backend.seedReviewDiff([{ path: "src/a.js", status: "M" }]);
+    backend.seedReviewDiffSides("src/a.js", { before: "one\n", after: "one\ntwo\n" });
+    renderTile(backend);
+
+    await screen.findByTestId("review-picker");
+    fireEvent.click(screen.getByTestId("create-review")); // working_tree by default
+    await waitFor(() => expect(screen.getByTestId("diff-editor")).toBeTruthy());
+
+    // Modified side is editable; Save is disabled until dirty.
+    expect(screen.getByTestId("diff-editor").getAttribute("data-readonly")).toBe("false");
+    expect((screen.getByTestId("save-edit") as HTMLButtonElement).disabled).toBe(true);
+
+    // Edit the modified content → dirty dot + Save enabled.
+    editContent("one\nchanged\n");
+    await waitFor(() => expect(screen.getByTestId("edit-dirty-dot")).toBeTruthy());
+    expect((screen.getByTestId("save-edit") as HTMLButtonElement).disabled).toBe(false);
+
+    // Save persists through the file buffer registry.
+    fireEvent.click(screen.getByTestId("save-edit"));
+    await waitFor(() => expect(savedFiles.length).toBe(1));
+    expect(savedFiles[0].path).toContain("src/a.js");
+    expect(savedFiles[0].content).toBe("one\nchanged\n");
+  });
+
+  it("keeps the modified side read-only for non-working_tree sources", async () => {
+    const backend = new MemoryBackend();
+    backend.seedReviewDiff([{ path: "a.js", status: "M" }]);
+    backend.seedReviewDiffSides("a.js", { before: "x\n", after: "x\ny\n" });
+    renderTile(backend);
+
+    await screen.findByTestId("review-picker");
+    fireEvent.change(screen.getByTestId("diff-source-select"), { target: { value: "last_commit" } });
+    fireEvent.click(screen.getByTestId("create-review"));
+    await waitFor(() => expect(screen.getByTestId("diff-editor")).toBeTruthy());
+
+    expect(screen.getByTestId("diff-editor").getAttribute("data-readonly")).toBe("true");
+    expect(screen.queryByTestId("save-edit")).toBeNull();
   });
 });

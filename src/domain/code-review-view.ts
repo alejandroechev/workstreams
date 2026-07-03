@@ -86,3 +86,13 @@ export function fileStatusLabel(status: string): string {
       return "modified";
   }
 }
+
+/**
+ * Whether the diff's modified (right) side maps to the on-disk working file —
+ * the only case in which in-place editing is valid (ADR 014 §4). For
+ * `last_commit` / `branch` the modified side is committed content, not the
+ * working file, so those diffs are read-only.
+ */
+export function modifiedEditable(diffSource: string): boolean {
+  return diffSource === "working_tree";
+}
