@@ -74,7 +74,7 @@ fn parse_name_status(out: &str) -> Vec<(String, String)> {
         let status = parts.next().unwrap_or("M");
         let status_char = status.chars().next().unwrap_or('M').to_string();
         // For renames (Rxxx) name-status has old\tnew; take the new path.
-        let path = parts.last().unwrap_or("").to_string();
+        let path = parts.next_back().unwrap_or("").to_string();
         if !path.is_empty() {
             v.push((path, status_char));
         }
