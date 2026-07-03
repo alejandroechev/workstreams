@@ -49,7 +49,7 @@ export interface Tile {
   updated_at: string;
 }
 
-export type TileType = "terminal" | "copilot_session" | "file_viewer" | "file_explorer" | "code_viewer" | "doc_viewer" | "session_meta" | "workbench" | "plan" | "diff_review" | "agent_review";
+export type TileType = "terminal" | "copilot_session" | "file_viewer" | "file_explorer" | "code_viewer" | "doc_viewer" | "session_meta" | "workbench" | "plan" | "diff_review";
 
 export interface CopilotConfigItem {
   name: string;

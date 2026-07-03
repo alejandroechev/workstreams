@@ -9,7 +9,6 @@ import type {
   DiffSource,
 } from "../domain/diff-review";
 import type { FileComment, ImportedCommentInput, ImportSummary } from "../domain/file-comments";
-import type { AgentReview, ReviewComment } from "../domain/agent-review";
 import { CONTENT_SEARCH_MAX_PER_FILE } from "../domain/content-search";
 import type { Backend } from "./types";
 import { rewriteTileCwd } from "../domain/worktree-change";
@@ -62,8 +61,6 @@ export class MemoryBackend implements Backend {
   private diffComments = new Map<string, DiffComment[]>();
   private invalidatedChunks = new Map<string, Set<string>>();
   private fileComments = new Map<string, FileComment>();
-  private agentReviews = new Map<string, AgentReview>();
-  private reviewComments = new Map<string, ReviewComment>();
   /**
    * Test/dev seed for listSessionFeatures. Maps sessionId → payload.
    * Populated via {@link seedSessionFeatures}. Default per-session
@@ -816,158 +813,5 @@ export class MemoryBackend implements Backend {
       inserted += 1;
     }
     return { inserted, skipped };
-  }
-
-  // ── Local Agent Review (ADR 013) ──────────────────────────────────────
-  // In-memory stub: the git-driven re-anchor sweep is a no-op here (anchors
-  // stay `unchanged`); real trackability is validated in Rust. This keeps the
-  // reviewer↔agent loop fully exercisable offline for CLI/E2E/dev.
-
-  async createAgentReview(
-    workstreamId: string,
-    baseRef?: string | null,
-    headRef?: string | null,
-  ): Promise<AgentReview> {
-    const existing = Array.from(this.agentReviews.values()).find(
-      (r) => r.workstream_id === workstreamId && r.status === "active",
-    );
-    if (existing) return existing;
-    const ts = now();
-    const review: AgentReview = {
-      id: generateId(),
-      workstream_id: workstreamId,
-      base_ref: baseRef ?? null,
-      head_ref: headRef ?? null,
-      round: 1,
-      status: "active",
-      exported_path: null,
-      created_at: ts,
-      updated_at: ts,
-      completed_at: null,
-    };
-    this.agentReviews.set(review.id, review);
-    return review;
-  }
-
-  async listReviewComments(reviewId: string): Promise<ReviewComment[]> {
-    const all = Array.from(this.reviewComments.values()).filter((c) => c.review_id === reviewId);
-    all.sort((a, b) => {
-      if (a.absolute_path !== b.absolute_path) return a.absolute_path.localeCompare(b.absolute_path);
-      if (a.anchor_line_start !== b.anchor_line_start) return a.anchor_line_start - b.anchor_line_start;
-      return a.created_at.localeCompare(b.created_at);
-    });
-    return all;
-  }
-
-  async addReviewComment(
-    reviewId: string,
-    absolutePath: string,
-    anchorLineStart: number,
-    anchorLineEnd: number,
-    bodyMd: string,
-  ): Promise<ReviewComment> {
-    if (anchorLineEnd < anchorLineStart) {
-      throw new Error("anchor_line_end must be >= anchor_line_start");
-    }
-    const review = this.agentReviews.get(reviewId);
-    if (!review) throw new Error("review not found");
-    const ts = now();
-    const comment: ReviewComment = {
-      id: generateId(),
-      review_id: reviewId,
-      workstream_id: review.workstream_id,
-      absolute_path: absolutePath,
-      anchor_line_start: anchorLineStart,
-      anchor_line_end: anchorLineEnd,
-      anchor_text: null,
-      body_md: bodyMd,
-      author: "me",
-      status: "open",
-      origin_parent_id: null,
-      round: review.round,
-      anchor_state: "unchanged",
-      fixing_commit: null,
-      anchor_commit: "memory",
-      created_at: ts,
-      updated_at: ts,
-      fixing_hunk: null,
-    };
-    this.reviewComments.set(comment.id, comment);
-    return comment;
-  }
-
-  async replyReviewComment(parentId: string, bodyMd: string, author: string): Promise<ReviewComment> {
-    if (author !== "me" && author !== "agent") {
-      throw new Error("author must be 'me' or 'agent'");
-    }
-    const parent = this.reviewComments.get(parentId);
-    if (!parent) throw new Error("parent comment not found");
-    const ts = now();
-    const reply: ReviewComment = {
-      id: generateId(),
-      review_id: parent.review_id,
-      workstream_id: parent.workstream_id,
-      absolute_path: parent.absolute_path,
-      anchor_line_start: parent.anchor_line_start,
-      anchor_line_end: parent.anchor_line_end,
-      anchor_text: null,
-      body_md: bodyMd,
-      author,
-      status: null,
-      origin_parent_id: parentId,
-      round: parent.round,
-      anchor_state: null,
-      fixing_commit: null,
-      anchor_commit: null,
-      created_at: ts,
-      updated_at: ts,
-      fixing_hunk: null,
-    };
-    this.reviewComments.set(reply.id, reply);
-    return reply;
-  }
-
-  async setCommentResolution(commentId: string, status: string, actor: string): Promise<void> {
-    const allowedMe = ["open", "addressed", "resolved", "wontfix"];
-    const allowedAgent = ["addressed", "wontfix"];
-    const ok = actor === "me" ? allowedMe.includes(status) : actor === "agent" ? allowedAgent.includes(status) : false;
-    if (!ok) throw new Error(`actor '${actor}' may not set status '${status}'`);
-    const comment = this.reviewComments.get(commentId);
-    if (!comment || comment.origin_parent_id !== null) {
-      throw new Error(`review thread ${commentId} not found`);
-    }
-    comment.status = status;
-    comment.updated_at = now();
-    this.reviewComments.set(commentId, comment);
-  }
-
-  async submitReviewRound(reviewId: string): Promise<void> {
-    const review = this.agentReviews.get(reviewId);
-    if (!review) throw new Error("review not found");
-    review.round += 1;
-    review.updated_at = now();
-    this.agentReviews.set(reviewId, review);
-  }
-
-  async completeAgentReview(reviewId: string): Promise<string> {
-    const review = this.agentReviews.get(reviewId);
-    if (!review) throw new Error("review not found");
-    const roots = Array.from(this.reviewComments.values()).filter(
-      (c) => c.review_id === reviewId && c.origin_parent_id === null,
-    );
-    const open = roots.filter((c) => {
-      const s = c.status ?? "open";
-      return s !== "resolved" && s !== "wontfix";
-    }).length;
-    if (open > 0) {
-      throw new Error(`${open} thread(s) still open — resolve or wontfix them before completing`);
-    }
-    const path = `memory://reviews/${reviewId}/review.md`;
-    review.status = "completed";
-    review.exported_path = path;
-    review.completed_at = now();
-    review.updated_at = review.completed_at;
-    this.agentReviews.set(reviewId, review);
-    return path;
   }
 }

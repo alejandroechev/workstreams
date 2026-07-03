@@ -242,25 +242,11 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
             updated_at TEXT NOT NULL
         );
 
-        CREATE TABLE IF NOT EXISTS agent_reviews (
-            id TEXT PRIMARY KEY,
-            workstream_id TEXT NOT NULL REFERENCES workstreams(id) ON DELETE CASCADE,
-            base_ref TEXT,
-            head_ref TEXT,
-            round INTEGER NOT NULL DEFAULT 1,
-            status TEXT NOT NULL DEFAULT 'active',
-            exported_path TEXT,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            completed_at TEXT
-        );
-
         CREATE INDEX IF NOT EXISTS idx_diff_chunks_review ON diff_chunks(review_id, ordinal);
         CREATE INDEX IF NOT EXISTS idx_diff_hunks_chunk ON diff_hunks(chunk_id);
         CREATE INDEX IF NOT EXISTS idx_diff_comments_chunk ON diff_comments(chunk_id);
         CREATE INDEX IF NOT EXISTS idx_diff_review_events_review ON diff_review_events(review_id, id);
         CREATE INDEX IF NOT EXISTS idx_file_comments_ws_path ON file_comments(workstream_id, absolute_path);
-        CREATE INDEX IF NOT EXISTS idx_agent_reviews_ws ON agent_reviews(workstream_id, status);
         CREATE UNIQUE INDEX IF NOT EXISTS idx_file_comments_origin
             ON file_comments(origin_type, origin_pr_id, origin_comment_id)
             WHERE origin_type = 'ado-pr';
@@ -272,33 +258,11 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
         "ALTER TABLE workstreams ADD COLUMN project_id TEXT REFERENCES projects(id)",
         "ALTER TABLE workstreams ADD COLUMN workstream_type TEXT NOT NULL DEFAULT 'standalone'",
         "ALTER TABLE workstreams ADD COLUMN worktree_branch TEXT",
-        // Local Agent Review (ADR 013): extend file_comments for the
-        // reviewer↔agent loop. Existing ADO-import ('ado-pr') and scratchpad
-        // ('user') rows are unaffected; local-review rows use
-        // origin_type='local-review'. anchor_state is the binary
-        // 'unchanged'|'changed' result of the spike-proven anchor engine.
-        "ALTER TABLE file_comments ADD COLUMN review_id TEXT",
-        "ALTER TABLE file_comments ADD COLUMN round INTEGER",
-        "ALTER TABLE file_comments ADD COLUMN anchor_hash TEXT",
-        "ALTER TABLE file_comments ADD COLUMN anchor_state TEXT",
-        "ALTER TABLE file_comments ADD COLUMN fixing_commit TEXT",
-        // The git ref the comment's anchor line numbers are currently valid
-        // against (updated on each unchanged re-anchor). Keeps consecutive-round
-        // diffs coordinate-consistent (ADR 013 §7).
-        "ALTER TABLE file_comments ADD COLUMN anchor_commit TEXT",
     ];
     for sql in &migrations {
         // SQLite errors if column already exists — ignore that error
         let _ = conn.execute_batch(sql);
     }
-
-    // Indexes that depend on migration-added columns MUST be created after the
-    // migrations run — otherwise a pre-existing DB (or a fresh one, since the
-    // base file_comments CREATE doesn't include these columns) fails with
-    // "no such column: review_id".
-    conn.execute_batch(
-        "CREATE INDEX IF NOT EXISTS idx_file_comments_review ON file_comments(review_id, round);",
-    )?;
 
     Ok(())
 }
@@ -341,7 +305,6 @@ mod tests {
             "diff_comments",
             "diff_review_events",
             "file_comments",
-            "agent_reviews",
         ];
         for table in &expected {
             let count: i64 = conn
@@ -361,60 +324,6 @@ mod tests {
         // Run init again — should not error
         init_db(&conn).unwrap();
         init_db(&conn).unwrap();
-    }
-
-    #[test]
-    fn init_db_upgrades_a_preexisting_pre_adr013_db() {
-        // Regression (ADR 013 startup panic): a DB created before the
-        // local-agent-review columns existed must upgrade cleanly. The
-        // idx_file_comments_review index references migration-added columns
-        // (review_id, round) and MUST be created only after the ALTER TABLE
-        // migrations run — otherwise init_db panics with "no such column:
-        // review_id".
-        let conn = Connection::open_in_memory().unwrap();
-        // Simulate the OLD file_comments schema (no review_id/round/anchor_* cols).
-        conn.execute_batch(
-            "CREATE TABLE file_comments (
-                id TEXT PRIMARY KEY,
-                workstream_id TEXT NOT NULL,
-                absolute_path TEXT NOT NULL,
-                anchor_line_start INTEGER NOT NULL,
-                anchor_line_end INTEGER NOT NULL,
-                anchor_text TEXT,
-                body_md TEXT NOT NULL,
-                author TEXT NOT NULL,
-                origin_type TEXT NOT NULL,
-                origin_pr_id TEXT,
-                origin_comment_id TEXT,
-                origin_thread_id TEXT,
-                origin_parent_id TEXT,
-                origin_url TEXT,
-                status TEXT,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            );",
-        )
-        .unwrap();
-
-        // Must not panic and must add the columns + index.
-        init_db(&conn).unwrap();
-
-        let has_review_id: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM pragma_table_info('file_comments') WHERE name='review_id'",
-                [],
-                |r| r.get(0),
-            )
-            .unwrap();
-        assert_eq!(has_review_id, 1, "review_id column should have been added");
-        let has_index: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='idx_file_comments_review'",
-                [],
-                |r| r.get(0),
-            )
-            .unwrap();
-        assert_eq!(has_index, 1, "idx_file_comments_review should exist");
     }
 
     #[test]
@@ -602,63 +511,5 @@ mod tests {
             })
             .unwrap();
         assert_eq!(val, "v2");
-    }
-
-    #[test]
-    fn agent_reviews_table_and_file_comment_columns_exist() {
-        let conn = open_in_memory();
-        // agent_reviews insert round-trips.
-        conn.execute_batch(
-            "INSERT INTO workstreams (id, name, status, workstream_type, created_at, updated_at)
-                VALUES ('w1', 'WS', 'active', 'standalone', 't', 't');
-             INSERT INTO agent_reviews (id, workstream_id, base_ref, head_ref, round, status, created_at, updated_at)
-                VALUES ('r1', 'w1', 'main', 'HEAD', 1, 'active', 't', 't');",
-        )
-        .unwrap();
-        let round: i64 = conn
-            .query_row("SELECT round FROM agent_reviews WHERE id='r1'", [], |r| {
-                r.get(0)
-            })
-            .unwrap();
-        assert_eq!(round, 1);
-
-        // file_comments carries the new local-review columns.
-        conn.execute(
-            "INSERT INTO file_comments
-                (id, workstream_id, absolute_path, anchor_line_start, anchor_line_end,
-                 anchor_text, body_md, author, origin_type, status,
-                 review_id, round, anchor_hash, anchor_state, fixing_commit,
-                 created_at, updated_at)
-             VALUES ('c1','w1','/a.js',4,4,'console.log()','fix','me','local-review','open',
-                     'r1',1,'abc123','unchanged',NULL,'t','t')",
-            [],
-        )
-        .unwrap();
-        let (state, review_id): (String, String) = conn
-            .query_row(
-                "SELECT anchor_state, review_id FROM file_comments WHERE id='c1'",
-                [],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )
-            .unwrap();
-        assert_eq!(state, "unchanged");
-        assert_eq!(review_id, "r1");
-    }
-
-    #[test]
-    fn agent_reviews_cascade_delete_with_workstream() {
-        let conn = open_in_memory();
-        conn.execute_batch(
-            "INSERT INTO workstreams (id, name, status, workstream_type, created_at, updated_at) VALUES ('w1', 'WS', 'active', 'standalone', 't', 't');
-             INSERT INTO agent_reviews (id, workstream_id, round, status, created_at, updated_at) VALUES ('r1', 'w1', 1, 'active', 't', 't');",
-        )
-        .unwrap();
-        conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
-        conn.execute("DELETE FROM workstreams WHERE id = 'w1'", [])
-            .unwrap();
-        let count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM agent_reviews", [], |r| r.get(0))
-            .unwrap();
-        assert_eq!(count, 0);
     }
 }

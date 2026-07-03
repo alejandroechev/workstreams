@@ -7,7 +7,6 @@ import SessionMetaTile from "../tiles/SessionMetaTile";
 import WorkbenchTile from "../tiles/WorkbenchTile";
 import PlanTile from "../tiles/PlanTile";
 import DiffReviewTile from "../tiles/DiffReviewTile";
-import AgentReviewTile from "../tiles/AgentReviewTile";
 import { isFeatureEnabled, featureDescriptor } from "../domain/feature-flags";
 
 function DisabledFeaturePlaceholder({ label, requires }: { label: string; requires: string }) {
@@ -298,26 +297,6 @@ function TileWrapperImpl({
           <DiffReviewTile
             tileId={tile.id}
             isFocused={isFocused}
-            reviewId={cfg.reviewId}
-          />
-        );
-      }
-      break;
-    }
-    case "agent_review": {
-      const cfg = JSON.parse(tile.config_json || "{}");
-      if (!workstreamId) {
-        content = (
-          <div style={{ padding: 16, color: "#f38ba8" }}>
-            Agent Review tile requires a workstream.
-          </div>
-        );
-      } else {
-        content = (
-          <AgentReviewTile
-            tileId={tile.id}
-            isFocused={isFocused}
-            workstreamId={workstreamId}
             reviewId={cfg.reviewId}
           />
         );

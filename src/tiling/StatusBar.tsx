@@ -21,7 +21,6 @@ interface Props {
   onAddWorkbench?: () => void;
   onAddPlan?: () => void;
   onAddDiffReview?: () => void;
-  onAddAgentReview?: () => void;
   onToggleFullscreen?: () => void;
   onToggleSideBySide?: () => void;
   onOpenSettings?: () => void;
@@ -58,7 +57,6 @@ export default function StatusBar({
   onAddWorkbench,
   onAddPlan,
   onAddDiffReview,
-  onAddAgentReview,
   onToggleFullscreen,
   onToggleSideBySide,
   onOpenSettings,
@@ -72,7 +70,6 @@ export default function StatusBar({
     { key: "workbench", label: "Workbench", icon: "beaker", shortcut: "Alt+B", onSelect: onAddWorkbench },
     { key: "plan", label: "Plan", icon: "plan", shortcut: "Alt+P", onSelect: onAddPlan, gated: !isFeatureEnabled("plan-tile") },
     { key: "diff-review", label: "Diff Review", icon: "bug", shortcut: "Alt+G", onSelect: onAddDiffReview, gated: !isFeatureEnabled("diff-review") },
-    { key: "agent-review", label: "Agent Review", icon: "session", shortcut: "Alt+A", onSelect: onAddAgentReview },
   ];
   const menuItems = rawItems
     .filter((it) => typeof it.onSelect === "function" && !it.gated)

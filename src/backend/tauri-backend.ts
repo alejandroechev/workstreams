@@ -9,7 +9,6 @@ import type {
   DiffChunk,
 } from "../domain/diff-review";
 import type { FileComment, ImportedCommentInput, ImportSummary } from "../domain/file-comments";
-import type { AgentReview, ReviewComment } from "../domain/agent-review";
 import type { Backend } from "./types";
 
 export class TauriBackend implements Backend {
@@ -338,54 +337,5 @@ export class TauriBackend implements Backend {
     items: ImportedCommentInput[],
   ): Promise<ImportSummary> {
     return invoke<ImportSummary>("import_pr_comments", { workstreamId, items });
-  }
-
-  // Local Agent Review (ADR 013)
-  async createAgentReview(
-    workstreamId: string,
-    baseRef?: string | null,
-    headRef?: string | null,
-  ): Promise<AgentReview> {
-    return invoke<AgentReview>("create_agent_review", {
-      workstreamId,
-      baseRef: baseRef ?? null,
-      headRef: headRef ?? null,
-    });
-  }
-
-  async listReviewComments(reviewId: string): Promise<ReviewComment[]> {
-    return invoke<ReviewComment[]>("list_review_comments", { reviewId });
-  }
-
-  async addReviewComment(
-    reviewId: string,
-    absolutePath: string,
-    anchorLineStart: number,
-    anchorLineEnd: number,
-    bodyMd: string,
-  ): Promise<ReviewComment> {
-    return invoke<ReviewComment>("add_review_comment", {
-      reviewId,
-      absolutePath,
-      anchorLineStart,
-      anchorLineEnd,
-      bodyMd,
-    });
-  }
-
-  async replyReviewComment(parentId: string, bodyMd: string, author: string): Promise<ReviewComment> {
-    return invoke<ReviewComment>("reply_review_comment", { parentId, bodyMd, author });
-  }
-
-  async setCommentResolution(commentId: string, status: string, actor: string): Promise<void> {
-    return invoke("set_comment_resolution", { commentId, status, actor });
-  }
-
-  async submitReviewRound(reviewId: string): Promise<void> {
-    return invoke("submit_review_round", { reviewId });
-  }
-
-  async completeAgentReview(reviewId: string): Promise<string> {
-    return invoke<string>("complete_agent_review", { reviewId });
   }
 }

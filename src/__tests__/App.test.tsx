@@ -192,13 +192,6 @@ function createBackend(): Backend {
     updateFileComment: vi.fn(),
     deleteFileComment: vi.fn(),
     importPrComments: vi.fn(),
-    createAgentReview: vi.fn().mockResolvedValue({ id: "r1", round: 1, status: "active" }),
-    listReviewComments: vi.fn().mockResolvedValue([]),
-    addReviewComment: vi.fn(),
-    replyReviewComment: vi.fn(),
-    setCommentResolution: vi.fn(),
-    submitReviewRound: vi.fn(),
-    completeAgentReview: vi.fn(),
   } as Backend;
 }
 

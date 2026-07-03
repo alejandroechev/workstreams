@@ -1,7 +1,12 @@
 # ADR 013: Local Agent Review (reviewer↔agent loop)
 
 ## Status
-Accepted.
+**Superseded by ADR 014 (Code Review Tile).** The MCP-based, Workstreams-DB
+storage design and the round/anchor trackability engine described here were
+retired before general use in favour of a diff-first, session-DB-backed,
+MCP-free design. This ADR is retained for historical context only; its schema
+(`agent_reviews`, the `file_comments` review columns) and code
+(`agent_review` module, `AgentReviewTile`, the 3 MCP tools) have been removed.
 
 ## Date
 2026-07-01

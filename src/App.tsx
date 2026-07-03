@@ -1039,7 +1039,6 @@ export default function App() {
       workbench: "Bench",
       plan: "Plan",
       diff_review: "Review",
-      agent_review: "Agent Review",
     };
     // Count by sub-shell (PowerShell vs WSL) so each gets its own
     // numbered sequence.
@@ -1587,7 +1586,6 @@ export default function App() {
           onAddWorkbench={() => addTile("workbench")}
           onAddPlan={() => addTile("plan")}
           onAddDiffReview={() => addTileDiffReview()}
-          onAddAgentReview={() => addTile("agent_review")}
           onOpenSettings={() => setShowSettings(true)}
           onToggleFullscreen={() => {
             if (orderedTiles.length > 0 && orderedTiles[focusedIndex]) {
