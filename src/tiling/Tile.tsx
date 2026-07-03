@@ -7,6 +7,7 @@ import SessionMetaTile from "../tiles/SessionMetaTile";
 import WorkbenchTile from "../tiles/WorkbenchTile";
 import PlanTile from "../tiles/PlanTile";
 import DiffReviewTile from "../tiles/DiffReviewTile";
+import CodeReviewTile from "../tiles/CodeReviewTile";
 import { isFeatureEnabled, featureDescriptor } from "../domain/feature-flags";
 
 function DisabledFeaturePlaceholder({ label, requires }: { label: string; requires: string }) {
@@ -298,6 +299,25 @@ function TileWrapperImpl({
             tileId={tile.id}
             isFocused={isFocused}
             reviewId={cfg.reviewId}
+          />
+        );
+      }
+      break;
+    }
+    case "code_review": {
+      if (!workstreamId) {
+        content = (
+          <div style={{ padding: 16, color: "#f38ba8" }}>
+            Code Review tile requires a workstream.
+          </div>
+        );
+      } else {
+        content = (
+          <CodeReviewTile
+            tileId={tile.id}
+            isFocused={isFocused}
+            workstreamId={workstreamId}
+            workstreamDir={workstreamDir}
           />
         );
       }
