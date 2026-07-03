@@ -78,4 +78,20 @@ describe("MemoryBackend.code review", () => {
       after: "",
     });
   });
+
+  it("getActiveReview returns null when the workstream has no reviews", async () => {
+    expect(await backend.getActiveReview("ws-empty")).toBeNull();
+    expect(await backend.listReviews("ws-empty")).toEqual([]);
+  });
+
+  it("simulateAgentReply on an unknown parent uses defaults and skips the parent update", async () => {
+    const r = await backend.createReview("ws-1", "working_tree");
+    const reply = backend.simulateAgentReply(r.id, "does-not-exist", "orphan reply");
+    expect(reply.author).toBe("agent");
+    expect(reply.parent_id).toBe("does-not-exist");
+    // Falls back to default anchor fields when the parent is missing.
+    expect(reply.file).toBe("");
+    expect(reply.line).toBe(0);
+    expect(reply.side).toBe("new");
+  });
 });

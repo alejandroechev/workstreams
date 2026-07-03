@@ -79,6 +79,8 @@ describe("code-review-view helpers", () => {
     expect(fileStatusLabel("M")).toBe("modified");
     expect(basename("C:/repo/src/a.js")).toBe("a.js");
     expect(basename("src\\b.ts")).toBe("b.ts");
+    // Trailing separator → empty last segment falls back to the full path.
+    expect(basename("dir/")).toBe("dir/");
   });
 
   it("modifiedEditable only for working_tree", () => {

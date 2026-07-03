@@ -517,5 +517,32 @@ describe("TauriBackend", () => {
     invoke.mockResolvedValueOnce(undefined);
     await backend.completeCodeReview("ws-1", "rv1");
     expect(invoke).toHaveBeenCalledWith("complete_code_review", { workstreamId: "ws-1", reviewId: "rv1" });
+
+    // Cover the baseRef/title fallback branches: omitted → null, provided → passed.
+    invoke.mockResolvedValueOnce([]);
+    await backend.codeReviewDiffFiles("/repo", "working_tree");
+    expect(invoke).toHaveBeenCalledWith("code_review_diff_files", {
+      directory: "/repo",
+      diffSource: "working_tree",
+      baseRef: null,
+    });
+
+    invoke.mockResolvedValueOnce(["B", "A"]);
+    await backend.codeReviewDiffFileSides("/repo", "a.js", "branch", "develop");
+    expect(invoke).toHaveBeenCalledWith("code_review_diff_file_sides", {
+      directory: "/repo",
+      filePath: "a.js",
+      diffSource: "branch",
+      baseRef: "develop",
+    });
+
+    invoke.mockResolvedValueOnce({ id: "rv2" });
+    await backend.createReview("ws-1", "working_tree");
+    expect(invoke).toHaveBeenCalledWith("create_review", {
+      workstreamId: "ws-1",
+      diffSource: "working_tree",
+      baseRef: null,
+      title: null,
+    });
   });
 });

@@ -64,8 +64,6 @@ export class MemoryBackend implements Backend {
   private fileComments = new Map<string, FileComment>();
   // Code Review (ADR 014) offline stub state.
   private reviews = new Map<string, Review>();
-  private reviewOrder = new Map<string, number>();
-  private reviewSeq = 0;
   private reviewComments = new Map<string, ReviewComment>();
   private boundSessions = new Map<string, string | null>();
   private reviewChangedFiles: ChangedFile[] = [];
@@ -906,19 +904,17 @@ export class MemoryBackend implements Backend {
       completed_at: null,
     };
     this.reviews.set(review.id, review);
-    this.reviewOrder.set(review.id, this.reviewSeq++);
     return review;
   }
 
-  // Sort newest-first, breaking created_at ties by insertion order so
+  // Sort newest-first, breaking created_at ties by Map insertion order so
   // same-millisecond creations remain deterministic (mirrors the DB rowid tiebreak).
   private reviewsNewestFirst(workstreamId: string): Review[] {
+    const order = Array.from(this.reviews.keys());
     return Array.from(this.reviews.values())
       .filter((r) => r.workstream_id === workstreamId)
       .sort(
-        (a, b) =>
-          b.created_at.localeCompare(a.created_at) ||
-          (this.reviewOrder.get(b.id) ?? 0) - (this.reviewOrder.get(a.id) ?? 0),
+        (a, b) => b.created_at.localeCompare(a.created_at) || order.indexOf(b.id) - order.indexOf(a.id),
       );
   }
 
