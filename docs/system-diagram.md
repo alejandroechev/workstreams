@@ -14,7 +14,7 @@ graph TB
             SessionMeta["SessionMetaTile<br/>Session + file detail"]
             Workbench["WorkbenchTile<br/>Workbench file detail"]
             DiffReview["DiffReviewTile<br/>3-pane diff/question/comments<br/>+ Monaco diff editor"]
-            AgentReview["AgentReviewTile<br/>reviewer↔agent loop (ADR 013)<br/>threads + per-comment before/after"]
+            CodeReview["CodeReviewTile<br/>diff-first PR-style review (ADR 014)<br/>inline comments + in-place edit<br/>reviewer↔agent via session.db, no MCP"]
             InlineComments["Inline File Comments<br/>(view zones in FileEditorView<br/>+ comments-toggle in viewToolbar)"]
             StatusBar["StatusBar<br/>Shortcuts + metadata"]
             subgraph Files["Files"]
@@ -34,6 +34,7 @@ graph TB
     subgraph Storage["Persistence"]
         AppDB["workstreams.db<br/>(SQLite — workstreams, tiles, layouts, scrollback)"]
         CopilotDB["~/.copilot/session-store.db<br/>(read-only enrichment)"]
+        CopilotSessionDB["~/.copilot/session-state/&lt;id&gt;/session.db<br/>(bound session — reviews + review_comments, RW)"]
     end
 
     subgraph OS["Windows OS"]
@@ -57,7 +58,7 @@ graph TB
     TileGrid --> SessionMeta
     TileGrid --> Workbench
     TileGrid --> DiffReview
-    TileGrid --> AgentReview
+    TileGrid --> CodeReview
     App --> StatusBar
     App -- "close-requested / switch guard" --> FileBuffers
 
@@ -84,9 +85,10 @@ graph TB
     RemoteProv -- "gh repo create" --> GhCli
     DiffReview -- "invoke: create/get/ack/comment + subscribe events" --> LibRS
     LibRS -- "emit: diff-review:chunk-active/done/drift" --> DiffReview
-    AgentReview -- "invoke: create/add/reply/resolve/submit-round/complete + subscribe events" --> LibRS
-    LibRS -- "emit: review:round-ready / comment-updated" --> AgentReview
-    LibRS -- "agent_review: re-anchor sweep on bg thread<br/>(git diff base..head → binary unchanged/changed)" --> DbRS
+    CodeReview -- "invoke: code_review_diff_files/sides,<br/>create/get/list review, add/list/set comment,<br/>complete_code_review" --> LibRS
+    LibRS -- "code_review: open bound session.db RW<br/>(busy_timeout) + ensure reviews/review_comments" --> CopilotSessionDB
+    CodeReview -- "poll: list_review_comments (1.5s)" --> LibRS
+    Agent["Copilot agent (built-in sql tool)"] -- "SELECT/INSERT/UPDATE review_comments" --> CopilotSessionDB
     LibRS -- "emit: tile-created<br/>(create_tile / create_or_focus_diff_review_tile)" --> App
     App -- "listen: tile-created<br/>route by tile.workstream_id" --> TileGrid
     Sidebar -- "invoke: create_worktree / remove_worktree<br/>(fire-and-forget, background thread)" --> LibRS

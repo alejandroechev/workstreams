@@ -46,13 +46,14 @@ project-aware workspace:
   navigate with arrows / Space / click, fullscreen with `Alt+F`.
 - 💬 **Inline file comments** — Per-workstream comments anchored to line
   ranges; persisted in SQLite.
-- 🔎 **Local agent code review** — Review AI-agent code in a tight local
-  reviewer↔agent loop (no ADO round-trips, no PR chatter). Comment on a diff;
-  the agent reads your comments over MCP, replies, and marks them addressed;
-  the tile tracks each comment across the agent's edits (re-anchoring when the
-  code merely shifts, flagging when the commented code actually **changed** and
-  showing the exact per-comment before/after + fixing commit). `Alt+A` opens
-  the Agent Review tile. See [ADR 013](docs/adrs/013-local-agent-review.md).
+- 🔎 **Local code review** — A diff-first, PR-style review tile for AI-agent
+  *or* human-written code, with no ADO round-trips and no MCP. Pick a diff
+  source (working tree, last commit, or a branch base), read the real diff,
+  comment inline on the modified side, and **edit code in place** in the diff
+  (working-tree source). Comments live in the bound Copilot session's own
+  `session.db`; the agent reads and replies with its built-in `sql` tool and
+  the tile shows the replies via polling. `Alt+A` opens the Code Review tile.
+  See [ADR 014](docs/adrs/014-code-review-tile.md).
 - ⌨️ **Keyboard-driven** — `Alt+<letter>` for every tile type, `Alt+Arrows`
   to move focus, `Alt+S` for side-by-side compare.
 - 💾 **Survives restarts** — workstreams, tile layouts, scrollback, opened
@@ -84,6 +85,7 @@ Pre-built Windows installers are attached to every
    - `Alt+T` Terminal
    - `Alt+M` Session Meta
    - `Alt+B` Workbench
+   - `Alt+A` Code Review
 3. Navigate between tiles with `Alt+Arrows`. Fullscreen the focused one
    with `Alt+F`.
 4. Open the settings dialog (gear icon) to tune font sizes, terminal scroll
@@ -102,6 +104,7 @@ All app-level commands use **Alt** to avoid conflicts with terminal
 | `Alt+R` | New Repo Explorer tile |
 | `Alt+M` | New Session Meta tile |
 | `Alt+B` | New Workbench tile |
+| `Alt+A` | New Code Review tile |
 | `Alt+Q` | Close focused tile |
 | `Alt+F` | Toggle fullscreen for focused tile |
 | `Alt+S` | Toggle side-by-side (when exactly 2 tiles are selected) |
