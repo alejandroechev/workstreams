@@ -31,6 +31,25 @@ fn run_git(dir: &str, args: &[&str], allow_fail: bool) -> Result<String, String>
     Ok(String::from_utf8_lossy(&out.stdout).trim_end().to_string())
 }
 
+/// Like `run_git` but returns stdout **verbatim** (no trimming) and tolerates a
+/// non-zero exit by yielding an empty string. Used for retrieving file content
+/// (`git show <ref>:<file>`), where trailing newlines are significant and must
+/// be preserved for the diff sides.
+fn run_git_raw(dir: &str, args: &[&str]) -> String {
+    #[allow(unused_mut)]
+    let mut cmd = Command::new("git");
+    cmd.args(args).current_dir(dir);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+    match cmd.output() {
+        Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout).into_owned(),
+        _ => String::new(),
+    }
+}
+
 fn ref_exists(dir: &str, r: &str) -> bool {
     run_git(dir, &["rev-parse", "--verify", "--quiet", r], true)
         .map(|s| !s.is_empty())
@@ -55,8 +74,10 @@ pub fn resolve_base_ref(dir: &str, base_ref: Option<&str>) -> Option<String> {
 }
 
 /// Content of a file at a git ref, or empty string if absent at that ref.
+/// Preserves the file's exact bytes (incl. trailing newline) so diff sides are
+/// faithful.
 fn show(dir: &str, git_ref: &str, file: &str) -> String {
-    run_git(dir, &["show", &format!("{git_ref}:{file}"), "--"], true).unwrap_or_default()
+    run_git_raw(dir, &["show", &format!("{git_ref}:{file}"), "--"])
 }
 
 fn read_working(dir: &str, file: &str) -> String {
