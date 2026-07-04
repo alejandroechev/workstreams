@@ -59,8 +59,12 @@ Two load-bearing unknowns were spiked to **GO**
    **polls** the tables for the agent's writes. This is why there is no MCP and
    no Workstreams-DB round-trip for the conversation.
 
-6. **Session binding.** A review targets the workstream's **most-recently-linked
-   Copilot session** (via `copilot_session_links`). A linked session is a
+6. **Session binding.** A review targets the workstream's bound Copilot
+   session, read from the `copilot_session` tile's `config_json`
+   (`copilot_session_id`, or legacy `resume_by_id`) — the same source that
+   drives the tile's "Linked" badge — preferring the **pinned** session tile,
+   then the most-recently-updated one (falling back to the
+   `copilot_session_links` enrichment table). A linked session is a
    **prerequisite**; with none, the tile disables commenting and prompts the
    user to open a session. Choosing among multiple sessions is v2.
 

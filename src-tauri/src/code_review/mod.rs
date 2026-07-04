@@ -89,14 +89,55 @@ pub fn ensure_review_schema(conn: &Connection) -> Result<(), String> {
     .map_err(|e| format!("ensure review schema: {e}"))
 }
 
-/// Resolve a workstream's bound Copilot session = the **most-recently-linked**
-/// session across the workstream's tiles (ADR 014 §6). Queries the Workstreams
-/// DB. Returns None when the workstream has no linked session yet (a linked
-/// session is a prerequisite to start a review).
+/// Resolve a workstream's bound Copilot session (ADR 014 §6). The link a user
+/// establishes lives in the `copilot_session` tile's `config_json`
+/// (`copilot_session_id`, or legacy `resume_by_id`) — the same source the
+/// frontend uses to show the "Linked" badge. We prefer the pinned session tile,
+/// then the most-recently-updated tile. As a fallback we consult the
+/// `copilot_session_links` enrichment table. Returns None when no linked session
+/// exists yet (a linked session is a prerequisite to start a review).
 pub fn resolve_bound_session(
     ws_db: &Connection,
     workstream_id: &str,
 ) -> rusqlite::Result<Option<String>> {
+    // Primary source: the workstream's copilot_session tiles' config_json.
+    let mut stmt = ws_db.prepare(
+        "SELECT config_json
+         FROM tiles
+         WHERE workstream_id = ?1 AND tile_type = 'copilot_session'
+         ORDER BY updated_at DESC",
+    )?;
+    let mut best: Option<String> = None;
+    let mut best_pinned = false;
+    let rows = stmt.query_map([workstream_id], |r| r.get::<_, String>(0))?;
+    for cfg_json in rows {
+        let cfg: serde_json::Value = match serde_json::from_str(&cfg_json.unwrap_or_default()) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let session_id = cfg
+            .get("copilot_session_id")
+            .and_then(|v| v.as_str())
+            .or_else(|| cfg.get("resume_by_id").and_then(|v| v.as_str()));
+        let Some(session_id) = session_id.filter(|s| !s.is_empty()) else {
+            continue;
+        };
+        let pinned = cfg.get("pinned").and_then(|v| v.as_bool()).unwrap_or(false);
+        // Rows are already ordered newest-first; take the first match, but let a
+        // pinned tile win over a merely-newer non-pinned one.
+        if best.is_none() || (pinned && !best_pinned) {
+            best = Some(session_id.to_string());
+            best_pinned = pinned;
+            if pinned {
+                break;
+            }
+        }
+    }
+    if best.is_some() {
+        return Ok(best);
+    }
+
+    // Fallback: the copilot_session_links enrichment table.
     ws_db
         .query_row(
             "SELECT l.copilot_session_id
@@ -566,6 +607,46 @@ mod tests {
         )
         .unwrap();
         assert_eq!(resolve_bound_session(&conn, "w2").unwrap(), None);
+    }
+
+    #[test]
+    fn resolve_bound_session_reads_tile_config_json() {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::db::init_db(&conn).unwrap();
+        conn.execute_batch(
+            "INSERT INTO workstreams (id,name,status,workstream_type,created_at,updated_at)
+                VALUES ('w1','WS','active','standalone','t','t');
+             -- Newer, non-pinned tile linked via config_json (legacy resume_by_id).
+             INSERT INTO tiles (id,workstream_id,tile_type,config_json,created_at,updated_at)
+                VALUES ('t2','w1','copilot_session','{\"resume_by_id\":\"sess-side\"}','t','2026-02-01');
+             -- Older, PINNED tile linked via copilot_session_id → should win.
+             INSERT INTO tiles (id,workstream_id,tile_type,config_json,created_at,updated_at)
+                VALUES ('t1','w1','copilot_session','{\"copilot_session_id\":\"sess-pinned\",\"pinned\":true}','t','2026-01-01');",
+        )
+        .unwrap();
+        // Pinned tile wins over the merely-newer non-pinned one.
+        assert_eq!(
+            resolve_bound_session(&conn, "w1").unwrap().as_deref(),
+            Some("sess-pinned")
+        );
+
+        // Without a pinned tile, the most-recently-updated linked tile wins.
+        let conn2 = Connection::open_in_memory().unwrap();
+        crate::db::init_db(&conn2).unwrap();
+        conn2
+            .execute_batch(
+                "INSERT INTO workstreams (id,name,status,workstream_type,created_at,updated_at)
+                    VALUES ('w1','WS','active','standalone','t','t');
+                 INSERT INTO tiles (id,workstream_id,tile_type,config_json,created_at,updated_at)
+                    VALUES ('a','w1','copilot_session','{\"copilot_session_id\":\"old\"}','t','2026-01-01');
+                 INSERT INTO tiles (id,workstream_id,tile_type,config_json,created_at,updated_at)
+                    VALUES ('b','w1','copilot_session','{\"copilot_session_id\":\"new\"}','t','2026-03-01');",
+            )
+            .unwrap();
+        assert_eq!(
+            resolve_bound_session(&conn2, "w1").unwrap().as_deref(),
+            Some("new")
+        );
     }
 
     // ── Review store helpers ──────────────────────────────────────────────
