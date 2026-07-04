@@ -29,7 +29,7 @@ project-aware workspace:
   command (default `agency copilot --yolo`; switch to `copilot --yolo` for
   the public CLI).
 - 🗂️ **Built-in repo browser** — Files / Diff / Log / Hooks / Search tabs. Diff
-  has split / unified toggle. Audio, images, and SQLite databases preview
+  has split / unified toggle. Audio, images, PDFs, and SQLite databases preview
   inline. Git hooks open in a syntax-highlighted editor with inline editing.
 - 🔎 **Search all files** — the Search tab (or `Ctrl+Shift+F`) runs a fast
   content search across the repo, respecting `.gitignore`, grouping matches by

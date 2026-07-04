@@ -14,6 +14,9 @@ import {
   dirnameOf,
   classifyLinkTarget,
   isMarkdownFile,
+  isPdfFile,
+  mimeForPdf,
+  makePdfBlobUrl,
 } from "../file-types";
 
 describe("file-types", () => {
@@ -235,8 +238,36 @@ describe("file-types", () => {
       expect(classifyLinkTarget("a.md")).toBe("markdown");
       expect(classifyLinkTarget("a.png")).toBe("image");
       expect(classifyLinkTarget("a.mp3")).toBe("audio");
+      expect(classifyLinkTarget("a.pdf")).toBe("pdf");
       expect(classifyLinkTarget("a.ts")).toBe("file");
       expect(classifyLinkTarget("noext")).toBe("file");
+    });
+  });
+
+  describe("PDF helpers", () => {
+    it("isPdfFile detects .pdf case-insensitively", () => {
+      expect(isPdfFile("report.pdf")).toBe(true);
+      expect(isPdfFile("C:\\docs\\Spec.PDF")).toBe(true);
+      expect(isPdfFile("/home/u/a.pdf")).toBe(true);
+      expect(isPdfFile("notes.md")).toBe(false);
+      expect(isPdfFile("archive.pdf.zip")).toBe(false);
+      expect(isPdfFile("")).toBe(false);
+    });
+
+    it("mimeForPdf returns application/pdf for pdf paths, null otherwise", () => {
+      expect(mimeForPdf("a.pdf")).toBe("application/pdf");
+      expect(mimeForPdf("a.png")).toBeNull();
+    });
+
+    it("makePdfBlobUrl builds a blob URL + bytes", () => {
+      const createSpy = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:pdf-1");
+      // "%PDF" magic bytes, base64-encoded.
+      const r = makePdfBlobUrl("doc.pdf", btoa("%PDF-1.7"));
+      expect(r.url).toBe("blob:pdf-1");
+      expect(r.mime).toBe("application/pdf");
+      expect(r.size).toBe(8);
+      expect(r.bytes.byteLength).toBe(8);
+      createSpy.mockRestore();
     });
   });
 });

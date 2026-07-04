@@ -122,16 +122,27 @@ export function isMarkdownFile(path: string): boolean {
   return MARKDOWN_EXTS.has(getExt(path));
 }
 
+/** True if the path is a PDF we can render in an embedded viewer. */
+export function isPdfFile(path: string): boolean {
+  return getExt(path) === "pdf";
+}
+
+/** MIME type for a PDF path (`application/pdf`), or null for non-PDF paths. */
+export function mimeForPdf(path: string): string | null {
+  return isPdfFile(path) ? "application/pdf" : null;
+}
+
 /**
  * Classify a path by what kind of viewer it should open in. Pure / extension-based.
  * `file` is the default catch-all for non-markdown, non-image things (source code,
  * configs, plain text, etc.).
  */
-export type LinkTargetKind = "markdown" | "image" | "audio" | "file";
+export type LinkTargetKind = "markdown" | "image" | "audio" | "pdf" | "file";
 export function classifyLinkTarget(path: string): LinkTargetKind {
   if (isMarkdownFile(path)) return "markdown";
   if (isImageFile(path)) return "image";
   if (isAudioFile(path)) return "audio";
+  if (isPdfFile(path)) return "pdf";
   return "file";
 }
 
@@ -166,6 +177,18 @@ export function makeAudioBlobUrl(path: string, b64: string): { url: string; byte
 export function makeImageBlobUrl(path: string, b64: string): { url: string; bytes: ArrayBuffer; size: number; mime: string } {
   const bytes = base64ToBytes(b64);
   const mime = mimeForImage(path) || "application/octet-stream";
+  const blob = new Blob([bytes], { type: mime });
+  return { url: URL.createObjectURL(blob), bytes: bytes.buffer, size: bytes.length, mime };
+}
+
+/**
+ * Build an object URL + raw bytes for a PDF file path. Mirrors the image/audio
+ * loaders. The blob is tagged `application/pdf` so the embedded WebView2 PDF
+ * viewer renders it. Caller revokes the URL on unmount / next swap.
+ */
+export function makePdfBlobUrl(path: string, b64: string): { url: string; bytes: ArrayBuffer; size: number; mime: string } {
+  const bytes = base64ToBytes(b64);
+  const mime = mimeForPdf(path) || "application/pdf";
   const blob = new Blob([bytes], { type: mime });
   return { url: URL.createObjectURL(blob), bytes: bytes.buffer, size: bytes.length, mime };
 }

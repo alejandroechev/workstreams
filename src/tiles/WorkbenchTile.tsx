@@ -7,7 +7,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useBackend } from "../backend/context";
 import { detectLanguage } from "../domain/tile-config";
-import { makeAudioBlobUrl } from "../domain/file-types";
+import { makeAudioBlobUrl, makePdfBlobUrl, isPdfFile } from "../domain/file-types";
 import { FileEditorView, type MarkdownViewState } from "../files/FileEditorView";
 import type { BufferSnapshot } from "../files/FileBufferRegistry";
 import { subscribeAddToWorkbench } from "../domain/workbench-events";
@@ -16,6 +16,7 @@ import { parseViewState } from "../domain/tile-view-state";
 import { useTileViewStatePersist } from "../domain/useTileViewStatePersist";
 import { FileContextMenu } from "../ui/components/FileContextMenu";
 import { ZoomableImage } from "../ui/components/ZoomableImage";
+import { PdfViewer } from "../ui/components/PdfViewer";
 import AudioPlayer from "./AudioPlayer";
 import {
   PlusIcon,
@@ -44,7 +45,7 @@ type Mode = "list" | "view";
 
 const WORKBENCH_AUDIO_EXTS = new Set(["wav", "mp3", "ogg", "flac"]);
 const IMAGE_EXTS = new Set(["png", "jpg", "jpeg", "gif", "webp", "bmp", "ico"]);
-const BINARY_FALLBACK_EXTS = new Set(["mp4", "mov", "webm", "pdf", "zip", "gz", "tar", "7z", "exe", "dll", "so", "dylib"]);
+const BINARY_FALLBACK_EXTS = new Set(["mp4", "mov", "webm", "zip", "gz", "tar", "7z", "exe", "dll", "so", "dylib"]);
 
 const IMAGE_MIME_BY_EXT: Record<string, string> = {
   png: "image/png",
@@ -103,6 +104,7 @@ export default function WorkbenchTile({ tileId: _tileId, isFocused, configJson, 
   const [audioBytes, setAudioBytes] = useState<ArrayBuffer | null>(null);
   const [audioSize, setAudioSize] = useState(0);
   const [imageDataUrl, setImageDataUrl] = useState<string | null>(null);
+  const [pdfUrl, setPdfUrl] = useState<string | null>(null);
   const [editorSnapshot, setEditorSnapshot] = useState<BufferSnapshot | null>(null);
   const [editorViewState, setEditorViewState] = useState<MarkdownViewState | null>(null);
   const hydratedRef = useRef(false);
@@ -189,10 +191,12 @@ export default function WorkbenchTile({ tileId: _tileId, isFocused, configJson, 
     setMode("view");
     // Reset prior media/editor state (and revoke any object URL we created).
     if (audioUrl) URL.revokeObjectURL(audioUrl);
+    if (pdfUrl) URL.revokeObjectURL(pdfUrl);
     setAudioUrl(null);
     setAudioBytes(null);
     setAudioSize(0);
     setImageDataUrl(null);
+    setPdfUrl(null);
     setEditorSnapshot(null);
     setFileContent("");
     try {
@@ -205,6 +209,9 @@ export default function WorkbenchTile({ tileId: _tileId, isFocused, configJson, 
       } else if (isImageFile(path)) {
         const b64 = await invoke<string>("read_file_base64", { path });
         setImageDataUrl(`data:${imageMimeFor(path)};base64,${b64}`);
+      } else if (isPdfFile(path)) {
+        const b64 = await invoke<string>("read_file_base64", { path });
+        setPdfUrl(makePdfBlobUrl(path, b64).url);
       } else if (isBinaryFallbackFile(path)) {
         const content = await backend.readFile(path);
         setFileContent(content);
@@ -214,18 +221,20 @@ export default function WorkbenchTile({ tileId: _tileId, isFocused, configJson, 
     } finally {
       setLoadingFile(false);
     }
-  }, [backend, audioUrl]);
+  }, [backend, audioUrl, pdfUrl]);
 
   const handleBack = useCallback(() => {
     if (audioUrl) URL.revokeObjectURL(audioUrl);
+    if (pdfUrl) URL.revokeObjectURL(pdfUrl);
     setAudioUrl(null);
     setAudioBytes(null);
     setImageDataUrl(null);
+    setPdfUrl(null);
     setEditorSnapshot(null);
     setMode("list");
     setViewingPath(null);
     setFileContent("");
-  }, [audioUrl]);
+  }, [audioUrl, pdfUrl]);
 
   useEffect(() => {
     if (!workstreamVisible || hydratedRef.current) return;
@@ -376,6 +385,8 @@ export default function WorkbenchTile({ tileId: _tileId, isFocused, configJson, 
               src={imageDataUrl}
               alt={fileName(viewingPath)}
             />
+          ) : pdfUrl ? (
+            <PdfViewer testid="workbench-pdf-preview" src={pdfUrl} title={fileName(viewingPath)} />
           ) : isBinaryFallbackFile(viewingPath) ? (
             <Editor
               height="100%"

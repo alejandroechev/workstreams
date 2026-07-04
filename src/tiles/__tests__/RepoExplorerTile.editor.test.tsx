@@ -85,6 +85,7 @@ function createBackend(): Backend {
     { name: "README.md", is_dir: false, modified_epoch: 1, size: 12 },
     { name: "tone.wav", is_dir: false, modified_epoch: 1, size: 12 },
     { name: "logo.png", is_dir: false, modified_epoch: 1, size: 12 },
+    { name: "spec.pdf", is_dir: false, modified_epoch: 1, size: 2048 },
   ];
 
   return {
@@ -178,6 +179,16 @@ describe("RepoExplorerTile editor wiring", () => {
     renderTile();
     await openFile("logo.png");
     expect(await screen.findByTestId("image-preview")).toBeInTheDocument();
+    expect(screen.queryByTestId("file-editor-view")).toBeNull();
+  });
+
+  it("renders a PDF preview for pdf files instead of FileEditorView", async () => {
+    renderTile();
+    await openFile("spec.pdf");
+    const frame = await screen.findByTestId("pdf-preview");
+    expect(frame).toBeInTheDocument();
+    expect(frame.tagName).toBe("IFRAME");
+    expect(frame).toHaveAttribute("src", "blob:audio");
     expect(screen.queryByTestId("file-editor-view")).toBeNull();
   });
 

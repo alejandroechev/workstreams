@@ -5,7 +5,7 @@ import { listen } from "@tauri-apps/api/event";
 import { MarkdownView } from "../ui/MarkdownView";
 import { dirnameOf } from "../domain/file-types";
 import { useBackend } from "../backend/context";
-import { makeAudioBlobUrl } from "../domain/file-types";
+import { makeAudioBlobUrl, makePdfBlobUrl, isPdfFile } from "../domain/file-types";
 import { FileEditorView, type MarkdownViewState } from "../files/FileEditorView";
 import type { BufferSnapshot } from "../files/FileBufferRegistry";
 import AudioPlayer from "./AudioPlayer";
@@ -16,6 +16,7 @@ import type { CopilotConfigItem } from "../domain/types";
 import { SqliteTableView, sessionSqliteOps, type SqliteTable } from "../ui/components/SqliteTableView";
 import { FileContextMenu } from "../ui/components/FileContextMenu";
 import { ZoomableImage } from "../ui/components/ZoomableImage";
+import { PdfViewer } from "../ui/components/PdfViewer";
 import {
   SparklesIcon,
   PuzzlePieceIcon,
@@ -62,7 +63,7 @@ const CATEGORY_META: Record<string, CategoryMeta> = {
 const CATEGORY_ORDER = ["skill", "extension", "agent", "mcp_server", "instruction"];
 const AUDIO_EXTS = new Set(["wav", "mp3", "ogg", "flac"]);
 const IMAGE_EXTS = new Set(["png", "jpg", "jpeg", "gif", "webp", "bmp", "ico"]);
-const BINARY_EXTS = new Set(["mp4", "mov", "webm", "pdf", "zip", "gz", "tar", "7z", "exe", "dll", "so", "dylib"]);
+const BINARY_EXTS = new Set(["mp4", "mov", "webm", "zip", "gz", "tar", "7z", "exe", "dll", "so", "dylib"]);
 
 type TabId = "config" | "state" | "database";
 
@@ -106,12 +107,13 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
     title: string;
     path: string;
     content: string;
-    type: "editor" | "image" | "audio" | "unsupported";
+    type: "editor" | "image" | "audio" | "pdf" | "unsupported";
     mimeType?: string;
     audioUrl?: string;
     audioBytes?: ArrayBuffer;
     audioPath?: string;
     audioSize?: number;
+    pdfUrl?: string;
   } | null>(null);
   const [editorSnapshot, setEditorSnapshot] = useState<BufferSnapshot | null>(null);
   const [editorViewState, setEditorViewState] = useState<MarkdownViewState | null>(null);
@@ -123,6 +125,12 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
     const prev = viewContent?.audioUrl;
     return () => { if (prev) URL.revokeObjectURL(prev); };
   }, [viewContent?.audioUrl]);
+
+  // Revoke any object URL the previous PDF entry created.
+  useEffect(() => {
+    const prev = viewContent?.pdfUrl;
+    return () => { if (prev) URL.revokeObjectURL(prev); };
+  }, [viewContent?.pdfUrl]);
 
   const loadConfig = useCallback(async (silent = false) => {
     if (!silent) {
@@ -384,6 +392,12 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
           audioPath: path,
           audioSize: r.size,
         });
+        return;
+      }
+      if (isPdfFile(path)) {
+        const b64 = await invoke<string>("read_file_base64", { path });
+        const r = makePdfBlobUrl(path, b64);
+        setViewContent({ title, path, content: "", type: "pdf", pdfUrl: r.url });
         return;
       }
       if (BINARY_EXTS.has(ext)) {
@@ -864,6 +878,13 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
                 isFocused={isFocused}
               />
             </div>
+          )}
+          {viewContent.type === "pdf" && viewContent.pdfUrl && (
+            <PdfViewer
+              testid="session-meta-pdf-preview"
+              src={viewContent.pdfUrl}
+              title={viewContent.title}
+            />
           )}
         </div>
       )}

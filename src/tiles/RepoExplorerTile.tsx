@@ -11,7 +11,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useBackend } from "../backend/context";
 import { detectLanguage } from "../domain/tile-config";
-import { isAudioFile, isImageFile, isSvgFile, makeAudioBlobUrl, makeImageBlobUrl, dirnameOf, type LinkTargetKind } from "../domain/file-types";
+import { isAudioFile, isImageFile, isSvgFile, isPdfFile, makeAudioBlobUrl, makeImageBlobUrl, makePdfBlobUrl, dirnameOf, type LinkTargetKind } from "../domain/file-types";
 import { createNavigationStack, currentPath as navCurrent, canGoBack as navCanBack, canGoForward as navCanFwd, pushPath as navPush, goBack as navBack, goForward as navFwd, type NavigationStack } from "../domain/nav-history";
 import {
   FolderIcon,
@@ -32,6 +32,7 @@ import {
 import { SqliteTableView, fileSqliteOps } from "../ui/components/SqliteTableView";
 import { FileContextMenu } from "../ui/components/FileContextMenu";
 import { ZoomableImage } from "../ui/components/ZoomableImage";
+import { PdfViewer } from "../ui/components/PdfViewer";
 import { openPath } from "@tauri-apps/plugin-opener";
 import { useFileComments } from "../files/useFileComments";
 import { RepoContentSearch } from "./RepoContentSearch";
@@ -59,7 +60,7 @@ interface DirEntry {
   size: number;
 }
 
-type Mode = "browse" | "view" | "audio" | "image" | "log" | "hooks" | "sqlite" | "search";
+type Mode = "browse" | "view" | "audio" | "image" | "pdf" | "log" | "hooks" | "sqlite" | "search";
 type DiffMode = "unstaged" | "last_commit" | "branch_vs_master";
 
 const MARKDOWN_EXTS = new Set(["md", "mdx", "markdown"]);
@@ -169,6 +170,9 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
   const [audioTooLarge, setAudioTooLarge] = useState(false);
   // Image preview state.
   const [imageUrl, setImageUrl] = useState<string | null>(null);
+  // PDF preview state.
+  const [pdfUrl, setPdfUrl] = useState<string | null>(null);
+  const [pdfSizeBytes, setPdfSizeBytes] = useState(0);
   // File-viewer navigation history: each entry is an absolute file path.
   // Empty when not in a file/image/audio view (i.e. we're browsing).
   const [navStack, setNavStack] = useState<NavigationStack | null>(null);
@@ -322,6 +326,11 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
     return () => { if (prev) URL.revokeObjectURL(prev); };
   }, [imageUrl]);
 
+  useEffect(() => {
+    const prev = pdfUrl;
+    return () => { if (prev) URL.revokeObjectURL(prev); };
+  }, [pdfUrl]);
+
   const openFile = useCallback(async (path: string, navMode: "push" | "replace" | "none" = "push") => {
     const trimmedPath = path.trim();
     if (!trimmedPath) return;
@@ -334,6 +343,7 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
     setAudioBytes(null);
     setAudioTooLarge(false);
     setImageUrl(null);
+    setPdfUrl(null);
     setEditorSnapshot(null);
     setCommitDiffHash("");
 
@@ -388,6 +398,26 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
         setFilePath(trimmedPath);
         setContent(null);
         setMode("audio");
+        return;
+      } catch (e) {
+        setFileError(String(e));
+        return;
+      } finally {
+        setFileLoading(false);
+      }
+    }
+
+    // PDF branch — read base64, render in an embedded viewer.
+    if (isPdfFile(trimmedPath)) {
+      try {
+        const found = entries.find((e) => e.fullPath === trimmedPath);
+        const b64 = await invoke<string>("read_file_base64", { path: trimmedPath });
+        const r = makePdfBlobUrl(trimmedPath, b64);
+        setPdfUrl(r.url);
+        setPdfSizeBytes(found?.size ?? r.size);
+        setFilePath(trimmedPath);
+        setContent(null);
+        setMode("pdf");
         return;
       } catch (e) {
         setFileError(String(e));
@@ -589,12 +619,13 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
     setAudioUrl(null);
     setAudioBytes(null);
     setAudioTooLarge(false);
+    setPdfUrl(null);
     setNavStack(null);
     setMode("browse");
   }, []);
 
   const handleLinkClick = useCallback(async (absPath: string, kind: LinkTargetKind) => {
-    if (kind === "markdown" || kind === "image" || kind === "audio" || kind === "file") {
+    if (kind === "markdown" || kind === "image" || kind === "audio" || kind === "pdf" || kind === "file") {
       await openFile(absPath, "push");
       return;
     }
@@ -1434,6 +1465,42 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
         ) : (
           <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "#585b70" }}>
             {fileLoading ? "Loading image…" : fileError ? fileError : "No image loaded"}
+          </div>
+        )}
+        {overlays}
+      </div>
+    );
+  }
+
+  // ─── PDF mode ───
+  if (mode === "pdf") {
+    return (
+      <div ref={containerRef} style={containerStyle}>
+        {tabBar}
+        <div style={toolbarStyle}>
+          <button
+            onClick={handleBackToBrowse}
+            style={{ ...toolbarButtonStyle, display: "flex", alignItems: "center" }}
+            title="Go to folder"
+            data-testid="repo-explorer-go-to-folder"
+          >
+            <ChevronUpIcon style={{ width: 16, height: 16 }} />
+          </button>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, overflow: "hidden", flex: 1 }}>
+            <span style={{ ...pathTextStyle, display: "flex", alignItems: "center", gap: 4 }}>
+              <DocumentIcon style={{ width: 14, height: 14, color: "#f5c2e7", flexShrink: 0 }} />
+              {filePath}
+            </span>
+            <span style={{ fontSize: 11, color: "#6c7086", marginLeft: 8 }}>
+              {formatBytes(pdfSizeBytes)}
+            </span>
+          </div>
+        </div>
+        {pdfUrl ? (
+          <PdfViewer testid="pdf-preview" src={pdfUrl} title={filePath} />
+        ) : (
+          <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "#585b70" }}>
+            {fileLoading ? "Loading PDF…" : fileError ? fileError : "No PDF loaded"}
           </div>
         )}
         {overlays}
