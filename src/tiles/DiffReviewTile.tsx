@@ -12,6 +12,7 @@ import {
 } from "@heroicons/react/24/outline";
 import { useBackend } from "../backend/context";
 import { loadMonaco } from "../files/loadMonaco";
+import { GITHUB_DARK_DIFF_THEME, defineGithubDiffTheme } from "../ui/monaco-diff-theme";
 import { detectLanguage } from "../domain/tile-config";
 import {
   DIFF_REVIEW_EVENTS,
@@ -251,6 +252,7 @@ export default function DiffReviewTile({ reviewId }: Props): React.ReactElement 
       const monaco = monacoRef.current ?? (await loadMonaco());
       if (disposed) return;
       monacoRef.current = monaco;
+      defineGithubDiffTheme(monaco);
       if (!containerRef.current) return;
 
       if (!editorRef.current) {
@@ -263,7 +265,7 @@ export default function DiffReviewTile({ reviewId }: Props): React.ReactElement 
           originalEditable: false,
           automaticLayout: true,
           renderSideBySide: false,
-          theme: "vs-dark",
+          theme: GITHUB_DARK_DIFF_THEME,
           minimap: { enabled: false },
           fontSize: 13,
           fontFamily: "'Cascadia Code', 'Consolas', monospace",

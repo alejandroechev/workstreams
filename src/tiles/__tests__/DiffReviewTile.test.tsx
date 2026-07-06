@@ -72,6 +72,7 @@ const fakeMonaco = {
     createDiffEditor: vi.fn((_c: HTMLElement, opts: Record<string, unknown>) => createFakeEditor(opts)),
     createModel: vi.fn((value: string, _language?: string) => createFakeModel(value)),
     setModelLanguage: vi.fn(),
+    defineTheme: vi.fn(),
   },
 };
 
@@ -208,7 +209,8 @@ describe("DiffReviewTile", () => {
 
     await waitFor(() => expect(fakeMonaco.editor.createDiffEditor).toHaveBeenCalled());
     const opts = fakeMonaco.editor.createDiffEditor.mock.calls[0]?.[1] as Record<string, unknown>;
-    expect(opts.theme).toBe("vs-dark");
+    expect(opts.theme).toBe("github-dark-diff");
+    expect(fakeMonaco.editor.defineTheme).toHaveBeenCalledWith("github-dark-diff", expect.objectContaining({ base: "vs-dark" }));
     expect(opts.renderSideBySide).toBe(false);
     // src/auth/mw.ts → "typescript"
     const createdLanguages = fakeMonaco.editor.createModel.mock.calls.map((c) => c[1]);

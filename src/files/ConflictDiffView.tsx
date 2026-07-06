@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type CSSProperties, type ReactElement } from "react";
 import type * as MonacoNs from "monaco-editor";
 import { loadMonaco } from "./loadMonaco";
+import { GITHUB_DARK_DIFF_THEME, defineGithubDiffTheme } from "../ui/monaco-diff-theme";
 
 export interface ConflictDiffViewProps {
   diskContent: string;
@@ -47,6 +48,7 @@ export function ConflictDiffView({
     const createEditor = async (): Promise<void> => {
       const monaco: MonacoModule = await loadMonaco();
       if (disposed || containerRef.current === null) return;
+      defineGithubDiffTheme(monaco);
 
       const modelLanguage = language ?? "plaintext";
       const originalModel = monaco.editor.createModel(
@@ -62,6 +64,7 @@ export function ConflictDiffView({
         originalEditable: false,
         automaticLayout: true,
         renderSideBySide: true,
+        theme: GITHUB_DARK_DIFF_THEME,
       });
 
       editor.setModel({ original: originalModel, modified: modifiedModel });

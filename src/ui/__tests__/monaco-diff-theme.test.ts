@@ -1,8 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import {
   GITHUB_DARK_DIFF_THEME,
   defineGithubDiffTheme,
-  _resetGithubDiffThemeForTests,
 } from "../monaco-diff-theme";
 
 function fakeMonaco() {
@@ -10,8 +9,6 @@ function fakeMonaco() {
 }
 
 describe("monaco-diff-theme", () => {
-  beforeEach(() => _resetGithubDiffThemeForTests());
-
   it("registers a vs-dark-derived theme with GitHub diff colors", () => {
     const monaco = fakeMonaco();
     defineGithubDiffTheme(monaco);
@@ -40,5 +37,14 @@ describe("monaco-diff-theme", () => {
     defineGithubDiffTheme(monaco);
     defineGithubDiffTheme(monaco);
     expect(monaco.editor.defineTheme).toHaveBeenCalledTimes(1);
+  });
+
+  it("registers per Monaco instance (app has CDN + bundled instances)", () => {
+    const a = fakeMonaco();
+    const b = fakeMonaco();
+    defineGithubDiffTheme(a);
+    defineGithubDiffTheme(b);
+    expect(a.editor.defineTheme).toHaveBeenCalledTimes(1);
+    expect(b.editor.defineTheme).toHaveBeenCalledTimes(1);
   });
 });

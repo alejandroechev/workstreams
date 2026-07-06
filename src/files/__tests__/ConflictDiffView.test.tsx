@@ -62,6 +62,7 @@ const fakeMonaco = {
       createFakeEditor(options),
     ),
     createModel: vi.fn((value: string, language: string) => createFakeModel(value, language)),
+    defineTheme: vi.fn(),
   },
 };
 

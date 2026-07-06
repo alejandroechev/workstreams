@@ -36,27 +36,27 @@ const COLORS: Record<string, string> = {
   "diffEditorOverview.removedForeground": "#f8514999",
 };
 
-let defined = false;
-
 /**
  * Register the `github-dark-diff` theme on the given Monaco instance. The theme
  * inherits `vs-dark` (so all syntax highlighting is unchanged) and only
- * overrides the diff-specific colors. Idempotent: safe to call from every
- * editor's `beforeMount`. Monaco themes are global, so once registered the
- * theme is available to every editor.
+ * overrides the diff-specific colors. Idempotent per Monaco instance: safe to
+ * call from every editor's `beforeMount`. Monaco themes are global *within an
+ * instance*, so once registered the theme is available to every editor on that
+ * instance.
+ *
+ * The app has two distinct Monaco instances — `@monaco-editor/react` (CDN) and
+ * the bundled `loadMonaco()` — so the guard is keyed per instance rather than
+ * module-global; otherwise the second instance would never get the theme.
  */
+const registered = new WeakSet<object>();
+
 export function defineGithubDiffTheme(monaco: typeof MonacoNs): void {
-  if (defined) return;
+  if (registered.has(monaco)) return;
   monaco.editor.defineTheme(GITHUB_DARK_DIFF_THEME, {
     base: "vs-dark",
     inherit: true,
     rules: [],
     colors: COLORS,
   });
-  defined = true;
-}
-
-/** Test-only: reset the registration guard so a fresh mock can be asserted. */
-export function _resetGithubDiffThemeForTests(): void {
-  defined = false;
+  registered.add(monaco);
 }
