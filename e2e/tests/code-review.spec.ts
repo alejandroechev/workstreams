@@ -113,8 +113,8 @@ test.describe("Code Review tile", () => {
       b.simulateAgentReply(review.id, c.id, "Done — removed it.");
     });
 
-    // The reviewer thread and the agent reply appear via the 1.5s poll.
-    await expect(page.locator('[data-testid="comment-thread"]')).toBeVisible({ timeout: 8000 });
+    // The reviewer thread and the agent reply render inline (Monaco view zone).
+    await expect(page.locator('[data-testid="thread-status"]')).toBeVisible({ timeout: 8000 });
     await expect(page.locator('[data-testid="thread-reply"]')).toBeVisible({ timeout: 8000 });
 
     // Reviewer resolves the thread, then completes the review.

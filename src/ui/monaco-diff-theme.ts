@@ -18,16 +18,25 @@ export const GITHUB_DARK_DIFF_THEME = "github-dark-diff";
 
 // GitHub Primer dark diff overlay colors, as #RRGGBBAA. The alpha byte lets
 // Monaco blend them over whatever editor background is active.
+//
+// Note on stacking: Monaco marks a *fully* inserted/removed line with BOTH the
+// line background AND a word-level (char) background on every character, so the
+// two overlays stack. GitHub only shows the word-level emphasis on *partial*
+// changes. To keep all-added / all-removed files subtle (like GitHub) while
+// still hinting the changed span on partial edits, the word (`*TextBackground`)
+// alphas are deliberately low so the stacked result stays close to the line
+// tint rather than doubling into a heavy block.
 const COLORS: Record<string, string> = {
   // Full changed-line backgrounds (subtle, ~15%).
   "diffEditor.insertedLineBackground": "#2ea04326",
   "diffEditor.removedLineBackground": "#f8514926",
-  // Word/character-level emphasis for the exact changed tokens (~40%).
-  "diffEditor.insertedTextBackground": "#2ea04366",
-  "diffEditor.removedTextBackground": "#f8514966",
-  // Gutter / line-number column blocks (~30%), like GitHub's colored numbers.
-  "diffEditorGutter.insertedLineBackground": "#2ea0434d",
-  "diffEditorGutter.removedLineBackground": "#f851494d",
+  // Word/character-level emphasis for the exact changed tokens. Kept low so it
+  // stacks gently over the line background on fully-changed lines.
+  "diffEditor.insertedTextBackground": "#2ea0431f",
+  "diffEditor.removedTextBackground": "#f851491f",
+  // Gutter / line-number column blocks (~25%), like GitHub's colored numbers.
+  "diffEditorGutter.insertedLineBackground": "#2ea04340",
+  "diffEditorGutter.removedLineBackground": "#f8514940",
   // Fill instead of outline: drop the boxy borders Monaco draws around tokens.
   "diffEditor.insertedTextBorder": "#00000000",
   "diffEditor.removedTextBorder": "#00000000",

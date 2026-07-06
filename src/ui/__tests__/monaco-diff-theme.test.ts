@@ -19,13 +19,13 @@ describe("monaco-diff-theme", () => {
     expect(data.base).toBe("vs-dark");
     expect(data.inherit).toBe(true);
 
-    // Subtle line tints, stronger word emphasis, distinct gutter — no olive.
+    // Subtle line tints, gentle word emphasis, distinct gutter — no olive.
     expect(data.colors["diffEditor.insertedLineBackground"]).toBe("#2ea04326");
-    expect(data.colors["diffEditor.insertedTextBackground"]).toBe("#2ea04366");
+    expect(data.colors["diffEditor.insertedTextBackground"]).toBe("#2ea0431f");
     expect(data.colors["diffEditor.removedLineBackground"]).toBe("#f8514926");
-    expect(data.colors["diffEditor.removedTextBackground"]).toBe("#f8514966");
-    expect(data.colors["diffEditorGutter.insertedLineBackground"]).toBe("#2ea0434d");
-    expect(data.colors["diffEditorGutter.removedLineBackground"]).toBe("#f851494d");
+    expect(data.colors["diffEditor.removedTextBackground"]).toBe("#f851491f");
+    expect(data.colors["diffEditorGutter.insertedLineBackground"]).toBe("#2ea04340");
+    expect(data.colors["diffEditorGutter.removedLineBackground"]).toBe("#f8514940");
     // Borders are transparent (fill, not outline).
     expect(data.colors["diffEditor.insertedTextBorder"]).toBe("#00000000");
     expect(data.colors["diffEditor.removedTextBorder"]).toBe("#00000000");

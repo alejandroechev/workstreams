@@ -4,7 +4,6 @@ import type * as MonacoNs from "monaco-editor";
 import { DiffEditor } from "@monaco-editor/react";
 import {
   CheckCircleIcon,
-  ArrowUturnLeftIcon,
   ExclamationTriangleIcon,
   PlusCircleIcon,
   DocumentIcon,
@@ -13,7 +12,6 @@ import { useBackend } from "../backend/context";
 import { detectLanguage } from "../domain/tile-config";
 import { fileBufferRegistry } from "../files/FileBufferRegistry";
 import { GITHUB_DARK_DIFF_THEME, defineGithubDiffTheme } from "../ui/monaco-diff-theme";
-import { MarkdownView } from "../ui/MarkdownView";
 import type { Review, ReviewComment, ChangedFile, DiffSource } from "../domain/code-review";
 import {
   groupThreads,
@@ -63,9 +61,12 @@ export default function CodeReviewTile({ workstreamId, workstreamDir, isFocused 
   const [draftSource, setDraftSource] = useState<DiffSource>("working_tree");
   const [draftBase, setDraftBase] = useState("master");
 
-  // Comment composer (anchored to a selected new-side line).
-  const [pendingAnchor, setPendingAnchor] = useState<{ file: string; line: number; code: string } | null>(null);
-  const [composerBody, setComposerBody] = useState("");
+  // Comment composer. `selectionAnchor` is the current non-empty new-side line
+  // range (drives the floating "+ Comment" button); `composer` is the open
+  // inline composer for a chosen range. Mirrors the Repo Explorer file-comment
+  // UX (floating button on selection → inline composer → view-zone threads).
+  const [selectionAnchor, setSelectionAnchor] = useState<{ start: number; end: number } | null>(null);
+  const [composer, setComposer] = useState<{ start: number; end: number; body: string } | null>(null);
 
   // In-place editing (ADR 014 §4) — only when the modified side is the working file.
   const [dirty, setDirty] = useState(false);
@@ -78,6 +79,90 @@ export default function CodeReviewTile({ workstreamId, workstreamDir, isFocused 
 
   const modifiedEditorRef = useRef<MonacoNs.editor.IStandaloneCodeEditor | null>(null);
   const zoneIdsRef = useRef<string[]>([]);
+  // Latest setStatus, held in a ref so imperative view-zone buttons call fresh.
+  const setStatusRef = useRef<(id: string, status: string) => void>(() => {});
+  const busyRef = useRef(false);
+  busyRef.current = busy;
+
+  /** Estimated view-zone height (in editor line units) for a line's threads. */
+  function estimateThreadZoneLines(ts: CommentThread[]): number {
+    let lines = 1; // top padding
+    for (const t of ts) {
+      lines += 1; // meta header
+      if (t.root.code) lines += 1;
+      lines += Math.max(1, Math.ceil(t.root.body.length / 70));
+      for (const rep of t.replies) lines += 1 + Math.max(1, Math.ceil(rep.body.length / 70));
+      lines += 1; // action row
+    }
+    return lines + 1; // bottom padding
+  }
+
+  /** Imperatively render a comment thread (reviewer + agent replies + resolve). */
+  function renderThreadZone(node: HTMLDivElement, ts: CommentThread[], reviewOpen: boolean): void {
+    node.innerHTML = "";
+    node.style.pointerEvents = "auto";
+    node.style.cssText +=
+      ";background:#181825;border-left:3px solid #89b4fa;padding:6px 10px;color:#cdd6f4;font-size:12px;font-family:'Cascadia Code','Consolas',monospace;overflow:auto";
+    for (const t of ts) {
+      const open = isOpenThread(t.root);
+      const head = document.createElement("div");
+      head.style.cssText = "display:flex;align-items:center;gap:8px;margin-bottom:2px";
+      const author = document.createElement("span");
+      author.textContent = t.root.author;
+      author.style.cssText = "color:#f9e2af;font-weight:600";
+      head.appendChild(author);
+      const status = document.createElement("span");
+      status.dataset.testid = "thread-status";
+      status.textContent = statusLabel(t.root.status);
+      status.style.cssText = open
+        ? "background:#313244;color:#cdd6f4;border-radius:6px;padding:0 6px;font-size:10px"
+        : "background:#a6e3a1;color:#1e1e2e;border-radius:6px;padding:0 6px;font-size:10px";
+      head.appendChild(status);
+      node.appendChild(head);
+
+      if (t.root.code) {
+        const code = document.createElement("pre");
+        code.textContent = t.root.code;
+        code.style.cssText = "background:#11111b;border-radius:4px;padding:4px 6px;margin:2px 0;font-size:11px;overflow-x:auto";
+        node.appendChild(code);
+      }
+      const body = document.createElement("div");
+      body.textContent = t.root.body;
+      body.style.cssText = "white-space:pre-wrap;word-break:break-word;line-height:1.5";
+      node.appendChild(body);
+
+      for (const rep of t.replies) {
+        const wrap = document.createElement("div");
+        wrap.dataset.testid = "thread-reply";
+        wrap.style.cssText = "border-left:2px solid #45475a;padding-left:8px;margin:4px 0";
+        const ra = document.createElement("span");
+        ra.textContent = rep.author;
+        ra.style.cssText = "color:#f9e2af;font-size:11px;font-weight:600";
+        wrap.appendChild(ra);
+        const rb = document.createElement("div");
+        rb.textContent = rep.body;
+        rb.style.cssText = "white-space:pre-wrap;word-break:break-word;line-height:1.5";
+        wrap.appendChild(rb);
+        node.appendChild(wrap);
+      }
+
+      if (reviewOpen) {
+        const btn = document.createElement("button");
+        btn.dataset.testid = open ? "resolve" : "reopen";
+        btn.textContent = open ? "Resolve" : "Reopen";
+        btn.style.cssText =
+          "margin-top:4px;background:none;border:1px solid #45475a;color:#89b4fa;border-radius:4px;padding:2px 8px;cursor:pointer;font-size:11px;pointer-events:auto";
+        btn.addEventListener("mousedown", (e) => e.stopPropagation());
+        btn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          e.preventDefault();
+          if (busyRef.current) return;
+          setStatusRef.current(t.root.id, open ? "resolved" : "open");
+        });
+        node.appendChild(btn);
+      }
+    }
+  }
 
   const reviewRef = useRef<Review | null>(null);
   reviewRef.current = review;
@@ -144,6 +229,8 @@ export default function CodeReviewTile({ workstreamId, workstreamDir, isFocused 
   useEffect(() => {
     if (!review || !selectedFile) return;
     setDirty(false);
+    setSelectionAnchor(null);
+    setComposer(null);
     let cancelled = false;
     (async () => {
       try {
@@ -171,21 +258,25 @@ export default function CodeReviewTile({ workstreamId, workstreamDir, isFocused 
   const stillOpen = openCount(threads);
   const completable = review?.status === "open" && threads.length > 0 && stillOpen === 0;
 
-  // ── Inline view zones: render a marker under each commented new-side line ──
+  // ── Inline view zones: render the full comment thread under each commented
+  // new-side line, with an inline Resolve/Reopen action (Repo-Explorer-style). ──
   useEffect(() => {
     const editor = modifiedEditorRef.current;
     if (!editor || !selectedFile) return;
     const byLine = threadsByLine(threads, selectedFile);
+    const reviewOpen = reviewRef.current?.status === "open";
     editor.changeViewZones((accessor) => {
       for (const id of zoneIdsRef.current) accessor.removeZone(id);
       zoneIdsRef.current = [];
       for (const [line, ts] of byLine) {
         const dom = document.createElement("div");
-        dom.className = "cr-zone";
-        dom.style.cssText = "background:#181825;border-left:3px solid #89b4fa;padding:4px 10px;color:#cdd6f4;font-size:12px;font-family:monospace";
-        const t0 = ts[0];
-        dom.textContent = `💬 ${t0.root.author}: ${t0.root.body}${ts.length > 1 || t0.replies.length ? "  (thread)" : ""}`;
-        accessor.addZone({ afterLineNumber: line, heightInLines: 1, domNode: dom });
+        renderThreadZone(dom, ts, reviewOpen);
+        const id = accessor.addZone({
+          afterLineNumber: line,
+          heightInLines: estimateThreadZoneLines(ts),
+          domNode: dom,
+        });
+        zoneIdsRef.current.push(id);
       }
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -231,11 +322,20 @@ export default function CodeReviewTile({ workstreamId, workstreamDir, isFocused 
       const modified = editor.getModifiedEditor();
       modifiedEditorRef.current = modified;
       modified.onDidChangeCursorSelection((e) => {
-        const line = e.selection.positionLineNumber;
         const file = selectedFileRef.current;
         if (!file) return;
-        const code = modified.getModel()?.getLineContent(line) ?? "";
-        setPendingAnchor({ file, line, code });
+        const sel = e.selection;
+        // Only surface the floating "+ Comment" button for a real (non-empty)
+        // selection, matching the Repo Explorer file-comment UX.
+        const empty =
+          sel.startLineNumber === sel.endLineNumber && sel.startColumn === sel.endColumn;
+        if (empty) {
+          setSelectionAnchor(null);
+          return;
+        }
+        const start = Math.min(sel.startLineNumber, sel.endLineNumber);
+        const end = Math.max(sel.startLineNumber, sel.endLineNumber);
+        setSelectionAnchor({ start, end });
       });
       // In-place edit: track dirty + Ctrl+S save when the modified side is editable.
       modified.onDidChangeModelContent(() => {
@@ -270,29 +370,31 @@ export default function CodeReviewTile({ workstreamId, workstreamDir, isFocused 
 
   const addComment = useCallback(async () => {
     const r = reviewRef.current;
-    const anchor = pendingAnchor;
-    if (!r || !anchor || !composerBody.trim()) return;
+    const file = selectedFileRef.current;
+    if (!r || !file || !composer || !composer.body.trim()) return;
+    const lines = (modifiedEditorRef.current?.getModel()?.getValue() ?? sidesAfterRef.current).split(/\r?\n/);
+    const code = lines.slice(composer.start - 1, composer.end).join("\n") || null;
     setBusy(true);
     try {
       await backend.addReviewComment(
         workstreamId,
         r.id,
-        anchor.file,
-        anchor.line,
+        file,
+        composer.start,
         "new",
-        anchor.code || null,
+        code,
         null,
-        composerBody.trim(),
+        composer.body.trim(),
       );
-      setComposerBody("");
-      setPendingAnchor(null);
+      setComposer(null);
+      setSelectionAnchor(null);
       await loadComments();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
     }
-  }, [backend, workstreamId, pendingAnchor, composerBody, loadComments]);
+  }, [backend, workstreamId, composer, loadComments]);
 
   const setStatus = useCallback(
     async (commentId: string, status: string) => {
@@ -308,6 +410,7 @@ export default function CodeReviewTile({ workstreamId, workstreamDir, isFocused 
     },
     [backend, workstreamId, loadComments],
   );
+  setStatusRef.current = setStatus;
 
   const complete = useCallback(async () => {
     const r = reviewRef.current;
@@ -430,11 +533,8 @@ export default function CodeReviewTile({ workstreamId, workstreamDir, isFocused 
                       {saving ? "Saving…" : "Save"}
                     </button>
                   )}
-                  {pendingAnchor && (
-                    <span style={styles.muted} data-testid="pending-anchor">line {pendingAnchor.line}</span>
-                  )}
                 </div>
-                <div style={{ flex: 1, minHeight: 0 }}>
+                <div style={{ flex: 1, minHeight: 0, position: "relative" }}>
                   <DiffEditor
                     key={selectedFile}
                     height="100%"
@@ -453,73 +553,62 @@ export default function CodeReviewTile({ workstreamId, workstreamDir, isFocused 
                       overviewRulerBorder: false,
                     }}
                   />
-                </div>
-                {pendingAnchor && (
-                  <div style={styles.composer} data-testid="comment-composer">
-                    <textarea
-                      data-testid="comment-body"
-                      style={styles.textarea}
-                      placeholder={`Comment on ${basename(pendingAnchor.file)}:${pendingAnchor.line} (markdown)`}
-                      value={composerBody}
-                      onChange={(e) => setComposerBody(e.target.value)}
-                    />
-                    <div style={{ display: "flex", gap: 6 }}>
-                      <button style={styles.btnPrimary} disabled={busy} onClick={addComment} data-testid="add-comment">
-                        Comment
-                      </button>
-                      <button style={styles.btn} disabled={busy} onClick={() => { setPendingAnchor(null); setComposerBody(""); }}>
-                        Cancel
-                      </button>
+                  {/* Floating "+ Comment" button on a non-empty selection. */}
+                  {review.status === "open" && selectionAnchor && !composer && (
+                    <button
+                      data-testid="add-comment-floating"
+                      onClick={() =>
+                        setComposer({ start: selectionAnchor.start, end: selectionAnchor.end, body: "" })
+                      }
+                      style={styles.floatingBtn}
+                    >
+                      + Comment ({selectionAnchor.start}
+                      {selectionAnchor.start !== selectionAnchor.end ? `-${selectionAnchor.end}` : ""})
+                    </button>
+                  )}
+                  {/* Floating inline composer. */}
+                  {composer && (
+                    <div style={styles.floatingComposer} data-testid="comment-composer">
+                      <div style={{ fontSize: 10, color: "#a6adc8" }}>
+                        Lines {composer.start}
+                        {composer.start !== composer.end ? `-${composer.end}` : ""}
+                      </div>
+                      <textarea
+                        data-testid="comment-body"
+                        autoFocus
+                        rows={5}
+                        style={styles.textarea}
+                        placeholder="Comment (markdown)"
+                        value={composer.body}
+                        onChange={(e) =>
+                          setComposer((cur) => (cur ? { ...cur, body: e.target.value } : cur))
+                        }
+                      />
+                      <div style={{ display: "flex", justifyContent: "flex-end", gap: 6 }}>
+                        <button
+                          style={styles.btn}
+                          disabled={busy}
+                          onClick={() => setComposer(null)}
+                          data-testid="comment-cancel"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          style={styles.btnPrimary}
+                          disabled={busy || composer.body.trim().length === 0}
+                          onClick={addComment}
+                          data-testid="add-comment"
+                        >
+                          Comment
+                        </button>
+                      </div>
                     </div>
-                  </div>
-                )}
+                  )}
+                </div>
               </>
             ) : (
               <div style={styles.center}>Pick a file to review.</div>
             )}
-          </div>
-
-          {/* Comments panel */}
-          <div style={styles.commentsPanel} data-testid="comments-panel">
-            {threads.length === 0 && <div style={styles.muted}>No comments yet — select a line in the diff.</div>}
-            {threads.map((t) => {
-              const open = isOpenThread(t.root);
-              return (
-                <div key={t.root.id} style={styles.thread} data-testid="comment-thread">
-                  <div style={styles.threadHead}>
-                    <button
-                      style={styles.anchorBtn}
-                      onClick={() => setSelectedFile(t.root.file)}
-                      title="jump to file"
-                    >
-                      {basename(t.root.file)}:{t.root.line}
-                    </button>
-                    <span style={{ ...styles.statusChip, ...(open ? {} : styles.statusChipClosed) }} data-testid="thread-status">
-                      {statusLabel(t.root.status)}
-                    </span>
-                  </div>
-                  {t.root.code && <pre style={styles.code}>{t.root.code}</pre>}
-                  <div style={styles.commentBody}><MarkdownView>{t.root.body}</MarkdownView></div>
-                  {t.replies.map((rep) => (
-                    <div key={rep.id} style={styles.reply} data-testid="thread-reply">
-                      <span style={styles.author}>{rep.author}</span>
-                      <div style={styles.commentBody}><MarkdownView>{rep.body}</MarkdownView></div>
-                    </div>
-                  ))}
-                  <div style={{ marginTop: 6 }}>
-                    {open ? (
-                      <button style={styles.btn} disabled={busy} onClick={() => setStatus(t.root.id, "resolved")} data-testid="resolve">
-                        <CheckCircleIcon width={13} height={13} /> Resolve
-                      </button>
-                    ) : (
-                      <button style={styles.btn} disabled={busy} onClick={() => setStatus(t.root.id, "open")} data-testid="reopen">
-                        <ArrowUturnLeftIcon width={13} height={13} /> Reopen
-                      </button>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
           </div>
         </div>
       )}
@@ -550,17 +639,17 @@ const styles: Record<string, React.CSSProperties> = {
   diffToolbar: { display: "flex", alignItems: "center", gap: 8, padding: "4px 10px", borderBottom: "1px solid #313244" },
   filePathText: { flex: 1, fontFamily: "monospace", fontSize: 11, color: "#89dceb", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
   dirtyDot: { width: 8, height: 8, borderRadius: "50%", background: "#f9e2af", flexShrink: 0 },
-  composer: { borderTop: "1px solid #313244", padding: 8, display: "flex", flexDirection: "column", gap: 6 },
-  textarea: { minHeight: 48, background: "#181825", color: "#cdd6f4", border: "1px solid #313244", borderRadius: 6, padding: 6, fontFamily: "inherit", fontSize: 12 },
-  commentsPanel: { width: 300, borderLeft: "1px solid #313244", overflowY: "auto", flexShrink: 0, padding: 8, display: "flex", flexDirection: "column", gap: 8 },
+  textarea: { minHeight: 48, background: "#11111b", color: "#cdd6f4", border: "1px solid #313244", borderRadius: 4, padding: 6, fontFamily: "monospace", fontSize: 12, resize: "vertical" },
   muted: { color: "#6c7086", fontSize: 12, padding: 8, fontStyle: "italic" },
-  thread: { border: "1px solid #313244", borderRadius: 8, padding: 8 },
-  threadHead: { display: "flex", alignItems: "center", gap: 6, marginBottom: 4 },
-  anchorBtn: { background: "none", border: "none", color: "#89dceb", cursor: "pointer", fontFamily: "monospace", fontSize: 12, padding: 0 },
-  statusChip: { background: "#313244", color: "#cdd6f4", borderRadius: 6, padding: "1px 6px", fontSize: 10 },
-  statusChipClosed: { background: "#a6e3a1", color: "#1e1e2e" },
-  code: { background: "#181825", borderRadius: 6, padding: 6, overflowX: "auto", fontSize: 11, margin: "4px 0" },
-  commentBody: { fontSize: 13 },
-  reply: { borderLeft: "2px solid #45475a", paddingLeft: 8, margin: "6px 0" },
-  author: { color: "#f9e2af", fontSize: 11, fontWeight: 600 },
+  floatingBtn: {
+    position: "absolute", top: 8, right: 16, padding: "4px 10px", background: "#89b4fa",
+    color: "#11111b", border: "none", borderRadius: 4, cursor: "pointer", fontSize: 11,
+    fontWeight: 600, boxShadow: "0 2px 6px rgba(0,0,0,0.4)", zIndex: 5,
+  },
+  floatingComposer: {
+    position: "absolute", top: 8, right: 16, width: 360, background: "#1e1e2e",
+    border: "1px solid #45475a", borderRadius: 6, padding: 10,
+    boxShadow: "0 4px 12px rgba(0,0,0,0.5)", zIndex: 10, display: "flex",
+    flexDirection: "column", gap: 8,
+  },
 };

@@ -7,13 +7,24 @@ import { MemoryBackend } from "../../backend/memory-backend";
 import CodeReviewTile from "../CodeReviewTile";
 
 // Shared mock state, hoisted so it's reachable from the vi.mock factory below.
+type SelEvent = {
+  selection: {
+    startLineNumber: number;
+    endLineNumber: number;
+    startColumn: number;
+    endColumn: number;
+  };
+};
 const h = vi.hoisted(() => ({
-  selectionHandlers: [] as Array<(e: { selection: { positionLineNumber: number } }) => void>,
+  selectionHandlers: [] as Array<(e: unknown) => void>,
   // The live modified buffer of the currently-mounted DiffEditor (per-mount ref).
   liveBuffer: null as null | { current: string },
   contentHandlers: [] as Array<() => void>,
   savedFiles: [] as Array<{ path: string; content: string }>,
   registryModelValue: "",
+  // View-zone DOM nodes, attached to document.body so their testids are queryable.
+  zoneNodes: new Map<string, HTMLElement>(),
+  zoneSeq: 0,
 }));
 
 // ── Mock the Monaco DiffEditor: capture onMount, expose a fake modified editor
@@ -32,7 +43,7 @@ vi.mock("@monaco-editor/react", () => ({
     const bufRef = useRef(props.modified);
     h.liveBuffer = bufRef;
     const modified = {
-      onDidChangeCursorSelection: (cb: (e: { selection: { positionLineNumber: number } }) => void) => {
+      onDidChangeCursorSelection: (cb: (e: unknown) => void) => {
         h.selectionHandlers.push(cb);
       },
       onDidChangeModelContent: (cb: () => void) => {
@@ -46,8 +57,27 @@ vi.mock("@monaco-editor/react", () => ({
           bufRef.current = v;
         },
       }),
-      changeViewZones: (fn: (accessor: { addZone: () => string; removeZone: () => void }) => void) => {
-        fn({ addZone: () => "z1", removeZone: () => {} });
+      // Attach view-zone DOM nodes to the document so their testids/buttons are
+      // queryable + clickable (mirrors Monaco attaching them to the overlay).
+      changeViewZones: (
+        fn: (accessor: {
+          addZone: (z: { domNode: HTMLElement }) => string;
+          removeZone: (id: string) => void;
+        }) => void,
+      ) => {
+        fn({
+          addZone: (z) => {
+            const id = `z${h.zoneSeq++}`;
+            document.body.appendChild(z.domNode);
+            h.zoneNodes.set(id, z.domNode);
+            return id;
+          },
+          removeZone: (id) => {
+            const n = h.zoneNodes.get(id);
+            if (n) n.remove();
+            h.zoneNodes.delete(id);
+          },
+        });
       },
     };
     const editor = { getModifiedEditor: () => modified };
@@ -66,7 +96,6 @@ vi.mock("../../files/FileBufferRegistry", () => ({
   },
 }));
 
-const selectionHandlers = h.selectionHandlers;
 const savedFiles = h.savedFiles;
 
 // MarkdownView stub (avoids react-markdown heavy render).
@@ -76,7 +105,10 @@ vi.mock("../../ui/MarkdownView", () => ({
 
 function selectLine(line: number) {
   act(() => {
-    for (const cb of selectionHandlers) cb({ selection: { positionLineNumber: line } });
+    const e: SelEvent = {
+      selection: { startLineNumber: line, endLineNumber: line, startColumn: 1, endColumn: 6 },
+    };
+    for (const cb of h.selectionHandlers) cb(e);
   });
 }
 
@@ -97,6 +129,9 @@ function renderTile(backend: MemoryBackend) {
 
 afterEach(() => {
   cleanup();
+  for (const n of h.zoneNodes.values()) n.remove();
+  h.zoneNodes.clear();
+  h.zoneSeq = 0;
   h.selectionHandlers.length = 0;
   h.contentHandlers.length = 0;
   h.savedFiles.length = 0;
@@ -127,17 +162,21 @@ describe("CodeReviewTile", () => {
     await waitFor(() => expect(screen.getByTestId("file-src/a.js")).toBeTruthy());
     await waitFor(() => expect(screen.getByTestId("diff-editor")).toBeTruthy());
 
-    // Select new-side line 2 → composer appears → add a comment.
+    // Select new-side line 2 → floating "+ Comment" button → open composer → add.
     selectLine(2);
+    await waitFor(() => expect(screen.getByTestId("add-comment-floating")).toBeTruthy());
+    fireEvent.click(screen.getByTestId("add-comment-floating"));
     await waitFor(() => expect(screen.getByTestId("comment-composer")).toBeTruthy());
     fireEvent.change(screen.getByTestId("comment-body"), { target: { value: "remove line two" } });
     fireEvent.click(screen.getByTestId("add-comment"));
 
-    // Thread appears in the comments panel, anchored at a.js:2, status Open.
-    await waitFor(() => expect(screen.getByTestId("comment-thread")).toBeTruthy());
-    expect(screen.getByText("a.js:2")).toBeTruthy();
+    // Thread renders inline as a view zone (status Open); header shows the count.
+    await waitFor(() => expect(screen.getByTestId("thread-status")).toBeTruthy());
     expect(screen.getByTestId("thread-status").textContent).toBe("Open");
     expect(screen.getByTestId("open-count").textContent).toContain("1 open");
+    // No bottom composer stays open and no right-hand comments panel exists.
+    expect(screen.queryByTestId("comment-composer")).toBeNull();
+    expect(screen.queryByTestId("comments-panel")).toBeNull();
   });
 
   it("polls up an agent reply and lets the reviewer resolve then complete", async () => {
@@ -151,10 +190,12 @@ describe("CodeReviewTile", () => {
     await waitFor(() => expect(screen.getByTestId("diff-editor")).toBeTruthy());
 
     selectLine(2);
+    await screen.findByTestId("add-comment-floating");
+    fireEvent.click(screen.getByTestId("add-comment-floating"));
     await screen.findByTestId("comment-composer");
     fireEvent.change(screen.getByTestId("comment-body"), { target: { value: "fix this" } });
     fireEvent.click(screen.getByTestId("add-comment"));
-    await waitFor(() => expect(screen.getByTestId("comment-thread")).toBeTruthy());
+    await waitFor(() => expect(screen.getByTestId("thread-status")).toBeTruthy());
 
     // Agent replies out-of-band; the 1.5s poll should pick it up (real timers).
     const review = await backend.getActiveReview("ws-1");
@@ -163,7 +204,7 @@ describe("CodeReviewTile", () => {
     await waitFor(() => expect(screen.getByTestId("thread-reply")).toBeTruthy(), { timeout: 4000 });
     expect(screen.getByTestId("attention-badge")).toBeTruthy(); // open + addressed
 
-    // Resolve → Complete becomes available → complete.
+    // Resolve (inline in the view zone) → Complete becomes available → complete.
     fireEvent.click(screen.getByTestId("resolve"));
     await waitFor(() => expect(screen.getByTestId("thread-status").textContent).toBe("Resolved"));
     await waitFor(() => expect(screen.getByTestId("complete-review")).toBeTruthy());

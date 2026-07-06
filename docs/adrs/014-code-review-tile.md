@@ -38,11 +38,17 @@ Two load-bearing unknowns were spiked to **GO**
    `working_tree` | `last_commit` | `branch` (vs a chosen base). The diff is
    **recomputed live from git on open** (no snapshot).
 
-3. **Render** with a side-by-side Monaco `DiffEditor` (`parseDiffToSides`).
-   Inline comment threads are **view zones** on `getModifiedEditor()`, anchored
-   to the **new-side line** (old-side for pure deletions), with a "＋ Comment"
+3. **Render** with a side-by-side Monaco `DiffEditor` (`parseDiffToSides`),
+   themed with the shared **`github-dark-diff`** Monaco theme (`src/ui/
+   monaco-diff-theme.ts`) so diffs read like a GitHub PR (subtle line tints +
+   gentle word emphasis) instead of Monaco's default olive wash. Inline comment
+   threads are **view zones** on `getModifiedEditor()`, anchored to the
+   **new-side line** (old-side for pure deletions), with a floating "＋ Comment"
    affordance on line selection — the ADR 009 view-zone technique retargeted to
-   the diff editor.
+   the diff editor. Commenting is **inline-only** (floating button → inline
+   composer → in-between-lines thread with an inline Resolve/Reopen); there is
+   no fixed bottom composer or right-hand comments summary panel, mirroring the
+   Repo Explorer file-comment UX.
 
 4. **In-place editing (v1 core).** When the modified side maps to the on-disk
    **working file**, the modified editor is **editable** and backed by the
