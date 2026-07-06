@@ -33,6 +33,7 @@ import { SqliteTableView, fileSqliteOps } from "../ui/components/SqliteTableView
 import { FileContextMenu } from "../ui/components/FileContextMenu";
 import { ZoomableImage } from "../ui/components/ZoomableImage";
 import { PdfViewer } from "../ui/components/PdfViewer";
+import { GITHUB_DARK_DIFF_THEME, defineGithubDiffTheme } from "../ui/monaco-diff-theme";
 import { openPath } from "@tauri-apps/plugin-opener";
 import { useFileComments } from "../files/useFileComments";
 import { RepoContentSearch } from "./RepoContentSearch";
@@ -1148,7 +1149,8 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
                 language={detectLanguage(diffFilePath)}
                 original={diffBefore}
                 modified={diffAfter}
-                theme="vs-dark"
+                theme={GITHUB_DARK_DIFF_THEME}
+                beforeMount={defineGithubDiffTheme}
                 onMount={(editor) => { editorRef.current = editor.getModifiedEditor(); }}
                 options={{
                   readOnly: true,

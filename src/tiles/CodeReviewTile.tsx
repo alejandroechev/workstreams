@@ -12,6 +12,7 @@ import {
 import { useBackend } from "../backend/context";
 import { detectLanguage } from "../domain/tile-config";
 import { fileBufferRegistry } from "../files/FileBufferRegistry";
+import { GITHUB_DARK_DIFF_THEME, defineGithubDiffTheme } from "../ui/monaco-diff-theme";
 import { MarkdownView } from "../ui/MarkdownView";
 import type { Review, ReviewComment, ChangedFile, DiffSource } from "../domain/code-review";
 import {
@@ -440,7 +441,8 @@ export default function CodeReviewTile({ workstreamId, workstreamDir, isFocused 
                     language={detectLanguage(selectedFile)}
                     original={sides.before}
                     modified={sides.after}
-                    theme="vs-dark"
+                    theme={GITHUB_DARK_DIFF_THEME}
+                    beforeMount={defineGithubDiffTheme}
                     onMount={onDiffMount}
                     options={{
                       readOnly: !editable,
