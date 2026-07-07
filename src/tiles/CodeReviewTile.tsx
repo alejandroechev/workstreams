@@ -534,7 +534,7 @@ export default function CodeReviewTile({ workstreamId, workstreamDir, isFocused 
                     </button>
                   )}
                 </div>
-                <div style={{ flex: 1, minHeight: 0, position: "relative" }}>
+                <div className="interactive-zones" style={{ flex: 1, minHeight: 0, position: "relative" }}>
                   <DiffEditor
                     key={selectedFile}
                     height="100%"

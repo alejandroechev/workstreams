@@ -919,7 +919,12 @@ export function FileEditorView({
 
     return (
       <div style={{ position: "relative", height: "100%", width: "100%" }}>
-        <div ref={editorHostRef} data-testid="file-editor-monaco" style={{ height: "100%", width: "100%" }} />
+        <div
+          ref={editorHostRef}
+          data-testid="file-editor-monaco"
+          className={commentsEnabled ? "interactive-zones" : undefined}
+          style={{ height: "100%", width: "100%" }}
+        />
         {commentsEnabled && onAddComment && selectionAnchor && !composer ? (
           <button
             data-testid="add-comment-floating"

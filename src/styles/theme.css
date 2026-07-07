@@ -70,3 +70,19 @@ button:hover {
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }
 }
+
+/*
+ * Interactive Monaco view zones (inline comment threads).
+ *
+ * Monaco renders `.view-zones` in DOM order BEFORE `.view-lines`, so the text
+ * layer paints on top and swallows clicks aimed at buttons inside a zone (you
+ * see the I-beam cursor over them). Opt an editor into interactive zones by
+ * adding the `interactive-zones` class to its host element; this lifts the
+ * view-zone layer above the text layer so buttons in the zone receive pointer
+ * events. Zones only occupy their reserved vertical gaps (transparent
+ * elsewhere), so no code text is covered. The zone DOM itself still sets
+ * `pointer-events: auto`.
+ */
+.interactive-zones .view-zones {
+  z-index: 1;
+}
