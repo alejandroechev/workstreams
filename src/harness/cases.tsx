@@ -1,0 +1,146 @@
+// @test-skip: dev/E2E-only harness scaffolding; real-Monaco interactivity is covered by scripts/harness.mjs + e2e/tests/comment-interactivity.spec.ts, not jsdom.
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type FC } from "react";
+
+import { FileEditorView } from "../files/FileEditorView";
+import CodeReviewTile from "../tiles/CodeReviewTile";
+import { BackendProvider } from "../backend/context";
+import { MemoryBackend } from "../backend/memory-backend";
+import type { FileComment } from "../domain/file-comments";
+import { makeInMemoryRegistry } from "./fakeRegistry";
+
+/**
+ * Harness cases (dev/E2E only). Each case mounts ONE component under test with
+ * seeded data, full-viewport, so a Playwright probe can reach the buggy UI in a
+ * single `page.goto('…?harness=<id>')` — no workstream/tile navigation.
+ *
+ * These cases render *real* Monaco (via the real loader), which is exactly what
+ * the jsdom unit tests cannot do. They exist to reproduce/verify real
+ * layout/z-index/pointer-events bugs (e.g. clicking buttons inside comment view
+ * zones).
+ */
+
+const full: CSSProperties = { position: "fixed", inset: 0, background: "#1e1e2e" };
+
+function nowIso() {
+  return new Date().toISOString();
+}
+
+/**
+ * Case: Repo Explorer file-comment zone. A `FileEditorView` with one seeded
+ * user comment on line 2, so its inline view zone renders the Edit/Delete
+ * buttons. Clicking **Edit** must open the inline composer (the state change
+ * the probe asserts).
+ */
+const CommentZoneCase: FC = () => {
+  const path = "C:/repo/src/example.ts";
+  const content = "const a = 1;\nconst b = 2;\nconst c = 3;\nconst d = 4;\n";
+  const registry = useMemo(() => makeInMemoryRegistry(path, content), []);
+  const [comments, setComments] = useState<FileComment[]>(() => [
+    {
+      id: "c1",
+      workstream_id: "ws-1",
+      absolute_path: path,
+      anchor_line_start: 2,
+      anchor_line_end: 2,
+      anchor_text: "const b = 2;",
+      body_md: "Prefer a clearer name than `b`.",
+      author: "reviewer",
+      origin_type: "user",
+      origin_pr_id: null,
+      origin_comment_id: null,
+      origin_thread_id: null,
+      origin_parent_id: null,
+      origin_url: null,
+      status: "active",
+      created_at: nowIso(),
+      updated_at: nowIso(),
+    },
+  ]);
+
+  return (
+    <div data-testid="harness-case" data-case="comment-zone" style={full}>
+      <FileEditorView
+        path={path}
+        registry={registry}
+        showHeader={false}
+        commentsEnabled
+        comments={comments}
+        onBack={() => {}}
+        onAddComment={() => Promise.resolve()}
+        onUpdateComment={(id, bodyMd) => {
+          setComments((cs) => cs.map((c) => (c.id === id ? { ...c, body_md: bodyMd } : c)));
+          return Promise.resolve();
+        }}
+        onDeleteComment={(id) => {
+          setComments((cs) => cs.filter((c) => c.id !== id));
+          return Promise.resolve();
+        }}
+      />
+    </div>
+  );
+};
+
+/**
+ * Case: Code Review thread zone. A `CodeReviewTile` with an active working-tree
+ * review + one reviewer comment on line 2, so its inline thread view zone
+ * renders the **Resolve** button. Clicking Resolve must flip the thread status
+ * to "Resolved" (the state change the probe asserts).
+ */
+const ReviewThreadCase: FC = () => {
+  const backend = useMemo(() => {
+    const b = new MemoryBackend();
+    b.seedBoundSession("ws-1", "sess-1");
+    b.seedReviewDiff([{ path: "src/example.ts", status: "M" }]);
+    b.seedReviewDiffSides("src/example.ts", {
+      before: "const a = 1;\nconst old = 2;\nconst c = 3;\n",
+      after: "const a = 1;\nconst renamed = 2;\nconst c = 3;\n",
+    });
+    return b;
+  }, []);
+  const [ready, setReady] = useState(false);
+  const seededRef = useRef(false);
+
+  useEffect(() => {
+    if (seededRef.current) return;
+    seededRef.current = true;
+    void (async () => {
+      const r = await backend.createReview("ws-1", "working_tree", null, null);
+      await backend.addReviewComment(
+        "ws-1",
+        r.id,
+        "src/example.ts",
+        2,
+        "new",
+        "const renamed = 2;",
+        null,
+        "Please pick a clearer name.",
+      );
+      setReady(true);
+    })();
+  }, [backend]);
+
+  if (!ready) return <div data-testid="harness-loading">seeding…</div>;
+  return (
+    <div data-testid="harness-case" data-case="review-thread" style={full}>
+      <BackendProvider backend={backend}>
+        <CodeReviewTile tileId="t1" isFocused workstreamId="ws-1" workstreamDir="C:/repo" />
+      </BackendProvider>
+    </div>
+  );
+};
+
+export interface HarnessCase {
+  title: string;
+  Component: FC;
+}
+
+export const harnessCases: Record<string, HarnessCase> = {
+  "comment-zone": {
+    title: "Repo Explorer file-comment zone (Edit/Delete buttons)",
+    Component: CommentZoneCase,
+  },
+  "review-thread": {
+    title: "Code Review thread zone (Resolve/Reopen buttons)",
+    Component: ReviewThreadCase,
+  },
+};

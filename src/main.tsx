@@ -25,10 +25,25 @@ if (isE2E && typeof window !== "undefined") {
   (window as unknown as { __WS_BACKEND__?: unknown }).__WS_BACKEND__ = backend;
 }
 
-ReactDOM.createRoot(document.getElementById("root")!).render(
-  <React.StrictMode>
-    <BackendProvider backend={backend}>
-      <App />
-    </BackendProvider>
-  </React.StrictMode>
-);
+// Dev/E2E-only component harness: `?harness=<caseId>` mounts a single component
+// under test in isolation (real Monaco) for fast, reliable UI-bug repro. The
+// dynamic import keeps harness code out of the production static graph.
+const harnessEnabled = isE2E || import.meta.env.DEV;
+const harnessParam =
+  typeof window !== "undefined" && new URLSearchParams(window.location.search).has("harness");
+
+if (harnessEnabled && harnessParam) {
+  const { HarnessRoot } = await import("./harness/HarnessRoot");
+  // No StrictMode here: the harness mounts real Monaco editors, and StrictMode's
+  // intentional double-mount races the async editor-creation/dispose lifecycle
+  // (the point of the harness is a faithful single mount of the component).
+  ReactDOM.createRoot(document.getElementById("root")!).render(<HarnessRoot />);
+} else {
+  ReactDOM.createRoot(document.getElementById("root")!).render(
+    <React.StrictMode>
+      <BackendProvider backend={backend}>
+        <App />
+      </BackendProvider>
+    </React.StrictMode>,
+  );
+}
