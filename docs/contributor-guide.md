@@ -20,6 +20,7 @@ cargo tauri build    # Production build (CDP disabled — never shipped)
 npm test             # Unit tests (vitest)
 npm run test:coverage  # Unit tests + 90% coverage gate
 npm run test:e2e     # Playwright E2E tests (Vite dev server + MemoryBackend)
+npm run harness -- <case>             # Reproduce/verify a real-Monaco UI bug in isolation
 npx tsc --noEmit     # Type check
 
 npm run lint                          # ESLint over src/
@@ -54,6 +55,27 @@ configure per-test `invoke()` handlers through
 `window.__WS_INVOKE_HANDLERS__`. Useful for validating multi-step UI flows
 (workstream creation, session linking, etc.) without needing the real Tauri
 runtime. See `e2e/tests/ws-create.spec.ts` for the canonical example.
+
+## Component harness (real-Monaco UI bugs)
+
+jsdom/Vitest mocks Monaco and has no layout/z-index/pointer-events, so a class
+of bugs is invisible to unit tests (e.g. buttons inside Monaco **view zones**
+being unclickable because the text layer paints on top). The **component
+harness** reproduces these against real Monaco, fast, without driving the whole
+app:
+
+```
+npm run harness              # run all cases
+npm run harness -- <case>    # e.g. comment-zone | review-thread
+```
+
+`?harness=<case>` (dev/E2E-only, guarded in `src/main.tsx`) mounts a single
+component with seeded data from the `src/harness/cases.tsx` registry.
+`scripts/harness.mjs` reuses/cold-starts the `dev:e2e` server, then proves each
+target button is **actually clickable** (a `elementFromPoint` hit-test plus a
+real click that must cause a state change), screenshotting to `.dev/harness/`.
+Durable cases graduate to `e2e/tests/comment-interactivity.spec.ts` (CI). See
+the `ui-harness` skill in `.github/skills/`.
 
 ## Per-feature visual validation
 

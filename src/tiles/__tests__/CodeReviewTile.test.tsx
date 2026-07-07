@@ -1,3 +1,7 @@
+// NOTE: jsdom + mocked Monaco → logic/state coverage only. The inline thread
+// view-zone buttons being *actually clickable* (not occluded by Monaco's text
+// layer) is covered by the Playwright harness — `npm run harness -- review-thread`
+// and e2e/tests/comment-interactivity.spec.ts — NOT here.
 import { render, screen, waitFor, fireEvent, cleanup, act } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useRef } from "react";

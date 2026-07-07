@@ -1,3 +1,8 @@
+// NOTE: these tests run in jsdom with Monaco mocked, so they cover logic/state
+// only. Real-Monaco interactivity of inline comment view zones (buttons being
+// clickable, not occluded by the text layer) is covered by the Playwright
+// harness — `npm run harness -- comment-zone` and
+// e2e/tests/comment-interactivity.spec.ts — NOT here.
 import { act, fireEvent, render, screen, waitFor, cleanup } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
