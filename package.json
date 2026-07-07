@@ -24,6 +24,7 @@
     "discipline-audit": "node scripts/discipline-audit.mjs",
     "diff-grok:smoke": "node scripts/diff-grok-smoke.mjs",
     "code-review:smoke": "node scripts/code-review-smoke.mjs",
+    "harness": "node scripts/harness.mjs",
     "db-model": "node scripts/gen-db-model.mjs",
     "db-model:check": "node scripts/gen-db-model.mjs --check",
     "hooks:install": "node scripts/install-hooks.mjs",
