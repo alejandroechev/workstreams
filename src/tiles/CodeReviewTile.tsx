@@ -12,6 +12,7 @@ import { useBackend } from "../backend/context";
 import { detectLanguage } from "../domain/tile-config";
 import { fileBufferRegistry } from "../files/FileBufferRegistry";
 import { GITHUB_DARK_DIFF_THEME, defineGithubDiffTheme } from "../ui/monaco-diff-theme";
+import { INTERACTIVE_ZONES_CLASS, markInteractiveZoneNode } from "../ui/interactive-zones";
 import type { Review, ReviewComment, ChangedFile, DiffSource } from "../domain/code-review";
 import {
   groupThreads,
@@ -100,7 +101,7 @@ export default function CodeReviewTile({ workstreamId, workstreamDir, isFocused 
   /** Imperatively render a comment thread (reviewer + agent replies + resolve). */
   function renderThreadZone(node: HTMLDivElement, ts: CommentThread[], reviewOpen: boolean): void {
     node.innerHTML = "";
-    node.style.pointerEvents = "auto";
+    markInteractiveZoneNode(node);
     node.style.cssText +=
       ";background:#181825;border-left:3px solid #89b4fa;padding:6px 10px;color:#cdd6f4;font-size:12px;font-family:'Cascadia Code','Consolas',monospace;overflow:auto";
     for (const t of ts) {
@@ -534,7 +535,7 @@ export default function CodeReviewTile({ workstreamId, workstreamDir, isFocused 
                     </button>
                   )}
                 </div>
-                <div className="interactive-zones" style={{ flex: 1, minHeight: 0, position: "relative" }}>
+                <div className={INTERACTIVE_ZONES_CLASS} style={{ flex: 1, minHeight: 0, position: "relative" }}>
                   <DiffEditor
                     key={selectedFile}
                     height="100%"

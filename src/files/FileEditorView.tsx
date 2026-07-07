@@ -20,6 +20,7 @@ import {
 } from "./FileBufferRegistry";
 import { classifyDangerousPath, type DangerHit } from "./dangerousPaths";
 import { ZoomableImage } from "../ui/components/ZoomableImage";
+import { INTERACTIVE_ZONES_CLASS, markInteractiveZoneNode } from "../ui/interactive-zones";
 import { MarkdownView } from "../ui/MarkdownView";
 import { SlideDeck } from "../ui/components/SlideDeck";
 import { loadMonaco } from "./loadMonaco";
@@ -271,8 +272,9 @@ export function FileEditorView({
     node.innerHTML = "";
     // Monaco's view-zone overlay defaults to pointer-events: none for the
     // surrounding layer; explicitly opt the comment dom into receiving
-    // hover + click so the buttons are actually interactive.
-    node.style.pointerEvents = "auto";
+    // hover + click so the buttons are actually interactive (paired with the
+    // INTERACTIVE_ZONES_CLASS on the editor host — see interactive-zones.ts).
+    markInteractiveZoneNode(node);
     const header = document.createElement("div");
     header.style.display = "flex";
     header.style.alignItems = "center";
@@ -922,7 +924,7 @@ export function FileEditorView({
         <div
           ref={editorHostRef}
           data-testid="file-editor-monaco"
-          className={commentsEnabled ? "interactive-zones" : undefined}
+          className={commentsEnabled ? INTERACTIVE_ZONES_CLASS : undefined}
           style={{ height: "100%", width: "100%" }}
         />
         {commentsEnabled && onAddComment && selectionAnchor && !composer ? (
