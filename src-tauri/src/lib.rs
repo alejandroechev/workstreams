@@ -4549,6 +4549,12 @@ pub fn run() {
             code_review::list_review_comments,
             code_review::set_review_comment_status,
             code_review::complete_code_review,
+            code_review::file_comments::list_session_file_comments,
+            code_review::file_comments::add_session_file_comment,
+            code_review::file_comments::reply_session_file_comment,
+            code_review::file_comments::update_session_file_comment,
+            code_review::file_comments::set_session_file_comment_status,
+            code_review::file_comments::delete_session_file_comment,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

@@ -15,6 +15,7 @@
 // them arrive in the review-store-backend phase.
 #![allow(dead_code)]
 
+pub mod file_comments;
 pub mod git;
 
 use crate::AppState;
