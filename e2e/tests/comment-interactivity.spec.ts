@@ -45,6 +45,31 @@ test.describe("inline comment interactivity", () => {
     await expect(page.locator('[data-testid="comment-composer"]')).toBeVisible();
   });
 
+  test("Repo Explorer file-comment renders the agent reply and Resolve flips the status", async ({ page }) => {
+    await openCase(page, "comment-zone");
+
+    // The threaded agent reply renders inside the same view zone as the note.
+    await expect(page.locator('[data-testid="comment-entry-a1"]')).toBeVisible();
+    await expect(page.locator('[data-testid="comment-entry-a1"]')).toContainText("Renamed");
+
+    // Resolve is the reviewer's own note action; clicking it must not be
+    // occluded and must flip the reviewer note's status to resolved (which
+    // swaps the button to Reopen).
+    const resolve = page.locator('[data-testid="comment-resolve-c1"]');
+    await expect(resolve).toBeVisible();
+    const covered = await page.evaluate(() => {
+      const el = document.querySelector('[data-testid="comment-resolve-c1"]');
+      if (!el) return true;
+      const r = el.getBoundingClientRect();
+      const top = document.elementFromPoint(Math.round(r.left + r.width / 2), Math.round(r.top + r.height / 2));
+      return !(top && (el === top || el.contains(top) || top.contains(el)));
+    });
+    expect(covered, "Resolve button is occluded by a Monaco layer").toBe(false);
+
+    await resolve.click({ timeout: 5_000 });
+    await expect(page.locator('[data-testid="comment-reopen-c1"]')).toBeVisible();
+  });
+
   test("Code Review thread Resolve button is clickable and flips the status", async ({ page }) => {
     await openCase(page, "review-thread");
 

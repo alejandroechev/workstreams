@@ -80,6 +80,14 @@ export default function CodeReviewTile({ workstreamId, workstreamDir, isFocused:
 
   const modifiedEditorRef = useRef<MonacoNs.editor.IStandaloneCodeEditor | null>(null);
   const zoneIdsRef = useRef<string[]>([]);
+  // Bumped once when the diff editor first mounts so the view-zone effect
+  // re-runs after the editor ref is available. Without this the effect can run
+  // while the editor is still null and never render the comment zones. (The
+  // now-removed 1.5s poll previously masked this by forcing re-renders.) The
+  // bump is guarded + deferred so it never fires during the DiffEditor's render
+  // (which would loop): file switches are already covered by the effect deps.
+  const [editorReadyToken, setEditorReadyToken] = useState(0);
+  const editorReadyBumpedRef = useRef(false);
   // Latest setStatus, held in a ref so imperative view-zone buttons call fresh.
   const setStatusRef = useRef<(id: string, status: string) => void>(() => {});
   const busyRef = useRef(false);
@@ -287,7 +295,7 @@ export default function CodeReviewTile({ workstreamId, workstreamDir, isFocused:
       }
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [threads, selectedFile, sides]);
+  }, [threads, selectedFile, sides, editorReadyToken]);
 
   const absPath = useCallback(
     (file: string) => `${dir.replace(/[\\/]+$/, "")}/${file}`,
@@ -328,6 +336,12 @@ export default function CodeReviewTile({ workstreamId, workstreamDir, isFocused:
     (editor: MonacoNs.editor.IStandaloneDiffEditor, monaco: typeof MonacoNs) => {
       const modified = editor.getModifiedEditor();
       modifiedEditorRef.current = modified;
+      // Signal (once, deferred) that the editor ref is ready so the view-zone
+      // effect re-runs. Deferred to avoid a setState during DiffEditor render.
+      if (!editorReadyBumpedRef.current) {
+        editorReadyBumpedRef.current = true;
+        queueMicrotask(() => setEditorReadyToken((t) => t + 1));
+      }
       modified.onDidChangeCursorSelection((e) => {
         const file = selectedFileRef.current;
         if (!file) return;
