@@ -2,7 +2,16 @@
 
 ## Status
 
-Accepted (MVP scope — single tool `create_diff_review` end-to-end)
+**Retired (2026-07-08).** The `workstreams-mcp` bridge server has been removed
+entirely. Its only remaining tool, `import_pr_comments` (ADO PR-comment import),
+was dropped by the unify-commenting change, and the `create_diff_review` tool
+went with the Diff Review tile (ADR 007, retired). Both surviving comment
+features — the Code Review tile (ADR 014) and inline file comments (ADR 009) —
+are **MCP-free**: the agent reads and writes the reviewer↔agent tables directly
+in its own session.db using the built-in `sql` tool, guided by the `code-review`
+and `file-comments` companion skills. This ADR is retained for historical
+context only; the MCP server and its `~/.copilot/mcp-servers/workstreams-mcp/`
+install are gone.
 
 ## Context
 
