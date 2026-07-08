@@ -113,10 +113,12 @@ test.describe("Code Review tile", () => {
       b.simulateAgentReply(review.id, c.id, "Done — removed it.");
     });
 
-    // The reviewer thread renders inline; with polling removed the agent reply
-    // only appears after clicking the manual Sync button.
-    await expect(page.locator('[data-testid="thread-status"]')).toBeVisible({ timeout: 8000 });
+    // Both the reviewer thread and the agent reply were written to the store
+    // out-of-band; with polling removed, neither shows until the reviewer
+    // clicks the manual Sync button.
+    await expect(page.locator('[data-testid="thread-status"]')).toBeHidden();
     await page.locator('[data-testid="sync-review"]').click();
+    await expect(page.locator('[data-testid="thread-status"]')).toBeVisible({ timeout: 8000 });
     await expect(page.locator('[data-testid="thread-reply"]')).toBeVisible({ timeout: 8000 });
 
     // Reviewer resolves the thread, then completes the review.
