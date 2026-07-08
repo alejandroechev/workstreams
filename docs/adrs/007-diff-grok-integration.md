@@ -1,10 +1,16 @@
 # ADR 007: diff-grok review skill + Diff Review tile
 
 ## Status
-Accepted.
+**Retired (2026-07-08).** The Diff Review tile, its `diff_*` tables, the 13
+Tauri commands, the `create_diff_review` MCP tool, and the `diff-grok` skill were
+removed entirely (unused in practice). Superseded in spirit by the Code Review
+tile (ADR 014), which covers local diff review with a session-DB-backed,
+MCP-free reviewer↔agent loop. This ADR is retained for historical context only;
+the code and DB tables are gone (existing `diff_*` tables are left in place
+non-destructively on already-migrated DBs but are no longer created or read).
 
 ## Date
-2026-05-26
+2026-05-26 (retired 2026-07-08)
 
 ## Context
 

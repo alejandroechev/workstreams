@@ -10,7 +10,6 @@ afterEach(() => _setFeatureFlagOverrideForTests(null));
 
 describe("feature-flags", () => {
   it("exposes a stable id list", () => {
-    expect(FEATURE_IDS).toContain("diff-review");
     expect(FEATURE_IDS).toContain("plan-tile");
   });
 
@@ -27,13 +26,12 @@ describe("feature-flags", () => {
 
   it("test override flips every flag to true", () => {
     _setFeatureFlagOverrideForTests(true);
-    expect(isFeatureEnabled("diff-review")).toBe(true);
     expect(isFeatureEnabled("plan-tile")).toBe(true);
   });
 
   it("test override flips every flag to false explicitly", () => {
     _setFeatureFlagOverrideForTests(false);
-    expect(isFeatureEnabled("diff-review")).toBe(false);
+    expect(isFeatureEnabled("plan-tile")).toBe(false);
   });
 
   it("featureDescriptor returns label + requires for every id", () => {

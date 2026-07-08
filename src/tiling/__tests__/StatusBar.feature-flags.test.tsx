@@ -22,7 +22,7 @@ function commonProps() {
     onAddSessionMeta: vi.fn(),
     onAddWorkbench: vi.fn(),
     onAddPlan: vi.fn(),
-    onAddDiffReview: vi.fn(),
+    onAddCodeReview: vi.fn(),
     onToggleFullscreen: vi.fn(),
     onToggleSideBySide: vi.fn(),
     onOpenSettings: vi.fn(),
@@ -34,22 +34,22 @@ function openAddTileMenu() {
 }
 
 describe("StatusBar feature-flag gating", () => {
-  it("hides Plan + Diff Review menu entries when their flags are off", () => {
+  it("hides the Plan menu entry when its flag is off", () => {
     _setFeatureFlagOverrideForTests(false);
     render(<StatusBar {...commonProps()} />);
     openAddTileMenu();
     expect(screen.queryByTestId("add-tile-item-plan")).toBeNull();
-    expect(screen.queryByTestId("add-tile-item-diff-review")).toBeNull();
     // Sanity: other entries still render.
     expect(screen.getByTestId("add-tile-item-explorer")).toBeTruthy();
     expect(screen.getByTestId("add-tile-item-session")).toBeTruthy();
+    // Code Review is not flag-gated.
+    expect(screen.getByTestId("add-tile-item-code-review")).toBeTruthy();
   });
 
-  it("shows Plan + Diff Review menu entries when the flag is on", () => {
+  it("shows the Plan menu entry when the flag is on", () => {
     _setFeatureFlagOverrideForTests(true);
     render(<StatusBar {...commonProps()} />);
     openAddTileMenu();
     expect(screen.getByTestId("add-tile-item-plan")).toBeTruthy();
-    expect(screen.getByTestId("add-tile-item-diff-review")).toBeTruthy();
   });
 });

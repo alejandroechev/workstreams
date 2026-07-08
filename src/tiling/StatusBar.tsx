@@ -20,7 +20,6 @@ interface Props {
   onAddSessionMeta?: () => void;
   onAddWorkbench?: () => void;
   onAddPlan?: () => void;
-  onAddDiffReview?: () => void;
   onAddCodeReview?: () => void;
   onToggleFullscreen?: () => void;
   onToggleSideBySide?: () => void;
@@ -57,13 +56,12 @@ export default function StatusBar({
   onAddSessionMeta,
   onAddWorkbench,
   onAddPlan,
-  onAddDiffReview,
   onAddCodeReview,
   onToggleFullscreen,
   onToggleSideBySide,
   onOpenSettings,
 }: Props) {
-  const rawItems: Array<{ key: string; label: string; icon: "session" | "terminal" | "folder" | "info" | "beaker" | "plan" | "bug" | "code"; shortcut?: string; onSelect?: () => void; gated?: boolean }> = [
+  const rawItems: Array<{ key: string; label: string; icon: "session" | "terminal" | "folder" | "info" | "beaker" | "plan" | "code"; shortcut?: string; onSelect?: () => void; gated?: boolean }> = [
     { key: "session", label: "Copilot Session", icon: "session", shortcut: "Alt+C", onSelect: onAddSession },
     { key: "terminal", label: "PowerShell", icon: "terminal", shortcut: "Alt+T", onSelect: onAddTerminal },
     { key: "wsl", label: "WSL Terminal", icon: "terminal", shortcut: "Alt+W", onSelect: onAddWslTerminal },
@@ -71,7 +69,6 @@ export default function StatusBar({
     { key: "meta", label: "Session Meta", icon: "info", shortcut: "Alt+M", onSelect: onAddSessionMeta },
     { key: "workbench", label: "Workbench", icon: "beaker", shortcut: "Alt+B", onSelect: onAddWorkbench },
     { key: "plan", label: "Plan", icon: "plan", shortcut: "Alt+P", onSelect: onAddPlan, gated: !isFeatureEnabled("plan-tile") },
-    { key: "diff-review", label: "Diff Review", icon: "bug", shortcut: "Alt+G", onSelect: onAddDiffReview, gated: !isFeatureEnabled("diff-review") },
     { key: "code-review", label: "Code Review", icon: "code", shortcut: "Alt+A", onSelect: onAddCodeReview },
   ];
   const menuItems = rawItems

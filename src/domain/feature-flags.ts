@@ -12,9 +12,9 @@
  * we keep one source of truth.
  */
 
-export type FeatureId = "diff-review" | "plan-tile";
+export type FeatureId = "plan-tile";
 
-export const FEATURE_IDS: readonly FeatureId[] = ["diff-review", "plan-tile"] as const;
+export const FEATURE_IDS: readonly FeatureId[] = ["plan-tile"] as const;
 
 interface FeatureDescriptor {
   id: FeatureId;
@@ -25,12 +25,6 @@ interface FeatureDescriptor {
 }
 
 const FEATURES: Record<FeatureId, FeatureDescriptor> = {
-  "diff-review": {
-    id: "diff-review",
-    label: "Diff Review",
-    requires:
-      "Requires the user-level diff-grok skill (planning + MCP bridge). Not enabled in this build.",
-  },
   "plan-tile": {
     id: "plan-tile",
     label: "Plan",

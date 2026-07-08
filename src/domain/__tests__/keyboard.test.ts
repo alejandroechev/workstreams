@@ -68,7 +68,6 @@ describe("parseKeyAction", () => {
     expect(parseKeyAction({ key: "c", ...alt })).toEqual({ type: "addTile", tileType: "copilot_session" });
     expect(parseKeyAction({ key: "r", ...alt })).toEqual({ type: "addTile", tileType: "file_explorer" });
     expect(parseKeyAction({ key: "p", ...alt })).toEqual({ type: "addTile", tileType: "plan" });
-    expect(parseKeyAction({ key: "g", ...alt })).toEqual({ type: "addTile", tileType: "diff_review" });
     expect(parseKeyAction({ key: "a", ...alt })).toEqual({ type: "addTile", tileType: "code_review" });
   });
 
@@ -90,7 +89,7 @@ describe("parseKeyAction", () => {
       editor: { getEditors: () => [{ hasTextFocus: () => true }] },
     } as never);
 
-    for (const key of ["c", "t", "w", "r", "m", "b", "p", "g", "a"]) {
+    for (const key of ["c", "t", "w", "r", "m", "b", "p", "a"]) {
       expect(parseKeyAction({ key, ...alt })).toBeNull();
     }
   });

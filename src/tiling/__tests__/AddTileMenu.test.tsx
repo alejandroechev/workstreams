@@ -35,16 +35,16 @@ describe("AddTileMenu", () => {
     expect(screen.queryByTestId("add-tile-menu")).toBeFalsy();
   });
 
-  it("renders and selects a Diff Review item", () => {
+  it("renders and selects an extra item", () => {
     const onSelect = vi.fn();
     const items = [
       ...makeItems(),
-      { key: "diff-review", label: "Diff Review", icon: "bug" as const, shortcut: "Alt+G", onSelect },
+      { key: "code-review", label: "Code Review", icon: "code" as const, shortcut: "Alt+A", onSelect },
     ];
 
     render(<AddTileMenu items={items} />);
     fireEvent.click(screen.getByTestId("add-tile-button"));
-    fireEvent.click(screen.getByTestId("add-tile-item-diff-review"));
+    fireEvent.click(screen.getByTestId("add-tile-item-code-review"));
 
     expect(onSelect).toHaveBeenCalledTimes(1);
     expect(screen.queryByTestId("add-tile-menu")).toBeFalsy();

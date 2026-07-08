@@ -6,7 +6,6 @@ import RepoExplorerTile from "../tiles/RepoExplorerTile";
 import SessionMetaTile from "../tiles/SessionMetaTile";
 import WorkbenchTile from "../tiles/WorkbenchTile";
 import PlanTile from "../tiles/PlanTile";
-import DiffReviewTile from "../tiles/DiffReviewTile";
 import CodeReviewTile from "../tiles/CodeReviewTile";
 import { isFeatureEnabled, featureDescriptor } from "../domain/feature-flags";
 
@@ -280,30 +279,6 @@ function TileWrapperImpl({
         );
       }
       break;
-    case "diff_review": {
-      if (!isFeatureEnabled("diff-review")) {
-        const d = featureDescriptor("diff-review");
-        content = <DisabledFeaturePlaceholder label={d.label} requires={d.requires} />;
-        break;
-      }
-      const cfg = JSON.parse(tile.config_json || "{}");
-      if (!cfg.reviewId) {
-        content = (
-          <div style={{ padding: 16, color: "#f38ba8" }}>
-            Diff Review tile missing reviewId in config.
-          </div>
-        );
-      } else {
-        content = (
-          <DiffReviewTile
-            tileId={tile.id}
-            isFocused={isFocused}
-            reviewId={cfg.reviewId}
-          />
-        );
-      }
-      break;
-    }
     case "code_review": {
       if (!workstreamId) {
         content = (

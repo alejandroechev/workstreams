@@ -2,16 +2,15 @@
 
 ## Status
 
-Accepted (2026-06-08).
+Accepted (2026-06-08). **Updated 2026-07-08:** the `diff-review` flag was
+removed when the Diff Review tile was retired (ADR 007). `plan-tile` is now the
+only flag. References to Diff Review below are historical.
 
 ## Context
 
 Some tiles depend on user-specific Copilot CLI infrastructure that is not part
 of the public release path:
 
-- **Diff Review tile** — relies on the user-level `diff-grok` skill (only
-  installed under `~/.copilot/skills/diff-grok/`), plus an MCP bridge that
-  speaks back to the Tauri app. Other users of the app don't have either.
 - **Plan tile** — reads the linked Copilot session's `plans` / `todos` /
   `todo_deps` tables, which are populated by the `discipline-guardian`
   extension (also user-level). Without that extension, the plan tab just

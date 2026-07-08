@@ -175,18 +175,6 @@ function createBackend(): Backend {
     completeSessionPlan: vi.fn(),
     watchSessionFeatures: vi.fn(),
     unwatchSessionFeatures: vi.fn(),
-    createDiffReview: vi.fn(),
-    listActiveDiffReviews: vi.fn(async () => []),
-    createOrFocusDiffReviewTile: vi.fn(),
-    setReviewPlan: vi.fn(),
-    getReview: vi.fn(),
-    listChunks: vi.fn(),
-    getChunkDetails: vi.fn(),
-    activateChunk: vi.fn(),
-    ackChunk: vi.fn(),
-    addComment: vi.fn(),
-    completeReview: vi.fn(),
-    detectDrift: vi.fn(),
     listFileComments: vi.fn().mockResolvedValue([]),
     addFileComment: vi.fn(),
     updateFileComment: vi.fn(),
@@ -346,75 +334,21 @@ describe("dirty file buffer close confirmations", () => {
   });
 });
 
-function makeReview(id: string, ref: string | null = null): import("../domain/diff-review").DiffReview {
-  return {
-    id,
-    workstream_id: "ws-1",
-    diff_source: "working_tree",
-    source_ref: ref,
-    status: "active",
-    created_at: now,
-    completed_at: null,
-    exported_path: null,
-  } as import("../domain/diff-review").DiffReview;
-}
-
 function makeTile(id: string, wsId = "ws-1"): Tile {
   return {
     id,
     workstream_id: wsId,
-    tile_type: "diff_review",
-    title: "Review",
+    tile_type: "terminal",
+    title: "Term",
     config_json: "{}",
     created_at: now,
     updated_at: now,
   } as Tile;
 }
 
-describe("diff-review tile-open paths", () => {
+describe("tile-created event paths", () => {
   beforeEach(() => {
     mocks.resetTileCreatedHandler();
-  });
-
-  it("Alt+G with 0 active reviews shows the inline hint banner", async () => {
-    const backend = createBackend();
-    (backend.listActiveDiffReviews as ReturnType<typeof vi.fn>).mockResolvedValue([]);
-    await renderApp(backend);
-    fireEvent.click(screen.getByText("One"));
-
-    fireEvent.keyDown(window, { key: "g", altKey: true });
-
-    expect(backend.listActiveDiffReviews).toHaveBeenCalledWith("ws-1");
-    await waitFor(() => expect(screen.getByTestId("no-active-review-hint")).toBeInTheDocument());
-    expect(backend.createOrFocusDiffReviewTile).not.toHaveBeenCalled();
-  });
-
-  it("Alt+G with 1 active review auto-opens via createOrFocusDiffReviewTile", async () => {
-    const backend = createBackend();
-    (backend.listActiveDiffReviews as ReturnType<typeof vi.fn>).mockResolvedValue([makeReview("r1")]);
-    (backend.createOrFocusDiffReviewTile as ReturnType<typeof vi.fn>).mockResolvedValue(makeTile("t1"));
-    await renderApp(backend);
-    fireEvent.click(screen.getByText("One"));
-
-    fireEvent.keyDown(window, { key: "g", altKey: true });
-
-    await waitFor(() =>
-      expect(backend.createOrFocusDiffReviewTile).toHaveBeenCalledWith("ws-1", "r1"),
-    );
-  });
-
-  it("Alt+G with >1 active reviews opens the picker modal", async () => {
-    const backend = createBackend();
-    (backend.listActiveDiffReviews as ReturnType<typeof vi.fn>).mockResolvedValue([
-      makeReview("r1"), makeReview("r2"),
-    ]);
-    await renderApp(backend);
-    fireEvent.click(screen.getByText("One"));
-
-    fireEvent.keyDown(window, { key: "g", altKey: true });
-
-    await waitFor(() => expect(screen.getByTestId("diff-review-picker-modal")).toBeInTheDocument());
-    expect(backend.createOrFocusDiffReviewTile).not.toHaveBeenCalled();
   });
 
   it("tile-created event upserts the tile in the matching workstream", async () => {

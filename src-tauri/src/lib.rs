@@ -1,6 +1,5 @@
 mod code_review;
 mod db;
-mod diff_review;
 mod file_comments;
 mod file_io;
 mod fs_watcher;
@@ -722,8 +721,8 @@ fn update_layout(
 // ── PTY Commands ───────────────────────────────────────────────────────
 
 /// Builds a HashMap of env vars to inject into PTY-spawned child processes
-/// so skills (notably diff-grok) can detect which workstream they belong to
-/// and connect back to the Tauri command bridge.
+/// so skills can detect which workstream they belong to and connect back to
+/// the Tauri command bridge.
 ///
 /// Looks up the workstream id from the tile via the DB. Returns None if the
 /// tile is not found — terminals can still spawn, the env var just won't
@@ -4535,19 +4534,6 @@ pub fn run() {
             // Filesystem watcher
             watch_directory,
             unwatch_directory,
-            // Diff Review (diff-grok)
-            diff_review::create_diff_review,
-            diff_review::set_review_plan,
-            diff_review::get_review,
-            diff_review::list_active_diff_reviews,
-            diff_review::create_or_focus_diff_review_tile,
-            diff_review::list_chunks,
-            diff_review::get_chunk_details,
-            diff_review::activate_chunk,
-            diff_review::ack_chunk,
-            diff_review::add_comment,
-            diff_review::complete_review,
-            diff_review::detect_drift,
             file_comments::list_file_comments,
             file_comments::add_file_comment,
             file_comments::update_file_comment,

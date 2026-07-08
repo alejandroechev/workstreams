@@ -1,13 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { Project, Workstream, Tile, TileType, WorkstreamLayout, CopilotConfigItem } from "../domain/types";
-import type {
-  ChunkInput,
-  ChunkWithDetails,
-  DiffComment,
-  DiffReview,
-  DiffSource,
-  DiffChunk,
-} from "../domain/diff-review";
 import type { FileComment, ImportedCommentInput, ImportSummary } from "../domain/file-comments";
 import type { Review, ReviewComment, ChangedFile, DiffSides } from "../domain/code-review";
 import type { Backend } from "./types";
@@ -253,54 +245,6 @@ export class TauriBackend implements Backend {
 
   async unwatchSessionFeatures(sessionId: string): Promise<void> {
     await invoke("unwatch_session_features", { sessionId });
-  }
-
-  async createDiffReview(workstreamId: string, diffSource: DiffSource, sourceRef: string | null): Promise<DiffReview> {
-    return invoke<DiffReview>("create_diff_review", { workstreamId, diffSource, sourceRef });
-  }
-
-  async listActiveDiffReviews(workstreamId: string): Promise<DiffReview[]> {
-    return invoke<DiffReview[]>("list_active_diff_reviews", { workstreamId });
-  }
-
-  async createOrFocusDiffReviewTile(workstreamId: string, reviewId: string): Promise<Tile> {
-    return invoke<Tile>("create_or_focus_diff_review_tile", { workstreamId, reviewId });
-  }
-
-  async setReviewPlan(reviewId: string, planJson: string, chunks: ChunkInput[]): Promise<void> {
-    await invoke("set_review_plan", { reviewId, planJson, chunks });
-  }
-
-  async getReview(reviewId: string): Promise<DiffReview> {
-    return invoke<DiffReview>("get_review", { reviewId });
-  }
-
-  async listChunks(reviewId: string): Promise<DiffChunk[]> {
-    return invoke<DiffChunk[]>("list_chunks", { reviewId });
-  }
-
-  async getChunkDetails(chunkId: string): Promise<ChunkWithDetails> {
-    return invoke<ChunkWithDetails>("get_chunk_details", { chunkId });
-  }
-
-  async activateChunk(reviewId: string, chunkId: string): Promise<void> {
-    await invoke("activate_chunk", { reviewId, chunkId });
-  }
-
-  async ackChunk(chunkId: string, state: "approved" | "commented" | "seen"): Promise<void> {
-    await invoke("ack_chunk", { chunkId, state });
-  }
-
-  async addComment(chunkId: string, anchorFile: string, anchorLineStart: number, anchorLineEnd: number, text: string): Promise<DiffComment> {
-    return invoke<DiffComment>("add_comment", { chunkId, anchorFile, anchorLineStart, anchorLineEnd, text });
-  }
-
-  async completeReview(reviewId: string): Promise<{ exported_path: string }> {
-    return invoke<{ exported_path: string }>("complete_review", { reviewId });
-  }
-
-  async detectDrift(reviewId: string): Promise<string[]> {
-    return invoke<string[]>("detect_drift", { reviewId });
   }
 
   async listFileComments(workstreamId: string, absolutePath: string): Promise<FileComment[]> {

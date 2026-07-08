@@ -16,7 +16,6 @@ import TileGrid from "./tiling/TileGrid";
 import StatusBar from "./tiling/StatusBar";
 import SessionPicker, { type CopilotSession } from "./tiles/SessionPicker";
 import SettingsModal from "./ui/SettingsModal";
-import DiffReviewPickerModal from "./ui/components/DiffReviewPickerModal";
 import ConfirmCloseDialog from "./ui/components/ConfirmCloseDialog";
 import { navigateFocus } from "./domain/layout";
 import { toggleFullscreenForTile as toggleFullscreenForTileState, shiftSelectTile as shiftSelectTileState } from "./domain/tile-layout-mode";
@@ -36,7 +35,6 @@ import { workbenchStore } from "./domain/workbench-store-instance";
 import { setWorkbenchStoreForDispatcher } from "./domain/workbench-events";
 import { useBackend } from "./backend/context";
 import type { Project, Workstream, Tile, TileType } from "./domain/types";
-import type { DiffReview } from "./domain/diff-review";
 
 // Wire the persistent Workbench store into the cross-tile dispatcher
 // so right-clicks from anywhere persist to the workstream's setting
@@ -196,9 +194,8 @@ export default function App() {
   }, [updateActiveState]);
 
   // Idempotently insert/replace a tile in its workstream's state, deduped by id.
-  // Used by addTile, the tile-created event listener, the CDP seed bridge, and
-  // the diff-review path B handler — single source of truth so all entry points
-  // converge on the same state shape.
+  // Used by addTile and the tile-created event listener — single source of truth
+  // so all entry points converge on the same state shape.
   const upsertTileLocally = useCallback((tile: Tile) => {
     setWsStates((prev) => {
       const wsId = tile.workstream_id;
@@ -232,9 +229,6 @@ export default function App() {
    *  id, driven by id-keyed `worktree-progress` events through the reducer. */
   const [provisioning, setProvisioning] = useState<Map<string, ProvisioningState>>(new Map());
   const [showSettings, setShowSettings] = useState(false);
-  const [showDiffReviewPicker, setShowDiffReviewPicker] = useState(false);
-  const [diffReviewPickerReviews, setDiffReviewPickerReviews] = useState<DiffReview[]>([]);
-  const [noActiveReviewHint, setNoActiveReviewHint] = useState(false);
   // Track which tile IDs have active PTYs to avoid double-spawning
   const spawnedPtys = useRef<Set<string>>(new Set());
   // Tile ids whose PTY exit was triggered by our own restart code path.
@@ -1038,7 +1032,6 @@ export default function App() {
       session_meta: "Meta-session",
       workbench: "Bench",
       plan: "Plan",
-      diff_review: "Review",
       code_review: "Code Review",
     };
     // Count by sub-shell (PowerShell vs WSL) so each gets its own
@@ -1176,115 +1169,9 @@ export default function App() {
     setFocusedIndex(tileOrder.length);
   }, [activeWsId, workstreams, tileOrder.length, backend]);
 
-  // Debug bridge for CDP visual probes (Phase 4 of ADR 007). Exposes a
-  // minimal helper that seeds a diff review + tile end-to-end so the visual
-  // probe can render the Diff Review tile without driving the skill terminal.
-  // Only enabled when window flag is set by the test harness.
-  useEffect(() => {
-    const w = window as unknown as {
-      __wsSeedDiffReviewTile?: (input?: { workstreamId?: string }) => Promise<{ reviewId: string; tileId: string }>;
-      __wsCloseDiffReviewTile?: (tileId: string) => Promise<void>;
-    };
-    w.__wsSeedDiffReviewTile = async (input) => {
-      const wsId = input?.workstreamId ?? activeWsId;
-      if (!wsId) throw new Error("no active workstream");
-      const review = await backend.createDiffReview(wsId, "working_tree", null);
-      await backend.setReviewPlan(review.id, JSON.stringify({ source: "cdp-seed" }), [
-        {
-          title: "Add retry budget to JWT verification",
-          summary: "Wraps verifyJwt() in a 3-attempt retry with exponential backoff.",
-          is_trivial: false,
-          question_text: "Why is the retry budget hardcoded to 3?",
-          question_style: "socratic",
-          hunks: [
-            {
-              file_path: "src/auth/jwt.ts",
-              old_start: 10,
-              old_lines: 4,
-              new_start: 10,
-              new_lines: 12,
-              patch_text:
-                "@@ -10,4 +10,12 @@\n-  return verifyJwt(token);\n+  for (let i = 0; i < 3; i++) {\n+    try { return verifyJwt(token); }\n+    catch (e) { if (i === 2) throw e; await sleep(2 ** i * 100); }\n+  }\n",
-            },
-          ],
-        },
-        {
-          title: "Bump @types/node to 20.11.0",
-          summary: null,
-          is_trivial: true,
-          question_text: null,
-          question_style: null,
-          hunks: [
-            {
-              file_path: "package.json",
-              old_start: 22,
-              old_lines: 1,
-              new_start: 22,
-              new_lines: 1,
-              patch_text: '@@ -22,1 +22,1 @@\n-    "@types/node": "20.10.0",\n+    "@types/node": "20.11.0",\n',
-            },
-          ],
-        },
-      ]);
-      const config = JSON.stringify({ reviewId: review.id });
-      const tile = await backend.createTile(wsId, "diff_review", "CDP Review", config);
-      upsertTileLocally(tile);
-      // Persist order only if newly appended.
-      setWsStates((prev) => {
-        const state = prev.get(wsId);
-        if (state) {
-          backend.updateLayout(wsId, { tile_order_json: JSON.stringify(state.tileOrder) });
-        }
-        return prev;
-      });
-      const chunks = await backend.listChunks(review.id);
-      if (chunks[0]) await backend.activateChunk(review.id, chunks[0].id);
-      return { reviewId: review.id, tileId: tile.id };
-    };
-    w.__wsCloseDiffReviewTile = async (tileId) => {
-      await closeTile(tileId);
-    };
-    return () => { delete w.__wsSeedDiffReviewTile; delete w.__wsCloseDiffReviewTile; };
-  }, [activeWsId, backend, closeTile, upsertTileLocally]);
-
-  // Diff Review tile-open handler (path B + skill auto-open fallback).
-  // 0 active reviews → inline hint banner (auto-clears).
-  // 1 active review → open/focus it via idempotent backend command.
-  // >1 active reviews → show picker modal so user disambiguates.
-  const addTileDiffReview = useCallback(async () => {
-    if (!activeWsId) return;
-    let reviews: DiffReview[];
-    try {
-      reviews = await backend.listActiveDiffReviews(activeWsId);
-    } catch {
-      reviews = [];
-    }
-    if (reviews.length === 0) {
-      setNoActiveReviewHint(true);
-      window.setTimeout(() => setNoActiveReviewHint(false), 6000);
-      return;
-    }
-    if (reviews.length === 1) {
-      const tile = await backend.createOrFocusDiffReviewTile(activeWsId, reviews[0].id);
-      const existing = wsStates.get(activeWsId);
-      const wasAlreadyThere = !!existing?.tileOrder.includes(tile.id);
-      upsertTileLocally(tile);
-      if (!wasAlreadyThere) {
-        const newOrder = [...(existing?.tileOrder ?? []), tile.id];
-        backend.updateLayout(activeWsId, { tile_order_json: JSON.stringify(newOrder) });
-        setFocusedIndex(newOrder.length - 1);
-      } else {
-        setFocusedIndex(existing!.tileOrder.indexOf(tile.id));
-      }
-      return;
-    }
-    setDiffReviewPickerReviews(reviews);
-    setShowDiffReviewPicker(true);
-  }, [activeWsId, backend, upsertTileLocally, wsStates, setFocusedIndex]);
-
   // Listen for tile-created events emitted by the Rust backend (e.g. when
-  // `create_or_focus_diff_review_tile` or `create_tile` is invoked from the
-  // skill or any other source). Idempotent via upsertTileLocally.
+  // `create_tile` is invoked from a skill or any other source). Idempotent via
+  // upsertTileLocally.
   useEffect(() => {
     const unsubPromise = listen<Tile>("tile-created", (event) => {
       upsertTileLocally(event.payload);
@@ -1371,8 +1258,6 @@ export default function App() {
           e.preventDefault();
           if (action.tileType === "copilot_session") {
             setShowSessionPicker(true);
-          } else if (action.tileType === "diff_review") {
-            addTileDiffReview();
           } else {
             addTile(action.tileType, action.extraConfig);
           }
@@ -1586,7 +1471,6 @@ export default function App() {
           onAddSessionMeta={() => addTile("session_meta")}
           onAddWorkbench={() => addTile("workbench")}
           onAddPlan={() => addTile("plan")}
-          onAddDiffReview={() => addTileDiffReview()}
           onAddCodeReview={() => addTile("code_review")}
           onOpenSettings={() => setShowSettings(true)}
           onToggleFullscreen={() => {
@@ -1605,50 +1489,6 @@ export default function App() {
         onConfirm={handleConfirmClose}
         onCancel={handleCancelClose}
       />
-
-      {showDiffReviewPicker && (
-        <DiffReviewPickerModal
-          reviews={diffReviewPickerReviews}
-          onPick={async (reviewId) => {
-            setShowDiffReviewPicker(false);
-            if (!activeWsId) return;
-            const tile = await backend.createOrFocusDiffReviewTile(activeWsId, reviewId);
-            const existing = wsStates.get(activeWsId);
-            const wasAlreadyThere = !!existing?.tileOrder.includes(tile.id);
-            upsertTileLocally(tile);
-            if (!wasAlreadyThere) {
-              const newOrder = [...(existing?.tileOrder ?? []), tile.id];
-              backend.updateLayout(activeWsId, { tile_order_json: JSON.stringify(newOrder) });
-              setFocusedIndex(newOrder.length - 1);
-            } else {
-              setFocusedIndex(existing!.tileOrder.indexOf(tile.id));
-            }
-          }}
-          onClose={() => setShowDiffReviewPicker(false)}
-        />
-      )}
-
-      {noActiveReviewHint && (
-        <div
-          data-testid="no-active-review-hint"
-          role="status"
-          style={{
-            position: "fixed",
-            bottom: 40,
-            right: 20,
-            zIndex: 1000,
-            background: "#1e293b",
-            color: "#e2e8f0",
-            padding: "10px 14px",
-            borderRadius: 6,
-            fontSize: 13,
-            boxShadow: "0 4px 12px rgba(0,0,0,0.4)",
-            maxWidth: 340,
-          }}
-        >
-          No active diff reviews. Run the <code>diff-grok</code> skill in a Copilot session to start one.
-        </div>
-      )}
 
       {/* Session picker modal */}
       {showSessionPicker && (

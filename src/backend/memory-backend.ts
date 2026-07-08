@@ -1,13 +1,4 @@
 import type { Project, Workstream, Tile, TileType, WorkstreamLayout, CopilotConfigItem } from "../domain/types";
-import type {
-  ChunkInput,
-  ChunkWithDetails,
-  DiffChunk,
-  DiffComment,
-  DiffHunk,
-  DiffReview,
-  DiffSource,
-} from "../domain/diff-review";
 import type { FileComment, ImportedCommentInput, ImportSummary } from "../domain/file-comments";
 import type { Review, ReviewComment, ChangedFile, DiffSides } from "../domain/code-review";
 import { CONTENT_SEARCH_MAX_PER_FILE } from "../domain/content-search";
@@ -56,11 +47,6 @@ export class MemoryBackend implements Backend {
   private files = new Map<string, string>();
   private dirs = new Set<string>();
   private terminals = new Set<string>();
-  private diffReviews = new Map<string, DiffReview>();
-  private diffChunks = new Map<string, DiffChunk>();
-  private diffHunks = new Map<string, DiffHunk[]>();
-  private diffComments = new Map<string, DiffComment[]>();
-  private invalidatedChunks = new Map<string, Set<string>>();
   private fileComments = new Map<string, FileComment>();
   // Code Review (ADR 014) offline stub state.
   private reviews = new Map<string, Review>();
@@ -81,9 +67,8 @@ export class MemoryBackend implements Backend {
 
   /**
    * Test helper: pre-populate the in-memory `listSessionFeatures`
-   * response for a session id. Mirrors the {@link seedDiffReview}
-   * pattern. The frontend Plan tile tests use this to drive the
-   * shimmed backend without standing up real session-state folders.
+   * response for a session id. The frontend Plan tile tests use this to drive
+   * the shimmed backend without standing up real session-state folders.
    */
   seedSessionFeatures(
     sessionId: string,
@@ -480,229 +465,6 @@ export class MemoryBackend implements Backend {
 
   async unwatchSessionFeatures(_sessionId: string): Promise<void> {
     // No-op.
-  }
-
-  // --- Diff Review (ADR 007) ---
-
-  /**
-   * Test/dev seeding helper — pre-populate a review with chunks, hunks, and
-   * optionally comments. Mirrors the shape the real backend exposes.
-   */
-  seedDiffReview(input: {
-    review: DiffReview;
-    chunks: DiffChunk[];
-    hunks: DiffHunk[];
-    comments?: DiffComment[];
-  }): void {
-    this.diffReviews.set(input.review.id, input.review);
-    for (const chunk of input.chunks) {
-      this.diffChunks.set(chunk.id, chunk);
-      this.diffHunks.set(chunk.id, []);
-      this.diffComments.set(chunk.id, []);
-    }
-    for (const hunk of input.hunks) {
-      const arr = this.diffHunks.get(hunk.chunk_id) ?? [];
-      arr.push(hunk);
-      this.diffHunks.set(hunk.chunk_id, arr);
-    }
-    for (const comment of input.comments ?? []) {
-      const arr = this.diffComments.get(comment.chunk_id) ?? [];
-      arr.push(comment);
-      this.diffComments.set(comment.chunk_id, arr);
-    }
-  }
-
-  /** Test helper: mark a set of chunks invalidated so the next detectDrift returns them. */
-  seedDiffDrift(reviewId: string, chunkIds: string[]): void {
-    this.invalidatedChunks.set(reviewId, new Set(chunkIds));
-  }
-
-  async listActiveDiffReviews(workstreamId: string): Promise<DiffReview[]> {
-    return Array.from(this.diffReviews.values())
-      .filter((review) => review.workstream_id === workstreamId && review.status === "active")
-      .sort((a, b) => {
-        const createdCompare = b.created_at.localeCompare(a.created_at);
-        return createdCompare !== 0 ? createdCompare : a.id.localeCompare(b.id);
-      });
-  }
-
-  private getDiffReviewIdFromTile(tile: Tile): string | null {
-    try {
-      const config = JSON.parse(tile.config_json) as { reviewId?: unknown };
-      return typeof config.reviewId === "string" ? config.reviewId : null;
-    } catch {
-      return null;
-    }
-  }
-
-  async createOrFocusDiffReviewTile(workstreamId: string, reviewId: string): Promise<Tile> {
-    for (const tile of this.tiles.values()) {
-      if (
-        tile.workstream_id === workstreamId &&
-        tile.tile_type === "diff_review" &&
-        this.getDiffReviewIdFromTile(tile) === reviewId
-      ) {
-        return tile;
-      }
-    }
-
-    const timestamp = now();
-    const tile: Tile = {
-      id: generateId(),
-      workstream_id: workstreamId,
-      tile_type: "diff_review",
-      title: `Review: ${reviewId.slice(0, 8)}`,
-      config_json: JSON.stringify({ reviewId }),
-      created_at: timestamp,
-      updated_at: timestamp,
-    };
-    this.tiles.set(tile.id, tile);
-
-    const layout = await this.getLayout(workstreamId);
-    let tileOrder: string[];
-    try {
-      const parsed = JSON.parse(layout.tile_order_json) as unknown;
-      tileOrder = Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === "string") : [];
-    } catch {
-      tileOrder = [];
-    }
-    if (!tileOrder.includes(tile.id)) {
-      tileOrder.push(tile.id);
-    }
-    await this.updateLayout(workstreamId, { tile_order_json: JSON.stringify(tileOrder) });
-
-    return tile;
-  }
-
-  async createDiffReview(workstreamId: string, diffSource: DiffSource, sourceRef: string | null): Promise<DiffReview> {
-    const review: DiffReview = {
-      id: generateId(),
-      workstream_id: workstreamId,
-      diff_source: diffSource,
-      source_ref: sourceRef,
-      status: "planning",
-      plan_json: null,
-      exported_path: null,
-      created_at: now(),
-      updated_at: now(),
-      completed_at: null,
-    };
-    this.diffReviews.set(review.id, review);
-    return review;
-  }
-
-  async setReviewPlan(reviewId: string, planJson: string, chunks: ChunkInput[] = []): Promise<void> {
-    const review = this.diffReviews.get(reviewId);
-    if (!review) throw new Error(`Review not found: ${reviewId}`);
-    review.plan_json = planJson;
-    review.status = "active";
-    review.updated_at = now();
-    chunks.forEach((input, idx) => {
-      const chunkId = generateId();
-      const chunk: DiffChunk = {
-        id: chunkId,
-        review_id: reviewId,
-        ordinal: idx,
-        title: input.title,
-        summary: input.summary,
-        is_trivial: input.is_trivial,
-        state: "pending",
-        question_text: input.question_text,
-        question_style: input.question_style,
-        invalidated_at: null,
-        created_at: now(),
-        updated_at: now(),
-      };
-      this.diffChunks.set(chunkId, chunk);
-      const hunks: DiffHunk[] = input.hunks.map((h) => ({
-        id: generateId(),
-        chunk_id: chunkId,
-        file_path: h.file_path,
-        old_start: h.old_start,
-        old_lines: h.old_lines,
-        new_start: h.new_start,
-        new_lines: h.new_lines,
-        patch_text: h.patch_text,
-        content_hash: `mem-${chunkId}-${h.file_path}`,
-      }));
-      this.diffHunks.set(chunkId, hunks);
-    });
-  }
-
-  async getReview(reviewId: string): Promise<DiffReview> {
-    const review = this.diffReviews.get(reviewId);
-    if (!review) throw new Error(`Review not found: ${reviewId}`);
-    return review;
-  }
-
-  async listChunks(reviewId: string): Promise<DiffChunk[]> {
-    return Array.from(this.diffChunks.values())
-      .filter((c) => c.review_id === reviewId)
-      .sort((a, b) => a.ordinal - b.ordinal);
-  }
-
-  async getChunkDetails(chunkId: string): Promise<ChunkWithDetails> {
-    const chunk = this.diffChunks.get(chunkId);
-    if (!chunk) throw new Error(`Chunk not found: ${chunkId}`);
-    return {
-      chunk,
-      hunks: this.diffHunks.get(chunkId) ?? [],
-      comments: this.diffComments.get(chunkId) ?? [],
-    };
-  }
-
-  async activateChunk(_reviewId: string, chunkId: string): Promise<void> {
-    const chunk = this.diffChunks.get(chunkId);
-    if (!chunk) throw new Error(`Chunk not found: ${chunkId}`);
-    if (chunk.state === "pending") {
-      chunk.state = "seen";
-    }
-    chunk.updated_at = now();
-  }
-
-  async ackChunk(chunkId: string, state: "approved" | "commented" | "seen"): Promise<void> {
-    const chunk = this.diffChunks.get(chunkId);
-    if (!chunk) throw new Error(`Chunk not found: ${chunkId}`);
-    chunk.state = state;
-    chunk.updated_at = now();
-  }
-
-  async addComment(chunkId: string, anchorFile: string, anchorLineStart: number, anchorLineEnd: number, text: string): Promise<DiffComment> {
-    const chunk = this.diffChunks.get(chunkId);
-    if (!chunk) throw new Error(`Chunk not found: ${chunkId}`);
-    const comment: DiffComment = {
-      id: generateId(),
-      chunk_id: chunkId,
-      anchor_file: anchorFile,
-      anchor_line_start: anchorLineStart,
-      anchor_line_end: anchorLineEnd,
-      text,
-      created_at: now(),
-    };
-    const arr = this.diffComments.get(chunkId) ?? [];
-    arr.push(comment);
-    this.diffComments.set(chunkId, arr);
-    if (chunk.state !== "commented") {
-      chunk.state = "commented";
-      chunk.updated_at = now();
-    }
-    return comment;
-  }
-
-  async completeReview(reviewId: string): Promise<{ exported_path: string }> {
-    const review = this.diffReviews.get(reviewId);
-    if (!review) throw new Error(`Review not found: ${reviewId}`);
-    const exportedPath = `.copilot-reviews/${reviewId}/review.json`;
-    review.status = "completed";
-    review.completed_at = now();
-    review.exported_path = exportedPath;
-    review.updated_at = now();
-    return { exported_path: exportedPath };
-  }
-
-  async detectDrift(reviewId: string): Promise<string[]> {
-    const set = this.invalidatedChunks.get(reviewId);
-    return set ? Array.from(set) : [];
   }
 
   async listFileComments(workstreamId: string, absolutePath: string): Promise<FileComment[]> {
