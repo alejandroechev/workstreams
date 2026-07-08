@@ -388,6 +388,57 @@ describe("TauriBackend", () => {
     expect(invoke).toHaveBeenCalledWith("import_pr_comments", { workstreamId: "ws-1", items });
   });
 
+  it("session file comment commands map to snake_case Tauri commands", async () => {
+    invoke.mockResolvedValueOnce([]);
+    await backend.listSessionFileComments("ws-1", "src/a.ts");
+    expect(invoke).toHaveBeenCalledWith("list_session_file_comments", {
+      workstreamId: "ws-1",
+      file: "src/a.ts",
+    });
+
+    invoke.mockResolvedValueOnce({ id: "fc-1" });
+    await backend.addSessionFileComment("ws-1", "src/a.ts", 5, 7, "  foo();", "note");
+    expect(invoke).toHaveBeenCalledWith("add_session_file_comment", {
+      workstreamId: "ws-1",
+      file: "src/a.ts",
+      anchorLineStart: 5,
+      anchorLineEnd: 7,
+      anchorText: "  foo();",
+      body: "note",
+    });
+
+    invoke.mockResolvedValueOnce({ id: "fc-2" });
+    await backend.replySessionFileComment("ws-1", "fc-1", "reply");
+    expect(invoke).toHaveBeenCalledWith("reply_session_file_comment", {
+      workstreamId: "ws-1",
+      parentId: "fc-1",
+      body: "reply",
+    });
+
+    invoke.mockResolvedValueOnce({ id: "fc-1" });
+    await backend.updateSessionFileComment("ws-1", "fc-1", "edited");
+    expect(invoke).toHaveBeenCalledWith("update_session_file_comment", {
+      workstreamId: "ws-1",
+      id: "fc-1",
+      body: "edited",
+    });
+
+    invoke.mockResolvedValueOnce({ id: "fc-1" });
+    await backend.setSessionFileCommentStatus("ws-1", "fc-1", "resolved");
+    expect(invoke).toHaveBeenCalledWith("set_session_file_comment_status", {
+      workstreamId: "ws-1",
+      id: "fc-1",
+      status: "resolved",
+    });
+
+    invoke.mockResolvedValueOnce(undefined);
+    await backend.deleteSessionFileComment("ws-1", "fc-1");
+    expect(invoke).toHaveBeenCalledWith("delete_session_file_comment", {
+      workstreamId: "ws-1",
+      id: "fc-1",
+    });
+  });
+
   it("code review commands map to snake_case Tauri commands (with tuple mapping)", async () => {
     invoke.mockResolvedValueOnce("sess-1");
     expect(await backend.resolveWorkstreamSession("ws-1")).toBe("sess-1");

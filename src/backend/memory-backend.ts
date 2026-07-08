@@ -1,5 +1,10 @@
 import type { Project, Workstream, Tile, TileType, WorkstreamLayout, CopilotConfigItem } from "../domain/types";
-import type { FileComment, ImportedCommentInput, ImportSummary } from "../domain/file-comments";
+import type {
+  FileComment,
+  ImportedCommentInput,
+  ImportSummary,
+  SessionFileComment,
+} from "../domain/file-comments";
 import type { Review, ReviewComment, ChangedFile, DiffSides } from "../domain/code-review";
 import { CONTENT_SEARCH_MAX_PER_FILE } from "../domain/content-search";
 import type { Backend } from "./types";
@@ -582,6 +587,139 @@ export class MemoryBackend implements Backend {
       inserted += 1;
     }
     return { inserted, skipped };
+  }
+
+  // ── Session.db-backed inline file comments (unify-commenting) ────────────
+  // Offline stub mirroring the reviewer↔agent reply/status model. `file` is a
+  // repo-relative path. Requires a linked session (throws when unbound).
+  private sessionFileComments = new Map<string, SessionFileComment>();
+
+  private requireBoundSession(workstreamId: string): void {
+    const sid = this.boundSessions.get(workstreamId);
+    if (!sid) {
+      throw new Error("No linked Copilot session for this workstream");
+    }
+  }
+
+  async listSessionFileComments(
+    workstreamId: string,
+    file: string,
+  ): Promise<SessionFileComment[]> {
+    this.requireBoundSession(workstreamId);
+    const all = Array.from(this.sessionFileComments.values()).filter(
+      (c) => c.workstream_id === workstreamId && c.file === file,
+    );
+    all.sort((a, b) => {
+      if (a.anchor_line_start !== b.anchor_line_start) {
+        return a.anchor_line_start - b.anchor_line_start;
+      }
+      return a.created_at.localeCompare(b.created_at);
+    });
+    return all;
+  }
+
+  async addSessionFileComment(
+    workstreamId: string,
+    file: string,
+    anchorLineStart: number,
+    anchorLineEnd: number,
+    anchorText: string | null,
+    body: string,
+  ): Promise<SessionFileComment> {
+    this.requireBoundSession(workstreamId);
+    if (anchorLineEnd < anchorLineStart) {
+      throw new Error("anchor_line_end must be >= anchor_line_start");
+    }
+    const ts = now();
+    const comment: SessionFileComment = {
+      id: generateId(),
+      workstream_id: workstreamId,
+      file,
+      anchor_line_start: anchorLineStart,
+      anchor_line_end: anchorLineEnd,
+      anchor_text: anchorText,
+      body,
+      author: "reviewer",
+      parent_id: null,
+      status: "open",
+      created_at: ts,
+      updated_at: ts,
+    };
+    this.sessionFileComments.set(comment.id, comment);
+    return comment;
+  }
+
+  async replySessionFileComment(
+    workstreamId: string,
+    parentId: string,
+    body: string,
+  ): Promise<SessionFileComment> {
+    this.requireBoundSession(workstreamId);
+    const parent = this.sessionFileComments.get(parentId);
+    if (!parent) {
+      throw new Error(`comment ${parentId} not found`);
+    }
+    const ts = now();
+    const reply: SessionFileComment = {
+      id: generateId(),
+      workstream_id: parent.workstream_id,
+      file: parent.file,
+      anchor_line_start: parent.anchor_line_start,
+      anchor_line_end: parent.anchor_line_end,
+      anchor_text: parent.anchor_text,
+      body,
+      author: "agent",
+      parent_id: parentId,
+      status: parent.status,
+      created_at: ts,
+      updated_at: ts,
+    };
+    this.sessionFileComments.set(reply.id, reply);
+    return reply;
+  }
+
+  async updateSessionFileComment(
+    workstreamId: string,
+    id: string,
+    body: string,
+  ): Promise<SessionFileComment> {
+    this.requireBoundSession(workstreamId);
+    const existing = this.sessionFileComments.get(id);
+    if (!existing || existing.author !== "reviewer") {
+      throw new Error(`comment ${id} not found or not editable`);
+    }
+    const updated: SessionFileComment = { ...existing, body, updated_at: now() };
+    this.sessionFileComments.set(id, updated);
+    return updated;
+  }
+
+  async setSessionFileCommentStatus(
+    workstreamId: string,
+    id: string,
+    status: string,
+  ): Promise<SessionFileComment> {
+    this.requireBoundSession(workstreamId);
+    const existing = this.sessionFileComments.get(id);
+    if (!existing) {
+      throw new Error(`comment ${id} not found`);
+    }
+    const updated: SessionFileComment = { ...existing, status, updated_at: now() };
+    this.sessionFileComments.set(id, updated);
+    return updated;
+  }
+
+  async deleteSessionFileComment(workstreamId: string, id: string): Promise<void> {
+    this.requireBoundSession(workstreamId);
+    const existing = this.sessionFileComments.get(id);
+    if (!existing || existing.author !== "reviewer") {
+      throw new Error(`comment ${id} not found or not deletable`);
+    }
+    // Cascade: remove the reviewer note and its agent replies.
+    for (const [cid, c] of Array.from(this.sessionFileComments.entries())) {
+      if (cid === id || c.parent_id === id) {
+        this.sessionFileComments.delete(cid);
+      }
+    }
   }
 
   // ── Code Review (ADR 014) — offline stub of the reviewer↔agent loop ──────

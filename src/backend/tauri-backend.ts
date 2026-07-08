@@ -1,6 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { Project, Workstream, Tile, TileType, WorkstreamLayout, CopilotConfigItem } from "../domain/types";
-import type { FileComment, ImportedCommentInput, ImportSummary } from "../domain/file-comments";
+import type {
+  FileComment,
+  ImportedCommentInput,
+  ImportSummary,
+  SessionFileComment,
+} from "../domain/file-comments";
 import type { Review, ReviewComment, ChangedFile, DiffSides } from "../domain/code-review";
 import type { Backend } from "./types";
 
@@ -282,6 +287,68 @@ export class TauriBackend implements Backend {
     items: ImportedCommentInput[],
   ): Promise<ImportSummary> {
     return invoke<ImportSummary>("import_pr_comments", { workstreamId, items });
+  }
+
+  // Session.db-backed inline file comments (unify-commenting)
+  async listSessionFileComments(
+    workstreamId: string,
+    file: string,
+  ): Promise<SessionFileComment[]> {
+    return invoke<SessionFileComment[]>("list_session_file_comments", { workstreamId, file });
+  }
+
+  async addSessionFileComment(
+    workstreamId: string,
+    file: string,
+    anchorLineStart: number,
+    anchorLineEnd: number,
+    anchorText: string | null,
+    body: string,
+  ): Promise<SessionFileComment> {
+    return invoke<SessionFileComment>("add_session_file_comment", {
+      workstreamId,
+      file,
+      anchorLineStart,
+      anchorLineEnd,
+      anchorText,
+      body,
+    });
+  }
+
+  async replySessionFileComment(
+    workstreamId: string,
+    parentId: string,
+    body: string,
+  ): Promise<SessionFileComment> {
+    return invoke<SessionFileComment>("reply_session_file_comment", {
+      workstreamId,
+      parentId,
+      body,
+    });
+  }
+
+  async updateSessionFileComment(
+    workstreamId: string,
+    id: string,
+    body: string,
+  ): Promise<SessionFileComment> {
+    return invoke<SessionFileComment>("update_session_file_comment", { workstreamId, id, body });
+  }
+
+  async setSessionFileCommentStatus(
+    workstreamId: string,
+    id: string,
+    status: string,
+  ): Promise<SessionFileComment> {
+    return invoke<SessionFileComment>("set_session_file_comment_status", {
+      workstreamId,
+      id,
+      status,
+    });
+  }
+
+  async deleteSessionFileComment(workstreamId: string, id: string): Promise<void> {
+    return invoke("delete_session_file_comment", { workstreamId, id });
   }
 
   // Code Review (ADR 014)

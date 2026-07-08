@@ -1,6 +1,11 @@
 // @test-skip: Type-only interface; behaviour covered by MemoryBackend + TauriBackend tests.
 import type { Project, Workstream, Tile, TileType, WorkstreamLayout, CopilotConfigItem } from "../domain/types";
-import type { FileComment, ImportedCommentInput, ImportSummary } from "../domain/file-comments";
+import type {
+  FileComment,
+  ImportedCommentInput,
+  ImportSummary,
+  SessionFileComment,
+} from "../domain/file-comments";
 import type { Review, ReviewComment, ChangedFile, DiffSides } from "../domain/code-review";
 
 export interface FileSearchMatch {
@@ -130,6 +135,34 @@ export interface Backend {
     workstreamId: string,
     items: ImportedCommentInput[],
   ): Promise<ImportSummary>;
+  // Session.db-backed inline file comments (unify-commenting). Stored in the
+  // bound Copilot session's session.db with the reviewer↔agent reply model.
+  // `file` is repo-relative. Requires a linked session (throws otherwise).
+  listSessionFileComments(workstreamId: string, file: string): Promise<SessionFileComment[]>;
+  addSessionFileComment(
+    workstreamId: string,
+    file: string,
+    anchorLineStart: number,
+    anchorLineEnd: number,
+    anchorText: string | null,
+    body: string,
+  ): Promise<SessionFileComment>;
+  replySessionFileComment(
+    workstreamId: string,
+    parentId: string,
+    body: string,
+  ): Promise<SessionFileComment>;
+  updateSessionFileComment(
+    workstreamId: string,
+    id: string,
+    body: string,
+  ): Promise<SessionFileComment>;
+  setSessionFileCommentStatus(
+    workstreamId: string,
+    id: string,
+    status: string,
+  ): Promise<SessionFileComment>;
+  deleteSessionFileComment(workstreamId: string, id: string): Promise<void>;
   // Code Review (ADR 014) — diff-first, session-DB backed, MCP-free
   resolveWorkstreamSession(workstreamId: string): Promise<string | null>;
   codeReviewDiffFiles(directory: string, diffSource: string, baseRef?: string | null): Promise<ChangedFile[]>;
