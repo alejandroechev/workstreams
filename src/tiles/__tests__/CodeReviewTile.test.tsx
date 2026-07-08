@@ -183,7 +183,7 @@ describe("CodeReviewTile", () => {
     expect(screen.queryByTestId("comments-panel")).toBeNull();
   });
 
-  it("polls up an agent reply and lets the reviewer resolve then complete", async () => {
+  it("surfaces an agent reply after clicking Sync, then resolve + complete", async () => {
     const backend = new MemoryBackend();
     backend.seedReviewDiff([{ path: "a.js", status: "M" }]);
     backend.seedReviewDiffSides("a.js", { before: "x\n", after: "x\ny\n" });
@@ -201,11 +201,14 @@ describe("CodeReviewTile", () => {
     fireEvent.click(screen.getByTestId("add-comment"));
     await waitFor(() => expect(screen.getByTestId("thread-status")).toBeTruthy());
 
-    // Agent replies out-of-band; the 1.5s poll should pick it up (real timers).
+    // Agent replies out-of-band. With polling removed, the reply only appears
+    // after the reviewer clicks the manual Sync button.
     const review = await backend.getActiveReview("ws-1");
     const comments = await backend.listReviewComments("ws-1", review!.id);
     backend.simulateAgentReply(review!.id, comments[0].id, "done");
-    await waitFor(() => expect(screen.getByTestId("thread-reply")).toBeTruthy(), { timeout: 4000 });
+    expect(screen.queryByTestId("thread-reply")).toBeNull();
+    fireEvent.click(screen.getByTestId("sync-review"));
+    await waitFor(() => expect(screen.getByTestId("thread-reply")).toBeTruthy());
     expect(screen.getByTestId("attention-badge")).toBeTruthy(); // open + addressed
 
     // Resolve (inline in the view zone) → Complete becomes available → complete.

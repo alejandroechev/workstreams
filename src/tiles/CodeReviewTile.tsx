@@ -7,6 +7,7 @@ import {
   ExclamationTriangleIcon,
   PlusCircleIcon,
   DocumentIcon,
+  ArrowPathIcon,
 } from "@heroicons/react/24/outline";
 import { useBackend } from "../backend/context";
 import { detectLanguage } from "../domain/tile-config";
@@ -34,7 +35,6 @@ interface Props {
   workstreamDir?: string;
 }
 
-const POLL_MS = 1500;
 
 /**
  * Code Review tile (ADR 014) — local PR-style review. Pick a diff source, see
@@ -43,7 +43,7 @@ const POLL_MS = 1500;
  * replies via polling. In-place editing of the modified side is added by the
  * `inplace-edit` phase.
  */
-export default function CodeReviewTile({ workstreamId, workstreamDir, isFocused }: Props) {
+export default function CodeReviewTile({ workstreamId, workstreamDir, isFocused: _isFocused }: Props) {
   const backend = useBackend();
   const dir = workstreamDir ?? "";
 
@@ -247,12 +247,18 @@ export default function CodeReviewTile({ workstreamId, workstreamDir, isFocused 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedFile, review?.id]);
 
-  // Poll comments for the agent's writes while focused.
-  useEffect(() => {
-    if (!review || !isFocused) return;
-    const t = setInterval(() => void loadComments(), POLL_MS);
-    return () => clearInterval(t);
-  }, [review, isFocused, loadComments]);
+  // Manual Sync (no polling): re-read reviews/review_comments from session.db
+  // on demand via the header Sync button. unify-commenting removed the ~1.5s
+  // poll to avoid steady background churn on the session DB.
+  const [syncing, setSyncing] = useState(false);
+  const syncComments = useCallback(async () => {
+    setSyncing(true);
+    try {
+      await loadComments();
+    } finally {
+      setSyncing(false);
+    }
+  }, [loadComments]);
 
   const threads: CommentThread[] = useMemo(() => groupThreads(comments), [comments]);
   const attention = attentionCount(threads);
@@ -457,6 +463,17 @@ export default function CodeReviewTile({ workstreamId, workstreamDir, isFocused 
           </span>
         )}
         <span style={{ flex: 1 }} />
+        {review && (
+          <button
+            style={styles.btn}
+            disabled={busy || syncing}
+            onClick={() => void syncComments()}
+            data-testid="sync-review"
+            title="Re-read comments from the session database"
+          >
+            <ArrowPathIcon width={14} height={14} /> {syncing ? "Syncing…" : "Sync"}
+          </button>
+        )}
         <button style={styles.btn} disabled={busy} onClick={() => setPicking(true)} data-testid="new-review">
           <PlusCircleIcon width={14} height={14} /> New review
         </button>

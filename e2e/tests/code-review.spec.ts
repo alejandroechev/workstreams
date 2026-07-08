@@ -7,7 +7,7 @@
  *   - create a working_tree review, see the changed files + diff
  *   - comment inline on the modified side
  *   - in-place edit → Save affordance appears (working_tree is editable)
- *   - a (stubbed) agent reply written to the store shows up via the poll
+ *   - a (stubbed) agent reply written to the store shows up after Sync
  *   - reviewer resolves the thread, then completes the review
  */
 import { test, expect, type Page } from "@playwright/test";
@@ -72,7 +72,7 @@ test.beforeEach(async ({ page }) => {
 });
 
 test.describe("Code Review tile", () => {
-  test("local review loop: diff renders → editable → comment + agent reply via poll → resolve → complete", async ({
+  test("local review loop: diff renders → editable → comment + agent reply via Sync → resolve → complete", async ({
     page,
   }) => {
     await createWorkstream(page, "Review A");
@@ -92,9 +92,9 @@ test.describe("Code Review tile", () => {
     await expect(page.locator('[data-testid="save-edit"]')).toBeVisible();
 
     // Add a reviewer comment + an agent reply straight to the session store,
-    // then assert the tile's poll surfaces the thread and reply. (Monaco caret
-    // selection + in-place typing are covered by the component test with a
-    // mocked editor; here we validate the store⇄poll integration.)
+    // then assert the tile surfaces the thread and (after Sync) the reply.
+    // (Monaco caret selection + in-place typing are covered by the component
+    // test with a mocked editor; here we validate the store⇄Sync integration.)
     await page.evaluate(async () => {
       const b = (window as unknown as { __WS_BACKEND__?: any }).__WS_BACKEND__;
       const wss = await b.listWorkstreams();
@@ -113,8 +113,10 @@ test.describe("Code Review tile", () => {
       b.simulateAgentReply(review.id, c.id, "Done — removed it.");
     });
 
-    // The reviewer thread and the agent reply render inline (Monaco view zone).
+    // The reviewer thread renders inline; with polling removed the agent reply
+    // only appears after clicking the manual Sync button.
     await expect(page.locator('[data-testid="thread-status"]')).toBeVisible({ timeout: 8000 });
+    await page.locator('[data-testid="sync-review"]').click();
     await expect(page.locator('[data-testid="thread-reply"]')).toBeVisible({ timeout: 8000 });
 
     // Reviewer resolves the thread, then completes the review.
