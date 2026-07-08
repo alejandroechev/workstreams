@@ -163,31 +163,6 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
             console_error_count INTEGER NOT NULL DEFAULT 0,
             captured_at TEXT NOT NULL
         );
-
-        CREATE TABLE IF NOT EXISTS file_comments (
-            id TEXT PRIMARY KEY,
-            workstream_id TEXT NOT NULL,
-            absolute_path TEXT NOT NULL,
-            anchor_line_start INTEGER NOT NULL,
-            anchor_line_end INTEGER NOT NULL,
-            anchor_text TEXT,
-            body_md TEXT NOT NULL,
-            author TEXT NOT NULL,
-            origin_type TEXT NOT NULL,
-            origin_pr_id TEXT,
-            origin_comment_id TEXT,
-            origin_thread_id TEXT,
-            origin_parent_id TEXT,
-            origin_url TEXT,
-            status TEXT,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_file_comments_ws_path ON file_comments(workstream_id, absolute_path);
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_file_comments_origin
-            ON file_comments(origin_type, origin_pr_id, origin_comment_id)
-            WHERE origin_type = 'ado-pr';
         ",
     )?;
 
@@ -237,7 +212,6 @@ mod tests {
             "copilot_session_links",
             "settings",
             "visual_proofs",
-            "file_comments",
         ];
         for table in &expected {
             let count: i64 = conn

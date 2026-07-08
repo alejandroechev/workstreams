@@ -1,11 +1,6 @@
 // @test-skip: Type-only interface; behaviour covered by MemoryBackend + TauriBackend tests.
 import type { Project, Workstream, Tile, TileType, WorkstreamLayout, CopilotConfigItem } from "../domain/types";
-import type {
-  FileComment,
-  ImportedCommentInput,
-  ImportSummary,
-  SessionFileComment,
-} from "../domain/file-comments";
+import type { SessionFileComment } from "../domain/file-comments";
 import type { Review, ReviewComment, ChangedFile, DiffSides } from "../domain/code-review";
 
 export interface FileSearchMatch {
@@ -119,22 +114,6 @@ export interface Backend {
    */
   watchSessionFeatures(sessionId: string): Promise<void>;
   unwatchSessionFeatures(sessionId: string): Promise<void>;
-  // File comments (inline per-workstream comments + ADO PR import)
-  listFileComments(workstreamId: string, absolutePath: string): Promise<FileComment[]>;
-  addFileComment(
-    workstreamId: string,
-    absolutePath: string,
-    anchorLineStart: number,
-    anchorLineEnd: number,
-    anchorText: string | null,
-    bodyMd: string,
-  ): Promise<FileComment>;
-  updateFileComment(id: string, bodyMd: string): Promise<FileComment>;
-  deleteFileComment(id: string): Promise<void>;
-  importPrComments(
-    workstreamId: string,
-    items: ImportedCommentInput[],
-  ): Promise<ImportSummary>;
   // Session.db-backed inline file comments (unify-commenting). Stored in the
   // bound Copilot session's session.db with the reviewer↔agent reply model.
   // `file` is repo-relative. Requires a linked session (throws otherwise).

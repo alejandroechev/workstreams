@@ -1,11 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { Project, Workstream, Tile, TileType, WorkstreamLayout, CopilotConfigItem } from "../domain/types";
-import type {
-  FileComment,
-  ImportedCommentInput,
-  ImportSummary,
-  SessionFileComment,
-} from "../domain/file-comments";
+import type { SessionFileComment } from "../domain/file-comments";
 import type { Review, ReviewComment, ChangedFile, DiffSides } from "../domain/code-review";
 import type { Backend } from "./types";
 
@@ -252,44 +247,6 @@ export class TauriBackend implements Backend {
     await invoke("unwatch_session_features", { sessionId });
   }
 
-  async listFileComments(workstreamId: string, absolutePath: string): Promise<FileComment[]> {
-    return invoke<FileComment[]>("list_file_comments", { workstreamId, absolutePath });
-  }
-
-  async addFileComment(
-    workstreamId: string,
-    absolutePath: string,
-    anchorLineStart: number,
-    anchorLineEnd: number,
-    anchorText: string | null,
-    bodyMd: string,
-  ): Promise<FileComment> {
-    return invoke<FileComment>("add_file_comment", {
-      workstreamId,
-      absolutePath,
-      anchorLineStart,
-      anchorLineEnd,
-      anchorText,
-      bodyMd,
-    });
-  }
-
-  async updateFileComment(id: string, bodyMd: string): Promise<FileComment> {
-    return invoke<FileComment>("update_file_comment", { id, bodyMd });
-  }
-
-  async deleteFileComment(id: string): Promise<void> {
-    return invoke("delete_file_comment", { id });
-  }
-
-  async importPrComments(
-    workstreamId: string,
-    items: ImportedCommentInput[],
-  ): Promise<ImportSummary> {
-    return invoke<ImportSummary>("import_pr_comments", { workstreamId, items });
-  }
-
-  // Session.db-backed inline file comments (unify-commenting)
   async listSessionFileComments(
     workstreamId: string,
     file: string,
