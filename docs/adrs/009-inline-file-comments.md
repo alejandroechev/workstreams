@@ -1,141 +1,145 @@
-# ADR 009: Inline file comments + agent-driven ADO PR import
+# ADR 009: Inline file comments (session.db, reviewer↔agent)
 
 ## Status
 
-Accepted (v1 — user comments + agent-driven import via MCP)
+**Rewritten (2026-07-08, unify-commenting).** The original v1 design (a
+`file_comments` table in `workstreams.db`, hardcoded `author='me'`, and
+agent-driven **ADO PR import** via the `import_pr_comments` MCP tool) has been
+retired. Inline file comments now live in the **bound Copilot session's
+`session.db`** and use the same **reviewer↔agent reply/status model** as the
+Code Review tile (ADR 014), read/written by the agent with its built-in `sql`
+tool — **no MCP, no ADO import**. This ADR describes the current design; the
+"## Superseded v1" section at the end preserves the original for history.
 
 ## Context
 
-Code review feedback often lives outside the working tree: in PR comments,
-chat threads, doc reviews, or just the reviewer's head. When the developer
-finally sits down to address them, the comments are spread across several
-tabs and there's no anchored view next to the actual lines being changed.
-
-Within a Workstreams workstream we want a place to (a) jot inline notes on
-any file the user views, (b) pull in PR review comments from Azure DevOps
-PRs so they sit visually next to the code they reference, and (c) edit /
-delete user notes as work progresses. Comments are private to the
-workstream and never written back upstream — this isn't a PR client, it's
-a scratchpad for the developer's own reading of code.
+Within a Workstreams workstream we want a place to jot inline notes on any file
+the Repo Explorer shows, anchored next to the lines they reference, and — the
+new part — to let the **Copilot agent running in the bound session reply to
+those notes and mark them addressed**, exactly like the Code Review tile does
+for diff comments. Previously the two features diverged: Code Review stored its
+comments in the session.db with an agent reply loop, while Repo Explorer stored
+private notes in `workstreams.db` with an ADO-import path and no agent
+interaction. unify-commenting collapses that divergence.
 
 ## Decision
 
-Three layers:
+1. **Storage** — a `file_comments` table in the **bound session's `session.db`**
+   (the same DB the Code Review tile uses), *not* `workstreams.db`. A linked
+   Copilot session is a prerequisite: with no bound session the Repo Explorer
+   comment toggle is disabled with a prompt, mirroring the Code Review tile.
+   Comments are keyed by **repo-relative `file`** + line range so they are
+   portable and match what the agent sees. Columns carry the reviewer↔agent
+   model: `author` (`reviewer` | `agent`), `parent_id` (reply threading),
+   `status` (`open` | `addressed` | `resolved` | `wontfix`), plus `anchor_text`
+   for future drift detection.
 
-1. **Storage** — `file_comments` table in the workstreams SQLite DB.
-   Workstream-scoped, anchored to absolute path + line range (start..end).
-   Origin column distinguishes user comments from imported ones; a partial
-   `UNIQUE INDEX` on `(origin_type='ado-pr', origin_pr_id, origin_comment_id)`
-   makes re-import idempotent for free, without blocking multiple user
-   comments at the same anchor.
+2. **In-app UI** — the Repo Explorer file viewer (`FileEditorView`) renders each
+   reviewer note as a Monaco view zone below its anchor, with the threaded
+   **agent replies** nested inside the same zone. The reviewer's own note gets
+   inline **Edit / Delete** buttons and a **Resolve / Reopen** toggle; resolved
+   / wontfix notes are struck through. Add is selection-based: select lines →
+   floating `+ Comment` → inline composer. The toggle state persists per
+   workstream via the `settings` table. No polling — the tile reloads from
+   session.db when the file is (re)opened or the toggle is turned on.
 
-2. **In-app UI** — Repo Explorer file viewer renders comments as Monaco
-   view zones below each comment's anchor line, when a toolbar icon (next
-   to Edit/View) is toggled on. Selection-based add: the user selects one
-   or more lines, a floating `+ Comment` button appears at the top-right
-   of the editor host, click opens an inline composer (markdown textarea
-   + Save / Cancel). User comments get inline Edit / Delete buttons;
-   imported ones are read-only with an "open in ADO" link when a URL is
-   present, and `fixed` / `closed` statuses are visually struck through.
-   Toggle state persists per workstream via the `settings` table.
-
-3. **ADO import** — handled entirely by the agent through a new MCP tool
-   `import_pr_comments` exposed by `workstreams-mcp` (diff-grok pattern,
-   ADR 008). The Workstreams app stays ADO-blind: the agent uses whatever
-   tool it has (an ADO skill, MCP, gh-az, manual paste, etc.), shapes the
-   result into the tool's `items[]` schema, and invokes the tool. The
-   tool inserts via `INSERT OR IGNORE` against the partial unique index,
-   returning `{inserted, skipped}`. Threaded replies are represented as
-   separate items with `origin_parent_id` set.
+3. **Agent loop** — the agent reads and writes `file_comments` directly with its
+   built-in `sql` tool, guided by the **`file-comments` companion skill**
+   (sibling of `code-review`). Role rule: the agent never edits reviewer notes;
+   it replies as `author='agent'` with `parent_id`, and marks the reviewer note
+   `addressed` or `wontfix` (never `resolved` — that is reviewer-only).
 
 ### Why these choices
 
 | Choice | Rationale |
 |---|---|
-| Naive line-number anchoring (no drift detection v1) | User chose simplicity (`a` answer on Q2). `anchor_text` column captures the line snippet at create time so drift detection can be added later as a non-breaking enhancement. |
-| Absolute path key, not repo-relative | User preference (Q3). Trade-off: comments don't follow worktree moves. Acceptable for v1; can be migrated later. |
-| Inline view zones, no gutter glyphs / sidebar | User chose `a` on Q6. Simpler render path; comments are always visible when the toggle is on. |
-| Selection-based add, not gutter-click | User chose `selection based` on Q7. Naturally gives line *ranges* (matches ADO comment shape). |
-| Hardcoded `"me"` author for user comments | User-confirmed (FQ2). Avoids OS-user dependency; no plumbing needed. |
-| MCP tool instead of in-app ADO client | User chose `mcp, follow diff-grok pattern` on FQ1. Keeps the Tauri app free of HTTP clients and ADO PAT storage; the agent's own tooling handles auth. |
-| Dedup via partial unique index | Re-import is a one-shot snapshot (Q17). Index gives idempotency without per-row "have we seen this?" lookups. |
+| session.db, not workstreams.db | Unifies with Code Review (ADR 014); lets the agent read/reply with its own `sql` tool, no cross-DB plumbing. |
+| Repo-relative `file` key | Portable across machines/worktrees and matches what the agent edits; the tile converts absolute paths via `toRepoRelative(rootDir, path)`. |
+| Reviewer↔agent columns (author/parent_id/status) | Same model as `review_comments`; enables the reply/resolve loop and a shared mental model across both features. |
+| No polling — reload on open/toggle | unify-commenting removed background polling everywhere; the reviewer refreshes on demand (Repo Explorer by reopening; Code Review via a Sync button). |
+| No ADO import, no MCP | The `import_pr_comments` MCP tool + `workstreams-mcp` bridge were removed; the agent's native `sql` access replaces them. |
+| Linked-session prerequisite | Comments are agent-collaborative; without a bound session there is no agent to reply, so the toggle is disabled with a prompt. |
 
-### Schema
+### Schema (session.db)
 
 ```sql
 CREATE TABLE file_comments (
   id TEXT PRIMARY KEY,
   workstream_id TEXT NOT NULL,
-  absolute_path TEXT NOT NULL,
+  file TEXT NOT NULL,                  -- repo-relative path
   anchor_line_start INTEGER NOT NULL,
   anchor_line_end INTEGER NOT NULL,
-  anchor_text TEXT,
-  body_md TEXT NOT NULL,
-  author TEXT NOT NULL,
-  origin_type TEXT NOT NULL,    -- 'user' | 'ado-pr'
-  origin_pr_id TEXT,
-  origin_comment_id TEXT,
-  origin_thread_id TEXT,
-  origin_parent_id TEXT,
-  origin_url TEXT,
-  status TEXT,                  -- 'active'|'fixed'|'wontfix'|'closed' for ado-pr
+  anchor_text TEXT,                    -- drift snapshot of the anchored lines
+  body TEXT NOT NULL,                  -- markdown
+  author TEXT NOT NULL,                -- 'reviewer' | 'agent'
+  parent_id TEXT,                      -- reply threading
+  status TEXT NOT NULL DEFAULT 'open', -- open | addressed | resolved | wontfix
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
-CREATE INDEX idx_file_comments_ws_path
-  ON file_comments(workstream_id, absolute_path);
-CREATE UNIQUE INDEX idx_file_comments_origin
-  ON file_comments(origin_type, origin_pr_id, origin_comment_id)
-  WHERE origin_type = 'ado-pr';
+CREATE INDEX idx_file_comments_ws_file
+  ON file_comments(workstream_id, file, anchor_line_start);
 ```
 
 ### Tauri commands
 
-- `list_file_comments(workstream_id, absolute_path) -> FileComment[]`
-- `add_file_comment(workstream_id, absolute_path, anchor_line_start,
-  anchor_line_end, anchor_text?, body_md) -> FileComment` (hard-codes
-  `author='me'`, `origin_type='user'`)
-- `update_file_comment(id, body_md) -> FileComment` (user-comments only;
-  blocked by `WHERE origin_type='user'` guard)
-- `delete_file_comment(id)` (same guard)
-- `import_pr_comments(workstream_id, items) -> {inserted, skipped}`
+Implemented in `code_review::file_comments` (opens the bound session.db RW and
+ensures the `file_comments` schema on each call):
 
-### MCP tool (workstreams-mcp)
-
-`import_pr_comments` mirrors the Rust command and is the only path
-agents have to inject ADO comments. Schema-validated input; per-item
-anchor validation; transactional insert; returns `{inserted, skipped}`.
+- `list_session_file_comments(workstream_id, file) -> FileComment[]`
+- `add_session_file_comment(workstream_id, file, anchor_line_start,
+  anchor_line_end, anchor_text?, body) -> FileComment` (author=`reviewer`,
+  status=`open`)
+- `reply_session_file_comment(workstream_id, parent_id, body) -> FileComment`
+  (author=`agent`)
+- `update_session_file_comment(workstream_id, id, body) -> FileComment`
+  (reviewer notes only)
+- `set_session_file_comment_status(workstream_id, id, status) -> FileComment`
+- `delete_session_file_comment(workstream_id, id)` (reviewer note + cascade its
+  agent replies)
 
 ## Consequences
 
 **Positive**
-- Comments live where the user reads code, no separate tab/portal.
-- ADO import is decoupled from the app: any ADO tooling change is
-  irrelevant to Workstreams. New origins (GitHub PRs, manual paste)
-  can be added by exposing more MCP tools or just by writing JSON-shaped
-  items into the same tool.
-- Idempotent re-import via partial unique index — agents can re-run on
-  demand without bookkeeping.
+- One coherent reviewer↔agent commenting model across Code Review (diffs) and
+  Repo Explorer (whole files); one mental model, one companion-skill pattern.
+- The agent participates directly via `sql` — no MCP server to install or keep
+  in sync, no ADO PAT storage in the app.
+- Repo-relative keys make comments portable.
 
 **Negative**
-- Absolute-path key fragile across worktree moves. Acceptable for v1;
-  could be migrated to repo-relative later.
-- Naive line numbers drift when files are edited above the anchor. The
-  `anchor_text` column is groundwork for drift detection, but v1 just
-  shows the comment at the original line number regardless.
-- Imported comments are markdown but rendered as plaintext in v1
-  (`textContent`) to avoid running React rendering inside Monaco view
-  zones. Easy upgrade: portal a React `MarkdownView` into the zone DOM
-  node.
+- A linked Copilot session is now required to comment (previously notes worked
+  standalone). Acceptable: the feature's value is the agent loop.
+- Naive line-number anchoring still drifts when files are edited above the
+  anchor; `anchor_text` remains groundwork for drift detection.
+- Bodies render as plaintext (`textContent`) inside the Monaco view zone to
+  avoid React rendering there; a future upgrade can portal `MarkdownView` in.
 
 ## Validation
 
-- **Unit (Rust)**: 4 tests covering ordering, isolation, dedup, and
-  user-comment escape from the partial unique index (`file_comments::tests`).
-- **Unit (TS)**: 11 MemoryBackend cases + 7 `useFileComments` hook cases
-  + 12 `comments-layer` helper cases.
-- **Integration**: TauriBackend invoke-shape test verifying snake_case
-  arg mapping for all 5 commands.
-- **CDP**: open a file in Repo Explorer, toggle the comments icon,
-  select 2 lines, click `+ Comment`, type, save, verify view zone
-  appears with body + Edit/Delete buttons; reload to verify persistence.
+- **Unit (Rust)**: `code_review::file_comments::tests` cover ordering, workstream
+  isolation, reply threading, reviewer-only edit, and delete cascade.
+- **Unit (TS)**: MemoryBackend session-file-comment cases, `useFileComments`
+  hook cases (incl. repo-relative keying + session-required error),
+  `comments-layer` thread/height/status helpers, `toRepoRelative` cases, and a
+  session-gated RepoExplorer toggle test.
+- **Integration**: TauriBackend invoke-shape test for the 6 session commands.
+- **E2E (real Monaco)**: the `comment-zone` harness case + `comment-interactivity`
+  spec assert the reviewer note + threaded agent reply render and that Edit /
+  Resolve are clickable (not occluded by Monaco layers).
+
+---
+
+## Superseded v1 (historical)
+
+The original design stored comments in a `file_comments` table in
+`workstreams.db` keyed by **absolute path**, hardcoded `author='me'`, marked
+comments `origin_type` `user` | `ado-pr`, and imported Azure DevOps PR comments
+through an `import_pr_comments` MCP tool exposed by `workstreams-mcp` (the ADR
+008 bridge), deduped via a partial unique index on
+`(origin_type='ado-pr', origin_pr_id, origin_comment_id)`. Imported comments
+were read-only with an "open in ADO" link. That whole surface — the
+workstreams.db table, the 5 Tauri commands, the MCP tool, and the ADO-import UI
+— was removed by unify-commenting (2026-07-08). Existing `workstreams.db`
+`file_comments` tables are left in place non-destructively on already-migrated
+DBs but are no longer created or read.

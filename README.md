@@ -44,15 +44,20 @@ project-aware workspace:
 - 🖥️ **Present markdown as slides** — any `.md` has a third "Slides" mode,
   picked from a three-way Edit / Preview / Slides selector: split on `---`,
   navigate with arrows / Space / click, fullscreen with `Alt+F`.
-- 💬 **Inline file comments** — Per-workstream comments anchored to line
-  ranges; persisted in SQLite.
+- 💬 **Inline file comments** — Anchor comments to line ranges on any file in
+  the Repo Explorer. Comments live in the bound Copilot session's own
+  `session.db` with the same reviewer↔agent model as Code Review: the agent
+  replies and marks notes addressed with its built-in `sql` tool (guided by the
+  `file-comments` skill), and you resolve or reopen each thread inline. A linked
+  Copilot session is required. See [ADR 009](docs/adrs/009-inline-file-comments.md).
 - 🔎 **Local code review** — A diff-first, PR-style review tile for AI-agent
   *or* human-written code, with no ADO round-trips and no MCP. Pick a diff
   source (working tree, last commit, or a branch base), read the real diff,
   comment inline on the modified side, and **edit code in place** in the diff
   (working-tree source). Comments live in the bound Copilot session's own
-  `session.db`; the agent reads and replies with its built-in `sql` tool and
-  the tile shows the replies via polling. `Alt+A` opens the Code Review tile.
+  `session.db`; the agent reads and replies with its built-in `sql` tool (guided
+  by the `code-review` skill) and you pull in the replies with the **Sync**
+  button. `Alt+A` opens the Code Review tile.
   See [ADR 014](docs/adrs/014-code-review-tile.md).
 - ⌨️ **Keyboard-driven** — `Alt+<letter>` for every tile type, `Alt+Arrows`
   to move focus, `Alt+S` for side-by-side compare.
