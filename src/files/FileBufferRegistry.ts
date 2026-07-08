@@ -185,6 +185,10 @@ class FileBufferRegistryImpl implements FileBufferRegistry {
     const existing = this.entries.get(canonicalPath);
     if (existing !== undefined) {
       existing.refcount += 1;
+      // Pick up external edits made since this entry was cached (the OS file
+      // watcher can miss atomic write+rename saves on Windows), so opening the
+      // file in a new tile shows current disk contents, not a stale buffer.
+      await this.reconcileWithDisk(existing);
       this.notify(existing);
       return snapshotFor(existing);
     }
@@ -382,8 +386,28 @@ class FileBufferRegistryImpl implements FileBufferRegistry {
       this.dispatch(entry, { type: "external_delete_detected" });
       return;
     }
+    await this.reconcileWithDisk(entry);
+  }
 
-    const disk = normalizeReadResult(await this.deps.invokeTauri<ReadTextFileResult>("read_text_file", { path: entry.path }));
+  /**
+   * Re-read the file from disk and reconcile it with the in-memory buffer.
+   * Shared by the OS watcher and by `acquire` (so opening/reopening a file —
+   * e.g. in a new tile — always reflects the current disk contents even when
+   * the watcher missed the change, as happens with atomic write+rename saves
+   * on Windows). Never clobbers unsaved edits: a dirty/saving buffer whose disk
+   * copy diverged is flagged as a conflict instead.
+   */
+  private async reconcileWithDisk(entry: InternalEntry): Promise<void> {
+    let disk: ReturnType<typeof normalizeReadResult>;
+    try {
+      disk = normalizeReadResult(
+        await this.deps.invokeTauri<ReadTextFileResult>("read_text_file", { path: entry.path }),
+      );
+    } catch {
+      // File transiently unreadable (e.g. mid-rename) or removed — keep the
+      // current buffer; a real delete arrives via the watcher's "removed" event.
+      return;
+    }
 
     // Echo guard: the OS watcher fires for OUR own writes too. If the disk
     // hash equals the hash we just wrote (or the hash we last read), the

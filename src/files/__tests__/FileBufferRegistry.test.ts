@@ -140,16 +140,52 @@ describe("FileBufferRegistry", () => {
     expect(h.models[0].eol).toBe(0);
   });
 
-  it("acquires the same canonical file once and increments refcount", async () => {
+  it("reuses the cached model on re-acquire but revalidates against disk", async () => {
     const h = createHarness();
 
     await h.registry.acquire("file.txt");
     await h.registry.acquire("file.txt");
 
+    // The model is created once (buffer is shared)...
     expect(h.monaco.editor.createModel).toHaveBeenCalledTimes(1);
-    expect(h.invokeTauri.mock.calls.filter(([cmd]) => cmd === "read_text_file")).toHaveLength(1);
+    // ...but each acquire re-reads disk to pick up external edits the OS
+    // watcher may have missed (atomic write+rename). Same hash → no reload.
+    expect(h.invokeTauri.mock.calls.filter(([cmd]) => cmd === "read_text_file")).toHaveLength(2);
     h.registry.release(canonical);
     expect(h.registry.getSnapshot(canonical)).not.toBeNull();
+  });
+
+  it("revalidates a clean cached entry on re-acquire and reloads external edits", async () => {
+    const h = createHarness();
+
+    await h.registry.acquire("file.txt");
+    expect(h.models[0].getValue()).toBe("hello\n");
+
+    // Simulate an external edit landing on disk between opens (e.g. an agent
+    // edited the session-state file while a tile still held the buffer).
+    h.readQueue.push(readResponse({ content: "updated\n", hash_hex: "hash-ext", mtime_unix_ms: 99 }));
+
+    const snapshot = await h.registry.acquire("file.txt");
+
+    // Same buffer/model reused, but its content is now the fresh disk copy.
+    expect(h.monaco.editor.createModel).toHaveBeenCalledTimes(1);
+    expect(h.models[0].getValue()).toBe("updated\n");
+    expect(snapshot).toMatchObject({ path: canonical, state: "clean", dirty: false });
+  });
+
+  it("does not clobber a dirty buffer on re-acquire (flags a conflict instead)", async () => {
+    const h = createHarness();
+
+    await h.registry.acquire("file.txt");
+    h.models[0].setValue("my local edits\n"); // buffer is now dirty
+
+    // Disk diverges too.
+    h.readQueue.push(readResponse({ content: "disk changed\n", hash_hex: "hash-ext" }));
+    const snapshot = await h.registry.acquire("file.txt");
+
+    // The user's unsaved edits are preserved; a conflict is surfaced.
+    expect(h.models[0].getValue()).toBe("my local edits\n");
+    expect(snapshot.conflictingDiskContent).toBe("disk changed\n");
   });
 
   it("releases clean buffers and disposes on the final release", async () => {
