@@ -211,7 +211,22 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
   // file isn't markdown or no toggle is meaningful (conflict, save_blocked).
   const [editorViewState, setEditorViewState] = useState<MarkdownViewState | null>(null);
   // Inline file-comments toggle. Persisted per-workstream via settings.
+  // Comments live in the bound Copilot session's session.db (unify-commenting),
+  // so a linked session is required to enable them.
   const [commentsEnabled, setCommentsEnabled] = useState(false);
+  const [hasSession, setHasSession] = useState(false);
+  useEffect(() => {
+    if (!workstreamId) {
+      setHasSession(false);
+      return;
+    }
+    let cancelled = false;
+    void backend
+      .resolveWorkstreamSession(workstreamId)
+      .then((s) => { if (!cancelled) setHasSession(!!s); })
+      .catch(() => { if (!cancelled) setHasSession(false); });
+    return () => { cancelled = true; };
+  }, [workstreamId, backend, filePath]);
   useEffect(() => {
     if (!workstreamId) return;
     let cancelled = false;
@@ -220,8 +235,16 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
       .catch(() => {});
     return () => { cancelled = true; };
   }, [workstreamId]);
-  const fileComments = useFileComments(workstreamId ?? null, filePath || null);
+  const fileComments = useFileComments(workstreamId ?? null, rootDir ?? null, filePath || null);
+  // No polling: reload from session.db when comments are turned on or the file
+  // (re)opens. The hook reloads on file change; this covers the toggle-on case.
+  useEffect(() => {
+    if (commentsEnabled) void fileComments.reload();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [commentsEnabled]);
+  const commentsAvailable = Boolean(workstreamId && hasSession);
   const toggleCommentsVisible = useCallback(() => {
+    if (!commentsAvailable) return;
     setCommentsEnabled((v) => {
       const next = !v;
       if (workstreamId) {
@@ -229,7 +252,7 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
       }
       return next;
     });
-  }, [workstreamId]);
+  }, [workstreamId, commentsAvailable]);
   // Right-click context menu state. Anchored to viewport coordinates of
   // the contextmenu event; null when closed.
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; path: string; isDir: boolean } | null>(null);
@@ -1250,17 +1273,24 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
         {workstreamId && filePath ? (
           <button
             onClick={toggleCommentsVisible}
+            disabled={!commentsAvailable}
             style={{
               background: commentsEnabled ? "#313244" : "none",
               border: "none",
-              color: commentsEnabled ? "#a6e3a1" : "#89b4fa",
-              cursor: "pointer",
+              color: !commentsAvailable ? "#585b70" : commentsEnabled ? "#a6e3a1" : "#89b4fa",
+              cursor: commentsAvailable ? "pointer" : "not-allowed",
               display: "flex",
               alignItems: "center",
               padding: "2px 4px",
               borderRadius: 3,
             }}
-            title={commentsEnabled ? "Hide inline comments" : "Show inline comments"}
+            title={
+              !commentsAvailable
+                ? "Open a Copilot session in this workstream to add inline comments"
+                : commentsEnabled
+                  ? "Hide inline comments"
+                  : "Show inline comments"
+            }
             data-testid="repo-explorer-comments-toggle"
           >
             <ChatBubbleLeftRightIcon style={{ width: 14, height: 14 }} />
@@ -1293,10 +1323,11 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
               onSnapshotChange={setEditorSnapshot}
               onViewStateChange={setEditorViewState}
               comments={fileComments.comments}
-              commentsEnabled={commentsEnabled}
+              commentsEnabled={commentsEnabled && commentsAvailable}
               onAddComment={fileComments.add}
               onUpdateComment={fileComments.update}
               onDeleteComment={fileComments.remove}
+              onSetCommentStatus={fileComments.setStatus}
             />
           </div>
           {overlays}

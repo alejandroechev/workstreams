@@ -12,6 +12,7 @@ import {
   makeImageBlobUrl,
   resolveRelativePath,
   dirnameOf,
+  toRepoRelative,
   classifyLinkTarget,
   isMarkdownFile,
   isPdfFile,
@@ -187,6 +188,28 @@ describe("file-types", () => {
     });
     it("returns empty for bare filenames", () => {
       expect(dirnameOf("foo.md")).toBe("");
+    });
+  });
+
+  describe("toRepoRelative", () => {
+    it("strips the repo root prefix and normalises separators", () => {
+      expect(toRepoRelative("C:\\repo", "C:\\repo\\src\\a.ts")).toBe("src/a.ts");
+      expect(toRepoRelative("C:/repo", "C:/repo/src/a.ts")).toBe("src/a.ts");
+    });
+    it("is case-insensitive on the root prefix (Windows)", () => {
+      expect(toRepoRelative("C:\\Repo", "c:\\repo\\src\\a.ts")).toBe("src/a.ts");
+    });
+    it("tolerates a trailing separator on the root", () => {
+      expect(toRepoRelative("C:/repo/", "C:/repo/src/a.ts")).toBe("src/a.ts");
+    });
+    it("returns empty when the path equals the root", () => {
+      expect(toRepoRelative("C:/repo", "C:/repo")).toBe("");
+    });
+    it("returns the normalised absolute path when not under the root", () => {
+      expect(toRepoRelative("C:/repo", "D:/other/a.ts")).toBe("D:/other/a.ts");
+    });
+    it("returns the normalised path when the root is empty", () => {
+      expect(toRepoRelative("", "C:\\a\\b.ts")).toBe("C:/a/b.ts");
     });
   });
 

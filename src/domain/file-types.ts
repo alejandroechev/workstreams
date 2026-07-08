@@ -233,3 +233,23 @@ export function dirnameOf(path: string): string {
   if (idx < 0) return "";
   return path.slice(0, idx);
 }
+
+/**
+ * Convert an absolute file path to a repo-relative POSIX-style path given the
+ * repository root. Both inputs are normalised to forward slashes and compared
+ * case-insensitively on the root prefix (Windows-friendly). When `absolutePath`
+ * is not under `rootDir`, the normalised absolute path is returned unchanged so
+ * callers still get a stable key.
+ */
+export function toRepoRelative(rootDir: string, absolutePath: string): string {
+  const norm = (p: string): string => p.replace(/\\/g, "/").replace(/\/+$/, "");
+  const root = norm(rootDir);
+  const abs = norm(absolutePath);
+  if (root.length === 0) return abs;
+  const prefix = root + "/";
+  if (abs.toLowerCase().startsWith(prefix.toLowerCase())) {
+    return abs.slice(prefix.length);
+  }
+  if (abs.toLowerCase() === root.toLowerCase()) return "";
+  return abs;
+}

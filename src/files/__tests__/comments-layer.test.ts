@@ -3,26 +3,23 @@ import {
   selectionToAnchor,
   formatCommentMeta,
   isMutable,
-  estimateZoneHeightInLines,
+  isClosedStatus,
+  groupCommentThreads,
+  estimateThreadHeightInLines,
 } from "../comments-layer";
-import type { FileComment } from "../../domain/file-comments";
+import type { SessionFileComment } from "../../domain/file-comments";
 
-const baseComment: FileComment = {
+const baseComment: SessionFileComment = {
   id: "fc-1",
   workstream_id: "ws-1",
-  absolute_path: "C:/a.ts",
+  file: "src/a.ts",
   anchor_line_start: 1,
   anchor_line_end: 1,
   anchor_text: null,
-  body_md: "hi",
-  author: "me",
-  origin_type: "user",
-  origin_pr_id: null,
-  origin_comment_id: null,
-  origin_thread_id: null,
-  origin_parent_id: null,
-  origin_url: null,
-  status: null,
+  body: "hi",
+  author: "reviewer",
+  parent_id: null,
+  status: "open",
   created_at: "0",
   updated_at: "0",
 };
@@ -57,53 +54,93 @@ describe("selectionToAnchor", () => {
 });
 
 describe("formatCommentMeta", () => {
-  it("renders the bare author for user comments", () => {
-    expect(formatCommentMeta(baseComment)).toBe("me");
+  it("renders 'you' + status for a reviewer note", () => {
+    expect(formatCommentMeta(baseComment)).toBe("you · open");
   });
 
-  it("renders PR + status for imported comments", () => {
-    const imported: FileComment = {
+  it("renders 'agent' + status for an agent reply", () => {
+    const reply: SessionFileComment = {
       ...baseComment,
-      origin_type: "ado-pr",
-      author: "alice",
-      origin_pr_id: "42",
-      status: "fixed",
+      author: "agent",
+      parent_id: "fc-1",
+      status: "addressed",
     };
-    expect(formatCommentMeta(imported)).toBe("alice · PR #42 · fixed");
-  });
-
-  it("falls back to 'active' when imported comment has no status", () => {
-    const imported: FileComment = {
-      ...baseComment,
-      origin_type: "ado-pr",
-      author: "alice",
-      origin_pr_id: "42",
-      status: null,
-    };
-    expect(formatCommentMeta(imported)).toBe("alice · PR #42 · active");
+    expect(formatCommentMeta(reply)).toBe("agent · addressed");
   });
 });
 
 describe("isMutable", () => {
-  it("is true for user comments", () => {
+  it("is true for reviewer notes", () => {
     expect(isMutable(baseComment)).toBe(true);
   });
-  it("is false for imported comments", () => {
-    expect(isMutable({ ...baseComment, origin_type: "ado-pr" })).toBe(false);
+  it("is false for agent replies", () => {
+    expect(isMutable({ ...baseComment, author: "agent" })).toBe(false);
   });
 });
 
-describe("estimateZoneHeightInLines", () => {
-  it("uses a minimum of 3 lines", () => {
-    expect(estimateZoneHeightInLines("x")).toBe(3);
+describe("isClosedStatus", () => {
+  it("treats resolved / wontfix as closed", () => {
+    expect(isClosedStatus("resolved")).toBe(true);
+    expect(isClosedStatus("wontfix")).toBe(true);
   });
-  it("counts explicit newlines", () => {
-    // 1 header + 3 body + 1 padding
-    expect(estimateZoneHeightInLines("a\nb\nc")).toBe(5);
+  it("treats open / addressed as not closed", () => {
+    expect(isClosedStatus("open")).toBe(false);
+    expect(isClosedStatus("addressed")).toBe(false);
   });
-  it("counts wrapping at ~80 chars per visual line", () => {
-    const longLine = "x".repeat(240); // 3 visual lines
-    // 1 header + 3 wrapped + 1 padding
-    expect(estimateZoneHeightInLines(longLine)).toBe(5);
+});
+
+describe("groupCommentThreads", () => {
+  it("nests agent replies under their reviewer root, sorted by created_at", () => {
+    const root: SessionFileComment = { ...baseComment, id: "r1" };
+    const reply2: SessionFileComment = {
+      ...baseComment,
+      id: "a2",
+      author: "agent",
+      parent_id: "r1",
+      body: "second",
+      created_at: "2",
+    };
+    const reply1: SessionFileComment = {
+      ...baseComment,
+      id: "a1",
+      author: "agent",
+      parent_id: "r1",
+      body: "first",
+      created_at: "1",
+    };
+    const threads = groupCommentThreads([root, reply2, reply1]);
+    expect(threads).toHaveLength(1);
+    expect(threads[0].root.id).toBe("r1");
+    expect(threads[0].replies.map((r) => r.id)).toEqual(["a1", "a2"]);
+  });
+
+  it("drops replies whose parent is absent", () => {
+    const orphan: SessionFileComment = {
+      ...baseComment,
+      id: "a1",
+      author: "agent",
+      parent_id: "missing",
+    };
+    expect(groupCommentThreads([orphan])).toEqual([]);
+  });
+});
+
+describe("estimateThreadHeightInLines", () => {
+  it("uses a minimum of 3 lines for a single short root", () => {
+    expect(
+      estimateThreadHeightInLines({ root: { ...baseComment, body: "x" }, replies: [] }),
+    ).toBe(3);
+  });
+  it("adds a header + body lines per reply", () => {
+    const root = { ...baseComment, body: "a\nb\nc" };
+    const reply: SessionFileComment = {
+      ...baseComment,
+      id: "a1",
+      author: "agent",
+      parent_id: "fc-1",
+      body: "y",
+    };
+    // root: 1 header + 3 body; reply: 1 header + 1 body; + 1 padding = 7
+    expect(estimateThreadHeightInLines({ root, replies: [reply] })).toBe(7);
   });
 });

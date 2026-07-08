@@ -5,6 +5,8 @@ import { BackendProvider } from "../../backend/context";
 import { MemoryBackend } from "../../backend/memory-backend";
 import { useFileComments } from "../useFileComments";
 
+const ROOT = "C:/repo";
+
 function wrap(backend: MemoryBackend) {
   return function Wrapper({ children }: { children: ReactNode }) {
     return <BackendProvider backend={backend}>{children}</BackendProvider>;
@@ -16,34 +18,51 @@ describe("useFileComments", () => {
 
   beforeEach(() => {
     backend = new MemoryBackend();
+    backend.seedBoundSession("ws-1", "sess-1");
   });
 
   it("starts empty and inert when workstreamId/path are null", () => {
-    const { result } = renderHook(() => useFileComments(null, null), { wrapper: wrap(backend) });
+    const { result } = renderHook(() => useFileComments(null, null, null), {
+      wrapper: wrap(backend),
+    });
     expect(result.current.comments).toEqual([]);
     expect(result.current.loading).toBe(false);
     expect(result.current.error).toBeNull();
   });
 
-  it("loads existing comments on mount", async () => {
-    await backend.addFileComment("ws-1", "C:/a.ts", 1, 1, null, "hello");
-    const { result } = renderHook(() => useFileComments("ws-1", "C:/a.ts"), { wrapper: wrap(backend) });
+  it("loads existing comments on mount, keyed on the repo-relative path", async () => {
+    await backend.addSessionFileComment("ws-1", "src/a.ts", 1, 1, null, "hello");
+    const { result } = renderHook(() => useFileComments("ws-1", ROOT, "C:/repo/src/a.ts"), {
+      wrapper: wrap(backend),
+    });
     await waitFor(() => expect(result.current.comments).toHaveLength(1));
-    expect(result.current.comments[0].body_md).toBe("hello");
+    expect(result.current.comments[0].body).toBe("hello");
+    expect(result.current.file).toBe("src/a.ts");
+  });
+
+  it("surfaces an error when the workstream has no linked session", async () => {
+    const { result } = renderHook(() => useFileComments("ws-unbound", ROOT, "C:/repo/src/a.ts"), {
+      wrapper: wrap(backend),
+    });
+    await waitFor(() => expect(result.current.error).toMatch(/linked Copilot session/i));
   });
 
   it("add inserts and keeps the list sorted by anchor_line_start", async () => {
-    const { result } = renderHook(() => useFileComments("ws-1", "C:/a.ts"), { wrapper: wrap(backend) });
+    const { result } = renderHook(() => useFileComments("ws-1", ROOT, "C:/repo/src/a.ts"), {
+      wrapper: wrap(backend),
+    });
     await waitFor(() => expect(result.current.loading).toBe(false));
     await act(async () => {
       await result.current.add(10, 10, null, "second");
       await result.current.add(2, 4, null, "first");
     });
-    expect(result.current.comments.map((c) => c.body_md)).toEqual(["first", "second"]);
+    expect(result.current.comments.map((c) => c.body)).toEqual(["first", "second"]);
   });
 
   it("update replaces the comment in local state", async () => {
-    const { result } = renderHook(() => useFileComments("ws-1", "C:/a.ts"), { wrapper: wrap(backend) });
+    const { result } = renderHook(() => useFileComments("ws-1", ROOT, "C:/repo/src/a.ts"), {
+      wrapper: wrap(backend),
+    });
     await waitFor(() => expect(result.current.loading).toBe(false));
     let id = "";
     await act(async () => {
@@ -53,11 +72,13 @@ describe("useFileComments", () => {
     await act(async () => {
       await result.current.update(id, "new");
     });
-    expect(result.current.comments[0].body_md).toBe("new");
+    expect(result.current.comments[0].body).toBe("new");
   });
 
-  it("remove deletes from local state", async () => {
-    const { result } = renderHook(() => useFileComments("ws-1", "C:/a.ts"), { wrapper: wrap(backend) });
+  it("setStatus updates the comment status in local state", async () => {
+    const { result } = renderHook(() => useFileComments("ws-1", ROOT, "C:/repo/src/a.ts"), {
+      wrapper: wrap(backend),
+    });
     await waitFor(() => expect(result.current.loading).toBe(false));
     let id = "";
     await act(async () => {
@@ -65,25 +86,48 @@ describe("useFileComments", () => {
       id = c.id;
     });
     await act(async () => {
+      await result.current.setStatus(id, "resolved");
+    });
+    expect(result.current.comments[0].status).toBe("resolved");
+  });
+
+  it("remove deletes the note and cascades its replies from local state", async () => {
+    const { result } = renderHook(() => useFileComments("ws-1", ROOT, "C:/repo/src/a.ts"), {
+      wrapper: wrap(backend),
+    });
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    let id = "";
+    await act(async () => {
+      const c = await result.current.add(1, 1, null, "x");
+      id = c.id;
+      await backend.replySessionFileComment("ws-1", id, "reply");
+    });
+    await act(async () => {
+      await result.current.reload();
+    });
+    expect(result.current.comments).toHaveLength(2);
+    await act(async () => {
       await result.current.remove(id);
     });
     expect(result.current.comments).toEqual([]);
   });
 
   it("re-loads when path changes", async () => {
-    await backend.addFileComment("ws-1", "C:/a.ts", 1, 1, null, "a-comment");
-    await backend.addFileComment("ws-1", "C:/b.ts", 1, 1, null, "b-comment");
+    await backend.addSessionFileComment("ws-1", "src/a.ts", 1, 1, null, "a-comment");
+    await backend.addSessionFileComment("ws-1", "src/b.ts", 1, 1, null, "b-comment");
     const { result, rerender } = renderHook(
-      ({ p }: { p: string }) => useFileComments("ws-1", p),
-      { wrapper: wrap(backend), initialProps: { p: "C:/a.ts" } },
+      ({ p }: { p: string }) => useFileComments("ws-1", ROOT, p),
+      { wrapper: wrap(backend), initialProps: { p: "C:/repo/src/a.ts" } },
     );
-    await waitFor(() => expect(result.current.comments[0]?.body_md).toBe("a-comment"));
-    rerender({ p: "C:/b.ts" });
-    await waitFor(() => expect(result.current.comments[0]?.body_md).toBe("b-comment"));
+    await waitFor(() => expect(result.current.comments[0]?.body).toBe("a-comment"));
+    rerender({ p: "C:/repo/src/b.ts" });
+    await waitFor(() => expect(result.current.comments[0]?.body).toBe("b-comment"));
   });
 
   it("add throws when no workstreamId/path is set", async () => {
-    const { result } = renderHook(() => useFileComments(null, null), { wrapper: wrap(backend) });
+    const { result } = renderHook(() => useFileComments(null, null, null), {
+      wrapper: wrap(backend),
+    });
     await expect(result.current.add(1, 1, null, "x")).rejects.toThrow();
   });
 });

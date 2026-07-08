@@ -5,7 +5,7 @@ import { FileEditorView } from "../files/FileEditorView";
 import CodeReviewTile from "../tiles/CodeReviewTile";
 import { BackendProvider } from "../backend/context";
 import { MemoryBackend } from "../backend/memory-backend";
-import type { FileComment } from "../domain/file-comments";
+import type { SessionFileComment } from "../domain/file-comments";
 import { makeInMemoryRegistry } from "./fakeRegistry";
 
 /**
@@ -35,23 +35,18 @@ const CommentZoneCase: FC = () => {
   const path = "C:/repo/src/example.ts";
   const content = "const a = 1;\nconst b = 2;\nconst c = 3;\nconst d = 4;\n";
   const registry = useMemo(() => makeInMemoryRegistry(path, content), []);
-  const [comments, setComments] = useState<FileComment[]>(() => [
+  const [comments, setComments] = useState<SessionFileComment[]>(() => [
     {
       id: "c1",
       workstream_id: "ws-1",
-      absolute_path: path,
+      file: "src/example.ts",
       anchor_line_start: 2,
       anchor_line_end: 2,
       anchor_text: "const b = 2;",
-      body_md: "Prefer a clearer name than `b`.",
+      body: "Prefer a clearer name than `b`.",
       author: "reviewer",
-      origin_type: "user",
-      origin_pr_id: null,
-      origin_comment_id: null,
-      origin_thread_id: null,
-      origin_parent_id: null,
-      origin_url: null,
-      status: "active",
+      parent_id: null,
+      status: "open",
       created_at: nowIso(),
       updated_at: nowIso(),
     },
@@ -67,12 +62,16 @@ const CommentZoneCase: FC = () => {
         comments={comments}
         onBack={() => {}}
         onAddComment={() => Promise.resolve()}
-        onUpdateComment={(id, bodyMd) => {
-          setComments((cs) => cs.map((c) => (c.id === id ? { ...c, body_md: bodyMd } : c)));
+        onUpdateComment={(id, body) => {
+          setComments((cs) => cs.map((c) => (c.id === id ? { ...c, body } : c)));
           return Promise.resolve();
         }}
         onDeleteComment={(id) => {
-          setComments((cs) => cs.filter((c) => c.id !== id));
+          setComments((cs) => cs.filter((c) => c.id !== id && c.parent_id !== id));
+          return Promise.resolve();
+        }}
+        onSetCommentStatus={(id, status) => {
+          setComments((cs) => cs.map((c) => (c.id === id ? { ...c, status } : c)));
           return Promise.resolve();
         }}
       />

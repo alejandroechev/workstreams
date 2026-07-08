@@ -1,4 +1,4 @@
-import type { FileComment } from "../domain/file-comments";
+import type { SessionFileComment } from "../domain/file-comments";
 
 export interface Anchor {
   start: number;
@@ -8,8 +8,8 @@ export interface Anchor {
 
 /**
  * Given the editor's content and a Monaco selection range, build an Anchor
- * suitable for `addFileComment`. The anchor's text snapshot is the joined
- * lines covered by the selection (used later for drift detection).
+ * suitable for `addSessionFileComment`. The anchor's text snapshot is the
+ * joined lines covered by the selection (used later for drift detection).
  *
  * Returns null when the selection is empty (single column, no line span)
  * because there's nothing meaningful to anchor a comment to.
@@ -31,34 +31,63 @@ export function selectionToAnchor(
 }
 
 /**
- * Returns a human-readable single-line summary of a comment's origin/status.
- * Used in the view-zone header next to the body so users can tell apart
- * imported ADO comments from their own.
+ * Returns a human-readable single-line summary of a comment's author/status.
+ * Used in the view-zone header next to the body.
  */
-export function formatCommentMeta(comment: FileComment): string {
-  if (comment.origin_type === "ado-pr") {
-    const pr = comment.origin_pr_id ?? "?";
-    const status = comment.status ?? "active";
-    return `${comment.author} · PR #${pr} · ${status}`;
-  }
-  return `${comment.author}`;
+export function formatCommentMeta(comment: SessionFileComment): string {
+  const who = comment.author === "agent" ? "agent" : "you";
+  return `${who} · ${comment.status}`;
 }
 
-/** Returns true when the user is allowed to edit/delete this comment. */
-export function isMutable(comment: FileComment): boolean {
-  return comment.origin_type === "user";
+/** Returns true when the reviewer is allowed to edit/delete this comment. */
+export function isMutable(comment: SessionFileComment): boolean {
+  return comment.author === "reviewer";
+}
+
+/** Returns true when the comment is a resolved/dismissed reviewer note. */
+export function isClosedStatus(status: string): boolean {
+  return status === "resolved" || status === "wontfix";
+}
+
+export interface CommentThread {
+  root: SessionFileComment;
+  replies: SessionFileComment[];
 }
 
 /**
- * Rough height estimate (in editor line units) for the view zone we'll
- * render below a comment's anchor. One line for the meta header + one line
- * per ~80 chars of body, plus a 1-line bottom padding so adjacent lines of
- * code stay visually distinct from the comment block.
+ * Group a flat comment list into top-level reviewer notes with their threaded
+ * agent replies attached in creation order. Replies whose parent is absent are
+ * dropped (defensive).
  */
-export function estimateZoneHeightInLines(bodyMd: string): number {
-  const explicitLines = bodyMd.split(/\r?\n/).length;
-  const wrappedLines = bodyMd
-    .split(/\r?\n/)
-    .reduce((acc, line) => acc + Math.max(1, Math.ceil(line.length / 80)), 0);
-  return Math.max(3, 1 + Math.max(explicitLines, wrappedLines) + 1);
+export function groupCommentThreads(comments: SessionFileComment[]): CommentThread[] {
+  const roots = comments.filter((c) => c.parent_id === null);
+  const byParent = new Map<string, SessionFileComment[]>();
+  for (const c of comments) {
+    if (c.parent_id === null) continue;
+    const arr = byParent.get(c.parent_id) ?? [];
+    arr.push(c);
+    byParent.set(c.parent_id, arr);
+  }
+  return roots.map((root) => ({
+    root,
+    replies: (byParent.get(root.id) ?? []).sort((a, b) =>
+      a.created_at.localeCompare(b.created_at),
+    ),
+  }));
+}
+
+/**
+ * Rough height estimate (in editor line units) for the view zone we'll render
+ * below a comment thread's anchor. One line for the meta header + one line per
+ * ~80 chars of body for the root and each reply, plus padding so adjacent lines
+ * of code stay visually distinct from the comment block.
+ */
+export function estimateThreadHeightInLines(thread: CommentThread): number {
+  const bodyLines = (body: string): number =>
+    body.split(/\r?\n/).reduce((acc, line) => acc + Math.max(1, Math.ceil(line.length / 80)), 0);
+  let lines = 1 + bodyLines(thread.root.body);
+  for (const r of thread.replies) {
+    lines += 1 + bodyLines(r.body);
+  }
+  return Math.max(3, lines + 1);
 }

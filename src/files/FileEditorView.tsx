@@ -28,10 +28,13 @@ import {
   selectionToAnchor,
   formatCommentMeta,
   isMutable,
-  estimateZoneHeightInLines,
+  isClosedStatus,
+  groupCommentThreads,
+  estimateThreadHeightInLines,
   type Anchor,
+  type CommentThread,
 } from "./comments-layer";
-import type { FileComment } from "../domain/file-comments";
+import type { SessionFileComment } from "../domain/file-comments";
 import { getAppSettings, subscribeAppSettings } from "../domain/app-settings";
 
 const MAX_INLINE_EDIT_SIZE_BYTES = 1024 * 1024;
@@ -102,7 +105,7 @@ export interface FileEditorViewProps {
    * Inline file comments to render as Monaco view zones below their anchor.
    * Only used when `commentsEnabled` is true and the editor is mounted.
    */
-  comments?: import("../domain/file-comments").FileComment[];
+  comments?: import("../domain/file-comments").SessionFileComment[];
   /** When true, comment view zones are rendered. */
   commentsEnabled?: boolean;
   /**
@@ -113,12 +116,14 @@ export interface FileEditorViewProps {
     start: number,
     end: number,
     anchorText: string | null,
-    bodyMd: string,
+    body: string,
   ) => Promise<unknown>;
   /** Update-comment handler. Wired by the parent tile to `useFileComments.update`. */
-  onUpdateComment?: (id: string, bodyMd: string) => Promise<unknown>;
+  onUpdateComment?: (id: string, body: string) => Promise<unknown>;
   /** Delete-comment handler. Wired by the parent tile to `useFileComments.remove`. */
   onDeleteComment?: (id: string) => Promise<unknown>;
+  /** Set-status handler (resolve/reopen). Wired to `useFileComments.setStatus`. */
+  onSetCommentStatus?: (id: string, status: string) => Promise<unknown>;
 }
 
 import { detectLanguage } from "../domain/tile-config";
@@ -223,6 +228,7 @@ export function FileEditorView({
   onAddComment,
   onUpdateComment,
   onDeleteComment,
+  onSetCommentStatus,
 }: FileEditorViewProps): ReactElement {
   const editorHostRef = useRef<HTMLDivElement | null>(null);
   const editorRef = useRef<MonacoNs.editor.IStandaloneCodeEditor | null>(null);
@@ -250,16 +256,16 @@ export function FileEditorView({
   // editing an existing comment in place.
   const [composer, setComposer] = useState<
     | { mode: "create"; anchor: Anchor; body: string }
-    | { mode: "edit"; comment: FileComment; body: string }
+    | { mode: "edit"; comment: SessionFileComment; body: string }
     | null
   >(null);
 
-  const handleEditClick = useCallback((c: FileComment) => {
-    setComposer({ mode: "edit", comment: c, body: c.body_md });
+  const handleEditClick = useCallback((c: SessionFileComment) => {
+    setComposer({ mode: "edit", comment: c, body: c.body });
   }, []);
 
   const handleDeleteClick = useCallback(
-    (c: FileComment) => {
+    (c: SessionFileComment) => {
       if (!onDeleteComment) return;
       if (!window.confirm("Delete this comment?")) return;
       void onDeleteComment(c.id);
@@ -267,90 +273,116 @@ export function FileEditorView({
     [onDeleteComment],
   );
 
-  /** Imperatively populate the view-zone DOM node for a comment. */
-  function renderCommentZone(node: HTMLDivElement, c: FileComment): void {
+  const handleStatusClick = useCallback(
+    (c: SessionFileComment, status: string) => {
+      if (!onSetCommentStatus) return;
+      void onSetCommentStatus(c.id, status);
+    },
+    [onSetCommentStatus],
+  );
+
+  /** Imperatively populate the view-zone DOM node for a comment thread. */
+  function renderCommentZone(node: HTMLDivElement, thread: CommentThread): void {
     node.innerHTML = "";
     // Monaco's view-zone overlay defaults to pointer-events: none for the
     // surrounding layer; explicitly opt the comment dom into receiving
     // hover + click so the buttons are actually interactive (paired with the
     // INTERACTIVE_ZONES_CLASS on the editor host — see interactive-zones.ts).
     markInteractiveZoneNode(node);
-    const header = document.createElement("div");
-    header.style.display = "flex";
-    header.style.alignItems = "center";
-    header.style.gap = "8px";
-    header.style.marginBottom = "4px";
-    header.style.color = "#a6adc8";
-    header.style.fontSize = "10px";
-    const meta = document.createElement("span");
-    meta.textContent = formatCommentMeta(c);
-    if (c.status === "fixed" || c.status === "closed") {
-      meta.style.textDecoration = "line-through";
-      meta.style.opacity = "0.7";
-    }
-    header.appendChild(meta);
-    const spacer = document.createElement("span");
-    spacer.style.flex = "1";
-    header.appendChild(spacer);
-    if (isMutable(c)) {
-      const editBtn = document.createElement("button");
-      editBtn.textContent = "Edit";
-      editBtn.dataset.testid = `comment-edit-${c.id}`;
-      Object.assign(editBtn.style, {
+
+    const makeBtn = (
+      label: string,
+      color: string,
+      testid: string,
+      onClick: () => void,
+    ): HTMLButtonElement => {
+      const btn = document.createElement("button");
+      btn.textContent = label;
+      btn.dataset.testid = testid;
+      Object.assign(btn.style, {
         background: "none",
         border: "1px solid #45475a",
-        color: "#89b4fa",
+        color,
         borderRadius: "3px",
         padding: "1px 6px",
         cursor: "pointer",
         fontSize: "10px",
         pointerEvents: "auto",
       });
-      editBtn.addEventListener("mousedown", (e) => e.stopPropagation());
-      editBtn.addEventListener("click", (e) => {
+      btn.addEventListener("mousedown", (e) => e.stopPropagation());
+      btn.addEventListener("click", (e) => {
         e.stopPropagation();
         e.preventDefault();
-        handleEditClick(c);
+        onClick();
       });
-      header.appendChild(editBtn);
-      const delBtn = document.createElement("button");
-      delBtn.textContent = "Delete";
-      delBtn.dataset.testid = `comment-delete-${c.id}`;
-      Object.assign(delBtn.style, {
-        background: "none",
-        border: "1px solid #45475a",
-        color: "#f38ba8",
-        borderRadius: "3px",
-        padding: "1px 6px",
-        cursor: "pointer",
-        fontSize: "10px",
-        pointerEvents: "auto",
-      });
-      delBtn.addEventListener("mousedown", (e) => e.stopPropagation());
-      delBtn.addEventListener("click", (e) => {
-        e.stopPropagation();
-        e.preventDefault();
-        handleDeleteClick(c);
-      });
-      header.appendChild(delBtn);
-    } else if (c.origin_url) {
-      const link = document.createElement("a");
-      link.href = c.origin_url;
-      link.target = "_blank";
-      link.rel = "noreferrer";
-      link.textContent = "open in ADO";
-      link.style.color = "#89b4fa";
-      link.style.fontSize = "10px";
-      link.style.textDecoration = "none";
-      header.appendChild(link);
-    }
-    node.appendChild(header);
-    const body = document.createElement("div");
-    body.style.whiteSpace = "pre-wrap";
-    body.style.wordBreak = "break-word";
-    body.style.lineHeight = "1.5";
-    body.textContent = c.body_md;
-    node.appendChild(body);
+      return btn;
+    };
+
+    const appendEntry = (c: SessionFileComment, isReply: boolean): void => {
+      const wrap = document.createElement("div");
+      if (isReply) {
+        wrap.style.marginTop = "6px";
+        wrap.style.paddingLeft = "10px";
+        wrap.style.borderLeft = "2px solid #45475a";
+      }
+      wrap.dataset.testid = `comment-entry-${c.id}`;
+
+      const header = document.createElement("div");
+      header.style.display = "flex";
+      header.style.alignItems = "center";
+      header.style.gap = "8px";
+      header.style.marginBottom = "4px";
+      header.style.color = "#a6adc8";
+      header.style.fontSize = "10px";
+      const meta = document.createElement("span");
+      meta.textContent = formatCommentMeta(c);
+      meta.dataset.testid = `comment-meta-${c.id}`;
+      if (isClosedStatus(c.status)) {
+        meta.style.textDecoration = "line-through";
+        meta.style.opacity = "0.7";
+      }
+      header.appendChild(meta);
+      const spacer = document.createElement("span");
+      spacer.style.flex = "1";
+      header.appendChild(spacer);
+
+      if (isMutable(c)) {
+        // Resolve / reopen toggle for the reviewer's own note.
+        if (onSetCommentStatus) {
+          if (isClosedStatus(c.status)) {
+            header.appendChild(
+              makeBtn("Reopen", "#a6e3a1", `comment-reopen-${c.id}`, () =>
+                handleStatusClick(c, "open"),
+              ),
+            );
+          } else {
+            header.appendChild(
+              makeBtn("Resolve", "#a6e3a1", `comment-resolve-${c.id}`, () =>
+                handleStatusClick(c, "resolved"),
+              ),
+            );
+          }
+        }
+        header.appendChild(
+          makeBtn("Edit", "#89b4fa", `comment-edit-${c.id}`, () => handleEditClick(c)),
+        );
+        header.appendChild(
+          makeBtn("Delete", "#f38ba8", `comment-delete-${c.id}`, () => handleDeleteClick(c)),
+        );
+      }
+      wrap.appendChild(header);
+
+      const body = document.createElement("div");
+      body.style.whiteSpace = "pre-wrap";
+      body.style.wordBreak = "break-word";
+      body.style.lineHeight = "1.5";
+      body.textContent = c.body;
+      wrap.appendChild(body);
+      node.appendChild(wrap);
+    };
+
+    appendEntry(thread.root, false);
+    for (const reply of thread.replies) appendEntry(reply, true);
   }
 
 
@@ -567,7 +599,8 @@ export function FileEditorView({
       for (const zid of zoneIdsRef.current.values()) accessor.removeZone(zid);
       zoneIdsRef.current.clear();
       zoneNodesRef.current.clear();
-      for (const c of comments) {
+      for (const thread of groupCommentThreads(comments)) {
+        const c = thread.root;
         const dom = document.createElement("div");
         dom.style.background = "#1e1e2e";
         dom.style.borderTop = "1px solid #313244";
@@ -578,11 +611,11 @@ export function FileEditorView({
         dom.style.color = "#cdd6f4";
         dom.dataset.testid = `comment-zone-${c.id}`;
         dom.dataset.commentId = c.id;
-        renderCommentZone(dom, c);
+        renderCommentZone(dom, thread);
         zoneNodesRef.current.set(c.id, dom);
         const zid = accessor.addZone({
           afterLineNumber: c.anchor_line_end,
-          heightInLines: estimateZoneHeightInLines(c.body_md),
+          heightInLines: estimateThreadHeightInLines(thread),
           domNode: dom,
           // Let our DOM (with pointer-events: auto) handle mouse events
           // instead of Monaco eating mousedown as a cursor movement.
@@ -602,7 +635,7 @@ export function FileEditorView({
       ids.clear();
       zoneNodesRef.current.clear();
     };
-  }, [comments, commentsEnabled, editorReadyToken, handleEditClick, handleDeleteClick]);
+  }, [comments, commentsEnabled, editorReadyToken, handleEditClick, handleDeleteClick, handleStatusClick]);
 
   // Selection listener -> floating + composer trigger.
   useEffect(() => {
