@@ -18,12 +18,19 @@ export interface TileMenuItem {
 interface Props {
   items: TileMenuItem[];
   buttonStyle?: React.CSSProperties;
+  /** When true, the button is greyed out and cannot be opened (e.g. no workstream selected). */
+  disabled?: boolean;
 }
 
-export default function AddTileMenu({ items, buttonStyle }: Props) {
+export default function AddTileMenu({ items, buttonStyle, disabled = false }: Props) {
   const [open, setOpen] = useState(false);
   const [highlightIdx, setHighlightIdx] = useState(0);
   const rootRef = useRef<HTMLDivElement | null>(null);
+
+  // Close the menu if it becomes disabled while open.
+  useEffect(() => {
+    if (disabled && open) setOpen(false);
+  }, [disabled, open]);
 
   // Close on outside click / Escape.
   useEffect(() => {
@@ -64,26 +71,30 @@ export default function AddTileMenu({ items, buttonStyle }: Props) {
     <div ref={rootRef} style={{ position: "relative" }}>
       <button
         onClick={() => {
+          if (disabled) return;
           setOpen((v) => !v);
           setHighlightIdx(0);
         }}
+        disabled={disabled}
         style={{
           background: open ? "#313244" : "transparent",
           border: "1px solid #45475a",
           borderRadius: 4,
           color: "#cdd6f4",
-          cursor: "pointer",
+          cursor: disabled ? "not-allowed" : "pointer",
           fontSize: 11,
           padding: "4px 8px",
           display: "inline-flex",
           alignItems: "center",
           gap: 4,
+          opacity: disabled ? 0.4 : 1,
           ...(buttonStyle ?? {}),
         }}
-        title="Add tile"
+        title={disabled ? "Select a workstream to add tiles" : "Add tile"}
         data-testid="add-tile-button"
         aria-haspopup="menu"
         aria-expanded={open}
+        aria-disabled={disabled}
       >
         <PlusIcon style={{ width: 12, height: 12 }} />
         <span>Add tile</span>

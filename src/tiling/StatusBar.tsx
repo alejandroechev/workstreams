@@ -12,6 +12,8 @@ interface Props {
   canEnterSideBySide: boolean;
   /** When true the SBS selection checkboxes are visible across tiles. */
   sbsSelectionMode?: boolean;
+  /** When true (no workstream selected), the Add-tile / side-by-side / fullscreen controls are disabled. */
+  disabled?: boolean;
   workstreamName?: string;
   onAddSession?: () => void;
   onAddTerminal?: () => void;
@@ -48,6 +50,7 @@ export default function StatusBar({
   sideBySide,
   canEnterSideBySide: _canEnterSideBySide,
   sbsSelectionMode = false,
+  disabled = false,
   workstreamName,
   onAddSession,
   onAddTerminal,
@@ -105,7 +108,7 @@ export default function StatusBar({
         )}
       </div>
       <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
-        <AddTileMenu items={menuItems} />
+        <AddTileMenu items={menuItems} disabled={disabled} />
         {onOpenSettings && (
           <button
             data-testid="open-settings"
@@ -119,34 +122,42 @@ export default function StatusBar({
         {onToggleSideBySide && (
           <button
             data-testid="toggle-sbs"
+            disabled={disabled}
             style={{
               ...iconBtnStyle,
               color: sideBySide ? "#cba6f7" : sbsSelectionMode ? "#f9e2af" : "#cdd6f4",
               borderColor: sideBySide ? "#cba6f7" : sbsSelectionMode ? "#f9e2af" : "#585b70",
               background: sideBySide ? "#3a2f4f" : sbsSelectionMode ? "#3a3520" : iconBtnStyle.background,
-              cursor: "pointer",
+              cursor: disabled ? "not-allowed" : "pointer",
+              opacity: disabled ? 0.4 : 1,
             }}
-            onClick={onToggleSideBySide}
+            onClick={disabled ? undefined : onToggleSideBySide}
             title={
-              sideBySide
-                ? "Exit side-by-side (Alt+S)"
-                : sbsSelectionMode
-                  ? "Cancel side-by-side selection (Alt+S)"
-                  : "Pick two tiles for side-by-side (Alt+S)"
+              disabled
+                ? "Select a workstream to use side-by-side"
+                : sideBySide
+                  ? "Exit side-by-side (Alt+S)"
+                  : sbsSelectionMode
+                    ? "Cancel side-by-side selection (Alt+S)"
+                    : "Pick two tiles for side-by-side (Alt+S)"
             }
           >
             <ViewColumnsIcon style={{ width: 13, height: 13, display: "block" }} />
           </button>
         )}
         <button
+          data-testid="toggle-fullscreen"
+          disabled={disabled}
           style={{
             ...iconBtnStyle,
             color: fullscreen ? "#f9e2af" : "#cdd6f4",
             borderColor: fullscreen ? "#f9e2af" : "#585b70",
             background: fullscreen ? "#3f3a25" : iconBtnStyle.background,
+            cursor: disabled ? "not-allowed" : "pointer",
+            opacity: disabled ? 0.4 : 1,
           }}
-          onClick={onToggleFullscreen}
-          title="Toggle fullscreen (Alt+F)"
+          onClick={disabled ? undefined : onToggleFullscreen}
+          title={disabled ? "Select a workstream to use fullscreen" : "Toggle fullscreen (Alt+F)"}
         >
           ⛶
         </button>

@@ -1461,6 +1461,7 @@ export default function App() {
           sideBySide={sideBySideTileIds !== null}
           canEnterSideBySide={selectedForSideBySide.size === 2}
           sbsSelectionMode={sbsSelectionMode}
+          disabled={!activeWsId}
           workstreamName={
             workstreams.find((w) => w.id === activeWsId)?.name || ""
           }

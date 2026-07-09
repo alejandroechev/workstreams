@@ -76,6 +76,32 @@ describe("WorkstreamActionMenu", () => {
     expect(handlers.onClose).toHaveBeenCalledOnce();
   });
 
+  it("stops action clicks from bubbling to an ancestor (row select) handler", () => {
+    const onAncestorClick = vi.fn();
+    const handlers = {
+      onClose: vi.fn(),
+      onRename: vi.fn(),
+      onChangeStatus: vi.fn(),
+      onChangeWorktree: vi.fn(),
+      onFork: vi.fn(),
+      onArchive: vi.fn(),
+    };
+    render(
+      <div onClick={onAncestorClick} data-testid="row">
+        <WorkstreamActionMenu
+          workstream={baseWs}
+          anchor={{ top: 10, left: 10 }}
+          {...handlers}
+        />
+      </div>,
+    );
+    fireEvent.click(screen.getByTestId("action-archive"));
+    expect(handlers.onArchive).toHaveBeenCalledOnce();
+    // The row's select handler must NOT fire — invoking an action on a
+    // non-loaded workstream should not open/load it.
+    expect(onAncestorClick).not.toHaveBeenCalled();
+  });
+
   it("closes on Escape", () => {
     const handlers = renderMenu();
     // Wait for the deferred listener install.

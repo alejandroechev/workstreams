@@ -17,6 +17,15 @@ describe("AddTileMenu", () => {
     expect(screen.getByText("Add tile")).toBeTruthy();
   });
 
+  it("is disabled and will not open when disabled (no workstream selected)", () => {
+    render(<AddTileMenu items={makeItems()} disabled />);
+    const btn = screen.getByTestId("add-tile-button") as HTMLButtonElement;
+    expect(btn.disabled).toBe(true);
+    expect(btn.getAttribute("title")).toMatch(/select a workstream/i);
+    fireEvent.click(btn);
+    expect(screen.queryByTestId("add-tile-menu")).toBeFalsy();
+  });
+
   it("opens the menu on click and shows all items", () => {
     render(<AddTileMenu items={makeItems()} />);
     fireEvent.click(screen.getByTestId("add-tile-button"));

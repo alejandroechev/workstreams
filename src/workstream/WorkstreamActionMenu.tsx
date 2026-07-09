@@ -64,6 +64,11 @@ export function WorkstreamActionMenu({
       ref={ref}
       data-testid="workstream-action-menu"
       data-workstream-id={workstream.id}
+      // The menu renders as a DOM descendant of its sidebar row (which selects
+      // the workstream on click). Stop clicks here so invoking an action
+      // (rename, change worktree, archive, …) on a NON-loaded workstream does
+      // not bubble up and open/load it.
+      onClick={(e) => e.stopPropagation()}
       style={{
         ...menuStyle,
         top: anchor.top,
