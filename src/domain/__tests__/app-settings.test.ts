@@ -206,6 +206,39 @@ describe("app-settings mutate", () => {
     expect(getAppSettings().copilotCommand).toBe("copilot --yolo");
     expect(sqlStore.get("app.copilot_command")).toBe("copilot --yolo");
   });
+
+  it("setAppSettings persists disableWebglRenderer as '1'/'0'", async () => {
+    setAppSettings({ disableWebglRenderer: true });
+    await Promise.resolve();
+    expect(getAppSettings().disableWebglRenderer).toBe(true);
+    expect(sqlStore.get("app.disable_webgl_renderer")).toBe("1");
+    setAppSettings({ disableWebglRenderer: false });
+    await Promise.resolve();
+    expect(getAppSettings().disableWebglRenderer).toBe(false);
+    expect(sqlStore.get("app.disable_webgl_renderer")).toBe("0");
+  });
+});
+
+describe("app-settings disableWebglRenderer", () => {
+  it("defaults to false and sanitizes non-boolean input", () => {
+    expect(DEFAULT_SETTINGS.disableWebglRenderer).toBe(false);
+    expect(sanitize({ disableWebglRenderer: true }).disableWebglRenderer).toBe(true);
+    expect(
+      sanitize({ disableWebglRenderer: "1" as unknown as boolean }).disableWebglRenderer,
+    ).toBe(false);
+  });
+
+  it("hydrate reads app.disable_webgl_renderer from SQLite ('1' → true)", async () => {
+    sqlStore.set("app.disable_webgl_renderer", "1");
+    const result = await hydrateAppSettings();
+    expect(result.disableWebglRenderer).toBe(true);
+  });
+
+  it("hydrate treats '0' as false", async () => {
+    sqlStore.set("app.disable_webgl_renderer", "0");
+    const result = await hydrateAppSettings();
+    expect(result.disableWebglRenderer).toBe(false);
+  });
 });
 
 describe("app-settings copilotCommand hydration", () => {

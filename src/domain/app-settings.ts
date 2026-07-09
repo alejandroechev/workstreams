@@ -31,6 +31,7 @@ const SQL_KEYS = {
   markdownFontSize: "app.font.markdown",
   terminalFontSize: "app.font.terminal",
   copilotCommand: "app.copilot_command",
+  disableWebglRenderer: "app.disable_webgl_renderer",
 } as const;
 
 export interface AppSettings {
@@ -44,6 +45,10 @@ export interface AppSettings {
    * `agency copilot --yolo` wrapper; can be set to plain `copilot --yolo`
    * (or any compatible CLI) for external users. */
   copilotCommand: string;
+  /** When true, terminal/Copilot tiles skip the xterm WebGL (GPU) renderer and
+   * use the DOM renderer only. Escape hatch for GPU context-loss "black
+   * terminal" issues — the DOM renderer is slower but never goes black. */
+  disableWebglRenderer: boolean;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -52,6 +57,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   markdownFontSize: 12,
   terminalFontSize: 12,
   copilotCommand: "agency copilot --yolo",
+  disableWebglRenderer: false,
 };
 
 export const SCROLL_SPEED_MIN = 0.1;
@@ -115,6 +121,10 @@ export function sanitize(raw: Partial<AppSettings> | null | undefined): AppSetti
       typeof raw.copilotCommand === "string" && raw.copilotCommand.trim().length > 0
         ? raw.copilotCommand.trim()
         : DEFAULT_SETTINGS.copilotCommand,
+    disableWebglRenderer:
+      typeof raw.disableWebglRenderer === "boolean"
+        ? raw.disableWebglRenderer
+        : DEFAULT_SETTINGS.disableWebglRenderer,
   };
 }
 
@@ -156,13 +166,21 @@ async function readSqlSettings(): Promise<Partial<AppSettings>> {
       }
     } catch { /* ignore */ }
   })());
+  // Boolean-typed: disableWebglRenderer ("1"/"0").
+  tasks.push((async () => {
+    try {
+      const raw = await invoke<string | null>("get_setting", { key: SQL_KEYS.disableWebglRenderer });
+      if (raw === "1" || raw === "0") entries.disableWebglRenderer = raw === "1";
+    } catch { /* ignore */ }
+  })());
   await Promise.all(tasks);
   return entries;
 }
 
-async function writeSqlSetting(key: keyof typeof SQL_KEYS, value: number | string): Promise<void> {
+async function writeSqlSetting(key: keyof typeof SQL_KEYS, value: number | string | boolean): Promise<void> {
   try {
-    await invoke("set_setting", { key: SQL_KEYS[key], value: String(value) });
+    const serialized = typeof value === "boolean" ? (value ? "1" : "0") : String(value);
+    await invoke("set_setting", { key: SQL_KEYS[key], value: serialized });
   } catch {
     /* ignore */
   }
@@ -247,13 +265,15 @@ export function setAppSettings(next: Partial<AppSettings>): AppSettings {
   if (merged.markdownFontSize !== cached.markdownFontSize) changed.push("markdownFontSize");
   if (merged.terminalFontSize !== cached.terminalFontSize) changed.push("terminalFontSize");
   if (merged.copilotCommand !== cached.copilotCommand) changed.push("copilotCommand");
+  if (merged.disableWebglRenderer !== cached.disableWebglRenderer) changed.push("disableWebglRenderer");
   cached = merged;
   for (const k of changed) {
-    const v: number | string =
+    const v: number | string | boolean =
       k === "terminalScrollSpeed" ? merged.terminalScrollSpeed
       : k === "textFontSize" ? merged.textFontSize
       : k === "markdownFontSize" ? merged.markdownFontSize
       : k === "terminalFontSize" ? merged.terminalFontSize
+      : k === "disableWebglRenderer" ? merged.disableWebglRenderer
       : merged.copilotCommand;
     void writeSqlSetting(k, v);
   }

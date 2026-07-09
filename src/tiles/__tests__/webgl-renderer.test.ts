@@ -88,6 +88,91 @@ describe("createWebglController", () => {
     expect(ctl.isLoaded()).toBe(true);
   });
 
+  it("calls onContextLoss so the host can force a fallback repaint", () => {
+    const addon = makeAddon();
+    const onContextLoss = vi.fn();
+    const ctl = createWebglController({
+      createAddon: () => addon as unknown as WebglAddonLike,
+      loadAddon: vi.fn(),
+      getContainer: () => makeContainer(),
+      onContextLoss,
+    });
+    ctl.tryLoad();
+    addon.triggerContextLoss();
+    expect(onContextLoss).toHaveBeenCalledTimes(1);
+  });
+
+  it("gives up on WebGL after maxContextLosses and stays on the DOM renderer", () => {
+    // Each tryLoad returns a fresh addon so we can lose the context repeatedly.
+    const addons: ReturnType<typeof makeAddon>[] = [];
+    const create = vi.fn(() => {
+      const a = makeAddon();
+      addons.push(a);
+      return a as unknown as WebglAddonLike;
+    });
+    const ctl = createWebglController({
+      createAddon: create,
+      loadAddon: vi.fn(),
+      getContainer: () => makeContainer(),
+      maxContextLosses: 2,
+    });
+
+    // Loss #1: still recoverable.
+    ctl.tryLoad();
+    addons[0].triggerContextLoss();
+    expect(ctl.hasGivenUp()).toBe(false);
+    ctl.tryLoad();
+    expect(ctl.isLoaded()).toBe(true);
+
+    // Loss #2: hits the threshold → give up.
+    addons[1].triggerContextLoss();
+    expect(ctl.hasGivenUp()).toBe(true);
+    expect(ctl.isLoaded()).toBe(false);
+
+    // Further reveals must NOT re-create WebGL — permanent DOM renderer.
+    ctl.tryLoad();
+    ctl.tryLoad();
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(ctl.isLoaded()).toBe(false);
+  });
+
+  it("does not load when isDisabled() returns true (global opt-out)", () => {
+    const create = vi.fn(() => makeAddon() as unknown as WebglAddonLike);
+    let disabled = true;
+    const ctl = createWebglController({
+      createAddon: create,
+      loadAddon: vi.fn(),
+      getContainer: () => makeContainer(),
+      isDisabled: () => disabled,
+    });
+    ctl.tryLoad();
+    expect(create).not.toHaveBeenCalled();
+    expect(ctl.isLoaded()).toBe(false);
+    // Flipping the setting off re-enables on the next tryLoad.
+    disabled = false;
+    ctl.tryLoad();
+    expect(ctl.isLoaded()).toBe(true);
+  });
+
+  it("unload() drops a live addon but keeps the controller re-loadable", () => {
+    const addon = makeAddon();
+    const create = vi.fn(() => addon as unknown as WebglAddonLike);
+    const ctl = createWebglController({
+      createAddon: create,
+      loadAddon: vi.fn(),
+      getContainer: () => makeContainer(),
+    });
+    ctl.tryLoad();
+    expect(ctl.isLoaded()).toBe(true);
+    ctl.unload();
+    expect(addon.dispose).toHaveBeenCalled();
+    expect(ctl.isLoaded()).toBe(false);
+    // Unlike dispose(), unload() allows a later tryLoad to re-create it.
+    ctl.tryLoad();
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(ctl.isLoaded()).toBe(true);
+  });
+
   it("stays on the DOM renderer when addon creation throws", () => {
     const ctl = createWebglController({
       createAddon: () => {

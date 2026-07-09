@@ -94,7 +94,11 @@ Pre-built Windows installers are attached to every
 3. Navigate between tiles with `Alt+Arrows`. Fullscreen the focused one
    with `Alt+F`.
 4. Open the settings dialog (gear icon) to tune font sizes, terminal scroll
-   speed, and the Copilot command.
+   speed, the Copilot command, and rendering. Terminals use the GPU (WebGL)
+   renderer by default; if a terminal ever goes **black** and won't recover,
+   toggle **Disable GPU (WebGL) rendering** to fall back to the slower DOM
+   renderer (which never blanks). Terminals also self-recover from GPU context
+   loss and permanently drop to the DOM renderer after repeated losses.
 
 ## Keyboard shortcuts
 

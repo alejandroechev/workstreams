@@ -92,13 +92,23 @@ export default function TerminalTile({ tileId, isFocused, focusToken, isFullscre
     // controller that only initialises when the container is visible+sized
     // (persist-by-hide leaves inactive tiles at 0×0) and that gracefully falls
     // back to the DOM renderer on WebGL context loss, re-creating on reveal.
+    // On context loss it forces a repaint (so the canvas doesn't stay black)
+    // and, after repeated losses, gives up on WebGL for good. The global
+    // "disable GPU rendering" setting forces the DOM renderer outright.
     const webgl = createWebglController({
       createAddon: () => new WebglAddon(),
       loadAddon: (addon) => term.loadAddon(addon as unknown as Parameters<typeof term.loadAddon>[0]),
       getContainer: () => containerRef.current,
+      isDisabled: () => getAppSettings().disableWebglRenderer,
+      onContextLoss: () => {
+        try { if (term.rows > 0) term.refresh(0, term.rows - 1); } catch { /* best effort */ }
+        setTimeout(() => {
+          try { if (term.rows > 0) term.refresh(0, term.rows - 1); } catch { /* best effort */ }
+        }, 50);
+      },
     });
     webglRef.current = webgl;
-    webgl.tryLoad();
+    if (!getAppSettings().disableWebglRenderer) webgl.tryLoad();
 
     // Expose terminal instance on container for dev/E2E probes.
     (containerRef.current as unknown as { __wsTerm?: unknown }).__wsTerm = term;
@@ -358,7 +368,8 @@ export default function TerminalTile({ tileId, isFocused, focusToken, isFullscre
 
   // Apply font-size changes to xterm + re-fit + tell the PTY about the
   // new cell grid. Idempotent: if the term hasn't been initialised yet
-  // Live font-size updates from the global terminal font setting.
+  // Live updates from global settings: terminal font size + the GPU-renderer
+  // toggle (unload WebGL + repaint on disable; re-load on re-enable).
   useEffect(() => {
     return subscribeAppSettings((s) => {
       const term = termRef.current;
@@ -367,6 +378,15 @@ export default function TerminalTile({ tileId, isFocused, focusToken, isFullscre
         term.options.fontSize = s.terminalFontSize;
         ptyFitRef.current?.invalidate();
         ptyFitRef.current?.request();
+      }
+      const webgl = webglRef.current;
+      if (webgl) {
+        if (s.disableWebglRenderer && webgl.isLoaded()) {
+          webgl.unload();
+          try { if (term.rows > 0) term.refresh(0, term.rows - 1); } catch { /* best effort */ }
+        } else if (!s.disableWebglRenderer && !webgl.isLoaded()) {
+          webgl.tryLoad();
+        }
       }
     });
   }, []);

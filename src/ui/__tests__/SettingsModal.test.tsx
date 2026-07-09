@@ -83,6 +83,18 @@ describe("SettingsModal", () => {
     expect(getAppSettings().terminalFontSize).toBe(12);
   });
 
+  it("toggles disable-WebGL and commits after debounce", () => {
+    expect(getAppSettings().disableWebglRenderer).toBe(false);
+    render(<SettingsModal open onClose={() => {}} />);
+    const checkbox = screen.getByTestId("settings-disable-webgl") as HTMLInputElement;
+    expect(checkbox.checked).toBe(false);
+    fireEvent.click(checkbox);
+    // Debounced commit — cache not updated until the timer fires.
+    expect(getAppSettings().disableWebglRenderer).toBe(false);
+    act(() => vi.advanceTimersByTime(DEBOUNCE_MS));
+    expect(getAppSettings().disableWebglRenderer).toBe(true);
+  });
+
   it("close button fires onClose", () => {
     let closed = false;
     render(<SettingsModal open onClose={() => (closed = true)} />);

@@ -252,6 +252,27 @@ export default function SettingsModal({ open, onClose }: Props) {
           <div style={{ height: 1, background: "#313244", margin: "18px 0 14px" }} />
 
           <div style={{ fontSize: 11, color: "#89b4fa", marginBottom: 8, textTransform: "uppercase", letterSpacing: 0.5 }}>
+            Rendering
+          </div>
+          <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+            <input
+              type="checkbox"
+              data-testid="settings-disable-webgl"
+              checked={localValues.disableWebglRenderer}
+              onChange={(e) => update({ disableWebglRenderer: e.target.checked })}
+            />
+            <span>Disable GPU (WebGL) rendering for terminals</span>
+          </label>
+          <div style={{ marginTop: 4, fontSize: 11, color: "#6c7086" }}>
+            Terminal and Copilot session tiles render on the GPU (WebGL) for
+            speed. If a terminal goes <strong>black</strong> and won't recover,
+            turn this on to force the slower DOM renderer, which never blanks.
+            Applies to open tiles immediately.
+          </div>
+
+          <div style={{ height: 1, background: "#313244", margin: "18px 0 14px" }} />
+
+          <div style={{ fontSize: 11, color: "#89b4fa", marginBottom: 8, textTransform: "uppercase", letterSpacing: 0.5 }}>
             App behavior
           </div>
           <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
