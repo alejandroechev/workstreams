@@ -38,20 +38,26 @@ echo "🔍 Pre-push: Rust clippy..."
 # FULL suite when a push touches e2e/ or UI source. We run the whole suite
 # (not --only-changed) so a src change that breaks a spec it doesn't import
 # is caught locally too — specs drive the app by URL, not by import, so
-# --only-changed would miss that class. Benchmarks (12-core, cold server):
-# the full suite is ~90s with `--workers=2 --retries=1`. Those flags matter:
-# the default 6 workers overwhelm the single Vite dev server during the cold
-# Monaco compile (flaky page.goto timeouts); 2 workers + one retry is the
-# reliable sweet spot. Unrelated pushes (docs/backend-only) skip E2E entirely.
+# --only-changed would miss that class. Unrelated pushes (docs/backend-only)
+# skip E2E entirely.
+#
+# Run SERIALLY (--workers=1). The Monaco-heavy view-zone specs (code-review,
+# comment-interactivity) are timing-sensitive: with >1 worker, parallel
+# browsers contend for the single Vite dev server during on-demand Monaco
+# compilation and flake (page.goto timeouts / zones not yet rendered). Serial
+# is reliable in every benchmark; --retries=2 absorbs a cold-start miss on the
+# first spec and only costs time when something actually flakes. ~80-135s.
+# Tip: keep a `npm run dev:e2e` server running to make this fast (Playwright
+# reuses it) — see playwright.config.ts reuseExistingServer.
 REMOTE_REF_E2E=$(git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null || echo "")
 if [ -n "$REMOTE_REF_E2E" ]; then
   E2E_TOUCHED=$(git diff --name-only "$REMOTE_REF_E2E..HEAD" -- \
     'e2e/' 'src/tiles/' 'src/files/' 'src/harness/' 'src/App.tsx' 'src/backend/' \
     'playwright.config.ts' 2>/dev/null | wc -l | awk '{print $1+0}')
   if [ "$E2E_TOUCHED" -gt 0 ]; then
-    echo "🔍 Pre-push: Playwright (full suite, --workers=2 --retries=1)..."
-    npx playwright test --workers=2 --retries=1 \
-      || fail "Playwright E2E failed. Run 'npx playwright test --workers=2 --retries=1' locally (starts dev:e2e)."
+    echo "🔍 Pre-push: Playwright (full suite, --workers=1 --retries=2)..."
+    npx playwright test --workers=1 --retries=2 \
+      || fail "Playwright E2E failed. Run 'npx playwright test --workers=1 --retries=2' locally (starts dev:e2e)."
   fi
 fi
 
