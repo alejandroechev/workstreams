@@ -24,6 +24,9 @@ pub struct Project {
     pub directory: String,
     pub git_remote: Option<String>,
     pub color: String,
+    /// Optional per-project Copilot command override. NULL/None = inherit the
+    /// global `app.copilot_command` setting. See ADR / grill notes.
+    pub copilot_command: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -193,6 +196,7 @@ fn create_project(
         directory,
         git_remote,
         color: c,
+        copilot_command: None,
         created_at: ts.clone(),
         updated_at: ts,
     })
@@ -202,7 +206,7 @@ fn create_project(
 fn list_projects(state: State<'_, AppState>) -> Result<Vec<Project>, String> {
     let db = state.db.lock().unwrap();
     let mut stmt = db
-        .prepare("SELECT id, name, directory, git_remote, color, created_at, updated_at FROM projects ORDER BY name")
+        .prepare("SELECT id, name, directory, git_remote, color, copilot_command, created_at, updated_at FROM projects ORDER BY name")
         .map_err(|e| format!("DB error: {e}"))?;
     let rows = stmt
         .query_map([], |row| {
@@ -212,8 +216,9 @@ fn list_projects(state: State<'_, AppState>) -> Result<Vec<Project>, String> {
                 directory: row.get(2)?,
                 git_remote: row.get(3)?,
                 color: row.get(4)?,
-                created_at: row.get(5)?,
-                updated_at: row.get(6)?,
+                copilot_command: row.get(5)?,
+                created_at: row.get(6)?,
+                updated_at: row.get(7)?,
             })
         })
         .map_err(|e| format!("DB error: {e}"))?;
@@ -227,6 +232,7 @@ fn update_project(
     id: String,
     name: Option<String>,
     color: Option<String>,
+    copilot_command: Option<String>,
 ) -> Result<(), String> {
     let db = state.db.lock().unwrap();
     let ts = now();
@@ -241,6 +247,22 @@ fn update_project(
         db.execute(
             "UPDATE projects SET color = ?1, updated_at = ?2 WHERE id = ?3",
             (&c, &ts, &id),
+        )
+        .map_err(|e| format!("DB error: {e}"))?;
+    }
+    // Per-project Copilot command override. An empty/whitespace value clears the
+    // override (stores NULL = inherit the global command); a non-empty value is
+    // stored trimmed. Omitted (None) leaves the current value untouched.
+    if let Some(cmd) = copilot_command {
+        let trimmed = cmd.trim();
+        let value: Option<&str> = if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed)
+        };
+        db.execute(
+            "UPDATE projects SET copilot_command = ?1, updated_at = ?2 WHERE id = ?3",
+            (value, &ts, &id),
         )
         .map_err(|e| format!("DB error: {e}"))?;
     }

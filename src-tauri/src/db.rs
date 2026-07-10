@@ -97,6 +97,7 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
             directory TEXT NOT NULL,
             git_remote TEXT,
             color TEXT NOT NULL DEFAULT '#89b4fa',
+            copilot_command TEXT,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         );
@@ -171,6 +172,7 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
         "ALTER TABLE workstreams ADD COLUMN project_id TEXT REFERENCES projects(id)",
         "ALTER TABLE workstreams ADD COLUMN workstream_type TEXT NOT NULL DEFAULT 'standalone'",
         "ALTER TABLE workstreams ADD COLUMN worktree_branch TEXT",
+        "ALTER TABLE projects ADD COLUMN copilot_command TEXT",
     ];
     for sql in &migrations {
         // SQLite errors if column already exists — ignore that error
@@ -352,6 +354,54 @@ mod tests {
             })
             .unwrap();
         assert_eq!(name, "Test");
+    }
+
+    #[test]
+    fn projects_copilot_command_defaults_null_and_round_trips() {
+        let conn = open_in_memory();
+        // Insert without the column → NULL (inherit global).
+        conn.execute(
+            "INSERT INTO projects (id, name, directory, color, created_at, updated_at) VALUES ('p1', 'Test', '/tmp', '#fff', 't1', 't1')",
+            [],
+        )
+        .unwrap();
+        let cmd: Option<String> = conn
+            .query_row(
+                "SELECT copilot_command FROM projects WHERE id = 'p1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(cmd, None, "new projects default to NULL (inherit)");
+
+        // Set an override, then clear it back to NULL — mirrors update_project.
+        conn.execute(
+            "UPDATE projects SET copilot_command = 'copilot --yolo' WHERE id = 'p1'",
+            [],
+        )
+        .unwrap();
+        let set: Option<String> = conn
+            .query_row(
+                "SELECT copilot_command FROM projects WHERE id = 'p1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(set.as_deref(), Some("copilot --yolo"));
+
+        conn.execute(
+            "UPDATE projects SET copilot_command = NULL WHERE id = 'p1'",
+            [],
+        )
+        .unwrap();
+        let cleared: Option<String> = conn
+            .query_row(
+                "SELECT copilot_command FROM projects WHERE id = 'p1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(cleared, None, "empty override clears back to inherit");
     }
 
     #[test]
