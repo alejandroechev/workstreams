@@ -37,6 +37,24 @@ describe("TauriBackend", () => {
     expect(invoke).toHaveBeenCalledWith("update_project", expect.objectContaining({ id: "p1", name: "Renamed" }));
   });
 
+  it("updateProject maps copilot_command to the camelCase Rust arg", async () => {
+    invoke.mockResolvedValueOnce(undefined);
+    await backend.updateProject("p1", { copilot_command: "copilot --yolo" });
+    expect(invoke).toHaveBeenCalledWith("update_project", { id: "p1", copilotCommand: "copilot --yolo" });
+  });
+
+  it("updateProject forwards an empty copilot_command (clear override)", async () => {
+    invoke.mockResolvedValueOnce(undefined);
+    await backend.updateProject("p1", { copilot_command: "" });
+    expect(invoke).toHaveBeenCalledWith("update_project", { id: "p1", copilotCommand: "" });
+  });
+
+  it("updateProject does not forward fields that update_project can't write", async () => {
+    invoke.mockResolvedValueOnce(undefined);
+    await backend.updateProject("p1", { git_remote: "https://x" } as never);
+    expect(invoke).toHaveBeenCalledWith("update_project", { id: "p1" });
+  });
+
   it("updateWorkstream passes id and updates", async () => {
     invoke.mockResolvedValueOnce(undefined);
     await backend.updateWorkstream("w1", { name: "Renamed", status: "blocked" });

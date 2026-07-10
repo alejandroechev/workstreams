@@ -87,6 +87,7 @@ export class MemoryBackend implements Backend {
       directory,
       git_remote: null,
       color: color || "#89b4fa",
+      copilot_command: null,
       created_at: now(),
       updated_at: now(),
     };
@@ -97,7 +98,14 @@ export class MemoryBackend implements Backend {
   async updateProject(id: string, updates: Partial<Project>): Promise<void> {
     const p = this.projects.get(id);
     if (!p) throw new Error(`Project not found: ${id}`);
-    Object.assign(p, updates, { updated_at: now() });
+    // Mirror the Rust update_project override semantics: an empty/whitespace
+    // copilot_command clears the override (null = inherit global).
+    const patch: Partial<Project> = { ...updates };
+    if (typeof patch.copilot_command === "string") {
+      const trimmed = patch.copilot_command.trim();
+      patch.copilot_command = trimmed.length > 0 ? trimmed : null;
+    }
+    Object.assign(p, patch, { updated_at: now() });
   }
 
   async deleteProject(id: string): Promise<void> {

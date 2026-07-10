@@ -13,6 +13,7 @@ import {
 } from "@heroicons/react/20/solid";
 import { PROJECT_PRESET_COLORS, isCustomProjectColor } from "../domain/colors";
 import { reorderById } from "../domain/reorder";
+import { getAppSettings } from "../domain/app-settings";
 import { WorkstreamActionMenu } from "./WorkstreamActionMenu";
 
 interface Props {
@@ -31,7 +32,7 @@ interface Props {
   onCreateWorkstream: (projectId?: string) => void;
   onArchiveWorkstream: (id: string) => void;
   onRenameWorkstream: (id: string, newName: string) => void;
-  onUpdateProject: (id: string, updates: { name: string; color: string }) => void;
+  onUpdateProject: (id: string, updates: { name: string; color: string; copilot_command: string | null }) => void;
   /**
    * Called after a drag-and-drop reorder with the FULL new order of active
    * workstream ids. The caller persists this (and any archived rows can be
@@ -142,6 +143,8 @@ export default function WorkstreamSidebar({
   const [editingProject, setEditingProject] = useState<Project | null>(null);
   const [editProjectName, setEditProjectName] = useState("");
   const [editProjectColor, setEditProjectColor] = useState("");
+  // Per-project Copilot command override (empty = inherit the global command).
+  const [editProjectCommand, setEditProjectCommand] = useState("");
   const [actionMenuWsId, setActionMenuWsId] = useState<string | null>(null);
   const [actionMenuAnchor, setActionMenuAnchor] = useState<{ top: number; left: number }>({ top: 0, left: 0 });
   const [hoveredWsId, setHoveredWsId] = useState<string | null>(null);
@@ -784,6 +787,7 @@ export default function WorkstreamSidebar({
               setEditingProject(p);
               setEditProjectName(p.name);
               setEditProjectColor(p.color);
+              setEditProjectCommand(p.copilot_command ?? "");
             }}
             style={{
               padding: "4px 8px",
@@ -855,7 +859,7 @@ export default function WorkstreamSidebar({
                 e.stopPropagation();
                 if (e.key === "Escape") setEditingProject(null);
                 if (e.key === "Enter" && editProjectName.trim()) {
-                  onUpdateProject(editingProject.id, { name: editProjectName.trim(), color: editProjectColor });
+                  onUpdateProject(editingProject.id, { name: editProjectName.trim(), color: editProjectColor, copilot_command: editProjectCommand.trim() || null });
                   setEditingProject(null);
                 }
               }}
@@ -924,6 +928,42 @@ export default function WorkstreamSidebar({
                 />
               </label>
             </div>
+            <label style={{ fontSize: 11, color: "#a6adc8", display: "block", marginBottom: 4 }}>Copilot command</label>
+            <input
+              type="text"
+              data-testid="edit-project-command"
+              value={editProjectCommand}
+              onChange={(e) => setEditProjectCommand(e.target.value)}
+              onKeyDown={(e) => {
+                e.stopPropagation();
+                if (e.key === "Escape") setEditingProject(null);
+                if (e.key === "Enter" && editProjectName.trim()) {
+                  onUpdateProject(editingProject.id, { name: editProjectName.trim(), color: editProjectColor, copilot_command: editProjectCommand.trim() || null });
+                  setEditingProject(null);
+                }
+              }}
+              placeholder={getAppSettings().copilotCommand}
+              spellCheck={false}
+              style={{
+                width: "100%",
+                background: "#313244",
+                border: "1px solid #45475a",
+                borderRadius: 4,
+                color: "#cdd6f4",
+                padding: "6px 8px",
+                fontSize: 12,
+                fontFamily: "monospace",
+                outline: "none",
+                boxSizing: "border-box",
+                marginBottom: 4,
+              }}
+            />
+            <div style={{ fontSize: 10, color: "#6c7086", marginBottom: 16 }}>
+              Overrides the global Copilot command for all workstreams in this
+              repo. Leave blank to inherit the global command
+              (<code>{getAppSettings().copilotCommand}</code>). The
+              <code> --resume=&lt;id&gt;</code> flag is appended automatically.
+            </div>
             <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
               <button
                 onClick={() => setEditingProject(null)}
@@ -934,7 +974,7 @@ export default function WorkstreamSidebar({
               <button
                 onClick={() => {
                   if (editProjectName.trim()) {
-                    onUpdateProject(editingProject.id, { name: editProjectName.trim(), color: editProjectColor });
+                    onUpdateProject(editingProject.id, { name: editProjectName.trim(), color: editProjectColor, copilot_command: editProjectCommand.trim() || null });
                     setEditingProject(null);
                   }
                 }}

@@ -35,16 +35,48 @@ import {
   getAppSettings,
   hydrateAppSettings,
   resetAppSettings,
+  resolveCopilotCommand,
   sanitize,
   setAppSettings,
   subscribeAppSettings,
   wheelDeltaToLines,
 } from "../app-settings";
+import type { Project } from "../types";
 
 beforeEach(() => {
   sqlStore.clear();
   globalThis.localStorage?.clear?.();
   _resetAppSettingsCacheForTests();
+});
+
+describe("resolveCopilotCommand", () => {
+  const mkProject = (copilot_command: string | null): Project => ({
+    id: "p1",
+    name: "P",
+    directory: "C:\\repo",
+    git_remote: null,
+    color: "#89b4fa",
+    copilot_command,
+    created_at: "",
+    updated_at: "",
+  });
+
+  it("uses the project override when set (trimmed)", () => {
+    setAppSettings({ copilotCommand: "agency copilot --yolo" });
+    expect(resolveCopilotCommand(mkProject("  copilot --yolo  "))).toBe("copilot --yolo");
+  });
+
+  it("inherits the global command when the override is null/blank", () => {
+    setAppSettings({ copilotCommand: "agency copilot --yolo" });
+    expect(resolveCopilotCommand(mkProject(null))).toBe("agency copilot --yolo");
+    expect(resolveCopilotCommand(mkProject("   "))).toBe("agency copilot --yolo");
+  });
+
+  it("inherits the global command when there is no project (standalone)", () => {
+    setAppSettings({ copilotCommand: "agency copilot --yolo" });
+    expect(resolveCopilotCommand(null)).toBe("agency copilot --yolo");
+    expect(resolveCopilotCommand(undefined)).toBe("agency copilot --yolo");
+  });
 });
 
 describe("app-settings sanitize", () => {

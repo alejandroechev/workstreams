@@ -39,6 +39,23 @@ describe("MemoryBackend projects", () => {
     expect(list[0].git_remote).toBe("https://github.com/test/repo");
   });
 
+  it("creates a project with copilot_command null (inherit) by default", async () => {
+    const p = await backend.createProject("App", "C:\\code\\app");
+    expect(p.copilot_command).toBeNull();
+  });
+
+  it("sets and clears the per-project copilot_command override", async () => {
+    const p = await backend.createProject("App", "C:\\app");
+    await backend.updateProject(p.id, { copilot_command: "  copilot --yolo  " });
+    let list = await backend.listProjects();
+    expect(list[0].copilot_command).toBe("copilot --yolo"); // trimmed
+
+    // Empty/whitespace clears the override back to inherit (null).
+    await backend.updateProject(p.id, { copilot_command: "   " });
+    list = await backend.listProjects();
+    expect(list[0].copilot_command).toBeNull();
+  });
+
   it("throws when updating non-existent project", async () => {
     await expect(backend.updateProject("nope", { name: "x" })).rejects.toThrow("Project not found");
   });

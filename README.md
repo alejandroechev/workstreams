@@ -99,6 +99,11 @@ Pre-built Windows installers are attached to every
    toggle **Disable GPU (WebGL) rendering** to fall back to the slower DOM
    renderer (which never blanks). Terminals also self-recover from GPU context
    loss and permanently drop to the DOM renderer after repeated losses.
+5. The Copilot command is global by default, but each **repo** can override it:
+   click a repo in the sidebar to open its edit dialog and set a **Copilot
+   command** (blank = inherit the global). Every workstream in that repo then
+   spawns Copilot sessions with the repo's command. Handy when one repo needs a
+   different launcher (e.g. `copilot --yolo`) than the rest.
 
 ## Keyboard shortcuts
 

@@ -22,6 +22,7 @@
  */
 
 import { invoke } from "@tauri-apps/api/core";
+import type { Project } from "./types";
 
 const LEGACY_STORAGE_KEY = "ws.app-settings.v1";
 
@@ -248,6 +249,20 @@ export async function hydrateAppSettings(): Promise<AppSettings> {
 
 export function getAppSettings(): AppSettings {
   return cached;
+}
+
+/**
+ * Resolve the effective Copilot command for a spawn: the workstream's project
+ * override if set, otherwise the global `copilotCommand` setting.
+ *
+ * "Repo" == Project. A project's `copilot_command` (trimmed, non-empty) wins;
+ * a null/blank override — or a null project (standalone workstream) — inherits
+ * the global command. Resolved at spawn time, so changing a project's command
+ * takes effect on the next session spawn/restart.
+ */
+export function resolveCopilotCommand(project: Project | null | undefined): string {
+  const override = project?.copilot_command?.trim();
+  return override && override.length > 0 ? override : getAppSettings().copilotCommand;
 }
 
 /**

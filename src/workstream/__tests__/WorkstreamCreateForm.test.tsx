@@ -10,7 +10,7 @@ describe("WorkstreamCreateForm", () => {
   afterEach(() => cleanup());
 
   const projects: Project[] = [
-    { id: "p1", name: "App", directory: "C:\\repo", git_remote: null, color: "#89b4fa", created_at: "", updated_at: "" },
+    { id: "p1", name: "App", directory: "C:\\repo", git_remote: null, color: "#89b4fa", copilot_command: null, created_at: "", updated_at: "" },
   ];
 
   const getRadio = (testId: string) =>

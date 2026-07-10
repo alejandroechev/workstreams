@@ -5,6 +5,10 @@ export interface Project {
   directory: string;
   git_remote: string | null;
   color: string;
+  /** Optional per-project Copilot command override. null/empty = inherit the
+   * global `copilotCommand` app setting. Resolved at spawn via
+   * `resolveCopilotCommand`. */
+  copilot_command: string | null;
   created_at: string;
   updated_at: string;
 }

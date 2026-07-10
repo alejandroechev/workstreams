@@ -14,7 +14,16 @@ export class TauriBackend implements Backend {
   }
 
   async updateProject(id: string, updates: Partial<Project>): Promise<void> {
-    await invoke("update_project", { id, ...updates });
+    // Tauri maps camelCase JS keys → snake_case Rust params, so the Project
+    // type's snake_case fields must be translated explicitly. `name`/`color`
+    // are single words (no case difference); `copilot_command` must be sent as
+    // `copilotCommand` to reach the Rust param. Other Project fields (e.g.
+    // git_remote) are intentionally not writable via update_project.
+    const args: Record<string, unknown> = { id };
+    if (updates.name !== undefined) args.name = updates.name;
+    if (updates.color !== undefined) args.color = updates.color;
+    if (updates.copilot_command !== undefined) args.copilotCommand = updates.copilot_command;
+    await invoke("update_project", args);
   }
 
   async deleteProject(id: string): Promise<void> {
