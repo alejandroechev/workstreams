@@ -10,6 +10,33 @@ use std::process::Command;
 #[cfg(test)]
 use std::sync::Arc;
 
+/// Build a `git` Command that never flashes a console window on Windows.
+/// Mirrors `lib.rs::git_cmd` / `code_review::git` — repo creation shells out to
+/// git/gh repeatedly, and without CREATE_NO_WINDOW each spawn pops a visible
+/// cmd window.
+fn git_command() -> Command {
+    #[allow(unused_mut)]
+    let mut cmd = Command::new("git");
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+    cmd
+}
+
+/// Same as `git_command` but for the `gh` CLI.
+fn gh_command() -> Command {
+    #[allow(unused_mut)]
+    let mut cmd = Command::new("gh");
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+    cmd
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateRepoResult {
     pub directory: String,
@@ -55,7 +82,7 @@ impl RemoteRepoProvider for GhCliRemoteProvider {
         local_dir: &Path,
     ) -> Result<String, String> {
         // Verify auth first; surface a clear error instead of a generic gh failure.
-        let status = Command::new("gh")
+        let status = gh_command()
             .args(["auth", "status"])
             .output()
             .map_err(|e| format!("gh CLI not available: {e}"))?;
@@ -71,7 +98,7 @@ impl RemoteRepoProvider for GhCliRemoteProvider {
             _ => "--private",
         };
         let repo_arg = format!("{owner}/{name}");
-        let out = Command::new("gh")
+        let out = gh_command()
             .current_dir(local_dir)
             .args([
                 "repo", "create", &repo_arg, vis_flag, "--source", ".", "--push",
@@ -86,7 +113,7 @@ impl RemoteRepoProvider for GhCliRemoteProvider {
         }
 
         // Read the resulting origin URL from local config (most reliable).
-        let url_out = Command::new("git")
+        let url_out = git_command()
             .current_dir(local_dir)
             .args(["remote", "get-url", "origin"])
             .output()
@@ -166,13 +193,13 @@ pub fn validate_repo_name(name: &str) -> Result<(), String> {
 }
 
 fn git_has_identity() -> bool {
-    let email = Command::new("git")
+    let email = git_command()
         .args(["config", "--global", "user.email"])
         .output()
         .ok()
         .map(|o| o.status.success() && !o.stdout.is_empty())
         .unwrap_or(false);
-    let name = Command::new("git")
+    let name = git_command()
         .args(["config", "--global", "user.name"])
         .output()
         .ok()
@@ -237,13 +264,13 @@ pub fn create_git_repo_with_progress(
 
     emit("init", "Initializing git repository", "running");
     // git init -b <branch>, falling back to init + symbolic-ref for old git.
-    let init_with_b = Command::new("git")
+    let init_with_b = git_command()
         .current_dir(&target)
         .args(["init", "-b", &branch])
         .output();
     let init_ok = matches!(&init_with_b, Ok(o) if o.status.success());
     if !init_ok {
-        let init = Command::new("git")
+        let init = git_command()
             .current_dir(&target)
             .args(["init"])
             .output()
@@ -254,7 +281,7 @@ pub fn create_git_repo_with_progress(
                 String::from_utf8_lossy(&init.stderr)
             ));
         }
-        let sref = Command::new("git")
+        let sref = git_command()
             .current_dir(&target)
             .args(["symbolic-ref", "HEAD", &format!("refs/heads/{branch}")])
             .output()
@@ -269,7 +296,7 @@ pub fn create_git_repo_with_progress(
 
     if opts.initial_commit {
         emit("committing", "Creating initial commit", "running");
-        let add = Command::new("git")
+        let add = git_command()
             .current_dir(&target)
             .args(["add", "-A"])
             .output()
@@ -280,7 +307,7 @@ pub fn create_git_repo_with_progress(
                 String::from_utf8_lossy(&add.stderr)
             ));
         }
-        let mut commit_cmd = Command::new("git");
+        let mut commit_cmd = git_command();
         commit_cmd.current_dir(&target);
         if !git_has_identity() {
             commit_cmd.args([
@@ -358,7 +385,7 @@ mod tests {
     }
 
     fn git_available() -> bool {
-        Command::new("git")
+        git_command()
             .arg("--version")
             .output()
             .map(|o| o.status.success())
@@ -369,6 +396,15 @@ mod tests {
     fn validates_empty_name() {
         assert!(validate_repo_name("").is_err());
         assert!(validate_repo_name("   ").is_err());
+    }
+
+    #[test]
+    fn git_and_gh_command_helpers_target_the_right_program() {
+        // Guards against a future refactor reintroducing raw Command::new that
+        // would flash a console window on Windows (CREATE_NO_WINDOW is applied
+        // inside these helpers).
+        assert_eq!(git_command().get_program(), "git");
+        assert_eq!(gh_command().get_program(), "gh");
     }
 
     #[test]
