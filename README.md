@@ -94,11 +94,13 @@ Pre-built Windows installers are attached to every
 3. Navigate between tiles with `Alt+Arrows`. Fullscreen the focused one
    with `Alt+F`.
 4. Open the settings dialog (gear icon) to tune font sizes, terminal scroll
-   speed, the Copilot command, and rendering. Terminals use the GPU (WebGL)
-   renderer by default; if a terminal ever goes **black** and won't recover,
-   toggle **Disable GPU (WebGL) rendering** to fall back to the slower DOM
-   renderer (which never blanks). Terminals also self-recover from GPU context
-   loss and permanently drop to the DOM renderer after repeated losses.
+   speed, the Copilot command, and rendering. Terminals use the reliable DOM
+   renderer by default; for extra speed you can uncheck **Disable GPU (WebGL)
+   rendering** to switch terminals to the GPU renderer. If a GPU-rendered
+   terminal ever goes **black** and won't recover, re-enable the setting to fall
+   back to the DOM renderer (which never blanks). Terminals also self-recover
+   from GPU context loss and permanently drop to the DOM renderer after repeated
+   losses.
 5. The Copilot command is global by default, but each **repo** can override it:
    click a repo in the sidebar to open its edit dialog and set a **Copilot
    command** (blank = inherit the global). Every workstream in that repo then

@@ -240,24 +240,26 @@ describe("app-settings mutate", () => {
   });
 
   it("setAppSettings persists disableWebglRenderer as '1'/'0'", async () => {
-    setAppSettings({ disableWebglRenderer: true });
-    await Promise.resolve();
-    expect(getAppSettings().disableWebglRenderer).toBe(true);
-    expect(sqlStore.get("app.disable_webgl_renderer")).toBe("1");
+    // Default is now true; flip to false first (a real change) then back to true.
     setAppSettings({ disableWebglRenderer: false });
     await Promise.resolve();
     expect(getAppSettings().disableWebglRenderer).toBe(false);
     expect(sqlStore.get("app.disable_webgl_renderer")).toBe("0");
+    setAppSettings({ disableWebglRenderer: true });
+    await Promise.resolve();
+    expect(getAppSettings().disableWebglRenderer).toBe(true);
+    expect(sqlStore.get("app.disable_webgl_renderer")).toBe("1");
   });
 });
 
 describe("app-settings disableWebglRenderer", () => {
-  it("defaults to false and sanitizes non-boolean input", () => {
-    expect(DEFAULT_SETTINGS.disableWebglRenderer).toBe(false);
-    expect(sanitize({ disableWebglRenderer: true }).disableWebglRenderer).toBe(true);
+  it("defaults to true and sanitizes non-boolean input to the default", () => {
+    expect(DEFAULT_SETTINGS.disableWebglRenderer).toBe(true);
+    expect(sanitize({ disableWebglRenderer: false }).disableWebglRenderer).toBe(false);
+    // Non-boolean falls back to the default (true).
     expect(
-      sanitize({ disableWebglRenderer: "1" as unknown as boolean }).disableWebglRenderer,
-    ).toBe(false);
+      sanitize({ disableWebglRenderer: "0" as unknown as boolean }).disableWebglRenderer,
+    ).toBe(true);
   });
 
   it("hydrate reads app.disable_webgl_renderer from SQLite ('1' → true)", async () => {

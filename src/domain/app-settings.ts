@@ -58,7 +58,10 @@ export const DEFAULT_SETTINGS: AppSettings = {
   markdownFontSize: 12,
   terminalFontSize: 12,
   copilotCommand: "agency copilot --yolo",
-  disableWebglRenderer: false,
+  // Default to the DOM renderer. The xterm WebGL renderer can go black on GPU
+  // context loss (see webgl-renderer.ts); defaulting off trades some render
+  // speed for reliability. Users can opt back into GPU rendering in Settings.
+  disableWebglRenderer: true,
 };
 
 export const SCROLL_SPEED_MIN = 0.1;
