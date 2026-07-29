@@ -133,8 +133,10 @@ pub fn add_file_comment_row(
     get_file_comment_row(db, &id).map(|o| o.expect("just inserted"))
 }
 
-/// Insert an agent reply threaded under a reviewer comment. Copies the parent's
-/// file/anchor so replies render next to the note.
+/// Insert a **reviewer** reply threaded under a comment. This backs the
+/// in-file "Reply" UI (the human reviewer). The agent replies via its own SQL
+/// skill (`author='agent'`) and does not use this command. Copies the parent's
+/// file/anchor so the reply renders next to the note.
 pub fn reply_file_comment_row(
     db: &Connection,
     parent_id: &str,
@@ -149,7 +151,7 @@ pub fn reply_file_comment_row(
         "INSERT INTO file_comments \
             (id, workstream_id, file, anchor_line_start, anchor_line_end, anchor_text, \
              body, author, parent_id, status, created_at, updated_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6, 'agent', ?7, 'open', ?8, ?8)",
+         VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6, 'reviewer', ?7, 'open', ?8, ?8)",
         rusqlite::params![
             id,
             parent.workstream_id,
@@ -321,6 +323,31 @@ mod tests {
         conn
     }
 
+    /// Seed an agent-authored reply directly (mirrors what the file-comments
+    /// skill does via raw SQL), since the reply command now authors 'reviewer'.
+    fn insert_agent_reply(conn: &Connection, parent: &FileComment, body: &str) -> String {
+        let id = new_id();
+        let ts = now();
+        conn.execute(
+            "INSERT INTO file_comments \
+                (id, workstream_id, file, anchor_line_start, anchor_line_end, anchor_text, \
+                 body, author, parent_id, status, created_at, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6, 'agent', ?7, 'open', ?8, ?8)",
+            rusqlite::params![
+                id,
+                parent.workstream_id,
+                parent.file,
+                parent.anchor_line_start,
+                parent.anchor_line_end,
+                body,
+                parent.id,
+                ts,
+            ],
+        )
+        .unwrap();
+        id
+    }
+
     #[test]
     fn add_list_orders_by_anchor_then_created() {
         let conn = schema_conn();
@@ -353,7 +380,7 @@ mod tests {
         let reply = reply_file_comment_row(&conn, &parent.id, "done")
             .unwrap()
             .unwrap();
-        assert_eq!(reply.author, "agent");
+        assert_eq!(reply.author, "reviewer");
         assert_eq!(reply.parent_id.as_deref(), Some(parent.id.as_str()));
         assert_eq!(reply.file, "src/a.ts");
         assert_eq!(reply.anchor_line_start, 4);
@@ -367,16 +394,23 @@ mod tests {
     fn update_only_reviewer_notes() {
         let conn = schema_conn();
         let parent = add_file_comment_row(&conn, "ws-1", "src/a.ts", 4, 4, None, "orig").unwrap();
-        let reply = reply_file_comment_row(&conn, &parent.id, "reply")
+        // A reviewer reply (from the in-file Reply UI) is editable.
+        let reviewer_reply = reply_file_comment_row(&conn, &parent.id, "reply")
             .unwrap()
             .unwrap();
+        assert_eq!(reviewer_reply.author, "reviewer");
         // Reviewer note editable.
         let up = update_file_comment_row(&conn, &parent.id, "edited")
             .unwrap()
             .unwrap();
         assert_eq!(up.body, "edited");
-        // Agent reply not editable via update.
-        assert!(update_file_comment_row(&conn, &reply.id, "hack")
+        // Reviewer reply also editable.
+        assert!(update_file_comment_row(&conn, &reviewer_reply.id, "reply-edited")
+            .unwrap()
+            .is_some());
+        // Agent reply NOT editable via update (the mutability guard).
+        let agent_id = insert_agent_reply(&conn, &parent, "agent says");
+        assert!(update_file_comment_row(&conn, &agent_id, "hack")
             .unwrap()
             .is_none());
     }
@@ -390,7 +424,7 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(addressed.status, "addressed");
-        // Delete the reviewer note → also removes its agent reply.
+        // Delete the reviewer note → also removes its threaded reply.
         assert!(delete_file_comment_row(&conn, &parent.id).unwrap());
         assert!(list_file_comments_rows(&conn, "ws-1", "src/a.ts")
             .unwrap()
