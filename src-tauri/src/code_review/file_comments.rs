@@ -405,9 +405,11 @@ mod tests {
             .unwrap();
         assert_eq!(up.body, "edited");
         // Reviewer reply also editable.
-        assert!(update_file_comment_row(&conn, &reviewer_reply.id, "reply-edited")
-            .unwrap()
-            .is_some());
+        assert!(
+            update_file_comment_row(&conn, &reviewer_reply.id, "reply-edited")
+                .unwrap()
+                .is_some()
+        );
         // Agent reply NOT editable via update (the mutability guard).
         let agent_id = insert_agent_reply(&conn, &parent, "agent says");
         assert!(update_file_comment_row(&conn, &agent_id, "hack")
