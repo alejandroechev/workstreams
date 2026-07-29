@@ -553,7 +553,7 @@ export class MemoryBackend implements Backend {
       anchor_line_end: parent.anchor_line_end,
       anchor_text: parent.anchor_text,
       body,
-      author: "agent",
+      author: "reviewer",
       parent_id: parentId,
       status: parent.status,
       created_at: ts,

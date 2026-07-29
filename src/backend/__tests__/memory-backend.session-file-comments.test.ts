@@ -56,10 +56,10 @@ describe("MemoryBackend.session file comments", () => {
     ).rejects.toThrow(/anchor_line_end/);
   });
 
-  it("adds an agent reply threaded under a reviewer note", async () => {
+  it("adds a reviewer reply threaded under a note (in-file Reply UI)", async () => {
     const parent = await backend.addSessionFileComment("ws-1", "src/a.ts", 1, 1, null, "q");
     const reply = await backend.replySessionFileComment("ws-1", parent.id, "answer");
-    expect(reply.author).toBe("agent");
+    expect(reply.author).toBe("reviewer");
     expect(reply.parent_id).toBe(parent.id);
     expect(reply.file).toBe("src/a.ts");
     const list = await backend.listSessionFileComments("ws-1", "src/a.ts");
@@ -78,12 +78,11 @@ describe("MemoryBackend.session file comments", () => {
     expect(fresh.body).toBe("new");
   });
 
-  it("refuses to update an agent reply", async () => {
+  it("allows updating a reviewer reply (it is reviewer-authored)", async () => {
     const parent = await backend.addSessionFileComment("ws-1", "src/a.ts", 1, 1, null, "q");
     const reply = await backend.replySessionFileComment("ws-1", parent.id, "a");
-    await expect(backend.updateSessionFileComment("ws-1", reply.id, "x")).rejects.toThrow(
-      /not editable/,
-    );
+    const updated = await backend.updateSessionFileComment("ws-1", reply.id, "edited");
+    expect(updated.body).toBe("edited");
   });
 
   it("sets status on a comment", async () => {
@@ -92,7 +91,7 @@ describe("MemoryBackend.session file comments", () => {
     expect(u.status).toBe("resolved");
   });
 
-  it("deletes a reviewer note and cascades its agent replies", async () => {
+  it("deletes a reviewer note and cascades its replies", async () => {
     const parent = await backend.addSessionFileComment("ws-1", "src/a.ts", 1, 1, null, "q");
     await backend.replySessionFileComment("ws-1", parent.id, "a1");
     await backend.replySessionFileComment("ws-1", parent.id, "a2");
@@ -100,11 +99,11 @@ describe("MemoryBackend.session file comments", () => {
     expect(await backend.listSessionFileComments("ws-1", "src/a.ts")).toEqual([]);
   });
 
-  it("refuses to delete an agent reply directly", async () => {
+  it("allows deleting a reviewer reply directly", async () => {
     const parent = await backend.addSessionFileComment("ws-1", "src/a.ts", 1, 1, null, "q");
     const reply = await backend.replySessionFileComment("ws-1", parent.id, "a");
-    await expect(backend.deleteSessionFileComment("ws-1", reply.id)).rejects.toThrow(
-      /not deletable/,
-    );
+    await backend.deleteSessionFileComment("ws-1", reply.id);
+    const list = await backend.listSessionFileComments("ws-1", "src/a.ts");
+    expect(list.map((c) => c.id)).toEqual([parent.id]);
   });
 });

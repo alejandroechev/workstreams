@@ -70,6 +70,51 @@ test.describe("inline comment interactivity", () => {
     await expect(page.locator('[data-testid="comment-reopen-c1"]')).toBeVisible();
   });
 
+  test("Repo Explorer file-comment Reply button opens the composer and adds a threaded reply", async ({ page }) => {
+    await openCase(page, "comment-zone");
+
+    const reply = page.locator('[data-testid="comment-reply-c1"]');
+    await expect(reply).toBeVisible();
+    // Not occluded by a Monaco layer.
+    const covered = await page.evaluate(() => {
+      const el = document.querySelector('[data-testid="comment-reply-c1"]');
+      if (!el) return true;
+      const r = el.getBoundingClientRect();
+      const top = document.elementFromPoint(Math.round(r.left + r.width / 2), Math.round(r.top + r.height / 2));
+      return !(top && (el === top || el.contains(top) || top.contains(el)));
+    });
+    expect(covered, "Reply button is occluded by a Monaco layer").toBe(false);
+
+    await reply.click({ timeout: 5_000 });
+    const composer = page.locator('[data-testid="comment-composer"]');
+    await expect(composer).toBeVisible();
+    await expect(composer).toContainText("Replying to comment");
+
+    await page.locator('[data-testid="comment-composer-textarea"]').fill("Looks good, thanks!");
+    await page.locator('[data-testid="comment-composer-save"]').click();
+
+    // The new reviewer reply renders inside the same thread zone.
+    await expect(
+      page.locator('[data-testid="comment-zone-c1"]'),
+    ).toContainText("Looks good, thanks!");
+  });
+
+  test("Repo Explorer file-comment Copy button is present and clickable", async ({ page }) => {
+    await openCase(page, "comment-zone");
+    const copy = page.locator('[data-testid="comment-copy-c1"]');
+    await expect(copy).toBeVisible();
+    const covered = await page.evaluate(() => {
+      const el = document.querySelector('[data-testid="comment-copy-c1"]');
+      if (!el) return true;
+      const r = el.getBoundingClientRect();
+      const top = document.elementFromPoint(Math.round(r.left + r.width / 2), Math.round(r.top + r.height / 2));
+      return !(top && (el === top || el.contains(top) || top.contains(el)));
+    });
+    expect(covered, "Copy button is occluded by a Monaco layer").toBe(false);
+    // Clicking must not throw (clipboard write is best-effort in the shim).
+    await copy.click({ timeout: 5_000 });
+  });
+
   test("Code Review thread Resolve button is clickable and flips the status", async ({ page }) => {
     await openCase(page, "review-thread");
 

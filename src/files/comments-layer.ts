@@ -91,3 +91,13 @@ export function estimateThreadHeightInLines(thread: CommentThread): number {
   }
   return Math.max(3, lines + 1);
 }
+
+/**
+ * Serialize a whole comment thread (root + replies) to plain text for the
+ * "Copy thread" action. Each entry is prefixed with its author + status so the
+ * copied text is self-describing when pasted elsewhere.
+ */
+export function formatThreadForCopy(thread: CommentThread): string {
+  const entry = (c: SessionFileComment): string => `${formatCommentMeta(c)}:\n${c.body}`;
+  return [thread.root, ...thread.replies].map(entry).join("\n\n");
+}

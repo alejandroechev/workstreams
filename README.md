@@ -48,8 +48,9 @@ project-aware workspace:
   the Repo Explorer. Comments live in the bound Copilot session's own
   `session.db` with the same reviewer↔agent model as Code Review: the agent
   replies and marks notes addressed with its built-in `sql` tool (guided by the
-  `file-comments` skill), and you resolve or reopen each thread inline. A linked
-  Copilot session is required. See [ADR 009](docs/adrs/009-inline-file-comments.md).
+  `file-comments` skill), and you **reply** in-thread, resolve/reopen, edit, or
+  **copy** the whole thread — all inline in the file. A linked Copilot session
+  is required. See [ADR 009](docs/adrs/009-inline-file-comments.md).
 - 🔎 **Local code review** — A diff-first, PR-style review tile for AI-agent
   *or* human-written code, with no ADO round-trips and no MCP. Pick a diff
   source (working tree, last commit, or a branch base), read the real diff,

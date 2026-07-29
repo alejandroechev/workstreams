@@ -80,6 +80,27 @@ const CommentZoneCase: FC = () => {
           setComments((cs) => cs.map((c) => (c.id === id ? { ...c, body } : c)));
           return Promise.resolve();
         }}
+        onReplyComment={(parentId, body) => {
+          const parent = comments.find((c) => c.id === parentId);
+          setComments((cs) => [
+            ...cs,
+            {
+              id: `r-${cs.length + 1}`,
+              workstream_id: "ws-1",
+              file: "src/example.ts",
+              anchor_line_start: parent?.anchor_line_start ?? 1,
+              anchor_line_end: parent?.anchor_line_end ?? 1,
+              anchor_text: parent?.anchor_text ?? null,
+              body,
+              author: "reviewer",
+              parent_id: parentId,
+              status: "open",
+              created_at: nowIso(),
+              updated_at: nowIso(),
+            },
+          ]);
+          return Promise.resolve();
+        }}
         onDeleteComment={(id) => {
           setComments((cs) => cs.filter((c) => c.id !== id && c.parent_id !== id));
           return Promise.resolve();

@@ -17,6 +17,7 @@ export interface UseFileCommentsResult {
     body: string,
   ) => Promise<SessionFileComment>;
   update: (id: string, body: string) => Promise<SessionFileComment>;
+  reply: (parentId: string, body: string) => Promise<SessionFileComment>;
   remove: (id: string) => Promise<void>;
   setStatus: (id: string, status: string) => Promise<SessionFileComment>;
 }
@@ -112,6 +113,16 @@ export function useFileComments(
     [backend, workstreamId],
   );
 
+  const reply = useCallback(
+    async (parentId: string, body: string) => {
+      if (!workstreamId) throw new Error("workstreamId is required");
+      const created = await backend.replySessionFileComment(workstreamId, parentId, body);
+      setComments((prev) => sortComments([...prev, created]));
+      return created;
+    },
+    [backend, workstreamId],
+  );
+
   const remove = useCallback(
     async (id: string) => {
       if (!workstreamId) throw new Error("workstreamId is required");
@@ -140,6 +151,7 @@ export function useFileComments(
     reload,
     add,
     update,
+    reply,
     remove,
     setStatus,
   };

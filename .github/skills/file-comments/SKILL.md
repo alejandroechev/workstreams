@@ -67,6 +67,13 @@ ORDER BY file, anchor_line_start;
 If there are zero open reviewer comments, tell the user there is nothing to
 address and stop.
 
+> **Threads:** a reviewer can now reply inside a thread from the file UI, so a
+> row with `author = 'reviewer'` **and a non-null `parent_id`** is a follow-up
+> on an existing thread (not a fresh note). Both root notes (`parent_id IS NULL`)
+> and reviewer replies are worth addressing; when handling one, read the whole
+> thread (all rows sharing the root id via `parent_id`) for context before
+> replying.
+
 ### 2. For each open reviewer comment
 
 1. Open `file` (a repo-relative path — resolve it against the workstream's repo

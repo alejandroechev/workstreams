@@ -35,11 +35,14 @@ interaction. unify-commenting collapses that divergence.
    for future drift detection.
 
 2. **In-app UI** — the Repo Explorer file viewer (`FileEditorView`) renders each
-   reviewer note as a Monaco view zone below its anchor, with the threaded
-   **agent replies** nested inside the same zone. The reviewer's own note gets
-   inline **Edit / Delete** buttons and a **Resolve / Reopen** toggle; resolved
-   / wontfix notes are struck through. Add is selection-based: select lines →
-   floating `+ Comment` → inline composer. The toggle state persists per
+   reviewer note as a Monaco view zone below its anchor, with threaded replies
+   nested inside the same zone. The reviewer's own note gets inline **Edit /
+   Delete** buttons, a **Resolve / Reopen** toggle, a **Reply** button (adds a
+   reviewer reply to the thread via an inline composer), and a **Copy** button
+   (copies the whole thread as text — a reliable fallback since the view-zone
+   text, though now `user-select: text`, can be awkward to drag-select). Resolved
+   / wontfix notes are struck through. New comments are selection-based: select
+   lines → floating `+ Comment` → inline composer. The toggle state persists per
    workstream via the `settings` table. No polling — the tile reloads from
    session.db when the file is (re)opened or the toggle is turned on.
 
@@ -47,7 +50,11 @@ interaction. unify-commenting collapses that divergence.
    built-in `sql` tool, guided by the **`file-comments` companion skill**
    (sibling of `code-review`). Role rule: the agent never edits reviewer notes;
    it replies as `author='agent'` with `parent_id`, and marks the reviewer note
-   `addressed` or `wontfix` (never `resolved` — that is reviewer-only).
+   `addressed` or `wontfix` (never `resolved` — that is reviewer-only). The
+   in-app **Reply** UI is the reviewer's side of the same thread: it authors
+   `reviewer` replies (editable/deletable like any reviewer comment), so the
+   `reply_session_file_comment` command is reviewer-only; the agent never uses
+   it (it inserts `agent` rows via raw SQL).
 
 ### Why these choices
 
@@ -91,12 +98,13 @@ ensures the `file_comments` schema on each call):
   anchor_line_end, anchor_text?, body) -> FileComment` (author=`reviewer`,
   status=`open`)
 - `reply_session_file_comment(workstream_id, parent_id, body) -> FileComment`
-  (author=`agent`)
+  (author=`reviewer` — backs the in-file Reply UI; the agent inserts `agent`
+  replies via raw SQL, not this command)
 - `update_session_file_comment(workstream_id, id, body) -> FileComment`
-  (reviewer notes only)
+  (reviewer-authored comments only — notes and reviewer replies)
 - `set_session_file_comment_status(workstream_id, id, status) -> FileComment`
 - `delete_session_file_comment(workstream_id, id)` (reviewer note + cascade its
-  agent replies)
+  replies; reviewer replies also deletable individually)
 
 ## Consequences
 

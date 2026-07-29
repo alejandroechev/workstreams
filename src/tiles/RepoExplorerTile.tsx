@@ -1326,6 +1326,7 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
               commentsEnabled={commentsEnabled && commentsAvailable}
               onAddComment={fileComments.add}
               onUpdateComment={fileComments.update}
+              onReplyComment={fileComments.reply}
               onDeleteComment={fileComments.remove}
               onSetCommentStatus={fileComments.setStatus}
             />

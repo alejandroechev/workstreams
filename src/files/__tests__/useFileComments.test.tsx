@@ -112,6 +112,26 @@ describe("useFileComments", () => {
     expect(result.current.comments).toEqual([]);
   });
 
+  it("reply adds a threaded reply and keeps local state in sync", async () => {
+    const { result } = renderHook(() => useFileComments("ws-1", ROOT, "C:/repo/src/a.ts"), {
+      wrapper: wrap(backend),
+    });
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    let rootId = "";
+    await act(async () => {
+      const c = await result.current.add(3, 3, null, "please fix");
+      rootId = c.id;
+    });
+    await act(async () => {
+      const r = await result.current.reply(rootId, "done");
+      expect(r.parent_id).toBe(rootId);
+      expect(r.author).toBe("reviewer");
+    });
+    expect(result.current.comments).toHaveLength(2);
+    const reply = result.current.comments.find((c) => c.parent_id === rootId);
+    expect(reply?.body).toBe("done");
+  });
+
   it("re-loads when path changes", async () => {
     await backend.addSessionFileComment("ws-1", "src/a.ts", 1, 1, null, "a-comment");
     await backend.addSessionFileComment("ws-1", "src/b.ts", 1, 1, null, "b-comment");

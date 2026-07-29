@@ -27,6 +27,7 @@ import { loadMonaco } from "./loadMonaco";
 import {
   selectionToAnchor,
   formatCommentMeta,
+  formatThreadForCopy,
   isMutable,
   isClosedStatus,
   groupCommentThreads,
@@ -35,6 +36,7 @@ import {
   type CommentThread,
 } from "./comments-layer";
 import type { SessionFileComment } from "../domain/file-comments";
+import { writeTextToClipboard } from "../domain/clipboard";
 import { getAppSettings, subscribeAppSettings } from "../domain/app-settings";
 
 const MAX_INLINE_EDIT_SIZE_BYTES = 1024 * 1024;
@@ -120,6 +122,9 @@ export interface FileEditorViewProps {
   ) => Promise<unknown>;
   /** Update-comment handler. Wired by the parent tile to `useFileComments.update`. */
   onUpdateComment?: (id: string, body: string) => Promise<unknown>;
+  /** Reply handler — adds a threaded reply under a comment. Wired to
+   * `useFileComments.reply`. When absent, the Reply button is not shown. */
+  onReplyComment?: (parentId: string, body: string) => Promise<unknown>;
   /** Delete-comment handler. Wired by the parent tile to `useFileComments.remove`. */
   onDeleteComment?: (id: string) => Promise<unknown>;
   /** Set-status handler (resolve/reopen). Wired to `useFileComments.setStatus`. */
@@ -227,6 +232,7 @@ export function FileEditorView({
   commentsEnabled = false,
   onAddComment,
   onUpdateComment,
+  onReplyComment,
   onDeleteComment,
   onSetCommentStatus,
 }: FileEditorViewProps): ReactElement {
@@ -257,11 +263,20 @@ export function FileEditorView({
   const [composer, setComposer] = useState<
     | { mode: "create"; anchor: Anchor; body: string }
     | { mode: "edit"; comment: SessionFileComment; body: string }
+    | { mode: "reply"; parentId: string; anchorLine: number; body: string }
     | null
   >(null);
 
   const handleEditClick = useCallback((c: SessionFileComment) => {
     setComposer({ mode: "edit", comment: c, body: c.body });
+  }, []);
+
+  const handleReplyClick = useCallback((c: SessionFileComment) => {
+    setComposer({ mode: "reply", parentId: c.id, anchorLine: c.anchor_line_start, body: "" });
+  }, []);
+
+  const handleCopyThread = useCallback((thread: CommentThread) => {
+    void writeTextToClipboard(formatThreadForCopy(thread));
   }, []);
 
   const handleDeleteClick = useCallback(
@@ -370,12 +385,36 @@ export function FileEditorView({
           makeBtn("Delete", "#f38ba8", `comment-delete-${c.id}`, () => handleDeleteClick(c)),
         );
       }
+      // Reply + Copy live on the thread root and act on the whole thread. Reply
+      // targets the root so the response joins this thread; Copy grabs the whole
+      // thread as text (a reliable fallback when in-editor text selection is
+      // awkward inside the Monaco view zone).
+      if (!isReply) {
+        if (onReplyComment) {
+          header.appendChild(
+            makeBtn("Reply", "#89b4fa", `comment-reply-${c.id}`, () => handleReplyClick(c)),
+          );
+        }
+        header.appendChild(
+          makeBtn("Copy", "#a6adc8", `comment-copy-${c.id}`, () => handleCopyThread(thread)),
+        );
+      }
       wrap.appendChild(header);
 
       const body = document.createElement("div");
       body.style.whiteSpace = "pre-wrap";
       body.style.wordBreak = "break-word";
       body.style.lineHeight = "1.5";
+      // Make the comment text selectable: the Monaco editor sets
+      // `user-select: none` on its container, which the view-zone DOM inherits,
+      // so without this the body can't be selected/copied natively. Stopping
+      // mousedown propagation lets a native text drag-select happen inside the
+      // zone without Monaco hijacking it to move the caret.
+      body.style.userSelect = "text";
+      (body.style as CSSStyleDeclaration & { webkitUserSelect?: string }).webkitUserSelect = "text";
+      body.style.cursor = "text";
+      body.dataset.testid = `comment-body-${c.id}`;
+      body.addEventListener("mousedown", (e) => e.stopPropagation());
       body.textContent = c.body;
       wrap.appendChild(body);
       node.appendChild(wrap);
@@ -635,7 +674,7 @@ export function FileEditorView({
       ids.clear();
       zoneNodesRef.current.clear();
     };
-  }, [comments, commentsEnabled, editorReadyToken, handleEditClick, handleDeleteClick, handleStatusClick]);
+  }, [comments, commentsEnabled, editorReadyToken, handleEditClick, handleDeleteClick, handleStatusClick, handleReplyClick, handleCopyThread, onReplyComment]);
 
   // Selection listener -> floating + composer trigger.
   useEffect(() => {
@@ -1005,7 +1044,9 @@ export function FileEditorView({
             <div style={{ fontSize: 10, color: "#a6adc8" }}>
               {composer.mode === "create"
                 ? `Lines ${composer.anchor.start}${composer.anchor.start !== composer.anchor.end ? `-${composer.anchor.end}` : ""}`
-                : `Editing comment on line ${composer.comment.anchor_line_start}`}
+                : composer.mode === "reply"
+                  ? `Replying to comment on line ${composer.anchorLine}`
+                  : `Editing comment on line ${composer.comment.anchor_line_start}`}
             </div>
             <textarea
               data-testid="comment-composer-textarea"
@@ -1047,6 +1088,8 @@ export function FileEditorView({
                     );
                   } else if (composer.mode === "edit" && onUpdateComment) {
                     await onUpdateComment(composer.comment.id, body);
+                  } else if (composer.mode === "reply" && onReplyComment) {
+                    await onReplyComment(composer.parentId, body);
                   }
                   setComposer(null);
                   setSelectionAnchor(null);

@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   selectionToAnchor,
   formatCommentMeta,
+  formatThreadForCopy,
   isMutable,
   isClosedStatus,
   groupCommentThreads,
@@ -142,5 +143,27 @@ describe("estimateThreadHeightInLines", () => {
     };
     // root: 1 header + 3 body; reply: 1 header + 1 body; + 1 padding = 7
     expect(estimateThreadHeightInLines({ root, replies: [reply] })).toBe(7);
+  });
+});
+
+describe("formatThreadForCopy", () => {
+  it("serializes the root and replies with author/status prefixes", () => {
+    const root = { ...baseComment, id: "r1", body: "please rename b" };
+    const reply: SessionFileComment = {
+      ...baseComment,
+      id: "a1",
+      author: "agent",
+      parent_id: "r1",
+      status: "addressed",
+      body: "done",
+    };
+    expect(formatThreadForCopy({ root, replies: [reply] })).toBe(
+      "you · open:\nplease rename b\n\nagent · addressed:\ndone",
+    );
+  });
+
+  it("handles a root with no replies", () => {
+    const root = { ...baseComment, body: "just a note" };
+    expect(formatThreadForCopy({ root, replies: [] })).toBe("you · open:\njust a note");
   });
 });
