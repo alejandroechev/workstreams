@@ -31,6 +31,8 @@ interface Props {
   onImportProject: () => void;
   onCreateWorkstream: (projectId?: string) => void;
   onArchiveWorkstream: (id: string) => void;
+  /** Stop a loaded workstream's tiles/processes without archiving it. */
+  onCloseWorkstream?: (id: string) => void;
   onRenameWorkstream: (id: string, newName: string) => void;
   onUpdateProject: (id: string, updates: { name: string; color: string; copilot_command: string | null }) => void;
   /**
@@ -125,6 +127,7 @@ export default function WorkstreamSidebar({
   onImportProject,
   onCreateWorkstream,
   onArchiveWorkstream,
+  onCloseWorkstream,
   onRenameWorkstream,
   onUpdateProject,
   onReorderWorkstreams,
@@ -519,6 +522,8 @@ export default function WorkstreamSidebar({
                   onChangeWorktree={onChangeWorktree ? () => onChangeWorktree(ws) : undefined}
                   onFork={onForkWorkstream ? () => onForkWorkstream(ws.id) : undefined}
                   onArchive={() => onArchiveWorkstream(ws.id)}
+                  onCloseWorkstream={onCloseWorkstream ? () => onCloseWorkstream(ws.id) : undefined}
+                  isLoaded={!!loadedWsIds && loadedWsIds.has(ws.id)}
                 />
               )}
 

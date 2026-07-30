@@ -6,6 +6,7 @@ import {
   ArrowsRightLeftIcon,
   ArrowTopRightOnSquareIcon,
   ArchiveBoxIcon,
+  MoonIcon,
 } from "@heroicons/react/20/solid";
 
 type WorkstreamStatus = Workstream["status"];
@@ -19,6 +20,14 @@ export interface WorkstreamActionMenuProps {
   onChangeWorktree?: () => void;
   onFork?: () => void;
   onArchive: () => void;
+  /**
+   * Stop a loaded workstream's inner tiles/processes without archiving it. The
+   * workstream stays in the active list and reverts to the "stopped" (moon)
+   * indicator. Only surfaced when the workstream is currently loaded.
+   */
+  onCloseWorkstream?: () => void;
+  /** Whether the workstream is currently loaded (has running tiles/PTYs). */
+  isLoaded?: boolean;
   /** Absolute coordinates for the popover (top-left of the trigger button). */
   anchor: { top: number; left: number };
 }
@@ -35,6 +44,8 @@ export function WorkstreamActionMenu({
   onChangeWorktree,
   onFork,
   onArchive,
+  onCloseWorkstream,
+  isLoaded,
   anchor,
 }: WorkstreamActionMenuProps) {
   const ref = useRef<HTMLDivElement>(null);
@@ -104,6 +115,15 @@ export function WorkstreamActionMenu({
       )}
 
       <Divider />
+
+      {isLoaded && onCloseWorkstream && (
+        <MenuItem
+          icon={<MoonIcon style={iconStyle} />}
+          label="Close (stop processes)"
+          onClick={close(onCloseWorkstream)}
+          testid="action-close"
+        />
+      )}
 
       <MenuItem
         icon={<ArchiveBoxIcon style={{ ...iconStyle, color: "#f38ba8" }} />}

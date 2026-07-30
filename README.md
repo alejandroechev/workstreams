@@ -28,6 +28,11 @@ project-aware workspace:
   workstream, with live activity indicator + bell on idle. Configurable CLI
   command (default `agency copilot --yolo`; switch to `copilot --yolo` for
   the public CLI).
+- 🌙 **Close (stop) a workstream** — the row's `⋯` menu has **Close (stop
+  processes)**, which tears down a loaded workstream's tiles/terminals (killing
+  its PTYs) without archiving it. It stays in the active list and reverts to
+  the moon "stopped" indicator, exactly like a workstream that hasn't been
+  opened yet this session; selecting it again reloads and respawns everything.
 - 🗂️ **Built-in repo browser** — Files / Diff / Log / Hooks / Search tabs. Diff
   has split / unified toggle. Audio, images, PDFs, and SQLite databases preview
   inline. Git hooks open in a syntax-highlighted editor with inline editing.

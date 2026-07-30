@@ -895,6 +895,44 @@ export default function App() {
     }
   }, [workstreams, activeWsId, tiles, backend, fireRemoveWorktree]);
 
+  // Close a loaded workstream: stop its inner tiles/processes (kill PTYs,
+  // unmount its tile tree) WITHOUT archiving it. The workstream stays in the
+  // active list and reverts to the "stopped" (moon) indicator — the same
+  // state as a workstream that hasn't been opened yet this session. Reopening
+  // it (selecting the row) re-runs the load effect and respawns everything.
+  const handleCloseWorkstream = useCallback(async (id: string) => {
+    // Only a loaded workstream can be closed.
+    if (!wsStates.has(id)) return;
+    if (!confirmDiscardDirtyFileBuffers("close workstream")) return;
+
+    const st = wsStates.get(id);
+    const wsTiles = st?.tiles ?? [];
+    for (const t of wsTiles) {
+      spawnedPtys.current.delete(t.id);
+      await backend.closeTerminal(t.id).catch(() => {});
+    }
+
+    // If it was the active workstream, deselect FIRST so the load effect
+    // doesn't immediately re-load/respawn it. Matches "not opened on start"
+    // semantics. Do NOT call setTiles/setTileOrder here — those route through
+    // updateActiveState, which would re-insert this id into wsStates (its
+    // activeWsId closure still points at `id`), leaving the row falsely
+    // "loaded". Removing the wsStates entry below is sufficient; `tiles` is
+    // derived from the active workstream, which is now none.
+    if (activeWsId === id) {
+      setActiveWsId(null);
+    }
+
+    // Remove from the loaded map — this unmounts the workstream's TileGrid
+    // and flips its sidebar row back to the "stopped" (moon) indicator.
+    setWsStates((prev) => {
+      if (!prev.has(id)) return prev;
+      const next = new Map(prev);
+      next.delete(id);
+      return next;
+    });
+  }, [wsStates, activeWsId, backend, confirmDiscardDirtyFileBuffers]);
+
   const handleForkWorkstream = useCallback(async (
     sourceWsId: string,
     opts: { name: string; branchName: string; baseBranch: string; archiveOld: boolean },
@@ -1341,6 +1379,7 @@ export default function App() {
         onImportProject={() => setShowProjectCreate(true)}
         onCreateWorkstream={(projectId) => setShowWsCreate({ show: true, projectId })}
         onArchiveWorkstream={handleArchiveWorkstream}
+        onCloseWorkstream={handleCloseWorkstream}
         onRenameWorkstream={handleRenameWorkstream}
         onUpdateProject={handleUpdateProject}
         onReorderWorkstreams={(orderedIds) => {

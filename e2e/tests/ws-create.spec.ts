@@ -176,4 +176,32 @@ test.describe("Workstream creation flow", () => {
     const log = await readInvokeLog(page);
     expect(log.some((e) => e.cmd === "get_setting")).toBe(true);
   });
+
+  test("Close stops a loaded workstream but keeps it in the active list with the moon indicator", async ({ page }) => {
+    // Create a base_repo workstream — it becomes the active/loaded workstream.
+    await openWsCreateForm(page);
+    await page.locator('[data-testid="ws-create-repo-base_repo"] input').click();
+    await page.locator('[data-testid="ws-create-name"]').fill("Closable");
+    await page.locator('[data-testid="ws-create-submit"]').click();
+    await expect(page.locator('[data-testid="ws-create-form"]')).toHaveCount(0);
+
+    const item = page.locator('[data-testid="workstream-item"]', { hasText: "Closable" });
+    await expect(item).toBeVisible();
+    // Loaded → its tile tree is mounted.
+    await expect(page.locator('[data-testid^="tile-pinned-"]')).toBeVisible();
+    // A loaded workstream is not "stopped".
+    await expect(item.locator('[data-testid="ws-indicator-stopped"]')).toHaveCount(0);
+
+    // Open the row's action menu and click Close.
+    await item.hover();
+    await item.locator('[data-testid^="ws-actions-"]').click();
+    await expect(page.locator('[data-testid="action-close"]')).toBeVisible();
+    await page.locator('[data-testid="action-close"]').click();
+
+    // The workstream stays in the active list...
+    await expect(item).toBeVisible();
+    // ...but is now stopped (moon indicator) and its tiles are unmounted.
+    await expect(item.locator('[data-testid="ws-indicator-stopped"]')).toBeVisible();
+    await expect(page.locator('[data-testid^="tile-pinned-"]')).toHaveCount(0);
+  });
 });

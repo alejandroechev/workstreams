@@ -76,6 +76,40 @@ describe("WorkstreamActionMenu", () => {
     expect(handlers.onClose).toHaveBeenCalledOnce();
   });
 
+  it("surfaces the Close item only when the workstream is loaded", () => {
+    // Not loaded → no Close item.
+    const { unmount } = render(
+      <WorkstreamActionMenu
+        workstream={baseWs}
+        anchor={{ top: 10, left: 10 }}
+        onClose={vi.fn()}
+        onRename={vi.fn()}
+        onArchive={vi.fn()}
+        onCloseWorkstream={vi.fn()}
+        isLoaded={false}
+      />,
+    );
+    expect(screen.queryByTestId("action-close")).toBeNull();
+    unmount();
+
+    // Loaded → Close item present.
+    renderMenu({ isLoaded: true, onCloseWorkstream: vi.fn() });
+    expect(screen.getByTestId("action-close")).toBeTruthy();
+  });
+
+  it("hides the Close item when no onCloseWorkstream handler is provided", () => {
+    renderMenu({ isLoaded: true });
+    expect(screen.queryByTestId("action-close")).toBeNull();
+  });
+
+  it("fires Close-workstream + menu Close on click", () => {
+    const onCloseWorkstream = vi.fn();
+    const handlers = renderMenu({ isLoaded: true, onCloseWorkstream });
+    fireEvent.click(screen.getByTestId("action-close"));
+    expect(onCloseWorkstream).toHaveBeenCalledOnce();
+    expect(handlers.onClose).toHaveBeenCalledOnce();
+  });
+
   it("stops action clicks from bubbling to an ancestor (row select) handler", () => {
     const onAncestorClick = vi.fn();
     const handlers = {
