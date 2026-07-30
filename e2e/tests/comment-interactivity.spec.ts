@@ -70,6 +70,34 @@ test.describe("inline comment interactivity", () => {
     await expect(page.locator('[data-testid="comment-reopen-c1"]')).toBeVisible();
   });
 
+  test("multi-reply comment thread does not overlap the following code lines", async ({ page }) => {
+    await openCase(page, "comment-zone");
+    // The harness thread has a root + two replies; its view zone must reserve
+    // enough vertical space that no code line renders on top of it (regression
+    // guard for the height under-estimate that put replies over the code).
+    await expect(page.locator('[data-testid="comment-entry-a2"]')).toContainText("looks good");
+
+    // Poll until the async height-measurement pass has settled (rAF), then
+    // assert no code line overlaps the zone.
+    await expect
+      .poll(
+        async () =>
+          page.evaluate(() => {
+            const zone = document.querySelector('[data-testid="comment-zone-c1"]');
+            if (!zone) return ["<no-zone>"];
+            const z = zone.getBoundingClientRect();
+            return [...document.querySelectorAll(".view-line")]
+              .map((l) => ({ t: (l.textContent || "").trim(), r: l.getBoundingClientRect() }))
+              .filter((l) => l.t.length > 0)
+              // A code line overlaps if its vertical span intersects the zone's.
+              .filter((l) => l.r.bottom > z.top + 2 && l.r.top < z.bottom - 2)
+              .map((l) => l.t);
+          }),
+        { timeout: 5_000 },
+      )
+      .toEqual([]);
+  });
+
   test("Repo Explorer file-comment Reply button opens the composer and adds a threaded reply", async ({ page }) => {
     await openCase(page, "comment-zone");
 

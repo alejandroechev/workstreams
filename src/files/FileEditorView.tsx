@@ -612,6 +612,10 @@ export function FileEditorView({
   // ─── Inline comments: view zones + selection listener ─────────────────
   const zoneIdsRef = useRef<Map<string, string>>(new Map());
   const zoneNodesRef = useRef<Map<string, HTMLDivElement>>(new Map());
+  // The IViewZone descriptor objects (kept by reference so we can mutate their
+  // height and re-layout after measuring the real DOM height).
+  const zoneDescriptorsRef = useRef<Map<string, MonacoNs.editor.IViewZone>>(new Map());
+  const measureRafRef = useRef<number | null>(null);
 
   // Rebuild view zones whenever the comment list or enabled state changes.
   useEffect(() => {
@@ -638,8 +642,15 @@ export function FileEditorView({
       for (const zid of zoneIdsRef.current.values()) accessor.removeZone(zid);
       zoneIdsRef.current.clear();
       zoneNodesRef.current.clear();
+      zoneDescriptorsRef.current.clear();
       for (const thread of groupCommentThreads(comments)) {
         const c = thread.root;
+        // Outer slot: the node Monaco owns and clamps to the reserved zone
+        // height. Kept minimal (overflow visible) so the inner content is never
+        // visually cut off, and so we can measure the inner node's *natural*
+        // height (Monaco fixes a `height` on this slot, which would otherwise
+        // make offsetHeight report the clamped value, not the real content).
+        const slot = document.createElement("div");
         const dom = document.createElement("div");
         dom.style.background = "#1e1e2e";
         dom.style.borderTop = "1px solid #313244";
@@ -651,17 +662,53 @@ export function FileEditorView({
         dom.dataset.testid = `comment-zone-${c.id}`;
         dom.dataset.commentId = c.id;
         renderCommentZone(dom, thread);
+        slot.appendChild(dom);
+        // Measure the INNER node (unclamped by Monaco) in the pass below.
         zoneNodesRef.current.set(c.id, dom);
-        const zid = accessor.addZone({
+        // Initial height from the line estimate (avoids a first-frame flash);
+        // the measurement pass below corrects it to the exact DOM height so
+        // multi-reply threads never overflow onto the following code lines.
+        const descriptor: MonacoNs.editor.IViewZone = {
           afterLineNumber: c.anchor_line_end,
           heightInLines: estimateThreadHeightInLines(thread),
-          domNode: dom,
+          domNode: slot,
           // Let our DOM (with pointer-events: auto) handle mouse events
           // instead of Monaco eating mousedown as a cursor movement.
           suppressMouseDown: true,
-        } as MonacoNs.editor.IViewZone);
+        };
+        const zid = accessor.addZone(descriptor);
         zoneIdsRef.current.set(c.id, zid);
+        zoneDescriptorsRef.current.set(c.id, descriptor);
       }
+    });
+
+    // Measurement pass: the line estimate can undercount a thread's real height
+    // (entry headers with Resolve/Edit/Delete/Reply/Copy buttons, per-reply
+    // margins, zone padding), which pushed later replies on top of the code
+    // below. After layout, set each zone's exact pixel height from the inner
+    // DOM's natural height.
+    if (measureRafRef.current !== null) cancelAnimationFrame(measureRafRef.current);
+    const entries = Array.from(zoneIdsRef.current.entries()).map(([cid, zid]) => ({
+      zid,
+      dom: zoneNodesRef.current.get(cid),
+      descriptor: zoneDescriptorsRef.current.get(cid),
+    }));
+    measureRafRef.current = requestAnimationFrame(() => {
+      measureRafRef.current = null;
+      const ed = editorRef.current;
+      if (!ed || entries.length === 0) return;
+      ed.changeViewZones((accessor: MonacoNs.editor.IViewZoneChangeAccessor) => {
+        for (const { zid, dom, descriptor } of entries) {
+          if (!dom || !descriptor) continue;
+          // Inner node's natural content height (Monaco doesn't constrain it).
+          const measured = dom.offsetHeight;
+          if (measured > 0 && descriptor.heightInPx !== measured) {
+            descriptor.heightInPx = measured;
+            descriptor.heightInLines = undefined;
+            accessor.layoutZone(zid);
+          }
+        }
+      });
     });
     return () => {
       const ed = editorRef.current;
@@ -671,8 +718,13 @@ export function FileEditorView({
           for (const zid of ids.values()) accessor.removeZone(zid);
         });
       }
+      if (measureRafRef.current !== null) {
+        cancelAnimationFrame(measureRafRef.current);
+        measureRafRef.current = null;
+      }
       ids.clear();
       zoneNodesRef.current.clear();
+      zoneDescriptorsRef.current.clear();
     };
   }, [comments, commentsEnabled, editorReadyToken, handleEditClick, handleDeleteClick, handleStatusClick, handleReplyClick, handleCopyThread, onReplyComment]);
 

@@ -64,6 +64,20 @@ const CommentZoneCase: FC = () => {
       created_at: nowIso(),
       updated_at: nowIso(),
     },
+    {
+      id: "a2",
+      workstream_id: "ws-1",
+      file: "src/example.ts",
+      anchor_line_start: 2,
+      anchor_line_end: 2,
+      anchor_text: "const b = 2;",
+      body: "Thanks — looks good now.",
+      author: "reviewer",
+      parent_id: "c1",
+      status: "open",
+      created_at: nowIso(),
+      updated_at: nowIso(),
+    },
   ]);
 
   return (
