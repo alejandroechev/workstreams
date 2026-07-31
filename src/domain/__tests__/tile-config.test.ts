@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import {
   createTerminalConfig,
   parseTerminalConfig,
@@ -8,6 +8,14 @@ import {
   parseCopilotSessionConfig,
   buildCopilotCommand,
 } from "../tile-config";
+import { __setPlatformOverrideForTests } from "../platform";
+
+// The terminal defaults are platform-dependent, and jsdom's user agent varies
+// with the host OS (win32 locally, linux in CI). Pin the platform explicitly so
+// these assertions are deterministic everywhere; the unix behaviour is covered
+// by its own block below.
+beforeEach(() => __setPlatformOverrideForTests("windows"));
+afterEach(() => __setPlatformOverrideForTests(null));
 
 describe("createTerminalConfig", () => {
   it("creates config with cwd and default command", () => {
@@ -28,6 +36,20 @@ describe("createTerminalConfig", () => {
   it("outputs valid JSON", () => {
     const json = createTerminalConfig("C:\\");
     expect(() => JSON.parse(json)).not.toThrow();
+  });
+
+  it("persists NO command on unix so the backend resolves $SHELL", () => {
+    __setPlatformOverrideForTests("unix");
+    const parsed = JSON.parse(createTerminalConfig("/home/user"));
+    expect(parsed.cwd).toBe("/home/user");
+    expect(parsed.command).toBeUndefined();
+    expect(parsed.process_status).toBe("spawning");
+  });
+
+  it("still honours an explicit command on unix", () => {
+    __setPlatformOverrideForTests("unix");
+    const parsed = JSON.parse(createTerminalConfig("/home/user", "/bin/bash"));
+    expect(parsed.command).toBe("/bin/bash");
   });
 });
 
@@ -53,6 +75,13 @@ describe("parseTerminalConfig", () => {
   it("returns default for whitespace-only string", () => {
     const config = parseTerminalConfig("   ");
     expect(config.cwd).toBe("C:\\");
+  });
+
+  it("falls back to the unix root and no command on unix", () => {
+    __setPlatformOverrideForTests("unix");
+    const config = parseTerminalConfig("");
+    expect(config.cwd).toBe("/");
+    expect(config.command).toBeUndefined();
   });
 
   it("round-trips with createTerminalConfig", () => {

@@ -7,6 +7,7 @@ import { BackendProvider } from "../../backend/context";
 import type { Backend } from "../../backend/types";
 import type { BufferSnapshot } from "../../files/FileBufferRegistry";
 import SessionMetaTile from "../SessionMetaTile";
+import { __setPlatformOverrideForTests } from "../../domain/platform";
 
 const invokeMock = vi.hoisted(() => vi.fn());
 const listenMock = vi.hoisted(() => vi.fn());
@@ -104,6 +105,10 @@ async function openLiveFile(name: string) {
 }
 
 beforeEach(() => {
+  // Paths are joined with the platform separator and jsdom's user agent varies
+  // with the host OS (win32 locally, linux in CI); pin Windows so the
+  // backslash-based expectations below hold everywhere.
+  __setPlatformOverrideForTests("windows");
   fileEditorProps.length = 0;
   invokeMock.mockReset();
   listenMock.mockResolvedValue(vi.fn());
@@ -117,6 +122,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  __setPlatformOverrideForTests(null);
   cleanup();
   vi.unstubAllGlobals();
   vi.clearAllMocks();

@@ -197,11 +197,10 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
       }
       const target = subdir ? joinPath(root, subdir) : root;
       const entries = await backend.listDirectory(target);
-      const sep = target.endsWith("\\") ? "" : "\\";
       const next = entries.map((e) => ({
         name: e.name,
         is_dir: e.is_dir,
-        full_path: `${target}${sep}${e.name}`,
+        full_path: joinPath(target, e.name),
       }));
       setStateEntries((prev) => JSON.stringify(prev) === JSON.stringify(next) ? prev : next);
       setStateCurrentDir(subdir);

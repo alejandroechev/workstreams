@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BackendProvider } from "../../backend/context";
 import type { Backend } from "../../backend/types";
 import SessionMetaTile from "../SessionMetaTile";
+import { __setPlatformOverrideForTests } from "../../domain/platform";
 
 const invokeMock = vi.hoisted(() => vi.fn());
 const listenMock = vi.hoisted(() => vi.fn());
@@ -64,11 +65,16 @@ async function enterFolder(name: string) {
 }
 
 beforeEach(() => {
+  // The tile joins paths with the platform separator, and jsdom's user agent
+  // varies with the host OS (win32 locally, linux in CI). Pin Windows so the
+  // backslash-keyed TREE fixture below matches deterministically everywhere.
+  __setPlatformOverrideForTests("windows");
   invokeMock.mockReset();
   listenMock.mockResolvedValue(vi.fn());
 });
 
 afterEach(() => {
+  __setPlatformOverrideForTests(null);
   cleanup();
   vi.clearAllMocks();
 });
