@@ -3,7 +3,7 @@ import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { MarkdownView } from "../ui/MarkdownView";
-import { dirnameOf } from "../domain/file-types";
+import { dirnameOf, parentRelativeDir } from "../domain/file-types";
 import { useBackend } from "../backend/context";
 import { makeAudioBlobUrl, makePdfBlobUrl, isPdfFile } from "../domain/file-types";
 import { FileEditorView, type MarkdownViewState } from "../files/FileEditorView";
@@ -677,9 +677,10 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
               <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "4px 8px", borderBottom: "1px solid #313244", flexShrink: 0, fontSize: 11 }}>
                   <button
-                    onClick={() => loadStateDir(null)}
+                    data-testid="meta-state-up"
+                    onClick={() => loadStateDir(parentRelativeDir(stateCurrentDir))}
                     disabled={!stateCurrentDir}
-                    title="Back to session root"
+                    title="Up one level"
                     style={{
                       background: "none",
                       border: "none",

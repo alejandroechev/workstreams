@@ -228,6 +228,22 @@ export function resolveRelativePath(basePath: string, relativePath: string): str
  * Directory portion of a file path, with trailing separator stripped.
  * Works for both `\` and `/` separators. Returns "" for bare filenames.
  */
+/**
+ * One level up from a *relative* directory path (as used by the Meta tile's
+ * State browser, where the current folder is stored relative to the session
+ * state root and `null` means "at the root").
+ *
+ * Returns `null` when the parent is the root itself, so callers can treat
+ * `null` uniformly as "root". Accepts either separator and always emits
+ * backslash-separated paths to match how the browser builds child paths.
+ */
+export function parentRelativeDir(relativeDir: string | null): string | null {
+  if (!relativeDir) return null;
+  const segments = relativeDir.split(/[\\/]+/).filter(Boolean);
+  segments.pop();
+  return segments.length > 0 ? segments.join("\\") : null;
+}
+
 export function dirnameOf(path: string): string {
   const idx = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
   if (idx < 0) return "";

@@ -18,6 +18,7 @@ import {
   isPdfFile,
   mimeForPdf,
   makePdfBlobUrl,
+  parentRelativeDir,
 } from "../file-types";
 
 describe("file-types", () => {
@@ -291,6 +292,32 @@ describe("file-types", () => {
       expect(r.size).toBe(8);
       expect(r.bytes.byteLength).toBe(8);
       createSpy.mockRestore();
+    });
+  });
+
+  describe("parentRelativeDir", () => {
+    it("returns null at the root (null input) so navigation stops there", () => {
+      expect(parentRelativeDir(null)).toBeNull();
+    });
+
+    it("returns null for a top-level folder (one level up IS the root)", () => {
+      expect(parentRelativeDir("features")).toBeNull();
+      expect(parentRelativeDir("")).toBeNull();
+    });
+
+    it("strips exactly one level, not all of them", () => {
+      expect(parentRelativeDir("features\\code-review-tile")).toBe("features");
+      expect(parentRelativeDir("features\\code-review-tile\\spikes")).toBe("features\\code-review-tile");
+    });
+
+    it("handles forward slashes and normalises to backslashes", () => {
+      expect(parentRelativeDir("features/code-review-tile/spikes")).toBe("features\\code-review-tile");
+      expect(parentRelativeDir("features/code-review-tile")).toBe("features");
+    });
+
+    it("ignores trailing separators", () => {
+      expect(parentRelativeDir("features\\code-review-tile\\")).toBe("features");
+      expect(parentRelativeDir("features\\")).toBeNull();
     });
   });
 });
