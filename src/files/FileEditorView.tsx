@@ -507,10 +507,19 @@ export function FileEditorView({
   // markdown files; non-markdown / no-preview-callback files have no
   // toggle to make. The forced edit modes (conflict, save_blocked) emit
   // `null` so the toolbar doesn't show a useless toggle.
+  //
+  // NOTE: only the PRESENCE of renderMarkdownPreview matters here, never its
+  // identity. Every host tile passes an inline arrow, so depending on the
+  // function itself re-ran this effect on each host render; for markdown that
+  // emitted a brand-new state object, hosts store it in state, and the
+  // resulting re-render minted yet another inline prop — an unbounded render
+  // loop that pegged the WebView renderer. (Non-markdown escaped it because
+  // emitting `null` twice makes React bail out of the re-render.)
+  const canRenderMarkdownPreview = renderMarkdownPreview !== undefined;
   useEffect(() => {
     if (!onViewStateChange) return;
     const isMd = snapshot !== null && isMarkdown(snapshot.path);
-    const canPreview = snapshot !== null && ((renderMarkdownPreview !== undefined && isMd) || isSvg(snapshot.path));
+    const canPreview = snapshot !== null && ((canRenderMarkdownPreview && isMd) || isSvg(snapshot.path));
     const isForcedEdit = snapshot?.state === "conflicted" || snapshot?.state === "save_blocked";
     // The toolbar should appear whenever there is a preview/edit toggle OR a
     // Present action (markdown). Forced-edit (conflict) suppresses it.
@@ -536,7 +545,7 @@ export function FileEditorView({
       setSlideIndex: (index: number) => setSlideState({ inputPath: path, index }),
     });
     return () => onViewStateChange(null);
-  }, [onViewStateChange, snapshot, effectiveMode, renderMarkdownPreview, path, localSlideIndex]);
+  }, [onViewStateChange, snapshot, effectiveMode, canRenderMarkdownPreview, path, localSlideIndex]);
 
   useEffect(() => {
     if (editorPath === null || editorHostRef.current === null) return undefined;
