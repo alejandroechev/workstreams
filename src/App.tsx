@@ -23,6 +23,7 @@ import { computeSessionNameSync } from "./domain/session-name-sync";
 import { deriveLinkedSessionIds } from "./domain/linked-sessions";
 import { parseKeyAction } from "./domain/keyboard";
 import { createTerminalConfig, createCopilotSessionConfig } from "./domain/tile-config";
+import { defaultRootDir, defaultTerminalCommand, supportsWsl } from "./domain/platform";
 import { createWorkstreamFlow } from "./domain/workstream-create";
 import {
   applyWorktreeEvent,
@@ -495,14 +496,14 @@ export default function App() {
         if (!spawnedPtys.current.has(tile.id)) {
           if (tile.tile_type === "terminal") {
             const config = JSON.parse(tile.config_json || "{}");
-            const cwd = config.cwd || "C:\\";
+            const cwd = config.cwd || defaultRootDir();
             spawnedPtys.current.add(tile.id);
             backend.spawnTerminal(tile.id, cwd, config.command || undefined, undefined, 30, 120).catch(() => {
               spawnedPtys.current.delete(tile.id);
             });
           } else if (tile.tile_type === "copilot_session") {
             const config = JSON.parse(tile.config_json || "{}");
-            const cwd = config.cwd || "C:\\";
+            const cwd = config.cwd || defaultRootDir();
             spawnedPtys.current.add(tile.id);
             const sessionId = config.copilot_session_id || config.resume_by_id || null;
             backend.spawnCopilotSession(tile.id, cwd, sessionId, 30, 120, commandForWsId(tile.workstream_id)).catch(() => {
@@ -1077,8 +1078,8 @@ export default function App() {
   const addTile = useCallback(async (tileType: TileType, extraConfig?: Record<string, string>) => {
     if (!activeWsId) return;
     const ws = workstreams.find((w) => w.id === activeWsId);
-    const cwd = ws?.directory || "C:\\";
-    const command = wsCommands.current.get(activeWsId) || "pwsh.exe";
+    const cwd = ws?.directory || defaultRootDir();
+    const command = wsCommands.current.get(activeWsId) || defaultTerminalCommand();
 
     const typeLabels: Record<TileType, string> = {
       terminal: "PowerShell",
@@ -1114,7 +1115,9 @@ export default function App() {
     let title: string;
 
     if (tileType === "terminal") {
-      const shellCmd = isWsl ? "wsl.exe" : command;
+      // `command` is null on unix so no shell is persisted and the backend
+      // resolves $SHELL at spawn/restore time.
+      const shellCmd = isWsl ? "wsl.exe" : (command ?? undefined);
       config = createTerminalConfig(cwd, shellCmd);
       title = isWsl ? `WSL ${tileCount + 1}` : `${typeLabels[tileType]} ${tileCount + 1}`;
     } else if (tileType === "copilot_session") {
@@ -1141,7 +1144,7 @@ export default function App() {
     // Spawn PTY for terminal and copilot_session tiles
     if (tileType === "terminal") {
       spawnedPtys.current.add(tile.id);
-      const shellCmd = extraConfig?.shell === "wsl" ? "wsl.exe" : (command !== "pwsh.exe" ? command : undefined);
+      const shellCmd = extraConfig?.shell === "wsl" ? "wsl.exe" : (command ?? undefined);
       await backend.spawnTerminal(tile.id, cwd, shellCmd, undefined, 30, 120);
     } else if (tileType === "copilot_session") {
       spawnedPtys.current.add(tile.id);

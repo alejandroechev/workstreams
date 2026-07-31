@@ -1,7 +1,11 @@
 name: Release
 
-# Manual one-click release: bumps the version, builds the Windows installer,
-# tags the commit, and publishes a GitHub Release with the artifacts.
+# Manual one-click release: bumps the version, builds the Windows and macOS
+# installers, tags the commit, and publishes a GitHub Release with the
+# artifacts.
+#
+# Windows: NSIS .exe + .msi + raw .exe (windows-latest)
+# macOS:   .dmg + zipped .app, Apple Silicon only, UNSIGNED (macos-latest)
 #
 # Usage: GitHub → Actions → "Release" → "Run workflow" → enter version
 # (e.g. v0.3.0) OR leave blank to auto-compute from conventional commits.
@@ -181,9 +185,90 @@ jobs:
           path: staging/*
           retention-days: 30
 
+  build-macos:
+    name: Build macOS release
+    needs: resolve-version
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+      - name: Cache cargo registry + target
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "src-tauri -> target"
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Stamp computed version into manifests for the build
+        shell: bash
+        env:
+          TAG: ${{ needs.resolve-version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          ver="${TAG#v}"
+          echo "Stamping version $ver into package.json + tauri.conf.json"
+          node -e "
+            const fs = require('fs');
+            for (const p of ['package.json', 'src-tauri/tauri.conf.json']) {
+              const j = JSON.parse(fs.readFileSync(p, 'utf8'));
+              j.version = process.argv[1];
+              fs.writeFileSync(p, JSON.stringify(j, null, 2) + '\n');
+            }
+          " "$ver"
+
+      # Apple Silicon only (covers every Mac sold since 2020). The bundle is
+      # NOT code-signed or notarised, so first launch needs a right-click →
+      # Open (or `xattr -dr com.apple.quarantine`). See README.
+      - name: Build Tauri app (aarch64)
+        run: npx tauri build --target aarch64-apple-darwin
+
+      - name: Stage artifacts
+        shell: bash
+        env:
+          TAG: ${{ needs.resolve-version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p staging
+          bundle="src-tauri/target/aarch64-apple-darwin/release/bundle"
+
+          dmg=$(find "$bundle/dmg" -name "*.dmg" -print -quit 2>/dev/null || true)
+          if [ -z "$dmg" ]; then
+            echo "::error::DMG not found under $bundle/dmg"
+            ls -laR "$bundle" || true
+            exit 1
+          fi
+          cp "$dmg" "staging/Workstreams-${TAG}-arm64.dmg"
+
+          # Also ship the raw .app (zipped) so users who prefer not to mount a
+          # DMG can drop it straight into /Applications.
+          app=$(find "$bundle/macos" -maxdepth 1 -name "*.app" -print -quit 2>/dev/null || true)
+          if [ -z "$app" ]; then
+            echo "::error::.app bundle not found under $bundle/macos"
+            ls -laR "$bundle" || true
+            exit 1
+          fi
+          ditto -c -k --sequesterRsrc --keepParent "$app" "staging/Workstreams-${TAG}-arm64.app.zip"
+
+          echo "Staged artifacts:"
+          ls -la staging/
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-release-${{ needs.resolve-version.outputs.tag }}
+          path: staging/*
+          retention-days: 30
+
   publish-release:
     name: Tag + GitHub Release
-    needs: [resolve-version, build-windows]
+    needs: [resolve-version, build-windows, build-macos]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -194,6 +279,12 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: windows-release-${{ needs.resolve-version.outputs.tag }}
+          path: dist/
+
+      - name: Download macOS artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-release-${{ needs.resolve-version.outputs.tag }}
           path: dist/
 
       - name: Create tag
@@ -225,7 +316,18 @@ jobs:
             echo "Manual release for commit ${{ github.sha }}"
             echo
             echo "**Bump kind:** \`${BUMP}\`"
-            echo "**Built on:** \`windows-latest\` from \`master\`"
+            echo
+            echo "## Downloads"
+            echo "| Platform | Artifact |"
+            echo "| --- | --- |"
+            echo "| Windows | \`.exe\` (NSIS installer), \`.msi\`, or the raw \`workstreams-${TAG}.exe\` |"
+            echo "| macOS (Apple Silicon) | \`Workstreams-${TAG}-arm64.dmg\` or \`.app.zip\` |"
+            echo
+            echo "> **macOS note:** the build is *not* code-signed or notarised, so Gatekeeper"
+            echo "> will block the first launch. Right-click the app → **Open** → **Open**, or run"
+            echo "> \`xattr -dr com.apple.quarantine /Applications/Workstreams.app\`."
+            echo ">"
+            echo "> Apple Silicon only — Intel Macs are not currently built."
             echo
             echo "## Commit log since previous tag"
             prev_tag=$(git tag --list 'v*' --sort=-v:refname | grep -v "^${TAG}$" | head -n 1 || true)

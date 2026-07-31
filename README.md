@@ -78,10 +78,31 @@ Full feature reference: [docs/features-detailed.md](docs/features-detailed.md).
 
 ## Install
 
-Pre-built Windows installers are attached to every
-[release](https://github.com/alejandroechev/workstreams/releases) (NSIS
-`.exe` or MSI). Linux / macOS are not currently shipped — build from source
+Pre-built installers are attached to every
+[release](https://github.com/alejandroechev/workstreams/releases):
+
+| Platform | Artifact |
+| --- | --- |
+| Windows | NSIS `.exe`, `.msi`, or the raw `workstreams-<tag>.exe` |
+| macOS (Apple Silicon) | `Workstreams-<tag>-arm64.dmg` or `.app.zip` |
+
+Linux is not currently shipped — build from source
 ([contributor guide](docs/contributor-guide.md#setup)).
+
+### macOS notes
+
+The macOS build is **experimental** and is *not* code-signed or notarised, so
+Gatekeeper blocks the first launch. Either right-click the app → **Open** →
+**Open**, or clear the quarantine flag:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/Workstreams.app
+```
+
+Only Apple Silicon (`aarch64`) is built; Intel Macs would need a separate
+`x86_64-apple-darwin` target. Terminal tiles run your login shell (`$SHELL`,
+falling back to `/bin/zsh`) instead of PowerShell, and the WSL tile is hidden.
+The Copilot CLI must be installed and on your `PATH`.
 
 ## Tour
 

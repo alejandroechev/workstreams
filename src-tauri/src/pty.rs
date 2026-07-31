@@ -125,6 +125,37 @@ pub struct PtyHandle {
     pid: Option<u32>,
 }
 
+/// Pick a sane default shell when a terminal tile doesn't specify a command.
+///
+/// This must be platform-aware: `pwsh.exe` only exists on Windows, so using it
+/// as a universal default made every terminal tile fail to spawn on
+/// macOS/Linux.
+#[cfg(windows)]
+fn default_shell() -> String {
+    "pwsh.exe".to_string()
+}
+
+#[cfg(unix)]
+fn default_shell() -> String {
+    resolve_unix_shell(std::env::var("SHELL").ok())
+}
+
+/// Resolve the Unix default shell from the `$SHELL` environment variable.
+///
+/// Split out from [`default_shell`] so the fallback logic is unit-testable
+/// without mutating process-global environment state. We only trust an
+/// absolute path; anything else (unset, blank, or a bare name) falls back to
+/// `/bin/zsh`, the macOS default login shell since Catalina and present on
+/// virtually all Linux distros too.
+#[cfg(unix)]
+fn resolve_unix_shell(env_shell: Option<String>) -> String {
+    const FALLBACK: &str = "/bin/zsh";
+    match env_shell {
+        Some(s) if s.trim().starts_with('/') => s.trim().to_string(),
+        _ => FALLBACK.to_string(),
+    }
+}
+
 pub struct PtyManager {
     handles: Mutex<HashMap<String, PtyHandle>>,
 }
@@ -160,7 +191,7 @@ impl PtyManager {
             })
             .map_err(|e| format!("Failed to open PTY: {e}"))?;
 
-        let shell = command.unwrap_or("pwsh.exe");
+        let shell = command.map(|c| c.to_string()).unwrap_or_else(default_shell);
         let mut cmd = CommandBuilder::new(shell);
         cmd.cwd(cwd);
         if let Some(ref a) = args {
@@ -305,6 +336,55 @@ impl PtyManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn default_shell_is_platform_appropriate() {
+        let shell = default_shell();
+        assert!(
+            !shell.is_empty(),
+            "default shell must never be empty (it is passed straight to CommandBuilder)"
+        );
+
+        #[cfg(windows)]
+        assert_eq!(
+            shell, "pwsh.exe",
+            "Windows keeps PowerShell as the default shell"
+        );
+
+        // On Unix (macOS/Linux) the default must be an absolute path to a real
+        // shell binary — `pwsh.exe` does not exist there, so spawning a
+        // terminal tile with the Windows default would fail outright.
+        #[cfg(unix)]
+        {
+            assert!(
+                shell.starts_with('/'),
+                "unix default shell must be an absolute path, got {shell}"
+            );
+            assert!(
+                !shell.ends_with(".exe"),
+                "unix default shell must not be a Windows executable, got {shell}"
+            );
+        }
+    }
+
+    #[test]
+    fn default_shell_prefers_the_shell_env_var_on_unix() {
+        // The user's login shell ($SHELL) is the correct default on Unix; we
+        // only fall back to a hardcoded path when it is unset/empty.
+        #[cfg(unix)]
+        {
+            let resolved = resolve_unix_shell(Some("/opt/homebrew/bin/fish".to_string()));
+            assert_eq!(resolved, "/opt/homebrew/bin/fish");
+
+            // Unset or blank -> zsh (the macOS default since Catalina).
+            assert_eq!(resolve_unix_shell(None), "/bin/zsh");
+            assert_eq!(resolve_unix_shell(Some("   ".to_string())), "/bin/zsh");
+
+            // A relative/garbage value is not trustworthy as an absolute
+            // program path; fall back rather than fail to spawn.
+            assert_eq!(resolve_unix_shell(Some("zsh".to_string())), "/bin/zsh");
+        }
+    }
 
     #[test]
     fn pty_manager_starts_empty() {

@@ -1,12 +1,18 @@
 import type { TerminalConfig, CopilotSessionConfig } from "./types";
+import { defaultRootDir, defaultTerminalCommand } from "./platform";
 
 /**
  * Create a JSON config string for a terminal tile.
+ *
+ * When no command is supplied we fall back to the platform default; on
+ * macOS/Linux that is `null`, so no shell is persisted and the backend
+ * resolves the user's login shell at spawn time.
  */
 export function createTerminalConfig(cwd: string, command?: string): string {
+  const resolved = command ?? defaultTerminalCommand() ?? undefined;
   const config: TerminalConfig = {
     cwd,
-    command: command ?? "pwsh.exe",
+    ...(resolved ? { command: resolved } : {}),
     process_status: "spawning",
   };
   return JSON.stringify(config);
@@ -16,13 +22,17 @@ export function createTerminalConfig(cwd: string, command?: string): string {
  * Parse a JSON config string into a TerminalConfig object.
  */
 export function parseTerminalConfig(configJson: string): TerminalConfig {
+  const fallback = (): TerminalConfig => {
+    const command = defaultTerminalCommand();
+    return { cwd: defaultRootDir(), ...(command ? { command } : {}) };
+  };
   if (!configJson || configJson.trim() === "") {
-    return { cwd: "C:\\", command: "pwsh.exe" };
+    return fallback();
   }
   try {
     return JSON.parse(configJson) as TerminalConfig;
   } catch {
-    return { cwd: "C:\\", command: "pwsh.exe" };
+    return fallback();
   }
 }
 

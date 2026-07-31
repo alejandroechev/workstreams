@@ -2,6 +2,7 @@
 import { ViewColumnsIcon } from "@heroicons/react/24/outline";
 import AddTileMenu from "./AddTileMenu";
 import { isFeatureEnabled } from "../domain/feature-flags";
+import { supportsWsl, terminalTileLabel } from "../domain/platform";
 
 interface Props {
   tileCount: number;
@@ -66,8 +67,9 @@ export default function StatusBar({
 }: Props) {
   const rawItems: Array<{ key: string; label: string; icon: "session" | "terminal" | "folder" | "info" | "beaker" | "plan" | "code"; shortcut?: string; onSelect?: () => void; gated?: boolean }> = [
     { key: "session", label: "Copilot Session", icon: "session", shortcut: "Alt+C", onSelect: onAddSession },
-    { key: "terminal", label: "PowerShell", icon: "terminal", shortcut: "Alt+T", onSelect: onAddTerminal },
-    { key: "wsl", label: "WSL Terminal", icon: "terminal", shortcut: "Alt+W", onSelect: onAddWslTerminal },
+    { key: "terminal", label: terminalTileLabel(), icon: "terminal", shortcut: "Alt+T", onSelect: onAddTerminal },
+    // WSL is Windows-only — hide the entry entirely on macOS/Linux.
+    { key: "wsl", label: "WSL Terminal", icon: "terminal", shortcut: "Alt+W", onSelect: onAddWslTerminal, gated: !supportsWsl() },
     { key: "explorer", label: "Repo Explorer", icon: "folder", shortcut: "Alt+R", onSelect: onAddExplorer },
     { key: "meta", label: "Session Meta", icon: "info", shortcut: "Alt+M", onSelect: onAddSessionMeta },
     { key: "workbench", label: "Workbench", icon: "beaker", shortcut: "Alt+B", onSelect: onAddWorkbench },

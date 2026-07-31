@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { MarkdownView } from "../ui/MarkdownView";
 import { dirnameOf, parentRelativeDir } from "../domain/file-types";
+import { joinPath } from "../domain/platform";
 import { useBackend } from "../backend/context";
 import { makeAudioBlobUrl, makePdfBlobUrl, isPdfFile } from "../domain/file-types";
 import { FileEditorView, type MarkdownViewState } from "../files/FileEditorView";
@@ -194,7 +195,7 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
         stateRootRef.current = root;
         setStateRootDir(root);
       }
-      const target = subdir ? `${root}\\${subdir.replace(/\//g, "\\")}` : root;
+      const target = subdir ? joinPath(root, subdir) : root;
       const entries = await backend.listDirectory(target);
       const sep = target.endsWith("\\") ? "" : "\\";
       const next = entries.map((e) => ({
@@ -216,7 +217,7 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
 
   // Absolute path of the directory currently shown in the State tab.
   const stateAbsoluteDir = stateRootDir
-    ? (stateCurrentDir ? `${stateRootDir}\\${stateCurrentDir.replace(/\//g, "\\")}` : stateRootDir)
+    ? (stateCurrentDir ? joinPath(stateRootDir, stateCurrentDir) : stateRootDir)
     : null;
 
   // Create a new file/folder in the State tab's current directory, prompting
@@ -306,7 +307,7 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
     if (linkedSessionIds) {
       const home = "C:\\Users\\alejandroe";
       for (const sid of linkedSessionIds) {
-        watchPaths.push(`${home}\\.copilot\\session-state\\${sid}`);
+        watchPaths.push(joinPath(home, ".copilot", "session-state", sid));
       }
     }
     for (const p of watchPaths) {
@@ -354,7 +355,7 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
         // Try common entry files in priority order
         const candidates = ["SKILL.md", "extension.mjs", "extension.js", "README.md", "index.ts", "index.js", "plugin.json", "agency.json"];
         for (const candidate of candidates) {
-          const candidatePath = path.endsWith("\\") || path.endsWith("/") ? `${path}${candidate}` : `${path}\\${candidate}`;
+          const candidatePath = joinPath(path, candidate);
           try {
             const content = await backend.readFile(candidatePath);
             setViewContent({
@@ -728,7 +729,7 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
                       key={entry.full_path}
                       onClick={() => {
                         if (entry.is_dir) {
-                          const nextRel = stateCurrentDir ? `${stateCurrentDir}\\${entry.name}` : entry.name;
+                          const nextRel = stateCurrentDir ? joinPath(stateCurrentDir, entry.name) : entry.name;
                           void loadStateDir(nextRel);
                         } else {
                           void viewFile(entry.full_path, entry.name);
