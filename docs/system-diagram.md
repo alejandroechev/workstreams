@@ -25,6 +25,7 @@ graph TB
         subgraph Backend["Rust Backend"]
             LibRS["lib.rs<br/>22 Tauri commands"]
             PtyRS["pty.rs<br/>PtyManager: spawn, write, resize, close"]
+            ShellEnvRS["shell_env.rs<br/>login-shell PATH repair (macOS GUI launch)"]
             DbRS["db.rs<br/>SQLite schema + WAL"]
             FileSystemProvider["FileSystemProvider trait<br/>OS / InMemory impls"]
         end
@@ -73,6 +74,7 @@ graph TB
     FileBuffers -- "invoke: read/write/watch/canonicalize" --> LibRS
 
     LibRS --> PtyRS
+    PtyRS --> ShellEnvRS
     LibRS --> DbRS
     PtyRS --> ConPTY
     ConPTY --> Shell

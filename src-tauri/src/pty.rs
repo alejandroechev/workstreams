@@ -156,6 +156,28 @@ fn resolve_unix_shell(env_shell: Option<String>) -> String {
     }
 }
 
+/// Build the environment overrides applied to a spawned PTY.
+///
+/// Caller-supplied workstream vars are layered *on top of* the repaired PATH
+/// so an explicit `PATH` from the caller always wins. Split out from
+/// [`PtyManager::spawn`] so the precedence rules are unit-testable without
+/// opening a real PTY.
+fn spawn_env_overrides(
+    caller_env: Option<HashMap<String, String>>,
+    resolved_path: Option<String>,
+) -> HashMap<String, String> {
+    let mut out = HashMap::new();
+    if let Some(path) = resolved_path {
+        out.insert("PATH".to_string(), path);
+    }
+    if let Some(env_vars) = caller_env {
+        for (k, v) in env_vars {
+            out.insert(k, v);
+        }
+    }
+    out
+}
+
 pub struct PtyManager {
     handles: Mutex<HashMap<String, PtyHandle>>,
 }
@@ -199,10 +221,12 @@ impl PtyManager {
                 cmd.arg(arg);
             }
         }
-        if let Some(env_vars) = env {
-            for (k, v) in env_vars {
-                cmd.env(k, v);
-            }
+        // A GUI launch (Dock/Finder on macOS) inherits launchd's stunted PATH,
+        // which hides every user-installed tool including the Copilot CLI.
+        // Repair it before spawning so `agency`/`copilot`/`node` resolve.
+        let overrides = spawn_env_overrides(env, crate::shell_env::resolved_path(&default_shell()));
+        for (k, v) in overrides {
+            cmd.env(k, v);
         }
 
         let child = pair
@@ -384,6 +408,37 @@ mod tests {
             // program path; fall back rather than fail to spawn.
             assert_eq!(resolve_unix_shell(Some("zsh".to_string())), "/bin/zsh");
         }
+    }
+
+    #[test]
+    fn spawn_env_injects_the_repaired_path() {
+        let out = spawn_env_overrides(None, Some("/opt/homebrew/bin:/usr/bin".to_string()));
+        assert_eq!(
+            out.get("PATH").map(String::as_str),
+            Some("/opt/homebrew/bin:/usr/bin")
+        );
+    }
+
+    #[test]
+    fn spawn_env_leaves_path_untouched_when_not_resolved() {
+        // Terminal launches (and Windows) resolve to None — we must not set
+        // PATH at all so the child inherits the process environment verbatim.
+        let mut caller = HashMap::new();
+        caller.insert("WORKSTREAMS_ACTIVE_TILE".to_string(), "tile-1".to_string());
+        let out = spawn_env_overrides(Some(caller), None);
+        assert!(!out.contains_key("PATH"));
+        assert_eq!(
+            out.get("WORKSTREAMS_ACTIVE_TILE").map(String::as_str),
+            Some("tile-1")
+        );
+    }
+
+    #[test]
+    fn spawn_env_lets_caller_override_path() {
+        let mut caller = HashMap::new();
+        caller.insert("PATH".to_string(), "/caller/wins".to_string());
+        let out = spawn_env_overrides(Some(caller), Some("/resolved".to_string()));
+        assert_eq!(out.get("PATH").map(String::as_str), Some("/caller/wins"));
     }
 
     #[test]

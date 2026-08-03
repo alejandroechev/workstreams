@@ -5,6 +5,7 @@ mod fs_watcher;
 mod pty;
 mod repo_create;
 mod session_poller;
+mod shell_env;
 
 use db::open_db;
 use fs_watcher::FsWatcher;

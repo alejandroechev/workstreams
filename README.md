@@ -104,6 +104,14 @@ Only Apple Silicon (`aarch64`) is built; Intel Macs would need a separate
 falling back to `/bin/zsh`) instead of PowerShell, and the WSL tile is hidden.
 The Copilot CLI must be installed and on your `PATH`.
 
+Apps launched from the Dock, Finder, or Spotlight inherit launchd's minimal
+`PATH` (`/usr/bin:/bin:/usr/sbin:/sbin`) and never read `~/.zshrc`, which would
+hide `copilot`, `agency`, `node` and Homebrew binaries from every tile. On a
+GUI launch Workstreams detects this and asks your login shell for its `PATH`
+once, then uses it for spawned tiles — so no `PATH` setup is needed. Because
+that value is snapshotted at startup, **restart the app after editing your
+shell profile**. See [ADR 017](docs/adrs/017-macos-gui-launch-path.md).
+
 ## Tour
 
 1. Click `+` in the sidebar → **Import existing repo** (pick a folder) or

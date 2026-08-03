@@ -184,14 +184,16 @@ mod tests {
     }
 
     fn temp_repo() -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "cr-diff-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        // A pid + timestamp name is not unique: `SystemTime::now()` only has
+        // microsecond granularity on macOS, so two of these tests running
+        // concurrently in the same process can land on the same nanos value,
+        // share a directory, and race inside `git init` ("cannot copy
+        // template hook: File exists"). A process-wide atomic counter makes
+        // the name collision-proof regardless of clock resolution.
+        static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let seq = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("cr-diff-{}-{}", std::process::id(), seq));
+        std::fs::remove_dir_all(&dir).ok();
         std::fs::create_dir_all(&dir).unwrap();
         git(&dir, &["init", "-q", "-b", "master"]);
         git(&dir, &["config", "user.email", "t@t"]);
