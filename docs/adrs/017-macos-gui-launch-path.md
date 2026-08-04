@@ -1,4 +1,4 @@
-# ADR 017 — Repair the GUI-launch `PATH` on macOS
+# ADR 017 — Repair the GUI-launch environment on macOS (`PATH`, `TERM`)
 
 ## Status
 
@@ -90,10 +90,38 @@ tiles are fixed by the same three lines and no call site can forget it.
 Windows keeps a `#[cfg(windows)]` `resolved_path` that always returns `None`,
 making the change a literal no-op there.
 
+### `TERM` is missing too
+
+`PATH` is not the only variable launchd fails to provide. A GUI-launched app
+also has **no `TERM`**, and a shell started under it reports `TERM=dumb`.
+
+`zsh` treats a dumb terminal as incapable of line editing: it disables ZLE
+entirely, the tty stays in canonical mode, and the kernel echoes an erase as a
+plain space. The visible result is that **Backspace appears to insert spaces**
+instead of deleting — the edit actually happens in the input buffer, but the
+screen never reflects it, so the line looks corrupted.
+
+Measured on a GUI-equivalent environment, typing `echo abc`, two `DEL` (`0x7f`)
+and `ZZ`:
+
+| `TERM` | Echoed erase | Rendered line |
+| --- | --- | --- |
+| unset / `dumb` | *(spaces)* | `echo abc  ZZ` ❌ |
+| `xterm-256color` | `\x08 \x08` | `echo aZZ` ✅ |
+
+`spawn_env_overrides` therefore also sets `TERM=xterm-256color` when the
+inherited value is missing, empty, `dumb`, or `unknown`. xterm.js implements
+the xterm protocol with 256-colour support, so this is an accurate description
+of the emulator on the other end of the PTY rather than a guess. An inherited
+`TERM` from a real terminal launch is preserved, and a caller-supplied `TERM`
+still wins. Windows uses neither termcap nor terminfo and ConPTY already
+reports a capable terminal, so the repair is `cfg(unix)`-only.
+
 ## Consequences
 
 - Copilot session tiles work when the app is launched from the Dock, Finder,
   Spotlight, or as a login item — the normal way a desktop app is started.
+  Backspace and other line editing work in terminal tiles for the same reason.
 - One extra process spawn (~100 ms) on GUI launches only, paid once per app
   process and cached in a `OnceLock`.
 - The repaired `PATH` is a *snapshot*. Editing `~/.zshrc` requires restarting
@@ -105,7 +133,7 @@ making the change a literal no-op there.
   their `PATH` to exactly the four launchd defaults in a terminal will trigger
   a probe. The merge keeps their entries, so the outcome is still correct.
 - Not addressed: other launchd-inherited environment gaps (e.g. `LANG`,
-  proxy variables). Only `PATH` was causing observable failures.
+  proxy variables). Only `PATH` and `TERM` were causing observable failures.
 
 ## Notes
 

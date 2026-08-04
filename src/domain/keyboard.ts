@@ -25,7 +25,36 @@ export interface ParseKeyActionOpts {
   altKey: boolean;
   ctrlKey: boolean;
   key: string;
+  /**
+   * Physical key identifier (`KeyboardEvent.code`, e.g. `"KeyT"`). Optional so
+   * existing callers/tests that only pass `key` keep working.
+   *
+   * Required for correctness on macOS: Option+<letter> applies the special
+   * character layer before the event is dispatched, so Option+T arrives with
+   * `key === "†"`, not `"t"`. `code` is layout-independent.
+   */
+  code?: string;
   activeElement: Element | null;
+}
+
+/**
+ * The letter a shortcut should be matched against.
+ *
+ * Prefers the physical key (`code`) whenever Alt is held, because macOS
+ * rewrites `key` for every Option+<letter> combination. Falls back to `key`
+ * so Windows/Linux behaviour — and any caller that doesn't supply `code` —
+ * is unchanged.
+ */
+export function shortcutKey(opts: {
+  altKey: boolean;
+  key: string;
+  code?: string;
+}): string {
+  if (opts.altKey && opts.code) {
+    const physical = /^Key([A-Z])$/.exec(opts.code);
+    if (physical) return physical[1].toLowerCase();
+  }
+  return opts.key;
 }
 
 type MonacoTextFocusEditor = {
@@ -69,10 +98,15 @@ function isMonacoFocused(activeElement: Element | null): boolean {
  * All app-level commands use Alt+ prefix to avoid conflicts with
  * terminal (Ctrl+C/V/etc) and editor (Ctrl+F/P/etc) shortcuts.
  *
+ * On macOS the same combos are typed with Option. Because Option+<letter>
+ * rewrites `event.key` into a special character ("†" for Option+T), matching
+ * goes through `shortcutKey`, which prefers the layout-independent
+ * `event.code`.
+ *
  * Tile-creation shortcuts:
  *   Alt+C  copilot_session
- *   Alt+T  terminal (PowerShell)
- *   Alt+W  terminal with shell=wsl
+ *   Alt+T  terminal (login shell / PowerShell on Windows)
+ *   Alt+W  terminal with shell=wsl (Windows only)
  *   Alt+R  file_explorer (Repo Explorer)
  *   Alt+M  session_meta
  *   Alt+B  workbench
@@ -86,7 +120,8 @@ function isMonacoFocused(activeElement: Element | null): boolean {
  *   Alt+ArrowKeys  navigate between tiles
  */
 export function parseKeyAction(opts: ParseKeyActionOpts): KeyAction | null {
-  const { altKey, key } = opts;
+  const { altKey } = opts;
+  const key = shortcutKey(opts);
 
   if (isAltTileCreationShortcut(altKey, key) && isMonacoFocused(opts.activeElement)) {
     return null;

@@ -178,4 +178,77 @@ describe("parseKeyAction", () => {
   it("Alt+E (old explorer shortcut) is no longer mapped", () => {
     expect(parseKeyAction({ key: "e", ...alt })).toBeNull();
   });
+
+  // macOS: Option+<letter> does not produce the plain letter in `event.key`.
+  // The OS applies the dead-key/special-character layer first, so Option+T
+  // arrives as "†", Option+C as "ç", and so on. Matching on `key` alone means
+  // every tile shortcut silently does nothing on a Mac. `event.code` is
+  // layout-independent ("KeyT") and is the correct thing to match.
+  describe("macOS Option+<letter> (event.key is a special character)", () => {
+    it("maps Option+T to a terminal tile via code", () => {
+      expect(parseKeyAction({ key: "†", code: "KeyT", ...alt })).toEqual({
+        type: "addTile",
+        tileType: "terminal",
+      });
+    });
+
+    it("maps the remaining tile-creation shortcuts via code", () => {
+      expect(parseKeyAction({ key: "ç", code: "KeyC", ...alt })).toEqual({
+        type: "addTile",
+        tileType: "copilot_session",
+      });
+      expect(parseKeyAction({ key: "®", code: "KeyR", ...alt })).toEqual({
+        type: "addTile",
+        tileType: "file_explorer",
+      });
+      expect(parseKeyAction({ key: "µ", code: "KeyM", ...alt })).toEqual({
+        type: "addTile",
+        tileType: "session_meta",
+      });
+      expect(parseKeyAction({ key: "∫", code: "KeyB", ...alt })).toEqual({
+        type: "addTile",
+        tileType: "workbench",
+      });
+      expect(parseKeyAction({ key: "π", code: "KeyP", ...alt })).toEqual({
+        type: "addTile",
+        tileType: "plan",
+      });
+      expect(parseKeyAction({ key: "å", code: "KeyA", ...alt })).toEqual({
+        type: "addTile",
+        tileType: "code_review",
+      });
+    });
+
+    it("maps tile-management shortcuts via code", () => {
+      expect(parseKeyAction({ key: "œ", code: "KeyQ", ...alt })).toEqual({ type: "closeTile" });
+      expect(parseKeyAction({ key: "ƒ", code: "KeyF", ...alt })).toEqual({ type: "toggleFullscreen" });
+      expect(parseKeyAction({ key: "ß", code: "KeyS", ...alt })).toEqual({ type: "toggleSideBySide" });
+    });
+
+    it("still suppresses tile shortcuts while Monaco has focus", () => {
+      // The Monaco guard keys off the same letter set, so it must recognise
+      // the code-derived letter too — otherwise Option+T would create a tile
+      // while the user is typing in the editor.
+      const editor = { hasTextFocus: () => true };
+      getMonacoIfLoadedMock.mockReturnValue({
+        editor: { getEditors: () => [editor] },
+      } as unknown as ReturnType<typeof getMonacoIfLoaded>);
+      expect(parseKeyAction({ key: "†", code: "KeyT", ...alt })).toBeNull();
+    });
+
+    it("ignores code when Alt is not held", () => {
+      expect(parseKeyAction({ key: "†", code: "KeyT", ...noMod })).toBeNull();
+    });
+
+    it("keeps working when code is absent (older events / tests)", () => {
+      expect(parseKeyAction({ key: "t", ...alt })).toEqual({
+        type: "addTile",
+        tileType: "terminal",
+      });
+    });
+
+    it("does not map an unrelated code", () => {
+      expect(parseKeyAction({ key: "Ω", code: "KeyZ", ...alt })).toBeNull();
+    });
+  });
 });

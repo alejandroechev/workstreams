@@ -156,20 +156,65 @@ fn resolve_unix_shell(env_shell: Option<String>) -> String {
     }
 }
 
+/// Terminal type advertised to spawned shells when the launcher supplied none.
+///
+/// xterm.js implements the xterm protocol with 256-colour support, so this is
+/// an honest description of the emulator on the other end of the PTY.
+#[cfg(unix)]
+const DEFAULT_TERM: &str = "xterm-256color";
+
+/// True when `TERM` is missing or too degraded to support line editing.
+///
+/// A GUI launch (Dock/Finder/Spotlight on macOS) inherits launchd's
+/// environment, which has no `TERM` at all; a bare `sh` under it reports
+/// `dumb`. Either way `zsh` disables ZLE, the tty falls back to canonical
+/// mode, and the kernel echoes an erase as a plain space — so Backspace
+/// appears to *insert spaces* rather than delete. Advertising a real terminal
+/// type restores normal line editing.
+#[cfg(unix)]
+fn needs_term_repair(inherited: Option<&str>) -> bool {
+    match inherited.map(str::trim) {
+        None | Some("") | Some("dumb") | Some("unknown") => true,
+        Some(_) => false,
+    }
+}
+
 /// Build the environment overrides applied to a spawned PTY.
 ///
-/// Caller-supplied workstream vars are layered *on top of* the repaired PATH
-/// so an explicit `PATH` from the caller always wins. Split out from
-/// [`PtyManager::spawn`] so the precedence rules are unit-testable without
-/// opening a real PTY.
+/// Caller-supplied workstream vars are layered *on top of* the repaired
+/// `PATH`/`TERM` so an explicit value from the caller always wins. Split out
+/// from [`PtyManager::spawn`] so the precedence rules are unit-testable
+/// without opening a real PTY.
 fn spawn_env_overrides(
     caller_env: Option<HashMap<String, String>>,
     resolved_path: Option<String>,
+) -> HashMap<String, String> {
+    spawn_env_overrides_with(caller_env, resolved_path, std::env::var("TERM").ok())
+}
+
+/// [`spawn_env_overrides`] with the inherited `TERM` injected, so the repair
+/// rule is testable without mutating process-global environment state.
+fn spawn_env_overrides_with(
+    caller_env: Option<HashMap<String, String>>,
+    resolved_path: Option<String>,
+    inherited_term: Option<String>,
 ) -> HashMap<String, String> {
     let mut out = HashMap::new();
     if let Some(path) = resolved_path {
         out.insert("PATH".to_string(), path);
     }
+    // Windows terminals do not use termcap/terminfo, and ConPTY already
+    // reports a capable terminal, so this repair is Unix-only.
+    #[cfg(unix)]
+    {
+        if needs_term_repair(inherited_term.as_deref()) {
+            out.insert("TERM".to_string(), DEFAULT_TERM.to_string());
+        } else if let Some(term) = inherited_term {
+            out.insert("TERM".to_string(), term);
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = inherited_term;
     if let Some(env_vars) = caller_env {
         for (k, v) in env_vars {
             out.insert(k, v);
@@ -417,6 +462,42 @@ mod tests {
             out.get("PATH").map(String::as_str),
             Some("/opt/homebrew/bin:/usr/bin")
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn spawn_env_sets_term_when_the_launcher_provided_none() {
+        // A GUI launch (Dock/Finder) inherits no TERM. Without it zsh treats
+        // the tty as dumb, disables ZLE, and the erase echo degrades to plain
+        // spaces — backspace visibly "types spaces" instead of deleting.
+        let out = spawn_env_overrides(None, None);
+        assert_eq!(out.get("TERM").map(String::as_str), Some("xterm-256color"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn spawn_env_keeps_an_inherited_term() {
+        // Launched from a terminal: respect whatever the user's terminal set.
+        let out = spawn_env_overrides_with(None, None, Some("screen-256color".to_string()));
+        assert_eq!(out.get("TERM").map(String::as_str), Some("screen-256color"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn spawn_env_replaces_a_dumb_term() {
+        // `TERM=dumb` is what a bare `sh` reports under launchd; it disables
+        // line editing just as badly as having no TERM at all.
+        let out = spawn_env_overrides_with(None, None, Some("dumb".to_string()));
+        assert_eq!(out.get("TERM").map(String::as_str), Some("xterm-256color"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn spawn_env_lets_caller_override_term() {
+        let mut caller = HashMap::new();
+        caller.insert("TERM".to_string(), "vt100".to_string());
+        let out = spawn_env_overrides(Some(caller), None);
+        assert_eq!(out.get("TERM").map(String::as_str), Some("vt100"));
     }
 
     #[test]

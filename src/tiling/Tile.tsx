@@ -8,6 +8,7 @@ import WorkbenchTile from "../tiles/WorkbenchTile";
 import PlanTile from "../tiles/PlanTile";
 import CodeReviewTile from "../tiles/CodeReviewTile";
 import { isFeatureEnabled, featureDescriptor } from "../domain/feature-flags";
+import { shortcutLabel } from "../domain/platform";
 
 function DisabledFeaturePlaceholder({ label, requires }: { label: string; requires: string }) {
   return (
@@ -390,7 +391,7 @@ function TileWrapperImpl({
               checked={isSelected}
               onChange={() => onToggleSelect?.(tile.id)}
               onClick={(e) => e.stopPropagation()}
-              title="Select for side-by-side (Alt+S)"
+              title={`Select for side-by-side (${shortcutLabel("S")})`}
               style={{
                 width: 13,
                 height: 13,

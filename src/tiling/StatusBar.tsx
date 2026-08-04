@@ -2,7 +2,7 @@
 import { ViewColumnsIcon } from "@heroicons/react/24/outline";
 import AddTileMenu from "./AddTileMenu";
 import { isFeatureEnabled } from "../domain/feature-flags";
-import { supportsWsl, terminalTileLabel } from "../domain/platform";
+import { supportsWsl, terminalTileLabel, shortcutLabel } from "../domain/platform";
 
 interface Props {
   tileCount: number;
@@ -66,15 +66,15 @@ export default function StatusBar({
   onOpenSettings,
 }: Props) {
   const rawItems: Array<{ key: string; label: string; icon: "session" | "terminal" | "folder" | "info" | "beaker" | "plan" | "code"; shortcut?: string; onSelect?: () => void; gated?: boolean }> = [
-    { key: "session", label: "Copilot Session", icon: "session", shortcut: "Alt+C", onSelect: onAddSession },
-    { key: "terminal", label: terminalTileLabel(), icon: "terminal", shortcut: "Alt+T", onSelect: onAddTerminal },
+    { key: "session", label: "Copilot Session", icon: "session", shortcut: shortcutLabel("C"), onSelect: onAddSession },
+    { key: "terminal", label: terminalTileLabel(), icon: "terminal", shortcut: shortcutLabel("T"), onSelect: onAddTerminal },
     // WSL is Windows-only — hide the entry entirely on macOS/Linux.
-    { key: "wsl", label: "WSL Terminal", icon: "terminal", shortcut: "Alt+W", onSelect: onAddWslTerminal, gated: !supportsWsl() },
-    { key: "explorer", label: "Repo Explorer", icon: "folder", shortcut: "Alt+R", onSelect: onAddExplorer },
-    { key: "meta", label: "Session Meta", icon: "info", shortcut: "Alt+M", onSelect: onAddSessionMeta },
-    { key: "workbench", label: "Workbench", icon: "beaker", shortcut: "Alt+B", onSelect: onAddWorkbench },
-    { key: "plan", label: "Plan", icon: "plan", shortcut: "Alt+P", onSelect: onAddPlan, gated: !isFeatureEnabled("plan-tile") },
-    { key: "code-review", label: "Code Review", icon: "code", shortcut: "Alt+A", onSelect: onAddCodeReview },
+    { key: "wsl", label: "WSL Terminal", icon: "terminal", shortcut: shortcutLabel("W"), onSelect: onAddWslTerminal, gated: !supportsWsl() },
+    { key: "explorer", label: "Repo Explorer", icon: "folder", shortcut: shortcutLabel("R"), onSelect: onAddExplorer },
+    { key: "meta", label: "Session Meta", icon: "info", shortcut: shortcutLabel("M"), onSelect: onAddSessionMeta },
+    { key: "workbench", label: "Workbench", icon: "beaker", shortcut: shortcutLabel("B"), onSelect: onAddWorkbench },
+    { key: "plan", label: "Plan", icon: "plan", shortcut: shortcutLabel("P"), onSelect: onAddPlan, gated: !isFeatureEnabled("plan-tile") },
+    { key: "code-review", label: "Code Review", icon: "code", shortcut: shortcutLabel("A"), onSelect: onAddCodeReview },
   ];
   const menuItems = rawItems
     .filter((it) => typeof it.onSelect === "function" && !it.gated)
@@ -138,10 +138,10 @@ export default function StatusBar({
               disabled
                 ? "Select a workstream to use side-by-side"
                 : sideBySide
-                  ? "Exit side-by-side (Alt+S)"
+                  ? `Exit side-by-side (${shortcutLabel("S")})`
                   : sbsSelectionMode
-                    ? "Cancel side-by-side selection (Alt+S)"
-                    : "Pick two tiles for side-by-side (Alt+S)"
+                    ? `Cancel side-by-side selection (${shortcutLabel("S")})`
+                    : `Pick two tiles for side-by-side (${shortcutLabel("S")})`
             }
           >
             <ViewColumnsIcon style={{ width: 13, height: 13, display: "block" }} />
@@ -159,7 +159,7 @@ export default function StatusBar({
             opacity: disabled ? 0.4 : 1,
           }}
           onClick={disabled ? undefined : onToggleFullscreen}
-          title={disabled ? "Select a workstream to use fullscreen" : "Toggle fullscreen (Alt+F)"}
+          title={disabled ? "Select a workstream to use fullscreen" : `Toggle fullscreen (${shortcutLabel("F")})`}
         >
           ⛶
         </button>

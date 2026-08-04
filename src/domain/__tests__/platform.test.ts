@@ -8,6 +8,7 @@ import {
   defaultTerminalCommand,
   supportsWsl,
   terminalTileLabel,
+  shortcutLabel,
   __setPlatformOverrideForTests,
 } from "../platform";
 
@@ -115,5 +116,16 @@ describe("terminal defaults", () => {
     // "PowerShell" would be wrong on macOS, where the tile runs $SHELL.
     __setPlatformOverrideForTests("unix");
     expect(terminalTileLabel()).toBe("Terminal");
+  });
+
+  it("renders modifier shortcuts with the platform's key name", () => {
+    // The physical key is the same, but a Mac keyboard has no key labelled
+    // "Alt" — telling a macOS user to press "Alt+T" sends them looking for a
+    // key that isn't there.
+    __setPlatformOverrideForTests("windows");
+    expect(shortcutLabel("T")).toBe("Alt+T");
+
+    __setPlatformOverrideForTests("unix");
+    expect(shortcutLabel("T")).toBe("⌥T");
   });
 });

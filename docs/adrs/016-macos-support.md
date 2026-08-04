@@ -47,6 +47,7 @@ the portability blockers behind a single platform module.
 | `defaultTerminalCommand()` | `pwsh.exe` | `null` |
 | `supportsWsl()` | `true` | `false` |
 | `terminalTileLabel()` | `PowerShell` | `Terminal` |
+| `shortcutLabel(k)` | `Alt+<k>` | `⌥<k>` |
 | `joinPath(base, ...segs)` | joins with `\` | joins with `/` |
 
 Detection reads the WebView user agent, which works across WebView2,
@@ -74,6 +75,22 @@ fallback logic is unit-testable without mutating process-global env state.
 
 Persisting the shell would have been replayed verbatim on restore, so keeping
 it unset is what makes tile restore work across platforms.
+
+### Keyboard shortcuts
+
+App shortcuts are `Alt+<letter>`, typed as `Option+<letter>` on a Mac. macOS
+applies its special-character layer *before* dispatching the event, so
+`Option+T` arrives as `key === "†"`, `Option+C` as `"ç"`, and so on — matching
+on `event.key` meant **every tile shortcut silently did nothing** on macOS.
+
+`parseKeyAction` now resolves the letter through `shortcutKey`, which prefers
+the layout-independent `event.code` (`"KeyT"`) whenever Alt is held and falls
+back to `event.key` otherwise. Windows/Linux matching is unchanged, and the
+Monaco-focus guard keys off the same resolved letter so `Option+T` still does
+not create a tile while the user is typing in the editor.
+
+Displayed shortcut hints go through `shortcutLabel`, because a Mac keyboard
+has no key labelled "Alt".
 
 ### Release pipeline
 

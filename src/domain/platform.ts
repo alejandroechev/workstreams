@@ -101,3 +101,16 @@ export function supportsWsl(): boolean {
 export function terminalTileLabel(): string {
   return isWindowsPlatform() ? "PowerShell" : "Terminal";
 }
+
+/**
+ * Render an app shortcut for display, using the modifier name that actually
+ * appears on the user's keyboard.
+ *
+ * The shortcuts are physically identical — the app matches on
+ * `KeyboardEvent.code` — but a Mac keyboard has no key labelled "Alt", so
+ * showing "Alt+T" there sends the user hunting for a key that doesn't exist.
+ * macOS convention is the bare ⌥ glyph with no separator.
+ */
+export function shortcutLabel(key: string): string {
+  return isWindowsPlatform() ? `Alt+${key}` : `⌥${key}`;
+}

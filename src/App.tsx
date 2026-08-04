@@ -23,7 +23,7 @@ import { computeSessionNameSync } from "./domain/session-name-sync";
 import { deriveLinkedSessionIds } from "./domain/linked-sessions";
 import { parseKeyAction } from "./domain/keyboard";
 import { createTerminalConfig, createCopilotSessionConfig } from "./domain/tile-config";
-import { defaultRootDir, defaultTerminalCommand, supportsWsl } from "./domain/platform";
+import { defaultRootDir, defaultTerminalCommand, supportsWsl, terminalTileLabel } from "./domain/platform";
 import { createWorkstreamFlow } from "./domain/workstream-create";
 import {
   applyWorktreeEvent,
@@ -1082,7 +1082,7 @@ export default function App() {
     const command = wsCommands.current.get(activeWsId) || defaultTerminalCommand();
 
     const typeLabels: Record<TileType, string> = {
-      terminal: "PowerShell",
+      terminal: terminalTileLabel(),
       copilot_session: "Copilot",
       file_viewer: "Viewer",
       file_explorer: "Repo",
@@ -1273,6 +1273,7 @@ export default function App() {
         altKey: e.altKey,
         ctrlKey: e.ctrlKey,
         key: e.key,
+        code: e.code,
         activeElement: document.activeElement,
       });
 
