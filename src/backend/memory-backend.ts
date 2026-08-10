@@ -2,7 +2,7 @@ import type { Project, Workstream, Tile, TileType, WorkstreamLayout, CopilotConf
 import type { SessionFileComment } from "../domain/file-comments";
 import type { Review, ReviewComment, ChangedFile, DiffSides } from "../domain/code-review";
 import { CONTENT_SEARCH_MAX_PER_FILE } from "../domain/content-search";
-import type { Backend, CodeTrace } from "./types";
+import type { Backend, CodeTrace, TraceStaleness } from "./types";
 import { parseTraceFile, type TraceFile } from "../domain/trace-format";
 import { rewriteTileCwd } from "../domain/worktree-change";
 
@@ -821,5 +821,17 @@ export class MemoryBackend implements Backend {
   async deleteCodeTrace(id: string): Promise<void> {
     // Absent is fine: the UI may remove a row a re-record already replaced.
     this.traceIndex.delete(id);
+  }
+
+  /** Test/dev seam: the staleness verdict this backend should report. */
+  _traceStaleness: TraceStaleness = "fresh";
+  async traceStaleness(): Promise<TraceStaleness> {
+    return this._traceStaleness;
+  }
+
+  /** Test/dev seam: the test names the picker should offer. */
+  _rustTests: string[] = [];
+  async listRustTests(): Promise<string[]> {
+    return this._rustTests;
   }
 }

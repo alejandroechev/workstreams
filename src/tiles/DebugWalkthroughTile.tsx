@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 
 import { useBackend } from "../backend/context";
-import type { CodeTrace } from "../backend/types";
+import type { CodeTrace, TraceStaleness } from "../backend/types";
 import type { TraceFile } from "../domain/trace-format";
 import {
   createWalkthrough,
@@ -162,11 +162,38 @@ export function DebugWalkthroughTile({
     [revealCurrent],
   );
 
-  // A trace is stale when HEAD has moved since it was recorded. Replay is
-  // never blocked for this — a banner plus one-click re-record is honest,
-  // whereas remapping line numbers would silently point at the wrong code.
-  const isStale =
-    !!walkthrough && !!headCommitSha && !headCommitSha.startsWith(walkthrough.trace.commitSha);
+  // Staleness is computed by the backend, which can also see uncommitted
+  // edits — those shift line numbers just as effectively as a new commit.
+  // Replay is never blocked for it: a banner plus one-click re-record is
+  // honest, whereas remapping line numbers would silently point at the wrong
+  // code.
+  const [staleness, setStaleness] = useState<TraceStaleness>("unknown");
+  useEffect(() => {
+    if (!walkthrough) {
+      setStaleness("unknown");
+      return;
+    }
+    let cancelled = false;
+    backend
+      .traceStaleness(walkthrough.trace.repoRoot, walkthrough.trace.commitSha)
+      .then((verdict) => {
+        if (!cancelled) setStaleness(verdict);
+      })
+      .catch(() => {
+        // No verdict is better than a wrong one — stay quiet rather than
+        // warning on a git failure.
+        if (!cancelled) setStaleness("unknown");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [backend, walkthrough]);
+
+  // An explicit headCommitSha prop overrides the backend, for callers that
+  // already know HEAD (and for tests that must not shell out to git).
+  const isStale = headCommitSha
+    ? !!walkthrough && !headCommitSha.startsWith(walkthrough.trace.commitSha)
+    : staleness === "head_moved" || staleness === "tree_dirty";
 
   const step = walkthrough ? currentStep(walkthrough) : null;
 
@@ -254,8 +281,11 @@ export function DebugWalkthroughTile({
           }}
         >
           <ExclamationTriangleIcon style={{ width: 14, height: 14 }} />
-          Stale — recorded at {walkthrough?.trace.commitSha.slice(0, 7)}. Line numbers may no longer
-          match; re-record with <code>scripts/trace-record.mjs</code>.
+          {staleness === "tree_dirty" && !headCommitSha
+            ? "Uncommitted changes since this trace was recorded."
+            : `Stale — recorded at ${walkthrough?.trace.commitSha.slice(0, 7)}.`}{" "}
+          Line numbers may no longer match; re-record with{" "}
+          <code>scripts/trace-record.mjs</code>.
         </div>
       )}
 

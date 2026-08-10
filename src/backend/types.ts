@@ -182,7 +182,16 @@ export interface Backend {
    * replay needs the steps, while listing only needs the metadata.
    */
   readCodeTraceFile(tracePath: string): Promise<TraceFile>;
+  /**
+   * How far a trace has drifted from the working tree. Replay is never
+   * blocked on this — the UI warns and offers a re-record.
+   */
+  traceStaleness(repoDir: string, recordedSha: string): Promise<TraceStaleness>;
+  /** Fully-qualified test names in a crate, for the entry-point picker. */
+  listRustTests(manifestDir: string): Promise<string[]>;
 }
+
+export type TraceStaleness = "fresh" | "head_moved" | "tree_dirty" | "unknown";
 
 /**
  * Index row for a recorded code walkthrough.

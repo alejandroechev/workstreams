@@ -3374,6 +3374,138 @@ fn index_code_trace(
     Ok(trace)
 }
 
+/// How far a recorded trace has drifted from the working tree.
+///
+/// Replay is never blocked on this: the UI shows a banner and offers a
+/// re-record. Remapping line numbers was rejected — silently pointing at the
+/// wrong line is worse than an honest warning.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TraceStaleness {
+    Fresh,
+    /// HEAD has moved since the recording.
+    HeadMoved,
+    /// HEAD matches but there are uncommitted edits.
+    TreeDirty,
+    /// Not enough information to judge (e.g. git unavailable at record time).
+    Unknown,
+}
+
+/// Pure staleness rule, split out so it is testable without a git repository.
+fn classify_trace_staleness(recorded_sha: &str, head_sha: &str, dirty: bool) -> TraceStaleness {
+    // The recorder writes "unknown" when git was unavailable. Asserting
+    // staleness on no evidence would train the user to ignore the banner.
+    if recorded_sha.is_empty()
+        || head_sha.is_empty()
+        || recorded_sha == "unknown"
+        || head_sha == "unknown"
+    {
+        return TraceStaleness::Unknown;
+    }
+    // Compare by prefix: a trace may hold a short sha while `git rev-parse`
+    // returns the full one, and a literal comparison would call every trace
+    // stale.
+    let matches = recorded_sha.starts_with(head_sha) || head_sha.starts_with(recorded_sha);
+    if !matches {
+        // Both conditions can hold at once; report the larger divergence.
+        return TraceStaleness::HeadMoved;
+    }
+    if dirty {
+        return TraceStaleness::TreeDirty;
+    }
+    TraceStaleness::Fresh
+}
+
+#[tauri::command]
+fn trace_staleness(repo_dir: String, recorded_sha: String) -> Result<TraceStaleness, String> {
+    let head = std::process::Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(&repo_dir)
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default();
+
+    let dirty = std::process::Command::new("git")
+        .args(["status", "--porcelain"])
+        .current_dir(&repo_dir)
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| !String::from_utf8_lossy(&o.stdout).trim().is_empty())
+        .unwrap_or(false);
+
+    Ok(classify_trace_staleness(&recorded_sha, &head, dirty))
+}
+
+/// Parse `--list` output from a libtest binary into test names.
+///
+/// Only `: test` entries are usable: a benchmark would launch but never reach
+/// the breakpoint the recorder sets.
+fn parse_test_list(stdout: &str) -> Vec<String> {
+    stdout
+        .lines()
+        .filter_map(|line| line.trim().strip_suffix(": test"))
+        .map(str::to_string)
+        .collect()
+}
+
+/// List the tests in a crate, for the walkthrough's entry-point picker.
+///
+/// Uses cargo's own listing rather than parsing Rust source, so the result is
+/// authoritative and needs no syntax handling.
+#[tauri::command]
+fn list_rust_tests(manifest_dir: String) -> Result<Vec<String>, String> {
+    let build = std::process::Command::new("cargo")
+        .args(["test", "--no-run", "--message-format=json"])
+        .current_dir(&manifest_dir)
+        .output()
+        .map_err(|e| format!("Cannot run cargo in {manifest_dir}: {e}"))?;
+    if !build.status.success() {
+        return Err(format!(
+            "cargo test --no-run failed: {}",
+            String::from_utf8_lossy(&build.stderr)
+                .lines()
+                .last()
+                .unwrap_or("")
+        ));
+    }
+
+    // Prefer the lib test binary — unit tests live there.
+    let mut executable: Option<String> = None;
+    for line in String::from_utf8_lossy(&build.stdout).lines() {
+        let Ok(msg) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        let is_test = msg
+            .get("profile")
+            .and_then(|p| p.get("test"))
+            .and_then(|t| t.as_bool());
+        let exe = msg.get("executable").and_then(|e| e.as_str());
+        if is_test == Some(true) {
+            if let Some(exe) = exe {
+                let name = msg
+                    .get("target")
+                    .and_then(|t| t.get("name"))
+                    .and_then(|n| n.as_str())
+                    .unwrap_or("");
+                if name.ends_with("_lib") || executable.is_none() {
+                    executable = Some(exe.to_string());
+                }
+            }
+        }
+    }
+    let exe = executable.ok_or("cargo produced no test executable")?;
+
+    let listed = std::process::Command::new(&exe)
+        .args(["--list"])
+        .current_dir(&manifest_dir)
+        .output()
+        .map_err(|e| format!("Cannot list tests in {exe}: {e}"))?;
+    Ok(parse_test_list(&String::from_utf8_lossy(&listed.stdout)))
+}
+
 /// Returns the absolute path of `~/.copilot/session-state/<id>` so the
 /// frontend can list it with the regular list_directory + read_file APIs.
 /// Errors if the directory doesn't exist.
@@ -4709,6 +4841,8 @@ pub fn run() {
             get_code_trace,
             delete_code_trace,
             index_code_trace,
+            trace_staleness,
+            list_rust_tests,
             list_session_checkpoints,
             list_session_events,
             query_session_files,
@@ -6465,5 +6599,102 @@ Body here.
         // replaced; that should not surface as an error.
         let conn = trace_db();
         assert!(delete_code_trace_in(&conn, "ghost").is_ok());
+    }
+
+    // ── Trace staleness ────────────────────────────────────────────────
+
+    #[test]
+    fn trace_is_fresh_when_head_matches_and_tree_is_clean() {
+        assert_eq!(
+            classify_trace_staleness("abc1234", "abc1234def", false),
+            TraceStaleness::Fresh
+        );
+    }
+
+    #[test]
+    fn trace_staleness_compares_by_prefix() {
+        // A trace may store a short sha while `git rev-parse HEAD` returns the
+        // full one; comparing them literally would call every trace stale.
+        assert_eq!(
+            classify_trace_staleness("abc1234", "abc1234000000000000", false),
+            TraceStaleness::Fresh
+        );
+        assert_eq!(
+            classify_trace_staleness("abc1234000000000000", "abc1234", false),
+            TraceStaleness::Fresh
+        );
+    }
+
+    #[test]
+    fn trace_is_stale_when_head_moved() {
+        assert_eq!(
+            classify_trace_staleness("abc1234", "999ffff", false),
+            TraceStaleness::HeadMoved
+        );
+    }
+
+    #[test]
+    fn a_dirty_tree_is_reported_even_when_head_matches() {
+        // Uncommitted edits shift line numbers just as effectively as a new
+        // commit, so the banner has to appear for them too.
+        assert_eq!(
+            classify_trace_staleness("abc1234", "abc1234", true),
+            TraceStaleness::TreeDirty
+        );
+    }
+
+    #[test]
+    fn a_moved_head_outranks_a_dirty_tree() {
+        // Both are true; reporting the bigger divergence is the honest choice.
+        assert_eq!(
+            classify_trace_staleness("abc1234", "999ffff", true),
+            TraceStaleness::HeadMoved
+        );
+    }
+
+    #[test]
+    fn an_unknown_commit_is_never_judged_stale() {
+        // The recorder writes "unknown" when git is unavailable. Claiming
+        // staleness on no evidence would train the user to ignore the banner.
+        assert_eq!(
+            classify_trace_staleness("unknown", "abc1234", false),
+            TraceStaleness::Unknown
+        );
+        assert_eq!(
+            classify_trace_staleness("", "abc1234", false),
+            TraceStaleness::Unknown
+        );
+        assert_eq!(
+            classify_trace_staleness("abc1234", "", false),
+            TraceStaleness::Unknown
+        );
+    }
+
+    // ── Test listing ───────────────────────────────────────────────────
+
+    #[test]
+    fn parses_test_names_from_libtest_list_output() {
+        let out = "pty::tests::resolves_shell: test\n                   shell_env::tests::merge_paths: test\n\n                   2 tests, 0 benchmarks\n";
+        assert_eq!(
+            parse_test_list(out),
+            vec![
+                "pty::tests::resolves_shell".to_string(),
+                "shell_env::tests::merge_paths".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn test_list_ignores_benchmarks_and_summary_lines() {
+        // Only `: test` entries can be traced; a benchmark would launch but
+        // never hit the breakpoint.
+        let out = "a::b: test\nc::d: benchmark\n1 test, 1 benchmark\n";
+        assert_eq!(parse_test_list(out), vec!["a::b".to_string()]);
+    }
+
+    #[test]
+    fn test_list_of_empty_output_is_empty() {
+        assert!(parse_test_list("").is_empty());
+        assert!(parse_test_list("0 tests, 0 benchmarks").is_empty());
     }
 }

@@ -3,7 +3,7 @@ import type { Project, Workstream, Tile, TileType, WorkstreamLayout, CopilotConf
 import type { SessionFileComment } from "../domain/file-comments";
 import type { Review, ReviewComment, ChangedFile, DiffSides } from "../domain/code-review";
 import { parseTraceFile, type TraceFile } from "../domain/trace-format";
-import type { Backend, CodeTrace } from "./types";
+import type { Backend, CodeTrace, TraceStaleness } from "./types";
 
 export class TauriBackend implements Backend {
   async listProjects(): Promise<Project[]> {
@@ -426,5 +426,13 @@ export class TauriBackend implements Backend {
     // so the app and the CLI agree on what a well-formed trace is.
     const raw = await invoke<{ content: string }>("read_text_file", { path: tracePath });
     return parseTraceFile(raw.content);
+  }
+
+  async traceStaleness(repoDir: string, recordedSha: string): Promise<TraceStaleness> {
+    return invoke<TraceStaleness>("trace_staleness", { repoDir, recordedSha });
+  }
+
+  async listRustTests(manifestDir: string): Promise<string[]> {
+    return invoke<string[]>("list_rust_tests", { manifestDir });
   }
 }

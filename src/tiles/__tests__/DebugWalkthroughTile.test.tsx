@@ -160,6 +160,42 @@ describe("DebugWalkthroughTile", () => {
     expect(screen.queryByTestId("walkthrough-stale-banner")).toBeNull();
   });
 
+  it("warns about uncommitted changes reported by the backend", async () => {
+    // Uncommitted edits shift line numbers just as effectively as a new
+    // commit, and only the backend can see them.
+    const backend = new MemoryBackend();
+    backend._seedTraceFile(TRACE_PATH, traceFile());
+    await backend.indexCodeTrace(TRACE_PATH, "ws-1");
+    backend._traceStaleness = "tree_dirty";
+    render(
+      <BackendProvider backend={backend}>
+        <DebugWalkthroughTile tileId="wt-1" workstreamId="ws-1" explorerCandidates={[{ id: "e1", title: null }]} />
+      </BackendProvider>,
+    );
+    const picker = await screen.findByLabelText("Trace");
+    await waitFor(() => expect(picker.querySelectorAll("option").length).toBeGreaterThan(1));
+    fireEvent.change(picker, { target: { value: TRACE_PATH } });
+    expect((await screen.findByTestId("walkthrough-stale-banner")).textContent).toMatch(/uncommitted/i);
+  });
+
+  it("stays quiet when the backend cannot judge staleness", async () => {
+    // Warning on no evidence would train the user to ignore the banner.
+    const backend = new MemoryBackend();
+    backend._seedTraceFile(TRACE_PATH, traceFile());
+    await backend.indexCodeTrace(TRACE_PATH, "ws-1");
+    backend._traceStaleness = "unknown";
+    render(
+      <BackendProvider backend={backend}>
+        <DebugWalkthroughTile tileId="wt-1" workstreamId="ws-1" explorerCandidates={[{ id: "e1", title: null }]} />
+      </BackendProvider>,
+    );
+    const picker = await screen.findByLabelText("Trace");
+    await waitFor(() => expect(picker.querySelectorAll("option").length).toBeGreaterThan(1));
+    fireEvent.change(picker, { target: { value: TRACE_PATH } });
+    await screen.findByTestId("walkthrough-step-current");
+    expect(screen.queryByTestId("walkthrough-stale-banner")).toBeNull();
+  });
+
   it("says so when a trace was truncated", async () => {
     await setup({ traceOverrides: { truncated: true } });
     expect(screen.getByTestId("walkthrough-truncated-banner")).toBeTruthy();
