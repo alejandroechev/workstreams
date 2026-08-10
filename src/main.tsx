@@ -5,6 +5,7 @@ import { BackendProvider } from "./backend/context";
 import { TauriBackend } from "./backend/tauri-backend";
 import { MemoryBackend } from "./backend/memory-backend";
 import type { Backend } from "./backend/types";
+import { _setFeatureFlagOverrideForTests } from "./domain/feature-flags";
 import "@xterm/xterm/css/xterm.css";
 import "./styles/theme.css";
 
@@ -23,6 +24,12 @@ const backend = await makeBackend();
 
 if (isE2E && typeof window !== "undefined") {
   (window as unknown as { __WS_BACKEND__?: unknown }).__WS_BACKEND__ = backend;
+  // E2E seam for flag-gated features. A spec sets __WS_FEATURE_FLAGS__ in an
+  // init script (before this module runs) to exercise a feature that ships
+  // disabled. Kept behind isE2E so a production build can never flip flags
+  // from the page.
+  const forced = (window as unknown as { __WS_FEATURE_FLAGS__?: boolean }).__WS_FEATURE_FLAGS__;
+  if (typeof forced === "boolean") _setFeatureFlagOverrideForTests(forced);
 }
 
 // Dev/E2E-only component harness: `?harness=<caseId>` mounts a single component

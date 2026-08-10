@@ -3260,9 +3260,13 @@ fn list_code_traces_in(
     // whichever happened to be inserted first.
     let rows = match workstream_id {
         Some(ws) => {
+            // Unscoped traces are included deliberately: the recorder CLI
+            // has no workstream context, so filtering them out would make
+            // every CLI-recorded trace invisible in the UI.
             let sql = format!(
                 "SELECT {CODE_TRACE_COLUMNS} FROM code_traces
-                 WHERE workstream_id = ?1 ORDER BY recorded_at DESC"
+                 WHERE workstream_id = ?1 OR workstream_id IS NULL
+                 ORDER BY recorded_at DESC"
             );
             let mut stmt = conn.prepare(&sql).map_err(|e| format!("DB error: {e}"))?;
             let mapped = stmt
@@ -6556,6 +6560,21 @@ Body here.
         let scoped = list_code_traces_in(&conn, Some("ws-2")).unwrap();
         assert_eq!(scoped.len(), 1);
         assert_eq!(scoped[0].id, "t2");
+    }
+
+    #[test]
+    fn list_code_traces_includes_unscoped_traces() {
+        // The recorder CLI knows nothing about workstreams, so it writes rows
+        // with a NULL workstream. Scoping them away would hide every trace
+        // recorded outside the app.
+        let conn = trace_db();
+        let mut unscoped = sample_trace("cli", "from::cli");
+        unscoped.workstream_id = None;
+        upsert_code_trace_in(&conn, &unscoped).unwrap();
+
+        let scoped = list_code_traces_in(&conn, Some("ws-1")).unwrap();
+        assert_eq!(scoped.len(), 1);
+        assert_eq!(scoped[0].id, "cli");
     }
 
     #[test]

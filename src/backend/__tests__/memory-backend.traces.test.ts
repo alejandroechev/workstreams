@@ -57,6 +57,16 @@ describe("MemoryBackend — code traces", () => {
     expect(scoped.map((t) => t.test_name)).toEqual(["b::b"]);
   });
 
+  it("includes unscoped traces in a workstream-scoped list", async () => {
+    // The recorder CLI has no workstream context; hiding its output would
+    // make every trace recorded outside the app invisible.
+    backend._seedTraceFile("/cli.json", baseTrace("from::cli"));
+    await backend.indexCodeTrace("/cli.json");
+
+    const scoped = await backend.listCodeTraces("ws-1");
+    expect(scoped.map((t) => t.test_name)).toEqual(["from::cli"]);
+  });
+
   it("returns traces newest first", async () => {
     backend._seedTraceFile("/old.json", { ...baseTrace("old"), recordedAt: "2026-01-01T00:00:00.000Z" });
     backend._seedTraceFile("/new.json", { ...baseTrace("new"), recordedAt: "2026-08-01T00:00:00.000Z" });

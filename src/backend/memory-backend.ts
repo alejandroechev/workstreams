@@ -810,7 +810,10 @@ export class MemoryBackend implements Backend {
 
   async listCodeTraces(workstreamId?: string | null): Promise<CodeTrace[]> {
     return Array.from(this.traceIndex.values())
-      .filter((t) => (workstreamId ? t.workstream_id === workstreamId : true))
+      // Unscoped traces are included on purpose: the recorder CLI has no
+      // workstream context, and filtering them out would hide every trace
+      // recorded outside the app.
+      .filter((t) => (workstreamId ? t.workstream_id === workstreamId || t.workstream_id === null : true))
       .sort((a, b) => b.recorded_at.localeCompare(a.recorded_at));
   }
 
