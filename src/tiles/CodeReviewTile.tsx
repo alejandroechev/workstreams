@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type * as MonacoNs from "monaco-editor";
 import { DiffEditor } from "@monaco-editor/react";
+import { ensureLocalMonacoLoader } from "../files/monacoLoaderConfig";
 import {
   CheckCircleIcon,
   ExclamationTriangleIcon,
@@ -49,6 +50,21 @@ export default function CodeReviewTile({ workstreamId, workstreamDir, isFocused:
 
   const [sessionResolved, setSessionResolved] = useState(false);
   const [hasSession, setHasSession] = useState(false);
+  // `@monaco-editor/react` fetches Monaco from a CDN unless told otherwise, so
+  // the diff silently never mounts without network. Point it at the bundled
+  // copy before rendering, and hold the editor back until that has happened —
+  // configuring after the first mount is too late to help.
+  const [monacoReady, setMonacoReady] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    void ensureLocalMonacoLoader().then(() => {
+      if (!cancelled) setMonacoReady(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const [review, setReview] = useState<Review | null>(null);
   const [files, setFiles] = useState<ChangedFile[]>([]);
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
@@ -567,6 +583,9 @@ export default function CodeReviewTile({ workstreamId, workstreamDir, isFocused:
                   )}
                 </div>
                 <div className={INTERACTIVE_ZONES_CLASS} style={{ flex: 1, minHeight: 0, position: "relative" }}>
+                  {!monacoReady ? (
+                    <div style={{ padding: 12, color: "#6c7086" }}>Loading editor…</div>
+                  ) : (
                   <DiffEditor
                     key={selectedFile}
                     height="100%"
@@ -585,6 +604,7 @@ export default function CodeReviewTile({ workstreamId, workstreamDir, isFocused:
                       overviewRulerBorder: false,
                     }}
                   />
+                  )}
                   {/* Floating "+ Comment" button on a non-empty selection. */}
                   {review.status === "open" && selectionAnchor && !composer && (
                     <button

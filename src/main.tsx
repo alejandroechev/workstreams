@@ -6,6 +6,7 @@ import { TauriBackend } from "./backend/tauri-backend";
 import { MemoryBackend } from "./backend/memory-backend";
 import type { Backend } from "./backend/types";
 import { _setFeatureFlagOverrideForTests } from "./domain/feature-flags";
+import { ensureLocalMonacoLoader } from "./files/monacoLoaderConfig";
 import "@xterm/xterm/css/xterm.css";
 import "./styles/theme.css";
 
@@ -40,6 +41,11 @@ const harnessParam =
   typeof window !== "undefined" && new URLSearchParams(window.location.search).has("harness");
 
 if (harnessEnabled && harnessParam) {
+  // The harness mounts an editor immediately, with no workstream/tile
+  // selection in between, so it is the one path that can lose the
+  // fire-and-forget race above. Awaiting here keeps it deterministic — the
+  // whole point of the harness is a faithful mount of real Monaco.
+  await ensureLocalMonacoLoader();
   const { HarnessRoot } = await import("./harness/HarnessRoot");
   // No StrictMode here: the harness mounts real Monaco editors, and StrictMode's
   // intentional double-mount races the async editor-creation/dispose lifecycle
