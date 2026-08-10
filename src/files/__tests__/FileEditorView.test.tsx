@@ -379,9 +379,41 @@ describe("FileEditorView", () => {
 
     const { onBack } = renderEditor(harness);
 
-    expect(await screen.findByText("This file is too large or appears to be binary. Open in another editor.")).toBeTruthy();
+    expect(await screen.findByText("Binary files cannot be edited")).toBeTruthy();
     fireEvent.click(screen.getAllByRole("button", { name: "Back" })[1]);
     expect(onBack).toHaveBeenCalledTimes(1);
+  });
+
+  it("surfaces the real load error instead of claiming the file is binary", async () => {
+    // A failed read (bad path, permissions) is recorded by the registry as
+    // sniffedBinary=true with the real cause in lastError. Showing the generic
+    // "too large or binary" text there actively misleads — a macOS path bug
+    // reported as `No such file or directory` looked like a binary-file
+    // problem for as long as this message hid the cause.
+    const harness = createRegistryHarness({
+      initialSnapshot: snapshot({
+        sniffedBinary: true,
+        lastError: "Cannot read file: No such file or directory (os error 2)",
+      }),
+    });
+
+    renderEditor(harness);
+
+    expect(
+      await screen.findByText("Cannot read file: No such file or directory (os error 2)"),
+    ).toBeTruthy();
+  });
+
+  it("falls back to the generic message when there is no recorded error", async () => {
+    const harness = createRegistryHarness({
+      initialSnapshot: snapshot({ sniffedBinary: true, lastError: undefined }),
+    });
+
+    renderEditor(harness);
+
+    expect(
+      await screen.findByText("This file is too large or appears to be binary. Open in another editor."),
+    ).toBeTruthy();
   });
 
   it("Ctrl+S saves the buffer", async () => {

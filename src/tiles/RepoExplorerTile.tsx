@@ -11,6 +11,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useBackend } from "../backend/context";
 import { detectLanguage } from "../domain/tile-config";
+import { joinPath, defaultRootDir, parentDir } from "../domain/platform";
 import { isAudioFile, isImageFile, isSvgFile, isPdfFile, makeAudioBlobUrl, makeImageBlobUrl, makePdfBlobUrl, dirnameOf, type LinkTargetKind } from "../domain/file-types";
 import { createNavigationStack, currentPath as navCurrent, canGoBack as navCanBack, canGoForward as navCanFwd, pushPath as navPush, goBack as navBack, goForward as navFwd, type NavigationStack } from "../domain/nav-history";
 import {
@@ -77,6 +78,18 @@ const AUDIO_SIZE_LIMIT_BYTES = 100 * 1024 * 1024; // 100 MB
 
 function extensionFor(path: string): string {
   return path.split(/[\\/.]/).pop()?.toLowerCase() || "";
+}
+
+/**
+ * Canonicalise a path for prefix/equality comparison only — never for I/O.
+ *
+ * `fs-change` payloads come from the OS watcher and may use a different
+ * separator than the path we constructed, so both sides are folded onto `/`
+ * before comparing. Folding onto `\` instead would be wrong on Unix, where a
+ * backslash is a legal filename character.
+ */
+function normalizeForCompare(path: string): string {
+  return path.replace(/[\\/]+/g, "/");
 }
 
 function isMarkdown(path: string): boolean {
@@ -150,7 +163,7 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
 
   const [mode, setMode] = useState<Mode>(initialPath ? "view" : "browse");
   // Browse state
-  const [currentDir, setCurrentDir] = useState(rootDir || "C:\\");
+  const [currentDir, setCurrentDir] = useState(rootDir || defaultRootDir());
   const [entries, setEntries] = useState<DirEntry[]>([]);
   const [dirError, setDirError] = useState<string | null>(null);
   const [dirLoading, setDirLoading] = useState(false);
@@ -290,11 +303,10 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
     setDirError(null);
     try {
       const raw = await backend.listDirectory(dir);
-      const sep = dir.endsWith("\\") ? "" : "\\";
       setEntries(raw.map((e) => ({
         name: e.name,
         isDir: e.is_dir,
-        fullPath: `${dir}${sep}${e.name}`,
+        fullPath: joinPath(dir, e.name),
         modifiedEpoch: e.modified_epoch,
         size: e.size,
       })));
@@ -315,8 +327,7 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
     if (name === null) return;
     const trimmed = name.trim();
     if (!trimmed) return;
-    const sep = dir.endsWith("\\") || dir.endsWith("/") ? "" : "\\";
-    const target = `${dir}${sep}${trimmed}`;
+    const target = joinPath(dir, trimmed);
     try {
       if (kind === "file") {
         await backend.createFile(target);
@@ -492,11 +503,10 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
       if (mode === "browse" && !activeDiffMode) {
         try {
           const raw = await backend.listDirectory(currentDir);
-          const sep = currentDir.endsWith("\\") ? "" : "\\";
           const fresh = raw.map((e) => ({
             name: e.name,
             isDir: e.is_dir,
-            fullPath: `${currentDir}${sep}${e.name}`,
+            fullPath: joinPath(currentDir, e.name),
             modifiedEpoch: e.modified_epoch,
             size: e.size,
           }));
@@ -517,13 +527,13 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
       // anyway and a fs-change burst would otherwise wake every Repo
       // Explorer subscriber across every loaded workstream.
       if (!workstreamVisible) return;
-      const changedPath = event.payload.path.replace(/\//g, "\\");
-      const normalDir = currentDir.replace(/\//g, "\\");
+      const changedPath = normalizeForCompare(event.payload.path);
+      const normalDir = normalizeForCompare(currentDir);
       if (!changedPath.startsWith(normalDir)) return;
       if (mode === "browse" && !activeDiffMode) {
         refreshEntries();
       } else if (mode === "view" && filePath && !shouldUseFileEditor(filePath)) {
-        const normalFile = filePath.replace(/\//g, "\\");
+        const normalFile = normalizeForCompare(filePath);
         if (changedPath === normalFile || changedPath.startsWith(normalDir)) {
           refreshLegacyContent();
         }
@@ -616,10 +626,8 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
   }, []);
 
   const navigateUp = () => {
-    const parent = currentDir.replace(/\\[^\\]+\\?$/, "");
-    if (parent && parent !== currentDir) {
-      loadDir(parent.endsWith("\\") ? parent : parent + "\\");
-    }
+    const parent = parentDir(currentDir);
+    if (parent && parent !== currentDir) loadDir(parent);
   };
 
   const handleEntryClick = (entry: DirEntry) => {
@@ -1017,7 +1025,7 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
               data-selected={selected ? "true" : "false"}
             >
               <span style={{ width: 16, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                <FileIcon name={path.split("\\").pop() || path} isDir={false} />
+                <FileIcon name={path.split(/[\\/]/).pop() || path} isDir={false} />
               </span>
               <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 12 }}>
                 {path}

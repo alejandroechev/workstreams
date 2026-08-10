@@ -1006,9 +1006,16 @@ export function FileEditorView({
     }
 
     if (isNonEditable(snapshot)) {
+      // `lastError` carries the real cause — a genuine binary/too-large
+      // verdict, or the underlying failure when the read itself blew up (the
+      // registry records a failed read as sniffedBinary=true). Preferring it
+      // stops a path or permission error from masquerading as a binary file.
       return (
         <MessageWithBack
-          message="This file is too large or appears to be binary. Open in another editor."
+          message={
+            snapshot.lastError ??
+            "This file is too large or appears to be binary. Open in another editor."
+          }
           onBack={onBack}
         />
       );

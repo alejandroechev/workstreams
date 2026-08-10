@@ -77,6 +77,30 @@ export function joinPath(base: string, ...segments: string[]): string {
 }
 
 /**
+ * The containing directory of `path`, or `null` when already at a filesystem
+ * root (or when `path` has no separator at all).
+ *
+ * Accepts either separator in the input, because paths are persisted in SQLite
+ * and may have been captured on a different platform. A trailing separator is
+ * ignored, so "up" from `/a/b/` is `/a` rather than `/a/b`.
+ */
+export function parentDir(path: string): string | null {
+  const trimmed = path.replace(/[\\/]+$/, "");
+  if (!trimmed) return null;
+
+  const idx = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"));
+  if (idx < 0) return null;
+
+  const parent = trimmed.slice(0, idx);
+  // Unix: the last separator was the leading one, so the parent is `/`.
+  if (!parent) return "/";
+  // Windows: a bare drive letter is the root and needs its trailing slash
+  // back ("C:" is the *current directory* on that drive, not its root).
+  if (/^[A-Za-z]:$/.test(parent)) return `${parent}\\`;
+  return parent;
+}
+
+/**
  * Shell command to persist in a terminal tile's config.
  *
  * On Windows this stays `pwsh.exe` (unchanged behaviour). On macOS/Linux it

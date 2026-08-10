@@ -9,6 +9,7 @@ import {
   supportsWsl,
   terminalTileLabel,
   shortcutLabel,
+  parentDir,
   __setPlatformOverrideForTests,
 } from "../platform";
 
@@ -127,5 +128,45 @@ describe("terminal defaults", () => {
 
     __setPlatformOverrideForTests("unix");
     expect(shortcutLabel("T")).toBe("⌥T");
+  });
+
+  describe("parentDir", () => {
+    it("walks up a Windows path and stops at the drive root", () => {
+      __setPlatformOverrideForTests("windows");
+      expect(parentDir("C:\\repo\\src")).toBe("C:\\repo");
+      expect(parentDir("C:\\repo")).toBe("C:\\");
+      // Already at the root — there is nowhere to go.
+      expect(parentDir("C:\\")).toBeNull();
+    });
+
+    it("walks up a unix path and stops at /", () => {
+      __setPlatformOverrideForTests("unix");
+      expect(parentDir("/home/me/repo")).toBe("/home/me");
+      expect(parentDir("/home")).toBe("/");
+      expect(parentDir("/")).toBeNull();
+    });
+
+    it("ignores a trailing separator", () => {
+      // Listings hand back directories with a trailing separator; "up" from
+      // `/a/b/` must be `/a`, not `/a/b`.
+      __setPlatformOverrideForTests("unix");
+      expect(parentDir("/a/b/")).toBe("/a");
+
+      __setPlatformOverrideForTests("windows");
+      expect(parentDir("C:\\a\\b\\")).toBe("C:\\a");
+    });
+
+    it("accepts a foreign separator in the input", () => {
+      // Paths are persisted in SQLite and may have been captured on another
+      // platform, so `up` must not break on the wrong slash.
+      __setPlatformOverrideForTests("unix");
+      expect(parentDir("/a/b\\c")).toBe("/a/b");
+    });
+
+    it("returns null when there is no separator at all", () => {
+      __setPlatformOverrideForTests("unix");
+      expect(parentDir("relative")).toBeNull();
+      expect(parentDir("")).toBeNull();
+    });
   });
 });

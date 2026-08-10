@@ -64,7 +64,7 @@ export function parseCopilotSessionConfig(configJson: string): CopilotSessionCon
     return {
       session_name: "unknown",
       command_template: "agency copilot --yolo",
-      cwd: "C:\\",
+      cwd: defaultRootDir(),
       is_resumed: false,
       created_at: new Date().toISOString(),
     };

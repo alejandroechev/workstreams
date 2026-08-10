@@ -8,7 +8,7 @@ import WorkbenchTile from "../tiles/WorkbenchTile";
 import PlanTile from "../tiles/PlanTile";
 import CodeReviewTile from "../tiles/CodeReviewTile";
 import { isFeatureEnabled, featureDescriptor } from "../domain/feature-flags";
-import { shortcutLabel } from "../domain/platform";
+import { shortcutLabel, defaultRootDir } from "../domain/platform";
 
 function DisabledFeaturePlaceholder({ label, requires }: { label: string; requires: string }) {
   return (
@@ -148,7 +148,7 @@ function TileWrapperImpl({
       const config = JSON.parse(tile.config_json || "{}");
       await invoke("spawn_terminal", {
         tileId: tile.id,
-        cwd: config.cwd || "C:\\",
+        cwd: config.cwd || defaultRootDir(),
         command: config.command || null,
         rows: 30,
         cols: 120,
@@ -214,7 +214,7 @@ function TileWrapperImpl({
         <RepoExplorerTile
           tileId={tile.id}
           isFocused={isFocused}
-          rootDir={workstreamDir || "C:\\"}
+          rootDir={workstreamDir || defaultRootDir()}
           initialPath={cfg.filePath}
           workstreamId={workstreamId}
           workstreamVisible={workstreamVisible}
@@ -229,7 +229,7 @@ function TileWrapperImpl({
         <RepoExplorerTile
           tileId={tile.id}
           isFocused={isFocused}
-          rootDir={workstreamDir || "C:\\"}
+          rootDir={workstreamDir || defaultRootDir()}
           workstreamId={workstreamId}
           workstreamVisible={workstreamVisible}
           configJson={tile.config_json}
