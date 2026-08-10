@@ -5,6 +5,7 @@ import { listen } from "@tauri-apps/api/event";
 import { MarkdownView } from "../ui/MarkdownView";
 import { dirnameOf, parentRelativeDir } from "../domain/file-types";
 import { joinPath } from "../domain/platform";
+import { resolveMetaWatchPaths } from "../domain/meta-watch-paths";
 import { useBackend } from "../backend/context";
 import { makeAudioBlobUrl, makePdfBlobUrl, isPdfFile } from "../domain/file-types";
 import { FileEditorView, type MarkdownViewState } from "../files/FileEditorView";
@@ -301,17 +302,25 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
   // session.db writes so steady SELECT-COUNT pressure from `session.db-journal`
   // / `inuse.<pid>.lock` chatter doesn't wake the COUNT(*) loop.
   useEffect(() => {
+    // Watch paths are resolved asynchronously because the session-state root
+    // comes from the backend (it knows the real home directory). `cancelled`
+    // guards the gap between resolving and watching so a fast unmount can't
+    // leave a directory watched with nothing to unwatch it.
+    let cancelled = false;
     const watchPaths: string[] = [];
-    if (workstreamDir) watchPaths.push(workstreamDir);
-    if (linkedSessionIds) {
-      const home = "C:\\Users\\alejandroe";
-      for (const sid of linkedSessionIds) {
-        watchPaths.push(joinPath(home, ".copilot", "session-state", sid));
+    void (async () => {
+      const resolved = await resolveMetaWatchPaths({
+        workstreamDir: workstreamDir ?? null,
+        sessionIds: linkedSessionIds ?? null,
+        resolveSessionStateDir: (sessionId) =>
+          invoke<string>("session_state_dir", { sessionId }),
+      });
+      if (cancelled) return;
+      for (const p of resolved) {
+        watchPaths.push(p);
+        invoke("watch_directory", { path: p }).catch(() => {});
       }
-    }
-    for (const p of watchPaths) {
-      invoke("watch_directory", { path: p }).catch(() => {});
-    }
+    })();
 
     const refreshConfig = debounce(() => { void loadConfig(true); }, 200);
     const refreshState = debounce(() => { void loadStateDir(stateCurrentDir, true); }, 200);
@@ -319,7 +328,7 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
 
     const unlisten = listen<{ path: string }>("fs-change", (event) => {
       if (!workstreamVisible) return;
-      const changedPath = event.payload.path.replace(/\//g, "\\").toLowerCase();
+      const changedPath = event.payload.path.replace(/[\\/]+/g, "/").toLowerCase();
       // Skip events.jsonl writes — the session poller writes here on every
       // turn / tool call; nothing in Meta needs to react to that.
       if (changedPath.endsWith("events.jsonl")) return;
@@ -328,6 +337,7 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
       else if (activeTab === "database" && changedPath.endsWith("session.db")) refreshDb();
     });
     return () => {
+      cancelled = true;
       refreshConfig.cancel();
       refreshState.cancel();
       refreshDb.cancel();
@@ -694,7 +704,7 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
                     <ChevronUpIcon style={{ width: 14, height: 14 }} />
                   </button>
                   <span style={{ color: "#6c7086", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}
-                    title={stateRootDir ? `${stateRootDir}${stateCurrentDir ? `\\${stateCurrentDir}` : ""}` : "session-state"}>
+                    title={stateAbsoluteDir ?? "session-state"}>
                     .copilot/session-state/{(stateRootDir?.split(/[\\/]/).pop()) || "…"}
                     {stateCurrentDir ? `/${stateCurrentDir.replace(/\\/g, "/")}` : ""}
                   </span>
