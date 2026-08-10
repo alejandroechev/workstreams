@@ -12,9 +12,9 @@
  * we keep one source of truth.
  */
 
-export type FeatureId = "plan-tile";
+export type FeatureId = "plan-tile" | "debug-walkthrough";
 
-export const FEATURE_IDS: readonly FeatureId[] = ["plan-tile"] as const;
+export const FEATURE_IDS: readonly FeatureId[] = ["plan-tile", "debug-walkthrough"] as const;
 
 interface FeatureDescriptor {
   id: FeatureId;
@@ -30,6 +30,12 @@ const FEATURES: Record<FeatureId, FeatureDescriptor> = {
     label: "Plan",
     requires:
       "Requires the Copilot CLI plan/todo subsystem with the discipline-guardian extension. Not enabled in this build.",
+  },
+  "debug-walkthrough": {
+    id: "debug-walkthrough",
+    label: "Code Walkthrough",
+    requires:
+      "Requires a trace recorded with scripts/trace-record.mjs (lldb-dap, macOS). Experimental; not enabled in this build.",
   },
 };
 

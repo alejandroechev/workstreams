@@ -79,6 +79,23 @@ export function progressLabel(w: Walkthrough): string {
   return `${total === 0 ? 0 : w.index + 1} / ${total}`;
 }
 
+/**
+ * Absolute path of a step's file.
+ *
+ * The separator is inferred from `repoRoot` rather than taken from the local
+ * platform, because traces are portable by design: one recorded on macOS can
+ * be opened on Windows. Using the host separator there would splice a
+ * Windows-recorded root onto a Unix-style relative path (`C:\repo/src/a.rs`)
+ * or vice versa.
+ */
+export function resolveStepPath(repoRoot: string, file: string): string {
+  const usesBackslash = repoRoot.includes("\\") && !repoRoot.includes("/");
+  const sep = usesBackslash ? "\\" : "/";
+  const root = repoRoot.replace(/[\\/]+$/, "");
+  const relative = file.replace(/[\\/]+/g, sep).replace(new RegExp(`^\\${sep}+`), "");
+  return `${root}${sep}${relative}`;
+}
+
 function isGenerated(file: string): boolean {
   return /(^|[\\/])target[\\/]/.test(file);
 }

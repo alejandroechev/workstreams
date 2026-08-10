@@ -7,6 +7,7 @@ import SessionMetaTile from "../tiles/SessionMetaTile";
 import WorkbenchTile from "../tiles/WorkbenchTile";
 import PlanTile from "../tiles/PlanTile";
 import CodeReviewTile from "../tiles/CodeReviewTile";
+import DebugWalkthroughTile from "../tiles/DebugWalkthroughTile";
 import { isFeatureEnabled, featureDescriptor } from "../domain/feature-flags";
 import { shortcutLabel, defaultRootDir } from "../domain/platform";
 
@@ -51,6 +52,10 @@ interface TileProps {
    * etc.) when the user can't see the result of the work anyway.
    */
   workstreamVisible?: boolean;
+  /** Repo Explorer tiles in this workstream, for walkthrough binding. */
+  explorerCandidates?: ReadonlyArray<{ id: string; title: string | null }>;
+  /** Current HEAD sha, used to flag a walkthrough trace as stale. */
+  headCommitSha?: string | null;
   /** When true the side-by-side selection checkbox is rendered in the header. */
   selectable?: boolean;
   /** Whether this tile is currently selected for side-by-side. */
@@ -88,6 +93,8 @@ function TileWrapperImpl({
   isSideBySide = false,
   hidden = false,
   workstreamVisible = true,
+  explorerCandidates = [],
+  headCommitSha = null,
   selectable = false,
   isSelected = false,
   onToggleSelect,
@@ -294,6 +301,29 @@ function TileWrapperImpl({
             isFocused={isFocused}
             workstreamId={workstreamId}
             workstreamDir={workstreamDir}
+          />
+        );
+      }
+      break;
+    }
+    case "debug_walkthrough": {
+      if (!isFeatureEnabled("debug-walkthrough")) {
+        const d = featureDescriptor("debug-walkthrough");
+        content = <DisabledFeaturePlaceholder label={d.label} requires={d.requires} />;
+      } else {
+        const cfg = (() => {
+          try { return JSON.parse(tile.config_json || "{}"); } catch { return {}; }
+        })();
+        content = (
+          <DebugWalkthroughTile
+            tileId={tile.id}
+            workstreamId={workstreamId ?? null}
+            explorerCandidates={explorerCandidates}
+            boundExplorerId={cfg.bound_explorer_id ?? null}
+            onBindExplorer={(explorerTileId) =>
+              onUpdateTileConfig?.(tile.id, JSON.stringify({ ...cfg, bound_explorer_id: explorerTileId }))
+            }
+            headCommitSha={headCommitSha ?? null}
           />
         );
       }

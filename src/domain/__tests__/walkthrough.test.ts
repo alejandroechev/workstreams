@@ -9,6 +9,7 @@ import {
   stepBack,
   gotoStep,
   visibleSteps,
+  resolveStepPath,
   totalSteps,
   progressLabel,
 } from "../walkthrough";
@@ -149,5 +150,28 @@ describe("display filtering", () => {
   it("applies a caller-supplied path filter", () => {
     const w = createWalkthrough(mixed, { fileFilter: (f) => f.startsWith("src/a") });
     expect(visibleSteps(w).map((s) => s.file)).toEqual(["src/a.rs"]);
+  });
+});
+
+describe("resolveStepPath", () => {
+  it("joins a unix root with a unix separator", () => {
+    expect(resolveStepPath("/Users/me/repo", "src/a.rs")).toBe("/Users/me/repo/src/a.rs");
+  });
+
+  it("joins a Windows root with a backslash", () => {
+    expect(resolveStepPath("C:\\repo", "src\\a.rs")).toBe("C:\\repo\\src\\a.rs");
+  });
+
+  it("infers the separator from the trace, not the host", () => {
+    // Traces are portable by design — recorded on macOS, opened on Windows.
+    // Using the *host* separator would splice a unix root onto Windows-style
+    // segments and produce a path that resolves nowhere.
+    expect(resolveStepPath("/repo", "src\\a.rs")).toBe("/repo/src/a.rs");
+    expect(resolveStepPath("C:\\repo", "src/a.rs")).toBe("C:\\repo\\src\\a.rs");
+  });
+
+  it("does not double up separators", () => {
+    expect(resolveStepPath("/repo/", "/src/a.rs")).toBe("/repo/src/a.rs");
+    expect(resolveStepPath("C:\\repo\\", "\\src\\a.rs")).toBe("C:\\repo\\src\\a.rs");
   });
 });

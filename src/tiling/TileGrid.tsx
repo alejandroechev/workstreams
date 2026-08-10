@@ -1,5 +1,5 @@
 // @test-skip: Thin React rendering wrapper; layout logic tested in layout.test.ts
-import { memo } from "react";
+import { memo, useMemo } from "react";
 import type { Tile } from "../workstream/types";
 import { computeLayout, computeSideBySideLayout } from "../domain/layout";
 import TileWrapper from "./Tile";
@@ -80,8 +80,16 @@ function TileGridImpl({
       ? computeSideBySideLayout()
       : computeLayout(orderedTiles.length);
 
+  // Repo Explorer tiles are the only valid targets a walkthrough can drive.
+  // Derived here rather than threaded from App because TileGrid already knows
+  // every tile in the workstream.
+  const explorerCandidates = useMemo(
+    () => tiles.filter((t) => t.tile_type === "file_explorer").map((t) => ({ id: t.id, title: t.title })),
+    [tiles],
+  );
+
   if (orderedTiles.length === 0) {
-    return (
+  return (
       <div
         style={{
           display: "flex",
@@ -145,6 +153,7 @@ function TileGridImpl({
             isSideBySide={isInSbs}
             hidden={hidden}
             workstreamVisible={isVisible}
+            explorerCandidates={explorerCandidates}
             selectable={showSelectable}
             isSelected={selectedForSideBySide.has(tile.id)}
             onToggleSelect={onToggleSideBySideSelect}

@@ -65,7 +65,7 @@ type MonacoEditorRegistry = {
   getEditors?: () => MonacoTextFocusEditor[];
 };
 
-const tileCreationShortcutKeys = new Set(["a", "b", "c", "m", "p", "r", "t", "w"]);
+const tileCreationShortcutKeys = new Set(["a", "b", "c", "d", "m", "p", "r", "t", "w"]);
 
 function isAltTileCreationShortcut(altKey: boolean, key: string): boolean {
   return altKey && tileCreationShortcutKeys.has(key.toLowerCase());
@@ -112,6 +112,7 @@ function isMonacoFocused(activeElement: Element | null): boolean {
  *   Alt+B  workbench
  *   Alt+P  plan
  *   Alt+A  code_review
+ *   Alt+D  debug_walkthrough
  *
  * Tile management:
  *   Alt+Q  close focused tile
@@ -161,6 +162,8 @@ export function parseKeyAction(opts: ParseKeyActionOpts): KeyAction | null {
         return { type: "addTile", tileType: "plan" };
       case "a":
         return { type: "addTile", tileType: "code_review" };
+      case "d":
+        return { type: "addTile", tileType: "debug_walkthrough" };
       // Tile management
       case "q":
         return { type: "closeTile" };

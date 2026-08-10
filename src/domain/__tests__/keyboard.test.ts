@@ -171,6 +171,15 @@ describe("parseKeyAction", () => {
     expect(parseKeyAction({ key: "Enter", ...noMod })).toBeNull();
   });
 
+  it("returns addTile for Alt+D (walkthrough)", () => {
+    expect(parseKeyAction({ key: "d", ...alt })).toEqual({ type: "addTile", tileType: "debug_walkthrough" });
+    // And via code, for macOS Option+D which arrives as a special character.
+    expect(parseKeyAction({ key: "\u2202", code: "KeyD", ...alt })).toEqual({
+      type: "addTile",
+      tileType: "debug_walkthrough",
+    });
+  });
+
   it("Alt+N (old terminal shortcut) is no longer mapped", () => {
     expect(parseKeyAction({ key: "n", ...alt })).toBeNull();
   });

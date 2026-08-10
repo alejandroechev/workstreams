@@ -1092,6 +1092,7 @@ export default function App() {
       workbench: "Bench",
       plan: "Plan",
       code_review: "Code Review",
+      debug_walkthrough: "Walkthrough",
     };
     // Count by sub-shell (PowerShell vs WSL) so each gets its own
     // numbered sequence.
@@ -1536,6 +1537,7 @@ export default function App() {
           onAddWorkbench={() => addTile("workbench")}
           onAddPlan={() => addTile("plan")}
           onAddCodeReview={() => addTile("code_review")}
+          onAddWalkthrough={() => addTile("debug_walkthrough")}
           onOpenSettings={() => setShowSettings(true)}
           onToggleFullscreen={() => {
             if (orderedTiles.length > 0 && orderedTiles[focusedIndex]) {
