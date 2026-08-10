@@ -2,7 +2,8 @@ import type { Project, Workstream, Tile, TileType, WorkstreamLayout, CopilotConf
 import type { SessionFileComment } from "../domain/file-comments";
 import type { Review, ReviewComment, ChangedFile, DiffSides } from "../domain/code-review";
 import { CONTENT_SEARCH_MAX_PER_FILE } from "../domain/content-search";
-import type { Backend } from "./types";
+import type { Backend, CodeTrace } from "./types";
+import { parseTraceFile, type TraceFile } from "../domain/trace-format";
 import { rewriteTileCwd } from "../domain/worktree-change";
 
 function generateId(): string {
@@ -768,5 +769,57 @@ export class MemoryBackend implements Backend {
     r.completed_at = now();
     r.updated_at = r.completed_at;
     this.reviews.set(reviewId, r);
+  }
+
+  // ── Code walkthrough traces ──────────────────────────────────────────
+  //
+  // Traces are held in memory rather than read from disk, so E2E runs and
+  // offline development need neither a debugger nor real recorded files.
+
+  private traceFiles = new Map<string, unknown>();
+  private traceIndex = new Map<string, CodeTrace>();
+
+  /** Test/dev seam: pretend `path` contains `contents`. */
+  _seedTraceFile(path: string, contents: unknown): void {
+    this.traceFiles.set(path, contents);
+  }
+
+  async readCodeTraceFile(tracePath: string): Promise<TraceFile> {
+    const raw = this.traceFiles.get(tracePath);
+    if (raw === undefined) throw new Error(`Cannot read trace ${tracePath}: no such file`);
+    return parseTraceFile(raw);
+  }
+
+  async indexCodeTrace(tracePath: string, workstreamId?: string | null): Promise<CodeTrace> {
+    // Derive the indexed fields from the file rather than trusting a caller,
+    // so the index can never drift from the file it points at.
+    const parsed = await this.readCodeTraceFile(tracePath);
+    const row: CodeTrace = {
+      id: tracePath,
+      workstream_id: workstreamId ?? null,
+      test_name: parsed.test,
+      trace_path: tracePath,
+      commit_sha: parsed.commitSha,
+      step_count: parsed.steps.length,
+      truncated: parsed.truncated,
+      recorded_at: parsed.recordedAt,
+    };
+    this.traceIndex.set(row.id, row);
+    return row;
+  }
+
+  async listCodeTraces(workstreamId?: string | null): Promise<CodeTrace[]> {
+    return Array.from(this.traceIndex.values())
+      .filter((t) => (workstreamId ? t.workstream_id === workstreamId : true))
+      .sort((a, b) => b.recorded_at.localeCompare(a.recorded_at));
+  }
+
+  async getCodeTrace(id: string): Promise<CodeTrace | null> {
+    return this.traceIndex.get(id) ?? null;
+  }
+
+  async deleteCodeTrace(id: string): Promise<void> {
+    // Absent is fine: the UI may remove a row a re-record already replaced.
+    this.traceIndex.delete(id);
   }
 }

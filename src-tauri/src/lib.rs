@@ -3192,6 +3192,188 @@ fn write_session_file(
         .map_err(|e| format!("Cannot write {}: {}", relative_path, e))
 }
 
+/// ── Code walkthrough trace index ──────────────────────────────────────
+///
+/// A recorded walkthrough lives in a JSON file written by
+/// `scripts/trace-record.mjs`; that file is the source of truth. This table is
+/// only an index, so the UI can list traces without parsing every file, and so
+/// a trace produced by the CLI — which knows nothing about this database — can
+/// be adopted after the fact.
+///
+/// The `*_in` functions take a `Connection` directly so they are unit-testable
+/// against an in-memory database without standing up Tauri state.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct CodeTrace {
+    pub id: String,
+    pub workstream_id: Option<String>,
+    pub test_name: String,
+    pub trace_path: String,
+    pub commit_sha: String,
+    pub step_count: i64,
+    pub truncated: bool,
+    pub recorded_at: String,
+}
+
+fn code_trace_from_row(row: &rusqlite::Row) -> rusqlite::Result<CodeTrace> {
+    Ok(CodeTrace {
+        id: row.get(0)?,
+        workstream_id: row.get(1)?,
+        test_name: row.get(2)?,
+        trace_path: row.get(3)?,
+        commit_sha: row.get(4)?,
+        step_count: row.get(5)?,
+        truncated: row.get::<_, i64>(6)? != 0,
+        recorded_at: row.get(7)?,
+    })
+}
+
+const CODE_TRACE_COLUMNS: &str =
+    "id, workstream_id, test_name, trace_path, commit_sha, step_count, truncated, recorded_at";
+
+fn upsert_code_trace_in(conn: &rusqlite::Connection, trace: &CodeTrace) -> Result<(), String> {
+    // INSERT OR REPLACE: re-recording a trace should update it in place rather
+    // than accumulate near-duplicate rows for the same id.
+    conn.execute(
+        "INSERT OR REPLACE INTO code_traces
+         (id, workstream_id, test_name, trace_path, commit_sha, step_count, truncated, recorded_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        rusqlite::params![
+            trace.id,
+            trace.workstream_id,
+            trace.test_name,
+            trace.trace_path,
+            trace.commit_sha,
+            trace.step_count,
+            i64::from(trace.truncated),
+            trace.recorded_at,
+        ],
+    )
+    .map_err(|e| format!("DB error: {e}"))?;
+    Ok(())
+}
+
+fn list_code_traces_in(
+    conn: &rusqlite::Connection,
+    workstream_id: Option<&str>,
+) -> Result<Vec<CodeTrace>, String> {
+    // Newest first: the picker should surface the most recent recording, not
+    // whichever happened to be inserted first.
+    let rows = match workstream_id {
+        Some(ws) => {
+            let sql = format!(
+                "SELECT {CODE_TRACE_COLUMNS} FROM code_traces
+                 WHERE workstream_id = ?1 ORDER BY recorded_at DESC"
+            );
+            let mut stmt = conn.prepare(&sql).map_err(|e| format!("DB error: {e}"))?;
+            let mapped = stmt
+                .query_map([ws], code_trace_from_row)
+                .map_err(|e| format!("DB error: {e}"))?;
+            mapped.collect::<Result<Vec<_>, _>>()
+        }
+        None => {
+            let sql =
+                format!("SELECT {CODE_TRACE_COLUMNS} FROM code_traces ORDER BY recorded_at DESC");
+            let mut stmt = conn.prepare(&sql).map_err(|e| format!("DB error: {e}"))?;
+            let mapped = stmt
+                .query_map([], code_trace_from_row)
+                .map_err(|e| format!("DB error: {e}"))?;
+            mapped.collect::<Result<Vec<_>, _>>()
+        }
+    };
+    rows.map_err(|e| format!("DB error: {e}"))
+}
+
+fn get_code_trace_in(conn: &rusqlite::Connection, id: &str) -> Result<Option<CodeTrace>, String> {
+    let sql = format!("SELECT {CODE_TRACE_COLUMNS} FROM code_traces WHERE id = ?1");
+    match conn.query_row(&sql, [id], code_trace_from_row) {
+        Ok(t) => Ok(Some(t)),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(e) => Err(format!("DB error: {e}")),
+    }
+}
+
+fn delete_code_trace_in(conn: &rusqlite::Connection, id: &str) -> Result<(), String> {
+    // Deleting an already-absent row is not an error: the UI may be removing
+    // something a concurrent re-record already replaced.
+    conn.execute("DELETE FROM code_traces WHERE id = ?1", [id])
+        .map_err(|e| format!("DB error: {e}"))?;
+    Ok(())
+}
+
+#[tauri::command]
+fn list_code_traces(
+    state: State<'_, AppState>,
+    workstream_id: Option<String>,
+) -> Result<Vec<CodeTrace>, String> {
+    let db = state.db.lock().unwrap();
+    list_code_traces_in(&db, workstream_id.as_deref())
+}
+
+#[tauri::command]
+fn get_code_trace(state: State<'_, AppState>, id: String) -> Result<Option<CodeTrace>, String> {
+    let db = state.db.lock().unwrap();
+    get_code_trace_in(&db, &id)
+}
+
+#[tauri::command]
+fn delete_code_trace(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    let db = state.db.lock().unwrap();
+    delete_code_trace_in(&db, &id)
+}
+
+/// Register a trace file that the recorder CLI just wrote.
+///
+/// Reads the file to derive the indexed fields rather than trusting the
+/// caller, so the index cannot drift from the file it points at.
+#[tauri::command]
+fn index_code_trace(
+    state: State<'_, AppState>,
+    trace_path: String,
+    workstream_id: Option<String>,
+) -> Result<CodeTrace, String> {
+    let raw = std::fs::read_to_string(&trace_path)
+        .map_err(|e| format!("Cannot read trace {trace_path}: {e}"))?;
+    let parsed: serde_json::Value = serde_json::from_str(&raw)
+        .map_err(|e| format!("Trace {trace_path} is not valid JSON: {e}"))?;
+
+    let version = parsed.get("version").and_then(|v| v.as_i64()).unwrap_or(0);
+    if version != 1 {
+        return Err(format!(
+            "Trace {trace_path} declares version {version}; this build supports version 1."
+        ));
+    }
+    let field = |name: &str| -> Result<String, String> {
+        parsed
+            .get(name)
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+            .ok_or_else(|| format!("Trace {trace_path} is missing \"{name}\""))
+    };
+
+    let trace = CodeTrace {
+        // Path-keyed: re-recording to the same file updates that row in place.
+        id: trace_path.clone(),
+        workstream_id,
+        test_name: field("test")?,
+        trace_path: trace_path.clone(),
+        commit_sha: field("commitSha")?,
+        step_count: parsed
+            .get("steps")
+            .and_then(|s| s.as_array())
+            .map(|s| s.len() as i64)
+            .unwrap_or(0),
+        truncated: parsed
+            .get("truncated")
+            .and_then(|t| t.as_bool())
+            .unwrap_or(false),
+        recorded_at: field("recordedAt")?,
+    };
+
+    let db = state.db.lock().unwrap();
+    upsert_code_trace_in(&db, &trace)?;
+    Ok(trace)
+}
+
 /// Returns the absolute path of `~/.copilot/session-state/<id>` so the
 /// frontend can list it with the regular list_directory + read_file APIs.
 /// Errors if the directory doesn't exist.
@@ -4523,6 +4705,10 @@ pub fn run() {
             read_session_file,
             write_session_file,
             session_state_dir,
+            list_code_traces,
+            get_code_trace,
+            delete_code_trace,
+            index_code_trace,
             list_session_checkpoints,
             list_session_events,
             query_session_files,
@@ -6161,5 +6347,123 @@ Body here.
     fn mark_plan_md_completed_noop_without_closing_fence() {
         let input = "---\nstatus: active\nno closing fence\n";
         assert_eq!(mark_plan_md_completed(input), input);
+    }
+
+    // ── Code walkthrough trace index ───────────────────────────────────
+
+    fn trace_db() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE code_traces (
+                id TEXT PRIMARY KEY,
+                workstream_id TEXT,
+                test_name TEXT NOT NULL,
+                trace_path TEXT NOT NULL,
+                commit_sha TEXT NOT NULL,
+                step_count INTEGER NOT NULL DEFAULT 0,
+                truncated INTEGER NOT NULL DEFAULT 0,
+                recorded_at TEXT NOT NULL
+            );",
+        )
+        .unwrap();
+        conn
+    }
+
+    fn sample_trace(id: &str, test: &str) -> CodeTrace {
+        CodeTrace {
+            id: id.to_string(),
+            workstream_id: Some("ws-1".to_string()),
+            test_name: test.to_string(),
+            trace_path: format!("/traces/{id}.json"),
+            commit_sha: "abc1234".to_string(),
+            step_count: 12,
+            truncated: false,
+            recorded_at: "2026-08-10T00:00:00Z".to_string(),
+        }
+    }
+
+    #[test]
+    fn upsert_and_list_code_traces_roundtrips() {
+        let conn = trace_db();
+        upsert_code_trace_in(&conn, &sample_trace("t1", "a::b")).unwrap();
+
+        let all = list_code_traces_in(&conn, None).unwrap();
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].test_name, "a::b");
+        assert_eq!(all[0].step_count, 12);
+        assert!(!all[0].truncated);
+    }
+
+    #[test]
+    fn upsert_code_trace_replaces_an_earlier_recording() {
+        // Re-recording the same trace id must not accumulate duplicates —
+        // the newest recording of a given trace is the only interesting one.
+        let conn = trace_db();
+        upsert_code_trace_in(&conn, &sample_trace("t1", "a::b")).unwrap();
+        let mut updated = sample_trace("t1", "a::b");
+        updated.step_count = 99;
+        updated.truncated = true;
+        upsert_code_trace_in(&conn, &updated).unwrap();
+
+        let all = list_code_traces_in(&conn, None).unwrap();
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].step_count, 99);
+        assert!(all[0].truncated, "truncated must survive the round trip");
+    }
+
+    #[test]
+    fn list_code_traces_can_scope_to_a_workstream() {
+        let conn = trace_db();
+        upsert_code_trace_in(&conn, &sample_trace("t1", "a::b")).unwrap();
+        let mut other = sample_trace("t2", "c::d");
+        other.workstream_id = Some("ws-2".to_string());
+        upsert_code_trace_in(&conn, &other).unwrap();
+
+        let scoped = list_code_traces_in(&conn, Some("ws-2")).unwrap();
+        assert_eq!(scoped.len(), 1);
+        assert_eq!(scoped[0].id, "t2");
+    }
+
+    #[test]
+    fn list_code_traces_returns_newest_first() {
+        // The picker shows the most recent recording at the top; ordering by
+        // insertion would surface stale traces first.
+        let conn = trace_db();
+        let mut older = sample_trace("old", "a::b");
+        older.recorded_at = "2026-01-01T00:00:00Z".to_string();
+        let mut newer = sample_trace("new", "c::d");
+        newer.recorded_at = "2026-08-01T00:00:00Z".to_string();
+        upsert_code_trace_in(&conn, &older).unwrap();
+        upsert_code_trace_in(&conn, &newer).unwrap();
+
+        let all = list_code_traces_in(&conn, None).unwrap();
+        assert_eq!(all[0].id, "new");
+    }
+
+    #[test]
+    fn get_code_trace_returns_none_for_unknown_id() {
+        let conn = trace_db();
+        assert!(get_code_trace_in(&conn, "nope").unwrap().is_none());
+    }
+
+    #[test]
+    fn delete_code_trace_removes_only_the_named_row() {
+        let conn = trace_db();
+        upsert_code_trace_in(&conn, &sample_trace("t1", "a::b")).unwrap();
+        upsert_code_trace_in(&conn, &sample_trace("t2", "c::d")).unwrap();
+
+        delete_code_trace_in(&conn, "t1").unwrap();
+
+        let all = list_code_traces_in(&conn, None).unwrap();
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].id, "t2");
+    }
+
+    #[test]
+    fn delete_code_trace_is_a_noop_for_an_unknown_id() {
+        // The UI may delete a row that a concurrent re-record already
+        // replaced; that should not surface as an error.
+        let conn = trace_db();
+        assert!(delete_code_trace_in(&conn, "ghost").is_ok());
     }
 }

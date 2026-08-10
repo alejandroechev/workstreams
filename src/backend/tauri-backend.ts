@@ -2,7 +2,8 @@ import { invoke } from "@tauri-apps/api/core";
 import type { Project, Workstream, Tile, TileType, WorkstreamLayout, CopilotConfigItem } from "../domain/types";
 import type { SessionFileComment } from "../domain/file-comments";
 import type { Review, ReviewComment, ChangedFile, DiffSides } from "../domain/code-review";
-import type { Backend } from "./types";
+import { parseTraceFile, type TraceFile } from "../domain/trace-format";
+import type { Backend, CodeTrace } from "./types";
 
 export class TauriBackend implements Backend {
   async listProjects(): Promise<Project[]> {
@@ -400,5 +401,30 @@ export class TauriBackend implements Backend {
 
   async completeCodeReview(workstreamId: string, reviewId: string): Promise<void> {
     return invoke("complete_code_review", { workstreamId, reviewId });
+  }
+
+  // ── Code walkthrough traces ──────────────────────────────────────────
+
+  async listCodeTraces(workstreamId?: string | null): Promise<CodeTrace[]> {
+    return invoke<CodeTrace[]>("list_code_traces", { workstreamId: workstreamId ?? null });
+  }
+
+  async getCodeTrace(id: string): Promise<CodeTrace | null> {
+    return invoke<CodeTrace | null>("get_code_trace", { id });
+  }
+
+  async deleteCodeTrace(id: string): Promise<void> {
+    return invoke("delete_code_trace", { id });
+  }
+
+  async indexCodeTrace(tracePath: string, workstreamId?: string | null): Promise<CodeTrace> {
+    return invoke<CodeTrace>("index_code_trace", { tracePath, workstreamId: workstreamId ?? null });
+  }
+
+  async readCodeTraceFile(tracePath: string): Promise<TraceFile> {
+    // Reuse the generic file reader, then validate through the shared parser
+    // so the app and the CLI agree on what a well-formed trace is.
+    const raw = await invoke<{ content: string }>("read_text_file", { path: tracePath });
+    return parseTraceFile(raw.content);
   }
 }

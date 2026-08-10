@@ -164,6 +164,22 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
             console_error_count INTEGER NOT NULL DEFAULT 0,
             captured_at TEXT NOT NULL
         );
+
+        -- Index of recorded code-walkthrough traces. The JSON file at
+        -- `trace_path` is the source of truth; this table exists only so the
+        -- UI can list traces without parsing every file on disk, and so a
+        -- trace recorded by the CLI (which knows nothing about this database)
+        -- can be adopted later.
+        CREATE TABLE IF NOT EXISTS code_traces (
+            id TEXT PRIMARY KEY,
+            workstream_id TEXT,
+            test_name TEXT NOT NULL,
+            trace_path TEXT NOT NULL,
+            commit_sha TEXT NOT NULL,
+            step_count INTEGER NOT NULL DEFAULT 0,
+            truncated INTEGER NOT NULL DEFAULT 0,
+            recorded_at TEXT NOT NULL
+        );
         ",
     )?;
 

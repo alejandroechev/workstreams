@@ -516,4 +516,61 @@ describe("TauriBackend", () => {
       title: null,
     });
   });
-});
+
+  describe("code traces", () => {
+    it("listCodeTraces passes a null workstream when unscoped", async () => {
+      invoke.mockResolvedValueOnce([]);
+      await backend.listCodeTraces();
+      expect(invoke).toHaveBeenCalledWith("list_code_traces", { workstreamId: null });
+    });
+
+    it("listCodeTraces forwards the workstream when scoped", async () => {
+      invoke.mockResolvedValueOnce([]);
+      await backend.listCodeTraces("ws-1");
+      expect(invoke).toHaveBeenCalledWith("list_code_traces", { workstreamId: "ws-1" });
+    });
+
+    it("getCodeTrace and deleteCodeTrace pass the id", async () => {
+      invoke.mockResolvedValueOnce(null);
+      await backend.getCodeTrace("t1");
+      expect(invoke).toHaveBeenCalledWith("get_code_trace", { id: "t1" });
+
+      invoke.mockResolvedValueOnce(undefined);
+      await backend.deleteCodeTrace("t1");
+      expect(invoke).toHaveBeenCalledWith("delete_code_trace", { id: "t1" });
+    });
+
+    it("indexCodeTrace forwards the path", async () => {
+      invoke.mockResolvedValueOnce({ id: "/t.json" });
+      await backend.indexCodeTrace("/t.json", "ws-1");
+      expect(invoke).toHaveBeenCalledWith("index_code_trace", {
+        tracePath: "/t.json",
+        workstreamId: "ws-1",
+      });
+    });
+
+    it("readCodeTraceFile validates through the shared parser", async () => {
+      // The app and the CLI must agree on what a well-formed trace is, so the
+      // read path goes through the same parser rather than casting.
+      invoke.mockResolvedValueOnce({
+        content: JSON.stringify({
+          version: 1,
+          test: "a::b",
+          repoRoot: "/r",
+          commitSha: "abc",
+          recordedAt: "2026-01-01T00:00:00Z",
+          truncated: false,
+          steps: [{ file: "a.rs", line: 1, function: "f" }],
+        }),
+      });
+      const trace = await backend.readCodeTraceFile("/t.json");
+      expect(trace.steps).toHaveLength(1);
+      expect(invoke).toHaveBeenCalledWith("read_text_file", { path: "/t.json" });
+    });
+
+    it("readCodeTraceFile rejects a malformed trace instead of returning it", async () => {
+      invoke.mockResolvedValueOnce({ content: JSON.stringify({ version: 42 }) });
+      await expect(backend.readCodeTraceFile("/bad.json")).rejects.toThrow(/version/i);
+    });
+  });
+}); 

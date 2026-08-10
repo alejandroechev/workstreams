@@ -191,6 +191,11 @@ function createBackend(): Backend {
     listReviewComments: vi.fn().mockResolvedValue([]),
     setReviewCommentStatus: vi.fn(),
     completeCodeReview: vi.fn(),
+    listCodeTraces: vi.fn(async () => []),
+    getCodeTrace: vi.fn(async () => null),
+    deleteCodeTrace: vi.fn(),
+    indexCodeTrace: vi.fn(),
+    readCodeTraceFile: vi.fn(),
   } as Backend;
 }
 

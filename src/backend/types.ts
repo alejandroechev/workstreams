@@ -1,6 +1,7 @@
 // @test-skip: Type-only interface; behaviour covered by MemoryBackend + TauriBackend tests.
 import type { Project, Workstream, Tile, TileType, WorkstreamLayout, CopilotConfigItem } from "../domain/types";
 import type { SessionFileComment } from "../domain/file-comments";
+import type { TraceFile } from "../domain/trace-format";
 import type { Review, ReviewComment, ChangedFile, DiffSides } from "../domain/code-review";
 
 export interface FileSearchMatch {
@@ -162,6 +163,43 @@ export interface Backend {
   listReviewComments(workstreamId: string, reviewId: string): Promise<ReviewComment[]>;
   setReviewCommentStatus(workstreamId: string, commentId: string, status: string): Promise<void>;
   completeCodeReview(workstreamId: string, reviewId: string): Promise<void>;
+
+  // ── Code walkthrough traces ──────────────────────────────────────────
+  /** Recorded traces, newest first. Scoped to a workstream when given. */
+  listCodeTraces(workstreamId?: string | null): Promise<CodeTrace[]>;
+  /** A single trace index row, or null when the id is unknown. */
+  getCodeTrace(id: string): Promise<CodeTrace | null>;
+  /** Remove an index row. Removing an unknown id is not an error. */
+  deleteCodeTrace(id: string): Promise<void>;
+  /**
+   * Adopt a trace file written by `scripts/trace-record.mjs`. The backend
+   * reads the file to derive the indexed fields, so the index cannot drift
+   * from the file it points at.
+   */
+  indexCodeTrace(tracePath: string, workstreamId?: string | null): Promise<CodeTrace>;
+  /**
+   * Read and validate the trace file itself. Separate from the index because
+   * replay needs the steps, while listing only needs the metadata.
+   */
+  readCodeTraceFile(tracePath: string): Promise<TraceFile>;
+}
+
+/**
+ * Index row for a recorded code walkthrough.
+ *
+ * The JSON file at `trace_path` is the source of truth; this is only enough
+ * metadata to list and pick traces without parsing every file.
+ */
+export interface CodeTrace {
+  id: string;
+  workstream_id: string | null;
+  test_name: string;
+  trace_path: string;
+  commit_sha: string;
+  step_count: number;
+  /** True when recording stopped at the step cap rather than at test exit. */
+  truncated: boolean;
+  recorded_at: string;
 }
 
 export interface SessionPlanEntry {
