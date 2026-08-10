@@ -47,6 +47,9 @@ type FakeEditor = {
   dispose: ReturnType<typeof vi.fn>;
   revealLineInCenter: ReturnType<typeof vi.fn>;
   setPosition: ReturnType<typeof vi.fn>;
+  createDecorationsCollection: ReturnType<typeof vi.fn>;
+  /** Decorations currently applied via the collection returned above. */
+  decorations: unknown[];
 };
 
 function snapshot(overrides: Partial<BufferSnapshot> = {}): BufferSnapshot {
@@ -147,6 +150,14 @@ beforeEach(() => {
           dispose: vi.fn(),
           revealLineInCenter: vi.fn(),
           setPosition: vi.fn(),
+          decorations: [],
+          createDecorationsCollection: vi.fn((decorations: unknown[] = []) => {
+            editor.decorations = decorations;
+            return {
+              set: (next: unknown[]) => { editor.decorations = next; },
+              clear: () => { editor.decorations = []; },
+            };
+          }),
         };
         fakeEditors.push(editor);
         return editor;
@@ -596,5 +607,31 @@ describe("FileEditorView", () => {
       "C:\\repo\\node_modules\\pkg\\index.js",
       false,
     );
+  });
+
+  it("highlights the walkthrough's current line", async () => {
+    // The controller tile drives navigation; the editor marks where the trace
+    // currently is so the reader can see it without hunting.
+    renderEditor(undefined, { highlightLine: 7 });
+    await waitFor(() => expect(fakeEditors).toHaveLength(1));
+    await waitFor(() => expect(fakeEditors[0].decorations.length).toBe(1));
+    const decoration = fakeEditors[0].decorations[0] as {
+      range: { startLineNumber: number };
+      options: { isWholeLine: boolean };
+    };
+    expect(decoration.range.startLineNumber).toBe(7);
+    expect(decoration.options.isWholeLine).toBe(true);
+  });
+
+  it("clears the highlight when the walkthrough line goes away", async () => {
+    const harness = createRegistryHarness();
+    const { rerender } = render(
+      <FileEditorView path="input-path" onBack={vi.fn()} registry={harness.registry} highlightLine={7} />,
+    );
+    await waitFor(() => expect(fakeEditors[0].decorations.length).toBe(1));
+    rerender(
+      <FileEditorView path="input-path" onBack={vi.fn()} registry={harness.registry} highlightLine={null} />,
+    );
+    await waitFor(() => expect(fakeEditors[0].decorations.length).toBe(0));
   });
 });

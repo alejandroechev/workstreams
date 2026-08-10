@@ -104,6 +104,12 @@ export interface FileEditorViewProps {
    */
   initialRevealLine?: number | null;
   /**
+   * Line to mark as the code walkthrough's current step. Distinct from
+   * `initialRevealLine`, which only scrolls: the highlight persists while the
+   * user scrolls away, so they can see where the trace is when they come back.
+   */
+  highlightLine?: number | null;
+  /**
    * Inline file comments to render as Monaco view zones below their anchor.
    * Only used when `commentsEnabled` is true and the editor is mounted.
    */
@@ -228,6 +234,7 @@ export function FileEditorView({
   initialViewMode,
   initialSlideIndex,
   initialRevealLine,
+  highlightLine = null,
   comments = [],
   commentsEnabled = false,
   onAddComment,
@@ -609,6 +616,36 @@ export function FileEditorView({
       editor.setPosition({ lineNumber: line, column: 1 });
     }
   }, [initialRevealLine, editorReadyToken]);
+
+  // Mark the walkthrough's current step with a whole-line decoration. Kept
+  // separate from the reveal effect above because reveal is a one-shot scroll
+  // while this must survive the user scrolling elsewhere — that persistence is
+  // what makes "wander off and come back" workable.
+  const highlightCollectionRef = useRef<MonacoNs.editor.IEditorDecorationsCollection | null>(null);
+  useEffect(() => {
+    const editor = editorRef.current;
+    if (!editor) return;
+    if (!highlightCollectionRef.current) {
+      // Guard the API rather than assume it: Monaco is loaded dynamically and
+      // decoration collections are a newer addition, so an older build (or a
+      // narrower test double) may not provide it. Losing the highlight is an
+      // acceptable degradation; taking the editor down is not.
+      if (typeof editor.createDecorationsCollection !== "function") return;
+      highlightCollectionRef.current = editor.createDecorationsCollection([]);
+    }
+    const collection = highlightCollectionRef.current;
+    if (typeof highlightLine !== "number" || highlightLine < 1) {
+      collection.clear();
+      return;
+    }
+    const line = Math.max(1, Math.floor(highlightLine));
+    collection.set([
+      {
+        range: { startLineNumber: line, startColumn: 1, endLineNumber: line, endColumn: 1 },
+        options: { isWholeLine: true, className: "ws-walkthrough-current-line" },
+      },
+    ]);
+  }, [highlightLine, editorReadyToken]);
 
   // ─── Live font-size updates from global app settings ──────────────────
   useEffect(() => {

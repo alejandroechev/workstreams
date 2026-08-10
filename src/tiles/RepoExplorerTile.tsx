@@ -12,6 +12,7 @@ import { listen } from "@tauri-apps/api/event";
 import { useBackend } from "../backend/context";
 import { detectLanguage } from "../domain/tile-config";
 import { joinPath, defaultRootDir, parentDir } from "../domain/platform";
+import { subscribeWalkthroughNavigate } from "../domain/walkthrough-nav";
 import { isAudioFile, isImageFile, isSvgFile, isPdfFile, makeAudioBlobUrl, makeImageBlobUrl, makePdfBlobUrl, dirnameOf, type LinkTargetKind } from "../domain/file-types";
 import { createNavigationStack, currentPath as navCurrent, canGoBack as navCanBack, canGoForward as navCanFwd, pushPath as navPush, goBack as navBack, goForward as navFwd, type NavigationStack } from "../domain/nav-history";
 import {
@@ -158,7 +159,7 @@ export function parseDiffToSides(diffText: string): { original: string; modified
   return { original: originalLines.join("\n"), modified: modifiedLines.join("\n") };
 }
 
-export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, initialPath, workstreamId, workstreamVisible = true, configJson, onConfigChange }: Props) {
+export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPath, workstreamId, workstreamVisible = true, configJson, onConfigChange }: Props) {
   const backend = useBackend();
 
   const [mode, setMode] = useState<Mode>(initialPath ? "view" : "browse");
@@ -295,6 +296,8 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
   // content-search result is opened; matched by path so it only applies to
   // that file).
   const pendingRevealLineRef = useRef<{ path: string; line: number } | null>(null);
+
+  const [walkthroughLine, setWalkthroughLine] = useState<number | null>(null);
 
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -478,6 +481,20 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
     setFileLoading(false);
     // Don't clear activeDiffMode here — it persists from browse diff selection.
   }, [entries, loadAudioFile]);
+
+  // Follow a code walkthrough. The controller tile owns the trace and step
+  // order; this tile just reveals whatever line it is told to. Events are
+  // filtered by tile id so only the explicitly-bound explorer reacts — several
+  // explorers can be open, and the others must stay where the user left them.
+  useEffect(() => {
+    return subscribeWalkthroughNavigate((payload) => {
+      if (payload.explorerTileId !== tileId) return;
+      pendingRevealLineRef.current = { path: payload.path, line: payload.line };
+      setWalkthroughLine(payload.line);
+      void openFile(payload.path);
+    });
+  }, [tileId, openFile]);
+
 
   // Load directory on mount (browse mode)
   useEffect(() => {
@@ -1321,6 +1338,7 @@ export default function RepoExplorerTile({ tileId: _tileId, isFocused, rootDir, 
               initialViewMode={restoredMdRef.current?.path === filePath ? restoredMdRef.current.mode : undefined}
               initialSlideIndex={restoredMdRef.current?.path === filePath ? restoredMdRef.current.slideIndex : undefined}
               initialRevealLine={pendingRevealLineRef.current?.path === filePath ? pendingRevealLineRef.current.line : undefined}
+              highlightLine={pendingRevealLineRef.current?.path === filePath ? walkthroughLine : null}
               renderMarkdownPreview={(markdownContent) => (
                 <MarkdownView
                   style={markdownContainerStyle}
