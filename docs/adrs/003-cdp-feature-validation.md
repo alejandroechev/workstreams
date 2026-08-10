@@ -86,3 +86,17 @@ required the user to close their working session.
   pragmatic default; `--cold` flag remains available.
 - **Commit baseline screenshots in git**: rejected for repo size; can be
   re-enabled per-feature later.
+
+## Platform limitation (added 2026-08-10)
+
+**This validation tier only works on Windows.** It relies on
+`additionalBrowserArgs: "--remote-debugging-port=9223"`, which is a WebView2
+option. macOS Tauri uses WKWebView, which offers only the Safari Web Inspector
+and implements no Chrome DevTools Protocol, so the argument is silently
+ignored: `cargo tauri dev` runs and the window appears, but nothing listens on
+the CDP port and the runner times out.
+
+Consequently a macOS session cannot close a feature's `<id>-visual` sub-todo.
+The remaining two tiers (Vitest, Playwright on the dev server) still apply, and
+the CDP probe should be written and left for a Windows run rather than skipped.
+See ADR 018 for the case that surfaced this.

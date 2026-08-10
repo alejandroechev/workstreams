@@ -400,7 +400,14 @@ async function main() {
     logStatus("WARNING: no steps recorded — the test never entered code under the repo root.");
   }
   if (trace.truncated) {
-    logStatus(`WARNING: hit the ${opts.maxSteps}-step cap; the trace is truncated.`);
+    // The cap counts *debugger* steps, which includes the step-outs from
+    // std/core frames that never reach the trace — so the recorded count is
+    // always lower, and saying so avoids "I asked for 400 and got 157".
+    logStatus(
+      `WARNING: stopped at the ${opts.maxSteps}-step cap (debugger steps, ` +
+        `including step-outs) so the trace is truncated; ${trace.steps.length} ` +
+        `locations were recorded. Re-run with a larger --steps to see more.`,
+    );
   }
 }
 

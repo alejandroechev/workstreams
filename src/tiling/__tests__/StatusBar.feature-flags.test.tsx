@@ -23,6 +23,7 @@ function commonProps() {
     onAddWorkbench: vi.fn(),
     onAddPlan: vi.fn(),
     onAddCodeReview: vi.fn(),
+    onAddWalkthrough: vi.fn(),
     onToggleFullscreen: vi.fn(),
     onToggleSideBySide: vi.fn(),
     onOpenSettings: vi.fn(),
@@ -44,6 +45,15 @@ describe("StatusBar feature-flag gating", () => {
     expect(screen.getByTestId("add-tile-item-session")).toBeTruthy();
     // Code Review is not flag-gated.
     expect(screen.getByTestId("add-tile-item-code-review")).toBeTruthy();
+    // The walkthrough ships disabled, like Plan.
+    expect(screen.queryByTestId("add-tile-item-walkthrough")).toBeNull();
+  });
+
+  it("shows the Code Walkthrough entry when its flag is on", () => {
+    _setFeatureFlagOverrideForTests(true);
+    render(<StatusBar {...commonProps()} />);
+    openAddTileMenu();
+    expect(screen.getByTestId("add-tile-item-walkthrough")).toBeTruthy();
   });
 
   it("shows the Plan menu entry when the flag is on", () => {

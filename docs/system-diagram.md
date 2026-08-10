@@ -26,6 +26,7 @@ graph TB
             LibRS["lib.rs<br/>22 Tauri commands"]
             PtyRS["pty.rs<br/>PtyManager: spawn, write, resize, close"]
             ShellEnvRS["shell_env.rs<br/>login-shell PATH repair (macOS GUI launch)"]
+            CodeTraceRS["code_traces index<br/>list/get/delete/index + staleness"]
             DbRS["db.rs<br/>SQLite schema + WAL"]
             FileSystemProvider["FileSystemProvider trait<br/>OS / InMemory impls"]
         end
@@ -76,6 +77,8 @@ graph TB
     LibRS --> PtyRS
     PtyRS --> ShellEnvRS
     LibRS --> DbRS
+    LibRS --> CodeTraceRS
+    CodeTraceRS --> DbRS
     PtyRS --> ConPTY
     ConPTY --> Shell
     DbRS --> AppDB

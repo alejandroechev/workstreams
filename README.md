@@ -65,6 +65,15 @@ project-aware workspace:
   by the `code-review` skill) and you pull in the replies with the **Sync**
   button. `Alt+A` opens the Code Review tile.
   See [ADR 014](docs/adrs/014-code-review-tile.md).
+- 🐾 **Code walkthrough** *(experimental, macOS)* — step through a Rust test's
+  **real execution** to understand code, not to debug it. Record once with
+  `node scripts/trace-record.mjs --test <name>` (drives `lldb-dap`), then replay
+  the trace in the app: the walkthrough tile drives a bound Repo Explorer, so
+  you get debug order *and* the freedom to wander off and hit **Resync**.
+  Because it is a replay, you can also step **backwards**. `Alt+D` opens the
+  tile (disabled by default; see the feature flag below).
+  `node scripts/trace-replay.mjs <trace.json>` steps through the same trace in
+  a terminal. See [ADR 018](docs/adrs/018-code-walkthrough-debugger.md).
 - ⌨️ **Keyboard-driven** — `Alt+<letter>` for every tile type, `Alt+Arrows`
   to move focus, `Alt+S` for side-by-side compare.
 - 💾 **Survives restarts** — workstreams, tile layouts, scrollback, opened
