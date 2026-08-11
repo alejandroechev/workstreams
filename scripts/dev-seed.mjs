@@ -3,94 +3,17 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import {
+  ensureShowcaseFiles,
+  SAMPLE_MD,
+  SHOWCASE_DIR,
+  DEV_DIR,
+} from "./dev-seed-files.mjs";
 import Database from "better-sqlite3";
 
-const DEV_DIR = path.resolve(".dev");
 const DB_PATH = process.env.WORKSTREAMS_DB_PATH || path.join(DEV_DIR, "workstreams-dev.db");
-const SHOWCASE_DIR = path.join(DEV_DIR, "showcase");
 
-const SAMPLE_MD = `# Markdown Showcase
 
-This file exercises every supported markdown feature so visual validation
-can compare rendering against the VS Code dark theme.
-
-## Headings
-
-### H3
-#### H4
-##### H5
-
-## Inline formatting
-
-This is **bold**, *italic*, ~~strike~~, and \`inline code\`. Visit
-[the repo](https://github.com/alejandroechev/workstreams) for more.
-
-## Blockquote
-
-> A blockquote should have a left border, italic style, and slightly muted
-> text. It can span multiple lines.
-
-## Lists
-
-- Bullet one
-- Bullet two
-  - Nested
-- Bullet three
-
-1. Ordered one
-2. Ordered two
-
-## Table
-
-| Column A | Column B | Column C |
-|----------|----------|----------|
-| 1        | foo      | true     |
-| 2        | bar      | false    |
-
-## Code (TypeScript)
-
-\`\`\`typescript
-function greet(name: string): string {
-  return \`Hello, \${name}!\`;
-}
-\`\`\`
-
-## Code (Rust)
-
-\`\`\`rust
-fn main() {
-    println!("Hello, world!");
-}
-\`\`\`
-
-## Mermaid diagram
-
-\`\`\`mermaid
-sequenceDiagram
-    participant U as User
-    participant A as App<br/>(MarkdownView)
-    participant M as MermaidDiagram
-    U->>A: Open .md file
-    A->>M: code block with language-mermaid
-    M-->>A: rendered SVG with panzoom
-    A-->>U: show diagram
-\`\`\`
-
----
-
-End of showcase.
-`;
-
-function ensureShowcaseFiles(dir = SHOWCASE_DIR) {
-  fs.mkdirSync(dir, { recursive: true });
-  const readme = path.join(dir, "README.md");
-  if (!fs.existsSync(readme)) {
-    fs.writeFileSync(readme, SAMPLE_MD, "utf8");
-    console.log(`[seed] wrote ${readme}`);
-  } else {
-    console.log(`[seed] showcase already present: ${readme}`);
-  }
-}
 
 function runSqlite(sql, params = []) {
   const db = new Database(DB_PATH);

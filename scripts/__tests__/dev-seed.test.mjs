@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterAll } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { ensureShowcaseFiles, SAMPLE_MD } from "../dev-seed.mjs";
+import { ensureShowcaseFiles, SAMPLE_MD } from "../dev-seed-files.mjs";
 
 // Isolated dir so tests never collide with a running dev pwsh holding
 // .dev/showcase as cwd (Windows locks dir until child process exits).

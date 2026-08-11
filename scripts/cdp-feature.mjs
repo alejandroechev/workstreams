@@ -96,11 +96,11 @@ async function ensureDevTauri({ cold }) {
   return { spawned: child };
 }
 
-function runSeeder() {
+async function runSeeder() {
   console.log("[cdp] seeding dev DB + showcase folder...");
   try {
     ensureShowcaseFiles();
-    seedDb();
+    await seedDb();
   } catch (err) {
     console.warn(`[cdp] seeder warning: ${err.message}`);
   }
@@ -153,7 +153,7 @@ async function main() {
     const r = await ensureDevTauri({ cold: args.cold });
     spawned = r.spawned;
 
-    if (args.seed) runSeeder();
+    if (args.seed) await runSeeder();
 
     const { browser, page } = await connect();
     const errors = captureErrors(page);
