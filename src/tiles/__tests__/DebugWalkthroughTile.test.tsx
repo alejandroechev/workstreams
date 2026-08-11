@@ -39,6 +39,7 @@ async function setup(opts: {
   explorers?: Array<{ id: string; title: string | null }>;
   boundExplorerId?: string | null;
   onBindExplorer?: (id: string) => void;
+  workstreamDir?: string | null;
 } = {}) {
   const backend = new MemoryBackend();
   backend._seedTraceFile(TRACE_PATH, traceFile(opts.traceOverrides));
@@ -55,6 +56,7 @@ async function setup(opts: {
         boundExplorerId={opts.boundExplorerId ?? null}
         onBindExplorer={opts.onBindExplorer}
         headCommitSha={opts.headCommitSha ?? null}
+        workstreamDir={opts.workstreamDir ?? null}
       />
     </BackendProvider>,
   );
@@ -248,6 +250,72 @@ describe("DebugWalkthroughTile", () => {
       );
       await screen.findByLabelText("Trace", { exact: true });
       expect(screen.queryByLabelText("Record trace")).toBeNull();
+    });
+  });
+
+  describe("layout", () => {
+    it("groups the controls into trace, record and step sections", async () => {
+      await setup({ workstreamDir: "/repo" });
+      expect(screen.getByTestId("walkthrough-section-trace")).toBeTruthy();
+      expect(screen.getByTestId("walkthrough-section-record")).toBeTruthy();
+      expect(screen.getByTestId("walkthrough-section-step")).toBeTruthy();
+    });
+
+    it("hides the record section when there is no workstream directory", async () => {
+      // Nothing to point cargo at, so the whole section would be inert.
+      await setup();
+      expect(screen.queryByTestId("walkthrough-section-record")).toBeNull();
+    });
+  });
+
+  describe("keyboard stepping", () => {
+    it("steps forward and back with unmodified keys", async () => {
+      await setup();
+      const tile = screen.getByTestId("debug-walkthrough-tile");
+      const progress = screen.getByTestId("walkthrough-progress");
+
+      fireEvent.keyDown(tile, { key: "ArrowDown" });
+      await waitFor(() => expect(progress.textContent).toBe("2 / 3"));
+      fireEvent.keyDown(tile, { key: "j" });
+      await waitFor(() => expect(progress.textContent).toBe("3 / 3"));
+      fireEvent.keyDown(tile, { key: "ArrowUp" });
+      await waitFor(() => expect(progress.textContent).toBe("2 / 3"));
+    });
+
+    it("jumps to the first and last step", async () => {
+      await setup();
+      const tile = screen.getByTestId("debug-walkthrough-tile");
+      const progress = screen.getByTestId("walkthrough-progress");
+
+      fireEvent.keyDown(tile, { key: "End" });
+      await waitFor(() => expect(progress.textContent).toBe("3 / 3"));
+      fireEvent.keyDown(tile, { key: "Home" });
+      await waitFor(() => expect(progress.textContent).toBe("1 / 3"));
+    });
+
+    it("drives the bound explorer from the keyboard", async () => {
+      await setup();
+      fireEvent.keyDown(screen.getByTestId("debug-walkthrough-tile"), { key: "ArrowDown" });
+      await waitFor(() => expect(navEvents.length).toBeGreaterThan(0));
+      expect(navEvents[navEvents.length - 1].line).toBe(20);
+    });
+
+    it("ignores keys held with a modifier", async () => {
+      // Alt+Arrows move focus between tiles; stealing them would break
+      // navigation the user relies on everywhere else.
+      await setup();
+      const tile = screen.getByTestId("debug-walkthrough-tile");
+      fireEvent.keyDown(tile, { key: "ArrowDown", altKey: true });
+      expect(screen.getByTestId("walkthrough-progress").textContent).toBe("1 / 3");
+    });
+
+    it("does not steal keys typed into a control", async () => {
+      // The test/trace dropdowns are focusable; a bare "j" there must not
+      // step the walkthrough out from under the user.
+      await setup();
+      const picker = screen.getByLabelText("Trace", { exact: true });
+      fireEvent.keyDown(picker, { key: "j" });
+      expect(screen.getByTestId("walkthrough-progress").textContent).toBe("1 / 3");
     });
   });
 

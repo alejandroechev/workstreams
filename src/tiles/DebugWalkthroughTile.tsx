@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { listen } from "@tauri-apps/api/event";
 
@@ -15,8 +15,10 @@ import {
   gotoStep,
   progressLabel,
   resolveStepPath,
+  totalSteps,
   type Walkthrough,
 } from "../domain/walkthrough";
+import { parseWalkthroughKey } from "../domain/walkthrough-keys";
 import {
   dispatchWalkthroughNavigate,
   selectExplorerBinding,
@@ -57,16 +59,29 @@ const panelStyle: React.CSSProperties = {
   overflow: "hidden",
 };
 
-const barStyle: React.CSSProperties = {
+/** One labelled row of the toolbar. Rows rather than a single line so the
+ *  controls stay usable in a narrow tile — the previous single row pushed the
+ *  stepping buttons off the right edge. */
+const rowStyle: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
   gap: 6,
-  padding: "6px 8px",
-  borderBottom: "1px solid #313244",
+  padding: "5px 8px",
   flexShrink: 0,
 };
 
-const buttonStyle: React.CSSProperties = {
+const rowLabelStyle: React.CSSProperties = {
+  color: "#6c7086",
+  fontSize: 10,
+  textTransform: "uppercase",
+  letterSpacing: 0.5,
+  width: 48,
+  flexShrink: 0,
+};
+
+const iconStyle: React.CSSProperties = { width: 14, height: 14 };
+
+const controlStyle: React.CSSProperties = {
   background: "#313244",
   color: "#cdd6f4",
   border: "none",
@@ -305,11 +320,66 @@ export function DebugWalkthroughTile({
     ? !!walkthrough && !headCommitSha.startsWith(walkthrough.trace.commitSha)
     : staleness === "head_moved" || staleness === "tree_dirty";
 
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  /**
+   * Step from the keyboard.
+   *
+   * Bare keys are safe here because every app-level command uses `Alt+`, but
+   * they must not fire while the user is interacting with a control: a `j`
+   * typed to jump inside the trace dropdown should not also advance the
+   * walkthrough underneath it.
+   */
+  const handleKeyDown = useCallback(
+    (event: React.KeyboardEvent<HTMLDivElement>) => {
+      const target = event.target as HTMLElement | null;
+      const tag = target?.tagName?.toLowerCase();
+      if (tag === "select" || tag === "input" || tag === "textarea" || tag === "button") return;
+
+      const action = parseWalkthroughKey({
+        key: event.key,
+        ctrlKey: event.ctrlKey,
+        metaKey: event.metaKey,
+        altKey: event.altKey,
+        shiftKey: event.shiftKey,
+      });
+      if (!action || !walkthrough) return;
+      event.preventDefault();
+
+      switch (action) {
+        case "next":
+          move(stepForward(walkthrough));
+          break;
+        case "prev":
+          move(stepBack(walkthrough));
+          break;
+        case "first":
+          move(gotoStep(walkthrough, 0));
+          break;
+        case "last":
+          move(gotoStep(walkthrough, totalSteps(walkthrough) - 1));
+          break;
+        case "resync":
+          revealCurrent(walkthrough);
+          break;
+      }
+    },
+    [walkthrough, move, revealCurrent],
+  );
+
   const step = walkthrough ? currentStep(walkthrough) : null;
 
   return (
-    <div style={panelStyle} data-testid="debug-walkthrough-tile">
-      <div style={barStyle}>
+    <div
+      style={panelStyle}
+      data-testid="debug-walkthrough-tile"
+      tabIndex={0}
+      onKeyDown={handleKeyDown}
+      ref={rootRef}
+    >
+      {/* Trace: which recording is open. */}
+      <div style={rowStyle} data-testid="walkthrough-section-trace">
+        <span style={rowLabelStyle}>Trace</span>
         <select
           aria-label="Trace"
           value={selectedTraceId ?? ""}
@@ -317,7 +387,7 @@ export function DebugWalkthroughTile({
             const trace = traces.find((t) => t.id === e.target.value);
             if (trace) void loadTrace(trace);
           }}
-          style={{ ...buttonStyle, maxWidth: 260 }}
+          style={{ ...controlStyle, flex: 1, minWidth: 0 }}
         >
           <option value="">Select a trace…</option>
           {traces.map((t) => (
@@ -326,51 +396,92 @@ export function DebugWalkthroughTile({
             </option>
           ))}
         </select>
-
-        {workstreamDir && (
-          <>
-            <select
-              aria-label="Test"
-              value={selectedTest}
-              onChange={(e) => setSelectedTest(e.target.value)}
-              style={{ ...buttonStyle, maxWidth: 220 }}
-            >
-              <option value="">Select a test…</option>
-              {(availableTests ?? []).map((t) => (
-                <option key={t} value={t}>
-                  {t}
-                </option>
-              ))}
-            </select>
-            <button
-              type="button"
-              aria-label="Record trace"
-              title="Run the test under a debugger and record its execution"
-              disabled={!selectedTest || recording}
-              onClick={() => void recordSelectedTest()}
-              style={buttonStyle}
-            >
-              <VideoCameraIcon style={{ width: 14, height: 14 }} />
-            </button>
-          </>
-        )}
-
         <button
           type="button"
           aria-label="Add trace"
-          title="Register a trace recorded with scripts/trace-record.mjs"
+          title="Open a trace file recorded with scripts/trace-record.mjs"
           onClick={() => void addTraceFromDisk()}
-          style={buttonStyle}
+          style={controlStyle}
         >
-          <PlusIcon style={{ width: 14, height: 14 }} />
+          <PlusIcon style={iconStyle} />
         </button>
+      </div>
 
-        {binding.needsChoice && (
+      {/* Record: produce a new trace from a test in this workstream. */}
+      {workstreamDir && (
+        <div style={rowStyle} data-testid="walkthrough-section-record">
+          <span style={rowLabelStyle}>Record</span>
+          <select
+            aria-label="Test"
+            value={selectedTest}
+            onChange={(e) => setSelectedTest(e.target.value)}
+            style={{ ...controlStyle, flex: 1, minWidth: 0 }}
+          >
+            <option value="">Select a test…</option>
+            {(availableTests ?? []).map((t) => (
+              <option key={t} value={t}>
+                {t}
+              </option>
+            ))}
+          </select>
+          <button
+            type="button"
+            aria-label="Record trace"
+            title="Run the test under a debugger and record its execution"
+            disabled={!selectedTest || recording}
+            onClick={() => void recordSelectedTest()}
+            style={controlStyle}
+          >
+            <VideoCameraIcon style={iconStyle} />
+          </button>
+        </div>
+      )}
+
+      {/* Step: move through the open trace. */}
+      <div style={{ ...rowStyle, borderBottom: "1px solid #313244" }} data-testid="walkthrough-section-step">
+        <span style={rowLabelStyle}>Step</span>
+        <button
+          type="button"
+          aria-label="Previous step"
+          title="Previous step (↑ / k)"
+          disabled={!walkthrough || !canStepBack(walkthrough)}
+          onClick={() => walkthrough && move(stepBack(walkthrough))}
+          style={controlStyle}
+        >
+          <ArrowLeftIcon style={iconStyle} />
+        </button>
+        <span data-testid="walkthrough-progress" style={{ minWidth: 56, textAlign: "center" }}>
+          {walkthrough ? progressLabel(walkthrough) : "— / —"}
+        </span>
+        <button
+          type="button"
+          aria-label="Next step"
+          title="Next step (↓ / j / space)"
+          disabled={!walkthrough || !canStepForward(walkthrough)}
+          onClick={() => walkthrough && move(stepForward(walkthrough))}
+          style={controlStyle}
+        >
+          <ArrowRightIcon style={iconStyle} />
+        </button>
+        <button
+          type="button"
+          aria-label="Resync"
+          title="Jump the editor back to the current step (r)"
+          disabled={!walkthrough}
+          onClick={() => revealCurrent(walkthrough)}
+          style={controlStyle}
+        >
+          <ArrowPathIcon style={iconStyle} />
+        </button>
+        <div style={{ flex: 1 }} />
+        {/* Only shown when the choice is real: with one explorer open the tile
+            binds silently, so a picker would be noise. */}
+        {binding.needsChoice ? (
           <select
             aria-label="Repo Explorer"
             value={boundExplorerId ?? ""}
             onChange={(e) => onBindExplorer?.(e.target.value)}
-            style={buttonStyle}
+            style={controlStyle}
           >
             <option value="">Bind explorer…</option>
             {explorerCandidates.map((c) => (
@@ -379,41 +490,11 @@ export function DebugWalkthroughTile({
               </option>
             ))}
           </select>
+        ) : (
+          <span style={{ color: "#585b70", fontSize: 10, whiteSpace: "nowrap" }}>
+            ↑↓ step · Home/End ends · r resync
+          </span>
         )}
-
-        <div style={{ flex: 1 }} />
-
-        <button
-          type="button"
-          aria-label="Previous step"
-          disabled={!walkthrough || !canStepBack(walkthrough)}
-          onClick={() => walkthrough && move(stepBack(walkthrough))}
-          style={buttonStyle}
-        >
-          <ArrowLeftIcon style={{ width: 14, height: 14 }} />
-        </button>
-        <span data-testid="walkthrough-progress" style={{ minWidth: 60, textAlign: "center" }}>
-          {walkthrough ? progressLabel(walkthrough) : "— / —"}
-        </span>
-        <button
-          type="button"
-          aria-label="Next step"
-          disabled={!walkthrough || !canStepForward(walkthrough)}
-          onClick={() => walkthrough && move(stepForward(walkthrough))}
-          style={buttonStyle}
-        >
-          <ArrowRightIcon style={{ width: 14, height: 14 }} />
-        </button>
-        <button
-          type="button"
-          aria-label="Resync"
-          title="Jump the editor back to the current step"
-          disabled={!walkthrough}
-          onClick={() => revealCurrent(walkthrough)}
-          style={buttonStyle}
-        >
-          <ArrowPathIcon style={{ width: 14, height: 14 }} />
-        </button>
       </div>
 
       {isStale && (

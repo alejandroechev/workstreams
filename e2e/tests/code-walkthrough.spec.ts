@@ -145,6 +145,40 @@ test.describe("Code walkthrough", () => {
     await expect(page.locator('[data-testid="walkthrough-progress"]')).toHaveText("3 / 3");
   });
 
+  test("keeps all three control sections visible in a narrow tile", async ({ page }) => {
+    // The controls used to sit on one row, which pushed the stepping buttons
+    // off the right edge as soon as a trace name was long.
+    await createWorkstream(page, "Walkthrough WS");
+    await openWalkthroughTile(page);
+
+    const tile = page.locator('[data-testid="debug-walkthrough-tile"]');
+    const tileBox = await tile.boundingBox();
+    for (const section of ["trace", "step"]) {
+      const box = await page.locator(`[data-testid="walkthrough-section-${section}"]`).boundingBox();
+      expect(box, `${section} section should be laid out`).not.toBeNull();
+      expect(box!.x + box!.width).toBeLessThanOrEqual(tileBox!.x + tileBox!.width + 1);
+    }
+    await expect(page.getByLabel("Next step")).toBeVisible();
+    await expect(page.getByLabel("Resync")).toBeVisible();
+  });
+
+  test("steps with the keyboard", async ({ page }) => {
+    await createWorkstream(page, "Walkthrough WS");
+    await openWalkthroughTile(page);
+    await page.getByLabel("Trace", { exact: true }).selectOption(TRACE_PATH);
+
+    const progress = page.locator('[data-testid="walkthrough-progress"]');
+    await expect(progress).toHaveText("1 / 3");
+
+    await page.locator('[data-testid="debug-walkthrough-tile"]').click();
+    await page.keyboard.press("ArrowDown");
+    await expect(progress).toHaveText("2 / 3");
+    await page.keyboard.press("End");
+    await expect(progress).toHaveText("3 / 3");
+    await page.keyboard.press("Home");
+    await expect(progress).toHaveText("1 / 3");
+  });
+
   test("tells the user to open a Repo Explorer when none is bound", async ({ page }) => {
     // Pressing Next with nothing bound must not silently do nothing.
     await createWorkstream(page, "Walkthrough WS");

@@ -179,6 +179,42 @@ fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
         .position(|window| window == needle)
 }
 
+/// Format a UNIX timestamp as an ISO-8601 UTC instant.
+///
+/// The trace format is shared with `scripts/trace-record.mjs`, which writes
+/// `new Date().toISOString()`. The app's global `now()` returns epoch seconds,
+/// so using it here produced traces whose `recordedAt` rendered as a raw number
+/// and — worse — sorted inconsistently against CLI-recorded traces, since the
+/// index orders by that string.
+///
+/// Implemented directly rather than pulling in `chrono` for one call, using the
+/// standard civil-from-days algorithm.
+pub fn format_iso8601(unix_seconds: u64) -> String {
+    let days = (unix_seconds / 86_400) as i64;
+    let secs_of_day = unix_seconds % 86_400;
+    let (year, month, day) = civil_from_days(days);
+    let (hour, minute, second) = (
+        secs_of_day / 3600,
+        (secs_of_day % 3600) / 60,
+        secs_of_day % 60,
+    );
+    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.000Z")
+}
+
+/// Days since 1970-01-01 → (year, month, day). Howard Hinnant's algorithm.
+fn civil_from_days(days: i64) -> (i64, u32, u32) {
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    (if m <= 2 { y + 1 } else { y }, m, d)
+}
+
 /// Locate the Cargo manifest directory for a repo.
 ///
 /// The manifest is often *not* at the repo root: a Tauri app keeps it in
@@ -598,7 +634,12 @@ pub fn record_trace(
         test: opts.test.clone(),
         repo_root: opts.repo_root.clone(),
         commit_sha: current_commit_sha(&opts.repo_root),
-        recorded_at: crate::now(),
+        recorded_at: format_iso8601(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0),
+        ),
         truncated,
         steps,
     })
@@ -814,6 +855,30 @@ mod tests {
         let (messages, _) = read_dap_messages(&buffer);
         assert_eq!(messages[0]["command"], "launch");
         assert_eq!(messages[1]["event"], "stopped");
+    }
+
+    #[test]
+    fn formats_a_timestamp_as_iso8601() {
+        // The trace format is shared with the Node CLI, which writes
+        // toISOString(); epoch seconds would render as a raw number and sort
+        // inconsistently against CLI-recorded traces.
+        assert_eq!(format_iso8601(0), "1970-01-01T00:00:00.000Z");
+        assert_eq!(format_iso8601(1_786_466_376), "2026-08-11T16:39:36.000Z");
+    }
+
+    #[test]
+    fn iso8601_handles_leap_years() {
+        // 2024-02-29T12:00:00Z
+        assert_eq!(format_iso8601(1_709_208_000), "2024-02-29T12:00:00.000Z");
+    }
+
+    #[test]
+    fn iso8601_sorts_lexicographically_in_time_order() {
+        // The trace index orders by this string, so lexicographic order must
+        // match chronological order.
+        let earlier = format_iso8601(1_700_000_000);
+        let later = format_iso8601(1_800_000_000);
+        assert!(earlier < later, "{earlier} should sort before {later}");
     }
 
     #[test]
