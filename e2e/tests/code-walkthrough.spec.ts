@@ -108,7 +108,7 @@ test.describe("Code walkthrough", () => {
     await createWorkstream(page, "Walkthrough WS");
     await openWalkthroughTile(page);
 
-    const picker = page.getByLabel("Trace");
+    const picker = page.getByLabel("Trace", { exact: true });
     await expect(picker.locator("option")).toHaveCount(2); // placeholder + trace
     await picker.selectOption(TRACE_PATH);
 
@@ -130,7 +130,7 @@ test.describe("Code walkthrough", () => {
   test("shows the recorded steps with collapsed hit counts", async ({ page }) => {
     await createWorkstream(page, "Walkthrough WS");
     await openWalkthroughTile(page);
-    await page.getByLabel("Trace").selectOption(TRACE_PATH);
+    await page.getByLabel("Trace", { exact: true }).selectOption(TRACE_PATH);
 
     await expect(page.getByText(/src\/pty\.rs:10/)).toBeVisible();
     await expect(page.getByText(/x3/)).toBeVisible();
@@ -139,7 +139,7 @@ test.describe("Code walkthrough", () => {
   test("jumps to a step clicked in the list", async ({ page }) => {
     await createWorkstream(page, "Walkthrough WS");
     await openWalkthroughTile(page);
-    await page.getByLabel("Trace").selectOption(TRACE_PATH);
+    await page.getByLabel("Trace", { exact: true }).selectOption(TRACE_PATH);
 
     await page.getByText(/src\/other\.rs:30/).click();
     await expect(page.locator('[data-testid="walkthrough-progress"]')).toHaveText("3 / 3");
