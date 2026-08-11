@@ -3462,8 +3462,19 @@ fn parse_test_list(stdout: &str) -> Vec<String> {
 /// authoritative and needs no syntax handling.
 #[tauri::command]
 fn list_rust_tests(manifest_dir: String) -> Result<Vec<String>, String> {
+    // The caller passes a repo root; the crate is often in a subdirectory
+    // (src-tauri/ for a Tauri app), so locate the manifest rather than
+    // assuming cargo can run at the top.
+    let manifest_dir = trace_record::find_cargo_manifest_dir(&manifest_dir).ok_or_else(|| {
+        format!("No Cargo.toml found in {manifest_dir} or its immediate subdirectories.")
+    })?;
+    let mut env = std::collections::HashMap::new();
+    if let Some(path) = shell_env::resolved_path(&pty::default_shell()) {
+        env.insert("PATH".to_string(), path);
+    }
     let build = std::process::Command::new("cargo")
         .args(["test", "--no-run", "--message-format=json"])
+        .envs(&env)
         .current_dir(&manifest_dir)
         .output()
         .map_err(|e| format!("Cannot run cargo in {manifest_dir}: {e}"))?;
@@ -3505,6 +3516,7 @@ fn list_rust_tests(manifest_dir: String) -> Result<Vec<String>, String> {
 
     let listed = std::process::Command::new(&exe)
         .args(["--list"])
+        .envs(&env)
         .current_dir(&manifest_dir)
         .output()
         .map_err(|e| format!("Cannot list tests in {exe}: {e}"))?;
@@ -3530,6 +3542,9 @@ async fn record_code_trace(
     repo_root: String,
     max_steps: Option<u32>,
 ) -> Result<String, String> {
+    let manifest_dir = trace_record::find_cargo_manifest_dir(&manifest_dir).ok_or_else(|| {
+        format!("No Cargo.toml found in {manifest_dir} or its immediate subdirectories.")
+    })?;
     let opts = trace_record::RecordOptions {
         test: test_name,
         manifest_dir,

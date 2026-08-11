@@ -204,6 +204,37 @@ describe("DebugWalkthroughTile", () => {
       expect((await screen.findByTestId("walkthrough-error")).textContent).toMatch(/lldb-dap/i);
     });
 
+    it("explains why no tests are listed instead of showing an empty dropdown", async () => {
+      // A silent catch here is what hid a real bug: cargo could not find
+      // Cargo.toml, the list came back empty, and the picker gave the user
+      // nothing to act on.
+      const backend = new MemoryBackend();
+      backend.listRustTests = async () => {
+        throw new Error("No Cargo.toml found in /repo or its immediate subdirectories.");
+      };
+      render(
+        <BackendProvider backend={backend}>
+          <DebugWalkthroughTile tileId="wt-1" workstreamId="ws-1" workstreamDir="/repo"
+            explorerCandidates={[{ id: "e1", title: null }]} />
+        </BackendProvider>,
+      );
+      expect((await screen.findByTestId("walkthrough-tests-unavailable")).textContent)
+        .toMatch(/no cargo\.toml/i);
+    });
+
+    it("says so when the crate simply has no tests", async () => {
+      const backend = new MemoryBackend();
+      backend._rustTests = [];
+      render(
+        <BackendProvider backend={backend}>
+          <DebugWalkthroughTile tileId="wt-1" workstreamId="ws-1" workstreamDir="/repo"
+            explorerCandidates={[{ id: "e1", title: null }]} />
+        </BackendProvider>,
+      );
+      expect((await screen.findByTestId("walkthrough-tests-unavailable")).textContent)
+        .toMatch(/no tests/i);
+    });
+
     it("cannot record without a workstream directory", async () => {
       // Nothing to point cargo at, so the control must be unavailable rather
       // than failing obscurely on click.

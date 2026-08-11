@@ -179,6 +179,43 @@ fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
         .position(|window| window == needle)
 }
 
+/// Locate the Cargo manifest directory for a repo.
+///
+/// The manifest is often *not* at the repo root: a Tauri app keeps it in
+/// `src-tauri/`, and plenty of mixed-language repos put the crate in a
+/// subdirectory. Assuming the root made `cargo` fail with "could not find
+/// Cargo.toml", which surfaced as an empty, unexplained test picker.
+///
+/// Checks the root first, then immediate subdirectories, preferring
+/// conventional names so a workspace with several crates picks the obvious
+/// one rather than whatever the filesystem happened to list first.
+pub fn find_cargo_manifest_dir(repo_root: &str) -> Option<String> {
+    let root = Path::new(repo_root);
+    if root.join("Cargo.toml").is_file() {
+        return Some(repo_root.to_string());
+    }
+
+    const PREFERRED: [&str; 4] = ["src-tauri", "rust", "backend", "src"];
+    for name in PREFERRED {
+        let candidate = root.join(name);
+        if candidate.join("Cargo.toml").is_file() {
+            return Some(candidate.to_string_lossy().to_string());
+        }
+    }
+
+    // Fall back to any immediate child, in a stable order so repeated calls
+    // agree with each other.
+    let mut children: Vec<String> = std::fs::read_dir(root)
+        .ok()?
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path())
+        .filter(|path| path.join("Cargo.toml").is_file())
+        .map(|path| path.to_string_lossy().to_string())
+        .collect();
+    children.sort();
+    children.into_iter().next()
+}
+
 /// Diagnostic tracing of the DAP conversation, enabled with `WS_TRACE_DAP=1`.
 /// Off by default so a normal recording stays quiet.
 fn dap_trace(message: &str) {
@@ -777,6 +814,49 @@ mod tests {
         let (messages, _) = read_dap_messages(&buffer);
         assert_eq!(messages[0]["command"], "launch");
         assert_eq!(messages[1]["event"], "stopped");
+    }
+
+    #[test]
+    fn finds_a_manifest_at_the_repo_root() {
+        let dir = std::env::temp_dir().join(format!("ws-manifest-root-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("Cargo.toml"), "[package]").unwrap();
+        let found = find_cargo_manifest_dir(&dir.to_string_lossy());
+        assert_eq!(found.as_deref(), Some(dir.to_string_lossy().as_ref()));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn finds_a_manifest_in_src_tauri() {
+        // The case that broke the picker: a Tauri repo keeps its crate in
+        // src-tauri/, so cargo at the root fails outright.
+        let dir = std::env::temp_dir().join(format!("ws-manifest-tauri-{}", std::process::id()));
+        let crate_dir = dir.join("src-tauri");
+        std::fs::create_dir_all(&crate_dir).unwrap();
+        std::fs::write(crate_dir.join("Cargo.toml"), "[package]").unwrap();
+        let found = find_cargo_manifest_dir(&dir.to_string_lossy());
+        assert_eq!(found.as_deref(), Some(crate_dir.to_string_lossy().as_ref()));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn prefers_the_root_manifest_over_a_child() {
+        let dir = std::env::temp_dir().join(format!("ws-manifest-both-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("src-tauri")).unwrap();
+        std::fs::write(dir.join("Cargo.toml"), "[workspace]").unwrap();
+        std::fs::write(dir.join("src-tauri").join("Cargo.toml"), "[package]").unwrap();
+        let found = find_cargo_manifest_dir(&dir.to_string_lossy());
+        assert_eq!(found.as_deref(), Some(dir.to_string_lossy().as_ref()));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn returns_none_for_a_repo_with_no_rust() {
+        // The picker must say so rather than showing an empty dropdown.
+        let dir = std::env::temp_dir().join(format!("ws-manifest-none-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        assert_eq!(find_cargo_manifest_dir(&dir.to_string_lossy()), None);
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

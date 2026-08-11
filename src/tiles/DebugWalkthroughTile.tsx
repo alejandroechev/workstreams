@@ -102,7 +102,8 @@ export function DebugWalkthroughTile({
   const [walkthrough, setWalkthrough] = useState<Walkthrough | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const [availableTests, setAvailableTests] = useState<string[]>([]);
+  const [availableTests, setAvailableTests] = useState<string[] | null>(null);
+  const [testsError, setTestsError] = useState<string | null>(null);
   const [selectedTest, setSelectedTest] = useState("");
   const [recording, setRecording] = useState(false);
   const [recordProgress, setRecordProgress] = useState("");
@@ -132,15 +133,20 @@ export function DebugWalkthroughTile({
   useEffect(() => {
     if (!workstreamDir) return;
     let cancelled = false;
+    setTestsError(null);
     backend
       .listRustTests(workstreamDir)
       .then((tests) => {
         if (!cancelled) setAvailableTests(tests);
       })
-      .catch(() => {
-        // A non-Rust (or unbuildable) workstream simply offers no tests; that
-        // is not an error worth interrupting the user for.
-        if (!cancelled) setAvailableTests([]);
+      .catch((e) => {
+        // Surfaced, not swallowed: a silent catch here hid a real bug where
+        // cargo could not find Cargo.toml and the picker just sat empty with
+        // nothing for the user to act on.
+        if (!cancelled) {
+          setAvailableTests([]);
+          setTestsError(String(e));
+        }
       });
     return () => {
       cancelled = true;
@@ -330,7 +336,7 @@ export function DebugWalkthroughTile({
               style={{ ...buttonStyle, maxWidth: 220 }}
             >
               <option value="">Select a test…</option>
-              {availableTests.map((t) => (
+              {(availableTests ?? []).map((t) => (
                 <option key={t} value={t}>
                   {t}
                 </option>
@@ -434,6 +440,12 @@ export function DebugWalkthroughTile({
       {walkthrough?.trace.truncated && (
         <div data-testid="walkthrough-truncated-banner" style={{ padding: "6px 8px", color: "#f9e2af" }}>
           This trace is truncated — recording stopped at the step cap.
+        </div>
+      )}
+
+      {workstreamDir && availableTests !== null && availableTests.length === 0 && (
+        <div data-testid="walkthrough-tests-unavailable" style={{ padding: "6px 8px", color: "#f9e2af" }}>
+          {testsError ?? "No tests found in this workstream's Rust crate."}
         </div>
       )}
 
