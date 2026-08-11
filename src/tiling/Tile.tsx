@@ -325,6 +325,7 @@ function TileWrapperImpl({
             }
             headCommitSha={headCommitSha ?? null}
             workstreamDir={workstreamDir ?? null}
+            linkedSessionIds={linkedSessionIds}
           />
         );
       }

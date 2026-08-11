@@ -49,6 +49,9 @@ export interface DebugWalkthroughTileProps {
   /** Repo root. Without one there is nothing to point cargo at, so recording
    *  is unavailable rather than failing obscurely on click. */
   workstreamDir?: string | null;
+  /** Copilot sessions linked to this workstream. The first owns new traces,
+   *  which keeps recordings out of the repo. */
+  linkedSessionIds?: string[];
 }
 
 const panelStyle: React.CSSProperties = {
@@ -112,6 +115,7 @@ export function DebugWalkthroughTile({
   onBindExplorer,
   headCommitSha = null,
   workstreamDir = null,
+  linkedSessionIds = [],
 }: DebugWalkthroughTileProps) {
   const backend = useBackend();
 
@@ -254,7 +258,12 @@ export function DebugWalkthroughTile({
     setRecording(true);
     setRecordProgress("starting");
     try {
-      const tracePath = await backend.recordCodeTrace(selectedTest, workstreamDir, workstreamDir);
+      const tracePath = await backend.recordCodeTrace(
+        selectedTest,
+        workstreamDir,
+        workstreamDir,
+        linkedSessionIds[0] ?? null,
+      );
       const indexed = await backend.indexCodeTrace(tracePath, workstreamId);
       setTraces(await backend.listCodeTraces(workstreamId));
       await loadTrace(indexed);
@@ -264,7 +273,7 @@ export function DebugWalkthroughTile({
       setRecording(false);
       setRecordProgress("");
     }
-  }, [backend, workstreamDir, selectedTest, workstreamId, loadTrace]);
+  }, [backend, workstreamDir, selectedTest, workstreamId, linkedSessionIds, loadTrace]);
 
   /** Drive the bound explorer to whatever step the walkthrough is on. */
   const revealCurrent = useCallback(

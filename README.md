@@ -75,7 +75,8 @@ project-aware workspace:
   `↑`/`↓` step, `o` finishes the current function and returns to its caller,
   `Home`/`End` jump to the ends, and `r` resyncs the editor.
   `node scripts/trace-replay.mjs <trace.json>` steps through the same trace in
-  a terminal. See [ADR 018](docs/adrs/018-code-walkthrough-debugger.md).
+  a terminal. Traces are stored under the owning Copilot session, not in your
+  repo, so they never show up in `git status`. See [ADR 018](docs/adrs/018-code-walkthrough-debugger.md).
 - ⌨️ **Keyboard-driven** — `Alt+<letter>` for every tile type, `Alt+Arrows`
   to move focus, `Alt+S` for side-by-side compare.
 - 💾 **Survives restarts** — workstreams, tile layouts, scrollback, opened

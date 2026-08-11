@@ -160,6 +160,59 @@ describe("DebugWalkthroughTile", () => {
       ]);
     });
 
+    it("records under the linked Copilot session, not the repo", async () => {
+      // Traces are personal reading aids; writing them into the working tree
+      // would pollute git status in every repo the user opens.
+      const backend = new MemoryBackend();
+      backend._rustTests = ["a::b"];
+      backend._seedTraceFile("/r.json", traceFile());
+      const calls: unknown[][] = [];
+      backend.recordCodeTrace = async (...args: unknown[]) => {
+        calls.push(args);
+        return "/r.json";
+      };
+
+      render(
+        <BackendProvider backend={backend}>
+          <DebugWalkthroughTile tileId="wt-1" workstreamId="ws-1" workstreamDir="/repo"
+            linkedSessionIds={["sess-42"]} explorerCandidates={[{ id: "e1", title: null }]} />
+        </BackendProvider>,
+      );
+
+      const testPicker = await screen.findByLabelText("Test");
+      await waitFor(() => expect(testPicker.querySelectorAll("option").length).toBe(2));
+      fireEvent.change(testPicker, { target: { value: "a::b" } });
+      fireEvent.click(screen.getByLabelText("Record trace"));
+
+      await waitFor(() => expect(calls.length).toBe(1));
+      expect(calls[0][3]).toBe("sess-42");
+    });
+
+    it("records without a session when none is linked", async () => {
+      const backend = new MemoryBackend();
+      backend._rustTests = ["a::b"];
+      backend._seedTraceFile("/r.json", traceFile());
+      const calls: unknown[][] = [];
+      backend.recordCodeTrace = async (...args: unknown[]) => {
+        calls.push(args);
+        return "/r.json";
+      };
+
+      render(
+        <BackendProvider backend={backend}>
+          <DebugWalkthroughTile tileId="wt-1" workstreamId="ws-1" workstreamDir="/repo"
+            explorerCandidates={[{ id: "e1", title: null }]} />
+        </BackendProvider>,
+      );
+      const testPicker = await screen.findByLabelText("Test");
+      await waitFor(() => expect(testPicker.querySelectorAll("option").length).toBe(2));
+      fireEvent.change(testPicker, { target: { value: "a::b" } });
+      fireEvent.click(screen.getByLabelText("Record trace"));
+
+      await waitFor(() => expect(calls.length).toBe(1));
+      expect(calls[0][3]).toBeNull();
+    });
+
     it("shows progress while recording so the UI never looks frozen", async () => {
       // A recording drives a debugger step by step and takes seconds to
       // minutes; a silent button would read as a hang.

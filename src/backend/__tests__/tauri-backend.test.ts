@@ -517,6 +517,26 @@ describe("TauriBackend", () => {
     });
   });
 
+  it("thin command wrappers forward their arguments", async () => {
+    // These are one-line invoke() passthroughs, but an untested wrapper is
+    // exactly where a renamed command or a mistyped argument key hides.
+    const cases: Array<[() => Promise<unknown>, string, unknown]> = [
+      [() => backend.createDirectory("/d"), "create_directory", { path: "/d" }],
+      [() => backend.cancelSearches(), "cancel_searches", undefined],
+      [() => backend.completeSessionPlan("s1", "p1"), "complete_session_plan", { sessionId: "s1", planId: "p1" }],
+      [() => backend.watchSessionFeatures("s1"), "watch_session_features", { sessionId: "s1" }],
+      [() => backend.unwatchSessionFeatures("s1"), "unwatch_session_features", { sessionId: "s1" }],
+      [() => backend.listSessionFeatures("s1"), "list_session_features", { sessionId: "s1" }],
+    ];
+    for (const [call, command, args] of cases) {
+      invoke.mockReset();
+      invoke.mockResolvedValueOnce(undefined);
+      await call();
+      if (args === undefined) expect(invoke).toHaveBeenCalledWith(command);
+      else expect(invoke).toHaveBeenCalledWith(command, args);
+    }
+  });
+
   describe("code traces", () => {
     it("listCodeTraces passes a null workstream when unscoped", async () => {
       invoke.mockResolvedValueOnce([]);
@@ -566,6 +586,42 @@ describe("TauriBackend", () => {
       const trace = await backend.readCodeTraceFile("/t.json");
       expect(trace.steps).toHaveLength(1);
       expect(invoke).toHaveBeenCalledWith("read_text_file", { path: "/t.json" });
+    });
+
+    it("traceStaleness and listRustTests forward their arguments", async () => {
+      invoke.mockResolvedValueOnce("fresh");
+      await backend.traceStaleness("/repo", "abc123");
+      expect(invoke).toHaveBeenCalledWith("trace_staleness", { repoDir: "/repo", recordedSha: "abc123" });
+
+      invoke.mockResolvedValueOnce([]);
+      await backend.listRustTests("/repo");
+      expect(invoke).toHaveBeenCalledWith("list_rust_tests", { manifestDir: "/repo" });
+    });
+
+    it("recordCodeTrace passes the owning session so traces stay out of the repo", async () => {
+      invoke.mockResolvedValueOnce("/traces/t.json");
+      await backend.recordCodeTrace("a::b", "/repo", "/repo", "sess-1", 500);
+      expect(invoke).toHaveBeenCalledWith("record_code_trace", {
+        testName: "a::b",
+        manifestDir: "/repo",
+        repoRoot: "/repo",
+        sessionId: "sess-1",
+        maxSteps: 500,
+      });
+    });
+
+    it("recordCodeTrace sends explicit nulls when session and cap are omitted", async () => {
+      // Tauri distinguishes a missing argument from null; sending undefined
+      // would fail deserialisation on the Rust side.
+      invoke.mockResolvedValueOnce("/traces/t.json");
+      await backend.recordCodeTrace("a::b", "/repo", "/repo");
+      expect(invoke).toHaveBeenCalledWith("record_code_trace", {
+        testName: "a::b",
+        manifestDir: "/repo",
+        repoRoot: "/repo",
+        sessionId: null,
+        maxSteps: null,
+      });
     });
 
     it("readCodeTraceFile rejects a malformed trace instead of returning it", async () => {

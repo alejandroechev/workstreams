@@ -3523,8 +3523,8 @@ fn list_rust_tests(manifest_dir: String) -> Result<Vec<String>, String> {
     Ok(parse_test_list(&String::from_utf8_lossy(&listed.stdout)))
 }
 
-/// Record a code walkthrough trace for `test_name`, writing the JSON to
-/// `<repo_root>/.workstreams/traces/` and indexing it.
+/// Record a code walkthrough trace for `test_name`, writing the JSON under the
+/// owning Copilot session (`session-state/<id>/files/traces/`) and indexing it.
 ///
 /// Runs on a blocking thread so it never occupies Tauri's main/IPC thread: a
 /// recording drives a debugger step by step and takes seconds to minutes.
@@ -3540,6 +3540,7 @@ async fn record_code_trace(
     test_name: String,
     manifest_dir: String,
     repo_root: String,
+    session_id: Option<String>,
     max_steps: Option<u32>,
 ) -> Result<String, String> {
     let manifest_dir = trace_record::find_cargo_manifest_dir(&manifest_dir).ok_or_else(|| {
@@ -3567,11 +3568,11 @@ async fn record_code_trace(
             );
         })?;
 
-        // Traces live beside the repo but outside it in spirit: they are a
-        // personal understanding aid, not a source artifact.
-        let dir = std::path::Path::new(&repo_root)
-            .join(".workstreams")
-            .join("traces");
+        // Traces live under the Copilot session, never in the repo: they are a
+        // personal reading aid, and writing them into the working tree would
+        // pollute `git status` in every repo the user opens.
+        let home = dirs::home_dir().ok_or("No home directory")?;
+        let dir = trace_record::trace_output_dir(&home, session_id.as_deref());
         std::fs::create_dir_all(&dir)
             .map_err(|e| format!("Cannot create {}: {e}", dir.display()))?;
         let safe_name = opts.test.replace("::", "__");

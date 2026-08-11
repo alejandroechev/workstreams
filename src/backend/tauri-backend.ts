@@ -440,12 +440,14 @@ export class TauriBackend implements Backend {
     testName: string,
     manifestDir: string,
     repoRoot: string,
+    sessionId?: string | null,
     maxSteps?: number,
   ): Promise<string> {
     return invoke<string>("record_code_trace", {
       testName,
       manifestDir,
       repoRoot,
+      sessionId: sessionId ?? null,
       maxSteps: maxSteps ?? null,
     });
   }

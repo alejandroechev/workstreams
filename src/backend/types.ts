@@ -199,6 +199,8 @@ export interface Backend {
     testName: string,
     manifestDir: string,
     repoRoot: string,
+    /** Copilot session that owns the trace; scopes where it is written. */
+    sessionId?: string | null,
     maxSteps?: number,
   ): Promise<string>;
 }

@@ -39,3 +39,9 @@ src-tauri/gen/
 .playwright-mcp/
 test-results/
 playwright-report/
+
+# Local Node pin (nodenv/fnm). Personal to a machine; CI pins its own version.
+.node-version
+
+# Legacy location for walkthrough traces (now stored under the Copilot session).
+.workstreams/

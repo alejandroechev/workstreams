@@ -187,6 +187,30 @@ fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
         .position(|window| window == needle)
 }
 
+/// Directory a recorded trace should be written to.
+///
+/// Traces live under the **Copilot session** that produced them
+/// (`~/.copilot/session-state/<id>/files/traces/`), not in the repo. A trace is
+/// a personal, disposable reading aid: writing it into the working tree
+/// pollutes every repo the user opens, shows up in `git status`, and risks
+/// being committed. Losing traces when a session ends is an accepted trade —
+/// re-recording takes seconds.
+///
+/// Falls back to `~/.copilot/traces/` when there is no session (no linked
+/// Copilot session, or the session folder has not been created yet), because
+/// refusing to record would be worse than storing it slightly less tidily.
+pub fn trace_output_dir(home: &Path, session_id: Option<&str>) -> std::path::PathBuf {
+    match session_id.filter(|id| !id.is_empty()) {
+        Some(id) => home
+            .join(".copilot")
+            .join("session-state")
+            .join(id)
+            .join("files")
+            .join("traces"),
+        None => home.join(".copilot").join("traces"),
+    }
+}
+
 /// Format a UNIX timestamp as an ISO-8601 UTC instant.
 ///
 /// The trace format is shared with `scripts/trace-record.mjs`, which writes
@@ -869,6 +893,31 @@ mod tests {
         let (messages, _) = read_dap_messages(&buffer);
         assert_eq!(messages[0]["command"], "launch");
         assert_eq!(messages[1]["event"], "stopped");
+    }
+
+    #[test]
+    fn writes_traces_under_the_owning_session() {
+        // Not into the repo: a trace is a personal reading aid, and writing it
+        // into the working tree pollutes git status in every repo opened.
+        let dir = trace_output_dir(Path::new("/home/me"), Some("sess-1"));
+        assert_eq!(
+            dir,
+            Path::new("/home/me/.copilot/session-state/sess-1/files/traces")
+        );
+    }
+
+    #[test]
+    fn falls_back_when_there_is_no_session() {
+        // Refusing to record would be worse than storing it less tidily.
+        let expected = Path::new("/home/me/.copilot/traces");
+        assert_eq!(trace_output_dir(Path::new("/home/me"), None), expected);
+        assert_eq!(trace_output_dir(Path::new("/home/me"), Some("")), expected);
+    }
+
+    #[test]
+    fn trace_dir_never_touches_the_repo() {
+        let dir = trace_output_dir(Path::new("/home/me"), Some("sess-1"));
+        assert!(!dir.to_string_lossy().contains(".workstreams"));
     }
 
     #[test]
