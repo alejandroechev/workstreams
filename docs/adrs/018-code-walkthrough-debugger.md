@@ -145,6 +145,29 @@ stays an ordinary editor: wander anywhere, then press **Resync**.
   a one-shot scroll, while the highlight *persists* as the user scrolls away.
   That persistence is what makes coming back work.
 
+### Controls: three rows, and bare-key stepping
+
+The toolbar is split into **Trace** (which recording is open), **Record** (test
+picker + record), and **Step** (prev/progress/next/resync). A single row pushed
+the stepping buttons off the right edge as soon as a trace name was long, which
+is the common case — test paths are verbose.
+
+Stepping also works from the keyboard while the tile has focus: `↑↓`/`←→`,
+`j`/`k`, `n`/`p`, space, `Home`/`End`, and `r` to resync. Bare keys are safe
+because every app-level command uses `Alt+`, but the handler ignores anything
+held with a modifier — `Alt+Arrows` moves focus between tiles and `Cmd+R`
+reloads — and ignores keys typed into a `select` or `button`, so a `j` pressed
+to jump inside the trace dropdown does not also advance the walkthrough.
+
+### Timestamps are ISO-8601, not epoch
+
+The app's global `now()` returns epoch seconds, but the trace format is shared
+with the Node CLI, which writes `toISOString()`. Using `now()` in the Rust
+recorder rendered as `recorded 1786466376` and, less visibly, broke ordering:
+the index sorts traces by that string, so Rust- and CLI-recorded traces
+interleaved incorrectly. The recorder now formats ISO-8601 itself rather than
+taking on a date dependency for one call.
+
 ### Stepping backwards is a feature
 
 In a replay model, "back" is an array index. A live debugger cannot do it

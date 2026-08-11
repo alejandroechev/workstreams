@@ -71,7 +71,8 @@ project-aware workspace:
   the trace in the app: the walkthrough tile drives a bound Repo Explorer, so
   you get debug order *and* the freedom to wander off and hit **Resync**.
   Because it is a replay, you can also step **backwards**. `Alt+D` opens the
-  tile (disabled by default; see the feature flag below).
+  tile (disabled by default; see the feature flag below); with it focused,
+  `↑`/`↓` step, `Home`/`End` jump to the ends, and `r` resyncs the editor.
   `node scripts/trace-replay.mjs <trace.json>` steps through the same trace in
   a terminal. See [ADR 018](docs/adrs/018-code-walkthrough-debugger.md).
 - ⌨️ **Keyboard-driven** — `Alt+<letter>` for every tile type, `Alt+Arrows`
