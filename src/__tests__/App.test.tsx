@@ -198,6 +198,7 @@ function createBackend(): Backend {
     readCodeTraceFile: vi.fn(),
     traceStaleness: vi.fn(async () => "fresh" as const),
     listRustTests: vi.fn(async () => []),
+    recordCodeTrace: vi.fn(async () => "/t.json"),
   } as Backend;
 }
 

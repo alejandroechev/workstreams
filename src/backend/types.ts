@@ -189,6 +189,18 @@ export interface Backend {
   traceStaleness(repoDir: string, recordedSha: string): Promise<TraceStaleness>;
   /** Fully-qualified test names in a crate, for the entry-point picker. */
   listRustTests(manifestDir: string): Promise<string[]>;
+  /**
+   * Record a trace for `testName` and return the written file's path.
+   *
+   * Long-running (it drives a debugger step by step), so callers should show
+   * progress rather than blocking. Emits `trace-record-progress` events.
+   */
+  recordCodeTrace(
+    testName: string,
+    manifestDir: string,
+    repoRoot: string,
+    maxSteps?: number,
+  ): Promise<string>;
 }
 
 export type TraceStaleness = "fresh" | "head_moved" | "tree_dirty" | "unknown";

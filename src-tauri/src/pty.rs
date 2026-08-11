@@ -131,12 +131,12 @@ pub struct PtyHandle {
 /// as a universal default made every terminal tile fail to spawn on
 /// macOS/Linux.
 #[cfg(windows)]
-fn default_shell() -> String {
+pub fn default_shell() -> String {
     "pwsh.exe".to_string()
 }
 
 #[cfg(unix)]
-fn default_shell() -> String {
+pub fn default_shell() -> String {
     resolve_unix_shell(std::env::var("SHELL").ok())
 }
 

@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
+import { listen } from "@tauri-apps/api/event";
 
 import { useBackend } from "../backend/context";
 import type { CodeTrace, TraceStaleness } from "../backend/types";
@@ -27,6 +28,7 @@ import {
   ArrowPathIcon,
   ExclamationTriangleIcon,
   PlusIcon,
+  VideoCameraIcon,
 } from "@heroicons/react/24/outline";
 
 export interface DebugWalkthroughTileProps {
@@ -39,6 +41,9 @@ export interface DebugWalkthroughTileProps {
   onBindExplorer?: (explorerTileId: string) => void;
   /** Current HEAD, for staleness. Undefined means "unknown, don't judge". */
   headCommitSha?: string | null;
+  /** Repo root. Without one there is nothing to point cargo at, so recording
+   *  is unavailable rather than failing obscurely on click. */
+  workstreamDir?: string | null;
 }
 
 const panelStyle: React.CSSProperties = {
@@ -88,6 +93,7 @@ export function DebugWalkthroughTile({
   boundExplorerId = null,
   onBindExplorer,
   headCommitSha = null,
+  workstreamDir = null,
 }: DebugWalkthroughTileProps) {
   const backend = useBackend();
 
@@ -96,6 +102,10 @@ export function DebugWalkthroughTile({
   const [walkthrough, setWalkthrough] = useState<Walkthrough | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [availableTests, setAvailableTests] = useState<string[]>([]);
+  const [selectedTest, setSelectedTest] = useState("");
+  const [recording, setRecording] = useState(false);
+  const [recordProgress, setRecordProgress] = useState("");
 
   const binding = useMemo(
     () => selectExplorerBinding(boundExplorerId, explorerCandidates),
@@ -116,6 +126,46 @@ export function DebugWalkthroughTile({
       cancelled = true;
     };
   }, [backend, workstreamId]);
+
+  // Offer the crate's own tests as entry points. Using cargo's listing keeps
+  // this authoritative and avoids parsing Rust source.
+  useEffect(() => {
+    if (!workstreamDir) return;
+    let cancelled = false;
+    backend
+      .listRustTests(workstreamDir)
+      .then((tests) => {
+        if (!cancelled) setAvailableTests(tests);
+      })
+      .catch(() => {
+        // A non-Rust (or unbuildable) workstream simply offers no tests; that
+        // is not an error worth interrupting the user for.
+        if (!cancelled) setAvailableTests([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [backend, workstreamDir]);
+
+  // Progress from the recorder. A recording drives a debugger step by step and
+  // takes seconds to minutes, so silence would read as a hang.
+  useEffect(() => {
+    if (!recording) return;
+    let unlisten: (() => void) | undefined;
+    listen<{ phase: string; steps: number }>("trace-record-progress", (event) => {
+      const { phase, steps } = event.payload;
+      setRecordProgress(steps > 0 ? `${phase} (${steps} steps)` : phase);
+    })
+      .then((fn) => {
+        unlisten = fn;
+      })
+      .catch(() => {
+        // No Tauri host (tests, or the browser E2E server): recording still
+        // works, it just reports no intermediate progress. An unhandled
+        // rejection here would surface as a spurious test failure.
+      });
+    return () => unlisten?.();
+  }, [recording]);
 
   const selectedTrace = useMemo(
     () => traces.find((t) => t.id === selectedTraceId) ?? null,
@@ -165,6 +215,32 @@ export function DebugWalkthroughTile({
       setError(String(e));
     }
   }, [backend, workstreamId, loadTrace]);
+
+  /**
+   * Record the selected test, then index and open the resulting trace.
+   *
+   * The recorder runs in the Rust backend rather than shelling out to the
+   * Node CLI: a bundled .app ships neither `scripts/` nor a guaranteed `node`,
+   * so shelling out would only have worked when the open workstream happened
+   * to be this repo.
+   */
+  const recordSelectedTest = useCallback(async () => {
+    if (!workstreamDir || !selectedTest) return;
+    setError(null);
+    setRecording(true);
+    setRecordProgress("starting");
+    try {
+      const tracePath = await backend.recordCodeTrace(selectedTest, workstreamDir, workstreamDir);
+      const indexed = await backend.indexCodeTrace(tracePath, workstreamId);
+      setTraces(await backend.listCodeTraces(workstreamId));
+      await loadTrace(indexed);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setRecording(false);
+      setRecordProgress("");
+    }
+  }, [backend, workstreamDir, selectedTest, workstreamId, loadTrace]);
 
   /** Drive the bound explorer to whatever step the walkthrough is on. */
   const revealCurrent = useCallback(
@@ -244,6 +320,34 @@ export function DebugWalkthroughTile({
             </option>
           ))}
         </select>
+
+        {workstreamDir && (
+          <>
+            <select
+              aria-label="Test"
+              value={selectedTest}
+              onChange={(e) => setSelectedTest(e.target.value)}
+              style={{ ...buttonStyle, maxWidth: 220 }}
+            >
+              <option value="">Select a test…</option>
+              {availableTests.map((t) => (
+                <option key={t} value={t}>
+                  {t}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              aria-label="Record trace"
+              title="Run the test under a debugger and record its execution"
+              disabled={!selectedTest || recording}
+              onClick={() => void recordSelectedTest()}
+              style={buttonStyle}
+            >
+              <VideoCameraIcon style={{ width: 14, height: 14 }} />
+            </button>
+          </>
+        )}
 
         <button
           type="button"
@@ -330,6 +434,12 @@ export function DebugWalkthroughTile({
       {walkthrough?.trace.truncated && (
         <div data-testid="walkthrough-truncated-banner" style={{ padding: "6px 8px", color: "#f9e2af" }}>
           This trace is truncated — recording stopped at the step cap.
+        </div>
+      )}
+
+      {recording && (
+        <div data-testid="walkthrough-recording" style={{ padding: "6px 8px", color: "#a6e3a1" }}>
+          Recording {selectedTest}… {recordProgress}
         </div>
       )}
 

@@ -125,6 +125,101 @@ describe("DebugWalkthroughTile", () => {
     expect((await screen.findByTestId("walkthrough-error")).textContent).toMatch(/cannot read/i);
   });
 
+  describe("recording from the UI", () => {
+    it("offers the crate's tests and records the chosen one", async () => {
+      // The whole point: no terminal round-trip. Pick a test, press Record,
+      // and end up stepping through it.
+      const backend = new MemoryBackend();
+      backend._rustTests = ["pty::tests::alpha", "shell_env::tests::beta"];
+      backend._seedTraceFile("/recorded/beta.json", traceFile({ test: "shell_env::tests::beta" }));
+      backend._recordedTracePath = "/recorded/beta.json";
+
+      render(
+        <BackendProvider backend={backend}>
+          <DebugWalkthroughTile
+            tileId="wt-1"
+            workstreamId="ws-1"
+            workstreamDir="/repo"
+            explorerCandidates={[{ id: "e1", title: null }]}
+          />
+        </BackendProvider>,
+      );
+
+      const testPicker = await screen.findByLabelText("Test");
+      await waitFor(() => expect(testPicker.querySelectorAll("option").length).toBe(3));
+      fireEvent.change(testPicker, { target: { value: "shell_env::tests::beta" } });
+      fireEvent.click(screen.getByLabelText("Record trace"));
+
+      await screen.findByTestId("walkthrough-step-current");
+      expect((await backend.listCodeTraces("ws-1")).map((t) => t.test_name)).toEqual([
+        "shell_env::tests::beta",
+      ]);
+    });
+
+    it("shows progress while recording so the UI never looks frozen", async () => {
+      // A recording drives a debugger step by step and takes seconds to
+      // minutes; a silent button would read as a hang.
+      const backend = new MemoryBackend();
+      backend._rustTests = ["a::b"];
+      backend._seedTraceFile("/r.json", traceFile());
+      backend._recordedTracePath = "/r.json";
+      let release: (v: string) => void = () => {};
+      backend.recordCodeTrace = () => new Promise<string>((resolve) => { release = resolve; });
+
+      render(
+        <BackendProvider backend={backend}>
+          <DebugWalkthroughTile tileId="wt-1" workstreamId="ws-1" workstreamDir="/repo"
+            explorerCandidates={[{ id: "e1", title: null }]} />
+        </BackendProvider>,
+      );
+
+      const testPicker = await screen.findByLabelText("Test");
+      await waitFor(() => expect(testPicker.querySelectorAll("option").length).toBe(2));
+      fireEvent.change(testPicker, { target: { value: "a::b" } });
+      fireEvent.click(screen.getByLabelText("Record trace"));
+
+      expect(await screen.findByTestId("walkthrough-recording")).toBeTruthy();
+      release("/r.json");
+    });
+
+    it("surfaces a recording failure instead of failing silently", async () => {
+      const backend = new MemoryBackend();
+      backend._rustTests = ["a::b"];
+      backend.recordCodeTrace = async () => {
+        throw new Error("lldb-dap not found");
+      };
+
+      render(
+        <BackendProvider backend={backend}>
+          <DebugWalkthroughTile tileId="wt-1" workstreamId="ws-1" workstreamDir="/repo"
+            explorerCandidates={[{ id: "e1", title: null }]} />
+        </BackendProvider>,
+      );
+
+      const testPicker = await screen.findByLabelText("Test");
+      await waitFor(() => expect(testPicker.querySelectorAll("option").length).toBe(2));
+      fireEvent.change(testPicker, { target: { value: "a::b" } });
+      fireEvent.click(screen.getByLabelText("Record trace"));
+
+      expect((await screen.findByTestId("walkthrough-error")).textContent).toMatch(/lldb-dap/i);
+    });
+
+    it("cannot record without a workstream directory", async () => {
+      // Nothing to point cargo at, so the control must be unavailable rather
+      // than failing obscurely on click.
+      const backend = new MemoryBackend();
+      backend._rustTests = ["a::b"];
+      render(
+        <BackendProvider backend={backend}>
+          <DebugWalkthroughTile tileId="wt-1" workstreamId="ws-1"
+            explorerCandidates={[{ id: "e1", title: null }]} />
+        </BackendProvider>,
+      );
+      await screen.findByLabelText("Trace", { exact: true });
+      expect(screen.queryByLabelText("Record trace")).toBeNull();
+    });
+  });
+
   it("lists the steps of a selected trace", async () => {
     await setup();
     expect(screen.getByText(/src\/pty\.rs:10/)).toBeTruthy();

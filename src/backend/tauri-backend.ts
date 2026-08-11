@@ -435,4 +435,18 @@ export class TauriBackend implements Backend {
   async listRustTests(manifestDir: string): Promise<string[]> {
     return invoke<string[]>("list_rust_tests", { manifestDir });
   }
+
+  async recordCodeTrace(
+    testName: string,
+    manifestDir: string,
+    repoRoot: string,
+    maxSteps?: number,
+  ): Promise<string> {
+    return invoke<string>("record_code_trace", {
+      testName,
+      manifestDir,
+      repoRoot,
+      maxSteps: maxSteps ?? null,
+    });
+  }
 }

@@ -32,8 +32,27 @@ original request actually asked for.
 
 | Half | Runs where | Depends on |
 | --- | --- | --- |
-| **Recorder** (`scripts/trace-record.mjs`) | CLI, outside the app | `lldb-dap`, cargo, macOS |
+| **Recorder** | CLI (`scripts/trace-record.mjs`) **and** in-app (`src-tauri/src/trace_record.rs`) | `lldb-dap`, cargo |
 | **Replayer** (controller tile + `scripts/trace-replay.mjs`) | In-app and CLI | nothing but the JSON file |
+
+### Why the recorder exists twice
+
+The CLI came first and remains the reference implementation and the scriptable
+entry point. Recording *from the UI* could not reuse it: a bundled `.app` ships
+neither the repo's `scripts/` folder nor a guaranteed `node`, and a Dock launch
+has neither on `PATH` — so shelling out would only have worked when the open
+workstream happened to be this repo.
+
+The Rust port therefore drives DAP directly. Both share the same proven
+protocol (cargo `--message-format=json` for binary discovery,
+`setFunctionBreakpoints`, step-in/step-out on the repo boundary,
+consecutive-duplicate collapsing) and write the same versioned format, so a
+trace from either is interchangeable. The duplication is deliberate and
+bounded; the alternative was shipping Node inside the bundle.
+
+The in-app recorder runs on a blocking thread and emits `trace-record-progress`
+events: a recording drives a debugger step by step and takes seconds to
+minutes, so a silent button would read as a hang.
 
 The split is the load-bearing decision. It keeps the OS-dependent half — which
 must spawn a debugger — out of a sandboxed, unsigned Tauri app; it makes replay

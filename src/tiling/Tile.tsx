@@ -324,6 +324,7 @@ function TileWrapperImpl({
               onUpdateTileConfig?.(tile.id, JSON.stringify({ ...cfg, bound_explorer_id: explorerTileId }))
             }
             headCommitSha={headCommitSha ?? null}
+            workstreamDir={workstreamDir ?? null}
           />
         );
       }

@@ -6,6 +6,7 @@ mod pty;
 mod repo_create;
 mod session_poller;
 mod shell_env;
+mod trace_record;
 
 use db::open_db;
 use fs_watcher::FsWatcher;
@@ -3510,6 +3511,66 @@ fn list_rust_tests(manifest_dir: String) -> Result<Vec<String>, String> {
     Ok(parse_test_list(&String::from_utf8_lossy(&listed.stdout)))
 }
 
+/// Record a code walkthrough trace for `test_name`, writing the JSON to
+/// `<repo_root>/.workstreams/traces/` and indexing it.
+///
+/// Runs on a blocking thread so it never occupies Tauri's main/IPC thread: a
+/// recording drives a debugger step by step and takes seconds to minutes.
+/// Progress is emitted as `trace-record-progress` events so the tile can show
+/// something other than a frozen button.
+///
+/// The environment is repaired via `shell_env` first. A Dock-launched app
+/// inherits launchd's stunted PATH (ADR 017), which would hide `cargo`, `git`
+/// and the debug adapter and make this fail with a confusing "not found".
+#[tauri::command]
+async fn record_code_trace(
+    app: AppHandle,
+    test_name: String,
+    manifest_dir: String,
+    repo_root: String,
+    max_steps: Option<u32>,
+) -> Result<String, String> {
+    let opts = trace_record::RecordOptions {
+        test: test_name,
+        manifest_dir,
+        repo_root: repo_root.clone(),
+        max_steps: max_steps.unwrap_or(2000),
+    };
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut env = std::collections::HashMap::new();
+        if let Some(path) = shell_env::resolved_path(&pty::default_shell()) {
+            env.insert("PATH".to_string(), path);
+        }
+        let env = if env.is_empty() { None } else { Some(env) };
+
+        let app_for_progress = app.clone();
+        let trace = trace_record::record_trace(&opts, env, move |phase, steps| {
+            let _ = app_for_progress.emit(
+                "trace-record-progress",
+                serde_json::json!({ "phase": phase, "steps": steps }),
+            );
+        })?;
+
+        // Traces live beside the repo but outside it in spirit: they are a
+        // personal understanding aid, not a source artifact.
+        let dir = std::path::Path::new(&repo_root)
+            .join(".workstreams")
+            .join("traces");
+        std::fs::create_dir_all(&dir)
+            .map_err(|e| format!("Cannot create {}: {e}", dir.display()))?;
+        let safe_name = opts.test.replace("::", "__");
+        let path = dir.join(format!("{safe_name}.json"));
+        let json = serde_json::to_string_pretty(&trace)
+            .map_err(|e| format!("Cannot serialise trace: {e}"))?;
+        std::fs::write(&path, json).map_err(|e| format!("Cannot write {}: {e}", path.display()))?;
+
+        Ok(path.to_string_lossy().to_string())
+    })
+    .await
+    .map_err(|e| format!("Recording task failed: {e}"))?
+}
+
 /// Returns the absolute path of `~/.copilot/session-state/<id>` so the
 /// frontend can list it with the regular list_directory + read_file APIs.
 /// Errors if the directory doesn't exist.
@@ -4847,6 +4908,7 @@ pub fn run() {
             index_code_trace,
             trace_staleness,
             list_rust_tests,
+            record_code_trace,
             list_session_checkpoints,
             list_session_events,
             query_session_files,

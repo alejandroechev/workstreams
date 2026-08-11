@@ -837,4 +837,16 @@ export class MemoryBackend implements Backend {
   async listRustTests(): Promise<string[]> {
     return this._rustTests;
   }
+
+  /**
+   * Test/dev seam: pretend to record. Returns the path a real recorder would
+   * have written, so the UI flow is exercisable with no debugger present.
+   */
+  _recordedTracePath: string | null = null;
+  async recordCodeTrace(testName: string): Promise<string> {
+    if (this._recordedTracePath === null) {
+      throw new Error(`Cannot record ${testName}: no recorder configured`);
+    }
+    return this._recordedTracePath;
+  }
 }
