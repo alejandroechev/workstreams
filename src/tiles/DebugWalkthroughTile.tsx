@@ -21,6 +21,7 @@ import {
   type Walkthrough,
 } from "../domain/walkthrough";
 import { parseWalkthroughKey } from "../domain/walkthrough-keys";
+import { filterTests, groupTestsByModule, shortTestName } from "../domain/test-picker";
 import {
   dispatchWalkthroughNavigate,
   selectExplorerBinding,
@@ -127,6 +128,7 @@ export function DebugWalkthroughTile({
   const [availableTests, setAvailableTests] = useState<string[] | null>(null);
   const [testsError, setTestsError] = useState<string | null>(null);
   const [selectedTest, setSelectedTest] = useState("");
+  const [testFilter, setTestFilter] = useState("");
   const [recording, setRecording] = useState(false);
   const [recordProgress, setRecordProgress] = useState("");
 
@@ -194,6 +196,21 @@ export function DebugWalkthroughTile({
       });
     return () => unlisten?.();
   }, [recording]);
+
+  // A flat list of every test is unusable — this crate alone has ~258 — so the
+  // picker is filtered first and grouped by module. Rust test names are
+  // already hierarchical, so no extra metadata is needed from cargo.
+  const matchingTests = useMemo(
+    () => filterTests(availableTests ?? [], testFilter),
+    [availableTests, testFilter],
+  );
+  const testGroups = useMemo(() => groupTestsByModule(matchingTests), [matchingTests]);
+
+  // Drop a selection the filter has hidden, so Record cannot run a test the
+  // user can no longer see.
+  useEffect(() => {
+    if (selectedTest && !matchingTests.includes(selectedTest)) setSelectedTest("");
+  }, [matchingTests, selectedTest]);
 
   const selectedTrace = useMemo(
     () => traces.find((t) => t.id === selectedTraceId) ?? null,
@@ -426,6 +443,13 @@ export function DebugWalkthroughTile({
       {workstreamDir && (
         <div style={rowStyle} data-testid="walkthrough-section-record">
           <span style={rowLabelStyle}>Record</span>
+          <input
+            aria-label="Filter tests"
+            placeholder="filter…"
+            value={testFilter}
+            onChange={(e) => setTestFilter(e.target.value)}
+            style={{ ...controlStyle, width: 96, flexShrink: 0 }}
+          />
           <select
             aria-label="Test"
             value={selectedTest}
@@ -433,12 +457,19 @@ export function DebugWalkthroughTile({
             style={{ ...controlStyle, flex: 1, minWidth: 0 }}
           >
             <option value="">Select a test…</option>
-            {(availableTests ?? []).map((t) => (
-              <option key={t} value={t}>
-                {t}
-              </option>
+            {testGroups.map((group) => (
+              <optgroup key={group.module} label={group.module}>
+                {group.tests.map((t) => (
+                  <option key={t} value={t}>
+                    {shortTestName(t)}
+                  </option>
+                ))}
+              </optgroup>
             ))}
           </select>
+          <span data-testid="walkthrough-test-count" style={{ color: "#585b70", fontSize: 10, whiteSpace: "nowrap" }}>
+            {matchingTests.length}
+          </span>
           <button
             type="button"
             aria-label="Record trace"

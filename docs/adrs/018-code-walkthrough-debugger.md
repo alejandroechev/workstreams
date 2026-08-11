@@ -145,6 +145,20 @@ stays an ordinary editor: wander anywhere, then press **Resync**.
   a one-shot scroll, while the highlight *persists* as the user scrolls away.
   That persistence is what makes coming back work.
 
+### The test picker is filtered and grouped
+
+Listing every test flat made recording impractical — this crate reports 261 —
+so the picker has a filter box and groups options by module. Rust test names
+are already hierarchical (`code_review::git::tests::resolve_base_ref`), so the
+module path is a natural scope and cargo needs to supply nothing extra. In
+practice 261 tests become 14 groups; `shell_env` narrows to 13 and `pty shell`
+to 3.
+
+The filter matches each whitespace-separated term against the full path in any
+order, so a module and a name can be combined without recalling the exact path.
+Filtering away a selected test clears the selection, so Record cannot run
+something the user can no longer see.
+
 ### Controls: three rows, and bare-key stepping
 
 The toolbar is split into **Trace** (which recording is open), **Record** (test

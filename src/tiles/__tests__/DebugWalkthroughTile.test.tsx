@@ -160,6 +160,84 @@ describe("DebugWalkthroughTile", () => {
       ]);
     });
 
+    it("narrows a large test list with a filter", async () => {
+      // A flat list of every test is unusable — this crate has ~258 — so the
+      // filter is what makes the picker practical.
+      const backend = new MemoryBackend();
+      backend._rustTests = [
+        "pty::tests::resolves_shell",
+        "pty::tests::default_shell",
+        "shell_env::tests::merge_paths",
+        "code_review::git::tests::resolve_base_ref",
+      ];
+      render(
+        <BackendProvider backend={backend}>
+          <DebugWalkthroughTile tileId="wt-1" workstreamId="ws-1" workstreamDir="/repo"
+            explorerCandidates={[{ id: "e1", title: null }]} />
+        </BackendProvider>,
+      );
+
+      const picker = await screen.findByLabelText("Test");
+      await waitFor(() => expect(picker.querySelectorAll("option").length).toBe(5));
+
+      fireEvent.change(screen.getByLabelText("Filter tests"), { target: { value: "shell_env" } });
+      await waitFor(() => expect(picker.querySelectorAll("option").length).toBe(2));
+      expect(picker.textContent).toContain("merge_paths");
+    });
+
+    it("groups tests by module so the list is scannable", async () => {
+      const backend = new MemoryBackend();
+      backend._rustTests = ["pty::tests::a", "shell_env::tests::b"];
+      render(
+        <BackendProvider backend={backend}>
+          <DebugWalkthroughTile tileId="wt-1" workstreamId="ws-1" workstreamDir="/repo"
+            explorerCandidates={[{ id: "e1", title: null }]} />
+        </BackendProvider>,
+      );
+      const picker = await screen.findByLabelText("Test");
+      await waitFor(() => expect(picker.querySelectorAll("optgroup").length).toBe(2));
+      const labels = Array.from(picker.querySelectorAll("optgroup")).map((g) => g.getAttribute("label"));
+      expect(labels).toEqual(["pty::tests", "shell_env::tests"]);
+    });
+
+    it("reports how many tests the filter matched", async () => {
+      const backend = new MemoryBackend();
+      backend._rustTests = ["pty::tests::a", "pty::tests::b", "shell_env::tests::c"];
+      render(
+        <BackendProvider backend={backend}>
+          <DebugWalkthroughTile tileId="wt-1" workstreamId="ws-1" workstreamDir="/repo"
+            explorerCandidates={[{ id: "e1", title: null }]} />
+        </BackendProvider>,
+      );
+      await screen.findByLabelText("Test");
+      expect((await screen.findByTestId("walkthrough-test-count")).textContent).toContain("3");
+      fireEvent.change(screen.getByLabelText("Filter tests"), { target: { value: "pty" } });
+      await waitFor(() =>
+        expect(screen.getByTestId("walkthrough-test-count").textContent).toContain("2"),
+      );
+    });
+
+    it("clears a selection the filter no longer includes", async () => {
+      // Otherwise Record would run a test the user can no longer see.
+      const backend = new MemoryBackend();
+      backend._rustTests = ["pty::tests::a", "shell_env::tests::b"];
+      render(
+        <BackendProvider backend={backend}>
+          <DebugWalkthroughTile tileId="wt-1" workstreamId="ws-1" workstreamDir="/repo"
+            explorerCandidates={[{ id: "e1", title: null }]} />
+        </BackendProvider>,
+      );
+      const picker = await screen.findByLabelText("Test");
+      await waitFor(() => expect(picker.querySelectorAll("option").length).toBe(3));
+      fireEvent.change(picker, { target: { value: "pty::tests::a" } });
+      expect(screen.getByLabelText("Record trace").hasAttribute("disabled")).toBe(false);
+
+      fireEvent.change(screen.getByLabelText("Filter tests"), { target: { value: "shell_env" } });
+      await waitFor(() =>
+        expect(screen.getByLabelText("Record trace").hasAttribute("disabled")).toBe(true),
+      );
+    });
+
     it("records under the linked Copilot session, not the repo", async () => {
       // Traces are personal reading aids; writing them into the working tree
       // would pollute git status in every repo the user opens.
