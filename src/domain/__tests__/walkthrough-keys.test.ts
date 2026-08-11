@@ -22,6 +22,12 @@ describe("parseWalkthroughKey", () => {
     expect(parseWalkthroughKey({ key: "End", ...plain })).toBe("last");
   });
 
+  it("steps out of the current function", () => {
+    // `o` for "out", matching the debugger convention users already know.
+    expect(parseWalkthroughKey({ key: "o", ...plain })).toBe("out");
+    expect(parseWalkthroughKey({ key: "O", ...plain })).toBe("out");
+  });
+
   it("resyncs the editor", () => {
     expect(parseWalkthroughKey({ key: "r", ...plain })).toBe("resync");
   });

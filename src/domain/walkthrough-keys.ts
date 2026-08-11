@@ -11,7 +11,7 @@
  * relies on everywhere else in the app.
  */
 
-export type WalkthroughKeyAction = "next" | "prev" | "first" | "last" | "resync";
+export type WalkthroughKeyAction = "next" | "prev" | "out" | "first" | "last" | "resync";
 
 export interface WalkthroughKeyEvent {
   key: string;
@@ -49,6 +49,9 @@ export function parseWalkthroughKey(event: WalkthroughKeyEvent): WalkthroughKeyA
     case "k":
     case "p":
       return "prev";
+    case "o":
+      // "out", matching the debugger convention users already know.
+      return "out";
     case "r":
       return "resync";
     default:

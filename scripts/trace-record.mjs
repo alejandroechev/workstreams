@@ -110,7 +110,9 @@ export function appendStep(steps, step) {
     prev.hits = (prev.hits ?? 1) + 1;
     return steps;
   }
-  steps.push({ file: step.file, line: step.line, function: step.function });
+  const next = { file: step.file, line: step.line, function: step.function };
+  if (step.depth !== undefined) next.depth = step.depth;
+  steps.push(next);
   return steps;
 }
 
@@ -333,7 +335,10 @@ async function record(opts, logStatus) {
     for (let i = 0; i < opts.maxSteps; i++) {
       let frames;
       try {
-        const st = await dap.request("stackTrace", { threadId, startFrame: 0, levels: 1 });
+        // `levels: 0` asks for the whole stack. lldb-dap only reports a correct
+        // frame count that way — with `levels: 1` its `totalFrames` is a stale
+        // constant — and the count is what makes "step out" exact.
+        const st = await dap.request("stackTrace", { threadId, startFrame: 0, levels: 0 });
         frames = st.stackFrames ?? [];
       } catch {
         break; // process exited — the test finished
@@ -349,6 +354,7 @@ async function record(opts, logStatus) {
           file: path.relative(opts.repoRoot, path.resolve(file)),
           line: frame.line,
           function: demangle(frame.name),
+          depth: frames.length,
         });
       }
 

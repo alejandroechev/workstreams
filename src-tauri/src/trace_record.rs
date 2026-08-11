@@ -30,6 +30,14 @@ pub struct TraceStep {
     /// Present only when consecutive identical locations were collapsed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hits: Option<u32>,
+    /// Call-stack depth as reported by the debugger. Absolute, not relative:
+    /// a Rust test sits ~22 frames inside the libtest harness, so these start
+    /// in the twenties and only comparisons between steps are meaningful.
+    /// Drives an exact "step out" — including under recursion, where the
+    /// caller shares the callee's name and a name-based rule picks the wrong
+    /// frame.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub depth: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -566,16 +574,20 @@ pub fn record_trace(
     for i in 0..opts.max_steps {
         let frames = match dap.request(
             "stackTrace",
-            serde_json::json!({ "threadId": thread_id, "startFrame": 0, "levels": 1 }),
+            // `levels: 0` asks for the whole stack. lldb-dap only reports a
+            // correct frame count that way — with `levels: 1` its `totalFrames`
+            // is a stale constant — and the count is what makes "step out"
+            // exact rather than a name-matching heuristic.
+            serde_json::json!({ "threadId": thread_id, "startFrame": 0, "levels": 0 }),
         ) {
             Ok(body) => body,
             Err(_) => break, // process exited — the test finished
         };
-        let Some(frame) = frames
-            .get("stackFrames")
-            .and_then(|f| f.as_array())
-            .and_then(|f| f.first())
-        else {
+        let Some(stack) = frames.get("stackFrames").and_then(|f| f.as_array()) else {
+            break;
+        };
+        let depth = stack.len() as u32;
+        let Some(frame) = stack.first() else {
             break;
         };
 
@@ -598,6 +610,7 @@ pub fn record_trace(
                         line: frame.get("line").and_then(|l| l.as_u64()).unwrap_or(0) as u32,
                         function: demangle(frame.get("name").and_then(|n| n.as_str())),
                         hits: None,
+                        depth: Some(depth),
                     },
                 );
                 if steps.len().is_multiple_of(10) {
@@ -655,6 +668,7 @@ mod tests {
             line,
             function: function.to_string(),
             hits: None,
+            depth: None,
         }
     }
 
@@ -963,5 +977,16 @@ mod live_tests {
         );
         assert!(trace.steps.iter().all(|s| s.line > 0));
         assert!(trace.steps.iter().any(|s| s.file.contains("shell_env.rs")));
+        // Depth is what makes "step out" exact, so a real recording must carry
+        // it — and must show the stack actually moving.
+        assert!(
+            trace.steps.iter().all(|s| s.depth.is_some()),
+            "every step needs a depth"
+        );
+        let depths: Vec<u32> = trace.steps.iter().filter_map(|s| s.depth).collect();
+        let min = depths.iter().min().unwrap();
+        let max = depths.iter().max().unwrap();
+        assert!(max > min, "expected nesting, got constant depth {min}");
+        eprintln!("depth range: {min}..={max}");
     }
 }

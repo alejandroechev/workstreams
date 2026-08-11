@@ -10,6 +10,9 @@ import {
   gotoStep,
   visibleSteps,
   resolveStepPath,
+  canStepOut,
+  stepOut,
+  stepOutIndex,
   totalSteps,
   progressLabel,
 } from "../walkthrough";
@@ -173,5 +176,91 @@ describe("resolveStepPath", () => {
   it("does not double up separators", () => {
     expect(resolveStepPath("/repo/", "/src/a.rs")).toBe("/repo/src/a.rs");
     expect(resolveStepPath("C:\\repo\\", "\\src\\a.rs")).toBe("C:\\repo\\src\\a.rs");
+  });
+});
+
+describe("step out", () => {
+  // Shape taken from a real recording: the test calls schema_conn, which calls
+  // ensure_review_schema, and control unwinds back through both.
+  const nested = trace([
+    { file: "a.rs", line: 680, function: "add_list_and_resolve", depth: 1 },
+    { file: "a.rs", line: 656, function: "schema_conn", depth: 2 },
+    { file: "a.rs", line: 61, function: "ensure_review_schema", depth: 3 },
+    { file: "a.rs", line: 90, function: "ensure_review_schema", depth: 3 },
+    { file: "a.rs", line: 657, function: "schema_conn", depth: 2 },
+    { file: "a.rs", line: 659, function: "schema_conn", depth: 2 },
+    { file: "a.rs", line: 681, function: "add_list_and_resolve", depth: 1 },
+  ]);
+
+  it("returns to the caller, skipping the rest of the current function", () => {
+    // From inside ensure_review_schema, "I'm done here" lands on the line in
+    // schema_conn that follows the call — not merely the next step.
+    const w = gotoStep(createWalkthrough(nested), 2);
+    expect(stepOutIndex(w)).toBe(4);
+    expect(currentStep(stepOut(w))?.line).toBe(657);
+  });
+
+  it("skips a whole nested subtree when stepping out of the middle frame", () => {
+    // From schema_conn, stepping out must pass over ensure_review_schema
+    // entirely rather than stopping inside it.
+    const w = gotoStep(createWalkthrough(nested), 1);
+    expect(currentStep(stepOut(w))?.line).toBe(681);
+  });
+
+  it("cannot step out of the outermost frame", () => {
+    const w = createWalkthrough(nested);
+    expect(canStepOut(w)).toBe(false);
+    expect(stepOutIndex(w)).toBeNull();
+  });
+
+  it("cannot step out when the frame never returns within the trace", () => {
+    // A truncated recording can end mid-call; claiming a return point would
+    // send the reader somewhere execution never reached.
+    const truncated = trace([
+      { file: "a.rs", line: 1, function: "outer", depth: 1 },
+      { file: "a.rs", line: 2, function: "inner", depth: 2 },
+    ]);
+    const w = gotoStep(createWalkthrough(truncated), 1);
+    expect(canStepOut(w)).toBe(false);
+  });
+
+  it("leaves the walkthrough untouched when there is nowhere to go", () => {
+    const w = createWalkthrough(nested);
+    expect(stepOut(w)).toBe(w);
+  });
+
+  it("handles recursion, which names alone cannot", () => {
+    // f calls itself: the caller has the *same* name, so a name-based rule
+    // would skip past the recursive parent to the wrong frame.
+    const recursive = trace([
+      { file: "a.rs", line: 10, function: "f", depth: 1 },
+      { file: "a.rs", line: 11, function: "f", depth: 2 },
+      { file: "a.rs", line: 11, function: "f", depth: 3 },
+      { file: "a.rs", line: 12, function: "f", depth: 2 },
+      { file: "a.rs", line: 13, function: "f", depth: 1 },
+    ]);
+    const w = gotoStep(createWalkthrough(recursive), 2);
+    expect(stepOutIndex(w)).toBe(3);
+  });
+
+  describe("traces recorded before depth was captured", () => {
+    // `depth` is optional, so older traces must still get a useful step-out
+    // rather than a disabled button.
+    const noDepth = trace([
+      { file: "a.rs", line: 680, function: "add_list_and_resolve" },
+      { file: "a.rs", line: 656, function: "schema_conn" },
+      { file: "a.rs", line: 61, function: "ensure_review_schema" },
+      { file: "a.rs", line: 657, function: "schema_conn" },
+      { file: "a.rs", line: 681, function: "add_list_and_resolve" },
+    ]);
+
+    it("falls back to returning to the calling function by name", () => {
+      const w = gotoStep(createWalkthrough(noDepth), 2);
+      expect(currentStep(stepOut(w))?.line).toBe(657);
+    });
+
+    it("still refuses at the outermost frame", () => {
+      expect(canStepOut(createWalkthrough(noDepth))).toBe(false);
+    });
   });
 });

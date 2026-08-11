@@ -168,6 +168,31 @@ the index sorts traces by that string, so Rust- and CLI-recorded traces
 interleaved incorrectly. The recorder now formats ISO-8601 itself rather than
 taking on a date dependency for one call.
 
+### Step out, and why the trace records call depth
+
+"I understand this function, take me back to the call site" is a core reading
+motion, so the tile has a **step out** (`o`) that jumps to where control
+returns to the *caller* — skipping the remainder of the current call and any
+deeper calls it makes, not merely advancing one step.
+
+A flat list of locations cannot express that on its own, so each step now
+carries the debugger's **call depth** and step-out finds the next shallower
+frame. The obvious alternative — "return to the next step whose function name
+differs" — breaks under recursion, where the caller shares the callee's name
+and the rule lands on an outer frame. `depth` is optional, so traces recorded
+before this still work via that name heuristic rather than showing a dead
+button; the caveat only applies to them.
+
+Capturing depth required asking DAP for the whole stack (`levels: 0`). With
+`levels: 1` lldb-dap reports a `totalFrames` that is a stale constant — 21
+regardless of actual depth — which would have produced a plausible-looking but
+entirely wrong step-out. Measured cost of the change: a 24-step recording went
+from ~9.1s to ~9.8s.
+
+Depths are **absolute**, not normalised: a Rust test sits ~22 frames inside the
+libtest harness, so they start in the twenties. Only comparisons between steps
+are meaningful.
+
 ### Stepping backwards is a feature
 
 In a replay model, "back" is an array index. A live debugger cannot do it

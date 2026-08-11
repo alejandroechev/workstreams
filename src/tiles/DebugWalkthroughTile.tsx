@@ -10,6 +10,8 @@ import {
   currentStep,
   canStepBack,
   canStepForward,
+  canStepOut,
+  stepOut,
   stepForward,
   stepBack,
   gotoStep,
@@ -28,6 +30,7 @@ import {
   ArrowLeftIcon,
   ArrowRightIcon,
   ArrowPathIcon,
+  ArrowUturnLeftIcon,
   ExclamationTriangleIcon,
   PlusIcon,
   VideoCameraIcon,
@@ -359,6 +362,9 @@ export function DebugWalkthroughTile({
         case "last":
           move(gotoStep(walkthrough, totalSteps(walkthrough) - 1));
           break;
+        case "out":
+          move(stepOut(walkthrough));
+          break;
         case "resync":
           revealCurrent(walkthrough);
           break;
@@ -465,6 +471,16 @@ export function DebugWalkthroughTile({
         </button>
         <button
           type="button"
+          aria-label="Step out"
+          title="Finish this function and return to the caller (o)"
+          disabled={!walkthrough || !canStepOut(walkthrough)}
+          onClick={() => walkthrough && move(stepOut(walkthrough))}
+          style={controlStyle}
+        >
+          <ArrowUturnLeftIcon style={iconStyle} />
+        </button>
+        <button
+          type="button"
           aria-label="Resync"
           title="Jump the editor back to the current step (r)"
           disabled={!walkthrough}
@@ -492,7 +508,7 @@ export function DebugWalkthroughTile({
           </select>
         ) : (
           <span style={{ color: "#585b70", fontSize: 10, whiteSpace: "nowrap" }}>
-            ↑↓ step · Home/End ends · r resync
+            ↑↓ step · o out · Home/End ends · r resync
           </span>
         )}
       </div>

@@ -73,6 +73,67 @@ export function stepBack(w: Walkthrough): Walkthrough {
   return gotoStep(w, w.index - 1);
 }
 
+
+/**
+ * Index of the step where control returns to the current step's **caller**, or
+ * `null` when there is nowhere to go.
+ *
+ * This is the reading equivalent of a debugger's "finish": *I understand this
+ * function, take me back to the call site.* It deliberately skips the whole
+ * remainder of the current call — including any deeper calls it makes — rather
+ * than merely advancing one step.
+ *
+ * Uses recorded call depth when available, which is exact (only comparisons
+ * between steps matter, so the absolute values need no normalising). Traces recorded
+ * before `depth` existed fall back to matching the calling function's **name**;
+ * that is correct except under recursion, where the caller shares the callee's
+ * name and the fallback lands on an outer frame instead. Depth-bearing traces
+ * have no such caveat, which is why the recorder captures it.
+ */
+export function stepOutIndex(w: Walkthrough): number | null {
+  const steps = w.trace.steps;
+  const current = steps[w.index];
+  if (!current) return null;
+
+  if (current.depth !== undefined) {
+    const depth = current.depth;
+    for (let i = w.index + 1; i < steps.length; i++) {
+      const candidate = steps[i].depth;
+      // A shallower frame means this call has returned.
+      if (candidate !== undefined && candidate < depth) return i;
+    }
+    // The frame never returns inside the trace — typically a truncated
+    // recording. Claiming a return point would send the reader somewhere
+    // execution never actually reached.
+    return null;
+  }
+
+  // Fallback: the most recent step in a different function is the caller.
+  let callerName: string | null = null;
+  for (let i = w.index - 1; i >= 0; i--) {
+    if (steps[i].function !== current.function) {
+      callerName = steps[i].function;
+      break;
+    }
+  }
+  if (callerName === null) return null; // outermost recorded frame
+
+  for (let i = w.index + 1; i < steps.length; i++) {
+    if (steps[i].function === callerName) return i;
+  }
+  return null;
+}
+
+export function canStepOut(w: Walkthrough): boolean {
+  return stepOutIndex(w) !== null;
+}
+
+/** Jump to the caller's next step. No-op when there is nowhere to return to. */
+export function stepOut(w: Walkthrough): Walkthrough {
+  const target = stepOutIndex(w);
+  return target === null ? w : gotoStep(w, target);
+}
+
 /** 1-based "n / total", for display. */
 export function progressLabel(w: Walkthrough): string {
   const total = totalSteps(w);

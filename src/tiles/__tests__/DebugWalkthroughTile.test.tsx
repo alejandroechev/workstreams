@@ -24,10 +24,12 @@ function traceFile(overrides: Record<string, unknown> = {}) {
     commitSha: "abc1234",
     recordedAt: "2026-08-10T00:00:00.000Z",
     truncated: false,
+    // outer calls inner, then control returns to outer's caller frame — enough
+    // shape for stepping, hit counts and step-out to all be exercised.
     steps: [
-      { file: "src/pty.rs", line: 10, function: "mycrate::pty::outer" },
-      { file: "src/pty.rs", line: 20, function: "mycrate::pty::inner", hits: 3 },
-      { file: "src/other.rs", line: 30, function: "mycrate::other::last" },
+      { file: "src/pty.rs", line: 10, function: "mycrate::pty::outer", depth: 2 },
+      { file: "src/pty.rs", line: 20, function: "mycrate::pty::inner", hits: 3, depth: 3 },
+      { file: "src/other.rs", line: 30, function: "mycrate::other::last", depth: 1 },
     ],
     ...overrides,
   };
@@ -253,6 +255,30 @@ describe("DebugWalkthroughTile", () => {
     });
   });
 
+  describe("step out", () => {
+    it("returns to the caller when the button is pressed", async () => {
+      await setup();
+      fireEvent.click(screen.getByLabelText("Next step"));
+      await waitFor(() => expect(screen.getByTestId("walkthrough-progress").textContent).toBe("2 / 3"));
+      fireEvent.click(screen.getByLabelText("Step out"));
+      await waitFor(() => expect(screen.getByTestId("walkthrough-progress").textContent).toBe("3 / 3"));
+    });
+
+    it("is disabled once the frame never returns within the trace", async () => {
+      // On the last step there is no shallower frame ahead, so the control
+      // must say so rather than silently no-op.
+      await setup();
+      fireEvent.click(screen.getByText(/src\/other\.rs:30/));
+      await waitFor(() => expect(screen.getByTestId("walkthrough-progress").textContent).toBe("3 / 3"));
+      expect(screen.getByLabelText("Step out").hasAttribute("disabled")).toBe(true);
+    });
+
+    it("is enabled while inside a nested call", async () => {
+      await setup();
+      expect(screen.getByLabelText("Step out").hasAttribute("disabled")).toBe(false);
+    });
+  });
+
   describe("layout", () => {
     it("groups the controls into trace, record and step sections", async () => {
       await setup({ workstreamDir: "/repo" });
@@ -298,6 +324,16 @@ describe("DebugWalkthroughTile", () => {
       fireEvent.keyDown(screen.getByTestId("debug-walkthrough-tile"), { key: "ArrowDown" });
       await waitFor(() => expect(navEvents.length).toBeGreaterThan(0));
       expect(navEvents[navEvents.length - 1].line).toBe(20);
+    });
+
+    it("steps out of the current function with o", async () => {
+      await setup();
+      const tile = screen.getByTestId("debug-walkthrough-tile");
+      // Step into the nested frame, then finish it.
+      fireEvent.keyDown(tile, { key: "ArrowDown" });
+      await waitFor(() => expect(screen.getByTestId("walkthrough-progress").textContent).toBe("2 / 3"));
+      fireEvent.keyDown(tile, { key: "o" });
+      await waitFor(() => expect(screen.getByTestId("walkthrough-progress").textContent).toBe("3 / 3"));
     });
 
     it("ignores keys held with a modifier", async () => {

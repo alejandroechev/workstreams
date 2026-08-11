@@ -47,6 +47,18 @@ export interface TraceStep {
    * greater than 1 — absence means "recorded once".
    */
   readonly hits?: number;
+  /**
+   * Call-stack depth at this step, as reported by the debugger.
+   *
+   * Absolute rather than relative — a Rust test sits ~22 frames inside the
+   * libtest harness, so these start in the twenties. Only *comparisons*
+   * between steps are meaningful.
+   *
+   * Optional because traces recorded before it was captured have none; readers
+   * fall back to comparing function names, which is right except under
+   * recursion (where the caller shares the callee's name).
+   */
+  readonly depth?: number;
 }
 
 export interface TraceFile {
@@ -113,11 +125,19 @@ function parseStep(raw: unknown, index: number): TraceStep {
 
   const fn = typeof step.function === "string" ? step.function : "";
 
-  const out: { file: string; line: number; function: string; hits?: number } = {
+  const out: { file: string; line: number; function: string; hits?: number; depth?: number } = {
     file,
     line,
     function: fn,
   };
+
+  if (step.depth !== undefined) {
+    const depth = step.depth;
+    if (typeof depth !== "number" || !Number.isInteger(depth) || depth < 1) {
+      fail(`step ${index} has an invalid "depth" (${String(depth)}); expected a positive integer`);
+    }
+    out.depth = depth;
+  }
 
   if (step.hits !== undefined) {
     const hits = step.hits;
