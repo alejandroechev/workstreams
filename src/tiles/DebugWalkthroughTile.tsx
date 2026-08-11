@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
+import { open } from "@tauri-apps/plugin-dialog";
 
 import { useBackend } from "../backend/context";
 import type { CodeTrace, TraceStaleness } from "../backend/types";
@@ -25,6 +26,7 @@ import {
   ArrowRightIcon,
   ArrowPathIcon,
   ExclamationTriangleIcon,
+  PlusIcon,
 } from "@heroicons/react/24/outline";
 
 export interface DebugWalkthroughTileProps {
@@ -138,6 +140,32 @@ export function DebugWalkthroughTile({
     [backend],
   );
 
+  /**
+   * Register a trace file written by `scripts/trace-record.mjs`.
+   *
+   * The recorder is a CLI and knows nothing about this database, so without an
+   * explicit "adopt this file" action a recorded trace would never appear in
+   * the picker — the feature would have no entry point at all.
+   */
+  const addTraceFromDisk = useCallback(async () => {
+    setError(null);
+    let picked: string | string[] | null;
+    try {
+      picked = await open({ title: "Open walkthrough trace", multiple: false, directory: false });
+    } catch (e) {
+      setError(String(e));
+      return;
+    }
+    if (typeof picked !== "string") return; // dismissed
+    try {
+      const indexed = await backend.indexCodeTrace(picked, workstreamId);
+      setTraces(await backend.listCodeTraces(workstreamId));
+      await loadTrace(indexed);
+    } catch (e) {
+      setError(String(e));
+    }
+  }, [backend, workstreamId, loadTrace]);
+
   /** Drive the bound explorer to whatever step the walkthrough is on. */
   const revealCurrent = useCallback(
     (w: Walkthrough | null) => {
@@ -216,6 +244,16 @@ export function DebugWalkthroughTile({
             </option>
           ))}
         </select>
+
+        <button
+          type="button"
+          aria-label="Add trace"
+          title="Register a trace recorded with scripts/trace-record.mjs"
+          onClick={() => void addTraceFromDisk()}
+          style={buttonStyle}
+        >
+          <PlusIcon style={{ width: 14, height: 14 }} />
+        </button>
 
         {binding.needsChoice && (
           <select

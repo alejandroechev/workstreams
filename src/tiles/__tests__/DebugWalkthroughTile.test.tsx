@@ -11,6 +11,9 @@ import {
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
+const openDialogMock = vi.hoisted(() => vi.fn());
+vi.mock("@tauri-apps/plugin-dialog", () => ({ open: openDialogMock }));
+
 const TRACE_PATH = "/traces/demo.json";
 
 function traceFile(overrides: Record<string, unknown> = {}) {
@@ -76,6 +79,50 @@ describe("DebugWalkthroughTile", () => {
   afterEach(() => {
     unsubscribe();
     cleanup();
+  });
+
+  it("registers a trace file picked from disk and selects it", async () => {
+    // The recorder is a CLI: it writes a file and knows nothing about the
+    // app's index. Without this the picker stays empty forever and the
+    // feature has no usable entry point.
+    const backend = new MemoryBackend();
+    backend._seedTraceFile("/picked/new.json", traceFile({ test: "picked::trace" }));
+    openDialogMock.mockResolvedValue("/picked/new.json");
+
+    render(
+      <BackendProvider backend={backend}>
+        <DebugWalkthroughTile tileId="wt-1" workstreamId="ws-1" explorerCandidates={[{ id: "e1", title: null }]} />
+      </BackendProvider>,
+    );
+
+    fireEvent.click(await screen.findByLabelText("Add trace"));
+
+    await screen.findByTestId("walkthrough-step-current");
+    expect((await backend.listCodeTraces("ws-1")).map((t) => t.test_name)).toEqual(["picked::trace"]);
+  });
+
+  it("does nothing when the file picker is dismissed", async () => {
+    const backend = new MemoryBackend();
+    openDialogMock.mockResolvedValue(null);
+    render(
+      <BackendProvider backend={backend}>
+        <DebugWalkthroughTile tileId="wt-1" workstreamId="ws-1" explorerCandidates={[{ id: "e1", title: null }]} />
+      </BackendProvider>,
+    );
+    fireEvent.click(await screen.findByLabelText("Add trace"));
+    await waitFor(() => expect(screen.queryByTestId("walkthrough-error")).toBeNull());
+  });
+
+  it("reports a picked file that is not a valid trace", async () => {
+    const backend = new MemoryBackend();
+    openDialogMock.mockResolvedValue("/picked/missing.json");
+    render(
+      <BackendProvider backend={backend}>
+        <DebugWalkthroughTile tileId="wt-1" workstreamId="ws-1" explorerCandidates={[{ id: "e1", title: null }]} />
+      </BackendProvider>,
+    );
+    fireEvent.click(await screen.findByLabelText("Add trace"));
+    expect((await screen.findByTestId("walkthrough-error")).textContent).toMatch(/cannot read/i);
   });
 
   it("lists the steps of a selected trace", async () => {
