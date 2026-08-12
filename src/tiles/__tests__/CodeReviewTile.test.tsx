@@ -136,7 +136,7 @@ async function waitForDiffEditor() {
   // quickly in isolation but can take >10s to settle when the pre-commit hook
   // transforms 20+ changed suites concurrently; short waits made the quality
   // gate fail on machine load rather than behavior.
-  return screen.findByTestId("diff-editor", {}, { timeout: 20_000 });
+  return screen.findByTestId("diff-editor", {}, { timeout: 60_000 });
 }
 
 afterEach(() => {
@@ -152,7 +152,7 @@ afterEach(() => {
   vi.clearAllTimers();
 });
 
-describe("CodeReviewTile", () => {
+describe("CodeReviewTile", { timeout: 120_000 }, () => {
   it("prompts to open a session when none is linked", async () => {
     const backend = new MemoryBackend();
     backend.seedBoundSession("ws-1", null);
