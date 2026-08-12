@@ -40,4 +40,19 @@ describe("repo-explorer-cli", () => {
     const out = execSync(`node "${cli}" "${tmp}" "world" --limit 2`, { encoding: "utf8" });
     expect(out.trim().split("\n").length).toBe(2);
   });
+
+  it("lists changed files against a custom target branch", () => {
+    execSync('git init -q -b main && git config user.email t@t && git config user.name t', {
+      cwd: tmp,
+    });
+    execSync('git add . && git commit -qm base && git branch release/1.0', { cwd: tmp });
+    fs.writeFileSync(path.join(tmp, "alpha.txt"), "changed on feature\n");
+    execSync('git add alpha.txt && git commit -qm feature', { cwd: tmp });
+
+    const out = execSync(
+      `node "${cli}" "${tmp}" --diff-branch "release/1.0"`,
+      { encoding: "utf8" },
+    );
+    expect(out.trim()).toBe("M\talpha.txt");
+  });
 });

@@ -183,24 +183,24 @@ export class TauriBackend implements Backend {
     await invoke("cancel_searches");
   }
 
-  async gitDiffFiles(directory: string, mode: string): Promise<string[]> {
-    return invoke<string[]>("git_diff_files", { directory, mode });
+  async gitDiffFiles(directory: string, mode: string, baseRef?: string | null): Promise<string[]> {
+    return invoke<string[]>("git_diff_files", { directory, mode, baseRef: baseRef ?? null });
   }
 
-  async gitDiffFile(directory: string, filePath: string, mode: string): Promise<string> {
-    return invoke<string>("git_diff_file", { directory, filePath, mode });
+  async gitDiffFile(directory: string, filePath: string, mode: string, baseRef?: string | null): Promise<string> {
+    return invoke<string>("git_diff_file", { directory, filePath, mode, baseRef: baseRef ?? null });
   }
 
-  async gitDiffFilesWithStatus(directory: string, mode: string): Promise<Array<{ path: string; status: "A" | "M" | "D" | "R" }>> {
-    const raw = await invoke<Array<[string, string]>>("git_diff_files_with_status", { directory, mode });
+  async gitDiffFilesWithStatus(directory: string, mode: string, baseRef?: string | null): Promise<Array<{ path: string; status: "A" | "M" | "D" | "R" }>> {
+    const raw = await invoke<Array<[string, string]>>("git_diff_files_with_status", { directory, mode, baseRef: baseRef ?? null });
     return raw.map(([path, status]) => ({
       path,
       status: (status === "A" || status === "D" || status === "R" ? status : "M") as "A" | "M" | "D" | "R",
     }));
   }
 
-  async gitDiffFileSides(directory: string, filePath: string, mode: string): Promise<{ before: string; after: string }> {
-    const [before, after] = await invoke<[string, string]>("git_diff_file_sides", { directory, filePath, mode });
+  async gitDiffFileSides(directory: string, filePath: string, mode: string, baseRef?: string | null): Promise<{ before: string; after: string }> {
+    const [before, after] = await invoke<[string, string]>("git_diff_file_sides", { directory, filePath, mode, baseRef: baseRef ?? null });
     return { before, after };
   }
 
@@ -214,6 +214,10 @@ export class TauriBackend implements Backend {
 
   async gitCurrentBranch(directory: string): Promise<string> {
     return invoke<string>("git_current_branch", { directory });
+  }
+
+  async gitListBranches(directory: string): Promise<string[]> {
+    return invoke<string[]>("git_list_branches", { directory });
   }
 
   async gitBranchTrackingInfo(directory: string): Promise<{ ahead: number; behind: number; remoteHeadShort: string }> {

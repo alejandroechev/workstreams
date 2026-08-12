@@ -393,19 +393,19 @@ export class MemoryBackend implements Backend {
     // No-op for memory backend; nothing to cancel.
   }
 
-  async gitDiffFiles(_directory: string, _mode: string): Promise<string[]> {
+  async gitDiffFiles(_directory: string, _mode: string, _baseRef?: string | null): Promise<string[]> {
     return [];
   }
 
-  async gitDiffFile(_directory: string, _filePath: string, _mode: string): Promise<string> {
+  async gitDiffFile(_directory: string, _filePath: string, _mode: string, _baseRef?: string | null): Promise<string> {
     return "";
   }
 
-  async gitDiffFilesWithStatus(_directory: string, _mode: string): Promise<Array<{ path: string; status: "A" | "M" | "D" | "R" }>> {
+  async gitDiffFilesWithStatus(_directory: string, _mode: string, _baseRef?: string | null): Promise<Array<{ path: string; status: "A" | "M" | "D" | "R" }>> {
     return [];
   }
 
-  async gitDiffFileSides(_directory: string, _filePath: string, _mode: string): Promise<{ before: string; after: string }> {
+  async gitDiffFileSides(_directory: string, _filePath: string, _mode: string, _baseRef?: string | null): Promise<{ before: string; after: string }> {
     return { before: "", after: "" };
   }
 
@@ -422,6 +422,10 @@ export class MemoryBackend implements Backend {
 
   async gitCurrentBranch(_directory: string): Promise<string> {
     return "main";
+  }
+
+  async gitListBranches(_directory: string): Promise<string[]> {
+    return ["main"];
   }
 
   async gitBranchTrackingInfo(_directory: string): Promise<{ ahead: number; behind: number; remoteHeadShort: string }> {

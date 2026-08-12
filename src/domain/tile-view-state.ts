@@ -17,6 +17,7 @@ export interface RepoExplorerViewState {
   currentDir?: string;
   filePath?: string;
   diffMode?: string; // "unstaged" | "last_commit" | "vs_master" | ...
+  customDiffBranch?: string;
   diffLayout?: "split" | "unified";
   hookName?: string;
   /** Last content-search query, restored when reopening on the Search tab. */
@@ -128,6 +129,7 @@ function sanitize<K extends AnyViewState["kind"]>(
       str("currentDir");
       str("filePath");
       str("diffMode");
+      str("customDiffBranch");
       str("hookName");
       str("searchQuery");
       if (raw.diffLayout === "split" || raw.diffLayout === "unified") {

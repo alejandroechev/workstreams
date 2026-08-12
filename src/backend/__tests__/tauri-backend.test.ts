@@ -322,25 +322,28 @@ describe("TauriBackend", () => {
     await backend.listDirectory("/");
     expect(invoke).toHaveBeenCalledWith("list_directory", { path: "/" });
     await backend.gitDiffFiles("/", "unstaged");
-    expect(invoke).toHaveBeenCalledWith("git_diff_files", { directory: "/", mode: "unstaged" });
+    expect(invoke).toHaveBeenCalledWith("git_diff_files", { directory: "/", mode: "unstaged", baseRef: null });
     await backend.gitDiffFile("/", "f.ts", "unstaged");
-    expect(invoke).toHaveBeenCalledWith("git_diff_file", { directory: "/", filePath: "f.ts", mode: "unstaged" });
+    expect(invoke).toHaveBeenCalledWith("git_diff_file", { directory: "/", filePath: "f.ts", mode: "unstaged", baseRef: null });
     invoke.mockResolvedValueOnce([["a.ts", "A"], ["b.ts", "M"], ["c.ts", "X"]]);
-    const statusFiles = await backend.gitDiffFilesWithStatus("/", "unstaged");
-    expect(invoke).toHaveBeenCalledWith("git_diff_files_with_status", { directory: "/", mode: "unstaged" });
+    const statusFiles = await backend.gitDiffFilesWithStatus("/", "custom_branch", "release/1.0");
+    expect(invoke).toHaveBeenCalledWith("git_diff_files_with_status", { directory: "/", mode: "custom_branch", baseRef: "release/1.0" });
     expect(statusFiles).toEqual([
       { path: "a.ts", status: "A" },
       { path: "b.ts", status: "M" },
       { path: "c.ts", status: "M" }, // unknown -> M fallback
     ]);
     invoke.mockResolvedValueOnce(["before-text", "after-text"]);
-    const sides = await backend.gitDiffFileSides("/", "f.ts", "unstaged");
-    expect(invoke).toHaveBeenCalledWith("git_diff_file_sides", { directory: "/", filePath: "f.ts", mode: "unstaged" });
+    const sides = await backend.gitDiffFileSides("/", "f.ts", "custom_branch", "release/1.0");
+    expect(invoke).toHaveBeenCalledWith("git_diff_file_sides", { directory: "/", filePath: "f.ts", mode: "custom_branch", baseRef: "release/1.0" });
     expect(sides).toEqual({ before: "before-text", after: "after-text" });
     await backend.gitShowCommit("/", "abc");
     expect(invoke).toHaveBeenCalledWith("git_show_commit", { directory: "/", hash: "abc" });
     await backend.gitCurrentBranch("/");
     expect(invoke).toHaveBeenCalledWith("git_current_branch", { directory: "/" });
+    invoke.mockResolvedValueOnce(["feature/a", "main"]);
+    expect(await backend.gitListBranches("/")).toEqual(["feature/a", "main"]);
+    expect(invoke).toHaveBeenCalledWith("git_list_branches", { directory: "/" });
     invoke.mockResolvedValueOnce([2, 3, "abc1234"]);
     const tracking = await backend.gitBranchTrackingInfo("/");
     expect(invoke).toHaveBeenCalledWith("git_branch_tracking_info", { directory: "/" });

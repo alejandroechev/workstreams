@@ -184,4 +184,21 @@ test.describe("inline comment interactivity", () => {
     await edit.click({ timeout: 5_000 });
     await expect(page.locator('[data-testid="comment-composer"]')).toBeVisible();
   });
+
+  test("Repo Explorer selects a custom target branch for historical diff", async ({ page }) => {
+    await page.goto("/?harness=diff-comment-zone", { waitUntil: "networkidle" });
+    await expect(page.locator('[data-testid="harness-case"]')).toBeVisible();
+    await page.locator('[data-testid="repo-explorer-tab-diff"]').click();
+
+    const picker = page.getByLabel("Custom diff target branch");
+    await expect(picker).toContainText("release/1.0");
+    await picker.selectOption("release/1.0");
+
+    await expect(picker).toHaveValue("release/1.0");
+    await expect(page.locator('[data-testid="diff-current-file"]')).toHaveText("example.ts");
+    await expect(page.getByLabel("Save diff edit")).toHaveCount(0);
+    await expect(
+      page.locator('[data-testid="repo-explorer-diff-comments-toggle"]'),
+    ).toHaveCount(0);
+  });
 });

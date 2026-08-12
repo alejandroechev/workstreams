@@ -165,6 +165,7 @@ function createBackend(): Backend {
     gitLog: vi.fn(),
     gitShowCommit: vi.fn(),
     gitCurrentBranch: vi.fn(),
+    gitListBranches: vi.fn(async () => ["main"]),
     gitBranchTrackingInfo: vi.fn(async () => ({ ahead: 0, behind: 0, remoteHeadShort: "" })),
     discoverCopilotConfig: vi.fn(),
     listSessionPlans: vi.fn(),

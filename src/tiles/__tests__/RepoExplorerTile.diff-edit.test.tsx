@@ -288,4 +288,111 @@ describe("Repo Explorer diff editing", () => {
 
     await waitFor(() => expect(screen.queryByTestId("comment-composer")).toBeNull());
   });
+
+  it("compares HEAD with a selected custom target branch", async () => {
+    const backend = new MemoryBackend();
+    backend.gitListBranches = vi.fn(async () => ["feature/current", "release/1.0"]);
+    backend.gitCurrentBranch = vi.fn(async () => "feature/current");
+    backend.gitDiffFilesWithStatus = vi.fn(async () => [
+      { path: "src/a.ts", status: "M" as const },
+    ]);
+    backend.gitDiffFileSides = vi.fn(async () => ({ before: "release\n", after: "head\n" }));
+
+    render(
+      <BackendProvider backend={backend}>
+        <RepoExplorerTile tileId="t1" isFocused rootDir="/repo" workstreamId="ws-1" />
+      </BackendProvider>,
+    );
+    fireEvent.click(await screen.findByTestId("repo-explorer-tab-diff"));
+    const picker = await screen.findByLabelText("Custom diff target branch");
+    fireEvent.change(picker, { target: { value: "release/1.0" } });
+
+    await waitFor(() =>
+      expect(backend.gitDiffFilesWithStatus).toHaveBeenCalledWith(
+        "/repo",
+        "custom_branch",
+        "release/1.0",
+      ),
+    );
+    await waitFor(() =>
+      expect(backend.gitDiffFileSides).toHaveBeenCalledWith(
+        "/repo",
+        "src/a.ts",
+        "custom_branch",
+        "release/1.0",
+      ),
+    );
+    expect(screen.queryByLabelText("Save diff edit")).toBeNull();
+  });
+
+  it("surfaces an invalid custom target branch in the Diff view", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const backend = new MemoryBackend();
+    backend.gitListBranches = vi.fn(async () => ["main", "missing"]);
+    backend.gitCurrentBranch = vi.fn(async () => "main");
+    backend.gitDiffFilesWithStatus = vi.fn(async (_dir, mode) => {
+      if (mode === "custom_branch") {
+        throw new Error("Target branch does not exist: missing");
+      }
+      return [];
+    });
+
+    render(
+      <BackendProvider backend={backend}>
+        <RepoExplorerTile tileId="t1" isFocused rootDir="/repo" workstreamId="ws-1" />
+      </BackendProvider>,
+    );
+    fireEvent.click(await screen.findByTestId("repo-explorer-tab-diff"));
+    fireEvent.change(await screen.findByLabelText("Custom diff target branch"), {
+      target: { value: "missing" },
+    });
+
+    expect((await screen.findByTestId("diff-error")).textContent).toContain(
+      "Target branch does not exist: missing",
+    );
+    consoleError.mockRestore();
+  });
+
+  it("keeps the latest custom branch when an older request finishes last", async () => {
+    const backend = new MemoryBackend();
+    backend.gitListBranches = vi.fn(async () => ["main", "release/old", "release/new"]);
+    backend.gitCurrentBranch = vi.fn(async () => "main");
+    let resolveOld:
+      | ((files: Array<{ path: string; status: "M" }>) => void)
+      | undefined;
+    let resolveNew:
+      | ((files: Array<{ path: string; status: "M" }>) => void)
+      | undefined;
+    backend.gitDiffFilesWithStatus = vi.fn(async (_dir, mode, baseRef) => {
+      if (mode !== "custom_branch") return [];
+      return new Promise<Array<{ path: string; status: "M" }>>((resolve) => {
+        if (baseRef === "release/old") resolveOld = resolve;
+        if (baseRef === "release/new") resolveNew = resolve;
+      });
+    });
+    backend.gitDiffFileSides = vi.fn(async (_dir, file) => ({
+      before: `before ${file}`,
+      after: `after ${file}`,
+    }));
+
+    render(
+      <BackendProvider backend={backend}>
+        <RepoExplorerTile tileId="t1" isFocused rootDir="/repo" workstreamId="ws-1" />
+      </BackendProvider>,
+    );
+    fireEvent.click(await screen.findByTestId("repo-explorer-tab-diff"));
+    const picker = await screen.findByLabelText("Custom diff target branch");
+    fireEvent.change(picker, { target: { value: "release/old" } });
+    fireEvent.change(picker, { target: { value: "release/new" } });
+    await waitFor(() => {
+      expect(resolveOld).toBeTypeOf("function");
+      expect(resolveNew).toBeTypeOf("function");
+    });
+
+    await act(async () => resolveNew?.([{ path: "src/new.ts", status: "M" }]));
+    await waitFor(() => expect(screen.getByTestId("diff-current-file").textContent).toBe("new.ts"));
+    await act(async () => resolveOld?.([{ path: "src/old.ts", status: "M" }]));
+
+    expect(screen.getByTestId("diff-current-file").textContent).toBe("new.ts");
+  });
 });

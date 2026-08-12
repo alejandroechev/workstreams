@@ -2172,9 +2172,51 @@ fn git_list_branches(directory: String) -> Result<Vec<String>, String> {
         .collect())
 }
 
+fn resolve_custom_diff_ref(directory: &str, base_ref: Option<&str>) -> Result<String, String> {
+    let base = base_ref
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or("A target branch is required for custom branch diff")?;
+    let commit_ref = format!("{base}^{{commit}}");
+    let output = git_cmd()
+        .args(["rev-parse", "--verify", "--quiet", &commit_ref])
+        .current_dir(directory)
+        .output()
+        .map_err(|e| format!("Failed to validate target branch: {e}"))?;
+    if !output.status.success() {
+        return Err(format!("Target branch does not exist: {base}"));
+    }
+    Ok(base.to_string())
+}
+
+fn resolve_diff_merge_base(directory: &str, base_ref: &str) -> Result<String, String> {
+    let output = git_cmd()
+        .args(["merge-base", base_ref, "HEAD"])
+        .current_dir(directory)
+        .output()
+        .map_err(|e| format!("Failed to resolve merge base for {base_ref}: {e}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "Cannot find a merge base between {base_ref} and HEAD: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    let merge_base = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if merge_base.is_empty() {
+        return Err(format!(
+            "Cannot find a merge base between {base_ref} and HEAD"
+        ));
+    }
+    Ok(merge_base)
+}
+
 /// Get list of changed files for a diff mode
 #[tauri::command]
-fn git_diff_files(directory: String, mode: String) -> Result<Vec<String>, String> {
+fn git_diff_files(
+    directory: String,
+    mode: String,
+    base_ref: Option<String>,
+) -> Result<Vec<String>, String> {
     let args: Vec<&str> = match mode.as_str() {
         "unstaged" => {
             let tracked = git_cmd()
@@ -2230,6 +2272,26 @@ fn git_diff_files(directory: String, mode: String) -> Result<Vec<String>, String
             // Fallback to main
             vec!["diff", "main...HEAD", "--name-only"]
         }
+        "custom_branch" => {
+            let base = resolve_custom_diff_ref(&directory, base_ref.as_deref())?;
+            let range = format!("{base}...HEAD");
+            let output = git_cmd()
+                .args(["diff", &range, "--name-only"])
+                .current_dir(&directory)
+                .output()
+                .map_err(|e| format!("Failed to run git: {e}"))?;
+            if !output.status.success() {
+                return Err(format!(
+                    "git error: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                ));
+            }
+            return Ok(String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .filter(|line| !line.is_empty())
+                .map(str::to_string)
+                .collect());
+        }
         _ => return Err(format!("Unknown diff mode: {mode}")),
     };
 
@@ -2254,7 +2316,12 @@ fn git_diff_files(directory: String, mode: String) -> Result<Vec<String>, String
 
 /// Get diff content for a specific file
 #[tauri::command]
-fn git_diff_file(directory: String, file_path: String, mode: String) -> Result<String, String> {
+fn git_diff_file(
+    directory: String,
+    file_path: String,
+    mode: String,
+    base_ref: Option<String>,
+) -> Result<String, String> {
     let base_args: Vec<&str> = match mode.as_str() {
         "unstaged" => {
             let ls = git_cmd()
@@ -2302,6 +2369,22 @@ fn git_diff_file(directory: String, file_path: String, mode: String) -> Result<S
                 .map_err(|e| format!("Failed to run git: {e}"))?;
             return Ok(String::from_utf8_lossy(&output2.stdout).to_string());
         }
+        "custom_branch" => {
+            let base = resolve_custom_diff_ref(&directory, base_ref.as_deref())?;
+            let range = format!("{base}...HEAD");
+            let output = git_cmd()
+                .args(["diff", &range, "--", &file_path])
+                .current_dir(&directory)
+                .output()
+                .map_err(|e| format!("Failed to run git: {e}"))?;
+            if !output.status.success() {
+                return Err(format!(
+                    "git error: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                ));
+            }
+            return Ok(String::from_utf8_lossy(&output.stdout).to_string());
+        }
         _ => return Err(format!("Unknown diff mode: {mode}")),
     };
     let mut args = base_args;
@@ -2345,6 +2428,7 @@ fn git_diff_file_sides(
     directory: String,
     file_path: String,
     mode: String,
+    base_ref: Option<String>,
 ) -> Result<(String, String), String> {
     match mode.as_str() {
         "unstaged" => {
@@ -2368,6 +2452,13 @@ fn git_diff_file_sides(
             let after = read_git_show(&directory, "HEAD", &file_path)?;
             Ok((before, after))
         }
+        "custom_branch" => {
+            let base = resolve_custom_diff_ref(&directory, base_ref.as_deref())?;
+            let merge_base = resolve_diff_merge_base(&directory, &base)?;
+            let before = read_git_show(&directory, &merge_base, &file_path)?;
+            let after = read_git_show(&directory, "HEAD", &file_path)?;
+            Ok((before, after))
+        }
         _ => Err(format!("Unknown diff mode: {mode}")),
     }
 }
@@ -2378,6 +2469,7 @@ fn git_diff_file_sides(
 fn git_diff_files_with_status(
     directory: String,
     mode: String,
+    base_ref: Option<String>,
 ) -> Result<Vec<(String, String)>, String> {
     fn parse_name_status(out: &str) -> Vec<(String, String)> {
         let mut v = Vec::new();
@@ -2450,6 +2542,14 @@ fn git_diff_files_with_status(
                 return Ok(parse_name_status(&String::from_utf8_lossy(&output.stdout)));
             }
             vec!["diff".into(), "main...HEAD".into(), "--name-status".into()]
+        }
+        "custom_branch" => {
+            let base = resolve_custom_diff_ref(&directory, base_ref.as_deref())?;
+            vec![
+                "diff".into(),
+                format!("{base}...HEAD"),
+                "--name-status".into(),
+            ]
         }
         _ => return Err(format!("Unknown diff mode: {mode}")),
     };
@@ -6110,8 +6210,8 @@ Body here.
         std::fs::write(tmp.join("kept.txt"), "v2\n").unwrap();
         std::fs::write(tmp.join("brand-new.txt"), "hello\n").unwrap();
 
-        let files =
-            git_diff_files(dir_str.clone(), "unstaged".into()).expect("git_diff_files unstaged");
+        let files = git_diff_files(dir_str.clone(), "unstaged".into(), None)
+            .expect("git_diff_files unstaged");
         assert!(
             files.iter().any(|f| f == "kept.txt"),
             "modified tracked should be listed: {files:?}"
@@ -6121,7 +6221,7 @@ Body here.
             "untracked file should be listed: {files:?}"
         );
 
-        let diff = git_diff_file(dir_str, "brand-new.txt".into(), "unstaged".into())
+        let diff = git_diff_file(dir_str, "brand-new.txt".into(), "unstaged".into(), None)
             .expect("git_diff_file unstaged for untracked");
         assert!(
             diff.contains("brand-new.txt") && diff.contains("hello"),
@@ -6159,25 +6259,105 @@ Body here.
         std::fs::write(tmp.join("kept.txt"), "v2\nshared\n").unwrap();
         std::fs::write(tmp.join("new.txt"), "brand new\n").unwrap();
 
-        let files =
-            git_diff_files_with_status(dir_str.clone(), "unstaged".into()).expect("with_status");
+        let files = git_diff_files_with_status(dir_str.clone(), "unstaged".into(), None)
+            .expect("with_status");
         let kept = files.iter().find(|(p, _)| p == "kept.txt").expect("kept");
         assert_eq!(kept.1, "M");
         let added = files.iter().find(|(p, _)| p == "new.txt").expect("new");
         assert_eq!(added.1, "A");
 
         let (before, after) =
-            git_diff_file_sides(dir_str.clone(), "kept.txt".into(), "unstaged".into())
+            git_diff_file_sides(dir_str.clone(), "kept.txt".into(), "unstaged".into(), None)
                 .expect("sides");
         assert!(before.contains("v1") && !before.contains("v2"));
         assert!(after.contains("v2") && !after.contains("v1"));
 
         let (before2, after2) =
-            git_diff_file_sides(dir_str.clone(), "new.txt".into(), "unstaged".into())
+            git_diff_file_sides(dir_str.clone(), "new.txt".into(), "unstaged".into(), None)
                 .expect("sides untracked");
         assert_eq!(before2, "");
         assert!(after2.contains("brand new"));
 
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn custom_branch_diff_uses_the_requested_merge_base() {
+        let tmp = std::env::temp_dir().join(format!(
+            "ws-custom-diff-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let dir_str = tmp.to_string_lossy().to_string();
+        let run = |args: &[&str]| {
+            std::process::Command::new("git")
+                .args(args)
+                .current_dir(&tmp)
+                .output()
+                .expect("git invoke")
+        };
+        assert!(run(&["init", "-q", "-b", "main"]).status.success());
+        run(&["config", "user.email", "t@t"]);
+        run(&["config", "user.name", "t"]);
+        std::fs::write(tmp.join("shared.txt"), "base\n").unwrap();
+        run(&["add", "."]);
+        run(&["commit", "-qm", "base"]);
+        run(&["branch", "release/1.0"]);
+        std::fs::write(tmp.join("shared.txt"), "feature\n").unwrap();
+        run(&["add", "."]);
+        run(&["commit", "-qm", "feature"]);
+        run(&["checkout", "-q", "release/1.0"]);
+        std::fs::write(tmp.join("shared.txt"), "release\n").unwrap();
+        run(&["add", "."]);
+        run(&["commit", "-qm", "release"]);
+        run(&["checkout", "-q", "main"]);
+
+        let files = git_diff_files_with_status(
+            dir_str.clone(),
+            "custom_branch".into(),
+            Some("release/1.0".into()),
+        )
+        .expect("custom branch files");
+        assert_eq!(files, vec![("shared.txt".into(), "M".into())]);
+        assert_eq!(
+            git_diff_files(
+                dir_str.clone(),
+                "custom_branch".into(),
+                Some("release/1.0".into()),
+            )
+            .expect("custom branch file names"),
+            vec!["shared.txt"]
+        );
+        let patch = git_diff_file(
+            dir_str.clone(),
+            "shared.txt".into(),
+            "custom_branch".into(),
+            Some("release/1.0".into()),
+        )
+        .expect("custom branch patch");
+        assert!(patch.contains("-base") && patch.contains("+feature"));
+        assert!(!patch.contains("release"));
+
+        let (before, after) = git_diff_file_sides(
+            dir_str.clone(),
+            "shared.txt".into(),
+            "custom_branch".into(),
+            Some("release/1.0".into()),
+        )
+        .expect("custom branch sides");
+        assert_eq!(before, "base\n");
+        assert_eq!(after, "feature\n");
+
+        assert!(git_diff_files_with_status(
+            dir_str,
+            "custom_branch".into(),
+            Some("missing".into()),
+        )
+        .is_err());
         std::fs::remove_dir_all(&tmp).ok();
     }
 

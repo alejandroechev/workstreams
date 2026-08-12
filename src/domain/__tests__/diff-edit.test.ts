@@ -22,6 +22,7 @@ describe("diffModeEditable", () => {
       expect(diffFileCommentable("unstaged", "D")).toBe(false);
       expect(diffFileCommentable("last_commit", "M")).toBe(false);
       expect(diffFileCommentable("branch_vs_master", "M")).toBe(false);
+      expect(diffFileCommentable("custom_branch", "M")).toBe(false);
       expect(diffFileCommentable("unstaged", undefined)).toBe(false);
     });
   });
@@ -32,6 +33,7 @@ describe("diffModeEditable", () => {
     // there is nothing an edit could be written back to.
     expect(diffModeEditable("last_commit")).toBe(false);
     expect(diffModeEditable("branch_vs_master")).toBe(false);
+    expect(diffModeEditable("custom_branch")).toBe(false);
   });
 
   it("refuses an absent or unknown mode rather than defaulting to editable", () => {

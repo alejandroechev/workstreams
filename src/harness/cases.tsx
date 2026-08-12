@@ -186,6 +186,7 @@ const DiffCommentZoneCase: FC = () => {
   const backend = useMemo(() => {
     const instance = new MemoryBackend();
     instance.seedBoundSession("ws-1", "sess-1");
+    instance.gitListBranches = async () => ["main", "release/1.0"];
     instance.gitDiffFilesWithStatus = async () => [
       { path: "src/example.ts", status: "M" as const },
     ];

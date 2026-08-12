@@ -69,7 +69,7 @@ interface DirEntry {
 }
 
 type Mode = "browse" | "view" | "audio" | "image" | "pdf" | "log" | "hooks" | "sqlite" | "search";
-type DiffMode = "unstaged" | "last_commit" | "branch_vs_master";
+type DiffMode = "unstaged" | "last_commit" | "branch_vs_master" | "custom_branch";
 
 const MARKDOWN_EXTS = new Set(["md", "mdx", "markdown"]);
 const SQLITE_EXTS = new Set(["db", "sqlite", "sqlite3", "db3"]);
@@ -210,6 +210,9 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
   const [diffAfter, setDiffAfter] = useState<string>("");
   const [diffFilePath, setDiffFilePath] = useState<string>("");
   const [diffLoading, setDiffLoading] = useState(false);
+  const [diffError, setDiffError] = useState<string | null>(null);
+  const [diffBranches, setDiffBranches] = useState<string[]>([]);
+  const [customDiffBranch, setCustomDiffBranch] = useState("");
   // Diff layout: "unified" (default, single pane) | "split" (classic
   // side-by-side). Persisted in tile view-state.
   const [diffLayout, setDiffLayout] = useState<"split" | "unified">("unified");
@@ -218,6 +221,7 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
   const [diffDirty, setDiffDirty] = useState(false);
   const [diffSaving, setDiffSaving] = useState(false);
   const diffEditorRef = useRef<MonacoNs.editor.ICodeEditor | null>(null);
+  const diffRequestEpochRef = useRef(0);
   const [diffCommentEditor, setDiffCommentEditor] =
     useState<MonacoNs.editor.ICodeEditor | null>(null);
   const [diffEditorReadyToken, setDiffEditorReadyToken] = useState(0);
@@ -729,6 +733,24 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
     diffCommentPath,
   );
   useEffect(() => {
+    if (!activeDiffMode) return;
+    let cancelled = false;
+    void backend
+      .gitListBranches(gitRoot)
+      .then((branches) => {
+        if (!cancelled) setDiffBranches(branches);
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setDiffBranches([]);
+          setDiffError(error instanceof Error ? error.message : String(error));
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeDiffMode, backend, gitRoot]);
+  useEffect(() => {
     if (commentsEnabled) void diffFileComments.reload();
     // The hook reloads when the selected diff file changes; this handles the
     // persisted visibility setting becoming enabled after mount.
@@ -736,12 +758,34 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
   }, [commentsEnabled]);
 
   // Diff mode handlers
-  const loadDiffSides = useCallback(async (file: string, mode: DiffMode) => {
+  const loadDiffSides = useCallback(async (
+    file: string,
+    mode: DiffMode,
+    baseRef?: string | null,
+    requestEpoch?: number,
+  ) => {
     try {
-      const { before, after } = await backend.gitDiffFileSides(gitRoot, file, mode);
+      const { before, after } = await backend.gitDiffFileSides(
+        gitRoot,
+        file,
+        mode,
+        baseRef ?? null,
+      );
+      if (
+        requestEpoch !== undefined &&
+        requestEpoch !== diffRequestEpochRef.current
+      ) {
+        return;
+      }
       setDiffBefore(before);
       setDiffAfter(after);
     } catch {
+      if (
+        requestEpoch !== undefined &&
+        requestEpoch !== diffRequestEpochRef.current
+      ) {
+        return;
+      }
       setDiffBefore("");
       setDiffAfter("");
     }
@@ -768,6 +812,7 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
     if (!editor || !diffEditableRef.current || !diffFilePath) return;
     const content = editor.getModel()?.getValue() ?? "";
     const absolute = joinPath(gitRoot, diffFilePath);
+    const requestEpoch = diffRequestEpochRef.current;
     setDiffSaving(true);
     try {
       const snap = await fileBufferRegistry.acquire(absolute);
@@ -780,25 +825,46 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
       setDiffDirty(false);
       // Re-read: an edit can change the diff itself (removing an added line
       // makes a hunk disappear), so a stale view would misrepresent the file.
-      if (activeDiffMode) await loadDiffSides(diffFilePath, activeDiffMode);
+      if (activeDiffMode) {
+        await loadDiffSides(
+          diffFilePath,
+          activeDiffMode,
+          activeDiffMode === "custom_branch" ? customDiffBranch : null,
+          requestEpoch,
+        );
+      }
     } catch (e) {
       setDirError(String(e));
     } finally {
       setDiffSaving(false);
     }
-  }, [activeDiffMode, diffFilePath, gitRoot, loadDiffSides]);
+  }, [activeDiffMode, customDiffBranch, diffFilePath, gitRoot, loadDiffSides]);
 
   // saveDiffEdit changes identity; hold the latest for the Monaco command.
   const saveDiffEditRef = useRef(saveDiffEdit);
   saveDiffEditRef.current = saveDiffEdit;
 
-  const activateDiffMode = useCallback(async (diffMode: DiffMode) => {
+  const activateDiffMode = useCallback(async (
+    diffMode: DiffMode,
+    requestedBaseRef?: string | null,
+  ) => {
+    const baseRef =
+      diffMode === "custom_branch"
+        ? requestedBaseRef?.trim() || customDiffBranch
+        : null;
+    if (diffMode === "custom_branch" && !baseRef) {
+      setDiffError("Choose a target branch for the custom diff.");
+      return;
+    }
+    const requestEpoch = ++diffRequestEpochRef.current;
     setActiveDiffMode(diffMode);
     setDiffLoading(true);
     setDiffBefore("");
     setDiffAfter("");
+    setDiffError(null);
     try {
-      const files = await backend.gitDiffFilesWithStatus(gitRoot, diffMode);
+      const files = await backend.gitDiffFilesWithStatus(gitRoot, diffMode, baseRef);
+      if (requestEpoch !== diffRequestEpochRef.current) return;
       setDiffFiles(files);
       // If the previously-selected file is still in the new mode's list,
       // keep it; otherwise drop to the first.
@@ -807,33 +873,44 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
         : files[0]?.path ?? "";
       setDiffFilePath(keep);
       if (keep) {
-        await loadDiffSides(keep, diffMode);
+        await loadDiffSides(keep, diffMode, baseRef, requestEpoch);
       }
     } catch (e) {
+      if (requestEpoch !== diffRequestEpochRef.current) return;
       console.error("[Explorer] diff error:", e);
       setDiffFiles([]);
+      setDiffFilePath("");
+      setDiffError(e instanceof Error ? e.message : String(e));
     } finally {
-      setDiffLoading(false);
+      if (requestEpoch === diffRequestEpochRef.current) setDiffLoading(false);
     }
-  }, [backend, gitRoot, diffFilePath, loadDiffSides]);
+  }, [backend, customDiffBranch, gitRoot, diffFilePath, loadDiffSides]);
 
   const selectDiffFile = useCallback(async (file: string) => {
     if (!activeDiffMode) return;
+    const requestEpoch = ++diffRequestEpochRef.current;
     setDiffFilePath(file);
     setDiffLoading(true);
     try {
-      await loadDiffSides(file, activeDiffMode);
+      await loadDiffSides(
+        file,
+        activeDiffMode,
+        activeDiffMode === "custom_branch" ? customDiffBranch : null,
+        requestEpoch,
+      );
     } finally {
-      setDiffLoading(false);
+      if (requestEpoch === diffRequestEpochRef.current) setDiffLoading(false);
     }
-  }, [activeDiffMode, loadDiffSides]);
+  }, [activeDiffMode, customDiffBranch, loadDiffSides]);
 
   const exitDiffMode = useCallback(() => {
+    diffRequestEpochRef.current += 1;
     setActiveDiffMode(null);
     setDiffBefore("");
     setDiffAfter("");
     setDiffFiles([]);
     setDiffFilePath("");
+    setDiffError(null);
   }, []);
 
   // Git log handlers
@@ -976,7 +1053,8 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
     if (tab && tab !== "files") {
       if (tab === "diff") {
         const dm = (vs.diffMode as DiffMode | undefined) ?? "unstaged";
-        activateDiffMode(dm);
+        if (vs.customDiffBranch) setCustomDiffBranch(vs.customDiffBranch);
+        activateDiffMode(dm, vs.customDiffBranch);
       } else if (tab === "log") {
         void openGitLog();
       } else if (tab === "hooks") {
@@ -1015,6 +1093,10 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
       currentDir,
       filePath: mode === "view" && filePath && !filePath.startsWith("commit:") ? filePath : undefined,
       diffMode: activeTab === "diff" && activeDiffMode ? activeDiffMode : undefined,
+      customDiffBranch:
+        activeTab === "diff" && activeDiffMode === "custom_branch" && customDiffBranch
+          ? customDiffBranch
+          : undefined,
       diffLayout: activeTab === "diff" ? diffLayout : undefined,
       hookName: activeTab === "hooks" && hookSelection ? hookSelection.name : undefined,
       searchQuery: activeTab === "search" && contentSearchQuery ? contentSearchQuery : undefined,
@@ -1171,6 +1253,33 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
           {dm === "unstaged" ? "Unstaged" : dm === "last_commit" ? "Last Commit" : "vs Master"}
         </button>
       ))}
+      <select
+        aria-label="Custom diff target branch"
+        title="Compare the selected branch's merge base with HEAD"
+        value={activeDiffMode === "custom_branch" ? customDiffBranch : ""}
+        onChange={(event) => {
+          const branch = event.target.value;
+          if (!branch) return;
+          setCustomDiffBranch(branch);
+          void activateDiffMode("custom_branch", branch);
+        }}
+        style={{
+          ...toolbarButtonStyle,
+          maxWidth: 170,
+          fontSize: 10,
+          padding: "2px 5px",
+          borderRadius: 3,
+          background: activeDiffMode === "custom_branch" ? "#45475a" : "#181825",
+          color: activeDiffMode === "custom_branch" ? "#cdd6f4" : "#89b4fa",
+        }}
+      >
+        <option value="">Custom branch…</option>
+        {diffBranches.map((branch) => (
+          <option key={branch} value={branch} disabled={branch === currentBranch}>
+            {branch === currentBranch ? `${branch} (current)` : branch}
+          </option>
+        ))}
+      </select>
       {activeDiffMode && diffFilePath && (
         <span
           data-testid="diff-current-file"
@@ -1275,6 +1384,20 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
       <div ref={containerRef} style={containerStyle}>
         {tabBar}
         {diffModeToolbar}
+        {diffError && (
+          <div
+            data-testid="diff-error"
+            style={{
+              padding: "6px 10px",
+              borderBottom: "1px solid #f38ba8",
+              background: "#30202a",
+              color: "#f38ba8",
+              fontSize: 11,
+            }}
+          >
+            {diffError}
+          </div>
+        )}
         <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
           <div style={diffFilePanelStyle} data-testid="diff-file-list">
             {diffLoading && diffFiles.length === 0 && (

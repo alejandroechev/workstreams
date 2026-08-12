@@ -374,6 +374,10 @@ describe("MemoryBackend", () => {
       const t = await backend.gitBranchTrackingInfo("C:\\project");
       expect(t).toEqual({ ahead: 0, behind: 0, remoteHeadShort: "" });
     });
+
+    it("gitListBranches returns offline branch fixtures", async () => {
+      expect(await backend.gitListBranches("C:\\project")).toEqual(["main"]);
+    });
   });
 
   describe("discoverCopilotConfig", () => {

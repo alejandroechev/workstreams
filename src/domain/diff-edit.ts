@@ -10,6 +10,7 @@
  * | `unstaged` | `git show HEAD` | the file on disk |
  * | `last_commit` | `git show HEAD~1` | `git show HEAD` |
  * | `branch_vs_master` | `git show master` | `git show HEAD` |
+ * | `custom_branch` | `git show <target>` | `git show HEAD` |
  *
  * Only `unstaged` reads the working tree, so only it is editable. This mirrors
  * `modifiedEditable` in `code-review-view.ts`, which encodes the same rule for

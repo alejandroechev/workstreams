@@ -21,9 +21,23 @@ describe("parseViewState", () => {
       activeTab: "search",
       searchQuery: "needle",
     });
+
     expect(parseViewState(out, "repo_explorer")).toEqual({
       activeTab: "search",
       searchQuery: "needle",
+    });
+  });
+
+  it("repo_explorer round-trips a custom diff target branch", () => {
+    const out = mergeViewState(null, "repo_explorer", {
+      activeTab: "diff",
+      diffMode: "custom_branch",
+      customDiffBranch: "release/1.0",
+    });
+    expect(parseViewState(out, "repo_explorer")).toEqual({
+      activeTab: "diff",
+      diffMode: "custom_branch",
+      customDiffBranch: "release/1.0",
     });
   });
 

@@ -104,7 +104,10 @@ Multi-tab repo browser (Files / Diff / Log / Hooks):
   editable and supports the same inline file-comment threads as the Files tab;
   comments remain keyed to the repo-relative working file, so they appear in
   either surface. Deleted files and historical diff modes cannot carry file
-  comments because they have no modified-side working-file lines.
+  comments because they have no modified-side working-file lines. A custom
+  branch picker lists local branches and compares the selected target's merge
+  base to `HEAD` (`target...HEAD`); the target is persisted per tile and
+  restored with the Diff tab.
 - **Log** tab: ahead / behind counts against `origin/<current-branch>`, with
   an `origin/<branch>` badge + accent border on the matching commit
 - **Hooks** tab: lists active git hooks; the selected hook opens in a Monaco
@@ -115,7 +118,8 @@ Multi-tab repo browser (Files / Diff / Log / Hooks):
 
 A stand-alone CLI scenario (`node scripts/repo-explorer-cli.mjs <dir>
 <query>`) mirrors the same filename search logic without launching the
-desktop app.
+desktop app. `node scripts/repo-explorer-cli.mjs <dir> --diff-branch <branch>`
+lists the same `branch...HEAD` changed-file set as the custom diff picker.
 
 ![Diff tab showing split-mode unstaged changes](assets/feature-diff.png)
 

@@ -77,14 +77,15 @@ export interface Backend {
   /** Bump the global search epoch so any in-flight search bails out on its next iteration. */
   cancelSearches(): Promise<void>;
   // Git diff
-  gitDiffFiles(directory: string, mode: string): Promise<string[]>;
-  gitDiffFile(directory: string, filePath: string, mode: string): Promise<string>;
-  gitDiffFilesWithStatus(directory: string, mode: string): Promise<Array<{ path: string; status: "A" | "M" | "D" | "R" }>>;
-  gitDiffFileSides(directory: string, filePath: string, mode: string): Promise<{ before: string; after: string }>;
+  gitDiffFiles(directory: string, mode: string, baseRef?: string | null): Promise<string[]>;
+  gitDiffFile(directory: string, filePath: string, mode: string, baseRef?: string | null): Promise<string>;
+  gitDiffFilesWithStatus(directory: string, mode: string, baseRef?: string | null): Promise<Array<{ path: string; status: "A" | "M" | "D" | "R" }>>;
+  gitDiffFileSides(directory: string, filePath: string, mode: string, baseRef?: string | null): Promise<{ before: string; after: string }>;
   // Git log & branch
   gitLog(directory: string, limit?: number): Promise<Array<{ hash: string; short_hash: string; message: string; author: string; date: string }>>;
   gitShowCommit(directory: string, hash: string): Promise<string>;
   gitCurrentBranch(directory: string): Promise<string>;
+  gitListBranches(directory: string): Promise<string[]>;
   /** Returns ahead/behind counts vs origin/<currentBranch> + remote head short hash. */
   gitBranchTrackingInfo(directory: string): Promise<{ ahead: number; behind: number; remoteHeadShort: string }>;
   // Copilot config discovery

@@ -7,10 +7,12 @@
 //
 // Usage:
 //   node scripts/repo-explorer-cli.mjs <directory> <query> [--limit N] [--names]
+//   node scripts/repo-explorer-cli.mjs <directory> --diff-branch <branch>
 //
 // Flags:
 //   --names   filename-only search (Ctrl+P equivalent)
 //   --limit N max total matches (default 200 for content, 50 for names)
+//   --diff-branch <branch> list files changed in <branch>...HEAD
 //
 // Examples:
 //   node scripts/repo-explorer-cli.mjs . "search_in_files"
@@ -19,6 +21,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { execFileSync } from "node:child_process";
 
 const SKIP_DIRS = new Set([
   "node_modules",
@@ -41,10 +44,12 @@ const MAX_FILE_SIZE = 1_048_576; // 1 MB
 const MAX_PER_FILE = 5;
 
 function parseArgs(argv) {
-  const args = { _: [], limit: undefined, names: false };
+  const args = { _: [], limit: undefined, names: false, diffBranch: undefined };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--names") args.names = true;
+    else if (a === "--diff-branch") args.diffBranch = argv[++i];
+    else if (a.startsWith("--diff-branch=")) args.diffBranch = a.slice("--diff-branch=".length);
     else if (a === "--limit") args.limit = parseInt(argv[++i], 10);
     else if (a.startsWith("--limit=")) args.limit = parseInt(a.split("=")[1], 10);
     else args._.push(a);
@@ -112,6 +117,29 @@ function searchInFiles(root, query, limit) {
 
 function main() {
   const args = parseArgs(process.argv.slice(2));
+  if (args.diffBranch !== undefined) {
+    if (args._.length < 1 || !args.diffBranch.trim()) {
+      console.error("Usage: node scripts/repo-explorer-cli.mjs <directory> --diff-branch <branch>");
+      process.exit(2);
+    }
+    const [dir] = args._;
+    const target = args.diffBranch.trim();
+    try {
+      execFileSync("git", ["rev-parse", "--verify", "--quiet", `${target}^{commit}`], {
+        cwd: dir,
+        stdio: "ignore",
+      });
+      const output = execFileSync("git", ["diff", "--name-status", `${target}...HEAD`], {
+        cwd: dir,
+        encoding: "utf8",
+      });
+      process.stdout.write(output);
+      return;
+    } catch {
+      console.error(`Target branch does not exist or cannot be compared: ${target}`);
+      process.exit(1);
+    }
+  }
   if (args._.length < 2) {
     console.error("Usage: node scripts/repo-explorer-cli.mjs <directory> <query> [--limit N] [--names]");
     process.exit(2);

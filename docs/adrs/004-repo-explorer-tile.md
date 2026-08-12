@@ -27,10 +27,22 @@ Pain points:
 6. **In-file search**: a magnifier toolbar button invokes Monaco's `actions.find` action — no custom find UI.
 7. **Font-size**: per-tile state (`fontSize`, default 13). A−/A+ buttons live on the right side of the tab bar and `Ctrl+= / Ctrl+- / Ctrl+0` shortcuts apply when the tile is focused. Applied to Monaco's `fontSize` option and to the directory listing rows.
 
+8. **Custom target branch diff (2026-08).** Alongside Unstaged, Last Commit,
+   and vs Master, the Diff toolbar exposes a local-branch picker. Selecting a
+   target computes `git diff <target>...HEAD`, matching the existing vs Master
+   merge-base semantics while allowing release or sibling feature branches.
+   The branch is passed separately as `baseRef` through the Backend/Tauri
+   contract rather than encoded into the mode string, validated with
+   `rev-parse --verify <target>^{commit}`, and persisted as
+   `viewState.customDiffBranch`. Its modified side is `HEAD`, so it remains
+   read-only and does not offer working-file comments.
+
 ## Consequences
 
 - Users get a consistent tab UI across `SessionMetaTile` and `RepoExplorerTile`.
 - Cross-file search works fully offline with no external binaries, but is slower than ripgrep on huge repos — acceptable trade-off given our skip-list and 1 MB cap.
 - Font-size lives only in component state — not persisted across tile recreation. If users complain we'll lift it to tile config.
+- The custom target picker lists local branches only. Remote-only refs must be
+  fetched into a local branch before they appear.
 - The tile type id (`file_explorer`) is retained, so existing workstream layouts keep loading without migration.
 - All overlays are scoped to the tile container, which means they cannot escape the tile bounds in any tiling mode (fullscreen, split, grid).
