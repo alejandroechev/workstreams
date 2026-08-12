@@ -30,6 +30,12 @@ use std::sync::OnceLock;
 /// we take the **last** non-empty line and require it to look like a PATH (at
 /// least one absolute entry). Anything else is rejected so a broken profile
 /// can never replace a working inherited PATH with garbage.
+///
+/// Only *called* from `cfg(unix)` code, but deliberately left uncompiled-out so
+/// its unit tests run on every platform. Windows would otherwise fail
+/// `clippy -D warnings` on dead code — which it did, breaking the pre-push gate
+/// for anyone developing this repo on Windows.
+#[cfg_attr(windows, allow(dead_code))]
 pub fn parse_login_path_output(raw: &str) -> Option<String> {
     let candidate = raw.lines().map(str::trim).rfind(|l| !l.is_empty())?;
 
@@ -46,6 +52,9 @@ pub fn parse_login_path_output(raw: &str) -> Option<String> {
 /// Duplicates are removed while keeping first-seen order, and empty segments
 /// are dropped — a trailing `:` in PATH means "current directory" to some
 /// tools, which we do not want to propagate into spawned shells.
+///
+/// See [`parse_login_path_output`] for why this is not `cfg(unix)`-gated.
+#[cfg_attr(windows, allow(dead_code))]
 pub fn merge_paths(login: Option<&str>, inherited: Option<&str>) -> Option<String> {
     let mut merged: Vec<&str> = Vec::new();
     for source in [login, inherited].into_iter().flatten() {
