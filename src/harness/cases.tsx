@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties, type FC } fro
 
 import { FileEditorView } from "../files/FileEditorView";
 import CodeReviewTile from "../tiles/CodeReviewTile";
+import RepoExplorerTile from "../tiles/RepoExplorerTile";
 import { BackendProvider } from "../backend/context";
 import { MemoryBackend } from "../backend/memory-backend";
 import type { SessionFileComment } from "../domain/file-comments";
@@ -177,6 +178,56 @@ const ReviewThreadCase: FC = () => {
   );
 };
 
+/**
+ * Case: Repo Explorer Unstaged diff with the shared file-comment layer mounted
+ * on the DiffEditor's modified side.
+ */
+const DiffCommentZoneCase: FC = () => {
+  const backend = useMemo(() => {
+    const instance = new MemoryBackend();
+    instance.seedBoundSession("ws-1", "sess-1");
+    instance.gitDiffFilesWithStatus = async () => [
+      { path: "src/example.ts", status: "M" as const },
+    ];
+    instance.gitDiffFileSides = async () => ({
+      before: "const oldName = 1;\nconst stable = 2;\n",
+      after: "const clearName = 1;\nconst stable = 2;\n",
+    });
+    return instance;
+  }, []);
+  const [ready, setReady] = useState(false);
+  const seededRef = useRef(false);
+
+  useEffect(() => {
+    if (seededRef.current) return;
+    seededRef.current = true;
+    void backend
+      .addSessionFileComment(
+        "ws-1",
+        "src/example.ts",
+        1,
+        1,
+        "const clearName = 1;",
+        "This comment came from the working file.",
+      )
+      .then(() => setReady(true));
+  }, [backend]);
+
+  if (!ready) return <div data-testid="harness-loading">seeding…</div>;
+  return (
+    <div data-testid="harness-case" data-case="diff-comment-zone" style={full}>
+      <BackendProvider backend={backend}>
+        <RepoExplorerTile
+          tileId="t1"
+          isFocused
+          rootDir="C:/repo"
+          workstreamId="ws-1"
+        />
+      </BackendProvider>
+    </div>
+  );
+};
+
 export interface HarnessCase {
   title: string;
   Component: FC;
@@ -190,5 +241,9 @@ export const harnessCases: Record<string, HarnessCase> = {
   "review-thread": {
     title: "Code Review thread zone (Resolve/Reopen buttons)",
     Component: ReviewThreadCase,
+  },
+  "diff-comment-zone": {
+    title: "Repo Explorer Unstaged diff file-comment zone",
+    Component: DiffCommentZoneCase,
   },
 };

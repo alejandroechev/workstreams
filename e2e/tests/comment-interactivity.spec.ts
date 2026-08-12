@@ -161,4 +161,27 @@ test.describe("inline comment interactivity", () => {
     await resolve.click({ timeout: 5_000 });
     await expect(page.locator('[data-testid="thread-status"]').first()).toHaveText("Resolved");
   });
+
+  test("Repo Explorer Unstaged diff renders editable file-comment threads", async ({ page }) => {
+    await page.goto("/?harness=diff-comment-zone", { waitUntil: "networkidle" });
+    await expect(page.locator('[data-testid="harness-case"]')).toBeVisible();
+    await page.locator('[data-testid="repo-explorer-tab-diff"]').click();
+    await page.waitForFunction(
+      () => document.querySelectorAll(".monaco-diff-editor").length > 0,
+      null,
+      { timeout: 30_000 },
+    );
+
+    const toggle = page.locator('[data-testid="repo-explorer-diff-comments-toggle"]');
+    await expect(toggle).toBeEnabled();
+    await toggle.click();
+
+    const edit = page.locator('[data-testid^="comment-edit-"]');
+    await expect(edit).toBeVisible();
+    await expect(page.locator('[data-testid^="comment-zone-"]')).toContainText(
+      "This comment came from the working file.",
+    );
+    await edit.click({ timeout: 5_000 });
+    await expect(page.locator('[data-testid="comment-composer"]')).toBeVisible();
+  });
 });

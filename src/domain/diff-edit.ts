@@ -30,3 +30,15 @@ export const EDITABLE_DIFF_MODE = "unstaged";
 export function diffModeEditable(mode: string | null | undefined): boolean {
   return mode === EDITABLE_DIFF_MODE;
 }
+
+/**
+ * True when a diff file has a modified-side working file that can carry a
+ * file comment. Deleted files have no modified-side lines, so their old-side
+ * deletions cannot be represented by the working-file `file_comments` model.
+ */
+export function diffFileCommentable(
+  mode: string | null | undefined,
+  status: "A" | "M" | "D" | "R" | undefined,
+): boolean {
+  return diffModeEditable(mode) && status !== undefined && status !== "D";
+}

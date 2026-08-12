@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useBackend } from "../backend/context";
 import { toRepoRelative } from "../domain/file-types";
 import type { SessionFileComment } from "../domain/file-comments";
@@ -41,9 +41,13 @@ export function useFileComments(
   absolutePath: string | null | undefined,
 ): UseFileCommentsResult {
   const backend = useBackend();
-  const [comments, setComments] = useState<SessionFileComment[]>([]);
+  const [commentState, setCommentState] = useState<{
+    file: string | null;
+    comments: SessionFileComment[];
+  }>({ file: null, comments: [] });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const reloadVersionRef = useRef(0);
 
   const file = useMemo(() => {
     if (!absolutePath) return null;
@@ -53,19 +57,24 @@ export function useFileComments(
   const isActive = Boolean(workstreamId && file !== null);
 
   const reload = useCallback(async () => {
+    const version = ++reloadVersionRef.current;
     if (!workstreamId || file === null) {
-      setComments([]);
+      setCommentState({ file: null, comments: [] });
       return;
     }
     setLoading(true);
     setError(null);
     try {
       const fresh = await backend.listSessionFileComments(workstreamId, file);
-      setComments(fresh);
+      if (version === reloadVersionRef.current) {
+        setCommentState({ file, comments: fresh });
+      }
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      if (version === reloadVersionRef.current) {
+        setError(e instanceof Error ? e.message : String(e));
+      }
     } finally {
-      setLoading(false);
+      if (version === reloadVersionRef.current) setLoading(false);
     }
   }, [backend, workstreamId, file]);
 
@@ -97,7 +106,13 @@ export function useFileComments(
         anchorText,
         body,
       );
-      setComments((prev) => sortComments([...prev, created]));
+      setCommentState((previous) => ({
+        file,
+        comments: sortComments([
+          ...(previous.file === file ? previous.comments : []),
+          created,
+        ]),
+      }));
       return created;
     },
     [backend, workstreamId, file],
@@ -107,7 +122,12 @@ export function useFileComments(
     async (id: string, body: string) => {
       if (!workstreamId) throw new Error("workstreamId is required");
       const updated = await backend.updateSessionFileComment(workstreamId, id, body);
-      setComments((prev) => prev.map((c) => (c.id === id ? updated : c)));
+      setCommentState((previous) => ({
+        ...previous,
+        comments: previous.comments.map((comment) =>
+          comment.id === id ? updated : comment,
+        ),
+      }));
       return updated;
     },
     [backend, workstreamId],
@@ -117,7 +137,10 @@ export function useFileComments(
     async (parentId: string, body: string) => {
       if (!workstreamId) throw new Error("workstreamId is required");
       const created = await backend.replySessionFileComment(workstreamId, parentId, body);
-      setComments((prev) => sortComments([...prev, created]));
+      setCommentState((previous) => ({
+        ...previous,
+        comments: sortComments([...previous.comments, created]),
+      }));
       return created;
     },
     [backend, workstreamId],
@@ -128,7 +151,12 @@ export function useFileComments(
       if (!workstreamId) throw new Error("workstreamId is required");
       await backend.deleteSessionFileComment(workstreamId, id);
       // Cascade replies locally to match the backend delete.
-      setComments((prev) => prev.filter((c) => c.id !== id && c.parent_id !== id));
+      setCommentState((previous) => ({
+        ...previous,
+        comments: previous.comments.filter(
+          (comment) => comment.id !== id && comment.parent_id !== id,
+        ),
+      }));
     },
     [backend, workstreamId],
   );
@@ -137,14 +165,20 @@ export function useFileComments(
     async (id: string, status: string) => {
       if (!workstreamId) throw new Error("workstreamId is required");
       const updated = await backend.setSessionFileCommentStatus(workstreamId, id, status);
-      setComments((prev) => prev.map((c) => (c.id === id ? updated : c)));
+      setCommentState((previous) => ({
+        ...previous,
+        comments: previous.comments.map((comment) =>
+          comment.id === id ? updated : comment,
+        ),
+      }));
       return updated;
     },
     [backend, workstreamId],
   );
 
   return {
-    comments: isActive ? comments : [],
+    comments:
+      isActive && commentState.file === file ? commentState.comments : [],
     loading,
     error,
     file: isActive ? file : null,

@@ -36,10 +36,12 @@ project-aware workspace:
 - 🗂️ **Built-in repo browser** — Files / Diff / Log / Hooks / Search tabs. Diff
   has split / unified toggle, and the **Unstaged** diff is **editable in place**:
   type on the modified side and `Ctrl+S` (or the Save button) writes straight to
-  the working file, then re-reads the diff. The historical modes (Last commit,
-  Branch vs master) stay read-only because their modified side is a past commit,
-  not a file on disk. Audio, images, PDFs, and SQLite databases preview
-  inline. Git hooks open in a syntax-highlighted editor with inline editing.
+  the working file, then re-reads the diff. Inline file comments work there too:
+  select modified-side lines and use the comment toggle to create the same
+  reviewer↔agent threads shown in the Files tab. Historical modes (Last commit,
+  Branch vs master) stay read-only and uncommentable because their modified side
+  is a past commit, not a file on disk. Audio, images, PDFs, and SQLite databases
+  preview inline. Git hooks open in a syntax-highlighted editor with inline editing.
 - 🔎 **Search all files** — the Search tab (or `Ctrl+Shift+F`) runs a fast
   content search across the repo, respecting `.gitignore`, grouping matches by
   file with highlighted previews; click a result to jump straight to that line.

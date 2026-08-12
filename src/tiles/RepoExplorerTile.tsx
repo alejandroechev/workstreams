@@ -14,8 +14,10 @@ import { useBackend } from "../backend/context";
 import { detectLanguage } from "../domain/tile-config";
 import { joinPath, defaultRootDir, parentDir } from "../domain/platform";
 import { subscribeWalkthroughNavigate } from "../domain/walkthrough-nav";
-import { diffModeEditable } from "../domain/diff-edit";
+import { diffFileCommentable, diffModeEditable } from "../domain/diff-edit";
 import { fileBufferRegistry } from "../files/FileBufferRegistry";
+import { FileCommentsLayer } from "../files/FileCommentsLayer";
+import { INTERACTIVE_ZONES_CLASS } from "../ui/interactive-zones";
 import { isAudioFile, isImageFile, isSvgFile, isPdfFile, makeAudioBlobUrl, makeImageBlobUrl, makePdfBlobUrl, dirnameOf, type LinkTargetKind } from "../domain/file-types";
 import { createNavigationStack, currentPath as navCurrent, canGoBack as navCanBack, canGoForward as navCanFwd, pushPath as navPush, goBack as navBack, goForward as navFwd, type NavigationStack } from "../domain/nav-history";
 import {
@@ -216,6 +218,9 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
   const [diffDirty, setDiffDirty] = useState(false);
   const [diffSaving, setDiffSaving] = useState(false);
   const diffEditorRef = useRef<MonacoNs.editor.ICodeEditor | null>(null);
+  const [diffCommentEditor, setDiffCommentEditor] =
+    useState<MonacoNs.editor.ICodeEditor | null>(null);
+  const [diffEditorReadyToken, setDiffEditorReadyToken] = useState(0);
   const diffAfterRef = useRef("");
   const diffEditableRef = useRef(false);
   // Git branch state
@@ -713,6 +718,22 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
 
   // Git root directory for diff commands (use rootDir, not browsed currentDir)
   const gitRoot = rootDir || currentDir;
+  const diffSelectedStatus = diffFiles.find((file) => file.path === diffFilePath)?.status;
+  const diffCommentPath =
+    diffFileCommentable(activeDiffMode, diffSelectedStatus) && diffFilePath
+      ? joinPath(gitRoot, diffFilePath)
+      : null;
+  const diffFileComments = useFileComments(
+    workstreamId ?? null,
+    gitRoot,
+    diffCommentPath,
+  );
+  useEffect(() => {
+    if (commentsEnabled) void diffFileComments.reload();
+    // The hook reloads when the selected diff file changes; this handles the
+    // persisted visibility setting becoming enabled after mount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [commentsEnabled]);
 
   // Diff mode handlers
   const loadDiffSides = useCallback(async (file: string, mode: DiffMode) => {
@@ -727,6 +748,9 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
   }, [backend, gitRoot]);
 
   const diffEditable = diffModeEditable(activeDiffMode);
+  const diffCommentable = diffFileCommentable(activeDiffMode, diffSelectedStatus);
+  const diffCommentsEnabled =
+    diffCommentable && commentsEnabled && commentsAvailable;
   useEffect(() => { diffEditableRef.current = diffEditable; }, [diffEditable]);
   useEffect(() => { diffAfterRef.current = diffAfter; setDiffDirty(false); }, [diffAfter]);
 
@@ -1184,6 +1208,36 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
           >
             {diffSaving ? "Saving…" : "Save"}
           </button>
+          {diffCommentable && (
+            <button
+              onClick={toggleCommentsVisible}
+              disabled={!commentsAvailable}
+              title={
+                !commentsAvailable
+                  ? "Open a Copilot session in this workstream to add inline comments"
+                  : commentsEnabled
+                    ? "Hide inline comments"
+                    : "Show inline comments"
+              }
+              data-testid="repo-explorer-diff-comments-toggle"
+              style={{
+                ...toolbarButtonStyle,
+                display: "inline-flex",
+                alignItems: "center",
+                padding: "2px 6px",
+                borderRadius: 3,
+                background: commentsEnabled ? "#313244" : "transparent",
+                color: !commentsAvailable
+                  ? "#585b70"
+                  : commentsEnabled
+                    ? "#a6e3a1"
+                    : "#89b4fa",
+                cursor: commentsAvailable ? "pointer" : "not-allowed",
+              }}
+            >
+              <ChatBubbleLeftRightIcon style={{ width: 13, height: 13 }} />
+            </button>
+          )}
         </div>
       )}
       {activeDiffMode && (
@@ -1262,7 +1316,10 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
               );
             })}
           </div>
-          <div style={{ flex: 1 }}>
+          <div
+            className={diffCommentsEnabled ? INTERACTIVE_ZONES_CLASS : undefined}
+            style={{ flex: 1, position: "relative", minWidth: 0 }}
+          >
             {diffFilePath ? (
               <DiffEditor
                 height="100%"
@@ -1274,7 +1331,13 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
                 onMount={(editor, monaco) => {
                   const modified = editor.getModifiedEditor();
                   editorRef.current = modified;
-                  diffEditorRef.current = modified;
+                  if (diffEditorRef.current !== modified) {
+                    diffEditorRef.current = modified;
+                    queueMicrotask(() => {
+                      setDiffCommentEditor(modified);
+                      setDiffEditorReadyToken((token) => token + 1);
+                    });
+                  }
                   modified.onDidChangeModelContent(() => {
                     if (!diffEditableRef.current) return;
                     // Compare against the loaded content: Monaco also fires
@@ -1302,6 +1365,18 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
                 {diffFiles.length === 0 ? "No changes in this diff mode" : "Pick a file from the list"}
               </div>
             )}
+            <FileCommentsLayer
+              key={diffCommentPath ?? "no-diff-comment-file"}
+              editor={diffCommentEditor}
+              editorReadyToken={diffEditorReadyToken}
+              comments={diffFileComments.comments}
+              enabled={diffCommentsEnabled}
+              onAddComment={diffFileComments.add}
+              onUpdateComment={diffFileComments.update}
+              onReplyComment={diffFileComments.reply}
+              onDeleteComment={diffFileComments.remove}
+              onSetCommentStatus={diffFileComments.setStatus}
+            />
           </div>
         </div>
         {overlays}

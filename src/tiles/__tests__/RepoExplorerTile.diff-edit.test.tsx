@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { useRef } from "react";
-import { fireEvent, render, screen, waitFor, cleanup } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, cleanup } from "@testing-library/react";
 
 import RepoExplorerTile from "../RepoExplorerTile";
 import { BackendProvider } from "../../backend/context";
@@ -8,6 +8,7 @@ import { MemoryBackend } from "../../backend/memory-backend";
 
 const h = vi.hoisted(() => ({
   contentHandlers: [] as Array<() => void>,
+  selectionHandlers: [] as Array<(event: unknown) => void>,
   commands: [] as Array<() => void>,
   liveBuffer: null as null | { current: string },
   lastOptions: null as null | { readOnly?: boolean; originalEditable?: boolean },
@@ -25,25 +26,36 @@ vi.mock("@monaco-editor/react", () => ({
     options?: { readOnly?: boolean; originalEditable?: boolean };
   }) => {
     const bufRef = useRef(props.modified);
+    const modifiedRef = useRef<Record<string, unknown> | null>(null);
+    const mountedRef = useRef(false);
     h.liveBuffer = bufRef;
     h.lastOptions = props.options ?? null;
-    const modified = {
-      onDidChangeModelContent: (cb: () => void) => h.contentHandlers.push(cb),
-      onDidChangeCursorSelection: () => {},
-      addCommand: (_key: number, cb: () => void) => h.commands.push(cb),
-      getModel: () => ({
-        getValue: () => bufRef.current,
-        setValue: (v: string) => { bufRef.current = v; },
-      }),
-      changeViewZones: () => {},
-      getContainerDomNode: () => document.createElement("div"),
-      revealLineInCenter: () => {},
-      setPosition: () => {},
-    };
-    props.onMount?.(
-      { getModifiedEditor: () => modified, getOriginalEditor: () => modified },
-      { KeyMod: { CtrlCmd: 1 }, KeyCode: { KeyS: 2 } },
-    );
+    if (!modifiedRef.current) {
+      modifiedRef.current = {
+        onDidChangeModelContent: (cb: () => void) => h.contentHandlers.push(cb),
+        onDidChangeCursorSelection: (cb: (event: unknown) => void) => {
+          h.selectionHandlers.push(cb);
+          return { dispose: vi.fn() };
+        },
+        addCommand: (_key: number, cb: () => void) => h.commands.push(cb),
+        getModel: () => ({
+          getValue: () => bufRef.current,
+          setValue: (v: string) => { bufRef.current = v; },
+        }),
+        changeViewZones: () => {},
+        getContainerDomNode: () => document.createElement("div"),
+        revealLineInCenter: () => {},
+        setPosition: () => {},
+      };
+    }
+    const modified = modifiedRef.current;
+    if (!mountedRef.current) {
+      mountedRef.current = true;
+      props.onMount?.(
+        { getModifiedEditor: () => modified, getOriginalEditor: () => modified },
+        { KeyMod: { CtrlCmd: 1 }, KeyCode: { KeyS: 2 } },
+      );
+    }
     return <div data-testid="diff-editor-stub" />;
   },
 }));
@@ -71,10 +83,15 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(async () => null) }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
 
-async function setup(mode: "unstaged" | "last_commit" | "branch_vs_master") {
+async function setup(
+  mode: "unstaged" | "last_commit" | "branch_vs_master",
+  status: "A" | "M" | "D" | "R" = "M",
+  paths = ["src/a.ts"],
+) {
   const backend = new MemoryBackend();
-  backend.gitDiffFilesWithStatus = async () => [{ path: "src/a.ts", status: "M" as const }];
+  backend.gitDiffFilesWithStatus = async () => paths.map((path) => ({ path, status }));
   backend.gitDiffFileSides = async () => ({ before: "old\n", after: "new\n" });
+  backend.seedBoundSession("ws-1", "session-1");
 
   render(
     <BackendProvider backend={backend}>
@@ -97,6 +114,7 @@ async function setup(mode: "unstaged" | "last_commit" | "branch_vs_master") {
 describe("Repo Explorer diff editing", () => {
   beforeEach(() => {
     h.contentHandlers.length = 0;
+    h.selectionHandlers.length = 0;
     h.commands.length = 0;
     h.saved.length = 0;
     h.liveBuffer = null;
@@ -133,7 +151,7 @@ describe("Repo Explorer diff editing", () => {
     expect(screen.queryByTestId("diff-dirty-dot")).toBeNull();
 
     h.liveBuffer!.current = "edited\n";
-    h.contentHandlers.forEach((cb) => cb());
+    act(() => h.contentHandlers.forEach((cb) => cb()));
 
     expect(await screen.findByTestId("diff-dirty-dot")).toBeTruthy();
   });
@@ -142,7 +160,7 @@ describe("Repo Explorer diff editing", () => {
     // Monaco fires change events for non-edits too (e.g. a programmatic
     // setValue); treating those as dirty would show a false unsaved marker.
     await setup("unstaged");
-    h.contentHandlers.forEach((cb) => cb());
+    act(() => h.contentHandlers.forEach((cb) => cb()));
     expect(screen.queryByTestId("diff-dirty-dot")).toBeNull();
   });
 
@@ -152,7 +170,7 @@ describe("Repo Explorer diff editing", () => {
     // EOL handling and external-change conflicts.
     await setup("unstaged");
     h.liveBuffer!.current = "edited\n";
-    h.contentHandlers.forEach((cb) => cb());
+    act(() => h.contentHandlers.forEach((cb) => cb()));
 
     fireEvent.click(await screen.findByLabelText("Save diff edit"));
 
@@ -164,7 +182,7 @@ describe("Repo Explorer diff editing", () => {
   it("clears the dirty marker after a save", async () => {
     await setup("unstaged");
     h.liveBuffer!.current = "edited\n";
-    h.contentHandlers.forEach((cb) => cb());
+    act(() => h.contentHandlers.forEach((cb) => cb()));
     await screen.findByTestId("diff-dirty-dot");
 
     fireEvent.click(screen.getByLabelText("Save diff edit"));
@@ -175,10 +193,10 @@ describe("Repo Explorer diff editing", () => {
   it("saves with Ctrl+S as well as the button", async () => {
     await setup("unstaged");
     h.liveBuffer!.current = "edited\n";
-    h.contentHandlers.forEach((cb) => cb());
+    act(() => h.contentHandlers.forEach((cb) => cb()));
 
     expect(h.commands.length).toBeGreaterThan(0);
-    h.commands.forEach((cb) => cb());
+    act(() => h.commands.forEach((cb) => cb()));
 
     await waitFor(() => expect(h.saved.length).toBe(1));
   });
@@ -195,9 +213,79 @@ describe("Repo Explorer diff editing", () => {
     const sides = vi.spyOn(backend, "gitDiffFileSides");
 
     h.liveBuffer!.current = "edited\n";
-    h.contentHandlers.forEach((cb) => cb());
+    act(() => h.contentHandlers.forEach((cb) => cb()));
     fireEvent.click(await screen.findByLabelText("Save diff edit"));
 
     await waitFor(() => expect(sides).toHaveBeenCalled());
+  });
+
+  it("adds a file comment from the unstaged diff's modified side", async () => {
+    const backend = await setup("unstaged");
+    const add = vi.spyOn(backend, "addSessionFileComment");
+    const toggle = await screen.findByTestId("repo-explorer-diff-comments-toggle");
+    await waitFor(() => expect((toggle as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(toggle);
+
+    act(() => {
+      h.selectionHandlers.forEach((handler) =>
+        handler({
+          selection: {
+            isEmpty: () => false,
+            startLineNumber: 1,
+            endLineNumber: 1,
+          },
+        }),
+      );
+    });
+    fireEvent.click(await screen.findByTestId("add-comment-floating"));
+    fireEvent.change(screen.getByTestId("comment-composer-textarea"), {
+      target: { value: "Review this change." },
+    });
+    fireEvent.click(screen.getByTestId("comment-composer-save"));
+
+    await waitFor(() =>
+      expect(add).toHaveBeenCalledWith(
+        "ws-1",
+        "src/a.ts",
+        1,
+        1,
+        "new",
+        "Review this change.",
+      ),
+    );
+  });
+
+  it("does not offer file comments for historical diffs", async () => {
+    await setup("last_commit");
+    expect(screen.queryByTestId("repo-explorer-diff-comments-toggle")).toBeNull();
+  });
+
+  it("does not offer working-file comments for deleted files", async () => {
+    await setup("unstaged", "D");
+    expect(screen.queryByTestId("repo-explorer-diff-comments-toggle")).toBeNull();
+  });
+
+  it("closes an in-progress comment composer when the selected diff file changes", async () => {
+    await setup("unstaged", "M", ["src/a.ts", "src/b.ts"]);
+    const toggle = await screen.findByTestId("repo-explorer-diff-comments-toggle");
+    await waitFor(() => expect((toggle as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(toggle);
+    act(() => {
+      h.selectionHandlers.forEach((handler) =>
+        handler({
+          selection: {
+            isEmpty: () => false,
+            startLineNumber: 1,
+            endLineNumber: 1,
+          },
+        }),
+      );
+    });
+    fireEvent.click(await screen.findByTestId("add-comment-floating"));
+    expect(screen.getByTestId("comment-composer")).toBeTruthy();
+
+    fireEvent.click(screen.getByText("src/b.ts"));
+
+    await waitFor(() => expect(screen.queryByTestId("comment-composer")).toBeNull());
   });
 });

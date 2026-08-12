@@ -20,23 +20,11 @@ import {
 } from "./FileBufferRegistry";
 import { classifyDangerousPath, type DangerHit } from "./dangerousPaths";
 import { ZoomableImage } from "../ui/components/ZoomableImage";
-import { INTERACTIVE_ZONES_CLASS, markInteractiveZoneNode } from "../ui/interactive-zones";
+import { INTERACTIVE_ZONES_CLASS } from "../ui/interactive-zones";
 import { MarkdownView } from "../ui/MarkdownView";
 import { SlideDeck } from "../ui/components/SlideDeck";
 import { loadMonaco } from "./loadMonaco";
-import {
-  selectionToAnchor,
-  formatCommentMeta,
-  formatThreadForCopy,
-  isMutable,
-  isClosedStatus,
-  groupCommentThreads,
-  estimateThreadHeightInLines,
-  type Anchor,
-  type CommentThread,
-} from "./comments-layer";
-import type { SessionFileComment } from "../domain/file-comments";
-import { writeTextToClipboard } from "../domain/clipboard";
+import { FileCommentsLayer, type FileCommentActions } from "./FileCommentsLayer";
 import { getAppSettings, subscribeAppSettings } from "../domain/app-settings";
 
 const MAX_INLINE_EDIT_SIZE_BYTES = 1024 * 1024;
@@ -64,7 +52,7 @@ export interface MarkdownViewState {
   setSlideIndex: (index: number) => void;
 }
 
-export interface FileEditorViewProps {
+export interface FileEditorViewProps extends FileCommentActions {
   /** Absolute path (NOT yet canonicalized — component will canonicalize via registry.acquire). */
   path: string;
   /** Called when the user clicks the back button (returns to the tile's file list). */
@@ -116,25 +104,6 @@ export interface FileEditorViewProps {
   comments?: import("../domain/file-comments").SessionFileComment[];
   /** When true, comment view zones are rendered. */
   commentsEnabled?: boolean;
-  /**
-   * Add-comment handler. Wired by the parent tile to `useFileComments.add`.
-   * Called when the user submits the inline composer.
-   */
-  onAddComment?: (
-    start: number,
-    end: number,
-    anchorText: string | null,
-    body: string,
-  ) => Promise<unknown>;
-  /** Update-comment handler. Wired by the parent tile to `useFileComments.update`. */
-  onUpdateComment?: (id: string, body: string) => Promise<unknown>;
-  /** Reply handler — adds a threaded reply under a comment. Wired to
-   * `useFileComments.reply`. When absent, the Reply button is not shown. */
-  onReplyComment?: (parentId: string, body: string) => Promise<unknown>;
-  /** Delete-comment handler. Wired by the parent tile to `useFileComments.remove`. */
-  onDeleteComment?: (id: string) => Promise<unknown>;
-  /** Set-status handler (resolve/reopen). Wired to `useFileComments.setStatus`. */
-  onSetCommentStatus?: (id: string, status: string) => Promise<unknown>;
 }
 
 import { detectLanguage } from "../domain/tile-config";
@@ -264,173 +233,6 @@ export function FileEditorView({
   // Bumped each time the Monaco editor instance is (re)created so dependent
   // effects can react without polluting the main editor effect.
   const [editorReadyToken, setEditorReadyToken] = useState(0);
-  const [selectionAnchor, setSelectionAnchor] = useState<Anchor | null>(null);
-  // Composer state: either creating a new comment for a selection, or
-  // editing an existing comment in place.
-  const [composer, setComposer] = useState<
-    | { mode: "create"; anchor: Anchor; body: string }
-    | { mode: "edit"; comment: SessionFileComment; body: string }
-    | { mode: "reply"; parentId: string; anchorLine: number; body: string }
-    | null
-  >(null);
-
-  const handleEditClick = useCallback((c: SessionFileComment) => {
-    setComposer({ mode: "edit", comment: c, body: c.body });
-  }, []);
-
-  const handleReplyClick = useCallback((c: SessionFileComment) => {
-    setComposer({ mode: "reply", parentId: c.id, anchorLine: c.anchor_line_start, body: "" });
-  }, []);
-
-  const handleCopyThread = useCallback((thread: CommentThread) => {
-    void writeTextToClipboard(formatThreadForCopy(thread));
-  }, []);
-
-  const handleDeleteClick = useCallback(
-    (c: SessionFileComment) => {
-      if (!onDeleteComment) return;
-      if (!window.confirm("Delete this comment?")) return;
-      void onDeleteComment(c.id);
-    },
-    [onDeleteComment],
-  );
-
-  const handleStatusClick = useCallback(
-    (c: SessionFileComment, status: string) => {
-      if (!onSetCommentStatus) return;
-      void onSetCommentStatus(c.id, status);
-    },
-    [onSetCommentStatus],
-  );
-
-  /** Imperatively populate the view-zone DOM node for a comment thread. */
-  function renderCommentZone(node: HTMLDivElement, thread: CommentThread): void {
-    node.innerHTML = "";
-    // Monaco's view-zone overlay defaults to pointer-events: none for the
-    // surrounding layer; explicitly opt the comment dom into receiving
-    // hover + click so the buttons are actually interactive (paired with the
-    // INTERACTIVE_ZONES_CLASS on the editor host — see interactive-zones.ts).
-    markInteractiveZoneNode(node);
-
-    const makeBtn = (
-      label: string,
-      color: string,
-      testid: string,
-      onClick: () => void,
-    ): HTMLButtonElement => {
-      const btn = document.createElement("button");
-      btn.textContent = label;
-      btn.dataset.testid = testid;
-      Object.assign(btn.style, {
-        background: "none",
-        border: "1px solid #45475a",
-        color,
-        borderRadius: "3px",
-        padding: "1px 6px",
-        cursor: "pointer",
-        fontSize: "10px",
-        pointerEvents: "auto",
-      });
-      btn.addEventListener("mousedown", (e) => e.stopPropagation());
-      btn.addEventListener("click", (e) => {
-        e.stopPropagation();
-        e.preventDefault();
-        onClick();
-      });
-      return btn;
-    };
-
-    const appendEntry = (c: SessionFileComment, isReply: boolean): void => {
-      const wrap = document.createElement("div");
-      if (isReply) {
-        wrap.style.marginTop = "6px";
-        wrap.style.paddingLeft = "10px";
-        wrap.style.borderLeft = "2px solid #45475a";
-      }
-      wrap.dataset.testid = `comment-entry-${c.id}`;
-
-      const header = document.createElement("div");
-      header.style.display = "flex";
-      header.style.alignItems = "center";
-      header.style.gap = "8px";
-      header.style.marginBottom = "4px";
-      header.style.color = "#a6adc8";
-      header.style.fontSize = "10px";
-      const meta = document.createElement("span");
-      meta.textContent = formatCommentMeta(c);
-      meta.dataset.testid = `comment-meta-${c.id}`;
-      if (isClosedStatus(c.status)) {
-        meta.style.textDecoration = "line-through";
-        meta.style.opacity = "0.7";
-      }
-      header.appendChild(meta);
-      const spacer = document.createElement("span");
-      spacer.style.flex = "1";
-      header.appendChild(spacer);
-
-      if (isMutable(c)) {
-        // Resolve / reopen toggle for the reviewer's own note.
-        if (onSetCommentStatus) {
-          if (isClosedStatus(c.status)) {
-            header.appendChild(
-              makeBtn("Reopen", "#a6e3a1", `comment-reopen-${c.id}`, () =>
-                handleStatusClick(c, "open"),
-              ),
-            );
-          } else {
-            header.appendChild(
-              makeBtn("Resolve", "#a6e3a1", `comment-resolve-${c.id}`, () =>
-                handleStatusClick(c, "resolved"),
-              ),
-            );
-          }
-        }
-        header.appendChild(
-          makeBtn("Edit", "#89b4fa", `comment-edit-${c.id}`, () => handleEditClick(c)),
-        );
-        header.appendChild(
-          makeBtn("Delete", "#f38ba8", `comment-delete-${c.id}`, () => handleDeleteClick(c)),
-        );
-      }
-      // Reply + Copy live on the thread root and act on the whole thread. Reply
-      // targets the root so the response joins this thread; Copy grabs the whole
-      // thread as text (a reliable fallback when in-editor text selection is
-      // awkward inside the Monaco view zone).
-      if (!isReply) {
-        if (onReplyComment) {
-          header.appendChild(
-            makeBtn("Reply", "#89b4fa", `comment-reply-${c.id}`, () => handleReplyClick(c)),
-          );
-        }
-        header.appendChild(
-          makeBtn("Copy", "#a6adc8", `comment-copy-${c.id}`, () => handleCopyThread(thread)),
-        );
-      }
-      wrap.appendChild(header);
-
-      const body = document.createElement("div");
-      body.style.whiteSpace = "pre-wrap";
-      body.style.wordBreak = "break-word";
-      body.style.lineHeight = "1.5";
-      // Make the comment text selectable: the Monaco editor sets
-      // `user-select: none` on its container, which the view-zone DOM inherits,
-      // so without this the body can't be selected/copied natively. Stopping
-      // mousedown propagation lets a native text drag-select happen inside the
-      // zone without Monaco hijacking it to move the caret.
-      body.style.userSelect = "text";
-      (body.style as CSSStyleDeclaration & { webkitUserSelect?: string }).webkitUserSelect = "text";
-      body.style.cursor = "text";
-      body.dataset.testid = `comment-body-${c.id}`;
-      body.addEventListener("mousedown", (e) => e.stopPropagation());
-      body.textContent = c.body;
-      wrap.appendChild(body);
-      node.appendChild(wrap);
-    };
-
-    appendEntry(thread.root, false);
-    for (const reply of thread.replies) appendEntry(reply, true);
-  }
-
 
   const snapshot = snapshotState.inputPath === path ? snapshotState.snapshot : null;
   const acquireError = acquireErrorState?.inputPath === path ? acquireErrorState.message : null;
@@ -654,147 +456,6 @@ export function FileEditorView({
       if (editor) editor.updateOptions({ fontSize: s.textFontSize });
     });
   }, [editorReadyToken]);
-
-  // ─── Inline comments: view zones + selection listener ─────────────────
-  const zoneIdsRef = useRef<Map<string, string>>(new Map());
-  const zoneNodesRef = useRef<Map<string, HTMLDivElement>>(new Map());
-  // The IViewZone descriptor objects (kept by reference so we can mutate their
-  // height and re-layout after measuring the real DOM height).
-  const zoneDescriptorsRef = useRef<Map<string, MonacoNs.editor.IViewZone>>(new Map());
-  const measureRafRef = useRef<number | null>(null);
-
-  // Rebuild view zones whenever the comment list or enabled state changes.
-  useEffect(() => {
-    const editor = editorRef.current;
-    if (!editor) {
-      // Editor not mounted yet (or showing markdown preview / error). Tear
-      // down any stale zone tracking.
-      zoneIdsRef.current.clear();
-      zoneNodesRef.current.clear();
-      return;
-    }
-    if (!commentsEnabled) {
-      const ids = zoneIdsRef.current;
-      if (ids.size > 0) {
-        editor.changeViewZones((accessor: MonacoNs.editor.IViewZoneChangeAccessor) => {
-          for (const zid of ids.values()) accessor.removeZone(zid);
-        });
-      }
-      ids.clear();
-      zoneNodesRef.current.clear();
-      return;
-    }
-    editor.changeViewZones((accessor: MonacoNs.editor.IViewZoneChangeAccessor) => {
-      for (const zid of zoneIdsRef.current.values()) accessor.removeZone(zid);
-      zoneIdsRef.current.clear();
-      zoneNodesRef.current.clear();
-      zoneDescriptorsRef.current.clear();
-      for (const thread of groupCommentThreads(comments)) {
-        const c = thread.root;
-        // Outer slot: the node Monaco owns and clamps to the reserved zone
-        // height. Kept minimal (overflow visible) so the inner content is never
-        // visually cut off, and so we can measure the inner node's *natural*
-        // height (Monaco fixes a `height` on this slot, which would otherwise
-        // make offsetHeight report the clamped value, not the real content).
-        const slot = document.createElement("div");
-        const dom = document.createElement("div");
-        dom.style.background = "#1e1e2e";
-        dom.style.borderTop = "1px solid #313244";
-        dom.style.borderBottom = "1px solid #313244";
-        dom.style.padding = "6px 12px 8px";
-        dom.style.fontFamily = "system-ui, sans-serif";
-        dom.style.fontSize = "11px";
-        dom.style.color = "#cdd6f4";
-        dom.dataset.testid = `comment-zone-${c.id}`;
-        dom.dataset.commentId = c.id;
-        renderCommentZone(dom, thread);
-        slot.appendChild(dom);
-        // Measure the INNER node (unclamped by Monaco) in the pass below.
-        zoneNodesRef.current.set(c.id, dom);
-        // Initial height from the line estimate (avoids a first-frame flash);
-        // the measurement pass below corrects it to the exact DOM height so
-        // multi-reply threads never overflow onto the following code lines.
-        const descriptor: MonacoNs.editor.IViewZone = {
-          afterLineNumber: c.anchor_line_end,
-          heightInLines: estimateThreadHeightInLines(thread),
-          domNode: slot,
-          // Let our DOM (with pointer-events: auto) handle mouse events
-          // instead of Monaco eating mousedown as a cursor movement.
-          suppressMouseDown: true,
-        };
-        const zid = accessor.addZone(descriptor);
-        zoneIdsRef.current.set(c.id, zid);
-        zoneDescriptorsRef.current.set(c.id, descriptor);
-      }
-    });
-
-    // Measurement pass: the line estimate can undercount a thread's real height
-    // (entry headers with Resolve/Edit/Delete/Reply/Copy buttons, per-reply
-    // margins, zone padding), which pushed later replies on top of the code
-    // below. After layout, set each zone's exact pixel height from the inner
-    // DOM's natural height.
-    if (measureRafRef.current !== null) cancelAnimationFrame(measureRafRef.current);
-    const entries = Array.from(zoneIdsRef.current.entries()).map(([cid, zid]) => ({
-      zid,
-      dom: zoneNodesRef.current.get(cid),
-      descriptor: zoneDescriptorsRef.current.get(cid),
-    }));
-    measureRafRef.current = requestAnimationFrame(() => {
-      measureRafRef.current = null;
-      const ed = editorRef.current;
-      if (!ed || entries.length === 0) return;
-      ed.changeViewZones((accessor: MonacoNs.editor.IViewZoneChangeAccessor) => {
-        for (const { zid, dom, descriptor } of entries) {
-          if (!dom || !descriptor) continue;
-          // Inner node's natural content height (Monaco doesn't constrain it).
-          const measured = dom.offsetHeight;
-          if (measured > 0 && descriptor.heightInPx !== measured) {
-            descriptor.heightInPx = measured;
-            descriptor.heightInLines = undefined;
-            accessor.layoutZone(zid);
-          }
-        }
-      });
-    });
-    return () => {
-      const ed = editorRef.current;
-      const ids = zoneIdsRef.current;
-      if (ed && ids.size > 0) {
-        ed.changeViewZones((accessor: MonacoNs.editor.IViewZoneChangeAccessor) => {
-          for (const zid of ids.values()) accessor.removeZone(zid);
-        });
-      }
-      if (measureRafRef.current !== null) {
-        cancelAnimationFrame(measureRafRef.current);
-        measureRafRef.current = null;
-      }
-      ids.clear();
-      zoneNodesRef.current.clear();
-      zoneDescriptorsRef.current.clear();
-    };
-  }, [comments, commentsEnabled, editorReadyToken, handleEditClick, handleDeleteClick, handleStatusClick, handleReplyClick, handleCopyThread, onReplyComment]);
-
-  // Selection listener -> floating + composer trigger.
-  useEffect(() => {
-    const editor = editorRef.current;
-    if (!editor || !commentsEnabled || !onAddComment) {
-      setSelectionAnchor(null);
-      return;
-    }
-    const disposable = editor.onDidChangeCursorSelection?.((e: MonacoNs.editor.ICursorSelectionChangedEvent) => {
-      const sel = e.selection;
-      if (!sel || sel.isEmpty()) {
-        setSelectionAnchor(null);
-        return;
-      }
-      const model = editor.getModel();
-      if (!model) return;
-      const lines = model.getValue().split(/\r?\n/);
-      const anchor = selectionToAnchor(lines, sel.startLineNumber, sel.endLineNumber);
-      setSelectionAnchor(anchor);
-    });
-    return () => disposable?.dispose?.();
-  }, [editorReadyToken, commentsEnabled, onAddComment]);
 
   const saveWithDangerousPathGuard = useCallback(async () => {
     const canonicalPath = canonicalPathRef.current;
@@ -1104,117 +765,17 @@ export function FileEditorView({
           className={commentsEnabled ? INTERACTIVE_ZONES_CLASS : undefined}
           style={{ height: "100%", width: "100%" }}
         />
-        {commentsEnabled && onAddComment && selectionAnchor && !composer ? (
-          <button
-            data-testid="add-comment-floating"
-            onClick={() => setComposer({ mode: "create", anchor: selectionAnchor, body: "" })}
-            style={{
-              position: "absolute",
-              top: 8,
-              right: 16,
-              padding: "4px 10px",
-              background: "#89b4fa",
-              color: "#11111b",
-              border: "none",
-              borderRadius: 4,
-              cursor: "pointer",
-              fontSize: 11,
-              fontWeight: 600,
-              boxShadow: "0 2px 6px rgba(0,0,0,0.4)",
-              zIndex: 5,
-            }}
-          >
-            + Comment ({selectionAnchor.start}{selectionAnchor.start !== selectionAnchor.end ? `-${selectionAnchor.end}` : ""})
-          </button>
-        ) : null}
-        {composer ? (
-          <div
-            data-testid="comment-composer"
-            style={{
-              position: "absolute",
-              top: 8,
-              right: 16,
-              width: 360,
-              background: "#1e1e2e",
-              border: "1px solid #45475a",
-              borderRadius: 6,
-              padding: 10,
-              boxShadow: "0 4px 12px rgba(0,0,0,0.5)",
-              zIndex: 10,
-              display: "flex",
-              flexDirection: "column",
-              gap: 8,
-            }}
-          >
-            <div style={{ fontSize: 10, color: "#a6adc8" }}>
-              {composer.mode === "create"
-                ? `Lines ${composer.anchor.start}${composer.anchor.start !== composer.anchor.end ? `-${composer.anchor.end}` : ""}`
-                : composer.mode === "reply"
-                  ? `Replying to comment on line ${composer.anchorLine}`
-                  : `Editing comment on line ${composer.comment.anchor_line_start}`}
-            </div>
-            <textarea
-              data-testid="comment-composer-textarea"
-              autoFocus
-              rows={5}
-              value={composer.body}
-              onChange={(e) => setComposer((cur) => (cur ? { ...cur, body: e.target.value } : cur))}
-              style={{
-                background: "#11111b",
-                color: "#cdd6f4",
-                border: "1px solid #313244",
-                borderRadius: 4,
-                padding: 6,
-                fontFamily: "monospace",
-                fontSize: 12,
-                resize: "vertical",
-              }}
-            />
-            <div style={{ display: "flex", justifyContent: "flex-end", gap: 6 }}>
-              <button
-                data-testid="comment-composer-cancel"
-                onClick={() => setComposer(null)}
-                style={{ background: "none", border: "1px solid #45475a", color: "#a6adc8", borderRadius: 4, padding: "3px 10px", cursor: "pointer", fontSize: 11 }}
-              >
-                Cancel
-              </button>
-              <button
-                data-testid="comment-composer-save"
-                disabled={composer.body.trim().length === 0}
-                onClick={async () => {
-                  const body = composer.body.trim();
-                  if (body.length === 0) return;
-                  if (composer.mode === "create" && onAddComment) {
-                    await onAddComment(
-                      composer.anchor.start,
-                      composer.anchor.end,
-                      composer.anchor.anchorText,
-                      body,
-                    );
-                  } else if (composer.mode === "edit" && onUpdateComment) {
-                    await onUpdateComment(composer.comment.id, body);
-                  } else if (composer.mode === "reply" && onReplyComment) {
-                    await onReplyComment(composer.parentId, body);
-                  }
-                  setComposer(null);
-                  setSelectionAnchor(null);
-                }}
-                style={{
-                  background: composer.body.trim().length === 0 ? "#45475a" : "#89b4fa",
-                  border: "none",
-                  color: "#11111b",
-                  borderRadius: 4,
-                  padding: "3px 10px",
-                  cursor: composer.body.trim().length === 0 ? "not-allowed" : "pointer",
-                  fontSize: 11,
-                  fontWeight: 600,
-                }}
-              >
-                Save
-              </button>
-            </div>
-          </div>
-        ) : null}
+        <FileCommentsLayer
+          editor={editorRef.current}
+          editorReadyToken={editorReadyToken}
+          comments={comments}
+          enabled={commentsEnabled}
+          onAddComment={onAddComment}
+          onUpdateComment={onUpdateComment}
+          onReplyComment={onReplyComment}
+          onDeleteComment={onDeleteComment}
+          onSetCommentStatus={onSetCommentStatus}
+        />
       </div>
     );
   }

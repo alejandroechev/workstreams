@@ -141,7 +141,38 @@ describe("useFileComments", () => {
     );
     await waitFor(() => expect(result.current.comments[0]?.body).toBe("a-comment"));
     rerender({ p: "C:/repo/src/b.ts" });
+    expect(result.current.comments).toEqual([]);
     await waitFor(() => expect(result.current.comments[0]?.body).toBe("b-comment"));
+  });
+
+  it("ignores a stale reload that finishes after the selected file changes", async () => {
+    await backend.addSessionFileComment("ws-1", "src/a.ts", 1, 1, null, "a-comment");
+    await backend.addSessionFileComment("ws-1", "src/b.ts", 1, 1, null, "b-comment");
+    const list = backend.listSessionFileComments.bind(backend);
+    const aComments = await list("ws-1", "src/a.ts");
+    let finishA: ((comments: typeof aComments) => void) | null = null;
+    backend.listSessionFileComments = async (workstreamId, file) => {
+      if (file === "src/a.ts") {
+        return new Promise((resolve) => {
+          finishA = resolve;
+        });
+      }
+      return list(workstreamId, file);
+    };
+
+    const { result, rerender } = renderHook(
+      ({ p }: { p: string }) => useFileComments("ws-1", ROOT, p),
+      { wrapper: wrap(backend), initialProps: { p: "C:/repo/src/a.ts" } },
+    );
+    await waitFor(() => expect(finishA).not.toBeNull());
+    rerender({ p: "C:/repo/src/b.ts" });
+    await waitFor(() => expect(result.current.comments[0]?.body).toBe("b-comment"));
+
+    await act(async () => {
+      finishA?.(aComments);
+      await Promise.resolve();
+    });
+    expect(result.current.comments[0]?.body).toBe("b-comment");
   });
 
   it("add throws when no workstreamId/path is set", async () => {

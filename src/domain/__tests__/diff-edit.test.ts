@@ -1,10 +1,29 @@
 import { describe, it, expect } from "vitest";
 
-import { diffModeEditable, EDITABLE_DIFF_MODE } from "../diff-edit";
+import {
+  diffFileCommentable,
+  diffModeEditable,
+  EDITABLE_DIFF_MODE,
+} from "../diff-edit";
 
 describe("diffModeEditable", () => {
   it("allows editing the unstaged diff, whose modified side is the working file", () => {
     expect(diffModeEditable("unstaged")).toBe(true);
+  });
+
+  describe("diffFileCommentable", () => {
+    it("allows comments on working files in the unstaged diff", () => {
+      expect(diffFileCommentable("unstaged", "A")).toBe(true);
+      expect(diffFileCommentable("unstaged", "M")).toBe(true);
+      expect(diffFileCommentable("unstaged", "R")).toBe(true);
+    });
+
+    it("refuses deleted files and historical modes", () => {
+      expect(diffFileCommentable("unstaged", "D")).toBe(false);
+      expect(diffFileCommentable("last_commit", "M")).toBe(false);
+      expect(diffFileCommentable("branch_vs_master", "M")).toBe(false);
+      expect(diffFileCommentable("unstaged", undefined)).toBe(false);
+    });
   });
 
   it("refuses historical diffs, whose modified side is a git object", () => {

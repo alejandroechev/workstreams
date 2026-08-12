@@ -59,8 +59,9 @@ packaged in `src/ui/interactive-zones.ts`:
 - `markInteractiveZoneNode(node)` — call on each zone DOM node to set
   `pointer-events:auto`.
 
-Adopted at both call sites: `FileEditorView` (when `commentsEnabled`) and the
-`CodeReviewTile` diff editor. New inline-in-editor UIs should use this helper.
+Adopted by `FileEditorView` (when `commentsEnabled`), the Repo Explorer
+Unstaged DiffEditor modified-side comment layer, and the `CodeReviewTile` diff
+editor. New inline-in-editor UIs should use this helper.
 
 ### 2. A dev/E2E component harness as the trustworthy signal
 

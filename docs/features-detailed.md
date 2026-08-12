@@ -100,7 +100,11 @@ Multi-tab repo browser (Files / Diff / Log / Hooks):
 - **Diff** tab: unified file-list + Monaco diff editor with A/M/D/R status
   badges. Unstaged includes both modified tracked files and untracked files.
   A **Split / Unified** toggle in the diff toolbar switches between
-  side-by-side and inline layouts (persisted per tile)
+  side-by-side and inline layouts (persisted per tile). Its modified side is
+  editable and supports the same inline file-comment threads as the Files tab;
+  comments remain keyed to the repo-relative working file, so they appear in
+  either surface. Deleted files and historical diff modes cannot carry file
+  comments because they have no modified-side working-file lines.
 - **Log** tab: ahead / behind counts against `origin/<current-branch>`, with
   an `origin/<branch>` badge + accent border on the matching commit
 - **Hooks** tab: lists active git hooks; the selected hook opens in a Monaco

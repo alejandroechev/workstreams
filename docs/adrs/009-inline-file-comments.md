@@ -34,17 +34,25 @@ interaction. unify-commenting collapses that divergence.
    `status` (`open` | `addressed` | `resolved` | `wontfix`), plus `anchor_text`
    for future drift detection.
 
-2. **In-app UI** — the Repo Explorer file viewer (`FileEditorView`) renders each
-   reviewer note as a Monaco view zone below its anchor, with threaded replies
-   nested inside the same zone. The reviewer's own note gets inline **Edit /
-   Delete** buttons, a **Resolve / Reopen** toggle, a **Reply** button (adds a
-   reviewer reply to the thread via an inline composer), and a **Copy** button
-   (copies the whole thread as text — a reliable fallback since the view-zone
-   text, though now `user-select: text`, can be awkward to drag-select). Resolved
-   / wontfix notes are struck through. New comments are selection-based: select
-   lines → floating `+ Comment` → inline composer. The toggle state persists per
-   workstream via the `settings` table. No polling — the tile reloads from
-   session.db when the file is (re)opened or the toggle is turned on.
+2. **In-app UI** — both the Repo Explorer file viewer (`FileEditorView`) and
+   the **modified side of its Unstaged diff** render each reviewer note as a
+   Monaco view zone below its anchor, with threaded replies nested inside the
+   same zone. `FileCommentsLayer` owns this shared Monaco interaction so the two
+   surfaces cannot drift. The reviewer's own note gets inline **Edit / Delete**
+   buttons, a **Resolve / Reopen** toggle, a **Reply** button (adds a reviewer
+   reply through an inline composer), and a **Copy** button (copies the whole
+   thread as text — a reliable fallback since view-zone text can be awkward to
+   drag-select). Resolved / wontfix notes are struck through. New comments are
+   selection-based: select lines → floating `+ Comment` → inline composer.
+   Because both surfaces use the same repo-relative file key, a comment created
+   in the diff also appears when that file is opened normally.
+
+   Diff comments are deliberately limited to non-deleted files in `unstaged`.
+   Last Commit and Branch vs master show historical blobs rather than a working
+   file, while a deleted file has no modified-side lines to anchor. The toggle
+   state persists per workstream via the `settings` table. No polling — the tile
+   reloads from session.db when the file is (re)opened, the selected diff file
+   changes, or the toggle is turned on.
 
 3. **Agent loop** — the agent reads and writes `file_comments` directly with its
    built-in `sql` tool, guided by the **`file-comments` companion skill**
@@ -62,6 +70,7 @@ interaction. unify-commenting collapses that divergence.
 |---|---|
 | session.db, not workstreams.db | Unifies with Code Review (ADR 014); lets the agent read/reply with its own `sql` tool, no cross-DB plumbing. |
 | Repo-relative `file` key | Portable across machines/worktrees and matches what the agent edits; the tile converts absolute paths via `toRepoRelative(rootDir, path)`. |
+| One `FileCommentsLayer` for file + diff editors | Keeps view zones, composers, thread actions, height measurement, and interactive-zone behavior identical while allowing each host to own its Monaco instance. |
 | Reviewer↔agent columns (author/parent_id/status) | Same model as `review_comments`; enables the reply/resolve loop and a shared mental model across both features. |
 | No polling — reload on open/toggle | unify-commenting removed background polling everywhere; the reviewer refreshes on demand (Repo Explorer by reopening; Code Review via a Sync button). |
 | No ADO import, no MCP | The `import_pr_comments` MCP tool + `workstreams-mcp` bridge were removed; the agent's native `sql` access replaces them. |
@@ -132,9 +141,9 @@ ensures the `file_comments` schema on each call):
   `comments-layer` thread/height/status helpers, `toRepoRelative` cases, and a
   session-gated RepoExplorer toggle test.
 - **Integration**: TauriBackend invoke-shape test for the 6 session commands.
-- **E2E (real Monaco)**: the `comment-zone` harness case + `comment-interactivity`
-  spec assert the reviewer note + threaded agent reply render and that Edit /
-  Resolve are clickable (not occluded by Monaco layers).
+- **E2E (real Monaco)**: the `comment-zone` and `diff-comment-zone` harness
+  cases + `comment-interactivity` spec assert file and Unstaged-diff threads
+  render and that Edit / Resolve are clickable (not occluded by Monaco layers).
 
 ---
 
