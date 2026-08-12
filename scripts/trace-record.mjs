@@ -26,6 +26,7 @@
 
 import { spawn, execFileSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
@@ -80,17 +81,72 @@ export function selectTestExecutable(stdout) {
  */
 export function isOurCode(file, repoRoot) {
   if (!file) return false;
-  const abs = path.resolve(file);
-  const root = path.resolve(repoRoot);
+  // Windows filesystems are case-insensitive and the debugger reports whatever
+  // case the PDB recorded, which need not match the directory the user typed.
+  // Comparing raw strings there silently classified every frame as "not ours"
+  // and produced an empty trace with nothing to explain it.
+  const fold = (p) => (process.platform === "win32" ? p.toLowerCase() : p);
+  const abs = fold(path.resolve(file));
+  const root = fold(path.resolve(repoRoot));
   // The separator guard stops `/repo-other` from matching root `/repo`.
   if (abs !== root && !abs.startsWith(root + path.sep)) return false;
   return !abs.includes(`${path.sep}target${path.sep}`);
 }
 
-/** Strip rustc's `::h<hash>` suffix from a symbol name. */
+/**
+ * Strip decoration from a debugger-reported symbol name.
+ *
+ * Two shapes arrive, depending on the debug-info format:
+ * - DWARF (macOS/Linux) yields a Rust path plus rustc's `::h<hash>` suffix.
+ * - PDB (Windows/MSVC) yields a C++-style signature such as
+ *   `struct ref$<str$> traceprobe::classify(int)`. Left raw, every row of a
+ *   Windows trace reads like a C++ declaration instead of the function name.
+ */
 export function demangle(name) {
   if (!name) return "";
-  return String(name).split("::h")[0];
+  const text = String(name);
+  // Drop a trailing parameter list, keeping `{{closure}}` braces intact.
+  const withoutParams = text.includes("(") ? text.slice(0, text.indexOf("(")) : text;
+  // Drop a leading return type: MSVC renders it before the symbol and it can
+  // itself contain spaces (`struct ref$<str$>`), so take the LAST segment.
+  const parts = withoutParams.trim().split(" ");
+  const symbol = parts[parts.length - 1] ?? withoutParams;
+  return symbol.split("::h")[0];
+}
+
+/** Which adapter dialect to speak. See `stackTraceLevels` for why it matters. */
+export function adapterKindFor(adapterPath) {
+  const base = String(adapterPath).split(/[\\/]/).pop() ?? "";
+  const stem = base.toLowerCase().replace(/\.exe$/, "");
+  // Anything unrecognised gets the conservative dialect: its requests are also
+  // valid for lldb-dap, so a wrong guess degrades rather than breaks.
+  return stem === "lldb-dap" ? "lldb-dap" : "codelldb";
+}
+
+/**
+ * How many stack frames to ask for.
+ *
+ * The DAP spec says `levels: 0` means "all frames", and lldb-dap obeys — which
+ * is what makes the recorded call depth (and therefore "step out") exact.
+ * codelldb takes `0` literally and returns **zero** frames, so the recorder saw
+ * an empty stack every step and wrote an empty trace without erroring. A finite
+ * cap well past any realistic Rust test depth restores the same information.
+ */
+export function stackTraceLevels(kind) {
+  return kind === "lldb-dap" ? 0 : 500;
+}
+
+/**
+ * Build the regex that pins a breakpoint to a test function.
+ *
+ * Neither `setFunctionBreakpoints` nor `breakpoint set --name` resolves a Rust
+ * symbol read from a PDB — both report "Resolved locations: 0" — while a regex
+ * lookup finds it. The `$` anchor keeps the breakpoint off the `::{{closure}}`
+ * twin that shares the prefix, which would otherwise stop one frame away from
+ * the test body.
+ */
+export function functionBreakpointRegex(test) {
+  return `${String(test).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`;
 }
 
 /**
@@ -248,7 +304,53 @@ function parseArgs(argv) {
   };
 }
 
-function resolveLldbDap() {
+/**
+ * Locate a debug adapter.
+ *
+ * macOS/Linux prefer LLVM's `lldb-dap`. Windows has no system LLDB, but
+ * CodeLLDB ships `codelldb.exe` bundled with its own LLDB **and**
+ * `msdia140.dll` (the MS Debug Interface Access library), which is what lets it
+ * read the PDBs an MSVC-toolchain Rust build produces — so it is the practical
+ * choice there. `lldb-dap.exe` is still preferred when present.
+ *
+ * `WORKSTREAMS_DAP_ADAPTER` overrides everything, for an adapter installed
+ * somewhere unusual.
+ */
+function resolveAdapter() {
+  const explicit = process.env.WORKSTREAMS_DAP_ADAPTER?.trim();
+  if (explicit) {
+    if (!fs.existsSync(explicit)) {
+      throw new Error(`WORKSTREAMS_DAP_ADAPTER points at '${explicit}', which does not exist.`);
+    }
+    return explicit;
+  }
+
+  if (process.platform === "win32") {
+    // `which` does not exist on Windows; the shipped equivalent is `where`.
+    // It prints "INFO: Could not find files..." to stderr when it misses, so
+    // stderr is discarded — a miss here is expected, not an error.
+    try {
+      const found = execFileSync("where", ["lldb-dap.exe"], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+      })
+        .split(/\r?\n/)[0]
+        ?.trim();
+      if (found) return found;
+    } catch {
+      // Fall through to the well-known locations.
+    }
+    for (const candidate of windowsAdapterCandidates()) {
+      if (fs.existsSync(candidate)) return candidate;
+    }
+    throw new Error(
+      "No debug adapter found. Install the CodeLLDB extension in VS Code " +
+        "(`code --install-extension vadimcn.vscode-lldb`), or install LLVM so " +
+        "`lldb-dap.exe` is on PATH. Set WORKSTREAMS_DAP_ADAPTER to point at an " +
+        "adapter in a non-standard location.",
+    );
+  }
+
   try {
     return execFileSync("xcrun", ["-f", "lldb-dap"], { encoding: "utf8" }).trim();
   } catch {
@@ -264,11 +366,69 @@ function resolveLldbDap() {
   }
 }
 
+/** Well-known Windows adapter locations, most preferred first. */
+function windowsAdapterCandidates() {
+  const candidates = [
+    "C:\\Program Files\\LLVM\\bin\\lldb-dap.exe",
+    "C:\\Program Files (x86)\\LLVM\\bin\\lldb-dap.exe",
+  ];
+  const home = os.homedir();
+  // VS Code, Insiders, and the remote/server variant each keep their own
+  // extension root; CodeLLDB's directory carries a version suffix, and several
+  // versions may be installed side by side.
+  for (const root of [".vscode", ".vscode-insiders", ".vscode-server"]) {
+    const extDir = path.join(home, root, "extensions");
+    let entries;
+    try {
+      entries = fs.readdirSync(extDir);
+    } catch {
+      continue;
+    }
+    const versions = entries.filter((e) => e.startsWith("vadimcn.vscode-lldb-")).sort().reverse();
+    for (const dir of versions) {
+      candidates.push(path.join(extDir, dir, "adapter", "codelldb.exe"));
+    }
+  }
+  return candidates;
+}
+
 function currentCommitSha(repoRoot) {
   try {
     return execFileSync("git", ["rev-parse", "HEAD"], { cwd: repoRoot, encoding: "utf8" }).trim();
   } catch {
     return "unknown";
+  }
+}
+
+/**
+ * Break on the test function.
+ *
+ * Two strategies, because symbol lookup differs by debug-info format:
+ *
+ * - **DWARF (lldb-dap)** resolves `setFunctionBreakpoints` by Rust path, which
+ *   avoids having to know which line the test body starts on.
+ * - **PDB (Windows/MSVC)** does not: `setFunctionBreakpoints` *and*
+ *   `breakpoint set --name` both report "Resolved locations: 0" for a symbol
+ *   that `image lookup -r` finds perfectly well. Only the regex form binds, so
+ *   there we drive LLDB's own command through `evaluate`.
+ *
+ * Falls back to the regex form whenever the standard request fails to verify,
+ * so an adapter that behaves unexpectedly still records rather than erroring.
+ */
+async function setTestBreakpoint(dap, kind, test) {
+  if (kind === "lldb-dap") {
+    const bp = await dap.request("setFunctionBreakpoints", { breakpoints: [{ name: test }] });
+    const verified = Array.isArray(bp.breakpoints) && bp.breakpoints.some((b) => b.verified !== false);
+    if (verified) return;
+  }
+
+  const expression = `breakpoint set -r "${functionBreakpointRegex(test).replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+  const body = await dap.request("evaluate", { expression, context: "repl" });
+  if (String(body?.result ?? "").includes("no locations")) {
+    throw new Error(
+      `no breakpoint could be set on '${test}'. Check the test name — it must ` +
+        "be fully qualified, e.g. `pty::tests::resolves_shell`.",
+    );
   }
 }
 
@@ -286,8 +446,9 @@ async function record(opts, logStatus) {
   const exe = selectTestExecutable(cargoOut);
   logStatus(`test binary: ${exe}`);
 
-  const adapter = resolveLldbDap();
-  logStatus(`adapter: ${adapter}`);
+  const adapter = resolveAdapter();
+  const kind = adapterKindFor(adapter);
+  logStatus(`adapter: ${adapter} (${kind})`);
 
   const proc = spawn(adapter, [], { stdio: ["pipe", "pipe", "inherit"] });
   const dap = new DapClient(proc, log);
@@ -306,25 +467,27 @@ async function record(opts, logStatus) {
 
     // `--exact` avoids running neighbouring tests whose frames would
     // interleave; `--test-threads=1` makes the step order deterministic.
+    //
+    // `terminal: "console"` is codelldb-only: left unset it defaults to an
+    // integrated terminal and answers `launch` with a `runInTerminal` REVERSE
+    // request, which this minimal client does not implement — the launch then
+    // fails with a bare "unknown error". It is withheld from lldb-dap so the
+    // working macOS path sends exactly what it always did.
     const launched = dap.request("launch", {
       program: exe,
       args: ["--exact", opts.test, "--test-threads=1", "--nocapture"],
       cwd: opts.manifestDir,
       stopOnEntry: false,
+      ...(kind === "codelldb" ? { terminal: "console" } : null),
       env: { RUST_BACKTRACE: "0" },
     });
 
-    // Breaking on the *function* avoids having to know which line the test
-    // body starts on.
-    const bp = await dap.request("setFunctionBreakpoints", {
-      breakpoints: [{ name: opts.test }],
-    });
-    if (Array.isArray(bp.breakpoints) && bp.breakpoints.every((b) => b.verified === false)) {
-      throw new Error(
-        `no breakpoint could be set on '${opts.test}'. Check the test name — ` +
-          "it must be fully qualified, e.g. `pty::tests::resolves_shell`.",
-      );
-    }
+    // Breakpoints belong after the `initialized` event. lldb-dap tolerates them
+    // earlier; codelldb does not, and reports every one unresolved.
+    await dap.waitFor("initialized").catch(() => {});
+
+    await setTestBreakpoint(dap, kind, opts.test);
+
     await dap.request("configurationDone", {});
     await launched;
 
@@ -335,10 +498,15 @@ async function record(opts, logStatus) {
     for (let i = 0; i < opts.maxSteps; i++) {
       let frames;
       try {
-        // `levels: 0` asks for the whole stack. lldb-dap only reports a correct
-        // frame count that way — with `levels: 1` its `totalFrames` is a stale
-        // constant — and the count is what makes "step out" exact.
-        const st = await dap.request("stackTrace", { threadId, startFrame: 0, levels: 0 });
+        // `levels: 0` means "all frames" per the DAP spec, and lldb-dap obeys
+        // — the frame count is what makes "step out" exact rather than a
+        // name-matching heuristic. codelldb takes 0 literally and returns ZERO
+        // frames, which recorded an empty trace with no error at all.
+        const st = await dap.request("stackTrace", {
+          threadId,
+          startFrame: 0,
+          levels: stackTraceLevels(kind),
+        });
         frames = st.stackFrames ?? [];
       } catch {
         break; // process exited — the test finished

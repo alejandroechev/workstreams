@@ -213,14 +213,91 @@ In a replay model, "back" is an array index. A live debugger cannot do it
 without record/replay support. It is kept in v1 as a genuine advantage rather
 than treated as an accident.
 
+## Windows recording (2026-08-12)
+
+Recording works on Windows **from the CLI**. The split held up: replay needed no
+changes at all, and the recorder needed no rewrite — only a second adapter
+dialect.
+
+### CodeLLDB, because of the PDB reader
+
+An MSVC-toolchain Rust build emits **PDB**, not DWARF, and Windows ships no
+system LLDB. CodeLLDB's `codelldb.exe` bundles its own LLDB *and*
+`msdia140.dll` — the MS Debug Interface Access library — so it can read those
+PDBs. `lldb-dap.exe` (from an LLVM install) is still preferred when present, and
+`WORKSTREAMS_DAP_ADAPTER` overrides the search.
+
+Discovery order: `WORKSTREAMS_DAP_ADAPTER` → `where lldb-dap.exe` → LLVM install
+dirs → CodeLLDB under `.vscode`/`.vscode-insiders`/`.vscode-server`.
+
+### Four dialect differences, none of which error
+
+Each of these produced a *silent* wrong result rather than a failure, which is
+why they are recorded here rather than left to be rediscovered:
+
+| Difference | Symptom |
+| --- | --- |
+| `levels: 0` on `stackTrace` | The spec says "all frames" and lldb-dap obeys; codelldb returns **zero** frames. The recorder saw an empty stack every step and wrote an empty trace. |
+| Function breakpoints | Neither `setFunctionBreakpoints` nor `breakpoint set --name` resolves a Rust symbol from a PDB ("Resolved locations: 0"), though `image lookup -r` finds it. Only a **regex** breakpoint binds. |
+| `terminal` | Unset, codelldb defaults to an integrated terminal and answers `launch` with a `runInTerminal` **reverse request**; a client that ignores it gets a bare "unknown error". `terminal: "console"` avoids it. |
+| Breakpoint timing | codelldb rejects breakpoints set before the `initialized` event; lldb-dap tolerates them. |
+
+The regex is anchored (`…$`) so it does not also match the `::{{closure}}` twin
+that shares the prefix and would stop one frame short of the test body.
+
+Both options are sent **only** to codelldb, so the proven macOS request stream
+is unchanged.
+
+### Windows path and symbol handling
+
+- **Case-insensitive, separator-agnostic path comparison.** The debugger reports
+  whatever case the PDB recorded, which need not match the workstream directory
+  the user typed. A byte-wise compare classified every frame as "not ours" and
+  produced an empty trace, again with no error.
+- **MSVC decoration is stripped.** PDB frames read
+  `struct ref$<str$> traceprobe::classify(int)` rather than a Rust path, so the
+  return type and parameter list are removed, leaving `traceprobe::classify`.
+
+### In-app recording is NOT yet working on Windows
+
+The Rust recorder reaches the breakpoint and then stalls: after
+`configurationDone` the debuggee is never resumed, so no `stopped` event
+arrives. The DAP conversation was compared message-by-message against the Node
+CLI driving the same adapter to the same test — they are **identical** up to the
+stall — and the following were each ruled out: stdio mode (`null`/`piped`/
+`inherit`), console allocation (`CREATE_NO_WINDOW`, `CREATE_NEW_CONSOLE`, a real
+console), `stopOnEntry` with a post-entry breakpoint, `--nocapture`, request
+timing, and the timeout itself. Cause unknown; the CLI is the supported Windows
+path until it is found.
+
+Two fixes made while chasing it are keepers on every platform:
+
+- **The DAP reader now pumps continuously on its own thread.** It previously
+  read only while a request was outstanding, so the adapter's stdout pipe could
+  fill and block *its* writes — a deadlock in which neither side progressed.
+- **Requests now time out** (30s) instead of blocking forever, so a stalled
+  adapter reports "the debug adapter stopped responding" rather than hanging the
+  recording thread with no diagnosis.
+
+### Validating on Windows needs a clean crate
+
+This repo's own test binary cannot start on the development machine at all —
+`cargo test --lib` exits with `STATUS_ENTRYPOINT_NOT_FOUND` (0xc0000139), which
+reproduces on a clean checkout and is unrelated to this feature. LLDB therefore
+cannot launch it either. Validation used a throwaway crate with no Tauri
+dependencies; the pure logic was exercised against the *real* module source by
+compiling it into a scratch crate with `#[path]`.
+
 ## Consequences
 
 - Ships behind the `debug-walkthrough` feature flag, disabled by default, like
   `plan-tile`.
-- **macOS-only recording** for now; replay is platform-neutral, so a
-  Windows recorder is an additive follow-up rather than a rewrite. Traces
-  resolve step paths using the separator of the *recorded* `repoRoot`, not the
-  host's — otherwise a macOS trace opened on Windows yields `C:\repo/src/a.rs`.
+- **Recording: macOS (in-app + CLI), Windows (CLI only).** Replay is
+  platform-neutral everywhere. Traces resolve step paths using the separator of
+  the *recorded* `repoRoot`, not the host's — otherwise a macOS trace opened on
+  Windows yields `C:\repo/src/a.rs`.
+- Windows recording requires CodeLLDB (or an LLVM `lldb-dap.exe`) to be
+  installed; it is not bundled.
 - Recording is slow (one DAP round-trip per step) and deliberate; it is a CLI
   action, never something the UI does implicitly.
 - The in-memory backend holds traces behind a `_seedTraceFile` seam, so E2E and
@@ -228,7 +305,7 @@ than treated as an accident.
 - **Explicitly out of v1:** UI-set breakpoints, conditional breakpoints, watch
   expressions, call-graph views, multi-threaded traces, async/await stepping,
   value editing, run-to-cursor, agent annotations, and variable values.
-  Deferred in order: Windows recorder → values → annotations →
+  Deferred in order: in-app Windows recording → values → annotations →
   right-click-to-record.
 - The versioned schema is the pressure valve against scope creep toward a real
   debugger: saying no now costs nothing later.
@@ -299,3 +376,4 @@ order, not from the text.
 
 If a future change makes walking a trace slower than simply reading the file,
 delete the feature rather than expand it.
+

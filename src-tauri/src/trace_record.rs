@@ -11,7 +11,7 @@
 
 use std::collections::HashMap;
 use std::io::{BufReader, Read, Write};
-use std::path::{Path, MAIN_SEPARATOR};
+use std::path::Path;
 use std::process::{Child, Command, Stdio};
 
 use serde::{Deserialize, Serialize};
@@ -95,6 +95,23 @@ pub fn select_test_executable(stdout: &str) -> Result<String, String> {
     Ok(chosen.1.clone())
 }
 
+/// Normalise a path for comparison: separators unified, and case folded on
+/// Windows where the filesystem is case-insensitive.
+///
+/// Both halves matter. The debugger reports whatever case and separator the
+/// PDB recorded, which need not match the workstream directory the user typed,
+/// and a raw string comparison then silently classifies every frame as
+/// "not ours" — producing an empty trace with no error to explain it.
+fn normalise_for_compare(path: &str) -> String {
+    let unified = path.replace('\\', "/");
+    let trimmed = unified.trim_end_matches('/');
+    if cfg!(windows) {
+        trimmed.to_lowercase()
+    } else {
+        trimmed.to_string()
+    }
+}
+
 /// Whether a stack frame belongs to the code under study.
 ///
 /// This is the step-out trigger. Without it a single `assert_eq!` descends into
@@ -105,20 +122,62 @@ pub fn is_our_code(file: Option<&str>, repo_root: &str) -> bool {
     let Some(file) = file.filter(|f| !f.is_empty()) else {
         return false;
     };
-    let root = repo_root.trim_end_matches(['/', '\\']);
+    let file_n = normalise_for_compare(file);
+    let root_n = normalise_for_compare(repo_root);
     // The separator guard stops `/repo-other` from matching root `/repo`.
-    if file != root && !file.starts_with(&format!("{root}{MAIN_SEPARATOR}")) {
+    if file_n != root_n && !file_n.starts_with(&format!("{root_n}/")) {
         return false;
     }
-    !file.contains(&format!("{MAIN_SEPARATOR}target{MAIN_SEPARATOR}"))
+    !file_n.contains("/target/")
 }
 
-/// Strip rustc's `::h<hash>` suffix from a symbol name.
-pub fn demangle(name: Option<&str>) -> String {
-    match name {
-        Some(n) => n.split("::h").next().unwrap_or(n).to_string(),
-        None => String::new(),
+/// Make an absolute frame path repo-relative, tolerating case and separator
+/// differences that `Path::strip_prefix` (a byte-wise match) would reject.
+///
+/// A frame outside the repo keeps its absolute path: silently rebasing
+/// something we could not relativise would point the UI at a file that does
+/// not exist.
+pub fn relative_to_repo(file: &str, repo_root: &str) -> String {
+    let file_n = normalise_for_compare(file);
+    let root_n = normalise_for_compare(repo_root);
+    let prefix = format!("{root_n}/");
+    if !file_n.starts_with(&prefix) {
+        return file.to_string();
     }
+    // Slice the ORIGINAL string so the stored path keeps its real case; the
+    // normalised forms share a length because normalisation is 1:1 per byte.
+    let relative = &file[prefix.len()..];
+    relative.replace(['/', '\\'], std::path::MAIN_SEPARATOR_STR)
+}
+
+/// Strip decoration from a debugger-reported symbol name.
+///
+/// Two shapes arrive, depending on the debug-info format:
+/// - DWARF (macOS/Linux) yields a Rust path plus rustc's `::h<hash>` suffix.
+/// - PDB (Windows/MSVC) yields a C++-style signature such as
+///   `struct ref$<str$> traceprobe::classify(int)`. Left raw, every row of a
+///   Windows trace reads like a C++ declaration instead of the function name.
+pub fn demangle(name: Option<&str>) -> String {
+    let Some(name) = name else {
+        return String::new();
+    };
+    // Drop a trailing parameter list, keeping `{{closure}}` braces intact.
+    let without_params = match name.find('(') {
+        Some(i) => &name[..i],
+        None => name,
+    };
+    // Drop a leading return type: MSVC renders it before the symbol, and it can
+    // itself contain spaces (`struct ref$<str$>`), so take the LAST segment.
+    let without_return = without_params
+        .rsplit(' ')
+        .next()
+        .unwrap_or(without_params)
+        .trim();
+    without_return
+        .split("::h")
+        .next()
+        .unwrap_or(without_return)
+        .to_string()
 }
 
 /// Append a location, collapsing it into the previous entry when identical.
@@ -284,8 +343,77 @@ pub fn find_cargo_manifest_dir(repo_root: &str) -> Option<String> {
     children.into_iter().next()
 }
 
-/// Diagnostic tracing of the DAP conversation, enabled with `WS_TRACE_DAP=1`.
-/// Off by default so a normal recording stays quiet.
+/// Which debug adapter we are driving.
+///
+/// The two speak the same protocol but disagree in ways that silently produce
+/// an empty trace rather than an error, so the differences are made explicit
+/// here instead of being scattered through the recording loop.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AdapterKind {
+    /// LLVM's own adapter — the macOS/Linux default.
+    LldbDap,
+    /// CodeLLDB's `codelldb`, which ships a PDB reader (`msdia140.dll`) and is
+    /// therefore the practical choice for MSVC-toolchain Rust on Windows.
+    CodeLldb,
+}
+
+impl AdapterKind {
+    pub fn from_path(adapter_path: &str) -> Self {
+        let stem = Path::new(adapter_path)
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_lowercase())
+            .unwrap_or_default();
+        if stem == "lldb-dap" {
+            Self::LldbDap
+        } else {
+            // Anything unrecognised gets the conservative dialect: its requests
+            // are also valid for lldb-dap, so a wrong guess degrades rather
+            // than breaks.
+            Self::CodeLldb
+        }
+    }
+}
+
+/// How many stack frames to ask for.
+///
+/// The DAP spec says `levels: 0` means "all frames", and lldb-dap obeys — which
+/// is what makes the recorded call depth (and therefore "step out") exact.
+/// codelldb takes `0` literally and returns **zero** frames, so the recorder
+/// saw an empty stack every step and wrote an empty trace without erroring.
+/// A finite cap well past any realistic Rust test depth restores the same
+/// information.
+pub fn stack_trace_levels(kind: AdapterKind) -> u32 {
+    match kind {
+        AdapterKind::LldbDap => 0,
+        AdapterKind::CodeLldb => 500,
+    }
+}
+
+/// Build the regex that pins a breakpoint to a test function.
+///
+/// Neither `setFunctionBreakpoints` nor `breakpoint set --name` resolves a Rust
+/// symbol read from a PDB — both report "Resolved locations: 0" — while a
+/// regex lookup finds it. The `$` anchor keeps the breakpoint off the
+/// `::{{closure}}` twin that shares the prefix, which would otherwise stop one
+/// frame away from the test body.
+pub fn function_breakpoint_regex(test: &str) -> String {
+    let mut escaped = String::with_capacity(test.len() + 8);
+    for ch in test.chars() {
+        if matches!(
+            ch,
+            '.' | '*' | '+' | '?' | '^' | '$' | '(' | ')' | '[' | ']' | '{' | '}' | '|' | '\\'
+        ) {
+            escaped.push('\\');
+        }
+        escaped.push(ch);
+    }
+    escaped.push('$');
+    escaped
+}
+
+/// Diagnostic tracing of the DAP conversation, enabled with `WS_TRACE_DAP=1`
+/// (summary) or `WS_TRACE_DAP=2` (full message bodies). Off by default so a
+/// normal recording stays quiet.
 fn dap_trace(message: &str) {
     if std::env::var("WS_TRACE_DAP").is_ok() {
         eprintln!("[dap] {message}");
@@ -305,12 +433,23 @@ pub struct RecordOptions {
     pub max_steps: u32,
 }
 
+/// A single DAP request should never legitimately take this long. Recording
+/// drives a debugger step by step, so a stall would otherwise hang the app's
+/// recording thread forever with no way to report why.
+const DAP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// A minimal DAP client over a child process's stdio.
 struct DapSession {
     child: Child,
     stdin: std::process::ChildStdin,
-    reader: BufReader<std::process::ChildStdout>,
-    buffer: Vec<u8>,
+    /// Messages parsed by the reader thread.
+    ///
+    /// A background thread pumps stdout continuously rather than reading only
+    /// while a request is outstanding. Both properties matter: it lets waits
+    /// carry a timeout, and it keeps the adapter's stdout pipe drained. An
+    /// undrained pipe eventually blocks the adapter's own writes — a deadlock
+    /// where neither side can proceed and nothing is logged.
+    rx: std::sync::mpsc::Receiver<serde_json::Value>,
     seq: u64,
     /// Messages seen while waiting for a different one.
     ///
@@ -337,13 +476,36 @@ impl DapSession {
         let mut child = cmd
             .spawn()
             .map_err(|e| format!("Cannot start {adapter}: {e}"))?;
-        let stdin = child.stdin.take().ok_or("no stdin on lldb-dap")?;
-        let stdout = child.stdout.take().ok_or("no stdout on lldb-dap")?;
+        let stdin = child.stdin.take().ok_or("no stdin on the debug adapter")?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or("no stdout on the debug adapter")?;
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut reader = BufReader::new(stdout);
+            let mut buffer: Vec<u8> = Vec::new();
+            let mut chunk = [0u8; 8192];
+            loop {
+                let (messages, rest) = read_dap_messages(&buffer);
+                buffer = rest;
+                for msg in messages {
+                    if tx.send(msg).is_err() {
+                        return; // session dropped
+                    }
+                }
+                match reader.read(&mut chunk) {
+                    Ok(0) | Err(_) => return, // adapter closed
+                    Ok(n) => buffer.extend_from_slice(&chunk[..n]),
+                }
+            }
+        });
+
         Ok(Self {
             child,
             stdin,
-            reader: BufReader::new(stdout),
-            buffer: Vec::new(),
+            rx,
             seq: 1,
             pending: std::collections::VecDeque::new(),
         })
@@ -364,10 +526,10 @@ impl DapSession {
         Ok(seq)
     }
 
-    /// Pump the stream until `predicate` matches a message, or the adapter
-    /// closes. Anything that doesn't match is **queued rather than dropped**,
-    /// so a message that arrives ahead of the one we are waiting on is still
-    /// available later.
+    /// Wait until `predicate` matches a message, the adapter closes, or the
+    /// timeout elapses. Anything that doesn't match is **queued rather than
+    /// dropped**, so a message that arrives ahead of the one we are waiting on
+    /// is still available later.
     fn wait_for(
         &mut self,
         mut predicate: impl FnMut(&serde_json::Value) -> bool,
@@ -376,28 +538,37 @@ impl DapSession {
         if let Some(pos) = self.pending.iter().position(&mut predicate) {
             return Ok(self.pending.remove(pos).expect("index just found"));
         }
+        let deadline = std::time::Instant::now() + DAP_TIMEOUT;
         loop {
-            let (messages, rest) = read_dap_messages(&self.buffer);
-            self.buffer = rest;
-            for msg in messages {
-                dap_trace(&format!(
-                    "<- {} {}",
-                    msg.get("type").and_then(|t| t.as_str()).unwrap_or("?"),
-                    msg.get("command")
-                        .or_else(|| msg.get("event"))
-                        .and_then(|c| c.as_str())
-                        .unwrap_or("?")
-                ));
-                if predicate(&msg) {
-                    return Ok(msg);
-                }
-                self.pending.push_back(msg);
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                return Err("the debug adapter stopped responding".to_string());
             }
-            let mut chunk = [0u8; 8192];
-            match self.reader.read(&mut chunk) {
-                Ok(0) => return Err("lldb-dap closed the connection".to_string()),
-                Ok(n) => self.buffer.extend_from_slice(&chunk[..n]),
-                Err(e) => return Err(format!("DAP read failed: {e}")),
+            match self.rx.recv_timeout(remaining) {
+                Ok(msg) => {
+                    if std::env::var("WS_TRACE_DAP").as_deref() == Ok("2") {
+                        dap_trace(&format!("<- {msg}"));
+                    } else {
+                        dap_trace(&format!(
+                            "<- {} {}",
+                            msg.get("type").and_then(|t| t.as_str()).unwrap_or("?"),
+                            msg.get("command")
+                                .or_else(|| msg.get("event"))
+                                .and_then(|c| c.as_str())
+                                .unwrap_or("?")
+                        ));
+                    }
+                    if predicate(&msg) {
+                        return Ok(msg);
+                    }
+                    self.pending.push_back(msg);
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    return Err("the debug adapter stopped responding".to_string());
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    return Err("the debug adapter closed the connection".to_string());
+                }
             }
         }
     }
@@ -449,54 +620,226 @@ impl Drop for DapSession {
     }
 }
 
-/// Locate `lldb-dap`, preferring Xcode's copy on macOS and falling back to PATH.
-fn resolve_lldb_dap(env: &Option<HashMap<String, String>>) -> Result<String, String> {
-    let path_override = env.as_ref().and_then(|e| e.get("PATH").cloned());
+/// Locate a debug adapter.
+///
+/// macOS/Linux prefer LLVM's `lldb-dap`. Windows has no system LLDB, but
+/// CodeLLDB ships `codelldb.exe` bundled with its own LLDB **and**
+/// `msdia140.dll` (the MS Debug Interface Access library), which is what lets
+/// it read the PDBs an MSVC-toolchain Rust build produces — so it is the
+/// practical choice there. `lldb-dap.exe` is still preferred when present.
+///
+/// `WORKSTREAMS_DAP_ADAPTER` overrides everything, for an adapter installed
+/// somewhere unusual.
+fn resolve_debug_adapter(env: &Option<HashMap<String, String>>) -> Result<String, String> {
+    let lookup = |key: &str| -> Option<String> {
+        env.as_ref()
+            .and_then(|e| e.get(key).cloned())
+            .or_else(|| std::env::var(key).ok())
+    };
 
-    let mut xcrun = Command::new("xcrun");
-    xcrun.args(["-f", "lldb-dap"]);
-    if let Some(p) = &path_override {
-        xcrun.env("PATH", p);
+    if let Some(explicit) = lookup("WORKSTREAMS_DAP_ADAPTER").filter(|p| !p.trim().is_empty()) {
+        let path = explicit.trim().to_string();
+        if Path::new(&path).is_file() {
+            return Ok(path);
+        }
+        return Err(format!(
+            "WORKSTREAMS_DAP_ADAPTER points at '{path}', which is not a file."
+        ));
     }
-    if let Ok(out) = xcrun.output() {
-        if out.status.success() {
-            let found = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            if !found.is_empty() {
-                return Ok(found);
+
+    let path_override = lookup("PATH");
+
+    #[cfg(not(windows))]
+    {
+        // Xcode's copy first on macOS, then anything on PATH (Linux, or a
+        // macOS without full Xcode).
+        for (program, args) in [
+            ("xcrun", vec!["-f", "lldb-dap"]),
+            ("which", vec!["lldb-dap"]),
+        ] {
+            let mut cmd = Command::new(program);
+            cmd.args(&args);
+            if let Some(p) = &path_override {
+                cmd.env("PATH", p);
+            }
+            if let Ok(out) = cmd.output() {
+                if out.status.success() {
+                    let found = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                    if !found.is_empty() {
+                        return Ok(found);
+                    }
+                }
             }
         }
+        Err(
+            "lldb-dap not found. On macOS install Xcode or the Command Line \
+             Tools; elsewhere install LLDB and put lldb-dap on PATH."
+                .to_string(),
+        )
     }
 
-    let mut which = Command::new("which");
-    which.arg("lldb-dap");
-    if let Some(p) = &path_override {
-        which.env("PATH", p);
-    }
-    if let Ok(out) = which.output() {
-        if out.status.success() {
-            let found = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            if !found.is_empty() {
-                return Ok(found);
+    #[cfg(windows)]
+    {
+        // `which` does not exist on Windows; the shipped equivalent is `where`.
+        let mut cmd = Command::new("where");
+        cmd.arg("lldb-dap.exe");
+        no_console_window(&mut cmd);
+        if let Some(p) = &path_override {
+            cmd.env("PATH", p);
+        }
+        if let Ok(out) = cmd.output() {
+            if out.status.success() {
+                if let Some(first) = String::from_utf8_lossy(&out.stdout).lines().next() {
+                    let found = first.trim().to_string();
+                    if !found.is_empty() {
+                        return Ok(found);
+                    }
+                }
             }
         }
-    }
 
-    Err(
-        "lldb-dap not found. On macOS install Xcode or the Command Line Tools; \
-         elsewhere install LLDB and put lldb-dap on PATH."
-            .to_string(),
-    )
+        for candidate in windows_adapter_candidates() {
+            if candidate.is_file() {
+                return Ok(candidate.to_string_lossy().to_string());
+            }
+        }
+
+        Err(
+            "No debug adapter found. Install the CodeLLDB extension in VS Code \
+             (`code --install-extension vadimcn.vscode-lldb`), or install LLVM \
+             so `lldb-dap.exe` is on PATH. Set WORKSTREAMS_DAP_ADAPTER to point \
+             at an adapter in a non-standard location."
+                .to_string(),
+        )
+    }
 }
 
+/// Well-known Windows adapter locations, most preferred first.
+///
+/// Kept separate from the probing so the search order is testable without a
+/// filesystem: an LLVM install is preferred over CodeLLDB because `lldb-dap` is
+/// the adapter this recorder was written against, and CodeLLDB's extension
+/// directory carries a version suffix that has to be globbed.
+#[cfg(windows)]
+fn windows_adapter_candidates() -> Vec<std::path::PathBuf> {
+    let mut candidates = Vec::new();
+
+    for llvm in [
+        r"C:\Program Files\LLVM\bin",
+        r"C:\Program Files (x86)\LLVM\bin",
+    ] {
+        candidates.push(Path::new(llvm).join("lldb-dap.exe"));
+    }
+
+    if let Some(home) = dirs::home_dir() {
+        // VS Code, Insiders, and the remote/server variant all install
+        // extensions into their own root.
+        for root in [".vscode", ".vscode-insiders", ".vscode-server"] {
+            let ext_dir = home.join(root).join("extensions");
+            let Ok(entries) = std::fs::read_dir(&ext_dir) else {
+                continue;
+            };
+            // Several versions may be installed side by side; take the newest
+            // by name, which sorts correctly for CodeLLDB's numbering.
+            let mut versions: Vec<std::path::PathBuf> = entries
+                .filter_map(|e| e.ok())
+                .map(|e| e.path())
+                .filter(|p| {
+                    p.file_name()
+                        .map(|n| n.to_string_lossy().starts_with("vadimcn.vscode-lldb-"))
+                        .unwrap_or(false)
+                })
+                .collect();
+            versions.sort();
+            for dir in versions.into_iter().rev() {
+                candidates.push(dir.join("adapter").join("codelldb.exe"));
+            }
+        }
+    }
+
+    candidates
+}
+
+/// Stop a spawned child from flashing a console window.
+///
+/// Repo-wide rule: the app is a GUI process, so every `Command` it runs must
+/// set `CREATE_NO_WINDOW` or the user sees a console blink. A recording spawns
+/// cargo, git and the adapter, so without this a single click flashes three.
+#[cfg(windows)]
+fn no_console_window(cmd: &mut Command) {
+    use std::os::windows::process::CommandExt;
+    cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+}
+
+#[cfg(not(windows))]
+fn no_console_window(_cmd: &mut Command) {}
+
 fn current_commit_sha(repo_root: &str) -> String {
-    Command::new("git")
-        .args(["rev-parse", "HEAD"])
-        .current_dir(repo_root)
-        .output()
+    let mut cmd = Command::new("git");
+    cmd.args(["rev-parse", "HEAD"]).current_dir(repo_root);
+    no_console_window(&mut cmd);
+    cmd.output()
         .ok()
         .filter(|o| o.status.success())
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
         .unwrap_or_else(|| "unknown".to_string())
+}
+
+/// Break on the test function.
+///
+/// Two strategies, because symbol lookup differs by debug-info format:
+///
+/// - **DWARF (lldb-dap)** resolves `setFunctionBreakpoints` by Rust path, which
+///   avoids having to know which line the test body starts on.
+/// - **PDB (Windows/MSVC)** does not: `setFunctionBreakpoints` *and*
+///   `breakpoint set --name` both report "Resolved locations: 0" for a symbol
+///   that `image lookup -r` finds perfectly well. Only the regex form binds, so
+///   there we drive LLDB's own command through `evaluate`.
+///
+/// Falls back to the regex form whenever the standard request fails to verify,
+/// so an adapter that behaves unexpectedly still records rather than erroring.
+fn set_test_breakpoint(dap: &mut DapSession, kind: AdapterKind, test: &str) -> Result<(), String> {
+    if kind == AdapterKind::LldbDap {
+        let bp = dap.request(
+            "setFunctionBreakpoints",
+            serde_json::json!({ "breakpoints": [{ "name": test }] }),
+        )?;
+        let verified = bp
+            .get("breakpoints")
+            .and_then(|b| b.as_array())
+            .map(|list| {
+                list.iter()
+                    .any(|b| b.get("verified").and_then(|v| v.as_bool()) != Some(false))
+            })
+            .unwrap_or(false);
+        if verified {
+            return Ok(());
+        }
+        dap_trace("function breakpoint unverified; falling back to a regex breakpoint");
+    }
+
+    let expression = format!(
+        "breakpoint set -r \"{}\"",
+        function_breakpoint_regex(test)
+            .replace('\\', "\\\\")
+            .replace('"', "\\\"")
+    );
+    let body = dap.request(
+        "evaluate",
+        serde_json::json!({ "expression": expression, "context": "repl" }),
+    )?;
+    // LLDB answers a regex breakpoint that matched nothing with "no locations".
+    let result = body
+        .get("result")
+        .and_then(|r| r.as_str())
+        .unwrap_or_default();
+    if result.contains("no locations") {
+        return Err(format!(
+            "no breakpoint could be set on '{test}'. The test name must be \
+             fully qualified, e.g. `pty::tests::resolves_shell`."
+        ));
+    }
+    Ok(())
 }
 
 /// Record a trace. `env` supplies the repaired PATH so `cargo`, `git` and the
@@ -512,6 +855,7 @@ pub fn record_trace(
     cargo
         .args(["test", "--no-run", "--message-format=json"])
         .current_dir(&opts.manifest_dir);
+    no_console_window(&mut cargo);
     if let Some(env) = &env {
         for (k, v) in env {
             cargo.env(k, v);
@@ -529,7 +873,8 @@ pub fn record_trace(
     }
     let exe = select_test_executable(&String::from_utf8_lossy(&build.stdout))?;
 
-    let adapter = resolve_lldb_dap(&env)?;
+    let adapter = resolve_debug_adapter(&env)?;
+    let kind = AdapterKind::from_path(&adapter);
     on_progress("starting debugger", 0);
     let mut dap = DapSession::spawn(&adapter, env)?;
 
@@ -546,38 +891,29 @@ pub fn record_trace(
 
     // `--exact` avoids running neighbouring tests whose frames would
     // interleave; `--test-threads=1` makes the step order deterministic.
-    let launch_seq = dap.send(
-        "launch",
-        serde_json::json!({
-            "program": exe,
-            "args": ["--exact", opts.test, "--test-threads=1", "--nocapture"],
-            "cwd": opts.manifest_dir,
-            "stopOnEntry": false,
-            "env": { "RUST_BACKTRACE": "0" },
-        }),
-    )?;
-
-    // Breaking on the *function* avoids having to know which line the test
-    // body starts on.
-    let bp = dap.request(
-        "setFunctionBreakpoints",
-        serde_json::json!({ "breakpoints": [{ "name": opts.test }] }),
-    )?;
-    let verified = bp
-        .get("breakpoints")
-        .and_then(|b| b.as_array())
-        .map(|list| {
-            list.iter()
-                .any(|b| b.get("verified").and_then(|v| v.as_bool()) != Some(false))
-        })
-        .unwrap_or(false);
-    if !verified {
-        return Err(format!(
-            "no breakpoint could be set on '{}'. The test name must be fully \
-             qualified, e.g. `pty::tests::resolves_shell`.",
-            opts.test
-        ));
+    //
+    // `terminal: "console"` is codelldb-only: left unset it defaults to an
+    // integrated terminal and answers `launch` with a `runInTerminal` REVERSE
+    // request, which this minimal client does not implement — the launch then
+    // fails with a bare "unknown error". It is withheld from lldb-dap so the
+    // working macOS path sends exactly what it always did.
+    let mut launch_args = serde_json::json!({
+        "program": exe,
+        "args": ["--exact", opts.test, "--test-threads=1", "--nocapture"],
+        "cwd": opts.manifest_dir,
+        "stopOnEntry": false,
+        "env": { "RUST_BACKTRACE": "0" },
+    });
+    if kind == AdapterKind::CodeLldb {
+        launch_args["terminal"] = serde_json::json!("console");
     }
+    let launch_seq = dap.send("launch", launch_args)?;
+
+    // Breakpoints belong after the `initialized` event. lldb-dap tolerates them
+    // earlier; codelldb does not, and reports every one unresolved.
+    let _ = dap.wait_for_event("initialized");
+
+    set_test_breakpoint(&mut dap, kind, &opts.test)?;
 
     dap.request("configurationDone", serde_json::json!({}))?;
     let _ = dap.wait_for(|m| {
@@ -587,6 +923,7 @@ pub fn record_trace(
 
     on_progress("stepping", 0);
     let stopped = dap.wait_for_event("stopped")?;
+
     let thread_id = stopped
         .get("threadId")
         .and_then(|t| t.as_u64())
@@ -598,11 +935,16 @@ pub fn record_trace(
     for i in 0..opts.max_steps {
         let frames = match dap.request(
             "stackTrace",
-            // `levels: 0` asks for the whole stack. lldb-dap only reports a
-            // correct frame count that way — with `levels: 1` its `totalFrames`
-            // is a stale constant — and the count is what makes "step out"
-            // exact rather than a name-matching heuristic.
-            serde_json::json!({ "threadId": thread_id, "startFrame": 0, "levels": 0 }),
+            // `levels: 0` means "all frames" per the DAP spec, and lldb-dap
+            // obeys — the frame count is what makes "step out" exact rather
+            // than a name-matching heuristic. codelldb takes 0 literally and
+            // returns ZERO frames, which recorded an empty trace with no
+            // error, so it gets a finite cap instead.
+            serde_json::json!({
+                "threadId": thread_id,
+                "startFrame": 0,
+                "levels": stack_trace_levels(kind),
+            }),
         ) {
             Ok(body) => body,
             Err(_) => break, // process exited — the test finished
@@ -623,14 +965,10 @@ pub fn record_trace(
 
         if ours {
             if let Some(file) = file {
-                let relative = Path::new(file)
-                    .strip_prefix(&opts.repo_root)
-                    .map(|p| p.to_string_lossy().to_string())
-                    .unwrap_or_else(|_| file.to_string());
                 append_step(
                     &mut steps,
                     TraceStep {
-                        file: relative,
+                        file: relative_to_repo(file, &opts.repo_root),
                         line: frame.get("line").and_then(|l| l.as_u64()).unwrap_or(0) as u32,
                         function: demangle(frame.get("name").and_then(|n| n.as_str())),
                         hits: None,
@@ -767,6 +1105,145 @@ mod tests {
         );
         assert_eq!(demangle(Some("main")), "main");
         assert_eq!(demangle(None), "");
+    }
+
+    // ── Windows support ───────────────────────────────────────────────────
+
+    #[test]
+    fn strips_msvc_decoration_from_a_frame_name() {
+        // LLDB reads MSVC PDBs and reports C++-style decorated names rather
+        // than the Rust path lldb-dap yields from DWARF. Left raw, every
+        // Windows trace row reads like a C++ signature.
+        assert_eq!(
+            demangle(Some("struct ref$<str$> traceprobe::classify(int)")),
+            "traceprobe::classify"
+        );
+        assert_eq!(
+            demangle(Some(
+                "int traceprobe::sum_evens(struct ref$<slice2$<i32> >)"
+            )),
+            "traceprobe::sum_evens"
+        );
+        // A plain Rust path must survive untouched.
+        assert_eq!(
+            demangle(Some("traceprobe::tests::classifies_and_sums")),
+            "traceprobe::tests::classifies_and_sums"
+        );
+        // Closures keep their marker — it is meaningful when reading a trace.
+        assert_eq!(
+            demangle(Some("traceprobe::tests::run::{{closure}}")),
+            "traceprobe::tests::run::{{closure}}"
+        );
+    }
+
+    #[test]
+    fn matches_repo_paths_case_insensitively_on_windows() {
+        // The debugger reports whatever case the PDB recorded, which need not
+        // match the case the user typed into the workstream directory.
+        let same_case = is_our_code(Some(r"C:\Repo\src\pty.rs"), r"C:\Repo");
+        let diff_case = is_our_code(Some(r"c:\repo\src\pty.rs"), r"C:\Repo");
+        assert!(same_case);
+        if cfg!(windows) {
+            assert!(diff_case, "Windows paths are case-insensitive");
+        }
+    }
+
+    #[test]
+    fn tolerates_mixed_separators_in_a_windows_path() {
+        // DAP frames and stored roots disagree about separators often enough
+        // that comparing raw strings silently records nothing.
+        if cfg!(windows) {
+            assert!(is_our_code(Some(r"C:/Repo/src/pty.rs"), r"C:\Repo"));
+            assert!(is_our_code(Some(r"C:\Repo\src\pty.rs"), "C:/Repo"));
+            // Still must reject a sibling that merely shares the prefix.
+            assert!(!is_our_code(Some(r"C:/Repo-other/src/x.rs"), r"C:\Repo"));
+            // …and generated code under target/.
+            assert!(!is_our_code(Some(r"C:/Repo/target/debug/o.rs"), r"C:\Repo"));
+        }
+    }
+
+    #[test]
+    fn makes_a_step_path_repo_relative_regardless_of_case_or_separator() {
+        assert_eq!(
+            relative_to_repo(r"C:\Repo\src\pty.rs", r"C:\Repo"),
+            r"src\pty.rs".replace('\\', std::path::MAIN_SEPARATOR_STR)
+        );
+        if cfg!(windows) {
+            // Differing case must not leave the path absolute.
+            assert_eq!(
+                relative_to_repo(r"c:\repo\src\pty.rs", r"C:\Repo"),
+                r"src\pty.rs"
+            );
+            assert_eq!(
+                relative_to_repo("C:/Repo/src/pty.rs", r"C:\Repo"),
+                r"src\pty.rs"
+            );
+        }
+    }
+
+    #[test]
+    fn a_frame_outside_the_repo_keeps_its_absolute_path() {
+        // Never silently rebase something we could not relativise.
+        let outside = if cfg!(windows) {
+            r"D:\other\x.rs"
+        } else {
+            "/other/x.rs"
+        };
+        let root = if cfg!(windows) { r"C:\Repo" } else { "/repo" };
+        assert_eq!(relative_to_repo(outside, root), outside);
+    }
+
+    #[test]
+    fn asks_for_a_finite_stack_depth_when_driving_codelldb() {
+        // The DAP spec says `levels: 0` means "all frames", and lldb-dap obeys.
+        // codelldb takes it literally and returns ZERO frames, which silently
+        // recorded an empty trace.
+        assert_eq!(stack_trace_levels(AdapterKind::LldbDap), 0);
+        assert!(stack_trace_levels(AdapterKind::CodeLldb) >= 200);
+    }
+
+    #[test]
+    fn classifies_an_adapter_by_its_executable_name() {
+        assert_eq!(
+            AdapterKind::from_path(
+                r"C:\Users\me\.vscode\extensions\vadimcn.vscode-lldb-1.11.4\adapter\codelldb.exe"
+            ),
+            AdapterKind::CodeLldb
+        );
+        assert_eq!(
+            AdapterKind::from_path("/usr/bin/lldb-dap"),
+            AdapterKind::LldbDap
+        );
+        assert_eq!(
+            AdapterKind::from_path(r"C:\Program Files\LLVM\bin\lldb-dap.exe"),
+            AdapterKind::LldbDap
+        );
+        // Unknown adapters are driven with the conservative (codelldb) dialect,
+        // whose requests are valid for lldb-dap too.
+        assert_eq!(
+            AdapterKind::from_path("/opt/some-dap"),
+            AdapterKind::CodeLldb
+        );
+    }
+
+    #[test]
+    fn builds_an_anchored_regex_breakpoint_for_a_test_path() {
+        // Plain `--name` / setFunctionBreakpoints does not resolve Rust symbols
+        // out of a PDB; a regex does. The `$` anchor keeps the breakpoint off
+        // the `::{{closure}}` twin that shares the prefix.
+        assert_eq!(
+            function_breakpoint_regex("tests::classifies_and_sums"),
+            "tests::classifies_and_sums$"
+        );
+    }
+
+    #[test]
+    fn escapes_regex_metacharacters_in_a_test_path() {
+        // Generic tests carry angle brackets and other metacharacters; unescaped
+        // they make the breakpoint match the wrong symbol or fail to compile.
+        let escaped = function_breakpoint_regex("mod::conv<T>::works+fast");
+        assert!(escaped.starts_with("mod::conv<T>::works\\+fast"));
+        assert!(escaped.ends_with('$'));
     }
 
     #[test]

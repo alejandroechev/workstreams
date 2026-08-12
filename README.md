@@ -65,11 +65,19 @@ project-aware workspace:
   by the `code-review` skill) and you pull in the replies with the **Sync**
   button. `Alt+A` opens the Code Review tile.
   See [ADR 014](docs/adrs/014-code-review-tile.md).
-- 🐾 **Code walkthrough** *(experimental, macOS)* — step through a Rust test's
+- 🐾 **Code walkthrough** *(experimental)* — step through a Rust test's
   **real execution** to understand code, not to debug it. Record once with
-  `node scripts/trace-record.mjs --test <name>` (drives `lldb-dap`), then replay
-  the trace in the app: the walkthrough tile drives a bound Repo Explorer, so
-  you get debug order *and* the freedom to wander off and hit **Resync**.
+  `node scripts/trace-record.mjs --test <name>` (drives a debug adapter), then
+  replay the trace in the app: the walkthrough tile drives a bound Repo
+  Explorer, so you get debug order *and* the freedom to wander off and hit
+  **Resync**.
+  Replay works on any platform. **Recording** needs a debug adapter:
+  macOS/Linux use `lldb-dap` (Xcode Command Line Tools or an LLVM install);
+  **Windows** uses [CodeLLDB](https://marketplace.visualstudio.com/items?itemName=vadimcn.vscode-lldb)
+  (`code --install-extension vadimcn.vscode-lldb`), because it bundles the PDB
+  reader an MSVC-toolchain Rust build needs. Point `WORKSTREAMS_DAP_ADAPTER` at
+  an adapter in a non-standard location. Recording *from the tile* is macOS-only
+  for now — on Windows use the CLI ([ADR 018](docs/adrs/018-code-walkthrough-debugger.md)).
   Because it is a replay, you can also step **backwards**. `Alt+D` opens the
   tile (disabled by default; see the feature flag below); with it focused,
   `↑`/`↓` step, `o` finishes the current function and returns to its caller,

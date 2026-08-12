@@ -8,7 +8,53 @@ import {
   encodeDapMessage,
   createFrameReader,
   demangle,
+  adapterKindFor,
+  stackTraceLevels,
+  functionBreakpointRegex,
 } from "../trace-record.mjs";
+
+describe("Windows adapter support", () => {
+  it("classifies an adapter by its executable name", () => {
+    expect(adapterKindFor("/usr/bin/lldb-dap")).toBe("lldb-dap");
+    expect(adapterKindFor("C:\\Program Files\\LLVM\\bin\\lldb-dap.exe")).toBe("lldb-dap");
+    expect(
+      adapterKindFor("C:\\Users\\me\\.vscode\\extensions\\vadimcn.vscode-lldb-1.11.4\\adapter\\codelldb.exe"),
+    ).toBe("codelldb");
+    // Unknown adapters get the conservative dialect, whose requests are also
+    // valid for lldb-dap.
+    expect(adapterKindFor("/opt/some-dap")).toBe("codelldb");
+  });
+
+  it("asks codelldb for a finite stack depth", () => {
+    // The DAP spec says `levels: 0` means "all frames" and lldb-dap obeys, so
+    // the frame count is exact. codelldb takes 0 literally and returns ZERO
+    // frames, which recorded an empty trace with no error at all.
+    expect(stackTraceLevels("lldb-dap")).toBe(0);
+    expect(stackTraceLevels("codelldb")).toBeGreaterThanOrEqual(200);
+  });
+
+  it("anchors a function-breakpoint regex to the end of the symbol", () => {
+    // Neither setFunctionBreakpoints nor `breakpoint set --name` resolves a
+    // Rust symbol read from a PDB; a regex does. `$` keeps the breakpoint off
+    // the `::{{closure}}` twin that shares the prefix.
+    expect(functionBreakpointRegex("tests::classifies_and_sums")).toBe("tests::classifies_and_sums$");
+  });
+
+  it("escapes regex metacharacters in a test path", () => {
+    const escaped = functionBreakpointRegex("mod::conv<T>::works+fast");
+    expect(escaped.startsWith("mod::conv<T>::works\\+fast")).toBe(true);
+    expect(escaped.endsWith("$")).toBe(true);
+  });
+
+  it("strips MSVC decoration from a frame name", () => {
+    // LLDB reads MSVC PDBs and reports C++-style signatures rather than the
+    // Rust path it yields from DWARF.
+    expect(demangle("struct ref$<str$> traceprobe::classify(int)")).toBe("traceprobe::classify");
+    expect(demangle("int traceprobe::sum_evens(struct ref$<slice2$<i32> >)")).toBe("traceprobe::sum_evens");
+    // A plain Rust path must survive untouched.
+    expect(demangle("traceprobe::tests::classifies_and_sums")).toBe("traceprobe::tests::classifies_and_sums");
+  });
+});
 
 describe("selectTestExecutable", () => {
   const line = (o) => JSON.stringify(o);
