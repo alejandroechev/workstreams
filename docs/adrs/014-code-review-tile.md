@@ -57,6 +57,20 @@ Two load-bearing unknowns were spiked to **GO**
    you type. Read-only when the modified side is historical (not the working
    file). `originalEditable` stays false.
 
+   **Extended to the Repo Explorer diff (2026-08).** The same rule now governs
+   Repo Explorer's diff view, since the constraint is about *where the modified
+   content came from*, not which tile renders it. Of that tile's three diff
+   modes, only `unstaged` puts the working file on the modified side
+   (`last_commit` and `branch_vs_master` both show historical blobs via
+   `git show`), so only `unstaged` is editable; the others stay read-only.
+   `src/domain/diff-edit.ts` encodes this as `diffModeEditable()` and **fails
+   closed** for unrecognised modes, so a diff mode added later cannot silently
+   become writable before someone verifies its provenance. Saving goes through
+   `FileBufferRegistry`, inheriting the hash-based conflict detection and
+   line-ending preservation of every other write, and the diff is re-read
+   afterwards because an edit can change the diff itself (deleting an added
+   line makes its hunk disappear).
+
 5. **Storage in the bound session's `session.db` — no MCP.** Two tables,
    `reviews` and `review_comments`, are created **in the Copilot session's
    `~/.copilot/session-state/<session-id>/session.db`** (schema below). The app

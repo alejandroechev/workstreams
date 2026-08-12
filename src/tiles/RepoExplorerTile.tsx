@@ -1,6 +1,7 @@
 // @test-skip: pre-existing tile shell, individual subcomponents tested separately
 import { useState, useEffect, useCallback, useRef } from "react";
 import Editor, { DiffEditor } from "@monaco-editor/react";
+import type * as MonacoNs from "monaco-editor";
 import { MarkdownView } from "../ui/MarkdownView";
 import { FileEditorView, type MarkdownViewState } from "../files/FileEditorView";
 import { MarkdownModeSelector } from "../ui/components/MarkdownModeSelector";
@@ -13,6 +14,8 @@ import { useBackend } from "../backend/context";
 import { detectLanguage } from "../domain/tile-config";
 import { joinPath, defaultRootDir, parentDir } from "../domain/platform";
 import { subscribeWalkthroughNavigate } from "../domain/walkthrough-nav";
+import { diffModeEditable } from "../domain/diff-edit";
+import { fileBufferRegistry } from "../files/FileBufferRegistry";
 import { isAudioFile, isImageFile, isSvgFile, isPdfFile, makeAudioBlobUrl, makeImageBlobUrl, makePdfBlobUrl, dirnameOf, type LinkTargetKind } from "../domain/file-types";
 import { createNavigationStack, currentPath as navCurrent, canGoBack as navCanBack, canGoForward as navCanFwd, pushPath as navPush, goBack as navBack, goForward as navFwd, type NavigationStack } from "../domain/nav-history";
 import {
@@ -208,6 +211,13 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
   // Diff layout: "unified" (default, single pane) | "split" (classic
   // side-by-side). Persisted in tile view-state.
   const [diffLayout, setDiffLayout] = useState<"split" | "unified">("unified");
+  // In-place diff editing: only the unstaged diff has the working file on its
+  // modified side, so only it can be written back (see domain/diff-edit.ts).
+  const [diffDirty, setDiffDirty] = useState(false);
+  const [diffSaving, setDiffSaving] = useState(false);
+  const diffEditorRef = useRef<MonacoNs.editor.ICodeEditor | null>(null);
+  const diffAfterRef = useRef("");
+  const diffEditableRef = useRef(false);
   // Git branch state
   const [currentBranch, setCurrentBranch] = useState<string | null>(null);
   // Git log state
@@ -716,6 +726,48 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
     }
   }, [backend, gitRoot]);
 
+  const diffEditable = diffModeEditable(activeDiffMode);
+  useEffect(() => { diffEditableRef.current = diffEditable; }, [diffEditable]);
+  useEffect(() => { diffAfterRef.current = diffAfter; setDiffDirty(false); }, [diffAfter]);
+
+  /**
+   * Save an in-place diff edit.
+   *
+   * Routed through the shared FileBufferRegistry rather than writing the file
+   * directly: this tile already saves that way in view mode, and a second path
+   * would diverge on EOL handling and external-change conflicts. The acquired
+   * buffer is released again so its refcount can reach zero — holding it open
+   * would keep the entry alive for the life of the tile.
+   */
+  const saveDiffEdit = useCallback(async () => {
+    const editor = diffEditorRef.current;
+    if (!editor || !diffEditableRef.current || !diffFilePath) return;
+    const content = editor.getModel()?.getValue() ?? "";
+    const absolute = joinPath(gitRoot, diffFilePath);
+    setDiffSaving(true);
+    try {
+      const snap = await fileBufferRegistry.acquire(absolute);
+      try {
+        fileBufferRegistry.getModel(snap.path)?.setValue(content);
+        await fileBufferRegistry.save(snap.path);
+      } finally {
+        fileBufferRegistry.release(snap.path);
+      }
+      setDiffDirty(false);
+      // Re-read: an edit can change the diff itself (removing an added line
+      // makes a hunk disappear), so a stale view would misrepresent the file.
+      if (activeDiffMode) await loadDiffSides(diffFilePath, activeDiffMode);
+    } catch (e) {
+      setDirError(String(e));
+    } finally {
+      setDiffSaving(false);
+    }
+  }, [activeDiffMode, diffFilePath, gitRoot, loadDiffSides]);
+
+  // saveDiffEdit changes identity; hold the latest for the Monaco command.
+  const saveDiffEditRef = useRef(saveDiffEdit);
+  saveDiffEditRef.current = saveDiffEdit;
+
   const activateDiffMode = useCallback(async (diffMode: DiffMode) => {
     setActiveDiffMode(diffMode);
     setDiffLoading(true);
@@ -1114,6 +1166,26 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
           {diffFilePath.split(/[\\/]/).filter(Boolean).pop()}
         </span>
       )}
+      {diffEditable && diffFilePath && (
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          {diffDirty && (
+            <span
+              data-testid="diff-dirty-dot"
+              title="Unsaved changes"
+              style={{ width: 7, height: 7, borderRadius: "50%", background: "#f9e2af" }}
+            />
+          )}
+          <button
+            aria-label="Save diff edit"
+            title="Save changes to the working file (Ctrl+S)"
+            disabled={!diffDirty || diffSaving}
+            onClick={() => void saveDiffEdit()}
+            style={{ ...toolbarButtonStyle, fontSize: 10, padding: "2px 6px", borderRadius: 3 }}
+          >
+            {diffSaving ? "Saving…" : "Save"}
+          </button>
+        </div>
+      )}
       {activeDiffMode && (
         <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
           <span style={{ fontSize: 10, color: "#6c7086" }} data-testid="diff-file-count">
@@ -1199,9 +1271,24 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
                 modified={diffAfter}
                 theme={GITHUB_DARK_DIFF_THEME}
                 beforeMount={defineGithubDiffTheme}
-                onMount={(editor) => { editorRef.current = editor.getModifiedEditor(); }}
+                onMount={(editor, monaco) => {
+                  const modified = editor.getModifiedEditor();
+                  editorRef.current = modified;
+                  diffEditorRef.current = modified;
+                  modified.onDidChangeModelContent(() => {
+                    if (!diffEditableRef.current) return;
+                    // Compare against the loaded content: Monaco also fires
+                    // this for programmatic setValue, and treating that as an
+                    // edit would show a false unsaved marker.
+                    setDiffDirty((modified.getModel()?.getValue() ?? "") !== diffAfterRef.current);
+                  });
+                  modified.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
+                    void saveDiffEditRef.current();
+                  });
+                }}
                 options={{
-                  readOnly: true,
+                  readOnly: !diffEditable,
+                  originalEditable: false,
                   minimap: { enabled: false },
                   fontSize: globalTextFont,
                   fontFamily: "'Cascadia Code', 'Consolas', monospace",

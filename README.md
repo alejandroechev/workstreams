@@ -34,7 +34,11 @@ project-aware workspace:
   the moon "stopped" indicator, exactly like a workstream that hasn't been
   opened yet this session; selecting it again reloads and respawns everything.
 - 🗂️ **Built-in repo browser** — Files / Diff / Log / Hooks / Search tabs. Diff
-  has split / unified toggle. Audio, images, PDFs, and SQLite databases preview
+  has split / unified toggle, and the **Unstaged** diff is **editable in place**:
+  type on the modified side and `Ctrl+S` (or the Save button) writes straight to
+  the working file, then re-reads the diff. The historical modes (Last commit,
+  Branch vs master) stay read-only because their modified side is a past commit,
+  not a file on disk. Audio, images, PDFs, and SQLite databases preview
   inline. Git hooks open in a syntax-highlighted editor with inline editing.
 - 🔎 **Search all files** — the Search tab (or `Ctrl+Shift+F`) runs a fast
   content search across the repo, respecting `.gitignore`, grouping matches by
