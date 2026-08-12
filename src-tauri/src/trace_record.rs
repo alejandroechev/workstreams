@@ -359,10 +359,18 @@ pub enum AdapterKind {
 
 impl AdapterKind {
     pub fn from_path(adapter_path: &str) -> Self {
-        let stem = Path::new(adapter_path)
-            .file_stem()
-            .map(|s| s.to_string_lossy().to_lowercase())
-            .unwrap_or_default();
+        // Split on BOTH separators rather than using `Path::file_stem`, which
+        // only treats `\` as one on Windows — so a Windows adapter path
+        // inspected on Linux (as CI does) yielded the whole string as the
+        // "file name" and misclassified the adapter.
+        let base = adapter_path
+            .rsplit(['/', '\\'])
+            .next()
+            .unwrap_or(adapter_path);
+        let stem = base
+            .strip_suffix(".exe")
+            .unwrap_or(base)
+            .to_ascii_lowercase();
         if stem == "lldb-dap" {
             Self::LldbDap
         } else {
