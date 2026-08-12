@@ -35,7 +35,7 @@ const FEATURES: Record<FeatureId, FeatureDescriptor> = {
     id: "debug-walkthrough",
     label: "Code Walkthrough",
     requires:
-      "Requires a trace recorded with scripts/trace-record.mjs (lldb-dap, macOS). Experimental; not enabled in this build.",
+      "Requires a recorded Rust test trace. Recording uses lldb-dap on macOS/Linux or CodeLLDB on Windows. Experimental; not enabled in this build.",
   },
 };
 

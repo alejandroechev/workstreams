@@ -84,6 +84,10 @@ project-aware workspace:
   reader an MSVC-toolchain Rust build needs. Point `WORKSTREAMS_DAP_ADAPTER` at
   an adapter in a non-standard location. Recording *from the tile* is macOS-only
   for now — on Windows use the CLI ([ADR 018](docs/adrs/018-code-walkthrough-debugger.md)).
+  Test discovery is explicit rather than automatic: enter an optional Cargo
+  package (`-p`) and name filter, then press **Load**. It runs in the background
+  and does not open a terminal window. The equivalent CLI is
+  `node scripts/trace-tests.mjs --manifest-dir <dir> [--package <name>] [--filter <text>]`.
   Because it is a replay, you can also step **backwards**. `Alt+D` opens the
   tile (disabled by default; see the feature flag below); with it focused,
   `↑`/`↓` step, `o` finishes the current function and returns to its caller,

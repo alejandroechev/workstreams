@@ -127,6 +127,9 @@ export function DebugWalkthroughTile({
   const [loading, setLoading] = useState(false);
   const [availableTests, setAvailableTests] = useState<string[] | null>(null);
   const [testsError, setTestsError] = useState<string | null>(null);
+  const [testsLoading, setTestsLoading] = useState(false);
+  const [cargoPackage, setCargoPackage] = useState("");
+  const [discoveryFilter, setDiscoveryFilter] = useState("");
   const [selectedTest, setSelectedTest] = useState("");
   const [testFilter, setTestFilter] = useState("");
   const [recording, setRecording] = useState(false);
@@ -152,30 +155,51 @@ export function DebugWalkthroughTile({
     };
   }, [backend, workstreamId]);
 
-  // Offer the crate's own tests as entry points. Using cargo's listing keeps
-  // this authoritative and avoids parsing Rust source.
+  const testLoadIdRef = useRef(0);
+
+  // A different workstream invalidates any loaded list, but deliberately does
+  // NOT start cargo. On large workspaces discovery can take minutes; merely
+  // opening this controller tile must stay instantaneous.
   useEffect(() => {
-    if (!workstreamDir) return;
-    let cancelled = false;
+    testLoadIdRef.current += 1;
+    setAvailableTests(null);
     setTestsError(null);
-    backend
-      .listRustTests(workstreamDir)
-      .then((tests) => {
-        if (!cancelled) setAvailableTests(tests);
-      })
-      .catch((e) => {
-        // Surfaced, not swallowed: a silent catch here hid a real bug where
-        // cargo could not find Cargo.toml and the picker just sat empty with
-        // nothing for the user to act on.
-        if (!cancelled) {
-          setAvailableTests([]);
-          setTestsError(String(e));
-        }
+    setTestsLoading(false);
+    setSelectedTest("");
+  }, [workstreamDir]);
+
+  const loadAvailableTests = useCallback(async () => {
+    if (!workstreamDir || testsLoading) return;
+    const requestId = ++testLoadIdRef.current;
+    const packageName = cargoPackage.trim();
+    const filter = discoveryFilter.trim();
+    setTestsLoading(true);
+    setTestsError(null);
+    setAvailableTests(null);
+    setSelectedTest("");
+    try {
+      const tests = await backend.listRustTests(workstreamDir, {
+        package: packageName || undefined,
+        filter: filter || undefined,
       });
+      if (testLoadIdRef.current === requestId) setAvailableTests(tests);
+    } catch (e) {
+      // Surfaced, not swallowed: a silent catch here previously hid a real
+      // Cargo.toml discovery bug and left an unexplained empty picker.
+      if (testLoadIdRef.current === requestId) {
+        setAvailableTests([]);
+        setTestsError(String(e));
+      }
+    } finally {
+      if (testLoadIdRef.current === requestId) setTestsLoading(false);
+    }
+  }, [backend, cargoPackage, discoveryFilter, testsLoading, workstreamDir]);
+
+  useEffect(() => {
     return () => {
-      cancelled = true;
+      testLoadIdRef.current += 1;
     };
-  }, [backend, workstreamDir]);
+  }, []);
 
   // Progress from the recorder. A recording drives a debugger step by step and
   // takes seconds to minutes, so silence would read as a hang.
@@ -439,21 +463,60 @@ export function DebugWalkthroughTile({
         </button>
       </div>
 
-      {/* Record: produce a new trace from a test in this workstream. */}
+      {/* Tests: explicit, potentially expensive discovery. */}
+      {workstreamDir && (
+        <div style={rowStyle} data-testid="walkthrough-section-tests">
+          <span style={rowLabelStyle}>Tests</span>
+          <input
+            aria-label="Cargo package"
+            placeholder="package (-p)"
+            title="Optional Cargo package. This is the main performance filter for a large workspace."
+            value={cargoPackage}
+            onChange={(e) => setCargoPackage(e.target.value)}
+            disabled={testsLoading}
+            style={{ ...controlStyle, width: 112, flexShrink: 0 }}
+          />
+          <input
+            aria-label="Discovery filter"
+            placeholder="test name"
+            title="Optional libtest name filter. Narrows returned tests but does not reduce compilation."
+            value={discoveryFilter}
+            onChange={(e) => setDiscoveryFilter(e.target.value)}
+            disabled={testsLoading}
+            style={{ ...controlStyle, flex: 1, minWidth: 72 }}
+          />
+          <button
+            type="button"
+            aria-label="Load tests"
+            title="Build selected test targets in the background and load their test names"
+            disabled={testsLoading}
+            onClick={() => void loadAvailableTests()}
+            style={controlStyle}
+          >
+            <ArrowPathIcon style={iconStyle} />
+            {testsLoading ? "Loading…" : "Load"}
+          </button>
+        </div>
+      )}
+
+      {/* Record: produce a new trace from a loaded test. */}
       {workstreamDir && (
         <div style={rowStyle} data-testid="walkthrough-section-record">
           <span style={rowLabelStyle}>Record</span>
           <input
             aria-label="Filter tests"
-            placeholder="filter…"
+            placeholder="narrow loaded…"
+            title="Filter the tests already loaded into this picker"
             value={testFilter}
             onChange={(e) => setTestFilter(e.target.value)}
+            disabled={availableTests === null || testsLoading}
             style={{ ...controlStyle, width: 96, flexShrink: 0 }}
           />
           <select
             aria-label="Test"
             value={selectedTest}
             onChange={(e) => setSelectedTest(e.target.value)}
+            disabled={availableTests === null || testsLoading}
             style={{ ...controlStyle, flex: 1, minWidth: 0 }}
           >
             <option value="">Select a test…</option>
@@ -577,6 +640,12 @@ export function DebugWalkthroughTile({
       {walkthrough?.trace.truncated && (
         <div data-testid="walkthrough-truncated-banner" style={{ padding: "6px 8px", color: "#f9e2af" }}>
           This trace is truncated — recording stopped at the step cap.
+        </div>
+      )}
+
+      {testsLoading && (
+        <div data-testid="walkthrough-tests-loading" style={{ padding: "6px 8px", color: "#89b4fa" }}>
+          Building test targets and loading names in the background…
         </div>
       )}
 

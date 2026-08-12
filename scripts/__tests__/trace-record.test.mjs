@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 
 import {
   selectTestExecutable,
+  selectTestExecutables,
   isOurCode,
   appendStep,
   buildTraceFile,
@@ -75,6 +76,19 @@ describe("selectTestExecutable", () => {
       line({ target: { name: "workstreams_lib" }, profile: { test: true }, executable: "/t/deps/workstreams_lib-abc" }),
     ].join("\n");
     expect(selectTestExecutable(stdout)).toBe("/t/deps/workstreams_lib-abc");
+  });
+
+  it("collects every distinct test executable for workspace discovery", () => {
+    const stdout = [
+      line({ target: { name: "crate_a" }, profile: { test: true }, executable: "/t/a" }),
+      line({ target: { name: "crate_b" }, profile: { test: true }, executable: "/t/b" }),
+      line({ target: { name: "crate_a" }, profile: { test: true }, executable: "/t/a" }),
+      line({ target: { name: "dep" }, profile: { test: false }, executable: "/t/dep" }),
+    ].join("\n");
+    expect(selectTestExecutables(stdout)).toEqual([
+      { name: "crate_a", exe: "/t/a" },
+      { name: "crate_b", exe: "/t/b" },
+    ]);
   });
 
   it("ignores non-JSON noise interleaved by cargo", () => {

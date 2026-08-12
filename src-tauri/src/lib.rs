@@ -156,16 +156,25 @@ fn get_workstream_by_id(db: &Connection, id: &str) -> Result<Workstream, String>
     .map_err(|e| format!("DB error: {e}"))
 }
 
-/// Create a git Command that doesn't show a console window on Windows
-fn git_cmd() -> std::process::Command {
+/// Create a child command that doesn't flash a console window on Windows.
+///
+/// Workstreams is a GUI process. `cargo test --no-run` and each built test
+/// binary are long-lived enough that a visible console is especially
+/// disruptive, but the same rule applies to every short helper too.
+fn hidden_command<S: AsRef<std::ffi::OsStr>>(program: S) -> std::process::Command {
     #[allow(unused_mut)]
-    let mut cmd = std::process::Command::new("git");
+    let mut cmd = std::process::Command::new(program);
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
         cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
     }
     cmd
+}
+
+/// Create a git Command that doesn't show a console window on Windows.
+fn git_cmd() -> std::process::Command {
+    hidden_command("git")
 }
 
 // ── Project Commands ──────────────────────────────────────────────────
@@ -3456,31 +3465,93 @@ fn parse_test_list(stdout: &str) -> Vec<String> {
         .collect()
 }
 
+fn rust_test_build_args(package: Option<&str>) -> Vec<String> {
+    let mut args = vec![
+        "test".to_string(),
+        "--no-run".to_string(),
+        "--message-format=json".to_string(),
+    ];
+    if let Some(package) = package.filter(|p| !p.trim().is_empty()) {
+        args.push("-p".to_string());
+        args.push(package.trim().to_string());
+    }
+    args
+}
+
+fn rust_test_list_args(filter: Option<&str>) -> Vec<String> {
+    let mut args = vec!["--list".to_string()];
+    if let Some(filter) = filter.filter(|f| !f.trim().is_empty()) {
+        args.push(filter.trim().to_string());
+    }
+    args
+}
+
+fn select_test_executables(stdout: &str) -> Vec<String> {
+    let mut executables = Vec::new();
+    for line in stdout.lines() {
+        let Ok(msg) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        let is_test = msg
+            .get("profile")
+            .and_then(|p| p.get("test"))
+            .and_then(|t| t.as_bool())
+            == Some(true);
+        let Some(executable) = msg.get("executable").and_then(|e| e.as_str()) else {
+            continue;
+        };
+        if is_test && !executables.iter().any(|e| e == executable) {
+            executables.push(executable.to_string());
+        }
+    }
+    executables
+}
+
 /// List the tests in a crate, for the walkthrough's entry-point picker.
 ///
 /// Uses cargo's own listing rather than parsing Rust source, so the result is
 /// authoritative and needs no syntax handling.
 #[tauri::command]
-fn list_rust_tests(manifest_dir: String) -> Result<Vec<String>, String> {
+async fn list_rust_tests(
+    manifest_dir: String,
+    package: Option<String>,
+    filter: Option<String>,
+) -> Result<Vec<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        list_rust_tests_blocking(&manifest_dir, package.as_deref(), filter.as_deref())
+    })
+    .await
+    .map_err(|e| format!("Test discovery task failed: {e}"))?
+}
+
+fn list_rust_tests_blocking(
+    manifest_dir: &str,
+    package: Option<&str>,
+    filter: Option<&str>,
+) -> Result<Vec<String>, String> {
     // The caller passes a repo root; the crate is often in a subdirectory
     // (src-tauri/ for a Tauri app), so locate the manifest rather than
     // assuming cargo can run at the top.
-    let manifest_dir = trace_record::find_cargo_manifest_dir(&manifest_dir).ok_or_else(|| {
+    let manifest_dir = trace_record::find_cargo_manifest_dir(manifest_dir).ok_or_else(|| {
         format!("No Cargo.toml found in {manifest_dir} or its immediate subdirectories.")
     })?;
     let mut env = std::collections::HashMap::new();
     if let Some(path) = shell_env::resolved_path(&pty::default_shell()) {
         env.insert("PATH".to_string(), path);
     }
-    let build = std::process::Command::new("cargo")
-        .args(["test", "--no-run", "--message-format=json"])
+    let build_args = rust_test_build_args(package);
+    let mut cargo = hidden_command("cargo");
+    cargo
+        .args(&build_args)
         .envs(&env)
-        .current_dir(&manifest_dir)
+        .current_dir(&manifest_dir);
+    let build = cargo
         .output()
         .map_err(|e| format!("Cannot run cargo in {manifest_dir}: {e}"))?;
     if !build.status.success() {
         return Err(format!(
-            "cargo test --no-run failed: {}",
+            "cargo {} failed: {}",
+            build_args.join(" "),
             String::from_utf8_lossy(&build.stderr)
                 .lines()
                 .last()
@@ -3488,39 +3559,41 @@ fn list_rust_tests(manifest_dir: String) -> Result<Vec<String>, String> {
         ));
     }
 
-    // Prefer the lib test binary — unit tests live there.
-    let mut executable: Option<String> = None;
-    for line in String::from_utf8_lossy(&build.stdout).lines() {
-        let Ok(msg) = serde_json::from_str::<serde_json::Value>(line) else {
-            continue;
-        };
-        let is_test = msg
-            .get("profile")
-            .and_then(|p| p.get("test"))
-            .and_then(|t| t.as_bool());
-        let exe = msg.get("executable").and_then(|e| e.as_str());
-        if is_test == Some(true) {
-            if let Some(exe) = exe {
-                let name = msg
-                    .get("target")
-                    .and_then(|t| t.get("name"))
-                    .and_then(|n| n.as_str())
-                    .unwrap_or("");
-                if name.ends_with("_lib") || executable.is_none() {
-                    executable = Some(exe.to_string());
-                }
+    let executables = select_test_executables(&String::from_utf8_lossy(&build.stdout));
+    if executables.is_empty() {
+        return Err("cargo produced no test executable".to_string());
+    }
+
+    let list_args = rust_test_list_args(filter);
+    let mut tests = Vec::new();
+    for executable in executables {
+        let mut command = hidden_command(&executable);
+        command
+            .args(&list_args)
+            .envs(&env)
+            .current_dir(&manifest_dir);
+        let listed = command
+            .output()
+            .map_err(|e| format!("Cannot list tests in {executable}: {e}"))?;
+        if !listed.status.success() {
+            return Err(format!(
+                "{} {} failed: {}",
+                executable,
+                list_args.join(" "),
+                String::from_utf8_lossy(&listed.stderr)
+                    .lines()
+                    .last()
+                    .unwrap_or("")
+            ));
+        }
+        for test in parse_test_list(&String::from_utf8_lossy(&listed.stdout)) {
+            if !tests.contains(&test) {
+                tests.push(test);
             }
         }
     }
-    let exe = executable.ok_or("cargo produced no test executable")?;
-
-    let listed = std::process::Command::new(&exe)
-        .args(["--list"])
-        .envs(&env)
-        .current_dir(&manifest_dir)
-        .output()
-        .map_err(|e| format!("Cannot list tests in {exe}: {e}"))?;
-    Ok(parse_test_list(&String::from_utf8_lossy(&listed.stdout)))
+    tests.sort();
+    Ok(tests)
 }
 
 /// Record a code walkthrough trace for `test_name`, writing the JSON under the
@@ -6793,5 +6866,47 @@ Body here.
     fn test_list_of_empty_output_is_empty() {
         assert!(parse_test_list("").is_empty());
         assert!(parse_test_list("0 tests, 0 benchmarks").is_empty());
+    }
+
+    #[test]
+    fn rust_test_build_args_scope_to_a_package_when_requested() {
+        assert_eq!(
+            rust_test_build_args(Some("core-lib")),
+            vec![
+                "test",
+                "--no-run",
+                "--message-format=json",
+                "-p",
+                "core-lib"
+            ]
+        );
+        assert_eq!(
+            rust_test_build_args(None),
+            vec!["test", "--no-run", "--message-format=json"]
+        );
+    }
+
+    #[test]
+    fn rust_test_list_args_apply_the_discovery_filter() {
+        assert_eq!(
+            rust_test_list_args(Some("shell path")),
+            vec!["--list", "shell path"]
+        );
+        assert_eq!(rust_test_list_args(None), vec!["--list"]);
+    }
+
+    #[test]
+    fn collects_every_distinct_test_executable_from_cargo_output() {
+        let out = [
+            r#"{"profile":{"test":true},"target":{"name":"crate_a"},"executable":"/t/a"}"#,
+            r#"{"profile":{"test":true},"target":{"name":"crate_b"},"executable":"/t/b"}"#,
+            r#"{"profile":{"test":true},"target":{"name":"crate_a"},"executable":"/t/a"}"#,
+            r#"{"profile":{"test":false},"target":{"name":"dep"},"executable":"/t/dep"}"#,
+        ]
+        .join("\n");
+        assert_eq!(
+            select_test_executables(&out),
+            vec!["/t/a".to_string(), "/t/b".to_string()]
+        );
     }
 }

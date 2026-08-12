@@ -131,6 +131,14 @@ function renderTile(backend: MemoryBackend) {
   );
 }
 
+async function waitForDiffEditor() {
+  // This file imports the full CodeReviewTile + Monaco mock graph. It passes
+  // quickly in isolation but can take >10s to settle when the pre-commit hook
+  // transforms 20+ changed suites concurrently; short waits made the quality
+  // gate fail on machine load rather than behavior.
+  return screen.findByTestId("diff-editor", {}, { timeout: 20_000 });
+}
+
 afterEach(() => {
   cleanup();
   for (const n of h.zoneNodes.values()) n.remove();
@@ -164,7 +172,7 @@ describe("CodeReviewTile", () => {
 
     // File list renders from the seeded diff; file auto-selected → DiffEditor mounts.
     await waitFor(() => expect(screen.getByTestId("file-src/a.js")).toBeTruthy());
-    await waitFor(() => expect(screen.getByTestId("diff-editor")).toBeTruthy());
+    await waitForDiffEditor();
 
     // Select new-side line 2 → floating "+ Comment" button → open composer → add.
     selectLine(2);
@@ -191,7 +199,7 @@ describe("CodeReviewTile", () => {
 
     await screen.findByTestId("review-picker");
     fireEvent.click(screen.getByTestId("create-review"));
-    await waitFor(() => expect(screen.getByTestId("diff-editor")).toBeTruthy());
+    await waitForDiffEditor();
 
     selectLine(2);
     await screen.findByTestId("add-comment-floating");
@@ -227,7 +235,7 @@ describe("CodeReviewTile", () => {
 
     await screen.findByTestId("review-picker");
     fireEvent.click(screen.getByTestId("create-review"));
-    await waitFor(() => expect(screen.getByTestId("diff-editor")).toBeTruthy(), { timeout: 4000 });
+    await waitForDiffEditor();
 
     // Modified side is editable; Save is disabled until dirty.
     expect(screen.getByTestId("diff-editor").getAttribute("data-readonly")).toBe("false");
@@ -254,7 +262,7 @@ describe("CodeReviewTile", () => {
     await screen.findByTestId("review-picker");
     fireEvent.change(screen.getByTestId("diff-source-select"), { target: { value: "last_commit" } });
     fireEvent.click(screen.getByTestId("create-review"));
-    await waitFor(() => expect(screen.getByTestId("diff-editor")).toBeTruthy(), { timeout: 4000 });
+    await waitForDiffEditor();
 
     expect(screen.getByTestId("diff-editor").getAttribute("data-readonly")).toBe("true");
     expect(screen.queryByTestId("save-edit")).toBeNull();

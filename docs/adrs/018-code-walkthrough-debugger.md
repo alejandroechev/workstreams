@@ -159,6 +159,46 @@ order, so a module and a name can be combined without recalling the exact path.
 Filtering away a selected test clears the selection, so Record cannot run
 something the user can no longer see.
 
+### Test discovery is explicit and backgrounded (2026-08-12)
+
+The first implementation ran test discovery as soon as the tile mounted. That
+was acceptable in this repo and pathological in a large Rust workspace:
+`cargo test --no-run --message-format=json` can compile hundreds of crates,
+and because the Tauri command was synchronous it occupied the IPC handler long
+enough for the whole UI to look frozen. On Windows both Cargo and the produced
+test binary also opened visible console windows.
+
+Discovery is now a separate **Tests** row with:
+
+- optional **Cargo package** — maps to `-p <package>` and is the meaningful
+  performance filter because only that package's test targets are built;
+- optional **test-name filter** — passed to each libtest binary after `--list`;
+  this reduces returned names but cannot avoid compilation, and the tooltip
+  says so;
+- an explicit **Load** button — opening the tile never runs Cargo.
+
+The Tauri command is `async` and delegates the blocking build/list work to
+`spawn_blocking`, so React and the IPC loop remain responsive. The tile shows a
+loading state, disables only discovery controls, and ignores a late result
+after unmount or workstream change.
+
+Cargo may report several test executables (workspace packages, integration
+tests, binary targets). Discovery now lists every distinct executable and
+deduplicates the combined names instead of silently selecting the first/lib
+binary.
+
+On Windows every discovery child uses `CREATE_NO_WINDOW`, including Cargo and
+the generated test executables, so explicit loading does not flash terminals.
+
+CLI parity is `scripts/trace-tests.mjs`:
+
+```text
+node scripts/trace-tests.mjs \
+  --manifest-dir <repo-or-crate> \
+  --package <cargo-package> \
+  --filter <test-name-substring>
+```
+
 ### Controls: three rows, and bare-key stepping
 
 The toolbar is split into **Trace** (which recording is open), **Record** (test
@@ -376,4 +416,3 @@ order, not from the text.
 
 If a future change makes walking a trace slower than simply reading the file,
 delete the feature rather than expand it.
-

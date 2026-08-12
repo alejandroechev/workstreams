@@ -69,6 +69,11 @@ async function configure(page: Page) {
         const backend = (window as unknown as { __WS_BACKEND__?: Record<string, unknown> }).__WS_BACKEND__;
         if (!backend) return false;
         (backend._seedTraceFile as (p: string, c: unknown) => void)(tracePath, trace);
+        backend._rustTests = [
+          "crate_a::tests::alpha",
+          "crate_a::tests::focused",
+          "crate_b::tests::other",
+        ];
         void (backend.indexCodeTrace as (p: string, w: string | null) => Promise<unknown>)(tracePath, null);
         return true;
       };
@@ -127,6 +132,22 @@ test.describe("Code walkthrough", () => {
     await expect(progress).toHaveText("2 / 3");
   });
 
+  test("loads tests only after an explicit request", async ({ page }) => {
+    await createWorkstream(page, "Walkthrough WS");
+    await openWalkthroughTile(page);
+
+    const picker = page.getByLabel("Test", { exact: true });
+    await expect(picker.locator("option")).toHaveCount(1);
+
+    await page.getByLabel("Cargo package").fill("crate-a");
+    await page.getByLabel("Discovery filter").fill("focused");
+    await page.getByLabel("Load tests").click();
+
+    await expect(page.locator('[data-testid="walkthrough-tests-loading"]')).toHaveCount(0);
+    await expect(picker.locator("option")).toHaveCount(2);
+    await expect(picker).toContainText("focused");
+  });
+
   test("shows the recorded steps with collapsed hit counts", async ({ page }) => {
     await createWorkstream(page, "Walkthrough WS");
     await openWalkthroughTile(page);
@@ -145,7 +166,7 @@ test.describe("Code walkthrough", () => {
     await expect(page.locator('[data-testid="walkthrough-progress"]')).toHaveText("3 / 3");
   });
 
-  test("keeps all three control sections visible in a narrow tile", async ({ page }) => {
+  test("keeps all four control sections visible in a narrow tile", async ({ page }) => {
     // The controls used to sit on one row, which pushed the stepping buttons
     // off the right edge as soon as a trace name was long.
     await createWorkstream(page, "Walkthrough WS");
@@ -153,7 +174,7 @@ test.describe("Code walkthrough", () => {
 
     const tile = page.locator('[data-testid="debug-walkthrough-tile"]');
     const tileBox = await tile.boundingBox();
-    for (const section of ["trace", "step"]) {
+    for (const section of ["trace", "tests", "record", "step"]) {
       const box = await page.locator(`[data-testid="walkthrough-section-${section}"]`).boundingBox();
       expect(box, `${section} section should be laid out`).not.toBeNull();
       expect(box!.x + box!.width).toBeLessThanOrEqual(tileBox!.x + tileBox!.width + 1);
@@ -170,7 +191,10 @@ test.describe("Code walkthrough", () => {
     const progress = page.locator('[data-testid="walkthrough-progress"]');
     await expect(progress).toHaveText("1 / 3");
 
-    await page.locator('[data-testid="debug-walkthrough-tile"]').click();
+    // Focus the controller root explicitly. A center click can land on one of
+    // the toolbar inputs (especially now that test discovery has its own row),
+    // and the keyboard handler intentionally ignores typing targets.
+    await page.locator('[data-testid="debug-walkthrough-tile"]').focus();
     await page.keyboard.press("ArrowDown");
     await expect(progress).toHaveText("2 / 3");
     await page.keyboard.press("End");

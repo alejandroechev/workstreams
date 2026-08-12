@@ -48,7 +48,21 @@ const REQUEST_TIMEOUT_MS = 30_000;
  * target, so that one wins when several test binaries were built.
  */
 export function selectTestExecutable(stdout) {
+  const candidates = selectTestExecutables(stdout);
+  if (candidates.length === 0) {
+    throw new Error(
+      "no test executable found — `cargo test --no-run` produced no test binary. " +
+        "Check that the manifest directory is correct and the crate compiles.",
+    );
+  }
+  const lib = candidates.find((c) => c.name.endsWith("_lib")) ?? candidates[0];
+  return lib.exe;
+}
+
+/** Collect every distinct test executable Cargo reports. */
+export function selectTestExecutables(stdout) {
   const candidates = [];
+  const seen = new Set();
   for (const line of String(stdout).split("\n")) {
     if (!line.trim()) continue;
     let msg;
@@ -58,17 +72,13 @@ export function selectTestExecutable(stdout) {
       continue; // cargo interleaves human-readable progress lines
     }
     if (msg?.profile?.test && msg?.executable) {
-      candidates.push({ name: msg.target?.name ?? "", exe: msg.executable });
+      if (!seen.has(msg.executable)) {
+        seen.add(msg.executable);
+        candidates.push({ name: msg.target?.name ?? "", exe: msg.executable });
+      }
     }
   }
-  if (candidates.length === 0) {
-    throw new Error(
-      "no test executable found — `cargo test --no-run` produced no test binary. " +
-        "Check that the manifest directory is correct and the crate compiles.",
-    );
-  }
-  const lib = candidates.find((c) => c.name.endsWith("_lib")) ?? candidates[0];
-  return lib.exe;
+  return candidates;
 }
 
 /**

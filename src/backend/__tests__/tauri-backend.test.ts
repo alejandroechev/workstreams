@@ -594,8 +594,12 @@ describe("TauriBackend", () => {
       expect(invoke).toHaveBeenCalledWith("trace_staleness", { repoDir: "/repo", recordedSha: "abc123" });
 
       invoke.mockResolvedValueOnce([]);
-      await backend.listRustTests("/repo");
-      expect(invoke).toHaveBeenCalledWith("list_rust_tests", { manifestDir: "/repo" });
+      await backend.listRustTests("/repo", { package: "core-lib", filter: "shell path" });
+      expect(invoke).toHaveBeenCalledWith("list_rust_tests", {
+        manifestDir: "/repo",
+        package: "core-lib",
+        filter: "shell path",
+      });
     });
 
     it("recordCodeTrace passes the owning session so traces stay out of the repo", async () => {

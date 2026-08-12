@@ -432,8 +432,15 @@ export class TauriBackend implements Backend {
     return invoke<TraceStaleness>("trace_staleness", { repoDir, recordedSha });
   }
 
-  async listRustTests(manifestDir: string): Promise<string[]> {
-    return invoke<string[]>("list_rust_tests", { manifestDir });
+  async listRustTests(
+    manifestDir: string,
+    query?: { package?: string; filter?: string },
+  ): Promise<string[]> {
+    return invoke<string[]>("list_rust_tests", {
+      manifestDir,
+      package: query?.package ?? null,
+      filter: query?.filter ?? null,
+    });
   }
 
   async recordCodeTrace(

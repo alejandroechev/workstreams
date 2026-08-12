@@ -187,8 +187,18 @@ export interface Backend {
    * blocked on this — the UI warns and offers a re-record.
    */
   traceStaleness(repoDir: string, recordedSha: string): Promise<TraceStaleness>;
-  /** Fully-qualified test names in a crate, for the entry-point picker. */
-  listRustTests(manifestDir: string): Promise<string[]>;
+  /**
+   * Fully-qualified test names for the entry-point picker.
+   *
+   * `package` maps to Cargo's `-p` and is the performance lever for large
+   * workspaces: only that package's test targets are built. `filter` is passed
+   * to libtest's `--list` command and narrows the returned names, but cannot
+   * reduce compilation work.
+   */
+  listRustTests(
+    manifestDir: string,
+    query?: { package?: string; filter?: string },
+  ): Promise<string[]>;
   /**
    * Record a trace for `testName` and return the written file's path.
    *

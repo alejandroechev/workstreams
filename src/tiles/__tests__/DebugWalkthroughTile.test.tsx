@@ -71,6 +71,11 @@ async function setup(opts: {
   return { backend };
 }
 
+async function loadTests() {
+  fireEvent.click(await screen.findByLabelText("Load tests"));
+  await waitFor(() => expect(screen.getByLabelText("Load tests").hasAttribute("disabled")).toBe(false));
+}
+
 describe("DebugWalkthroughTile", () => {
   let navEvents: WalkthroughNavigatePayload[];
   let unsubscribe: () => void;
@@ -130,6 +135,64 @@ describe("DebugWalkthroughTile", () => {
   });
 
   describe("recording from the UI", () => {
+    it("does not run cargo merely because the tile opened", async () => {
+      const backend = new MemoryBackend();
+      const listRustTests = vi.spyOn(backend, "listRustTests");
+      render(
+        <BackendProvider backend={backend}>
+          <DebugWalkthroughTile tileId="wt-1" workstreamId="ws-1" workstreamDir="/repo"
+            explorerCandidates={[{ id: "e1", title: null }]} />
+        </BackendProvider>,
+      );
+
+      await screen.findByLabelText("Load tests");
+      expect(listRustTests).not.toHaveBeenCalled();
+      expect(screen.getByLabelText("Test").querySelectorAll("option")).toHaveLength(1);
+    });
+
+    it("loads tests only after the user asks and forwards package + discovery filter", async () => {
+      const backend = new MemoryBackend();
+      backend._rustTests = ["crate_a::tests::focused"];
+      const listRustTests = vi.spyOn(backend, "listRustTests");
+      render(
+        <BackendProvider backend={backend}>
+          <DebugWalkthroughTile tileId="wt-1" workstreamId="ws-1" workstreamDir="/repo"
+            explorerCandidates={[{ id: "e1", title: null }]} />
+        </BackendProvider>,
+      );
+
+      fireEvent.change(screen.getByLabelText("Cargo package"), { target: { value: "crate-a" } });
+      fireEvent.change(screen.getByLabelText("Discovery filter"), { target: { value: "focused" } });
+      await loadTests();
+
+      expect(listRustTests).toHaveBeenCalledWith("/repo", {
+        package: "crate-a",
+        filter: "focused",
+      });
+      await waitFor(() => expect(screen.getByLabelText("Test").querySelectorAll("option")).toHaveLength(2));
+    });
+
+    it("keeps the tile responsive and shows progress while tests load", async () => {
+      const backend = new MemoryBackend();
+      let release: (tests: string[]) => void = () => {};
+      backend.listRustTests = () => new Promise<string[]>((resolve) => { release = resolve; });
+      render(
+        <BackendProvider backend={backend}>
+          <DebugWalkthroughTile tileId="wt-1" workstreamId="ws-1" workstreamDir="/repo"
+            explorerCandidates={[{ id: "e1", title: null }]} />
+        </BackendProvider>,
+      );
+
+      fireEvent.click(screen.getByLabelText("Load tests"));
+      expect(await screen.findByTestId("walkthrough-tests-loading")).toBeTruthy();
+      expect(screen.getByLabelText("Load tests").hasAttribute("disabled")).toBe(true);
+      // Another tile control remains interactive while the backend runs.
+      expect(screen.getByLabelText("Add trace").hasAttribute("disabled")).toBe(false);
+
+      release(["a::b"]);
+      await waitFor(() => expect(screen.queryByTestId("walkthrough-tests-loading")).toBeNull());
+    });
+
     it("offers the crate's tests and records the chosen one", async () => {
       // The whole point: no terminal round-trip. Pick a test, press Record,
       // and end up stepping through it.
@@ -149,6 +212,7 @@ describe("DebugWalkthroughTile", () => {
         </BackendProvider>,
       );
 
+      await loadTests();
       const testPicker = await screen.findByLabelText("Test");
       await waitFor(() => expect(testPicker.querySelectorAll("option").length).toBe(3));
       fireEvent.change(testPicker, { target: { value: "shell_env::tests::beta" } });
@@ -177,6 +241,7 @@ describe("DebugWalkthroughTile", () => {
         </BackendProvider>,
       );
 
+      await loadTests();
       const picker = await screen.findByLabelText("Test");
       await waitFor(() => expect(picker.querySelectorAll("option").length).toBe(5));
 
@@ -194,6 +259,7 @@ describe("DebugWalkthroughTile", () => {
             explorerCandidates={[{ id: "e1", title: null }]} />
         </BackendProvider>,
       );
+      await loadTests();
       const picker = await screen.findByLabelText("Test");
       await waitFor(() => expect(picker.querySelectorAll("optgroup").length).toBe(2));
       const labels = Array.from(picker.querySelectorAll("optgroup")).map((g) => g.getAttribute("label"));
@@ -209,6 +275,7 @@ describe("DebugWalkthroughTile", () => {
             explorerCandidates={[{ id: "e1", title: null }]} />
         </BackendProvider>,
       );
+      await loadTests();
       await screen.findByLabelText("Test");
       expect((await screen.findByTestId("walkthrough-test-count")).textContent).toContain("3");
       fireEvent.change(screen.getByLabelText("Filter tests"), { target: { value: "pty" } });
@@ -227,6 +294,7 @@ describe("DebugWalkthroughTile", () => {
             explorerCandidates={[{ id: "e1", title: null }]} />
         </BackendProvider>,
       );
+      await loadTests();
       const picker = await screen.findByLabelText("Test");
       await waitFor(() => expect(picker.querySelectorAll("option").length).toBe(3));
       fireEvent.change(picker, { target: { value: "pty::tests::a" } });
@@ -257,6 +325,7 @@ describe("DebugWalkthroughTile", () => {
         </BackendProvider>,
       );
 
+      await loadTests();
       const testPicker = await screen.findByLabelText("Test");
       await waitFor(() => expect(testPicker.querySelectorAll("option").length).toBe(2));
       fireEvent.change(testPicker, { target: { value: "a::b" } });
@@ -282,6 +351,7 @@ describe("DebugWalkthroughTile", () => {
             explorerCandidates={[{ id: "e1", title: null }]} />
         </BackendProvider>,
       );
+      await loadTests();
       const testPicker = await screen.findByLabelText("Test");
       await waitFor(() => expect(testPicker.querySelectorAll("option").length).toBe(2));
       fireEvent.change(testPicker, { target: { value: "a::b" } });
@@ -308,6 +378,7 @@ describe("DebugWalkthroughTile", () => {
         </BackendProvider>,
       );
 
+      await loadTests();
       const testPicker = await screen.findByLabelText("Test");
       await waitFor(() => expect(testPicker.querySelectorAll("option").length).toBe(2));
       fireEvent.change(testPicker, { target: { value: "a::b" } });
@@ -331,6 +402,7 @@ describe("DebugWalkthroughTile", () => {
         </BackendProvider>,
       );
 
+      await loadTests();
       const testPicker = await screen.findByLabelText("Test");
       await waitFor(() => expect(testPicker.querySelectorAll("option").length).toBe(2));
       fireEvent.change(testPicker, { target: { value: "a::b" } });
@@ -353,6 +425,7 @@ describe("DebugWalkthroughTile", () => {
             explorerCandidates={[{ id: "e1", title: null }]} />
         </BackendProvider>,
       );
+      await loadTests();
       expect((await screen.findByTestId("walkthrough-tests-unavailable")).textContent)
         .toMatch(/no cargo\.toml/i);
     });
@@ -366,6 +439,7 @@ describe("DebugWalkthroughTile", () => {
             explorerCandidates={[{ id: "e1", title: null }]} />
         </BackendProvider>,
       );
+      await loadTests();
       expect((await screen.findByTestId("walkthrough-tests-unavailable")).textContent)
         .toMatch(/no tests/i);
     });
@@ -411,16 +485,18 @@ describe("DebugWalkthroughTile", () => {
   });
 
   describe("layout", () => {
-    it("groups the controls into trace, record and step sections", async () => {
+    it("groups the controls into trace, tests, record and step sections", async () => {
       await setup({ workstreamDir: "/repo" });
       expect(screen.getByTestId("walkthrough-section-trace")).toBeTruthy();
+      expect(screen.getByTestId("walkthrough-section-tests")).toBeTruthy();
       expect(screen.getByTestId("walkthrough-section-record")).toBeTruthy();
       expect(screen.getByTestId("walkthrough-section-step")).toBeTruthy();
     });
 
-    it("hides the record section when there is no workstream directory", async () => {
-      // Nothing to point cargo at, so the whole section would be inert.
+    it("hides the tests and record sections when there is no workstream directory", async () => {
+      // Nothing to point cargo at, so both sections would be inert.
       await setup();
+      expect(screen.queryByTestId("walkthrough-section-tests")).toBeNull();
       expect(screen.queryByTestId("walkthrough-section-record")).toBeNull();
     });
   });

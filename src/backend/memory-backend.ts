@@ -834,8 +834,13 @@ export class MemoryBackend implements Backend {
 
   /** Test/dev seam: the test names the picker should offer. */
   _rustTests: string[] = [];
-  async listRustTests(): Promise<string[]> {
-    return this._rustTests;
+  async listRustTests(
+    _manifestDir?: string,
+    query?: { package?: string; filter?: string },
+  ): Promise<string[]> {
+    const filter = query?.filter?.trim().toLowerCase();
+    if (!filter) return this._rustTests;
+    return this._rustTests.filter((test) => test.toLowerCase().includes(filter));
   }
 
   /**
