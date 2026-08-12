@@ -53,7 +53,7 @@ Two load-bearing unknowns were spiked to **GO**
 4. **In-place editing (v1 core).** When the modified side maps to the on-disk
    **working file**, the modified editor is **editable** and backed by the
    shared `FileBufferRegistry` buffer, so edits save through the same
-   Ctrl+S / autosave / dirty-`*` path as any file, and Monaco re-diffs live as
+   Cmd/Ctrl+S / autosave / dirty-`*` path as any file, and Monaco re-diffs live as
    you type. Read-only when the modified side is historical (not the working
    file). `originalEditable` stays false.
 

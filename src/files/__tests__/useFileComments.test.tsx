@@ -175,6 +175,95 @@ describe("useFileComments", () => {
     expect(result.current.comments[0]?.body).toBe("b-comment");
   });
 
+  it("does not let a stale list response erase a newly added comment", async () => {
+    let finishList: ((comments: []) => void) | null = null;
+    backend.listSessionFileComments = async () =>
+      new Promise((resolve) => {
+        finishList = resolve;
+      });
+    const { result } = renderHook(
+      () => useFileComments("ws-1", ROOT, "C:/repo/src/a.ts"),
+      { wrapper: wrap(backend) },
+    );
+    await waitFor(() => expect(finishList).not.toBeNull());
+
+    await act(async () => {
+      await result.current.add(2, 2, "line two", "new comment");
+    });
+    expect(result.current.comments[0]?.body).toBe("new comment");
+
+    await act(async () => {
+      finishList?.([]);
+      await Promise.resolve();
+    });
+    expect(result.current.comments[0]?.body).toBe("new comment");
+  });
+
+  it("does not let a slow add from the previous file replace current comments", async () => {
+    await backend.addSessionFileComment("ws-1", "src/b.ts", 1, 1, null, "b-comment");
+    const realAdd = backend.addSessionFileComment.bind(backend);
+    let finishAdd: (() => void) | null = null;
+    backend.addSessionFileComment = async (...args) =>
+      new Promise((resolve) => {
+        finishAdd = () => {
+          void realAdd(...args).then(resolve);
+        };
+      });
+    const { result, rerender } = renderHook(
+      ({ p }: { p: string }) => useFileComments("ws-1", ROOT, p),
+      { wrapper: wrap(backend), initialProps: { p: "C:/repo/src/a.ts" } },
+    );
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    let pendingAdd!: Promise<unknown>;
+    act(() => {
+      pendingAdd = result.current.add(1, 1, "a", "a-comment");
+    });
+    rerender({ p: "C:/repo/src/b.ts" });
+    await waitFor(() => expect(result.current.comments[0]?.body).toBe("b-comment"));
+
+    await act(async () => {
+      finishAdd?.();
+      await pendingAdd;
+    });
+    expect(result.current.comments[0]?.body).toBe("b-comment");
+  });
+
+  it("does not let a stale list response erase a newly added reply", async () => {
+    const root = await backend.addSessionFileComment(
+      "ws-1",
+      "src/a.ts",
+      1,
+      1,
+      null,
+      "root",
+    );
+    const realList = backend.listSessionFileComments.bind(backend);
+    let finishList: (() => void) | null = null;
+    backend.listSessionFileComments = async (...args) =>
+      new Promise((resolve) => {
+        finishList = () => {
+          void realList(...args).then((comments) =>
+            resolve(comments.filter((comment) => comment.parent_id === null)),
+          );
+        };
+      });
+    const { result } = renderHook(
+      () => useFileComments("ws-1", ROOT, "C:/repo/src/a.ts"),
+      { wrapper: wrap(backend) },
+    );
+    await waitFor(() => expect(finishList).not.toBeNull());
+    await act(async () => {
+      await result.current.reply(root.id, "reply");
+    });
+    expect(result.current.comments.some((comment) => comment.body === "reply")).toBe(true);
+
+    await act(async () => {
+      finishList?.();
+      await Promise.resolve();
+    });
+    expect(result.current.comments.some((comment) => comment.body === "reply")).toBe(true);
+  });
+
   it("add throws when no workstreamId/path is set", async () => {
     const { result } = renderHook(() => useFileComments(null, null, null), {
       wrapper: wrap(backend),

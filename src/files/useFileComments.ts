@@ -98,21 +98,36 @@ export function useFileComments(
       if (!workstreamId || file === null) {
         throw new Error("workstreamId and a file are required to add a comment");
       }
-      const created = await backend.addSessionFileComment(
-        workstreamId,
-        file,
-        start,
-        end,
-        anchorText,
-        body,
-      );
-      setCommentState((previous) => ({
-        file,
-        comments: sortComments([
-          ...(previous.file === file ? previous.comments : []),
-          created,
-        ]),
-      }));
+      // Invalidate any list request that started before this write. Otherwise
+      // its stale response can arrive after the INSERT and erase the newly
+      // added comment from local state.
+      const version = ++reloadVersionRef.current;
+      let created: SessionFileComment;
+      try {
+        created = await backend.addSessionFileComment(
+          workstreamId,
+          file,
+          start,
+          end,
+          anchorText,
+          body,
+        );
+      } catch (error) {
+        if (version === reloadVersionRef.current) {
+          setError(error instanceof Error ? error.message : String(error));
+        }
+        throw error;
+      }
+      if (version === reloadVersionRef.current) {
+        setError(null);
+        setCommentState((previous) => ({
+          file,
+          comments: sortComments([
+            ...(previous.file === file ? previous.comments : []),
+            created,
+          ]),
+        }));
+      }
       return created;
     },
     [backend, workstreamId, file],
@@ -121,13 +136,16 @@ export function useFileComments(
   const update = useCallback(
     async (id: string, body: string) => {
       if (!workstreamId) throw new Error("workstreamId is required");
+      const version = ++reloadVersionRef.current;
       const updated = await backend.updateSessionFileComment(workstreamId, id, body);
-      setCommentState((previous) => ({
-        ...previous,
-        comments: previous.comments.map((comment) =>
-          comment.id === id ? updated : comment,
-        ),
-      }));
+      if (version === reloadVersionRef.current) {
+        setCommentState((previous) => ({
+          ...previous,
+          comments: previous.comments.map((comment) =>
+            comment.id === id ? updated : comment,
+          ),
+        }));
+      }
       return updated;
     },
     [backend, workstreamId],
@@ -136,27 +154,36 @@ export function useFileComments(
   const reply = useCallback(
     async (parentId: string, body: string) => {
       if (!workstreamId) throw new Error("workstreamId is required");
+      const version = ++reloadVersionRef.current;
       const created = await backend.replySessionFileComment(workstreamId, parentId, body);
-      setCommentState((previous) => ({
-        ...previous,
-        comments: sortComments([...previous.comments, created]),
-      }));
+      if (version === reloadVersionRef.current) {
+        setCommentState((previous) => ({
+          file,
+          comments: sortComments([
+            ...(previous.file === file ? previous.comments : []),
+            created,
+          ]),
+        }));
+      }
       return created;
     },
-    [backend, workstreamId],
+    [backend, file, workstreamId],
   );
 
   const remove = useCallback(
     async (id: string) => {
       if (!workstreamId) throw new Error("workstreamId is required");
+      const version = ++reloadVersionRef.current;
       await backend.deleteSessionFileComment(workstreamId, id);
       // Cascade replies locally to match the backend delete.
-      setCommentState((previous) => ({
-        ...previous,
-        comments: previous.comments.filter(
-          (comment) => comment.id !== id && comment.parent_id !== id,
-        ),
-      }));
+      if (version === reloadVersionRef.current) {
+        setCommentState((previous) => ({
+          ...previous,
+          comments: previous.comments.filter(
+            (comment) => comment.id !== id && comment.parent_id !== id,
+          ),
+        }));
+      }
     },
     [backend, workstreamId],
   );
@@ -164,13 +191,16 @@ export function useFileComments(
   const setStatus = useCallback(
     async (id: string, status: string) => {
       if (!workstreamId) throw new Error("workstreamId is required");
+      const version = ++reloadVersionRef.current;
       const updated = await backend.setSessionFileCommentStatus(workstreamId, id, status);
-      setCommentState((previous) => ({
-        ...previous,
-        comments: previous.comments.map((comment) =>
-          comment.id === id ? updated : comment,
-        ),
-      }));
+      if (version === reloadVersionRef.current) {
+        setCommentState((previous) => ({
+          ...previous,
+          comments: previous.comments.map((comment) =>
+            comment.id === id ? updated : comment,
+          ),
+        }));
+      }
       return updated;
     },
     [backend, workstreamId],

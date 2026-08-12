@@ -108,6 +108,9 @@ Multi-tab repo browser (Files / Diff / Log / Hooks):
   branch picker lists local branches and compares the selected target's merge
   base to `HEAD` (`target...HEAD`); the target is persisted per tile and
   restored with the Diff tab.
+  Unstaged edits save with `Cmd+S` on macOS or `Ctrl+S` elsewhere. Comment
+  composers show a Saving state and inline write errors; successful writes
+  close the composer and stale list responses cannot erase the new thread.
 - **Log** tab: ahead / behind counts against `origin/<current-branch>`, with
   an `origin/<branch>` badge + accent border on the matching commit
 - **Hooks** tab: lists active git hooks; the selected hook opens in a Monaco

@@ -844,6 +844,36 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
   const saveDiffEditRef = useRef(saveDiffEdit);
   saveDiffEditRef.current = saveDiffEdit;
 
+  useEffect(() => {
+    if (!isFocused || activeDiffMode !== "unstaged") return;
+    const handleSaveShortcut = (event: KeyboardEvent) => {
+      if (
+        event.key.toLowerCase() !== "s" ||
+        (!event.metaKey && !event.ctrlKey) ||
+        event.altKey ||
+        event.shiftKey
+      ) {
+        return;
+      }
+      const editor = diffEditorRef.current;
+      const target = event.target;
+      const isInsideEditor =
+        target instanceof Node && editor?.getContainerDomNode().contains(target);
+      const isExternalFormControl =
+        !isInsideEditor &&
+        (target instanceof HTMLInputElement ||
+          target instanceof HTMLTextAreaElement ||
+          target instanceof HTMLSelectElement);
+      if (isExternalFormControl) return;
+      if (!editor || (!isInsideEditor && !editor.hasTextFocus())) return;
+      event.preventDefault();
+      event.stopPropagation();
+      void saveDiffEditRef.current();
+    };
+    window.addEventListener("keydown", handleSaveShortcut, true);
+    return () => window.removeEventListener("keydown", handleSaveShortcut, true);
+  }, [activeDiffMode, isFocused]);
+
   const activateDiffMode = useCallback(async (
     diffMode: DiffMode,
     requestedBaseRef?: string | null,
@@ -1451,7 +1481,7 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
                 modified={diffAfter}
                 theme={GITHUB_DARK_DIFF_THEME}
                 beforeMount={defineGithubDiffTheme}
-                onMount={(editor, monaco) => {
+                onMount={(editor) => {
                   const modified = editor.getModifiedEditor();
                   editorRef.current = modified;
                   if (diffEditorRef.current !== modified) {
@@ -1467,9 +1497,6 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
                     // this for programmatic setValue, and treating that as an
                     // edit would show a false unsaved marker.
                     setDiffDirty((modified.getModel()?.getValue() ?? "") !== diffAfterRef.current);
-                  });
-                  modified.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
-                    void saveDiffEditRef.current();
                   });
                 }}
                 options={{

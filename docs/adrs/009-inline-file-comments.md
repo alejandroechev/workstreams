@@ -54,6 +54,10 @@ interaction. unify-commenting collapses that divergence.
    reloads from session.db when the file is (re)opened, the selected diff file
    changes, or the toggle is turned on.
 
+   Comment mutations expose pending and error state in the composer. A list
+   request that started before an INSERT is invalidated so its stale response
+   cannot erase the newly created thread from the UI.
+
 3. **Agent loop** — the agent reads and writes `file_comments` directly with its
    built-in `sql` tool, guided by the **`file-comments` companion skill**
    (sibling of `code-review`). Role rule: the agent never edits reviewer notes;

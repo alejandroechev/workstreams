@@ -61,6 +61,9 @@ export function FileCommentsLayer({
 }: FileCommentsLayerProps): ReactElement | null {
   const [selectionAnchor, setSelectionAnchor] = useState<Anchor | null>(null);
   const [composer, setComposer] = useState<Composer | null>(null);
+  const [composerSaving, setComposerSaving] = useState(false);
+  const [composerError, setComposerError] = useState<string | null>(null);
+  const composerRequestRef = useRef(0);
   const zoneIdsRef = useRef<Map<string, string>>(new Map());
   const zoneNodesRef = useRef<Map<string, HTMLDivElement>>(new Map());
   const zoneDescriptorsRef = useRef<Map<string, MonacoNs.editor.IViewZone>>(new Map());
@@ -355,7 +358,10 @@ export function FileCommentsLayer({
       {onAddComment && selectionAnchor && !composer ? (
         <button
           data-testid="add-comment-floating"
-          onClick={() => setComposer({ mode: "create", anchor: selectionAnchor, body: "" })}
+          onClick={() => {
+            setComposerError(null);
+            setComposer({ mode: "create", anchor: selectionAnchor, body: "" });
+          }}
           style={{
             position: "absolute",
             top: 8,
@@ -423,10 +429,24 @@ export function FileCommentsLayer({
               resize: "vertical",
             }}
           />
+          {composerError ? (
+            <div
+              data-testid="comment-composer-error"
+              role="alert"
+              style={{ color: "#f38ba8", fontSize: 11 }}
+            >
+              {composerError}
+            </div>
+          ) : null}
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 6 }}>
             <button
               data-testid="comment-composer-cancel"
-              onClick={() => setComposer(null)}
+              onClick={() => {
+                composerRequestRef.current += 1;
+                setComposerSaving(false);
+                setComposerError(null);
+                setComposer(null);
+              }}
               style={{
                 background: "none",
                 border: "1px solid #45475a",
@@ -441,24 +461,37 @@ export function FileCommentsLayer({
             </button>
             <button
               data-testid="comment-composer-save"
-              disabled={composer.body.trim().length === 0}
+              disabled={composerSaving || composer.body.trim().length === 0}
               onClick={async () => {
                 const body = composer.body.trim();
                 if (body.length === 0) return;
-                if (composer.mode === "create" && onAddComment) {
-                  await onAddComment(
-                    composer.anchor.start,
-                    composer.anchor.end,
-                    composer.anchor.anchorText,
-                    body,
-                  );
-                } else if (composer.mode === "edit" && onUpdateComment) {
-                  await onUpdateComment(composer.comment.id, body);
-                } else if (composer.mode === "reply" && onReplyComment) {
-                  await onReplyComment(composer.parentId, body);
+                const request = ++composerRequestRef.current;
+                setComposerSaving(true);
+                setComposerError(null);
+                try {
+                  if (composer.mode === "create" && onAddComment) {
+                    await onAddComment(
+                      composer.anchor.start,
+                      composer.anchor.end,
+                      composer.anchor.anchorText,
+                      body,
+                    );
+                  } else if (composer.mode === "edit" && onUpdateComment) {
+                    await onUpdateComment(composer.comment.id, body);
+                  } else if (composer.mode === "reply" && onReplyComment) {
+                    await onReplyComment(composer.parentId, body);
+                  } else {
+                    throw new Error("Comment action is unavailable.");
+                  }
+                  if (request !== composerRequestRef.current) return;
+                  setComposer(null);
+                  setSelectionAnchor(null);
+                } catch (error) {
+                  if (request !== composerRequestRef.current) return;
+                  setComposerError(error instanceof Error ? error.message : String(error));
+                } finally {
+                  if (request === composerRequestRef.current) setComposerSaving(false);
                 }
-                setComposer(null);
-                setSelectionAnchor(null);
               }}
               style={{
                 background: composer.body.trim().length === 0 ? "#45475a" : "#89b4fa",
@@ -471,7 +504,7 @@ export function FileCommentsLayer({
                 fontWeight: 600,
               }}
             >
-              Save
+              {composerSaving ? "Saving…" : "Save"}
             </button>
           </div>
         </div>

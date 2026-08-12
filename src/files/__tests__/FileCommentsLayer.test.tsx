@@ -1,10 +1,14 @@
 import "@testing-library/jest-dom/vitest";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type * as MonacoNs from "monaco-editor";
 
 import { FileCommentsLayer } from "../FileCommentsLayer";
 import type { SessionFileComment } from "../../domain/file-comments";
+
+afterEach(() => {
+  document.body.innerHTML = "";
+});
 
 function comment(): SessionFileComment {
   return {
@@ -109,5 +113,113 @@ describe("FileCommentsLayer", () => {
         "Check these lines.",
       ),
     );
+  });
+
+  it("closes the composer and renders the created comment after save", async () => {
+    const harness = editorHarness();
+    let nextComments: SessionFileComment[] = [];
+    const onAddComment = vi.fn(async (
+      start: number,
+      end: number,
+      anchorText: string | null,
+      body: string,
+    ) => {
+      nextComments = [{
+        ...comment(),
+        anchor_line_start: start,
+        anchor_line_end: end,
+        anchor_text: anchorText,
+        body,
+      }];
+      return nextComments[0];
+    });
+    const { rerender } = render(
+      <FileCommentsLayer
+        editor={harness.editor}
+        editorReadyToken={1}
+        comments={[]}
+        enabled
+        onAddComment={onAddComment}
+      />,
+    );
+
+    act(() => harness.selectLines(2, 2));
+    fireEvent.click(await screen.findByTestId("add-comment-floating"));
+    fireEvent.change(screen.getByTestId("comment-composer-textarea"), {
+      target: { value: "Saved from the diff." },
+    });
+    fireEvent.click(screen.getByTestId("comment-composer-save"));
+    await waitFor(() => expect(screen.queryByTestId("comment-composer")).toBeNull());
+
+    rerender(
+      <FileCommentsLayer
+        editor={harness.editor}
+        editorReadyToken={1}
+        comments={nextComments}
+        enabled
+        onAddComment={onAddComment}
+      />,
+    );
+    expect(document.querySelector('[data-testid="comment-zone-c1"]')).toHaveTextContent(
+      "Saved from the diff.",
+    );
+  });
+
+  it("shows a save error instead of leaving an inert composer", async () => {
+    const harness = editorHarness();
+    render(
+      <FileCommentsLayer
+        editor={harness.editor}
+        editorReadyToken={1}
+        comments={[]}
+        enabled
+        onAddComment={vi.fn().mockRejectedValue(new Error("database is locked"))}
+      />,
+    );
+
+    act(() => harness.selectLines(2, 2));
+    fireEvent.click(await screen.findByTestId("add-comment-floating"));
+    fireEvent.change(screen.getByTestId("comment-composer-textarea"), {
+      target: { value: "Will fail." },
+    });
+    fireEvent.click(screen.getByTestId("comment-composer-save"));
+
+    expect(await screen.findByTestId("comment-composer-error")).toHaveTextContent(
+      "database is locked",
+    );
+  });
+
+  it("allows cancelling a pending save and ignores its late completion", async () => {
+    const harness = editorHarness();
+    let finish: (() => void) | null = null;
+    render(
+      <FileCommentsLayer
+        editor={harness.editor}
+        editorReadyToken={1}
+        comments={[]}
+        enabled
+        onAddComment={() =>
+          new Promise((resolve) => {
+            finish = () => resolve(undefined);
+          })
+        }
+      />,
+    );
+
+    act(() => harness.selectLines(2, 2));
+    fireEvent.click(await screen.findByTestId("add-comment-floating"));
+    fireEvent.change(screen.getByTestId("comment-composer-textarea"), {
+      target: { value: "Slow save." },
+    });
+    fireEvent.click(screen.getByTestId("comment-composer-save"));
+    await screen.findByText("Saving…");
+    fireEvent.click(screen.getByTestId("comment-composer-cancel"));
+    expect(screen.queryByTestId("comment-composer")).toBeNull();
+
+    await act(async () => {
+      finish?.();
+      await Promise.resolve();
+    });
+    expect(screen.queryByTestId("comment-composer")).toBeNull();
   });
 });

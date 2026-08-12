@@ -35,8 +35,8 @@ project-aware workspace:
   opened yet this session; selecting it again reloads and respawns everything.
 - 🗂️ **Built-in repo browser** — Files / Diff / Log / Hooks / Search tabs. Diff
   has split / unified toggle, and the **Unstaged** diff is **editable in place**:
-  type on the modified side and `Ctrl+S` (or the Save button) writes straight to
-  the working file, then re-reads the diff. Inline file comments work there too:
+  type on the modified side and `Cmd+S` / `Ctrl+S` (or the Save button) writes
+  straight to the working file, then re-reads the diff. Inline file comments work there too:
   select modified-side lines and use the comment toggle to create the same
   reviewer↔agent threads shown in the Files tab. Historical modes (Last commit,
   Branch vs master, or a **custom target branch**) stay read-only and

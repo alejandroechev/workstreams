@@ -14,6 +14,7 @@ const h = vi.hoisted(() => ({
   lastOptions: null as null | { readOnly?: boolean; originalEditable?: boolean },
   saved: [] as Array<{ path: string; content: string }>,
   modelValue: "",
+  hasFocus: true,
 }));
 
 // Stand in for Monaco's DiffEditor: expose the modified buffer and capture the
@@ -42,6 +43,7 @@ vi.mock("@monaco-editor/react", () => ({
           getValue: () => bufRef.current,
           setValue: (v: string) => { bufRef.current = v; },
         }),
+        hasTextFocus: () => h.hasFocus,
         changeViewZones: () => {},
         getContainerDomNode: () => document.createElement("div"),
         revealLineInCenter: () => {},
@@ -120,6 +122,7 @@ describe("Repo Explorer diff editing", () => {
     h.liveBuffer = null;
     h.lastOptions = null;
     h.modelValue = "";
+    h.hasFocus = true;
   });
 
   afterEach(cleanup);
@@ -195,10 +198,40 @@ describe("Repo Explorer diff editing", () => {
     h.liveBuffer!.current = "edited\n";
     act(() => h.contentHandlers.forEach((cb) => cb()));
 
-    expect(h.commands.length).toBeGreaterThan(0);
-    act(() => h.commands.forEach((cb) => cb()));
+    fireEvent.keyDown(window, { key: "s", ctrlKey: true });
 
     await waitFor(() => expect(h.saved.length).toBe(1));
+  });
+
+  it("saves with a real Cmd+S keyboard event while the diff editor is focused", async () => {
+    await setup("unstaged");
+    h.liveBuffer!.current = "edited\n";
+    act(() => h.contentHandlers.forEach((cb) => cb()));
+
+    fireEvent.keyDown(window, { key: "s", metaKey: true });
+
+    await waitFor(() => expect(h.saved.length).toBe(1));
+  });
+
+  it("does not steal Cmd+S from a comment textarea", async () => {
+    await setup("unstaged");
+    const textarea = document.createElement("textarea");
+    document.body.appendChild(textarea);
+    textarea.focus();
+
+    fireEvent.keyDown(textarea, { key: "s", metaKey: true });
+
+    expect(h.saved).toEqual([]);
+    textarea.remove();
+  });
+
+  it("does not save when focus is outside the diff editor", async () => {
+    await setup("unstaged");
+    h.hasFocus = false;
+
+    fireEvent.keyDown(window, { key: "s", metaKey: true });
+
+    expect(h.saved).toEqual([]);
   });
 
   it("offers no save control for a read-only diff", async () => {
@@ -253,6 +286,10 @@ describe("Repo Explorer diff editing", () => {
         "Review this change.",
       ),
     );
+    await waitFor(() => expect(screen.queryByTestId("comment-composer")).toBeNull());
+    expect(await backend.listSessionFileComments("ws-1", "src/a.ts")).toEqual([
+      expect.objectContaining({ body: "Review this change." }),
+    ]);
   });
 
   it("does not offer file comments for historical diffs", async () => {

@@ -185,6 +185,48 @@ test.describe("inline comment interactivity", () => {
     await expect(page.locator('[data-testid="comment-composer"]')).toBeVisible();
   });
 
+  test("Repo Explorer Unstaged diff saves a comment edit and closes the composer", async ({ page }) => {
+    await page.goto("/?harness=diff-comment-zone", { waitUntil: "networkidle" });
+    await expect(page.locator('[data-testid="harness-case"]')).toBeVisible();
+    await page.locator('[data-testid="repo-explorer-tab-diff"]').click();
+    await page.locator('[data-testid="repo-explorer-diff-comments-toggle"]').click();
+
+    await page.locator('[data-testid^="comment-edit-"]').click();
+    await page.locator('[data-testid="comment-composer-textarea"]').fill(
+      "Edited and saved from the unstaged diff.",
+    );
+    await page.locator('[data-testid="comment-composer-save"]').click();
+
+    await expect(page.locator('[data-testid="comment-composer"]')).toHaveCount(0);
+    await expect(page.locator('[data-testid^="comment-zone-"]')).toContainText(
+      "Edited and saved from the unstaged diff.",
+    );
+  });
+
+  test("Repo Explorer Unstaged diff captures Cmd+S while Monaco is focused", async ({ page }) => {
+    await page.goto("/?harness=diff-comment-zone", { waitUntil: "networkidle" });
+    await expect(page.locator('[data-testid="harness-case"]')).toBeVisible();
+    await page.locator('[data-testid="repo-explorer-tab-diff"]').click();
+
+    const prevented = await page.evaluate(() => {
+      const input = document.querySelector<HTMLTextAreaElement>(
+        ".monaco-diff-editor .modified textarea",
+      );
+      if (!input) return false;
+      input.focus();
+      const event = new KeyboardEvent("keydown", {
+        key: "s",
+        metaKey: true,
+        bubbles: true,
+        cancelable: true,
+      });
+      input.dispatchEvent(event);
+      return event.defaultPrevented;
+    });
+
+    expect(prevented).toBe(true);
+  });
+
   test("Repo Explorer selects a custom target branch for historical diff", async ({ page }) => {
     await page.goto("/?harness=diff-comment-zone", { waitUntil: "networkidle" });
     await expect(page.locator('[data-testid="harness-case"]')).toBeVisible();
