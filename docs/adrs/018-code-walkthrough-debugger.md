@@ -159,6 +159,21 @@ order, so a module and a name can be combined without recalling the exact path.
 Filtering away a selected test clears the selection, so Record cannot run
 something the user can no longer see.
 
+The selected Cargo package is also carried into **recording**, not only test
+discovery. Both phases build with `cargo test -p <package> --no-run`; otherwise
+a successful package-scoped discovery can be followed by a whole-workspace
+recording failure in an unrelated crate. This surfaced in the Waimea workspace:
+`microsoft_ic3_waimea_media_store` built successfully, while an unrelated
+`edge_security_tests` protobuf build failed. Recorder build errors retain the
+first actionable Cargo error and its `Caused by` context instead of displaying
+only Cargo's final `waiting for other jobs to finish` warning.
+
+Tokio async tests remain a trace-quality limitation. Validation against
+`streams::tests::read_blocks_skip_block_on_decode_error` records and completes,
+but lldb-dap steps mostly through the generated async wrapper/poll boundary and
+produces only five source locations. Package scoping is fixed; following an
+async future across executor polls is separate future work.
+
 ### Test discovery is explicit and backgrounded (2026-08-12)
 
 The first implementation ran test discovery as soon as the tile mounted. That

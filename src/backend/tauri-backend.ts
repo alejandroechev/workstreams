@@ -453,6 +453,7 @@ export class TauriBackend implements Backend {
     repoRoot: string,
     sessionId?: string | null,
     maxSteps?: number,
+    packageName?: string | null,
   ): Promise<string> {
     return invoke<string>("record_code_trace", {
       testName,
@@ -460,6 +461,7 @@ export class TauriBackend implements Backend {
       repoRoot,
       sessionId: sessionId ?? null,
       maxSteps: maxSteps ?? null,
+      package: packageName ?? null,
     });
   }
 }

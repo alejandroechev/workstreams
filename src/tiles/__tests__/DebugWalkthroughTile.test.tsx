@@ -212,6 +212,9 @@ describe("DebugWalkthroughTile", () => {
         </BackendProvider>,
       );
 
+      fireEvent.change(screen.getByLabelText("Cargo package"), {
+        target: { value: "core-lib" },
+      });
       await loadTests();
       const testPicker = await screen.findByLabelText("Test");
       await waitFor(() => expect(testPicker.querySelectorAll("option").length).toBe(3));
@@ -325,6 +328,9 @@ describe("DebugWalkthroughTile", () => {
         </BackendProvider>,
       );
 
+      fireEvent.change(screen.getByLabelText("Cargo package"), {
+        target: { value: "core-lib" },
+      });
       await loadTests();
       const testPicker = await screen.findByLabelText("Test");
       await waitFor(() => expect(testPicker.querySelectorAll("option").length).toBe(2));
@@ -333,6 +339,7 @@ describe("DebugWalkthroughTile", () => {
 
       await waitFor(() => expect(calls.length).toBe(1));
       expect(calls[0][3]).toBe("sess-42");
+      expect(calls[0][5]).toBe("core-lib");
     });
 
     it("records without a session when none is linked", async () => {

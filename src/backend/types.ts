@@ -213,6 +213,7 @@ export interface Backend {
     /** Copilot session that owns the trace; scopes where it is written. */
     sessionId?: string | null,
     maxSteps?: number,
+    packageName?: string | null,
   ): Promise<string>;
 }
 

@@ -304,6 +304,8 @@ export function DebugWalkthroughTile({
         workstreamDir,
         workstreamDir,
         linkedSessionIds[0] ?? null,
+        undefined,
+        cargoPackage.trim() || null,
       );
       const indexed = await backend.indexCodeTrace(tracePath, workstreamId);
       setTraces(await backend.listCodeTraces(workstreamId));
@@ -314,7 +316,7 @@ export function DebugWalkthroughTile({
       setRecording(false);
       setRecordProgress("");
     }
-  }, [backend, workstreamDir, selectedTest, workstreamId, linkedSessionIds, loadTrace]);
+  }, [backend, cargoPackage, workstreamDir, selectedTest, workstreamId, linkedSessionIds, loadTrace]);
 
   /** Drive the bound explorer to whatever step the walkthrough is on. */
   const revealCurrent = useCallback(

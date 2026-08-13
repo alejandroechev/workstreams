@@ -437,8 +437,56 @@ pub struct RecordOptions {
     pub manifest_dir: String,
     /// Repo root; frames outside it are stepped over.
     pub repo_root: String,
+    /// Optional workspace package passed to Cargo as `-p`.
+    pub package: Option<String>,
     /// Max debugger steps before truncating.
     pub max_steps: u32,
+}
+
+pub fn format_cargo_build_error(stdout: &str, stderr: &str) -> String {
+    for line in stdout.lines() {
+        let Ok(message) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        if message.get("reason").and_then(|value| value.as_str()) != Some("compiler-message") {
+            continue;
+        }
+        let diagnostic = &message["message"];
+        if diagnostic.get("level").and_then(|value| value.as_str()) != Some("error") {
+            continue;
+        }
+        if let Some(rendered) = diagnostic.get("rendered").and_then(|value| value.as_str()) {
+            let rendered = rendered.trim();
+            if !rendered.is_empty() {
+                return rendered.to_string();
+            }
+        }
+        if let Some(text) = diagnostic.get("message").and_then(|value| value.as_str()) {
+            return text.to_string();
+        }
+    }
+
+    let lines: Vec<&str> = stderr.lines().collect();
+    let start = lines
+        .iter()
+        .position(|line| {
+            let line = line.trim_start();
+            line.starts_with("error:") || line.starts_with("error[")
+        })
+        .unwrap_or_else(|| lines.len().saturating_sub(20));
+    lines[start..]
+        .iter()
+        .filter(|line| {
+            !line
+                .trim()
+                .starts_with("warning: build failed, waiting for other jobs")
+        })
+        .take(40)
+        .copied()
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim()
+        .to_string()
 }
 
 /// A single DAP request should never legitimately take this long. Recording
@@ -860,9 +908,15 @@ pub fn record_trace(
 ) -> Result<TraceFile, String> {
     on_progress("building test binary", 0);
     let mut cargo = Command::new("cargo");
-    cargo
-        .args(["test", "--no-run", "--message-format=json"])
-        .current_dir(&opts.manifest_dir);
+    cargo.args(["test", "--no-run", "--message-format=json"]);
+    if let Some(package) = opts
+        .package
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        cargo.args(["-p", package.trim()]);
+    }
+    cargo.current_dir(&opts.manifest_dir);
     no_console_window(&mut cargo);
     if let Some(env) = &env {
         for (k, v) in env {
@@ -875,8 +929,8 @@ pub fn record_trace(
     if !build.status.success() {
         let stderr = String::from_utf8_lossy(&build.stderr);
         return Err(format!(
-            "cargo test --no-run failed: {}",
-            stderr.lines().last().unwrap_or("").trim()
+            "cargo test --no-run failed:\n{}",
+            format_cargo_build_error(&String::from_utf8_lossy(&build.stdout), &stderr,)
         ));
     }
     let exe = select_test_executable(&String::from_utf8_lossy(&build.stdout))?;
@@ -1072,6 +1126,30 @@ mod tests {
         assert!(select_test_executable(non_test)
             .unwrap_err()
             .contains("no test executable"));
+    }
+
+    #[test]
+    fn reports_the_real_cargo_error_instead_of_the_final_waiting_warning() {
+        let stderr = "   Compiling unrelated v0.1.0\n\
+error: failed to run custom build command for `unrelated`\n\n\
+Caused by:\n  protoc failed: Option \"debug_redact\" unknown.\n\
+warning: build failed, waiting for other jobs to finish...\n";
+        let message = format_cargo_build_error("", stderr);
+        assert!(message.contains("failed to run custom build command"));
+        assert!(message.contains("debug_redact"));
+        assert!(!message.ends_with("waiting for other jobs to finish..."));
+    }
+
+    #[test]
+    fn reports_rendered_rustc_diagnostics_from_cargo_json_stdout() {
+        let stdout = r#"{"reason":"compiler-message","message":{"level":"error","message":"cannot find value `x`","rendered":"error[E0425]: cannot find value `x` in this scope\n --> src/lib.rs:2:5\n"}}"#;
+        let message = format_cargo_build_error(
+            stdout,
+            "error: could not compile `demo` due to 1 previous error",
+        );
+        assert!(message.contains("error[E0425]"));
+        assert!(message.contains("src/lib.rs:2:5"));
+        assert!(!message.contains("could not compile"));
     }
 
     #[test]
@@ -1501,6 +1579,7 @@ mod live_tests {
             test: "shell_env::tests::merge_drops_empty_segments".to_string(),
             manifest_dir: format!("{repo}/src-tauri"),
             repo_root: repo,
+            package: None,
             max_steps: 200,
         };
         let trace = record_trace(&opts, None, |phase, n| eprintln!("[{phase}] {n}")).unwrap();

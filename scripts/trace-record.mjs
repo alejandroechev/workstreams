@@ -17,6 +17,7 @@
 //   --out <path>           Write the trace JSON here (default: stdout)
 //   --steps <n>            Max debugger steps before truncating (default 2000)
 //   --manifest-dir <dir>   Cargo manifest directory (default: src-tauri)
+//   --package <name>       Cargo workspace package passed as `-p`
 //   --repo-root <dir>      Repo root; frames outside it are stepped over
 //   --verbose              Log the DAP conversation to stderr
 //
@@ -309,6 +310,7 @@ function parseArgs(argv) {
     out: valueOf("--out", null),
     maxSteps: Number(valueOf("--steps", String(DEFAULT_MAX_STEPS))),
     manifestDir: path.resolve(valueOf("--manifest-dir", "src-tauri")),
+    package: valueOf("--package", null),
     repoRoot: path.resolve(valueOf("--repo-root", ".")),
     verbose: argv.includes("--verbose"),
   };
@@ -448,7 +450,9 @@ async function record(opts, logStatus) {
   const log = opts.verbose ? (...m) => console.error("[dap]", ...m) : () => {};
 
   logStatus(`building test binary in ${opts.manifestDir} …`);
-  const cargoOut = execFileSync("cargo", ["test", "--no-run", "--message-format=json"], {
+  const cargoArgs = ["test", "--no-run", "--message-format=json"];
+  if (opts.package?.trim()) cargoArgs.push("-p", opts.package.trim());
+  const cargoOut = execFileSync("cargo", cargoArgs, {
     cwd: opts.manifestDir,
     encoding: "utf8",
     maxBuffer: 64 * 1024 * 1024,

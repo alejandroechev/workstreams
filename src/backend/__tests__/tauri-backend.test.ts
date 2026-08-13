@@ -607,13 +607,14 @@ describe("TauriBackend", () => {
 
     it("recordCodeTrace passes the owning session so traces stay out of the repo", async () => {
       invoke.mockResolvedValueOnce("/traces/t.json");
-      await backend.recordCodeTrace("a::b", "/repo", "/repo", "sess-1", 500);
+      await backend.recordCodeTrace("a::b", "/repo", "/repo", "sess-1", 500, "core-lib");
       expect(invoke).toHaveBeenCalledWith("record_code_trace", {
         testName: "a::b",
         manifestDir: "/repo",
         repoRoot: "/repo",
         sessionId: "sess-1",
         maxSteps: 500,
+        package: "core-lib",
       });
     });
 
@@ -628,6 +629,7 @@ describe("TauriBackend", () => {
         repoRoot: "/repo",
         sessionId: null,
         maxSteps: null,
+        package: null,
       });
     });
 

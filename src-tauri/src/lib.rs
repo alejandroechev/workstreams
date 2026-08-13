@@ -3715,6 +3715,7 @@ async fn record_code_trace(
     repo_root: String,
     session_id: Option<String>,
     max_steps: Option<u32>,
+    package: Option<String>,
 ) -> Result<String, String> {
     let manifest_dir = trace_record::find_cargo_manifest_dir(&manifest_dir).ok_or_else(|| {
         format!("No Cargo.toml found in {manifest_dir} or its immediate subdirectories.")
@@ -3723,6 +3724,7 @@ async fn record_code_trace(
         test: test_name,
         manifest_dir,
         repo_root: repo_root.clone(),
+        package,
         max_steps: max_steps.unwrap_or(2000),
     };
 

@@ -75,7 +75,8 @@ project-aware workspace:
   See [ADR 014](docs/adrs/014-code-review-tile.md).
 - 🐾 **Code walkthrough** *(experimental)* — step through a Rust test's
   **real execution** to understand code, not to debug it. Record once with
-  `node scripts/trace-record.mjs --test <name>` (drives a debug adapter), then
+  `node scripts/trace-record.mjs --test <name> [--package <crate>]` (drives a
+  debug adapter), then
   replay the trace in the app: the walkthrough tile drives a bound Repo
   Explorer, so you get debug order *and* the freedom to wander off and hit
   **Resync**.

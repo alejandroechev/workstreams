@@ -852,7 +852,14 @@ export class MemoryBackend implements Backend {
    * have written, so the UI flow is exercisable with no debugger present.
    */
   _recordedTracePath: string | null = null;
-  async recordCodeTrace(testName: string): Promise<string> {
+  async recordCodeTrace(
+    testName: string,
+    _manifestDir?: string,
+    _repoRoot?: string,
+    _sessionId?: string | null,
+    _maxSteps?: number,
+    _packageName?: string | null,
+  ): Promise<string> {
     if (this._recordedTracePath === null) {
       throw new Error(`Cannot record ${testName}: no recorder configured`);
     }
