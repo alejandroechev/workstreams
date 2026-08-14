@@ -220,15 +220,16 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
     ? (stateCurrentDir ? joinPath(stateRootDir, stateCurrentDir) : stateRootDir)
     : null;
 
-  // Create a new file/folder in the State tab's current directory, prompting
-  // for a name and refreshing the listing afterwards.
-  const createStateEntry = useCallback(async (dir: string, kind: "file" | "folder") => {
-    const name = window.prompt(kind === "file" ? "New file name:" : "New folder name:");
-    if (name === null) return;
+  // Create a new file/folder in the State tab's current directory. Name entry
+  // is owned by FileContextMenu; window.prompt is unreliable in WKWebView.
+  const createStateEntry = useCallback(async (
+    dir: string,
+    kind: "file" | "folder",
+    name: string,
+  ) => {
     const trimmed = name.trim();
-    if (!trimmed) return;
-    const sep = dir.endsWith("\\") || dir.endsWith("/") ? "" : "\\";
-    const target = `${dir}${sep}${trimmed}`;
+    if (!trimmed) throw new Error("A name is required.");
+    const target = joinPath(dir, trimmed);
     try {
       if (kind === "file") {
         await backend.createFile(target);
@@ -238,6 +239,7 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
       await loadStateDir(stateCurrentDir);
     } catch (e) {
       setStateError(e instanceof Error ? e.message : String(e));
+      throw e;
     }
   }, [backend, loadStateDir, stateCurrentDir]);
 
@@ -907,11 +909,10 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
           path={contextMenu.path}
           workstreamId={workstreamId ?? null}
           onClose={() => setContextMenu(null)}
-          onNewFile={contextMenu.createDir ? () => createStateEntry(contextMenu.createDir!, "file") : undefined}
-          onNewFolder={contextMenu.createDir ? () => createStateEntry(contextMenu.createDir!, "folder") : undefined}
+          onNewFile={contextMenu.createDir ? (name) => createStateEntry(contextMenu.createDir!, "file", name) : undefined}
+          onNewFolder={contextMenu.createDir ? (name) => createStateEntry(contextMenu.createDir!, "folder", name) : undefined}
         />
       )}
     </div>
   );
 }
-

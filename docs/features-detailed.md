@@ -121,6 +121,9 @@ Multi-tab repo browser (Files / Diff / Log / Hooks):
   extensionless hooks) and an inline Edit / Save / Cancel flow
 - Search overlays are scoped inside the tile with arrow-key + Enter
   navigation
+- Right-click actions use a viewport-clamped menu: create files/folders with an
+  in-app name field, reveal paths in Finder/File Explorer, and dismiss via an
+  outside click or Escape without changing fullscreen mode.
 
 A stand-alone CLI scenario (`node scripts/repo-explorer-cli.mjs <dir>
 <query>`) mirrors the same filename search logic without launching the

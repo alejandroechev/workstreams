@@ -340,15 +340,16 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
     }
   }, [backend]);
 
-  // Create a new file or folder inside `dir`, prompting for the name, then
-  // refresh the listing so it appears immediately. Errors surface via
-  // setDirError (e.g. name collision). Used by the empty-space / entry
-  // context menu in browse mode.
-  const createEntry = useCallback(async (dir: string, kind: "file" | "folder") => {
-    const name = window.prompt(kind === "file" ? "New file name:" : "New folder name:");
-    if (name === null) return;
+  // Create a new file or folder inside `dir`, then refresh the listing.
+  // Name entry lives in FileContextMenu instead of window.prompt, which is not
+  // implemented consistently by WKWebView.
+  const createEntry = useCallback(async (
+    dir: string,
+    kind: "file" | "folder",
+    name: string,
+  ) => {
     const trimmed = name.trim();
-    if (!trimmed) return;
+    if (!trimmed) throw new Error("A name is required.");
     const target = joinPath(dir, trimmed);
     try {
       if (kind === "file") {
@@ -359,6 +360,7 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
       await loadDir(dir);
     } catch (e) {
       setDirError(String(e));
+      throw e;
     }
   }, [backend, loadDir]);
 
@@ -1254,8 +1256,8 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
           isDir={contextMenu.isDir}
           workstreamId={workstreamId ?? null}
           onClose={() => setContextMenu(null)}
-          onNewFile={() => createEntry(contextMenu.isDir ? contextMenu.path : currentDir, "file")}
-          onNewFolder={() => createEntry(contextMenu.isDir ? contextMenu.path : currentDir, "folder")}
+          onNewFile={(name) => createEntry(contextMenu.isDir ? contextMenu.path : currentDir, "file", name)}
+          onNewFolder={(name) => createEntry(contextMenu.isDir ? contextMenu.path : currentDir, "folder", name)}
         />
       )}
     </>

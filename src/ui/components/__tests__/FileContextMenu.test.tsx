@@ -1,16 +1,16 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { afterEach, describe, it, expect, vi, beforeEach } from "vitest";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { FileContextMenu } from "../FileContextMenu";
 
 const writeText = vi.fn();
-const openPath = vi.fn();
+const revealItemInDir = vi.fn();
 const dispatch = vi.fn();
 
 vi.mock("../../../domain/clipboard", () => ({
   writeTextToClipboard: (...args: unknown[]) => writeText(...args),
 }));
 vi.mock("@tauri-apps/plugin-opener", () => ({
-  openPath: (...args: unknown[]) => { openPath(...args); return Promise.resolve(); },
+  revealItemInDir: (...args: unknown[]) => revealItemInDir(...args),
 }));
 vi.mock("../../../domain/workbench-events", () => ({
   dispatchAddToWorkbench: (...args: unknown[]) => dispatch(...args),
@@ -19,8 +19,12 @@ vi.mock("../../../domain/workbench-events", () => ({
 describe("FileContextMenu", () => {
   beforeEach(() => {
     writeText.mockReset();
-    openPath.mockReset();
+    revealItemInDir.mockReset();
     dispatch.mockReset();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   it("renders all items for a file", () => {
@@ -48,9 +52,8 @@ describe("FileContextMenu", () => {
     expect(screen.queryByTestId("ctx-new-folder")).toBeNull();
   });
 
-  it("shows and fires New file / New folder when callbacks are provided", () => {
+  it("shows an inline name composer and creates a new file", async () => {
     const onNewFile = vi.fn();
-    const onNewFolder = vi.fn();
     const onClose = vi.fn();
     render(
       <FileContextMenu
@@ -61,14 +64,36 @@ describe("FileContextMenu", () => {
         workstreamId={null}
         onClose={onClose}
         onNewFile={onNewFile}
-        onNewFolder={onNewFolder}
       />,
     );
     fireEvent.click(screen.getByTestId("ctx-new-file"));
-    expect(onNewFile).toHaveBeenCalled();
+    fireEvent.change(screen.getByTestId("ctx-create-name"), {
+      target: { value: "notes.md" },
+    });
+    fireEvent.click(screen.getByTestId("ctx-create-save"));
+    await waitFor(() => expect(onNewFile).toHaveBeenCalledWith("notes.md"));
     expect(onClose).toHaveBeenCalled();
+  });
+
+  it("creates a new folder from the inline composer", async () => {
+    const onNewFolder = vi.fn();
+    render(
+      <FileContextMenu
+        x={0}
+        y={0}
+        path="C:/a"
+        isDir
+        workstreamId={null}
+        onClose={() => {}}
+        onNewFolder={onNewFolder}
+      />,
+    );
     fireEvent.click(screen.getByTestId("ctx-new-folder"));
-    expect(onNewFolder).toHaveBeenCalled();
+    fireEvent.change(screen.getByTestId("ctx-create-name"), {
+      target: { value: "assets" },
+    });
+    fireEvent.click(screen.getByTestId("ctx-create-save"));
+    await waitFor(() => expect(onNewFolder).toHaveBeenCalledWith("assets"));
   });
 
   it("fires copy-path and closes", () => {
@@ -85,10 +110,19 @@ describe("FileContextMenu", () => {
     expect(writeText).toHaveBeenCalledWith("b.txt");
   });
 
-  it("fires open-system", () => {
+  it("fires open-system", async () => {
     render(<FileContextMenu x={0} y={0} path="C:/a/b.txt" workstreamId="w1" onClose={() => {}} />);
     fireEvent.click(screen.getByTestId("ctx-open-system"));
-    expect(openPath).toHaveBeenCalledWith("C:/a/b.txt");
+    await waitFor(() => expect(revealItemInDir).toHaveBeenCalledWith("C:/a/b.txt"));
+  });
+
+  it("surfaces open-system errors instead of silently closing", async () => {
+    revealItemInDir.mockRejectedValueOnce(new Error("opener denied"));
+    const onClose = vi.fn();
+    render(<FileContextMenu x={0} y={0} path="C:/a/b.txt" workstreamId="w1" onClose={onClose} />);
+    fireEvent.click(screen.getByTestId("ctx-open-system"));
+    expect((await screen.findByTestId("ctx-action-error")).textContent).toContain("opener denied");
+    expect(onClose).not.toHaveBeenCalled();
   });
 
   it("fires add-to-workbench with workstreamId", () => {
@@ -101,15 +135,37 @@ describe("FileContextMenu", () => {
     const onClose = vi.fn();
     render(<FileContextMenu x={0} y={0} path="C:/a.txt" workstreamId={null} onClose={onClose} />);
     await new Promise((r) => setTimeout(r, 5));
-    fireEvent.keyDown(document, { key: "Escape" });
+    const event = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+    window.dispatchEvent(event);
     expect(onClose).toHaveBeenCalled();
+    expect(event.defaultPrevented).toBe(true);
   });
 
   it("closes on outside mousedown", async () => {
     const onClose = vi.fn();
     render(<FileContextMenu x={0} y={0} path="C:/a.txt" workstreamId={null} onClose={onClose} />);
     await new Promise((r) => setTimeout(r, 5));
-    fireEvent.mouseDown(document.body);
+    fireEvent.pointerDown(document.body);
     expect(onClose).toHaveBeenCalled();
+  });
+
+  it("clamps the measured menu inside the viewport", async () => {
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 0,
+      width: 220,
+      height: 300,
+      top: 0,
+      left: 0,
+      right: 220,
+      bottom: 300,
+      toJSON: () => ({}),
+    });
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 800 });
+    Object.defineProperty(window, "innerHeight", { configurable: true, value: 600 });
+    render(<FileContextMenu x={780} y={590} path="C:/a.txt" workstreamId={null} onClose={() => {}} />);
+    const menu = screen.getByTestId("file-context-menu");
+    await waitFor(() => expect(menu.style.left).toBe("572px"));
+    expect(menu.style.top).toBe("292px");
   });
 });

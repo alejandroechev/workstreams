@@ -43,17 +43,19 @@ function createBackend(): Backend {
       return found;
     }),
     readFile: vi.fn().mockResolvedValue("file contents"),
+    createFile: vi.fn().mockResolvedValue(undefined),
+    createDirectory: vi.fn().mockResolvedValue(undefined),
   } as unknown as Backend;
 }
 
-function renderTile() {
+function renderTile(backend = createBackend()) {
   invokeMock.mockImplementation((command: string) => {
     if (command === "session_state_dir") return Promise.resolve(STATE_ROOT);
     if (command === "watch_directory" || command === "unwatch_directory") return Promise.resolve(null);
     return Promise.reject(new Error(`unexpected invoke ${command}`));
   });
   return render(
-    <BackendProvider backend={createBackend()}>
+    <BackendProvider backend={backend}>
       <SessionMetaTile tileId="meta" isFocused={false} linkedSessionIds={["session-1"]} />
     </BackendProvider>,
   );
@@ -112,5 +114,22 @@ describe("SessionMetaTile State tab folder navigation", () => {
     fireEvent.click(screen.getByRole("button", { name: /State/i }));
     await screen.findByText("root-note.md");
     expect(screen.getByTestId("meta-state-up")).toBeDisabled();
+  });
+
+  it("creates a State file with the context menu composer name", async () => {
+    const backend = createBackend();
+    renderTile(backend);
+    fireEvent.click(screen.getByRole("button", { name: /State/i }));
+    const row = await screen.findByText("root-note.md");
+    fireEvent.contextMenu(row, { clientX: 20, clientY: 30 });
+    fireEvent.click(await screen.findByTestId("ctx-new-file"));
+    fireEvent.change(screen.getByTestId("ctx-create-name"), {
+      target: { value: "created.md" },
+    });
+    fireEvent.click(screen.getByTestId("ctx-create-save"));
+
+    await waitFor(() =>
+      expect(backend.createFile).toHaveBeenCalledWith(`${STATE_ROOT}\\created.md`),
+    );
   });
 });

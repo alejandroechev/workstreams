@@ -37,6 +37,16 @@ Pain points:
    `viewState.customDiffBranch`. Its modified side is `HEAD`, so it remains
    read-only and does not offer working-file comments.
 
+9. **Cross-platform file context menu (2026-08).** The menu portals to
+   `document.body`, measures after layout, and clamps inside the viewport so a
+   right-click near the bottom/right edge never clips actions. A viewport
+   backdrop closes on outside pointer input, while capture-phase Escape
+   consumes the key before tile/native fullscreen handlers. New file/folder
+   names use an in-app composer rather than `window.prompt` (unreliable in
+   WKWebView). "Open in system" uses opener's permitted `revealItemInDir`
+   command; the previous `openPath` call was outside `opener:default` scope and
+   silently discarded its permission error.
+
 ## Consequences
 
 - Users get a consistent tab UI across `SessionMetaTile` and `RepoExplorerTile`.

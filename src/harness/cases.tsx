@@ -259,6 +259,21 @@ const TerminalRevealCase: FC = () => {
   );
 };
 
+const RepoContextMenuCase: FC = () => {
+  const backend = useMemo(() => {
+    const instance = new MemoryBackend();
+    instance.seedFile("C:/repo/existing.txt", "hello");
+    return instance;
+  }, []);
+  return (
+    <div data-testid="harness-case" data-case="repo-context-menu" style={full}>
+      <BackendProvider backend={backend}>
+        <RepoExplorerTile tileId="context-menu" isFocused rootDir="C:/repo" workstreamId="ws-1" />
+      </BackendProvider>
+    </div>
+  );
+};
+
 export interface HarnessCase {
   title: string;
   Component: FC;
@@ -280,5 +295,9 @@ export const harnessCases: Record<string, HarnessCase> = {
   "terminal-reveal": {
     title: "Persisted terminal workstream reveal",
     Component: TerminalRevealCase,
+  },
+  "repo-context-menu": {
+    title: "Repo Explorer context menu",
+    Component: RepoContextMenuCase,
   },
 };
