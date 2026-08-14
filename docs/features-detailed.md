@@ -63,6 +63,9 @@ A **side-by-side** mode is available when exactly two tiles are selected
 ## Terminal tiles
 
 Full interactive terminals via xterm.js + portable-pty (ConPTY on Windows).
+Loaded workstreams keep their terminal instances alive while hidden; switching
+back explicitly remeasures, fits, and repaints xterm so WKWebView does not show
+a stale frame. Hidden workstreams cannot steal terminal focus.
 
 ## Code viewer tiles
 

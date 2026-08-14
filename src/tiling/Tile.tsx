@@ -180,6 +180,7 @@ function TileWrapperImpl({
           tileId={tile.id}
           isFocused={isFocused}
           focusToken={focusToken}
+          visible={workstreamVisible && !hidden}
           isFullscreen={isFullscreen}
           onStatusChange={setTermStatus}
         />
@@ -199,6 +200,7 @@ function TileWrapperImpl({
           configJson={tile.config_json}
           isFocused={isFocused}
           focusToken={focusToken}
+          visible={workstreamVisible && !hidden}
           isResuming={cfg.is_resumed === true}
           alreadyRunning={alreadyRunning}
           workstreamId={workstreamId}
@@ -559,5 +561,6 @@ function TileWrapperImpl({
 // workstream. React.memo with default shallow prop equality is enough
 // because most props are stable (tile object, ids, callbacks created
 // once); the isFocused/hidden/focusToken trio captures the per-tile
-// reasons to actually re-render.
+// reasons to actually re-render; workstreamVisible is the explicit reveal
+// signal for persisted terminal surfaces.
 const MemoTileWrapper = memo(TileWrapperImpl);

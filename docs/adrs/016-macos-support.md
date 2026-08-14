@@ -98,6 +98,26 @@ A `build-macos` job on `macos-latest` builds `--target aarch64-apple-darwin`
 and publishes a `.dmg` plus a zipped `.app`. `publish-release` now depends on
 both platform jobs.
 
+### Persisted xterm reveal
+
+Workstreams keep every loaded workstream mounted and hide inactive ones with
+`display:none`, preserving xterm and PTY state. WKWebView does not reliably
+emit `IntersectionObserver` callbacks when an ancestor returns from
+`display:none`; the React tile chrome can therefore update while xterm retains
+a stale frame until a manual resize triggers layout and repaint.
+
+`workstreamVisible` is now passed explicitly to terminal and Copilot session
+tiles. A `false → true` transition runs a cancellable two-pass recovery after
+layout: reload WebGL when enabled, remeasure xterm cell geometry, invalidate
+and request PTY fitting, invalidate the render surface, and repaint the full
+buffer. Hidden workstreams skip focus/fit work even though the global
+`focusToken` changes for every mounted grid. Browser observers remain a
+fallback, not the source of truth.
+
+The terminal GPU setting is independent of this path. It controls xterm's
+WebGL addon inside the webview; the visibility recovery runs for both WebGL and
+DOM rendering.
+
 ## Consequences
 
 - macOS runners are **free** for this public repo, so the extra job costs

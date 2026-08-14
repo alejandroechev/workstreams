@@ -9,6 +9,7 @@ import { listen } from "@tauri-apps/api/event";
 import { parseCopilotSessionConfig } from "../domain/tile-config";
 import { createPtyFitController } from "./pty-fit";
 import { createWebglController } from "./webgl-renderer";
+import { scheduleTerminalRevealRecovery, type RevealTerminalLike } from "./terminal-reveal";
 import { getAppSettings, subscribeAppSettings, createWheelLineAccumulator } from "../domain/app-settings";
 import { writeTextToClipboard, readTextFromClipboard } from "../domain/clipboard";
 import { handleOsc52 } from "../domain/osc52";
@@ -21,6 +22,8 @@ interface Props {
   isFocused: boolean;
   /** Bumped on workstream switch so we re-focus even when isFocused didn't change. */
   focusToken?: number;
+  /** Whether the workstream and this tile's layout slot are currently rendered. */
+  visible?: boolean;
   isResuming: boolean;
   alreadyRunning?: boolean;
   workstreamId?: string;
@@ -46,6 +49,7 @@ export default function CopilotSessionTile({
   configJson,
   isFocused,
   focusToken,
+  visible = true,
   isResuming,
   alreadyRunning,
   workstreamId,
@@ -63,6 +67,7 @@ export default function CopilotSessionTile({
   const ptyFitRef = useRef<ReturnType<typeof createPtyFitController> | null>(null);
   const serializeRef = useRef<SerializeAddon | null>(null);
   const webglRef = useRef<ReturnType<typeof createWebglController> | null>(null);
+  const previousVisibleRef = useRef(visible);
   const prevActivityRef = useRef<string>("idle");
   const [status, setStatus] = useState<string>(isResuming ? "resuming" : "starting");
 
@@ -300,40 +305,17 @@ export default function CopilotSessionTile({
     // caches glyphs in a texture atlas that can go stale when the element
     // was display:none. Without this, the user sees a blank or partially-
     // drawn terminal until something else triggers a redraw (e.g. Enter).
+    let cancelObserverRecovery = () => {};
     const visibilityObserver = new IntersectionObserver((entries) => {
       for (const entry of entries) {
         if (entry.isIntersecting) {
-          // Now that the tile is visible+sized, (re)load WebGL if it never
-          // initialised while hidden or its context was lost.
-          webgl.tryLoad();
-          // Force xterm to remeasure cell metrics — when this element was
-          // display:none, CharSizeService cached zero/stale cell dimensions
-          // and the next fit would propose a tiny cols/rows pair (cols≈11)
-          // which then gets shipped to the PTY and sticks.
-          try {
-            const core = (term as unknown as {
-              _core?: { _charSizeService?: { measure?: () => void } };
-            })._core;
-            core?._charSizeService?.measure?.();
-          } catch { /* best effort */ }
-          ptyFit.invalidate();
-          ptyFit.request();
-          // Schedule a second fit + repaint after the fit controller's debounce
-          // + rAF settles, in case the first fit still ran with stale metrics.
-          setTimeout(() => {
-            try {
-              const core = (term as unknown as {
-                _core?: { _charSizeService?: { measure?: () => void } };
-              })._core;
-              core?._charSizeService?.measure?.();
-            } catch { /* best effort */ }
-            ptyFit.invalidate();
-            ptyFit.request();
-            if (term.rows > 0) {
-              try { (term as unknown as { _core?: { _renderService?: { handleResize(c: number, r: number): void } } })._core?._renderService?.handleResize(term.cols, term.rows); } catch { /* best effort */ }
-              term.refresh(0, term.rows - 1);
-            }
-          }, 150);
+          cancelObserverRecovery();
+          cancelObserverRecovery = scheduleTerminalRevealRecovery({
+            terminal: term as unknown as RevealTerminalLike,
+            ptyFit,
+            webgl,
+            getContainer: () => containerRef.current,
+          });
         }
       }
     }, { threshold: 0.01 });
@@ -376,6 +358,7 @@ export default function CopilotSessionTile({
       invoke("unwatch_session", { tileId }).catch(() => {});
       resizeObserver.disconnect();
       visibilityObserver.disconnect();
+      cancelObserverRecovery();
       ptyFit.dispose();
       ptyFitRef.current = null;
       webgl.dispose();
@@ -387,6 +370,25 @@ export default function CopilotSessionTile({
       term.dispose();
     };
   }, [tileId]);
+
+  // WKWebView does not reliably notify IntersectionObserver when an ancestor
+  // flips display:none → flex. React already knows the owning workstream's
+  // visibility, so use that transition as the authoritative reveal signal.
+  useEffect(() => {
+    const wasVisible = previousVisibleRef.current;
+    previousVisibleRef.current = visible;
+    if (!visible || wasVisible) return;
+    const term = termRef.current;
+    const ptyFit = ptyFitRef.current;
+    const webgl = webglRef.current;
+    if (!term || !ptyFit || !webgl) return;
+    return scheduleTerminalRevealRecovery({
+      terminal: term as unknown as RevealTerminalLike,
+      ptyFit,
+      webgl,
+      getContainer: () => containerRef.current,
+    });
+  }, [visible]);
 
   // Re-register with poller when config changes (e.g., after auto-link sets copilot_session_id)
   useEffect(() => {
@@ -401,7 +403,7 @@ export default function CopilotSessionTile({
   }, [tileId, configJson, workstreamId]);
 
   useEffect(() => {
-    if (!isFocused) return;
+    if (!isFocused || !visible) return;
     const focusNow = () => {
       fitRef.current?.fit();
       const term = termRef.current;
@@ -422,7 +424,7 @@ export default function CopilotSessionTile({
     // not settled by then the next render's effect re-runs with a fresh token.
     const timer = window.setTimeout(focusNow, 50);
     return () => clearTimeout(timer);
-  }, [isFocused, focusToken]);
+  }, [isFocused, focusToken, visible]);
 
   // Force xterm to remeasure cell metrics + repaint the buffer whenever the
   // fullscreen state of this tile changes. The geometry jump from a small

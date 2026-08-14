@@ -9,6 +9,7 @@ import { listen } from "@tauri-apps/api/event";
 import { playBell, flashWindow } from "../domain/notifications";
 import { createPtyFitController } from "./pty-fit";
 import { createWebglController } from "./webgl-renderer";
+import { scheduleTerminalRevealRecovery, type RevealTerminalLike } from "./terminal-reveal";
 import { getAppSettings, subscribeAppSettings, createWheelLineAccumulator } from "../domain/app-settings";
 import { writeTextToClipboard, readTextFromClipboard } from "../domain/clipboard";
 import { handleOsc52 } from "../domain/osc52";
@@ -18,19 +19,22 @@ interface Props {
   isFocused: boolean;
   /** Bumped on workstream switch so we re-focus even when isFocused didn't change. */
   focusToken?: number;
+  /** Whether the workstream and this tile's layout slot are currently rendered. */
+  visible?: boolean;
   /** True when this tile is the fullscreen tile. See CopilotSessionTile for
    * the rationale; same atlas-stale issue on geometry-only changes. */
   isFullscreen?: boolean;
   onStatusChange?: (status: string) => void;
 }
 
-export default function TerminalTile({ tileId, isFocused, focusToken, isFullscreen = false, onStatusChange }: Props) {
+export default function TerminalTile({ tileId, isFocused, focusToken, visible = true, isFullscreen = false, onStatusChange }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const ptyFitRef = useRef<ReturnType<typeof createPtyFitController> | null>(null);
   const serializeRef = useRef<SerializeAddon | null>(null);
   const webglRef = useRef<ReturnType<typeof createWebglController> | null>(null);
+  const previousVisibleRef = useRef(visible);
   const [status, setStatus] = useState<"spawning" | "running" | "exited" | "failed">("spawning");
 
   const updateStatus = useCallback((s: typeof status) => {
@@ -231,34 +235,17 @@ export default function TerminalTile({ tileId, isFocused, focusToken, isFullscre
     // caches glyphs in a texture atlas that can go stale when the element
     // was display:none. Without this, the user sees a blank or partially-
     // drawn terminal until something else triggers a redraw (e.g. Enter).
+    let cancelObserverRecovery = () => {};
     const visibilityObserver = new IntersectionObserver((entries) => {
       for (const entry of entries) {
         if (entry.isIntersecting) {
-          // Now that the tile is visible+sized, (re)load WebGL if it never
-          // initialised while hidden or its context was lost.
-          webgl.tryLoad();
-          try {
-            const core = (term as unknown as {
-              _core?: { _charSizeService?: { measure?: () => void } };
-            })._core;
-            core?._charSizeService?.measure?.();
-          } catch { /* best effort */ }
-          ptyFit.invalidate();
-          ptyFit.request();
-          setTimeout(() => {
-            try {
-              const core = (term as unknown as {
-                _core?: { _charSizeService?: { measure?: () => void } };
-              })._core;
-              core?._charSizeService?.measure?.();
-            } catch { /* best effort */ }
-            ptyFit.invalidate();
-            ptyFit.request();
-            if (term.rows > 0) {
-              try { (term as unknown as { _core?: { _renderService?: { handleResize(c: number, r: number): void } } })._core?._renderService?.handleResize(term.cols, term.rows); } catch { /* best effort */ }
-              term.refresh(0, term.rows - 1);
-            }
-          }, 150);
+          cancelObserverRecovery();
+          cancelObserverRecovery = scheduleTerminalRevealRecovery({
+            terminal: term as unknown as RevealTerminalLike,
+            ptyFit,
+            webgl,
+            getContainer: () => containerRef.current,
+          });
         }
       }
     }, { threshold: 0.01 });
@@ -301,6 +288,7 @@ export default function TerminalTile({ tileId, isFocused, focusToken, isFullscre
       wheelTarget.removeEventListener("wheel", wheelHandler);
       resizeObserver.disconnect();
       visibilityObserver.disconnect();
+      cancelObserverRecovery();
       ptyFit.dispose();
       ptyFitRef.current = null;
       webgl.dispose();
@@ -312,10 +300,26 @@ export default function TerminalTile({ tileId, isFocused, focusToken, isFullscre
     };
   }, [tileId, saveScrollback, updateStatus]);
 
+  useEffect(() => {
+    const wasVisible = previousVisibleRef.current;
+    previousVisibleRef.current = visible;
+    if (!visible || wasVisible) return;
+    const term = termRef.current;
+    const ptyFit = ptyFitRef.current;
+    const webgl = webglRef.current;
+    if (!term || !ptyFit || !webgl) return;
+    return scheduleTerminalRevealRecovery({
+      terminal: term as unknown as RevealTerminalLike,
+      ptyFit,
+      webgl,
+      getContainer: () => containerRef.current,
+    });
+  }, [visible]);
+
   // Refit + focus when focused, OR when the focus token bumps (workstream
   // switched back to this tile's workstream without isFocused changing).
   useEffect(() => {
-    if (!isFocused) return;
+    if (!isFocused || !visible) return;
     const focusNow = () => {
       fitRef.current?.fit();
       const term = termRef.current;
@@ -334,7 +338,7 @@ export default function TerminalTile({ tileId, isFocused, focusToken, isFullscre
     // on the next focusToken bump if it didn't stick.
     const timer = window.setTimeout(focusNow, 50);
     return () => clearTimeout(timer);
-  }, [isFocused, focusToken]);
+  }, [isFocused, focusToken, visible]);
 
   // See CopilotSessionTile for the rationale: ResizeObserver fires fit on
   // fullscreen toggle but the canvas atlas can hold stale cell metrics

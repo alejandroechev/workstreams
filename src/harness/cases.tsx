@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties, type FC } fro
 import { FileEditorView } from "../files/FileEditorView";
 import CodeReviewTile from "../tiles/CodeReviewTile";
 import RepoExplorerTile from "../tiles/RepoExplorerTile";
+import TerminalTile from "../tiles/TerminalTile";
 import { BackendProvider } from "../backend/context";
 import { MemoryBackend } from "../backend/memory-backend";
 import type { SessionFileComment } from "../domain/file-comments";
@@ -229,6 +230,35 @@ const DiffCommentZoneCase: FC = () => {
   );
 };
 
+const TerminalRevealCase: FC = () => {
+  const [visible, setVisible] = useState(true);
+  const [focusToken, setFocusToken] = useState(0);
+  const switchVisibility = (next: boolean) => {
+    setVisible(next);
+    setFocusToken((token) => token + 1);
+  };
+
+  return (
+    <div data-testid="harness-case" data-case="terminal-reveal" style={full}>
+      <div style={{ position: "absolute", zIndex: 10, top: 8, right: 8, display: "flex", gap: 6 }}>
+        <button data-testid="terminal-hide" onClick={() => switchVisibility(false)}>Hide</button>
+        <button data-testid="terminal-show" onClick={() => switchVisibility(true)}>Show</button>
+      </div>
+      <div
+        data-testid="terminal-workstream"
+        style={{ position: "absolute", inset: 0, display: visible ? "block" : "none" }}
+      >
+        <TerminalTile
+          tileId="terminal-reveal"
+          isFocused
+          focusToken={focusToken}
+          visible={visible}
+        />
+      </div>
+    </div>
+  );
+};
+
 export interface HarnessCase {
   title: string;
   Component: FC;
@@ -246,5 +276,9 @@ export const harnessCases: Record<string, HarnessCase> = {
   "diff-comment-zone": {
     title: "Repo Explorer Unstaged diff file-comment zone",
     Component: DiffCommentZoneCase,
+  },
+  "terminal-reveal": {
+    title: "Persisted terminal workstream reveal",
+    Component: TerminalRevealCase,
   },
 };
