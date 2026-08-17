@@ -102,6 +102,17 @@ function listThread(db) {
     .all(WS, FILE);
 }
 
+/** Mirrors list_all_file_comments_rows (Comments tab): whole workstream. */
+function listAll(db) {
+  return db
+    .prepare(
+      `SELECT id, file, author, parent_id, created_at FROM file_comments
+       WHERE workstream_id = ?
+       ORDER BY file ASC, anchor_line_start ASC, ${CREATED_AT_ORDER} ASC, created_at ASC`,
+    )
+    .all(WS);
+}
+
 /** Mirrors delete_file_comment_row: gated on the ROOT being reviewer-authored. */
 function deleteThread(db, id) {
   return db
@@ -185,6 +196,34 @@ try {
   });
   check("reviewer thread deletes with its replies", deleteThread(db, "mine") === 2);
   check("only the imported thread remains", listThread(db).length === 3);
+
+  // 6. Comments tab: the workstream-wide list must span files and keep the
+  //    same chronological ordering guarantee as the per-file query.
+  insert(db, {
+    id: "other-file",
+    file: "src/backend/read.rs",
+    body: "different file",
+    author: "Eduardo Fernandez",
+    created_at: "2026-08-16T09:00:00Z",
+  });
+  const all = listAll(db);
+  const files = [...new Set(all.map((r) => r.file))];
+  check("list-all spans every commented file", files.length === 2, files.join(", "));
+  check(
+    "list-all is ordered by file path",
+    files[0] === "src/backend/read.rs" && files[1] === FILE,
+    files.join(" then "),
+  );
+  const thread = all.filter((r) => r.parent_id === "ado-1513151-16261206-1");
+  check(
+    "list-all keeps the agent reply before the later legacy-timestamp reply",
+    thread.length === 2 && thread[0].author === "agent" && thread[1].id === "my-reply",
+    thread.map((r) => r.id).join(", "),
+  );
+  check(
+    "list-all includes replies so threads can be grouped client-side",
+    all.some((r) => r.parent_id !== null),
+  );
 
   console.log(`\n${failures === 0 ? "PASS" : `FAIL (${failures})`}`);
 } finally {

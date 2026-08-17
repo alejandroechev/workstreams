@@ -268,6 +268,10 @@ export class TauriBackend implements Backend {
     return invoke<SessionFileComment[]>("list_session_file_comments", { workstreamId, file });
   }
 
+  async listAllSessionFileComments(workstreamId: string): Promise<SessionFileComment[]> {
+    return invoke<SessionFileComment[]>("list_session_file_comments_all", { workstreamId });
+  }
+
   async addSessionFileComment(
     workstreamId: string,
     file: string,

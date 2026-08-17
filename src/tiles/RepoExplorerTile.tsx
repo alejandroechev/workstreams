@@ -18,7 +18,7 @@ import { diffFileCommentable, diffModeEditable } from "../domain/diff-edit";
 import { fileBufferRegistry } from "../files/FileBufferRegistry";
 import { FileCommentsLayer } from "../files/FileCommentsLayer";
 import { INTERACTIVE_ZONES_CLASS } from "../ui/interactive-zones";
-import { isAudioFile, isImageFile, isSvgFile, isPdfFile, makeAudioBlobUrl, makeImageBlobUrl, makePdfBlobUrl, dirnameOf, type LinkTargetKind } from "../domain/file-types";
+import { isAudioFile, isImageFile, isSvgFile, isPdfFile, makeAudioBlobUrl, makeImageBlobUrl, makePdfBlobUrl, dirnameOf, toRepoRelative, type LinkTargetKind } from "../domain/file-types";
 import { createNavigationStack, currentPath as navCurrent, canGoBack as navCanBack, canGoForward as navCanFwd, pushPath as navPush, goBack as navBack, goForward as navFwd, type NavigationStack } from "../domain/nav-history";
 import {
   FolderIcon,
@@ -43,6 +43,9 @@ import { PdfViewer } from "../ui/components/PdfViewer";
 import { GITHUB_DARK_DIFF_THEME, defineGithubDiffTheme } from "../ui/monaco-diff-theme";
 import { openPath } from "@tauri-apps/plugin-opener";
 import { useFileComments } from "../files/useFileComments";
+import { useAllFileComments } from "../files/useAllFileComments";
+import { CommentsPanel } from "../files/CommentsPanel";
+import type { CommentFilters } from "../domain/comment-navigation";
 import { RepoContentSearch } from "./RepoContentSearch";
 import { debounce } from "../domain/debounce";
 import { getAppSettings, subscribeAppSettings } from "../domain/app-settings";
@@ -68,7 +71,7 @@ interface DirEntry {
   size: number;
 }
 
-type Mode = "browse" | "view" | "audio" | "image" | "pdf" | "log" | "hooks" | "sqlite" | "search";
+type Mode = "browse" | "view" | "audio" | "image" | "pdf" | "log" | "hooks" | "sqlite" | "search" | "comments";
 type DiffMode = "unstaged" | "last_commit" | "branch_vs_master" | "custom_branch";
 
 const MARKDOWN_EXTS = new Set(["md", "mdx", "markdown"]);
@@ -275,6 +278,20 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
     if (commentsEnabled) void fileComments.reload();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [commentsEnabled]);
+  // ─── Comments tab (cross-file comment navigation) ───
+  // Workstream-wide comment list; read-only. Every mutation still happens in
+  // the editor's view zone, so there is a single code path for status changes.
+  const allComments = useAllFileComments(workstreamId ?? null);
+  // Path opened FROM the Comments tab. Keeps the tab active while its editor
+  // shows a file, so switching tabs doesn't strand the user in "files".
+  const [commentsNavPath, setCommentsNavPath] = useState<string | null>(null);
+  const [selectedCommentId, setSelectedCommentId] = useState<string | null>(null);
+  const [commentFilters, setCommentFilters] = useState<CommentFilters>({
+    statuses: [],
+    authors: [],
+    text: "",
+  });
+
   const commentsAvailable = Boolean(workstreamId && hasSession);
   const toggleCommentsVisible = useCallback(() => {
     if (!commentsAvailable) return;
@@ -1006,8 +1023,10 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
   }, []);
 
   // ─── Tabs ────────────────────────────────────────────────────────────
-  type TabId = "files" | "diff" | "log" | "hooks" | "search";
+  type TabId = "files" | "diff" | "log" | "hooks" | "search" | "comments";
   const activeTab: TabId =
+    mode === "comments" ? "comments" :
+    commentsNavPath ? "comments" :
     mode === "search" ? "search" :
     mode === "log" ? "log" :
     mode === "hooks" ? "hooks" :
@@ -1066,8 +1085,22 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
         setEditorSnapshot(null);
         setMode("search");
         break;
+      case "comments":
+        setActiveDiffMode(null);
+        setDiffBefore(""); setDiffAfter("");
+        setDiffFiles([]);
+        setDiffFilePath("");
+        setContent(null);
+        setFilePath("");
+        setEditorSnapshot(null);
+        setCommentsNavPath(null);
+        setMode("comments");
+        // The agent writes comments to session.db out-of-band, so there is no
+        // subscription to piggyback on — re-read whenever the tab is entered.
+        void allComments.reload();
+        break;
     }
-  }, [activeTab, activateDiffMode, openGitLog, openGitHooks]);
+  }, [activeTab, activateDiffMode, openGitLog, openGitHooks, allComments]);
 
   const hydratedRef = useRef(false);
   // Captures persisted markdown mode/slide for the hydrated file so the
@@ -1094,6 +1127,14 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
       } else if (tab === "search") {
         if (vs.searchQuery) setContentSearchQuery(vs.searchQuery);
         setMode("search");
+      } else if (tab === "comments") {
+        setCommentFilters({
+          statuses: vs.commentStatus ? [vs.commentStatus] : [],
+          authors: vs.commentAuthor ? [vs.commentAuthor] : [],
+          text: vs.commentText ?? "",
+        });
+        if (vs.selectedCommentId) setSelectedCommentId(vs.selectedCommentId);
+        setMode("comments");
       }
     }
     if (vs.filePath && (!tab || tab === "files")) {
@@ -1132,6 +1173,10 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
       diffLayout: activeTab === "diff" ? diffLayout : undefined,
       hookName: activeTab === "hooks" && hookSelection ? hookSelection.name : undefined,
       searchQuery: activeTab === "search" && contentSearchQuery ? contentSearchQuery : undefined,
+      selectedCommentId: activeTab === "comments" && selectedCommentId ? selectedCommentId : undefined,
+      commentStatus: activeTab === "comments" ? commentFilters.statuses[0] : undefined,
+      commentAuthor: activeTab === "comments" ? commentFilters.authors[0] : undefined,
+      commentText: activeTab === "comments" && commentFilters.text ? commentFilters.text : undefined,
       mdViewMode: editorViewState?.mode,
       slideIndex: editorViewState?.mode === "present" ? editorViewState?.slideIndex : undefined,
     },
@@ -1154,6 +1199,7 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
     { id: "log", label: "Log", icon: ClockIcon },
     { id: "hooks", label: "Hooks", icon: BoltIcon },
     { id: "search", label: "Search", icon: MagnifyingGlassIcon },
+    { id: "comments", label: "Comments", icon: ChatBubbleLeftRightIcon },
   ];
   const tabBar = (
     <div style={tabBarStyle} data-testid="repo-explorer-tabs">
@@ -1988,6 +2034,113 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
               void openFile(path);
             }}
           />
+        </div>
+        {overlays}
+      </div>
+    );
+  }
+
+  // ─── Comments mode (cross-file comment navigation) ───
+  if (mode === "comments") {
+    const commentsFile = commentsNavPath;
+    return (
+      <div ref={containerRef} style={containerStyle}>
+        {tabBar}
+        <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 8px", borderBottom: "1px solid #313244" }}>
+          <span style={{ fontSize: 11, color: "#a6adc8" }}>
+            {allComments.comments.length} comment{allComments.comments.length === 1 ? "" : "s"}
+          </span>
+          {commentsFile && (
+            <span
+              data-testid="comments-current-file"
+              title={commentsFile}
+              style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 11, color: "#cdd6f4", fontWeight: 600 }}
+            >
+              {commentsFile.split(/[\\/]/).filter(Boolean).pop()}
+            </span>
+          )}
+          <div style={{ flex: 1 }} />
+          <button
+            data-testid="comments-refresh"
+            onClick={() => void allComments.reload()}
+            title="Re-read comments from the session database"
+            style={{ ...toolbarButtonStyle, fontSize: 10, padding: "2px 6px", borderRadius: 3 }}
+          >
+            {allComments.loading ? "Refreshing…" : "Refresh"}
+          </button>
+        </div>
+        {allComments.error && (
+          <div style={{ padding: "4px 8px", fontSize: 11, color: "#f38ba8" }}>{allComments.error}</div>
+        )}
+        <div style={{ flex: 1, minHeight: 0, display: "flex", overflow: "hidden" }}>
+          <CommentsPanel
+            comments={allComments.comments}
+            selectedId={selectedCommentId}
+            unbound={allComments.unbound}
+            filters={commentFilters}
+            onFiltersChange={setCommentFilters}
+            fileLines={
+              commentsFile && content !== null
+                ? { [toRepoRelative(rootDir ?? "", commentsFile)]: content.split(/\r?\n/) }
+                : undefined
+            }
+            onSelect={(comment) => {
+              setSelectedCommentId(comment.id);
+              const absolute = joinPath(rootDir ?? currentDir, comment.file);
+              // Same reveal channel the Search tab and walkthrough use.
+              pendingRevealLineRef.current = { path: absolute, line: comment.anchor_line_start };
+              setCommentsNavPath(absolute);
+              void openFile(absolute, "none");
+            }}
+          />
+          <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
+            {!commentsFile && (
+              <div style={{ margin: "auto", color: "#585b70", fontSize: 12 }}>
+                {allComments.unbound
+                  ? "No linked Copilot session."
+                  : allComments.comments.length === 0
+                    ? "No comments in this workstream yet."
+                    : "Pick a comment to see it in context"}
+              </div>
+            )}
+            {commentsFile && editorSnapshot === null && fileLoading && (
+              <div style={{ margin: "auto", color: "#585b70", fontSize: 12 }}>Loading…</div>
+            )}
+            {commentsFile && (
+              <FileEditorView
+                key={commentsFile}
+                path={commentsFile}
+                showHeader={false}
+                initialRevealLine={
+                  pendingRevealLineRef.current?.path === commentsFile
+                    ? pendingRevealLineRef.current.line
+                    : undefined
+                }
+                onSnapshotChange={setEditorSnapshot}
+                // Comments are ALWAYS on in this tab; it never mutates the
+                // shared toggle used by the Files/Diff tabs.
+                commentsEnabled
+                comments={fileComments.comments}
+                focusedCommentId={selectedCommentId}
+                onAddComment={(start, end, anchorText, body) =>
+                  fileComments.add(start, end, anchorText, body).then(() => { void allComments.reload(); })
+                }
+                onUpdateComment={(id, body) =>
+                  fileComments.update(id, body).then(() => { void allComments.reload(); })
+                }
+                onReplyComment={(parentId, body) =>
+                  fileComments.reply(parentId, body).then(() => { void allComments.reload(); })
+                }
+                onDeleteComment={(id) =>
+                  fileComments.remove(id).then(() => { void allComments.reload(); })
+                }
+                onSetCommentStatus={(id, status) =>
+                  fileComments.setStatus(id, status).then(() => { void allComments.reload(); })
+                }
+                onBack={() => { setCommentsNavPath(null); setContent(null); setFilePath(""); }}
+              />
+            )}
+          </div>
         </div>
         {overlays}
       </div>

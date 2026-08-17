@@ -9,6 +9,7 @@ import { BackendProvider } from "../backend/context";
 import { MemoryBackend } from "../backend/memory-backend";
 import type { SessionFileComment } from "../domain/file-comments";
 import { makeInMemoryRegistry } from "./fakeRegistry";
+import { CommentsPanel } from "../files/CommentsPanel";
 
 /**
  * Harness cases (dev/E2E only). Each case mounts ONE component under test with
@@ -346,6 +347,64 @@ const ImportedCommentZoneCase: FC = () => {
   );
 };
 
+/**
+ * Case: the **Comments tab** navigation pane beside a real Monaco editor.
+ *
+ * Proves the cross-file flow that jsdom cannot: clicking a thread in the panel
+ * reveals its anchor line in real Monaco and marks the right thread focused.
+ */
+const CommentsNavigationCase: FC = () => {
+  const path = "C:/repo/src/example.ts";
+  const content = Array.from({ length: 60 }, (_, i) => `const v${i + 1} = ${i + 1};`).join("\n");
+  const registry = useMemo(() => makeInMemoryRegistry(path, content), []);
+  const base = {
+    workstream_id: "ws-1",
+    file: "src/example.ts",
+    anchor_text: null,
+    status: "open",
+    parent_id: null,
+    created_at: "2026-08-17T10:00:00Z",
+    updated_at: "2026-08-17T10:00:00Z",
+  } as const;
+  const comments: SessionFileComment[] = [
+    { ...base, id: "near-top", anchor_line_start: 3, anchor_line_end: 3, body: "NEAR_TOP note", author: "Eduardo Fernandez" },
+    { ...base, id: "far-down", anchor_line_start: 48, anchor_line_end: 48, body: "FAR_DOWN note", author: "reviewer" },
+    { ...base, id: "other-file", file: "src/other.ts", anchor_line_start: 2, anchor_line_end: 2, body: "OTHER_FILE note", author: "agent" },
+  ];
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [revealLine, setRevealLine] = useState<number | undefined>(undefined);
+
+  return (
+    <div data-testid="harness-case" data-case="comments-navigation" style={{ ...full, display: "flex" }}>
+      <CommentsPanel
+        comments={comments}
+        selectedId={selectedId}
+        onSelect={(c) => {
+          setSelectedId(c.id);
+          if (c.file === "src/example.ts") setRevealLine(c.anchor_line_start);
+        }}
+      />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <FileEditorView
+          path={path}
+          registry={registry}
+          showHeader={false}
+          commentsEnabled
+          comments={comments.filter((c) => c.file === "src/example.ts")}
+          focusedCommentId={selectedId}
+          initialRevealLine={revealLine}
+          onBack={() => {}}
+          onAddComment={() => Promise.resolve()}
+          onUpdateComment={() => Promise.resolve()}
+          onReplyComment={() => Promise.resolve()}
+          onDeleteComment={() => Promise.resolve()}
+          onSetCommentStatus={() => Promise.resolve()}
+        />
+      </div>
+    </div>
+  );
+};
+
 export interface HarnessCase {
   title: string;
   Component: FC;
@@ -363,6 +422,10 @@ export const harnessCases: Record<string, HarnessCase> = {
   "imported-comment-zone": {
     title: "Imported (ADO) file-comment zone: author name + reply order",
     Component: ImportedCommentZoneCase,
+  },
+  "comments-navigation": {
+    title: "Comments tab: cross-file navigation to a thread",
+    Component: CommentsNavigationCase,
   },
   "diff-comment-zone": {
     title: "Repo Explorer Unstaged diff file-comment zone",

@@ -34,6 +34,11 @@ export interface FileCommentsLayerProps extends FileCommentActions {
   editorReadyToken: number;
   comments: SessionFileComment[];
   enabled: boolean;
+  /**
+   * Thread root to visually distinguish — set when the user navigated here
+   * from the Comments tab, so it is obvious which comment they clicked.
+   */
+  focusedCommentId?: string | null;
 }
 
 type Composer =
@@ -53,6 +58,7 @@ export function FileCommentsLayer({
   editorReadyToken,
   comments,
   enabled,
+  focusedCommentId = null,
   onAddComment,
   onUpdateComment,
   onReplyComment,
@@ -273,6 +279,12 @@ export function FileCommentsLayer({
         });
         content.dataset.testid = `comment-zone-${comment.id}`;
         content.dataset.commentId = comment.id;
+        const focused = comment.id === focusedCommentId;
+        content.dataset.focused = focused ? "true" : "false";
+        if (focused) {
+          content.style.borderLeft = "2px solid #89b4fa";
+          content.style.background = "#1e1e2e";
+        }
         renderCommentZone(content, thread);
         slot.appendChild(content);
         zoneNodesRef.current.set(comment.id, content);
@@ -325,7 +337,7 @@ export function FileCommentsLayer({
       zoneNodesRef.current.clear();
       zoneDescriptorsRef.current.clear();
     };
-  }, [comments, editor, editorReadyToken, enabled, renderCommentZone]);
+  }, [comments, editor, editorReadyToken, enabled, focusedCommentId, renderCommentZone]);
 
   useEffect(() => {
     if (!editor || !enabled || !onAddComment) {

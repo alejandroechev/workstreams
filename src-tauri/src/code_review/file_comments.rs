@@ -105,6 +105,30 @@ pub fn list_file_comments_rows(
     rows.collect()
 }
 
+/// Every comment in a workstream, across all files.
+///
+/// Backs the Repo Explorer **Comments tab**, which needs the whole workstream's
+/// comments to group them by file — the per-file query above cannot answer
+/// "which files even have comments?". Replies are included so threads can be
+/// assembled client-side (`groupCommentThreads`).
+///
+/// Ordered by file, then anchor line, then the same `CREATED_AT_ORDER` key the
+/// per-file query uses: legacy rows store epoch seconds and a plain
+/// `ORDER BY created_at` would sort all of them before every ISO-8601 row.
+pub fn list_all_file_comments_rows(
+    db: &Connection,
+    workstream_id: &str,
+) -> rusqlite::Result<Vec<FileComment>> {
+    let sql = format!(
+        "SELECT {COLS} FROM file_comments \
+         WHERE workstream_id = ?1 \
+         ORDER BY file ASC, anchor_line_start ASC, {CREATED_AT_ORDER} ASC, created_at ASC"
+    );
+    let mut stmt = db.prepare(&sql)?;
+    let rows = stmt.query_map(rusqlite::params![workstream_id], row_to_comment)?;
+    rows.collect()
+}
+
 pub fn get_file_comment_row(db: &Connection, id: &str) -> rusqlite::Result<Option<FileComment>> {
     let sql = format!("SELECT {COLS} FROM file_comments WHERE id = ?1");
     db.query_row(&sql, [id], row_to_comment)
@@ -250,6 +274,16 @@ pub fn list_session_file_comments(
 ) -> Result<Vec<FileComment>, String> {
     let conn = open_bound(&state, &workstream_id)?;
     list_file_comments_rows(&conn, &workstream_id, &file).map_err(|e| format!("DB error: {e}"))
+}
+
+/// Every comment in the workstream, across all files (Comments tab).
+#[tauri::command]
+pub fn list_session_file_comments_all(
+    state: State<'_, AppState>,
+    workstream_id: String,
+) -> Result<Vec<FileComment>, String> {
+    let conn = open_bound(&state, &workstream_id)?;
+    list_all_file_comments_rows(&conn, &workstream_id).map_err(|e| format!("DB error: {e}"))
 }
 
 #[tauri::command]
@@ -530,5 +564,63 @@ mod tests {
             r.get(0)
         })
         .unwrap()
+    }
+
+    #[test]
+    fn list_all_returns_every_file_ordered_by_file_line_then_time() {
+        let conn = schema_conn();
+        let ins = |id: &str, file: &str, line: i64, created: &str| {
+            conn.execute(
+                "INSERT INTO file_comments \
+                    (id, workstream_id, file, anchor_line_start, anchor_line_end, anchor_text, \
+                     body, author, parent_id, status, created_at, updated_at) \
+                 VALUES (?1, 'ws-1', ?2, ?3, ?3, NULL, 'b', 'reviewer', NULL, 'open', ?4, ?4)",
+                rusqlite::params![id, file, line, created],
+            )
+            .unwrap();
+        };
+        // Deliberately inserted out of order, across two files.
+        ins("b-10", "src/b.rs", 10, "2026-08-17T10:00:00Z");
+        ins("a-20", "src/a.rs", 20, "2026-08-17T09:00:00Z");
+        ins("a-5", "src/a.rs", 5, "2026-08-17T08:00:00Z");
+        // Same file+line as a-5 but LEGACY epoch seconds, written later. A
+        // lexicographic ORDER BY would float every epoch row to the top.
+        ins(
+            "a-5-later",
+            "src/a.rs",
+            5,
+            &chrono_free_epoch("2026-08-17T12:00:00Z").to_string(),
+        );
+
+        let ids: Vec<String> = list_all_file_comments_rows(&conn, "ws-1")
+            .unwrap()
+            .into_iter()
+            .map(|c| c.id)
+            .collect();
+        assert_eq!(ids, vec!["a-5", "a-5-later", "a-20", "b-10"]);
+    }
+
+    #[test]
+    fn list_all_is_scoped_to_its_workstream() {
+        let conn = schema_conn();
+        add_file_comment_row(&conn, "ws-1", "src/a.ts", 1, 1, None, "mine").unwrap();
+        add_file_comment_row(&conn, "ws-2", "src/a.ts", 1, 1, None, "theirs").unwrap();
+
+        let rows = list_all_file_comments_rows(&conn, "ws-1").unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].body, "mine");
+    }
+
+    #[test]
+    fn list_all_includes_replies_so_threads_can_be_grouped_client_side() {
+        let conn = schema_conn();
+        let parent = add_file_comment_row(&conn, "ws-1", "src/a.ts", 3, 3, None, "q").unwrap();
+        insert_agent_reply(&conn, &parent, "a");
+
+        let rows = list_all_file_comments_rows(&conn, "ws-1").unwrap();
+        assert_eq!(rows.len(), 2);
+        assert!(rows
+            .iter()
+            .any(|c| c.parent_id.as_deref() == Some(parent.id.as_str())));
     }
 }

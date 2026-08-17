@@ -509,6 +509,22 @@ export class MemoryBackend implements Backend {
     return all;
   }
 
+  async listAllSessionFileComments(workstreamId: string): Promise<SessionFileComment[]> {
+    this.requireBoundSession(workstreamId);
+    const all = Array.from(this.sessionFileComments.values()).filter(
+      (c) => c.workstream_id === workstreamId,
+    );
+    // Mirrors the SQL ordering in list_all_file_comments_rows.
+    all.sort((a, b) => {
+      if (a.file !== b.file) return a.file.localeCompare(b.file);
+      if (a.anchor_line_start !== b.anchor_line_start) {
+        return a.anchor_line_start - b.anchor_line_start;
+      }
+      return compareByCreatedAt(a, b);
+    });
+    return all;
+  }
+
   async addSessionFileComment(
     workstreamId: string,
     file: string,

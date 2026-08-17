@@ -177,6 +177,7 @@ function createBackend(): Backend {
     watchSessionFeatures: vi.fn(),
     unwatchSessionFeatures: vi.fn(),
     listSessionFileComments: vi.fn(async () => []),
+    listAllSessionFileComments: vi.fn(async () => []),
     addSessionFileComment: vi.fn(),
     replySessionFileComment: vi.fn(),
     updateSessionFileComment: vi.fn(),

@@ -242,3 +242,36 @@ describe("round trip", () => {
     });
   });
 });
+
+describe("repo_explorer comments tab view-state", () => {
+  it("restores comment filters and the selected comment", () => {
+    const vs = parseViewState(
+      JSON.stringify({
+        viewState: {
+          activeTab: "comments",
+          selectedCommentId: "ado-1-1",
+          commentStatus: "open",
+          commentAuthor: "Eduardo Fernandez",
+          commentText: "duration",
+        },
+      }),
+      "repo_explorer",
+    );
+
+    expect(vs.activeTab).toBe("comments");
+    expect(vs.selectedCommentId).toBe("ado-1-1");
+    expect(vs.commentStatus).toBe("open");
+    expect(vs.commentAuthor).toBe("Eduardo Fernandez");
+    expect(vs.commentText).toBe("duration");
+  });
+
+  it("drops non-string comment fields rather than trusting them", () => {
+    const vs = parseViewState(
+      JSON.stringify({ viewState: { selectedCommentId: 42, commentStatus: { a: 1 } } }),
+      "repo_explorer",
+    );
+
+    expect(vs.selectedCommentId).toBeUndefined();
+    expect(vs.commentStatus).toBeUndefined();
+  });
+});

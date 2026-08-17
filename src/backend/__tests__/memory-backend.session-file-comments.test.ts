@@ -192,4 +192,44 @@ describe("MemoryBackend.session file comments", () => {
     const list = await backend.listSessionFileComments("ws-1", "src/a.ts");
     expect(list.map((c) => c.id)).toEqual(["root", "agent-reply", "my-reply"]);
   });
+
+  it("lists every comment in the workstream across files, ordered by file then line", async () => {
+    await backend.addSessionFileComment("ws-1", "src/b.ts", 3, 3, null, "b3");
+    await backend.addSessionFileComment("ws-1", "src/a.ts", 20, 20, null, "a20");
+    await backend.addSessionFileComment("ws-1", "src/a.ts", 5, 5, null, "a5");
+
+    const all = await backend.listAllSessionFileComments("ws-1");
+    expect(all.map((c) => c.body)).toEqual(["a5", "a20", "b3"]);
+  });
+
+  it("scopes list-all to its workstream", async () => {
+    backend.seedBoundSession("ws-2", "sess-2");
+    await backend.addSessionFileComment("ws-1", "src/a.ts", 1, 1, null, "mine");
+    await backend.addSessionFileComment("ws-2", "src/a.ts", 1, 1, null, "theirs");
+
+    const all = await backend.listAllSessionFileComments("ws-1");
+    expect(all.map((c) => c.body)).toEqual(["mine"]);
+  });
+
+  it("orders list-all chronologically across mixed timestamp formats", async () => {
+    backend.seedSessionFileComment({
+      id: "iso", workstream_id: "ws-1", file: "src/a.ts",
+      anchor_line_start: 1, anchor_line_end: 1, body: "iso",
+      created_at: "2026-08-17T10:00:00Z",
+    });
+    backend.seedSessionFileComment({
+      id: "epoch", workstream_id: "ws-1", file: "src/a.ts",
+      anchor_line_start: 1, anchor_line_end: 1, body: "epoch",
+      created_at: String(Math.floor(Date.parse("2026-08-17T11:00:00Z") / 1000)),
+    });
+
+    const all = await backend.listAllSessionFileComments("ws-1");
+    expect(all.map((c) => c.id)).toEqual(["iso", "epoch"]);
+  });
+
+  it("throws list-all when no session is bound", async () => {
+    await expect(backend.listAllSessionFileComments("ws-unbound")).rejects.toThrow(
+      /linked Copilot session/i,
+    );
+  });
 });

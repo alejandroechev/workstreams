@@ -120,6 +120,13 @@ export interface Backend {
   // bound Copilot session's session.db with the reviewer↔agent reply model.
   // `file` is repo-relative. Requires a linked session (throws otherwise).
   listSessionFileComments(workstreamId: string, file: string): Promise<SessionFileComment[]>;
+  /**
+   * Every comment in the workstream, across all files — backs the Repo
+   * Explorer Comments tab, which must discover *which* files have comments.
+   * Ordered by file, anchor line, then chronologically. Includes replies so
+   * threads can be grouped client-side. Requires a linked session (throws).
+   */
+  listAllSessionFileComments(workstreamId: string): Promise<SessionFileComment[]>;
   addSessionFileComment(
     workstreamId: string,
     file: string,

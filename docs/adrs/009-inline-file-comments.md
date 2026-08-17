@@ -52,7 +52,23 @@ interaction. unify-commenting collapses that divergence.
    and the in-memory backend). `npm run file-comments:smoke` is the CLI-parity
    check for this loop.
 
-2. **In-app UI** — both the Repo Explorer file viewer (`FileEditorView`) and
+2. **Comments tab (cross-file navigation)** — a fifth Repo Explorer tab lists
+   **every** comment in the workstream, grouped by file, one row per thread root
+   (author, line, snippet, reply count). Clicking a row opens that file in the
+   right pane with comments on and reveals the anchor line, reusing the same
+   `initialRevealLine` channel the Search tab and code walkthrough already use;
+   the clicked thread's view zone is marked `data-focused`. The left pane is
+   deliberately **navigation-only** — reply/resolve/edit stay in the view zone
+   so there is one code path for mutations. Resolved/wontfix threads remain
+   listed (dimmed, struck through); the status filter decides visibility.
+   Drifted anchors (where `anchor_text` no longer matches the file at the stored
+   line) are **badged but still navigable** — re-anchoring is out of scope.
+   Backed by `list_session_file_comments_all(workstream_id)`, which mirrors the
+   per-file query including its `CREATED_AT_ORDER` key. Comments are always on
+   inside this tab, and it never mutates the show/hide preference the
+   Files/Diff tabs share.
+
+3. **In-app UI** — both the Repo Explorer file viewer (`FileEditorView`) and
    the **modified side of its Unstaged diff** render each reviewer note as a
    Monaco view zone below its anchor, with threaded replies nested inside the
    same zone. `FileCommentsLayer` owns this shared Monaco interaction so the two
@@ -76,7 +92,7 @@ interaction. unify-commenting collapses that divergence.
    request that started before an INSERT is invalidated so its stale response
    cannot erase the newly created thread from the UI.
 
-3. **Agent loop** — the agent reads and writes `file_comments` directly with its
+4. **Agent loop** — the agent reads and writes `file_comments` directly with its
    built-in `sql` tool, guided by the **`file-comments` companion skill**
    (sibling of `code-review`). Role rule: the agent never edits reviewer notes;
    it replies as `author='agent'` with `parent_id`, and marks the reviewer note
@@ -125,6 +141,8 @@ Implemented in `code_review::file_comments` (opens the bound session.db RW and
 ensures the `file_comments` schema on each call):
 
 - `list_session_file_comments(workstream_id, file) -> FileComment[]`
+- `list_session_file_comments_all(workstream_id) -> FileComment[]` (Comments
+  tab; every file, replies included, same ordering key)
 - `add_session_file_comment(workstream_id, file, anchor_line_start,
   anchor_line_end, anchor_text?, body) -> FileComment` (author=`reviewer`,
   status=`open`)

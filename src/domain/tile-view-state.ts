@@ -22,6 +22,12 @@ export interface RepoExplorerViewState {
   hookName?: string;
   /** Last content-search query, restored when reopening on the Search tab. */
   searchQuery?: string;
+  /** Comments tab: thread selected when the tile was last persisted. */
+  selectedCommentId?: string;
+  /** Comments tab filters. Single-valued today; the panel accepts arrays. */
+  commentStatus?: string;
+  commentAuthor?: string;
+  commentText?: string;
   mdViewMode?: "preview" | "edit" | "present";
   /** Current slide when mdViewMode === "present". */
   slideIndex?: number;
@@ -132,6 +138,10 @@ function sanitize<K extends AnyViewState["kind"]>(
       str("customDiffBranch");
       str("hookName");
       str("searchQuery");
+      str("selectedCommentId");
+      str("commentStatus");
+      str("commentAuthor");
+      str("commentText");
       if (raw.diffLayout === "split" || raw.diffLayout === "unified") {
         out.diffLayout = raw.diffLayout;
       }

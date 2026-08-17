@@ -5144,6 +5144,7 @@ pub fn run() {
             code_review::set_review_comment_status,
             code_review::complete_code_review,
             code_review::file_comments::list_session_file_comments,
+            code_review::file_comments::list_session_file_comments_all,
             code_review::file_comments::add_session_file_comment,
             code_review::file_comments::reply_session_file_comment,
             code_review::file_comments::update_session_file_comment,

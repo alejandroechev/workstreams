@@ -271,3 +271,58 @@ test.describe("imported review comments (ado-file-comments)", () => {
     expect(text.indexOf("AGENT_ANSWER")).toBeLessThan(text.indexOf("MY_FOLLOW_UP"));
   });
 });
+
+test.describe("Comments tab navigation", () => {
+  test("clicking a thread reveals its line in real Monaco and focuses that thread", async ({
+    page,
+  }) => {
+    await openCase(page, "comments-navigation");
+
+    // Threads are grouped by file, so a comment on another file is listed too.
+    await expect(page.locator('[data-testid="comments-file-src/example.ts"]')).toBeVisible();
+    await expect(page.locator('[data-testid="comments-file-src/other.ts"]')).toBeVisible();
+
+    // Monaco creates a view zone per comment regardless of scroll position, and
+    // it VIRTUALIZES scrolling (scrollTop stays 0 while the rendered line
+    // window moves). So the honest proof of "reveal" is that the first rendered
+    // line changed — the editor really moved to the anchor.
+    // Read the gutter rather than the code text: Monaco renders non-breaking
+    // spaces inside .view-line, which makes string comparison deceptive.
+    const topLineNumber = async () =>
+      page.evaluate(() => {
+        const nums = Array.from(document.querySelectorAll(".line-numbers"))
+          .map((el) => Number(el.textContent?.trim()))
+          .filter((n) => Number.isFinite(n) && n > 0);
+        return nums.length > 0 ? Math.min(...nums) : 0;
+      });
+    expect(await topLineNumber()).toBe(1);
+
+    await page.locator('[data-testid="comments-thread-far-down"]').click();
+
+    // Anchor is line 48, so the rendered window must move well down the file.
+    await expect.poll(topLineNumber, { timeout: 10_000 }).toBeGreaterThan(10);
+
+    // ...and that the clicked thread is the one marked focused.
+    const zone = page.locator('[data-testid="comment-zone-far-down"]');
+    await expect(zone).toBeVisible({ timeout: 10_000 });
+    await expect(zone).toHaveAttribute("data-focused", "true");
+    await expect(page.locator('[data-testid="comment-zone-near-top"]')).toHaveAttribute(
+      "data-focused",
+      "false",
+    );
+
+    // The panel keeps its own selection in sync.
+    await expect(page.locator('[data-testid="comments-thread-far-down"]')).toHaveAttribute(
+      "data-selected",
+      "true",
+    );
+  });
+
+  test("imported authors render by name in the navigation list", async ({ page }) => {
+    await openCase(page, "comments-navigation");
+
+    await expect(page.locator('[data-testid="comments-thread-near-top"]')).toContainText(
+      "Eduardo Fernandez",
+    );
+  });
+});

@@ -104,6 +104,8 @@ export interface FileEditorViewProps extends FileCommentActions {
   comments?: import("../domain/file-comments").SessionFileComment[];
   /** When true, comment view zones are rendered. */
   commentsEnabled?: boolean;
+  /** Thread root to highlight (set when navigating from the Comments tab). */
+  focusedCommentId?: string | null;
 }
 
 import { detectLanguage } from "../domain/tile-config";
@@ -206,6 +208,7 @@ export function FileEditorView({
   highlightLine = null,
   comments = [],
   commentsEnabled = false,
+  focusedCommentId = null,
   onAddComment,
   onUpdateComment,
   onReplyComment,
@@ -770,6 +773,7 @@ export function FileEditorView({
           editorReadyToken={editorReadyToken}
           comments={comments}
           enabled={commentsEnabled}
+          focusedCommentId={focusedCommentId}
           onAddComment={onAddComment}
           onUpdateComment={onUpdateComment}
           onReplyComment={onReplyComment}

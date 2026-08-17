@@ -62,9 +62,12 @@ project-aware workspace:
   `session.db` with the same reviewer↔agent model as Code Review: the agent
   replies and marks notes addressed with its built-in `sql` tool (guided by the
   `file-comments` skill), and you **reply** in-thread, resolve/reopen, edit, or
-  **copy** the whole thread — all inline in the file. Threads imported from an
-  external review (e.g. the `ado-file-comments` skill) keep the **original
-  reviewer's name** rather than being attributed to you, and are read-only.
+  **copy** the whole thread — all inline in the file. A **Comments tab** lists
+  every comment in the workstream grouped by file; clicking one opens that file
+  and jumps to the anchored line, with stale anchors badged. Threads imported
+  from an external review (e.g. the `ado-file-comments` skill) keep the
+  **original reviewer's name** rather than being attributed to you, and are
+  read-only.
   A linked Copilot session is required.
   See [ADR 009](docs/adrs/009-inline-file-comments.md).
 - 🔎 **Local code review** — A diff-first, PR-style review tile for AI-agent

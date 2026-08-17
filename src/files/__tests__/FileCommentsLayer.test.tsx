@@ -283,3 +283,39 @@ describe("FileCommentsLayer imported authors and reply order", () => {
     expect(text.indexOf("AGENT_ANSWER")).toBeLessThan(text.indexOf("MY_FOLLOW_UP"));
   });
 });
+
+describe("FileCommentsLayer focused thread", () => {
+  it("marks the focused thread's zone so a navigated-to comment is identifiable", () => {
+    const harness = editorHarness();
+    render(
+      <FileCommentsLayer
+        editor={harness.editor}
+        editorReadyToken={1}
+        comments={[comment(), { ...comment(), id: "c2", anchor_line_start: 3, anchor_line_end: 3 }]}
+        enabled
+        focusedCommentId="c2"
+      />,
+    );
+
+    expect(document.querySelector('[data-testid="comment-zone-c2"]')).toHaveAttribute(
+      "data-focused",
+      "true",
+    );
+    expect(document.querySelector('[data-testid="comment-zone-c1"]')).toHaveAttribute(
+      "data-focused",
+      "false",
+    );
+  });
+
+  it("marks nothing when no thread is focused", () => {
+    const harness = editorHarness();
+    render(
+      <FileCommentsLayer editor={harness.editor} editorReadyToken={1} comments={[comment()]} enabled />,
+    );
+
+    expect(document.querySelector('[data-testid="comment-zone-c1"]')).toHaveAttribute(
+      "data-focused",
+      "false",
+    );
+  });
+});
