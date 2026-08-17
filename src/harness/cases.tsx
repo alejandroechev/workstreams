@@ -274,6 +274,78 @@ const RepoContextMenuCase: FC = () => {
   );
 };
 
+/**
+ * Case: an **imported** review thread (e.g. from the `ado-file-comments` skill).
+ *
+ * Two regressions live here that only real Monaco rendering can confirm:
+ *  1. the root is authored by an external person, so the zone must show that
+ *     name — not "you", which attributed every imported comment to this user;
+ *  2. the agent reply carries an ISO-8601 timestamp while the reviewer's later
+ *     reply carries a legacy epoch-second one, so lexicographic ordering put
+ *     the reviewer's reply above the agent reply it was answering.
+ */
+const ImportedCommentZoneCase: FC = () => {
+  const path = "C:/repo/src/example.ts";
+  const content = "const a = 1;\nconst b = 2;\nconst c = 3;\nconst d = 4;\n";
+  const registry = useMemo(() => makeInMemoryRegistry(path, content), []);
+  const anchor = {
+    workstream_id: "ws-1",
+    file: "src/example.ts",
+    anchor_line_start: 2,
+    anchor_line_end: 2,
+    anchor_text: "const b = 2;",
+    status: "open",
+  } as const;
+  const [comments] = useState<SessionFileComment[]>(() => [
+    {
+      ...anchor,
+      id: "ado-1513151-16261206-1",
+      body: "Use Duration here.",
+      author: "Eduardo Fernandez",
+      parent_id: null,
+      created_at: "2026-08-16T23:51:26Z",
+      updated_at: "2026-08-16T23:51:26Z",
+    },
+    {
+      ...anchor,
+      id: "agent-reply",
+      body: "AGENT_ANSWER: switched to Duration.",
+      author: "agent",
+      parent_id: "ado-1513151-16261206-1",
+      created_at: "2026-08-17T10:00:00Z",
+      updated_at: "2026-08-17T10:00:00Z",
+    },
+    {
+      // Written in the tile AFTER the agent replied, in the legacy format.
+      ...anchor,
+      id: "my-reply",
+      body: "MY_FOLLOW_UP: thanks, confirmed.",
+      author: "reviewer",
+      parent_id: "ado-1513151-16261206-1",
+      created_at: String(Math.floor(Date.parse("2026-08-17T11:00:00Z") / 1000)),
+      updated_at: String(Math.floor(Date.parse("2026-08-17T11:00:00Z") / 1000)),
+    },
+  ]);
+
+  return (
+    <div data-testid="harness-case" data-case="imported-comment-zone" style={full}>
+      <FileEditorView
+        path={path}
+        registry={registry}
+        showHeader={false}
+        commentsEnabled
+        comments={comments}
+        onBack={() => {}}
+        onAddComment={() => Promise.resolve()}
+        onUpdateComment={() => Promise.resolve()}
+        onReplyComment={() => Promise.resolve()}
+        onDeleteComment={() => Promise.resolve()}
+        onSetCommentStatus={() => Promise.resolve()}
+      />
+    </div>
+  );
+};
+
 export interface HarnessCase {
   title: string;
   Component: FC;
@@ -287,6 +359,10 @@ export const harnessCases: Record<string, HarnessCase> = {
   "review-thread": {
     title: "Code Review thread zone (Resolve/Reopen buttons)",
     Component: ReviewThreadCase,
+  },
+  "imported-comment-zone": {
+    title: "Imported (ADO) file-comment zone: author name + reply order",
+    Component: ImportedCommentZoneCase,
   },
   "diff-comment-zone": {
     title: "Repo Explorer Unstaged diff file-comment zone",

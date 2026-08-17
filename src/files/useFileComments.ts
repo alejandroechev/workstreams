@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useBackend } from "../backend/context";
 import { toRepoRelative } from "../domain/file-types";
 import type { SessionFileComment } from "../domain/file-comments";
+import { compareByCreatedAt } from "../domain/comment-order";
 
 export interface UseFileCommentsResult {
   comments: SessionFileComment[];
@@ -88,7 +89,7 @@ export function useFileComments(
       if (a.anchor_line_start !== b.anchor_line_start) {
         return a.anchor_line_start - b.anchor_line_start;
       }
-      return a.created_at.localeCompare(b.created_at);
+      return compareByCreatedAt(a, b);
     });
     return next;
   };

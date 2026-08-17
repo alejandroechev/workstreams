@@ -223,3 +223,63 @@ describe("FileCommentsLayer", () => {
     expect(screen.queryByTestId("comment-composer")).toBeNull();
   });
 });
+
+describe("FileCommentsLayer imported authors and reply order", () => {
+  it("attributes an imported ADO comment to its real author, not to 'you'", () => {
+    const harness = editorHarness();
+    const imported: SessionFileComment = {
+      ...comment(),
+      id: "ado-1513151-16261206-1",
+      author: "Eduardo Fernandez",
+      body: "you don't need to do this with the new FFI.",
+    };
+
+    render(
+      <FileCommentsLayer
+        editor={harness.editor}
+        editorReadyToken={1}
+        comments={[imported]}
+        enabled
+      />,
+    );
+
+    const zone = document.querySelector('[data-testid="comment-zone-ado-1513151-16261206-1"]');
+    expect(zone).toHaveTextContent("Eduardo Fernandez");
+    expect(zone).not.toHaveTextContent("you ·");
+  });
+
+  it("renders an agent reply above a later reply written in the tile", () => {
+    const harness = editorHarness();
+    const root: SessionFileComment = { ...comment(), id: "root", created_at: "1786000000" };
+    const agentReply: SessionFileComment = {
+      ...comment(),
+      id: "agent-reply",
+      author: "agent",
+      parent_id: "root",
+      body: "AGENT_ANSWER",
+      created_at: "2026-08-17T10:00:00Z",
+    };
+    const myReply: SessionFileComment = {
+      ...comment(),
+      id: "my-reply",
+      parent_id: "root",
+      body: "MY_FOLLOW_UP",
+      // The tile historically wrote epoch seconds, which sorted before ISO.
+      created_at: String(Math.floor(Date.parse("2026-08-17T11:00:00Z") / 1000)),
+    };
+
+    render(
+      <FileCommentsLayer
+        editor={harness.editor}
+        editorReadyToken={1}
+        comments={[root, myReply, agentReply]}
+        enabled
+      />,
+    );
+
+    const text = document.querySelector('[data-testid="comment-zone-root"]')?.textContent ?? "";
+    expect(text).toContain("AGENT_ANSWER");
+    expect(text).toContain("MY_FOLLOW_UP");
+    expect(text.indexOf("AGENT_ANSWER")).toBeLessThan(text.indexOf("MY_FOLLOW_UP"));
+  });
+});

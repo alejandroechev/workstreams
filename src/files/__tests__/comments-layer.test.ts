@@ -7,6 +7,7 @@ import {
   isClosedStatus,
   groupCommentThreads,
   estimateThreadHeightInLines,
+  commentTimeValue,
 } from "../comments-layer";
 import type { SessionFileComment } from "../../domain/file-comments";
 
@@ -165,5 +166,62 @@ describe("formatThreadForCopy", () => {
   it("handles a root with no replies", () => {
     const root = { ...baseComment, body: "just a note" };
     expect(formatThreadForCopy({ root, replies: [] })).toBe("you · open:\njust a note");
+  });
+});
+
+describe("author display (imported third-party comments)", () => {
+  it("shows a named external author verbatim instead of 'you'", () => {
+    expect(
+      formatCommentMeta({ ...baseComment, author: "Eduardo Fernandez" }),
+    ).toBe("Eduardo Fernandez · open");
+  });
+
+  it("still renders the well-known reviewer/agent aliases", () => {
+    expect(formatCommentMeta({ ...baseComment, author: "reviewer" })).toBe("you · open");
+    expect(formatCommentMeta({ ...baseComment, author: "agent" })).toBe("agent · open");
+  });
+
+  it("only lets the local reviewer mutate their own note", () => {
+    expect(isMutable({ ...baseComment, author: "reviewer" })).toBe(true);
+    expect(isMutable({ ...baseComment, author: "Eduardo Fernandez" })).toBe(false);
+    expect(isMutable({ ...baseComment, author: "agent" })).toBe(false);
+  });
+});
+
+describe("commentTimeValue", () => {
+  it("parses ISO-8601 timestamps", () => {
+    expect(commentTimeValue("2026-08-17T14:48:29Z")).toBe(Date.parse("2026-08-17T14:48:29Z"));
+  });
+
+  it("parses legacy epoch-second timestamps written by the tile", () => {
+    expect(commentTimeValue("1787000000")).toBe(1787000000 * 1000);
+  });
+
+  it("sorts unparseable timestamps last rather than throwing", () => {
+    expect(commentTimeValue("not-a-date")).toBe(Number.MAX_SAFE_INTEGER);
+  });
+});
+
+describe("groupCommentThreads reply ordering across timestamp formats", () => {
+  it("keeps an agent ISO reply before a later epoch-second reviewer reply", () => {
+    const root: SessionFileComment = { ...baseComment, id: "root", created_at: "1787000000" };
+    const agentReply: SessionFileComment = {
+      ...baseComment,
+      id: "agent-reply",
+      author: "agent",
+      parent_id: "root",
+      created_at: "2026-08-17T10:00:00Z",
+    };
+    // Written by the tile AFTER the agent replied, but as epoch seconds.
+    const myReply: SessionFileComment = {
+      ...baseComment,
+      id: "my-reply",
+      parent_id: "root",
+      created_at: String(Math.floor(Date.parse("2026-08-17T11:00:00Z") / 1000)),
+    };
+
+    const [thread] = groupCommentThreads([root, myReply, agentReply]);
+
+    expect(thread.replies.map((r) => r.id)).toEqual(["agent-reply", "my-reply"]);
   });
 });

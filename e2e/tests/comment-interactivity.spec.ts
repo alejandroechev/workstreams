@@ -244,3 +244,30 @@ test.describe("inline comment interactivity", () => {
     ).toHaveCount(0);
   });
 });
+
+test.describe("imported review comments (ado-file-comments)", () => {
+  test("shows the external reviewer's name and keeps the agent reply above a later tile reply", async ({
+    page,
+  }) => {
+    await openCase(page, "imported-comment-zone");
+
+    const zone = page.locator('[data-testid="comment-zone-ado-1513151-16261206-1"]');
+    await expect(zone).toBeVisible();
+
+    // BUG 1: imported comments were attributed to this user ("you"). Assert on
+    // the ROOT's meta line specifically — "you" is still correct for the
+    // reviewer's own reply further down the same thread.
+    const rootMeta = page.locator('[data-testid="comment-meta-ado-1513151-16261206-1"]');
+    await expect(rootMeta).toHaveText("Eduardo Fernandez · open");
+    // The agent reply keeps its own identity.
+    await expect(page.locator('[data-testid="comment-meta-agent-reply"]')).toHaveText("agent · open");
+
+    // BUG 2: the agent reply (ISO-8601) must render above the reviewer reply
+    // written later in the tile (legacy epoch seconds). String ordering put
+    // every epoch row first, so the follow-up appeared before the answer.
+    const text = (await zone.innerText()).replace(/\s+/g, " ");
+    expect(text).toContain("AGENT_ANSWER");
+    expect(text).toContain("MY_FOLLOW_UP");
+    expect(text.indexOf("AGENT_ANSWER")).toBeLessThan(text.indexOf("MY_FOLLOW_UP"));
+  });
+});

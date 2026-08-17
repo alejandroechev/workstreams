@@ -30,9 +30,27 @@ interaction. unify-commenting collapses that divergence.
    comment toggle is disabled with a prompt, mirroring the Code Review tile.
    Comments are keyed by **repo-relative `file`** + line range so they are
    portable and match what the agent sees. Columns carry the reviewer↔agent
-   model: `author` (`reviewer` | `agent`), `parent_id` (reply threading),
+   model: `author`, `parent_id` (reply threading),
    `status` (`open` | `addressed` | `resolved` | `wontfix`), plus `anchor_text`
    for future drift detection.
+
+   **`author` is an open string, not an enum.** `reviewer` (this user, the only
+   mutable/deletable case) and `agent` are well-known aliases; importers such as
+   the `ado-file-comments` skill store the external reviewer's **display name**
+   (e.g. `Eduardo Fernandez`), which the UI renders verbatim. Treating the
+   column as `reviewer | agent` attributed every imported comment to this user.
+
+   **Timestamps are ISO-8601 UTC** (`YYYY-MM-DDTHH:MM:SSZ`) across every writer.
+   The tile previously wrote Unix seconds while agents and importers wrote
+   ISO-8601; because both `ORDER BY created_at` (TEXT) and the UI's string
+   compare are lexicographic, every epoch row sorted before every ISO row and a
+   tile-written reply rendered above the earlier agent reply it answered. Rows
+   predating this fix keep the legacy format, so ordering normalizes both shapes
+   on **both** sides: `list_file_comments_rows` casts each row to epoch seconds
+   in SQL (so the agent's own `sql` reads are ordered too), and
+   `src/domain/comment-order.ts` does the same in TS (shared by the editor layer
+   and the in-memory backend). `npm run file-comments:smoke` is the CLI-parity
+   check for this loop.
 
 2. **In-app UI** — both the Repo Explorer file viewer (`FileEditorView`) and
    the **modified side of its Unstaged diff** render each reviewer note as a
@@ -91,10 +109,10 @@ CREATE TABLE file_comments (
   anchor_line_end INTEGER NOT NULL,
   anchor_text TEXT,                    -- drift snapshot of the anchored lines
   body TEXT NOT NULL,                  -- markdown
-  author TEXT NOT NULL,                -- 'reviewer' | 'agent'
+  author TEXT NOT NULL,                -- 'reviewer' | 'agent' | imported display name
   parent_id TEXT,                      -- reply threading
   status TEXT NOT NULL DEFAULT 'open', -- open | addressed | resolved | wontfix
-  created_at TEXT NOT NULL,
+  created_at TEXT NOT NULL,            -- ISO-8601 UTC (legacy rows: epoch seconds)
   updated_at TEXT NOT NULL
 );
 CREATE INDEX idx_file_comments_ws_file
@@ -117,7 +135,10 @@ ensures the `file_comments` schema on each call):
   (reviewer-authored comments only — notes and reviewer replies)
 - `set_session_file_comment_status(workstream_id, id, status) -> FileComment`
 - `delete_session_file_comment(workstream_id, id)` (reviewer note + cascade its
-  replies; reviewer replies also deletable individually)
+  replies; reviewer replies also deletable individually). Gated on the **root**
+  being reviewer-authored, so an imported third-party thread is never partially
+  deleted — the earlier predicate removed a non-reviewer root's replies while
+  keeping the root itself.
 
 ## Consequences
 

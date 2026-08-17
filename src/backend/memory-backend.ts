@@ -2,6 +2,7 @@ import type { Project, Workstream, Tile, TileType, WorkstreamLayout, CopilotConf
 import type { SessionFileComment } from "../domain/file-comments";
 import type { Review, ReviewComment, ChangedFile, DiffSides } from "../domain/code-review";
 import { CONTENT_SEARCH_MAX_PER_FILE } from "../domain/content-search";
+import { compareByCreatedAt } from "../domain/comment-order";
 import type { Backend, CodeTrace, TraceStaleness } from "./types";
 import { parseTraceFile, type TraceFile } from "../domain/trace-format";
 import { rewriteTileCwd } from "../domain/worktree-change";
@@ -503,7 +504,7 @@ export class MemoryBackend implements Backend {
       if (a.anchor_line_start !== b.anchor_line_start) {
         return a.anchor_line_start - b.anchor_line_start;
       }
-      return a.created_at.localeCompare(b.created_at);
+      return compareByCreatedAt(a, b);
     });
     return all;
   }
@@ -618,6 +619,35 @@ export class MemoryBackend implements Backend {
 
   seedBoundSession(workstreamId: string, sessionId: string | null): void {
     this.boundSessions.set(workstreamId, sessionId);
+  }
+
+  /**
+   * Test/dev seed for a session file comment with an arbitrary author.
+   *
+   * The write commands only ever author `reviewer`; rows authored by the agent
+   * or imported from an external review (the `ado-file-comments` skill stores
+   * the ADO reviewer's display name) arrive through raw SQL. This seed lets the
+   * offline stub represent those rows so author rendering and reply ordering
+   * are exercised without a real session.db.
+   */
+  seedSessionFileComment(
+    comment: Partial<SessionFileComment> & Pick<SessionFileComment, "id" | "workstream_id" | "file">,
+  ): SessionFileComment {
+    const ts = comment.created_at ?? now();
+    const row: SessionFileComment = {
+      anchor_line_start: 1,
+      anchor_line_end: 1,
+      anchor_text: null,
+      body: "",
+      author: "reviewer",
+      parent_id: null,
+      status: "open",
+      updated_at: ts,
+      ...comment,
+      created_at: ts,
+    };
+    this.sessionFileComments.set(row.id, row);
+    return row;
   }
 
   seedReviewDiff(files: ChangedFile[]): void {

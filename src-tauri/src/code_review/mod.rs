@@ -193,11 +193,39 @@ pub fn resolve_workstream_session(
 // ── Review store (bound session.db) ───────────────────────────────────────
 
 fn now() -> String {
-    std::time::SystemTime::now()
+    let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
-        .as_secs()
-        .to_string()
+        .as_secs();
+    format_epoch_iso8601(secs)
+}
+
+/// Format Unix seconds as ISO-8601 UTC (`YYYY-MM-DDTHH:MM:SSZ`).
+///
+/// Timestamps in `file_comments` / `review_comments` are shared with agents and
+/// importers (the `file-comments` and `ado-file-comments` skills), which write
+/// ISO-8601. Writing raw epoch seconds here produced a mixed-format column, so
+/// any `ORDER BY created_at` (text) sorted every tile-authored row before every
+/// agent-authored one — a reply could appear above the reply it answered.
+/// One canonical format keeps SQL ordering chronological.
+fn format_epoch_iso8601(secs: u64) -> String {
+    let days = (secs / 86_400) as i64;
+    let tod = secs % 86_400;
+    let (hour, minute, second) = (tod / 3600, (tod % 3600) / 60, tod % 60);
+
+    // Civil-from-days (Howard Hinnant's algorithm), shifted to a 0000-03-01 era.
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = (z - era * 146_097) as u64;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = if month <= 2 { y + 1 } else { y };
+
+    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z")
 }
 
 fn new_id() -> String {
@@ -510,6 +538,27 @@ pub fn complete_code_review(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn format_epoch_iso8601_matches_the_agent_timestamp_format() {
+        // Expectations cross-checked against `new Date(s * 1000).toISOString()`.
+        assert_eq!(format_epoch_iso8601(0), "1970-01-01T00:00:00Z");
+        assert_eq!(format_epoch_iso8601(1_787_000_000), "2026-08-17T20:53:20Z");
+        // Leap days must not drift, including the 400-year rule.
+        assert_eq!(format_epoch_iso8601(1_709_164_800), "2024-02-29T00:00:00Z");
+        assert_eq!(format_epoch_iso8601(951_782_400), "2000-02-29T00:00:00Z");
+        assert_eq!(format_epoch_iso8601(4_102_444_800), "2100-01-01T00:00:00Z");
+    }
+
+    #[test]
+    fn now_is_sortable_as_text_against_iso_timestamps() {
+        let ts = now();
+        assert_eq!(ts.len(), 20, "expected YYYY-MM-DDTHH:MM:SSZ, got {ts}");
+        assert!(ts.ends_with('Z'));
+        // The bug: epoch-second text sorted before every ISO string, so a
+        // tile-written reply preceded an earlier agent reply.
+        assert!(ts.as_str() > "2020-01-01T00:00:00Z");
+    }
 
     fn temp_conn() -> Connection {
         // Fresh in-memory DB standing in for a session.db that already has some

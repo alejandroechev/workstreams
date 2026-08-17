@@ -14,7 +14,14 @@ export interface SessionFileComment {
   anchor_line_end: number;
   anchor_text: string | null;
   body: string;
-  author: "reviewer" | "agent";
+  /**
+   * Who wrote the comment. Two well-known aliases drive local behaviour:
+   * `reviewer` (this user, authored in the tile — the only mutable case) and
+   * `agent`. Importers such as the `ado-file-comments` skill store the real
+   * display name instead (e.g. `"Eduardo Fernandez"`), which is rendered
+   * verbatim so third-party review comments aren't attributed to this user.
+   */
+  author: string;
   parent_id: string | null;
   status: "open" | "addressed" | "resolved" | "wontfix" | string;
   created_at: string;

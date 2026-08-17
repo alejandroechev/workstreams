@@ -1,4 +1,5 @@
 import type { SessionFileComment } from "../domain/file-comments";
+import { compareByCreatedAt } from "../domain/comment-order";
 
 export interface Anchor {
   start: number;
@@ -35,9 +36,26 @@ export function selectionToAnchor(
  * Used in the view-zone header next to the body.
  */
 export function formatCommentMeta(comment: SessionFileComment): string {
-  const who = comment.author === "agent" ? "agent" : "you";
-  return `${who} · ${comment.status}`;
+  return `${formatAuthor(comment.author)} · ${comment.status}`;
 }
+
+/**
+ * Display label for an author. `reviewer` is this user's own note, `agent` is
+ * the assistant; anything else is an imported third-party name (e.g. an Azure
+ * DevOps reviewer) and is shown verbatim so it isn't attributed to this user.
+ */
+export function formatAuthor(author: string): string {
+  if (author === "agent") return "agent";
+  if (author === "reviewer") return "you";
+  return author;
+}
+
+/**
+ * Normalize a comment timestamp to epoch milliseconds for ordering.
+ * Re-exported from the domain layer so the backends and the editor layer share
+ * one implementation.
+ */
+export { commentTimeValue, compareByCreatedAt } from "../domain/comment-order";
 
 /** Returns true when the reviewer is allowed to edit/delete this comment. */
 export function isMutable(comment: SessionFileComment): boolean {
@@ -70,9 +88,7 @@ export function groupCommentThreads(comments: SessionFileComment[]): CommentThre
   }
   return roots.map((root) => ({
     root,
-    replies: (byParent.get(root.id) ?? []).sort((a, b) =>
-      a.created_at.localeCompare(b.created_at),
-    ),
+    replies: (byParent.get(root.id) ?? []).sort(compareByCreatedAt),
   }));
 }
 

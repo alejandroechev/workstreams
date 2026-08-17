@@ -77,6 +77,19 @@ fn row_to_comment(r: &rusqlite::Row<'_>) -> rusqlite::Result<FileComment> {
 
 // ── Pure DB helpers (unit-tested against a schema'd Connection) ────────────
 
+/// Chronological ordering key for `created_at`.
+///
+/// The column holds two formats: ISO-8601 UTC (written by the tile since the
+/// mixed-format fix, and always by agents/importers) and legacy Unix seconds
+/// from older tile writes. Plain `ORDER BY created_at` is lexicographic, so
+/// every epoch row sorted before every ISO row — a reply written in the tile
+/// came back above the earlier agent reply it answered. Normalizing both to
+/// epoch seconds keeps ordering chronological for legacy rows too.
+const CREATED_AT_ORDER: &str =
+    "CASE WHEN created_at GLOB '[0-9]*' AND created_at NOT GLOB '*[^0-9]*' \
+     THEN CAST(created_at AS INTEGER) \
+     ELSE CAST(strftime('%s', created_at) AS INTEGER) END";
+
 pub fn list_file_comments_rows(
     db: &Connection,
     workstream_id: &str,
@@ -85,7 +98,7 @@ pub fn list_file_comments_rows(
     let sql = format!(
         "SELECT {COLS} FROM file_comments \
          WHERE workstream_id = ?1 AND file = ?2 \
-         ORDER BY anchor_line_start ASC, created_at ASC"
+         ORDER BY anchor_line_start ASC, {CREATED_AT_ORDER} ASC, created_at ASC"
     );
     let mut stmt = db.prepare(&sql)?;
     let rows = stmt.query_map(rusqlite::params![workstream_id, file], row_to_comment)?;
@@ -200,11 +213,16 @@ pub fn set_file_comment_status_row(
     get_file_comment_row(db, id)
 }
 
-/// Delete a reviewer note (and its agent replies via parent_id).
+/// Delete a reviewer note (and its replies via parent_id).
+///
+/// Gated on the **root** being reviewer-authored: imported threads (e.g. an
+/// `ado-file-comments` row authored by the ADO reviewer) are not deletable, and
+/// must not lose their replies either — a partial delete would leave a root
+/// whose answers vanished.
 pub fn delete_file_comment_row(db: &Connection, id: &str) -> rusqlite::Result<bool> {
     let n = db.execute(
-        "DELETE FROM file_comments WHERE (id = ?1 OR parent_id = ?1) AND \
-         (author = 'reviewer' OR parent_id = ?1)",
+        "DELETE FROM file_comments WHERE (id = ?1 OR parent_id = ?1) AND EXISTS (\
+             SELECT 1 FROM file_comments root WHERE root.id = ?1 AND root.author = 'reviewer')",
         [id],
     )?;
     Ok(n > 0)
@@ -431,5 +449,86 @@ mod tests {
         assert!(list_file_comments_rows(&conn, "ws-1", "src/a.ts")
             .unwrap()
             .is_empty());
+    }
+
+    #[test]
+    fn delete_leaves_an_imported_third_party_thread_intact() {
+        let conn = schema_conn();
+        let ts = now();
+        // An ADO-imported root is authored by a real person, not 'reviewer'.
+        conn.execute(
+            "INSERT INTO file_comments \
+                (id, workstream_id, file, anchor_line_start, anchor_line_end, anchor_text, \
+                 body, author, parent_id, status, created_at, updated_at) \
+             VALUES ('ado-1-1', 'ws-1', 'src/a.ts', 4, 4, NULL, 'imported note', \
+                     'Eduardo Fernandez', NULL, 'open', ?1, ?1)",
+            [&ts],
+        )
+        .unwrap();
+        let root = get_file_comment_row(&conn, "ado-1-1").unwrap().unwrap();
+        insert_agent_reply(&conn, &root, "agent answer");
+
+        // Not deletable (only the local reviewer's own notes are), and the
+        // thread must survive whole — never lose replies under a kept root.
+        assert!(!delete_file_comment_row(&conn, "ado-1-1").unwrap());
+        assert_eq!(
+            list_file_comments_rows(&conn, "ws-1", "src/a.ts")
+                .unwrap()
+                .len(),
+            2
+        );
+    }
+
+    #[test]
+    fn list_orders_mixed_timestamp_formats_chronologically() {
+        let conn = schema_conn();
+        // Legacy tile format (epoch seconds) for the root...
+        conn.execute(
+            "INSERT INTO file_comments \
+                (id, workstream_id, file, anchor_line_start, anchor_line_end, anchor_text, \
+                 body, author, parent_id, status, created_at, updated_at) \
+             VALUES ('root', 'ws-1', 'src/a.ts', 1, 1, NULL, 'q', 'reviewer', NULL, 'open', \
+                     '1786000000', '1786000000')",
+            [],
+        )
+        .unwrap();
+        // ...an agent reply in ISO-8601...
+        conn.execute(
+            "INSERT INTO file_comments \
+                (id, workstream_id, file, anchor_line_start, anchor_line_end, anchor_text, \
+                 body, author, parent_id, status, created_at, updated_at) \
+             VALUES ('agent-reply', 'ws-1', 'src/a.ts', 1, 1, NULL, 'a', 'agent', 'root', \
+                     'open', '2026-08-17T10:00:00Z', '2026-08-17T10:00:00Z')",
+            [],
+        )
+        .unwrap();
+        // ...and a LATER reviewer reply still in the legacy format. Lexically
+        // '17870...' < '2026-...', which used to invert the thread.
+        let later = (chrono_free_epoch("2026-08-17T11:00:00Z")).to_string();
+        conn.execute(
+            "INSERT INTO file_comments \
+                (id, workstream_id, file, anchor_line_start, anchor_line_end, anchor_text, \
+                 body, author, parent_id, status, created_at, updated_at) \
+             VALUES ('my-reply', 'ws-1', 'src/a.ts', 1, 1, NULL, 'ok', 'reviewer', 'root', \
+                     'open', ?1, ?1)",
+            [&later],
+        )
+        .unwrap();
+
+        let ids: Vec<String> = list_file_comments_rows(&conn, "ws-1", "src/a.ts")
+            .unwrap()
+            .into_iter()
+            .map(|c| c.id)
+            .collect();
+        assert_eq!(ids, vec!["root", "agent-reply", "my-reply"]);
+    }
+
+    /// Epoch seconds for an ISO-8601 instant, without pulling in a date crate.
+    fn chrono_free_epoch(iso: &str) -> i64 {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.query_row("SELECT CAST(strftime('%s', ?1) AS INTEGER)", [iso], |r| {
+            r.get(0)
+        })
+        .unwrap()
     }
 }

@@ -106,4 +106,90 @@ describe("MemoryBackend.session file comments", () => {
     const list = await backend.listSessionFileComments("ws-1", "src/a.ts");
     expect(list.map((c) => c.id)).toEqual([parent.id]);
   });
+
+  it("preserves an imported third-party author instead of forcing 'reviewer'", async () => {
+    backend.seedSessionFileComment({
+      id: "ado-1513151-16261206-1",
+      workstream_id: "ws-1",
+      file: "src/a.ts",
+      anchor_line_start: 3,
+      anchor_line_end: 3,
+      body: "imported note",
+      author: "Eduardo Fernandez",
+      created_at: "2026-08-16T23:51:26Z",
+    });
+
+    const [imported] = await backend.listSessionFileComments("ws-1", "src/a.ts");
+    expect(imported.author).toBe("Eduardo Fernandez");
+  });
+
+  it("refuses to delete an imported note so its replies cannot be orphaned", async () => {
+    backend.seedSessionFileComment({
+      id: "ado-1",
+      workstream_id: "ws-1",
+      file: "src/a.ts",
+      anchor_line_start: 1,
+      anchor_line_end: 1,
+      body: "imported",
+      author: "Eduardo Fernandez",
+      created_at: "2026-08-16T23:51:26Z",
+    });
+    backend.seedSessionFileComment({
+      id: "ado-1-agent",
+      workstream_id: "ws-1",
+      file: "src/a.ts",
+      anchor_line_start: 1,
+      anchor_line_end: 1,
+      body: "agent answer",
+      author: "agent",
+      parent_id: "ado-1",
+      created_at: "2026-08-17T09:00:00Z",
+    });
+
+    await expect(backend.deleteSessionFileComment("ws-1", "ado-1")).rejects.toThrow(
+      /not found or not deletable/i,
+    );
+    expect(await backend.listSessionFileComments("ws-1", "src/a.ts")).toHaveLength(2);
+  });
+
+  it("orders replies chronologically across epoch-second and ISO timestamps", async () => {
+    // The tile historically wrote epoch seconds; agents/importers write ISO.
+    // Lexicographic ordering put every epoch row before every ISO row, so a
+    // reply written in the tile appeared above the agent reply it answered.
+    backend.seedSessionFileComment({
+      id: "root",
+      workstream_id: "ws-1",
+      file: "src/a.ts",
+      anchor_line_start: 1,
+      anchor_line_end: 1,
+      body: "question",
+      author: "reviewer",
+      created_at: "1786000000",
+    });
+    backend.seedSessionFileComment({
+      id: "agent-reply",
+      workstream_id: "ws-1",
+      file: "src/a.ts",
+      anchor_line_start: 1,
+      anchor_line_end: 1,
+      body: "agent answer",
+      author: "agent",
+      parent_id: "root",
+      created_at: "2026-08-17T10:00:00Z",
+    });
+    backend.seedSessionFileComment({
+      id: "my-reply",
+      workstream_id: "ws-1",
+      file: "src/a.ts",
+      anchor_line_start: 1,
+      anchor_line_end: 1,
+      body: "my follow-up",
+      author: "reviewer",
+      parent_id: "root",
+      created_at: String(Math.floor(Date.parse("2026-08-17T11:00:00Z") / 1000)),
+    });
+
+    const list = await backend.listSessionFileComments("ws-1", "src/a.ts");
+    expect(list.map((c) => c.id)).toEqual(["root", "agent-reply", "my-reply"]);
+  });
 });
