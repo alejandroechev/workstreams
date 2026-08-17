@@ -158,6 +158,26 @@ ensures the `file_comments` schema on each call):
   deleted — the earlier predicate removed a non-reviewer root's replies while
   keeping the root itself.
 
+## Host constraint: `onSnapshotChange` must be referentially stable
+
+`FileEditorView`'s buffer-acquire effect lists `onSnapshotChange` in its
+dependency array. A host that passes an **inline arrow** therefore hands it a
+new identity on every render, and the effect tears down and re-runs forever:
+acquire → publish snapshot → host `setState` → re-render → new identity →
+cleanup (`release` + `onSnapshotChange(null)`) → acquire → …
+
+This has bitten twice. First as the markdown CPU burn (see
+`FileEditorView.viewstate-loop.test.tsx`), then in the Comments tab, where it
+surfaced as drift badges flickering (the file's lines alternated with `null`,
+flipping `detectDrift` between `drifted` and `unknown`) and a file that never
+finished loading (the buffer was released as fast as it was acquired).
+
+Hosts must pass either a `useState` setter directly (what the Files tab does)
+or a `useCallback` with stable deps (what the Comments tab does). Guarded by
+`RepoExplorerTile.comments-loop.test.tsx` (jsdom: hangs without the fix) and
+`e2e/tests/comments-tab-stability.spec.ts` (real Chromium: samples the panel's
+markup over time and fails if it churns).
+
 ## Consequences
 
 **Positive**

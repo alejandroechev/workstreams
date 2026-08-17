@@ -8,8 +8,12 @@ import { loadMonaco } from "../files/loadMonaco";
  * the editor renders exactly as in the app (the whole point of the harness is
  * to exercise real Monaco layout/pointer-events, which jsdom can't).
  */
-export function makeInMemoryRegistry(path: string, content: string): FileBufferRegistry {
-  const store = new Map<string, string>([[path, content]]);
+export function makeInMemoryRegistry(
+  path: string,
+  content: string,
+  extraFiles: Record<string, string> = {},
+): FileBufferRegistry {
+  const store = new Map<string, string>([[path, content], ...Object.entries(extraFiles)]);
   const enc = new TextEncoder();
   const readResult = (p: string) => {
     const c = store.get(p) ?? "";

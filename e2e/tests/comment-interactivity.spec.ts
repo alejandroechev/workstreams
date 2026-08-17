@@ -272,11 +272,22 @@ test.describe("imported review comments (ado-file-comments)", () => {
   });
 });
 
+/**
+ * Comments-tab variant of {@link openCase}: this harness renders no editor
+ * until a thread is picked, mirroring the real tab, so waiting for Monaco up
+ * front would hang.
+ */
+async function openCommentsCase(page: Page) {
+  await page.goto("/?harness=comments-navigation", { waitUntil: "networkidle" });
+  await expect(page.locator('[data-testid="harness-case"]')).toBeVisible();
+  await expect(page.locator('[data-testid="comments-panel"]')).toBeVisible();
+}
+
 test.describe("Comments tab navigation", () => {
   test("clicking a thread reveals its line in real Monaco and focuses that thread", async ({
     page,
   }) => {
-    await openCase(page, "comments-navigation");
+    await openCommentsCase(page);
 
     // Threads are grouped by file, so a comment on another file is listed too.
     await expect(page.locator('[data-testid="comments-file-src/example.ts"]')).toBeVisible();
@@ -295,7 +306,12 @@ test.describe("Comments tab navigation", () => {
           .filter((n) => Number.isFinite(n) && n > 0);
         return nums.length > 0 ? Math.min(...nums) : 0;
       });
-    expect(await topLineNumber()).toBe(1);
+    // Open the file via a near-top comment first, so the baseline is line 1.
+    await page.locator('[data-testid="comments-thread-near-top"]').click();
+    await page.waitForFunction(() => document.querySelectorAll(".monaco-editor").length > 0, null, {
+      timeout: 30_000,
+    });
+    await expect.poll(topLineNumber, { timeout: 10_000 }).toBe(1);
 
     await page.locator('[data-testid="comments-thread-far-down"]').click();
 
@@ -319,7 +335,7 @@ test.describe("Comments tab navigation", () => {
   });
 
   test("imported authors render by name in the navigation list", async ({ page }) => {
-    await openCase(page, "comments-navigation");
+    await openCommentsCase(page);
 
     await expect(page.locator('[data-testid="comments-thread-near-top"]')).toContainText(
       "Eduardo Fernandez",

@@ -1,5 +1,5 @@
 // @test-skip: dev/E2E-only harness scaffolding; real-Monaco interactivity is covered by scripts/harness.mjs + e2e/tests/comment-interactivity.spec.ts, not jsdom.
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type FC } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FC } from "react";
 
 import { FileEditorView } from "../files/FileEditorView";
 import CodeReviewTile from "../tiles/CodeReviewTile";
@@ -9,6 +9,7 @@ import { BackendProvider } from "../backend/context";
 import { MemoryBackend } from "../backend/memory-backend";
 import type { SessionFileComment } from "../domain/file-comments";
 import { makeInMemoryRegistry } from "./fakeRegistry";
+import type { BufferSnapshot } from "../files/FileBufferRegistry";
 import { CommentsPanel } from "../files/CommentsPanel";
 
 /**
@@ -354,52 +355,80 @@ const ImportedCommentZoneCase: FC = () => {
  * reveals its anchor line in real Monaco and marks the right thread focused.
  */
 const CommentsNavigationCase: FC = () => {
-  const path = "C:/repo/src/example.ts";
-  const content = Array.from({ length: 60 }, (_, i) => `const v${i + 1} = ${i + 1};`).join("\n");
-  const registry = useMemo(() => makeInMemoryRegistry(path, content), []);
+  // Two files with comments, mirroring the real tab: selecting a comment in a
+  // different file remounts the editor (key=path), which is where the render
+  // loop showed up.
+  const pathA = "C:/repo/src/example.ts";
+  const pathB = "C:/repo/src/other.ts";
+  const contentA = Array.from({ length: 60 }, (_, i) => `const v${i + 1} = ${i + 1};`).join("\n");
+  const contentB = "export const other = true;\nexport const second = 2;\n";
+  const registry = useMemo(
+    () => makeInMemoryRegistry(pathA, contentA, { [pathB]: contentB }),
+    [],
+  );
   const base = {
     workstream_id: "ws-1",
-    file: "src/example.ts",
-    anchor_text: null,
+    anchor_text: null as string | null,
     status: "open",
     parent_id: null,
     created_at: "2026-08-17T10:00:00Z",
     updated_at: "2026-08-17T10:00:00Z",
   } as const;
   const comments: SessionFileComment[] = [
-    { ...base, id: "near-top", anchor_line_start: 3, anchor_line_end: 3, body: "NEAR_TOP note", author: "Eduardo Fernandez" },
-    { ...base, id: "far-down", anchor_line_start: 48, anchor_line_end: 48, body: "FAR_DOWN note", author: "reviewer" },
+    { ...base, id: "near-top", file: "src/example.ts", anchor_line_start: 3, anchor_line_end: 3, body: "NEAR_TOP note", author: "Eduardo Fernandez" },
+    { ...base, id: "far-down", file: "src/example.ts", anchor_line_start: 48, anchor_line_end: 48, body: "FAR_DOWN note", author: "reviewer" },
+    // Snapshot deliberately does NOT match line 5 -> must badge as drifted.
+    { ...base, id: "drifted", file: "src/example.ts", anchor_line_start: 5, anchor_line_end: 5, anchor_text: "THIS_LINE_IS_GONE();", body: "DRIFTED note", author: "reviewer" },
     { ...base, id: "other-file", file: "src/other.ts", anchor_line_start: 2, anchor_line_end: 2, body: "OTHER_FILE note", author: "agent" },
   ];
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [openPath, setOpenPath] = useState<string | null>(null);
   const [revealLine, setRevealLine] = useState<number | undefined>(undefined);
+  const [fileLines, setFileLines] = useState<string[] | null>(null);
+
+  // Stable identity, exactly like the tile: FileEditorView's acquire effect
+  // depends on this callback, so an inline arrow re-runs it forever.
+  const handleSnapshot = useCallback((snap: BufferSnapshot | null) => {
+    const text = snap ? registry.getModel(snap.path)?.getValue() : undefined;
+    setFileLines(text === undefined ? null : text.split(/\r?\n/));
+  }, [registry]);
+
+  const openRepoRelative = openPath === pathB ? "src/other.ts" : "src/example.ts";
 
   return (
     <div data-testid="harness-case" data-case="comments-navigation" style={{ ...full, display: "flex" }}>
       <CommentsPanel
         comments={comments}
         selectedId={selectedId}
+        fileLines={fileLines ? { [openRepoRelative]: fileLines } : undefined}
         onSelect={(c) => {
           setSelectedId(c.id);
-          if (c.file === "src/example.ts") setRevealLine(c.anchor_line_start);
+          setOpenPath(c.file === "src/other.ts" ? pathB : pathA);
+          setRevealLine(c.anchor_line_start);
         }}
       />
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <FileEditorView
-          path={path}
-          registry={registry}
-          showHeader={false}
-          commentsEnabled
-          comments={comments.filter((c) => c.file === "src/example.ts")}
-          focusedCommentId={selectedId}
-          initialRevealLine={revealLine}
-          onBack={() => {}}
-          onAddComment={() => Promise.resolve()}
-          onUpdateComment={() => Promise.resolve()}
-          onReplyComment={() => Promise.resolve()}
-          onDeleteComment={() => Promise.resolve()}
-          onSetCommentStatus={() => Promise.resolve()}
-        />
+      <div style={{ flex: 1, minWidth: 0 }} data-testid="comments-editor-pane">
+        {openPath === null ? (
+          <div data-testid="comments-no-selection">Pick a comment</div>
+        ) : (
+          <FileEditorView
+            key={openPath}
+            path={openPath}
+            registry={registry}
+            showHeader={false}
+            commentsEnabled
+            comments={comments.filter((c) => (openPath === pathB ? c.file === "src/other.ts" : c.file === "src/example.ts"))}
+            focusedCommentId={selectedId}
+            initialRevealLine={revealLine}
+            onSnapshotChange={handleSnapshot}
+            onBack={() => {}}
+            onAddComment={() => Promise.resolve()}
+            onUpdateComment={() => Promise.resolve()}
+            onReplyComment={() => Promise.resolve()}
+            onDeleteComment={() => Promise.resolve()}
+            onSetCommentStatus={() => Promise.resolve()}
+          />
+        )}
       </div>
     </div>
   );

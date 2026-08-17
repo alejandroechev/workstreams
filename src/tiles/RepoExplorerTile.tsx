@@ -281,6 +281,17 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
   const [selectedCommentId, setSelectedCommentId] = useState<string | null>(null);
   // Current text of the file open in the Comments tab, for drift badging.
   const [commentsFileLines, setCommentsFileLines] = useState<string[] | null>(null);
+  /**
+   * MUST be referentially stable: `FileEditorView`'s acquire effect lists
+   * `onSnapshotChange` in its deps, so an inline arrow here re-runs that effect
+   * on every render — release + re-acquire forever, which showed up as
+   * flickering drift badges and a file that never finished loading.
+   */
+  const handleCommentsSnapshot = useCallback((snap: BufferSnapshot | null) => {
+    setEditorSnapshot(snap);
+    const text = snap ? fileBufferRegistry.getModel(snap.path)?.getValue() : undefined;
+    setCommentsFileLines(text === undefined ? null : text.split(/\r?\n/));
+  }, []);
   const [commentFilters, setCommentFilters] = useState<CommentFilters>({
     statuses: [],
     authors: [],
@@ -2124,11 +2135,7 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
                     ? pendingRevealLineRef.current.line
                     : undefined
                 }
-                onSnapshotChange={(snap) => {
-                  setEditorSnapshot(snap);
-                  const text = snap ? fileBufferRegistry.getModel(snap.path)?.getValue() : undefined;
-                  setCommentsFileLines(text === undefined ? null : text.split(/\r?\n/));
-                }}
+                onSnapshotChange={handleCommentsSnapshot}
                 // Comments are ALWAYS on in this tab; it never mutates the
                 // shared toggle used by the Files/Diff tabs.
                 commentsEnabled
