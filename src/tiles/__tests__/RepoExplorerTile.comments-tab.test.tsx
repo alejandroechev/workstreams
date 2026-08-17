@@ -124,11 +124,17 @@ describe("RepoExplorerTile Comments tab", () => {
 
     fireEvent.click(await screen.findByTestId("comments-thread-c1"));
 
-    const editor = await screen.findByTestId("file-editor-view");
-    await waitFor(() => expect(editor).toHaveAttribute("data-reveal-line", "12"));
-    expect(editor.getAttribute("data-path")).toMatch(/src[\\/]a\.ts$/);
-    expect(editor).toHaveAttribute("data-comments-enabled", "true");
-    expect(editor).toHaveAttribute("data-focused-comment", "c1");
+    // Re-query on every assertion: capturing the node once let a DETACHED
+    // element keep stale attributes green after the tile swapped modes.
+    await screen.findByTestId("file-editor-view");
+    await waitFor(() =>
+      expect(screen.getByTestId("file-editor-view")).toHaveAttribute("data-reveal-line", "12"),
+    );
+    expect(screen.getByTestId("file-editor-view").getAttribute("data-path")).toMatch(
+      /src[\\/]a\.ts$/,
+    );
+    expect(screen.getByTestId("file-editor-view")).toHaveAttribute("data-comments-enabled", "true");
+    expect(screen.getByTestId("file-editor-view")).toHaveAttribute("data-focused-comment", "c1");
   });
 
   it("stays on the Comments tab after opening a file", async () => {
@@ -174,5 +180,48 @@ describe("RepoExplorerTile Comments tab", () => {
     await openCommentsTab();
 
     expect(await screen.findByTestId("comments-unbound")).toBeInTheDocument();
+  });
+
+  it("keeps the navigation pane visible after opening a comment", async () => {
+    renderTile(createBackend({ all: [comment({ id: "c1" })] }));
+    await openCommentsTab();
+
+    fireEvent.click(await screen.findByTestId("comments-thread-c1"));
+    await screen.findByTestId("file-editor-view");
+
+    // The whole point of the tab: you do not lose the list when you look at a
+    // comment in context.
+    expect(screen.getByTestId("comments-panel")).toBeInTheDocument();
+    expect(screen.getByTestId("comments-thread-c1")).toHaveAttribute("data-selected", "true");
+  });
+
+  it("returns to the list when the Comments tab is clicked again", async () => {
+    renderTile(createBackend({ all: [comment({ id: "c1" })] }));
+    const tab = await openCommentsTab();
+
+    fireEvent.click(await screen.findByTestId("comments-thread-c1"));
+    await screen.findByTestId("file-editor-view");
+
+    fireEvent.click(tab);
+
+    await waitFor(() =>
+      expect(screen.queryByTestId("file-editor-view")).not.toBeInTheDocument(),
+    );
+    expect(screen.getByTestId("comments-panel")).toBeInTheDocument();
+  });
+
+  it("switches away cleanly when another tab is chosen from a comment", async () => {
+    renderTile(createBackend({ all: [comment({ id: "c1" })] }));
+    const commentsTab = await openCommentsTab();
+
+    fireEvent.click(await screen.findByTestId("comments-thread-c1"));
+    await screen.findByTestId("file-editor-view");
+
+    fireEvent.click(screen.getByTestId("repo-explorer-tab-files"));
+
+    // The header must follow the actual view, not stay stuck on Comments.
+    await waitFor(() => expect(commentsTab).toHaveAttribute("data-active", "false"));
+    expect(screen.getByTestId("repo-explorer-tab-files")).toHaveAttribute("data-active", "true");
+    expect(screen.queryByTestId("comments-panel")).not.toBeInTheDocument();
   });
 });

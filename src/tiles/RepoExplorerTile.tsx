@@ -271,13 +271,6 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
       .catch(() => {});
     return () => { cancelled = true; };
   }, [workstreamId]);
-  const fileComments = useFileComments(workstreamId ?? null, rootDir ?? null, filePath || null);
-  // No polling: reload from session.db when comments are turned on or the file
-  // (re)opens. The hook reloads on file change; this covers the toggle-on case.
-  useEffect(() => {
-    if (commentsEnabled) void fileComments.reload();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [commentsEnabled]);
   // ─── Comments tab (cross-file comment navigation) ───
   // Workstream-wide comment list; read-only. Every mutation still happens in
   // the editor's view zone, so there is a single code path for status changes.
@@ -286,12 +279,24 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
   // shows a file, so switching tabs doesn't strand the user in "files".
   const [commentsNavPath, setCommentsNavPath] = useState<string | null>(null);
   const [selectedCommentId, setSelectedCommentId] = useState<string | null>(null);
+  // Current text of the file open in the Comments tab, for drift badging.
+  const [commentsFileLines, setCommentsFileLines] = useState<string[] | null>(null);
   const [commentFilters, setCommentFilters] = useState<CommentFilters>({
     statuses: [],
     authors: [],
     text: "",
   });
 
+  // In the Comments tab the open file comes from commentsNavPath (openFile is
+  // bypassed there), so the per-file hook has to key on that instead.
+  const activeCommentFilePath = mode === "comments" ? commentsNavPath : (filePath || null);
+  const fileComments = useFileComments(workstreamId ?? null, rootDir ?? null, activeCommentFilePath);
+  // No polling: reload from session.db when comments are turned on or the file
+  // (re)opens. The hook reloads on file change; this covers the toggle-on case.
+  useEffect(() => {
+    if (commentsEnabled) void fileComments.reload();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [commentsEnabled]);
   const commentsAvailable = Boolean(workstreamId && hasSession);
   const toggleCommentsVisible = useCallback(() => {
     if (!commentsAvailable) return;
@@ -1026,7 +1031,6 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
   type TabId = "files" | "diff" | "log" | "hooks" | "search" | "comments";
   const activeTab: TabId =
     mode === "comments" ? "comments" :
-    commentsNavPath ? "comments" :
     mode === "search" ? "search" :
     mode === "log" ? "log" :
     mode === "hooks" ? "hooks" :
@@ -1038,6 +1042,24 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
     // computed activeTab already says "files" (which happens when the
     // user is in view/audio mode looking at a file). Without this the
     // Files tab is unclickable from those modes, leaving the user stuck.
+    // Like "files" below, this runs BEFORE the `tab === activeTab` early return:
+    // clicking Comments while already inside it means "back to the list".
+    if (tab === "comments") {
+      setActiveDiffMode(null);
+      setDiffBefore(""); setDiffAfter("");
+      setDiffFiles([]);
+      setDiffFilePath("");
+      setContent(null);
+      setFilePath("");
+      setEditorSnapshot(null);
+      setCommentsNavPath(null);
+      setSelectedCommentId(null);
+      setMode("comments");
+      // The agent writes comments to session.db out-of-band, so there is no
+      // subscription to piggyback on — re-read whenever the tab is entered.
+      void allComments.reload();
+      return;
+    }
     if (tab === "files") {
       setActiveDiffMode(null);
       setDiffBefore(""); setDiffAfter("");
@@ -1084,20 +1106,6 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
         setFilePath("");
         setEditorSnapshot(null);
         setMode("search");
-        break;
-      case "comments":
-        setActiveDiffMode(null);
-        setDiffBefore(""); setDiffAfter("");
-        setDiffFiles([]);
-        setDiffFilePath("");
-        setContent(null);
-        setFilePath("");
-        setEditorSnapshot(null);
-        setCommentsNavPath(null);
-        setMode("comments");
-        // The agent writes comments to session.db out-of-band, so there is no
-        // subscription to piggyback on — re-read whenever the tab is entered.
-        void allComments.reload();
         break;
     }
   }, [activeTab, activateDiffMode, openGitLog, openGitHooks, allComments]);
@@ -2080,8 +2088,8 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
             filters={commentFilters}
             onFiltersChange={setCommentFilters}
             fileLines={
-              commentsFile && content !== null
-                ? { [toRepoRelative(rootDir ?? "", commentsFile)]: content.split(/\r?\n/) }
+              commentsFile && commentsFileLines
+                ? { [toRepoRelative(rootDir ?? "", commentsFile)]: commentsFileLines }
                 : undefined
             }
             onSelect={(comment) => {
@@ -2089,8 +2097,11 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
               const absolute = joinPath(rootDir ?? currentDir, comment.file);
               // Same reveal channel the Search tab and walkthrough use.
               pendingRevealLineRef.current = { path: absolute, line: comment.anchor_line_start };
+              // Deliberately NOT openFile(): it always setMode()s, which would
+              // drop us into the full-tile View branch and destroy this tab's
+              // two-pane layout. FileEditorView acquires the file itself from
+              // the buffer registry, so the path alone is enough.
               setCommentsNavPath(absolute);
-              void openFile(absolute, "none");
             }}
           />
           <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
@@ -2103,9 +2114,6 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
                     : "Pick a comment to see it in context"}
               </div>
             )}
-            {commentsFile && editorSnapshot === null && fileLoading && (
-              <div style={{ margin: "auto", color: "#585b70", fontSize: 12 }}>Loading…</div>
-            )}
             {commentsFile && (
               <FileEditorView
                 key={commentsFile}
@@ -2116,7 +2124,11 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
                     ? pendingRevealLineRef.current.line
                     : undefined
                 }
-                onSnapshotChange={setEditorSnapshot}
+                onSnapshotChange={(snap) => {
+                  setEditorSnapshot(snap);
+                  const text = snap ? fileBufferRegistry.getModel(snap.path)?.getValue() : undefined;
+                  setCommentsFileLines(text === undefined ? null : text.split(/\r?\n/));
+                }}
                 // Comments are ALWAYS on in this tab; it never mutates the
                 // shared toggle used by the Files/Diff tabs.
                 commentsEnabled
