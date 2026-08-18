@@ -72,9 +72,18 @@ interaction. unify-commenting collapses that divergence.
    the **modified side of its Unstaged diff** render each reviewer note as a
    Monaco view zone below its anchor, with threaded replies nested inside the
    same zone. `FileCommentsLayer` owns this shared Monaco interaction so the two
-   surfaces cannot drift. The reviewer's own note gets inline **Edit / Delete**
-   buttons, a **Resolve / Reopen** toggle, a **Reply** button (adds a reviewer
-   reply through an inline composer), and a **Copy** button (copies the whole
+   surfaces cannot drift.
+
+   Two different permissions govern the inline actions, and conflating them was
+   a bug: **Edit / Delete** is *authorship* — changing someone's words — so it
+   stays limited to the reviewer's own notes. **Resolve / Reopen** is *triage*
+   ("have I dealt with this?") and is offered on **every** comment regardless of
+   author, including agent replies and threads imported from an external review;
+   those are precisely the ones you most need to close out. Both backends always
+   allowed the status write, so this was a UI-only gate.
+
+   Every root also gets a **Reply** button (adds a reviewer reply through an
+   inline composer) and a **Copy** button (copies the whole
    thread as text — a reliable fallback since view-zone text can be awkward to
    drag-select). Resolved / wontfix notes are struck through. New comments are
    selection-based: select lines → floating `+ Comment` → inline composer.

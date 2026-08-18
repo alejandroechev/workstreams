@@ -57,7 +57,14 @@ export function formatAuthor(author: string): string {
  */
 export { commentTimeValue, compareByCreatedAt } from "../domain/comment-order";
 
-/** Returns true when the reviewer is allowed to edit/delete this comment. */
+/**
+ * Whether this user may edit/delete the comment — i.e. change its **text**.
+ * Only their own notes qualify; imported and agent comments are someone else's
+ * words.
+ *
+ * Deliberately NOT used to gate Resolve/Reopen: status is triage ("have I dealt
+ * with this?"), which applies to any comment regardless of who wrote it.
+ */
 export function isMutable(comment: SessionFileComment): boolean {
   return comment.author === "reviewer";
 }

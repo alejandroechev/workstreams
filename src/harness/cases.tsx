@@ -298,7 +298,7 @@ const ImportedCommentZoneCase: FC = () => {
     anchor_text: "const b = 2;",
     status: "open",
   } as const;
-  const [comments] = useState<SessionFileComment[]>(() => [
+  const [comments, setComments] = useState<SessionFileComment[]>(() => [
     {
       ...anchor,
       id: "ado-1513151-16261206-1",
@@ -342,7 +342,10 @@ const ImportedCommentZoneCase: FC = () => {
         onUpdateComment={() => Promise.resolve()}
         onReplyComment={() => Promise.resolve()}
         onDeleteComment={() => Promise.resolve()}
-        onSetCommentStatus={() => Promise.resolve()}
+        onSetCommentStatus={(id, status) => {
+          setComments((cs) => cs.map((c) => (c.id === id ? { ...c, status } : c)));
+          return Promise.resolve();
+        }}
       />
     </div>
   );

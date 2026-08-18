@@ -342,3 +342,45 @@ test.describe("Comments tab navigation", () => {
     );
   });
 });
+
+test.describe("resolving imported comments", () => {
+  test("an imported comment can be resolved even though it is not mine", async ({ page }) => {
+    await openCase(page, "imported-comment-zone");
+
+    const resolve = page.locator('[data-testid="comment-resolve-ado-1513151-16261206-1"]');
+    await expect(resolve).toBeVisible();
+
+    // The button must be genuinely clickable inside the Monaco view zone, not
+    // merely present (the class of bug this harness exists for).
+    const covered = await page.evaluate(() => {
+      const el = document.querySelector('[data-testid="comment-resolve-ado-1513151-16261206-1"]');
+      if (!el) return true;
+      const r = el.getBoundingClientRect();
+      const top = document.elementFromPoint(
+        Math.round(r.left + r.width / 2),
+        Math.round(r.top + r.height / 2),
+      );
+      return !(top && (el === top || el.contains(top) || top.contains(el)));
+    });
+    expect(covered, "Resolve button is occluded by a Monaco layer").toBe(false);
+
+    await resolve.click({ timeout: 5_000 });
+
+    // Round-trips to Reopen, proving the status actually changed.
+    await expect(
+      page.locator('[data-testid="comment-reopen-ado-1513151-16261206-1"]'),
+    ).toBeVisible();
+    await expect(
+      page.locator('[data-testid="comment-meta-ado-1513151-16261206-1"]'),
+    ).toHaveText("Eduardo Fernandez · resolved");
+  });
+
+  test("someone else's comment still cannot be edited or deleted", async ({ page }) => {
+    await openCase(page, "imported-comment-zone");
+
+    await expect(page.locator('[data-testid="comment-edit-ado-1513151-16261206-1"]')).toHaveCount(0);
+    await expect(
+      page.locator('[data-testid="comment-delete-ado-1513151-16261206-1"]'),
+    ).toHaveCount(0);
+  });
+});

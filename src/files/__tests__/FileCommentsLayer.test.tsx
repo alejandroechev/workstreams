@@ -319,3 +319,103 @@ describe("FileCommentsLayer focused thread", () => {
     );
   });
 });
+
+describe("FileCommentsLayer resolve is triage, not authorship", () => {
+  it("offers Resolve on an imported comment written by someone else", () => {
+    const harness = editorHarness();
+    render(
+      <FileCommentsLayer
+        editor={harness.editor}
+        editorReadyToken={1}
+        comments={[{ ...comment(), id: "ado-1", author: "Eduardo Fernandez" }]}
+        enabled
+        onSetCommentStatus={vi.fn()}
+      />,
+    );
+
+    expect(document.querySelector('[data-testid="comment-resolve-ado-1"]')).toBeInTheDocument();
+  });
+
+  it("still refuses to let me edit or delete someone else's comment", () => {
+    const harness = editorHarness();
+    render(
+      <FileCommentsLayer
+        editor={harness.editor}
+        editorReadyToken={1}
+        comments={[{ ...comment(), id: "ado-1", author: "Eduardo Fernandez" }]}
+        enabled
+        onSetCommentStatus={vi.fn()}
+      />,
+    );
+
+    expect(document.querySelector('[data-testid="comment-edit-ado-1"]')).not.toBeInTheDocument();
+    expect(document.querySelector('[data-testid="comment-delete-ado-1"]')).not.toBeInTheDocument();
+  });
+
+  it("resolves an imported comment through the callback", () => {
+    const harness = editorHarness();
+    const onSetCommentStatus = vi.fn().mockResolvedValue(undefined);
+    render(
+      <FileCommentsLayer
+        editor={harness.editor}
+        editorReadyToken={1}
+        comments={[{ ...comment(), id: "ado-1", author: "Eduardo Fernandez" }]}
+        enabled
+        onSetCommentStatus={onSetCommentStatus}
+      />,
+    );
+
+    fireEvent.click(document.querySelector('[data-testid="comment-resolve-ado-1"]') as HTMLElement);
+    expect(onSetCommentStatus).toHaveBeenCalledWith("ado-1", "resolved");
+  });
+
+  it("offers Reopen once an imported comment is resolved", () => {
+    const harness = editorHarness();
+    render(
+      <FileCommentsLayer
+        editor={harness.editor}
+        editorReadyToken={1}
+        comments={[
+          { ...comment(), id: "ado-1", author: "Eduardo Fernandez", status: "resolved" },
+        ]}
+        enabled
+        onSetCommentStatus={vi.fn()}
+      />,
+    );
+
+    expect(document.querySelector('[data-testid="comment-reopen-ado-1"]')).toBeInTheDocument();
+    expect(document.querySelector('[data-testid="comment-resolve-ado-1"]')).not.toBeInTheDocument();
+  });
+
+  it("offers Resolve on an agent reply too", () => {
+    const harness = editorHarness();
+    render(
+      <FileCommentsLayer
+        editor={harness.editor}
+        editorReadyToken={1}
+        comments={[
+          comment(),
+          { ...comment(), id: "agent-1", author: "agent", parent_id: "c1" },
+        ]}
+        enabled
+        onSetCommentStatus={vi.fn()}
+      />,
+    );
+
+    expect(document.querySelector('[data-testid="comment-resolve-agent-1"]')).toBeInTheDocument();
+  });
+
+  it("shows no status action when the host cannot handle one", () => {
+    const harness = editorHarness();
+    render(
+      <FileCommentsLayer
+        editor={harness.editor}
+        editorReadyToken={1}
+        comments={[{ ...comment(), id: "ado-1", author: "Eduardo Fernandez" }]}
+        enabled
+      />,
+    );
+
+    expect(document.querySelector('[data-testid="comment-resolve-ado-1"]')).not.toBeInTheDocument();
+  });
+});

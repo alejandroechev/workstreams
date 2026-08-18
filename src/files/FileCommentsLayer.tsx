@@ -171,18 +171,23 @@ export function FileCommentsLayer({
         spacer.style.flex = "1";
         header.appendChild(spacer);
 
+        // Resolve/Reopen is TRIAGE ("have I dealt with this?"), not authorship,
+        // so it is offered on every comment — including ones imported from an
+        // external review, which are exactly the ones you most need to close
+        // out. Edit/Delete stay author-gated below: changing someone else's
+        // words is a different question from marking their point handled.
+        if (onSetCommentStatus) {
+          header.appendChild(
+            isClosedStatus(comment.status)
+              ? makeButton("Reopen", "#a6e3a1", `comment-reopen-${comment.id}`, () =>
+                  handleStatusClick(comment, "open"),
+                )
+              : makeButton("Resolve", "#a6e3a1", `comment-resolve-${comment.id}`, () =>
+                  handleStatusClick(comment, "resolved"),
+                ),
+          );
+        }
         if (isMutable(comment)) {
-          if (onSetCommentStatus) {
-            header.appendChild(
-              isClosedStatus(comment.status)
-                ? makeButton("Reopen", "#a6e3a1", `comment-reopen-${comment.id}`, () =>
-                    handleStatusClick(comment, "open"),
-                  )
-                : makeButton("Resolve", "#a6e3a1", `comment-resolve-${comment.id}`, () =>
-                    handleStatusClick(comment, "resolved"),
-                  ),
-            );
-          }
           header.appendChild(
             makeButton("Edit", "#89b4fa", `comment-edit-${comment.id}`, () =>
               handleEditClick(comment),
