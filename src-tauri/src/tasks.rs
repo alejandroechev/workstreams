@@ -382,11 +382,17 @@ fn apply_labels(conn: &Connection, task_id: &str, names: &[String]) -> Result<()
     conn.execute_batch("BEGIN IMMEDIATE")
         .map_err(|e| format!("begin: {e}"))?;
     match apply_labels_locked(conn, task_id, names) {
-        Ok(()) => {
-            conn.execute_batch("COMMIT")
-                .map_err(|e| format!("commit: {e}"))?;
-            Ok(())
-        }
+        Ok(()) => match conn.execute_batch("COMMIT") {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                // SQLite can leave the transaction active after some commit
+                // failures. This connection lives in a shared Mutex, so a
+                // leftover transaction would silently swallow later writes and
+                // make every subsequent apply_labels fail.
+                let _ = conn.execute_batch("ROLLBACK");
+                Err(format!("commit: {e}"))
+            }
+        },
         Err(e) => {
             // Roll back so a partial label set never survives the failure.
             let _ = conn.execute_batch("ROLLBACK");

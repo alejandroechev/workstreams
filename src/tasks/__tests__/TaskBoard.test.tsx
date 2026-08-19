@@ -307,3 +307,39 @@ describe("failed mutations preserve typed input", () => {
     await waitFor(() => expect(input.value).toBe(""));
   });
 });
+
+describe("slow writes do not eat newer drafts", () => {
+  it("keeps a draft typed while the previous note was still saving", async () => {
+    // The success handler clears the box. If the user starts the next note
+    // before the first request lands, an unconditional clear silently eats it.
+    const task = await backend.createTask("x");
+    let release: (() => void) | null = null;
+    const slow = Object.create(backend) as MemoryBackend;
+    slow.addTaskEvent = (async (...args: unknown[]) => {
+      await new Promise<void>((r) => {
+        release = r;
+      });
+      return (MemoryBackend.prototype.addTaskEvent as never as (...a: unknown[]) => unknown).apply(
+        backend,
+        args,
+      );
+    }) as never;
+
+    render(<TaskBoard backend={slow} workstreams={[]} projects={[]} onClose={vi.fn()} />);
+    await screen.findByText("x");
+    fireEvent.click(screen.getByTestId(`task-card-${task.id}`));
+
+    const input = (await screen.findByTestId("note-input")) as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "first note" } });
+    fireEvent.click(screen.getByTestId("note-submit"));
+
+    // The user carries on typing before the write lands.
+    fireEvent.change(input, { target: { value: "second note in progress" } });
+    release!();
+
+    await waitFor(async () => {
+      expect(await backend.listTaskEvents(task.id)).toHaveLength(1);
+    });
+    expect(input.value).toBe("second note in progress");
+  });
+});

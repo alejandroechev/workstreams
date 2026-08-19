@@ -40,6 +40,24 @@ export interface TaskBoardProps {
   devlogDirectory?: string;
 }
 
+/**
+ * Clear an input after a successful write, but only if it still holds exactly
+ * what was submitted.
+ *
+ * Two things must both be true. A failed write must never clear the box, or
+ * the text is lost from the screen as well as from the database. And a slow
+ * success must never clear a *newer* draft the user started typing while the
+ * request was in flight.
+ */
+function clearIfUnchanged(
+  ok: boolean,
+  set: React.Dispatch<React.SetStateAction<string>>,
+  submitted: string,
+): void {
+  if (!ok) return;
+  set((current) => (current === submitted ? "" : current));
+}
+
 /** `HH:MM` in the user's own timezone. */
 function localClock(iso: string): string {
   const at = new Date(iso);
@@ -164,14 +182,14 @@ export function TaskBoard({
             onChange={(e) => setNewTitle(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Enter") {
-                void board.createTask(newTitle).then((ok) => { if (ok) setNewTitle(""); });
+                void board.createTask(newTitle).then((ok) => clearIfUnchanged(ok, setNewTitle, newTitle));
               }
             }}
             style={{ ...controlStyle, width: 220 }}
           />
           <button
             data-testid="new-task-submit"
-            onClick={() => void board.createTask(newTitle).then((ok) => { if (ok) setNewTitle(""); })}
+            onClick={() => void board.createTask(newTitle).then((ok) => clearIfUnchanged(ok, setNewTitle, newTitle))}
             style={controlStyle}
           >
             <PlusIcon style={{ width: 12, height: 12 }} />
@@ -361,11 +379,7 @@ export function TaskBoard({
                       .filter((n): n is string => Boolean(n));
                     void board
                       .setLabels(selected.id, [...names, labelText])
-                      .then((ok) => {
-                        // Only clear on success -- otherwise a failed write
-                        // silently discards what the user typed.
-                        if (ok) setLabelText("");
-                      });
+                      .then((ok) => clearIfUnchanged(ok, setLabelText, labelText));
                   }}
                   style={controlStyle}
                 >
@@ -411,7 +425,7 @@ export function TaskBoard({
                 <button
                   data-testid="new-subtask-submit"
                   onClick={() =>
-                    void board.addSubtask(selected.id, subtaskTitle).then((ok) => { if (ok) setSubtaskTitle(""); })
+                    void board.addSubtask(selected.id, subtaskTitle).then((ok) => clearIfUnchanged(ok, setSubtaskTitle, subtaskTitle))
                   }
                   style={controlStyle}
                 >
@@ -460,14 +474,14 @@ export function TaskBoard({
                   onChange={(e) => setNoteText(e.target.value)}
                   onKeyDown={(e) => {
                     if (e.key === "Enter") {
-                      void board.addNote(selected.id, noteText).then((ok) => { if (ok) setNoteText(""); });
+                      void board.addNote(selected.id, noteText).then((ok) => clearIfUnchanged(ok, setNoteText, noteText));
                     }
                   }}
                   style={{ ...controlStyle, flex: 1 }}
                 />
                 <button
                   data-testid="note-submit"
-                  onClick={() => void board.addNote(selected.id, noteText).then((ok) => { if (ok) setNoteText(""); })}
+                  onClick={() => void board.addNote(selected.id, noteText).then((ok) => clearIfUnchanged(ok, setNoteText, noteText))}
                   style={controlStyle}
                 >
                   Note

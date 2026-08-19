@@ -59,7 +59,9 @@ export function WorkstreamQuickNote({ backend, workstreamId }: WorkstreamQuickNo
     if (!trimmed) return;
     try {
       await backend.addTaskEvent(task.id, "note", trimmed, "manual");
-      setText("");
+      // Only clear if the box still holds what was sent: a slow success must
+      // not wipe a newer draft typed while the request was in flight.
+      setText((current) => (current === text ? "" : current));
       setFlash("logged");
     } catch (err) {
       // Silently swallowing this would look identical to success and lose
