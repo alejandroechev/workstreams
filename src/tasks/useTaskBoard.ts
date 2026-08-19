@@ -64,18 +64,37 @@ export function useTaskBoard(backend: Backend): TaskBoardData {
     void reload();
   }, [reload]);
 
-  const createTask = useCallback(
-    async (title: string) => {
-      const trimmed = title.trim();
-      if (!trimmed) return;
-      await backend.createTask(trimmed);
-      await reload();
+  /**
+   * Wrap a mutation so a backend failure becomes visible state rather than an
+   * unhandled rejection. Every caller is fire-and-forget from an event
+   * handler, so without this a failed write is indistinguishable from success.
+   */
+  const guard = useCallback(
+    async (run: () => Promise<void>) => {
+      try {
+        setError(null);
+        await run();
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      }
     },
-    [backend, reload],
+    [],
+  );
+
+  const createTask = useCallback(
+    (title: string) =>
+      guard(async () => {
+        const trimmed = title.trim();
+        if (!trimmed) return;
+        await backend.createTask(trimmed);
+        await reload();
+      }),
+    [backend, reload, guard],
   );
 
   const updateTask = useCallback(
-    async (id: string, updates: TaskUpdate) => {
+    (id: string, updates: TaskUpdate) =>
+      guard(async () => {
       // Capture the link change before writing, so the event can name what the
       // task moved *to* without re-reading the row.
       const linkChanged = updates.workstreamId !== undefined;
@@ -92,8 +111,8 @@ export function useTaskBoard(backend: Backend): TaskBoardData {
         );
       }
       await reload();
-    },
-    [backend, reload],
+      }),
+    [backend, reload, guard],
   );
 
   /**
@@ -102,62 +121,68 @@ export function useTaskBoard(backend: Backend): TaskBoardData {
    * possible without the user typing anything at all.
    */
   const setStatus = useCallback(
-    async (id: string, status: TaskStatus) => {
-      await backend.updateTask(id, { status });
-      const glyph = statusEmoji(status);
-      await backend.addTaskEvent(
-        id,
-        "status",
-        `${glyph ? `${glyph} ` : ""}${status.replace(/_/g, " ")}`,
-        "auto",
-      );
-      await reload();
-    },
-    [backend, reload],
+    (id: string, status: TaskStatus) =>
+      guard(async () => {
+        await backend.updateTask(id, { status });
+        const glyph = statusEmoji(status);
+        await backend.addTaskEvent(
+          id,
+          "status",
+          `${glyph ? `${glyph} ` : ""}${status.replace(/_/g, " ")}`,
+          "auto",
+        );
+        await reload();
+      }),
+    [backend, reload, guard],
   );
 
   const setTaskLabels = useCallback(
-    async (id: string, names: string[]) => {
-      await backend.setTaskLabels(id, names);
-      await reload();
-    },
-    [backend, reload],
+    (id: string, names: string[]) =>
+      guard(async () => {
+        await backend.setTaskLabels(id, names);
+        await reload();
+      }),
+    [backend, reload, guard],
   );
 
   const addSubtask = useCallback(
-    async (taskId: string, title: string) => {
-      const trimmed = title.trim();
-      if (!trimmed) return;
-      await backend.createSubtask(taskId, trimmed);
-      await reload();
-    },
-    [backend, reload],
+    (taskId: string, title: string) =>
+      guard(async () => {
+        const trimmed = title.trim();
+        if (!trimmed) return;
+        await backend.createSubtask(taskId, trimmed);
+        await reload();
+      }),
+    [backend, reload, guard],
   );
 
   const setSubtaskStatus = useCallback(
-    async (id: string, status: TaskStatus) => {
-      await backend.updateSubtask(id, { status });
-      await reload();
-    },
-    [backend, reload],
+    (id: string, status: TaskStatus) =>
+      guard(async () => {
+        await backend.updateSubtask(id, { status });
+        await reload();
+      }),
+    [backend, reload, guard],
   );
 
   const deleteSubtask = useCallback(
-    async (id: string) => {
-      await backend.deleteSubtask(id);
-      await reload();
-    },
-    [backend, reload],
+    (id: string) =>
+      guard(async () => {
+        await backend.deleteSubtask(id);
+        await reload();
+      }),
+    [backend, reload, guard],
   );
 
   const addEvent = useCallback(
-    async (taskId: string, kind: TaskEventKind, text: string) => {
-      const trimmed = text.trim();
-      if (!trimmed) return;
-      await backend.addTaskEvent(taskId, kind, trimmed);
-      await reload();
-    },
-    [backend, reload],
+    (taskId: string, kind: TaskEventKind, text: string) =>
+      guard(async () => {
+        const trimmed = text.trim();
+        if (!trimmed) return;
+        await backend.addTaskEvent(taskId, kind, trimmed);
+        await reload();
+      }),
+    [backend, reload, guard],
   );
 
   const addNote = useCallback(
@@ -166,19 +191,21 @@ export function useTaskBoard(backend: Backend): TaskBoardData {
   );
 
   const deleteEvent = useCallback(
-    async (id: string) => {
-      await backend.deleteTaskEvent(id);
-      await reload();
-    },
-    [backend, reload],
+    (id: string) =>
+      guard(async () => {
+        await backend.deleteTaskEvent(id);
+        await reload();
+      }),
+    [backend, reload, guard],
   );
 
   const deleteTask = useCallback(
-    async (id: string) => {
-      await backend.deleteTask(id);
-      await reload();
-    },
-    [backend, reload],
+    (id: string) =>
+      guard(async () => {
+        await backend.deleteTask(id);
+        await reload();
+      }),
+    [backend, reload, guard],
   );
 
   return {

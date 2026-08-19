@@ -302,6 +302,7 @@ export function setAppSettings(next: Partial<AppSettings>): AppSettings {
   if (merged.terminalFontSize !== cached.terminalFontSize) changed.push("terminalFontSize");
   if (merged.copilotCommand !== cached.copilotCommand) changed.push("copilotCommand");
   if (merged.disableWebglRenderer !== cached.disableWebglRenderer) changed.push("disableWebglRenderer");
+  if (merged.devlogDirectory !== cached.devlogDirectory) changed.push("devlogDirectory");
   cached = merged;
   for (const k of changed) {
     const v: number | string | boolean =
@@ -310,6 +311,7 @@ export function setAppSettings(next: Partial<AppSettings>): AppSettings {
       : k === "markdownFontSize" ? merged.markdownFontSize
       : k === "terminalFontSize" ? merged.terminalFontSize
       : k === "disableWebglRenderer" ? merged.disableWebglRenderer
+      : k === "devlogDirectory" ? merged.devlogDirectory
       : merged.copilotCommand;
     void writeSqlSetting(k, v);
   }

@@ -1077,10 +1077,37 @@ export class MemoryBackend implements Backend {
   ): Promise<DevlogExportResult> {
     if (!directory) throw new Error("devlog directory is not configured");
 
+    const writable = (p: string): boolean => {
+      const existing = this._devlogFiles.get(p);
+      return existing === undefined || isGeneratedByUs(existing);
+    };
+
     const intended = pathJoin(directory, `${date}.md`);
-    const existing = this._devlogFiles.get(intended);
-    const ours = existing === undefined || isGeneratedByUs(existing);
-    const path = ours ? intended : pathJoin(directory, `${date}.workstreams.md`);
+    const ours = writable(intended);
+
+    // Every fallback needs the same check as the intended path: the user may
+    // have hand-written the alongside name too, and writing it blind would
+    // destroy exactly what stepping aside was meant to protect. Mirrors
+    // `resolve_target` in src-tauri/src/devlog.rs.
+    let path = intended;
+    if (!ours) {
+      path = "";
+      for (let suffix = 0; suffix < 100; suffix++) {
+        const candidate = pathJoin(
+          directory,
+          suffix === 0 ? `${date}.workstreams.md` : `${date}.workstreams.${suffix}.md`,
+        );
+        if (writable(candidate)) {
+          path = candidate;
+          break;
+        }
+      }
+      if (!path) {
+        throw new Error(
+          `refusing to write: ${date}.md and every alongside name are files Workstreams did not generate`,
+        );
+      }
+    }
 
     this._devlogFiles.set(path, content);
 

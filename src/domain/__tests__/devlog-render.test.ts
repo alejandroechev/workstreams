@@ -67,6 +67,18 @@ describe("isGeneratedByUs", () => {
   it("rejects an empty file", () => {
     expect(isGeneratedByUs("")).toBe(false);
   });
+
+  it("rejects a marker that merely contains ours", () => {
+    // A substring test would authorise destroying every one of these.
+    expect(isGeneratedByUs("---\nnot_generated_by: workstreams\n---\n")).toBe(false);
+    expect(isGeneratedByUs("---\ngenerated_by: workstreams-backup\n---\n")).toBe(false);
+    expect(isGeneratedByUs("---\n# generated_by: workstreams-ish\n---\n")).toBe(false);
+  });
+
+  it("tolerates CRLF and a byte-order mark, which editors add freely", () => {
+    expect(isGeneratedByUs("---\r\ndate: x\r\ngenerated_by: workstreams\r\n---\r\n")).toBe(true);
+    expect(isGeneratedByUs("\uFEFF---\ndate: x\ngenerated_by: workstreams\n---\n")).toBe(true);
+  });
 });
 
 describe("sections", () => {

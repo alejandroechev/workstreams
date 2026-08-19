@@ -23,7 +23,8 @@ export interface WorkstreamQuickNoteProps {
 }
 
 export function WorkstreamQuickNote({ backend, workstreamId }: WorkstreamQuickNoteProps) {
-  const [task, setTask] = useState<Task | null>(null);
+  const [matches, setMatches] = useState<Task[]>([]);
+  const [targetId, setTargetId] = useState<string | null>(null);
   const [text, setText] = useState("");
   const [flash, setFlash] = useState<string | null>(null);
 
@@ -33,24 +34,39 @@ export function WorkstreamQuickNote({ backend, workstreamId }: WorkstreamQuickNo
       .listTasks()
       .then((tasks) => {
         if (cancelled) return;
-        setTask(tasks.find((t) => t.workstreamId === workstreamId) ?? null);
+        const mine = tasks.filter((t) => t.workstreamId === workstreamId);
+        setMatches(mine);
+        setTargetId((prev) =>
+          prev && mine.some((t) => t.id === prev) ? prev : (mine[0]?.id ?? null),
+        );
       })
       .catch(() => {
-        if (!cancelled) setTask(null);
+        if (!cancelled) setMatches([]);
       });
     return () => {
       cancelled = true;
     };
   }, [backend, workstreamId]);
 
+  // Nothing constrains one task per workstream, so several can legitimately
+  // point here. Picking the first silently would file notes under the wrong
+  // task -- and therefore the wrong section of the archive.
+  const task = matches.find((t) => t.id === targetId) ?? null;
+
   const submit = useCallback(async () => {
     if (!task) return;
     const trimmed = text.trim();
     if (!trimmed) return;
-    await backend.addTaskEvent(task.id, "note", trimmed, "manual");
-    setText("");
-    setFlash("logged");
-    window.setTimeout(() => setFlash(null), 1500);
+    try {
+      await backend.addTaskEvent(task.id, "note", trimmed, "manual");
+      setText("");
+      setFlash("logged");
+    } catch (err) {
+      // Silently swallowing this would look identical to success and lose
+      // the note the user just typed.
+      setFlash(err instanceof Error ? err.message : "could not log the note");
+    }
+    window.setTimeout(() => setFlash(null), 2500);
   }, [backend, task, text]);
 
   if (!task) return null;
@@ -58,7 +74,22 @@ export function WorkstreamQuickNote({ backend, workstreamId }: WorkstreamQuickNo
   return (
     <div data-testid="quick-note" style={barStyle}>
       <span style={{ color: "#6c7086", fontSize: 10 }}>Log to</span>
-      <span style={{ fontSize: 11 }}>{task.title}</span>
+      {matches.length > 1 ? (
+        <select
+          data-testid="quick-note-target"
+          value={task.id}
+          onChange={(e) => setTargetId(e.target.value)}
+          style={{ ...inputStyle, flex: "0 0 auto", maxWidth: 220 }}
+        >
+          {matches.map((t) => (
+            <option key={t.id} value={t.id}>
+              {t.title}
+            </option>
+          ))}
+        </select>
+      ) : (
+        <span style={{ fontSize: 11 }}>{task.title}</span>
+      )}
       <input
         data-testid="quick-note-input"
         value={text}

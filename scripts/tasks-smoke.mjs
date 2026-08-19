@@ -228,10 +228,21 @@ try {
     "## AudioTranscoding\n- 👁️Waiting on Marcus for bug fix review\n\t- ✅no repro\n";
   writeFileSync(dayFile, HAND_WRITTEN, "utf8");
 
-  // Mirror of the Rust rule in src-tauri/src/devlog.rs.
-  const target = isGeneratedByUs(readFileSync(dayFile, "utf8"))
-    ? dayFile
-    : path.join(wiki, `${today}.workstreams.md`);
+  // Mirror of the Rust rule in src-tauri/src/devlog.rs: the provenance check
+  // applies to EVERY candidate path, not just the intended one.
+  const writable = (p) => !existsSync(p) || isGeneratedByUs(readFileSync(p, "utf8"));
+  let target = "";
+  if (writable(dayFile)) {
+    target = dayFile;
+  } else {
+    for (let suffix = 0; suffix < 100 && !target; suffix++) {
+      const candidate = path.join(
+        wiki,
+        suffix === 0 ? `${today}.workstreams.md` : `${today}.workstreams.${suffix}.md`,
+      );
+      if (writable(candidate)) target = candidate;
+    }
+  }
   writeFileSync(target, page, "utf8");
 
   check("a hand-written day is never chosen as the target", target !== dayFile);
@@ -240,6 +251,29 @@ try {
     readFileSync(dayFile, "utf8") === HAND_WRITTEN,
   );
   check("the export lands alongside it", existsSync(target));
+
+  // A hand-written file at the ALONGSIDE name must be protected too, or
+  // stepping aside just destroys a different file of the user's.
+  const alongside = path.join(wiki, `${today}.workstreams.md`);
+  writeFileSync(alongside, HAND_WRITTEN, "utf8");
+  let secondTarget = "";
+  for (let suffix = 0; suffix < 100 && !secondTarget; suffix++) {
+    const candidate = path.join(
+      wiki,
+      suffix === 0 ? `${today}.workstreams.md` : `${today}.workstreams.${suffix}.md`,
+    );
+    if (writable(candidate)) secondTarget = candidate;
+  }
+  writeFileSync(secondTarget, page, "utf8");
+  check(
+    "a hand-written alongside file is protected as well",
+    readFileSync(alongside, "utf8") === HAND_WRITTEN && secondTarget !== alongside,
+  );
+
+  check(
+    "a marker that merely contains ours is rejected",
+    !isGeneratedByUs("---\nnot_generated_by: workstreams\n---\n"),
+  );
 
   // A page we generated earlier IS replaceable, or regeneration would spawn a
   // new file every single day.

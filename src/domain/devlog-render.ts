@@ -53,10 +53,19 @@ export interface RenderDevlogInput {
  * exact marker inside leading front matter is treated as somebody else's.
  */
 export function isGeneratedByUs(content: string): boolean {
-  if (!content.startsWith("---\n")) return false;
-  const end = content.indexOf("\n---", 4);
+  // Tolerate a UTF-8 BOM and CRLF, which editors add freely, but nothing else.
+  const body = content.replace(/^\uFEFF/, "").split("\r\n").join("\n");
+  if (!body.startsWith("---\n")) return false;
+  const end = body.indexOf("\n---", 4);
   if (end === -1) return false;
-  return content.slice(4, end).includes(GENERATED_BY_MARKER);
+  // Exact line match, not a substring test. `not_generated_by: workstreams`
+  // and `generated_by: workstreams-backup` both contain the marker, and
+  // treating either as ours would authorise destroying somebody else's file.
+  // Must stay in lockstep with `is_generated_by_us` in src-tauri/src/devlog.rs.
+  return body
+    .slice(4, end)
+    .split("\n")
+    .some((line) => line.replace(/\s+$/, "") === GENERATED_BY_MARKER);
 }
 
 function statusPrefix(task: Pick<Task, "status" | "flags">): string {

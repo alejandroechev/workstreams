@@ -208,3 +208,51 @@ describe("TaskBoard", () => {
     expect(onClose).toHaveBeenCalled();
   });
 });
+
+describe("failure surfacing", () => {
+  it("shows a backend failure instead of an empty board", async () => {
+    // An unhandled rejection with a silent empty board is indistinguishable
+    // from "you have no tasks", which is the worst possible failure mode.
+    const failing = {
+      listTasks: async () => {
+        throw new Error("db is gone");
+      },
+      listLabels: async () => [],
+      listTaskEvents: async () => [],
+    } as unknown as MemoryBackend;
+
+    render(
+      <TaskBoard backend={failing} workstreams={[]} projects={[]} onClose={vi.fn()} />,
+    );
+    expect(await screen.findByTestId("board-error")).toHaveTextContent("db is gone");
+  });
+
+  it("reports a failed mutation rather than swallowing it", async () => {
+    const task = await backend.createTask("x");
+    const flaky = Object.create(backend) as MemoryBackend;
+    flaky.updateTask = async () => {
+      throw new Error("write rejected");
+    };
+
+    render(<TaskBoard backend={flaky} workstreams={[]} projects={[]} onClose={vi.fn()} />);
+    await screen.findByText("x");
+    fireEvent.click(screen.getByTestId(`task-card-${task.id}`));
+    fireEvent.change(await screen.findByTestId("detail-status"), {
+      target: { value: "done" },
+    });
+
+    expect(await screen.findByTestId("board-error")).toHaveTextContent("write rejected");
+  });
+
+  it("renders event times in the local timezone, matching the exported page", async () => {
+    const task = await backend.createTask("x");
+    await backend.addTaskEvent(task.id, "note", "a note");
+    render(<TaskBoard backend={backend} workstreams={[]} projects={[]} onClose={vi.fn()} />);
+    await screen.findByText("x");
+    fireEvent.click(screen.getByTestId(`task-card-${task.id}`));
+
+    const now = new Date();
+    const expected = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+    expect(await screen.findByTestId("event-feed")).toHaveTextContent(expected);
+  });
+});

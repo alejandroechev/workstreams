@@ -355,4 +355,18 @@ describe("devlogDirectory", () => {
   it("falls back to empty for a non-string", () => {
     expect(sanitize({ devlogDirectory: 42 as never }).devlogDirectory).toBe("");
   });
+
+  it("survives a restart, rather than silently reverting to unconfigured", async () => {
+    // It was hydrated but never written, so the path was lost on every restart
+    // and export quietly stopped working. Round-trip through the store rather
+    // than spying on the call, so the whole path is proven.
+    setAppSettings({ devlogDirectory: "/Users/me/Wiki/devlog/fy2027" });
+    await new Promise((r) => setTimeout(r, 0));
+
+    _resetAppSettingsCacheForTests();
+    expect(getAppSettings().devlogDirectory).toBe("");
+
+    await hydrateAppSettings();
+    expect(getAppSettings().devlogDirectory).toBe("/Users/me/Wiki/devlog/fy2027");
+  });
 });

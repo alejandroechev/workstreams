@@ -40,6 +40,14 @@ export interface TaskBoardProps {
   devlogDirectory?: string;
 }
 
+/** `HH:MM` in the user's own timezone. */
+function localClock(iso: string): string {
+  const at = new Date(iso);
+  if (Number.isNaN(at.getTime())) return iso.slice(11, 16);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${pad(at.getHours())}:${pad(at.getMinutes())}`;
+}
+
 const STATUS_LABEL: Record<TaskStatus, string> = {
   todo: "To do",
   in_progress: "In progress",
@@ -190,6 +198,18 @@ export function TaskBoard({
             <XMarkIcon style={{ width: 14, height: 14 }} />
           </button>
         </header>
+
+        {board.loading && (
+          <p data-testid="board-loading" style={statusBarStyle}>
+            Loading tasks…
+          </p>
+        )}
+
+        {board.error && (
+          <p data-testid="board-error" style={{ ...statusBarStyle, color: "#f38ba8" }}>
+            {board.error}
+          </p>
+        )}
 
         {exportStatus && (
           <p data-testid="devlog-status" style={statusBarStyle}>
@@ -399,8 +419,11 @@ export function TaskBoard({
               <div data-testid="event-feed" style={{ maxHeight: 220, overflow: "auto" }}>
                 {selectedEvents.map((event) => (
                   <div key={event.id} style={eventRowStyle}>
+                    {/* Local clock, not the stored UTC slice: a note typed at
+                        21:00 must not read as 01:00 here while the exported
+                        page correctly files it under today. */}
                     <span style={{ color: "#6c7086", fontSize: 10 }}>
-                      {event.at.slice(11, 16)}
+                      {localClock(event.at)}
                     </span>
                     <span
                       style={{

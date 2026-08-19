@@ -18,7 +18,7 @@
 //! the wrong devlog page would be a silent data error.
 
 use crate::AppState;
-use rusqlite::{Connection, OptionalExtension};
+use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
@@ -329,14 +329,16 @@ fn apply_labels(conn: &Connection, task_id: &str, names: &[String]) -> Result<()
             None => {
                 // Re-check the DB as well: another writer (the CLI) may have
                 // inserted the same label since `existing` was read.
-                let found: Option<String> = conn
-                    .query_row(
-                        "SELECT id FROM labels WHERE lower(trim(name)) = ?1",
-                        [&key],
-                        |r| r.get(0),
-                    )
-                    .optional()
-                    .map_err(|e| e.to_string())?;
+                //
+                // The comparison must go through `normalize_label`, NOT through
+                // the index expression `lower(trim(name))`: SQL trim does not
+                // collapse internal whitespace, so `AI  Crew` would miss `AI
+                // Crew` and mint the duplicate this whole function exists to
+                // prevent.
+                let found = read_labels(conn)?
+                    .into_iter()
+                    .find(|l| normalize_label(&l.name) == key)
+                    .map(|l| l.id);
                 match found {
                     Some(id) => id,
                     None => {
@@ -601,6 +603,23 @@ mod tests {
         let labels = read_labels(&c).unwrap();
         assert_eq!(labels.len(), 1, "case variant forked the label");
         assert_eq!(labels[0].name, "AI Crew", "original casing should win");
+    }
+
+    #[test]
+    fn apply_labels_matches_internal_whitespace_variants() {
+        // SQL `trim` does not collapse internal whitespace, so a lookup through
+        // the index expression would miss this and mint a duplicate.
+        let c = conn();
+        insert_task(&c, "t1", "a");
+        insert_task(&c, "t2", "b");
+        apply_labels(&c, "t1", &["AI Crew".into()]).unwrap();
+        apply_labels(&c, "t2", &["AI   Crew".into()]).unwrap();
+
+        assert_eq!(
+            read_labels(&c).unwrap().len(),
+            1,
+            "whitespace variant forked the label"
+        );
     }
 
     #[test]
