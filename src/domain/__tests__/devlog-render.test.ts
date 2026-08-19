@@ -75,6 +75,17 @@ describe("isGeneratedByUs", () => {
     expect(isGeneratedByUs("---\n# generated_by: workstreams-ish\n---\n")).toBe(false);
   });
 
+  it("agrees with the Rust twin on BOM and whitespace edge cases", () => {
+    // Exactly the inputs where Rust's Unicode-aware trimming and JavaScript's
+    // \s used to diverge. These assertions are duplicated verbatim in
+    // src-tauri/src/devlog.rs; if the two ever disagree, the CLI and the UI
+    // hold different opinions about which files may be destroyed.
+    expect(isGeneratedByUs("\uFEFF\uFEFF---\ngenerated_by: workstreams\n---\n")).toBe(false);
+    expect(isGeneratedByUs("---\ngenerated_by: workstreams\uFEFF\n---\n")).toBe(false);
+    expect(isGeneratedByUs("---\ngenerated_by: workstreams\u00A0\n---\n")).toBe(false);
+    expect(isGeneratedByUs("---\ngenerated_by: workstreams  \t\n---\n")).toBe(true);
+  });
+
   it("tolerates CRLF and a byte-order mark, which editors add freely", () => {
     expect(isGeneratedByUs("---\r\ndate: x\r\ngenerated_by: workstreams\r\n---\r\n")).toBe(true);
     expect(isGeneratedByUs("\uFEFF---\ndate: x\ngenerated_by: workstreams\n---\n")).toBe(true);

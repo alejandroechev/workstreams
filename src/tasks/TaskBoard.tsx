@@ -164,14 +164,14 @@ export function TaskBoard({
             onChange={(e) => setNewTitle(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Enter") {
-                void board.createTask(newTitle).then(() => setNewTitle(""));
+                void board.createTask(newTitle).then((ok) => { if (ok) setNewTitle(""); });
               }
             }}
             style={{ ...controlStyle, width: 220 }}
           />
           <button
             data-testid="new-task-submit"
-            onClick={() => void board.createTask(newTitle).then(() => setNewTitle(""))}
+            onClick={() => void board.createTask(newTitle).then((ok) => { if (ok) setNewTitle(""); })}
             style={controlStyle}
           >
             <PlusIcon style={{ width: 12, height: 12 }} />
@@ -361,7 +361,11 @@ export function TaskBoard({
                       .filter((n): n is string => Boolean(n));
                     void board
                       .setLabels(selected.id, [...names, labelText])
-                      .then(() => setLabelText(""));
+                      .then((ok) => {
+                        // Only clear on success -- otherwise a failed write
+                        // silently discards what the user typed.
+                        if (ok) setLabelText("");
+                      });
                   }}
                   style={controlStyle}
                 >
@@ -407,7 +411,7 @@ export function TaskBoard({
                 <button
                   data-testid="new-subtask-submit"
                   onClick={() =>
-                    void board.addSubtask(selected.id, subtaskTitle).then(() => setSubtaskTitle(""))
+                    void board.addSubtask(selected.id, subtaskTitle).then((ok) => { if (ok) setSubtaskTitle(""); })
                   }
                   style={controlStyle}
                 >
@@ -456,14 +460,14 @@ export function TaskBoard({
                   onChange={(e) => setNoteText(e.target.value)}
                   onKeyDown={(e) => {
                     if (e.key === "Enter") {
-                      void board.addNote(selected.id, noteText).then(() => setNoteText(""));
+                      void board.addNote(selected.id, noteText).then((ok) => { if (ok) setNoteText(""); });
                     }
                   }}
                   style={{ ...controlStyle, flex: 1 }}
                 />
                 <button
                   data-testid="note-submit"
-                  onClick={() => void board.addNote(selected.id, noteText).then(() => setNoteText(""))}
+                  onClick={() => void board.addNote(selected.id, noteText).then((ok) => { if (ok) setNoteText(""); })}
                   style={controlStyle}
                 >
                   Note

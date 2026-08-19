@@ -256,3 +256,54 @@ describe("failure surfacing", () => {
     expect(await screen.findByTestId("event-feed")).toHaveTextContent(expected);
   });
 });
+
+describe("failed mutations preserve typed input", () => {
+  it("keeps the note in the box when the write fails", async () => {
+    // Clearing on failure loses the note entirely: it is in no database and
+    // no longer on screen. That is worse than not saving it.
+    const task = await backend.createTask("x");
+    const flaky = Object.create(backend) as MemoryBackend;
+    flaky.addTaskEvent = async () => {
+      throw new Error("write rejected");
+    };
+
+    render(<TaskBoard backend={flaky} workstreams={[]} projects={[]} onClose={vi.fn()} />);
+    await screen.findByText("x");
+    fireEvent.click(screen.getByTestId(`task-card-${task.id}`));
+
+    const input = (await screen.findByTestId("note-input")) as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "hard-won context" } });
+    fireEvent.click(screen.getByTestId("note-submit"));
+
+    await screen.findByTestId("board-error");
+    expect(input.value).toBe("hard-won context");
+  });
+
+  it("keeps the new task title when the write fails", async () => {
+    const flaky = Object.create(backend) as MemoryBackend;
+    flaky.createTask = async () => {
+      throw new Error("write rejected");
+    };
+
+    render(<TaskBoard backend={flaky} workstreams={[]} projects={[]} onClose={vi.fn()} />);
+    const input = (await screen.findByTestId("new-task-input")) as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "media_store read API" } });
+    fireEvent.click(screen.getByTestId("new-task-submit"));
+
+    await screen.findByTestId("board-error");
+    expect(input.value).toBe("media_store read API");
+  });
+
+  it("still clears the box on success", async () => {
+    const task = await backend.createTask("x");
+    render(<TaskBoard backend={backend} workstreams={[]} projects={[]} onClose={vi.fn()} />);
+    await screen.findByText("x");
+    fireEvent.click(screen.getByTestId(`task-card-${task.id}`));
+
+    const input = (await screen.findByTestId("note-input")) as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "a note" } });
+    fireEvent.click(screen.getByTestId("note-submit"));
+
+    await waitFor(() => expect(input.value).toBe(""));
+  });
+});

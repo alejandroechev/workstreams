@@ -53,7 +53,12 @@ export interface RenderDevlogInput {
  * exact marker inside leading front matter is treated as somebody else's.
  */
 export function isGeneratedByUs(content: string): boolean {
-  // Tolerate a UTF-8 BOM and CRLF, which editors add freely, but nothing else.
+  // Tolerate ONE leading UTF-8 BOM and CRLF, which editors add freely, but
+  // nothing else. The trailing-whitespace set below is deliberately ASCII-only
+  // rather than `\s`, because JavaScript's `\s` matches U+FEFF and U+00A0
+  // while Rust's `trim_end` does not. This function and `is_generated_by_us`
+  // in src-tauri/src/devlog.rs must agree on every input, or the CLI and the
+  // UI hold different opinions about which files may be destroyed.
   const body = content.replace(/^\uFEFF/, "").split("\r\n").join("\n");
   if (!body.startsWith("---\n")) return false;
   const end = body.indexOf("\n---", 4);
@@ -65,7 +70,7 @@ export function isGeneratedByUs(content: string): boolean {
   return body
     .slice(4, end)
     .split("\n")
-    .some((line) => line.replace(/\s+$/, "") === GENERATED_BY_MARKER);
+    .some((line) => line.replace(/[ \t\r]+$/, "") === GENERATED_BY_MARKER);
 }
 
 function statusPrefix(task: Pick<Task, "status" | "flags">): string {

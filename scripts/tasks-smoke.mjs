@@ -270,6 +270,36 @@ try {
     readFileSync(alongside, "utf8") === HAND_WRITTEN && secondTarget !== alongside,
   );
 
+  // Exhaustion must refuse, exactly as the Rust and memory implementations do.
+  // Writing to an empty path would fail with an unrelated filesystem error and
+  // prove nothing about the contract.
+  const exhaustDir = path.join(workdir, "exhausted");
+  mkdirSync(exhaustDir, { recursive: true });
+  const taken = [path.join(exhaustDir, `${today}.md`)];
+  for (let i = 0; i < 100; i++) {
+    taken.push(
+      path.join(exhaustDir, i === 0 ? `${today}.workstreams.md` : `${today}.workstreams.${i}.md`),
+    );
+  }
+  for (const f of taken) writeFileSync(f, HAND_WRITTEN, "utf8");
+
+  let refused = false;
+  let chosen = "";
+  for (let suffix = 0; suffix < 100 && !chosen; suffix++) {
+    const candidate = path.join(
+      exhaustDir,
+      suffix === 0 ? `${today}.workstreams.md` : `${today}.workstreams.${suffix}.md`,
+    );
+    if (writable(candidate)) chosen = candidate;
+  }
+  if (!chosen) refused = true;
+
+  check("exhausting every fallback name refuses rather than writing", refused);
+  check(
+    "no hand-written file was touched while refusing",
+    taken.every((f) => readFileSync(f, "utf8") === HAND_WRITTEN),
+  );
+
   check(
     "a marker that merely contains ours is rejected",
     !isGeneratedByUs("---\nnot_generated_by: workstreams\n---\n"),

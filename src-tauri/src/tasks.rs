@@ -307,7 +307,13 @@ fn read_labels(conn: &Connection) -> Result<Vec<Label>, String> {
 
 /// Resolve names to label ids, minting only genuinely new ones, then replace
 /// the task's label set.
-fn apply_labels(conn: &Connection, task_id: &str, names: &[String]) -> Result<(), String> {
+///
+/// Wrapped in `BEGIN IMMEDIATE` by `apply_labels`, because the in-process
+/// mutex does not serialise the separate CLI process: without a write lock,
+/// two writers can both pass the lookup before either inserts, and the
+/// `lower(trim(name))` index cannot catch the resulting pair when they differ
+/// only by internal whitespace.
+fn apply_labels_locked(conn: &Connection, task_id: &str, names: &[String]) -> Result<(), String> {
     let existing = read_labels(conn)?;
     let mut ids: Vec<String> = Vec::new();
     let mut seen: Vec<String> = Vec::new();
@@ -368,6 +374,25 @@ fn apply_labels(conn: &Connection, task_id: &str, names: &[String]) -> Result<()
         .map_err(|e| e.to_string())?;
     }
     Ok(())
+}
+
+/// Take the database write lock for the whole read-then-insert sequence, so
+/// label creation is atomic against the CLI as well as against this process.
+fn apply_labels(conn: &Connection, task_id: &str, names: &[String]) -> Result<(), String> {
+    conn.execute_batch("BEGIN IMMEDIATE")
+        .map_err(|e| format!("begin: {e}"))?;
+    match apply_labels_locked(conn, task_id, names) {
+        Ok(()) => {
+            conn.execute_batch("COMMIT")
+                .map_err(|e| format!("commit: {e}"))?;
+            Ok(())
+        }
+        Err(e) => {
+            // Roll back so a partial label set never survives the failure.
+            let _ = conn.execute_batch("ROLLBACK");
+            Err(e)
+        }
+    }
 }
 
 #[tauri::command]
@@ -603,6 +628,23 @@ mod tests {
         let labels = read_labels(&c).unwrap();
         assert_eq!(labels.len(), 1, "case variant forked the label");
         assert_eq!(labels[0].name, "AI Crew", "original casing should win");
+    }
+
+    #[test]
+    fn apply_labels_rolls_back_when_it_fails_partway() {
+        // A partial label set would silently mislabel the task and therefore
+        // file it under the wrong section of the exported archive.
+        let c = conn();
+        insert_task(&c, "t1", "a");
+        apply_labels(&c, "t1", &["Keep".into()]).unwrap();
+
+        // A task id that violates the foreign key fails mid-sequence.
+        let before = read_labels(&c).unwrap().len();
+        assert!(apply_labels(&c, "does-not-exist", &["New".into()]).is_err());
+        // The transaction must be closed, not left open and poisoning the
+        // next write.
+        apply_labels(&c, "t1", &["Keep".into()]).unwrap();
+        assert!(read_labels(&c).unwrap().len() >= before);
     }
 
     #[test]

@@ -44,8 +44,17 @@ pub struct DevlogExportResult {
 /// counts. See the module docs for why the failure mode has to be "refuse",
 /// not "assume".
 pub fn is_generated_by_us(content: &str) -> bool {
-    // Tolerate a UTF-8 BOM and CRLF, which editors add freely, but nothing else.
-    let body = content.trim_start_matches('\u{feff}').replace("\r\n", "\n");
+    // Tolerate ONE leading UTF-8 BOM and CRLF, which editors add freely, but
+    // nothing else. "Exactly one" and the explicit ASCII-only trailing set
+    // below are what keep this bit-for-bit equivalent to `isGeneratedByUs` in
+    // src/domain/devlog-render.ts. Rust's `trim_end` and JavaScript's `\s`
+    // disagree about Unicode whitespace (notably U+FEFF and U+0085), and a
+    // disagreement here means the CLI and the UI hold different opinions about
+    // which of the user's files may be destroyed.
+    let body = content
+        .strip_prefix('\u{feff}')
+        .unwrap_or(content)
+        .replace("\r\n", "\n");
     let Some(rest) = body.strip_prefix("---\n") else {
         return false;
     };
@@ -57,7 +66,7 @@ pub fn is_generated_by_us(content: &str) -> bool {
     // and hand us permission to destroy somebody else's file.
     rest[..end]
         .lines()
-        .any(|line| line.trim_end() == GENERATED_BY_MARKER)
+        .any(|line| line.trim_end_matches([' ', '\t', '\r']) == GENERATED_BY_MARKER)
 }
 
 /// Whether a date is a plain canonical `YYYY-MM-DD`.
@@ -82,8 +91,11 @@ fn is_safe_date(date: &str) -> bool {
 /// at the other end, which could be any file on the system.
 fn is_writable_target(path: &Path) -> bool {
     match std::fs::symlink_metadata(path) {
-        // Nothing there: safe to create.
-        Err(_) => true,
+        // Only a genuine absence means "safe to create". A permission or I/O
+        // error means we could not verify, and inability to verify is never
+        // permission to truncate -- the file may be a year of the user's notes.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => true,
+        Err(_) => false,
         Ok(meta) if meta.file_type().is_symlink() => false,
         Ok(_) => match std::fs::read_to_string(path) {
             Ok(existing) => is_generated_by_us(&existing),
@@ -330,6 +342,25 @@ mod tests {
         ));
         assert!(!is_generated_by_us(
             "---\n# generated_by: workstreams-ish\n---\n"
+        ));
+    }
+
+    #[test]
+    fn agrees_with_the_typescript_twin_on_bom_and_whitespace_edges() {
+        // These are exactly the inputs where Rust's Unicode-aware trimming and
+        // JavaScript's `\s` used to diverge. A disagreement means the CLI and
+        // the UI differ on which files may be destroyed.
+        assert!(!is_generated_by_us(
+            "\u{feff}\u{feff}---\ngenerated_by: workstreams\n---\n"
+        ));
+        assert!(!is_generated_by_us(
+            "---\ngenerated_by: workstreams\u{feff}\n---\n"
+        ));
+        assert!(!is_generated_by_us(
+            "---\ngenerated_by: workstreams\u{a0}\n---\n"
+        ));
+        assert!(is_generated_by_us(
+            "---\ngenerated_by: workstreams  \t\n---\n"
         ));
     }
 

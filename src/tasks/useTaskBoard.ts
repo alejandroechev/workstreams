@@ -22,17 +22,17 @@ export interface TaskBoardData {
   loading: boolean;
   error: string | null;
   reload: () => Promise<void>;
-  createTask: (title: string) => Promise<void>;
-  updateTask: (id: string, updates: TaskUpdate) => Promise<void>;
-  setStatus: (id: string, status: TaskStatus) => Promise<void>;
-  setLabels: (id: string, names: string[]) => Promise<void>;
-  addSubtask: (taskId: string, title: string) => Promise<void>;
-  setSubtaskStatus: (id: string, status: TaskStatus) => Promise<void>;
-  deleteSubtask: (id: string) => Promise<void>;
-  addNote: (taskId: string, text: string) => Promise<void>;
-  addEvent: (taskId: string, kind: TaskEventKind, text: string) => Promise<void>;
-  deleteEvent: (id: string) => Promise<void>;
-  deleteTask: (id: string) => Promise<void>;
+  createTask: (title: string) => Promise<boolean>;
+  updateTask: (id: string, updates: TaskUpdate) => Promise<boolean>;
+  setStatus: (id: string, status: TaskStatus) => Promise<boolean>;
+  setLabels: (id: string, names: string[]) => Promise<boolean>;
+  addSubtask: (taskId: string, title: string) => Promise<boolean>;
+  setSubtaskStatus: (id: string, status: TaskStatus) => Promise<boolean>;
+  deleteSubtask: (id: string) => Promise<boolean>;
+  addNote: (taskId: string, text: string) => Promise<boolean>;
+  addEvent: (taskId: string, kind: TaskEventKind, text: string) => Promise<boolean>;
+  deleteEvent: (id: string) => Promise<boolean>;
+  deleteTask: (id: string) => Promise<boolean>;
 }
 
 export function useTaskBoard(backend: Backend): TaskBoardData {
@@ -68,18 +68,21 @@ export function useTaskBoard(backend: Backend): TaskBoardData {
    * Wrap a mutation so a backend failure becomes visible state rather than an
    * unhandled rejection. Every caller is fire-and-forget from an event
    * handler, so without this a failed write is indistinguishable from success.
+   *
+   * Returns whether the mutation succeeded. Callers MUST honour it before
+   * clearing an input: resolving silently on failure would wipe the note or
+   * title the user typed while it was never saved anywhere.
    */
-  const guard = useCallback(
-    async (run: () => Promise<void>) => {
-      try {
-        setError(null);
-        await run();
-      } catch (err) {
-        setError(err instanceof Error ? err.message : String(err));
-      }
-    },
-    [],
-  );
+  const guard = useCallback(async (run: () => Promise<void>): Promise<boolean> => {
+    try {
+      setError(null);
+      await run();
+      return true;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      return false;
+    }
+  }, []);
 
   const createTask = useCallback(
     (title: string) =>
