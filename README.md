@@ -37,6 +37,16 @@ project-aware workspace:
   its PTYs) without archiving it. It stays in the active list and reverts to
   the moon "stopped" indicator, exactly like a workstream that hasn't been
   opened yet this session; selecting it again reloads and respawns everything.
+- 📋 **Task board with daily devlog export** — a global board (sidebar →
+  **Tasks**), not a tile, because a task may have no workstream and often
+  outlives the one it had. Seven columns matching the status glyphs already
+  used in a hand-written devlog (⚒️ 👁️ 🧊 🚗 🙋 ✅), **label swimlanes** so a
+  long in-progress column stays scannable, one level of subtasks that carry
+  their own status, and an **append-only event log** per task. Notes can be
+  deleted but never rewritten. **Export** renders the day into your wiki as
+  markdown, commits and pushes it — one-way, and it never overwrites a page it
+  did not generate. **Preview** shows exactly what would be written without
+  writing anything. See [ADR 020](docs/adrs/020-task-board-devlog-export.md).
 - 🗂️ **Built-in repo browser** — Files / Diff / Log / Hooks / Search tabs. Diff
   has split / unified toggle, and the **Unstaged** diff is **editable in place**:
   type on the modified side and `Cmd+S` / `Ctrl+S` (or the Save button) writes

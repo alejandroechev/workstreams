@@ -1,5 +1,6 @@
 mod code_review;
 mod db;
+mod devlog;
 mod file_io;
 mod fs_watcher;
 mod pty;
@@ -176,6 +177,11 @@ fn hidden_command<S: AsRef<std::ffi::OsStr>>(program: S) -> std::process::Comman
 /// Create a git Command that doesn't show a console window on Windows.
 fn git_cmd() -> std::process::Command {
     hidden_command("git")
+}
+
+/// Console-window-free `git`, exposed for sibling modules.
+pub(crate) fn git_command() -> std::process::Command {
+    git_cmd()
 }
 
 // ── Project Commands ──────────────────────────────────────────────────
@@ -5163,6 +5169,7 @@ pub fn run() {
             tasks::list_task_events,
             tasks::add_task_event,
             tasks::delete_task_event,
+            devlog::export_devlog_day,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

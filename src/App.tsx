@@ -6,6 +6,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { fileBufferRegistry } from "./files/FileBufferRegistry";
 import WorkstreamSidebar from "./workstream/WorkstreamSidebar";
 import { TaskBoard } from "./tasks/TaskBoard";
+import { WorkstreamQuickNote } from "./tasks/WorkstreamQuickNote";
 import ProjectCreateForm from "./workstream/ProjectCreateForm";
 import RepoCreateForm from "./workstream/RepoCreateForm";
 import WorkstreamCreateForm from "./workstream/WorkstreamCreateForm";
@@ -1441,6 +1442,7 @@ export default function App() {
                   flexDirection: "column",
                 }}
               >
+                <WorkstreamQuickNote backend={backend} workstreamId={wsId} />
                 <TileGrid
                   tiles={st.tiles}
                   tileOrder={st.tileOrder}
@@ -1664,6 +1666,7 @@ export default function App() {
           backend={backend}
           workstreams={workstreams}
           projects={projects}
+          devlogDirectory={getAppSettings().devlogDirectory}
           onClose={() => setShowTaskBoard(false)}
         />
       )}

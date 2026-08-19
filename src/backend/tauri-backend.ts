@@ -3,7 +3,13 @@ import type { Project, Workstream, Tile, TileType, WorkstreamLayout, CopilotConf
 import type { SessionFileComment } from "../domain/file-comments";
 import type { Review, ReviewComment, ChangedFile, DiffSides } from "../domain/code-review";
 import { parseTraceFile, type TraceFile } from "../domain/trace-format";
-import type { Backend, CodeTrace, TraceStaleness, TaskUpdate } from "./types";
+import type {
+  Backend,
+  CodeTrace,
+  TraceStaleness,
+  TaskUpdate,
+  DevlogExportResult,
+} from "./types";
 import type {
   Task,
   Subtask,
@@ -557,5 +563,20 @@ export class TauriBackend implements Backend {
   /** No `updateTaskEvent` counterpart exists -- event text is immutable. */
   async deleteTaskEvent(id: string): Promise<void> {
     await invoke("delete_task_event", { id });
+  }
+
+  async exportDevlogDay(
+    directory: string,
+    date: string,
+    content: string,
+    opts?: { commit?: boolean; push?: boolean },
+  ): Promise<DevlogExportResult> {
+    return invoke<DevlogExportResult>("export_devlog_day", {
+      directory,
+      date,
+      content,
+      commit: opts?.commit ?? true,
+      push: opts?.push ?? false,
+    });
   }
 }

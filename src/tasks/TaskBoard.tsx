@@ -26,6 +26,7 @@ import {
   type TaskStatus,
 } from "../domain/task-status";
 import { swimlanes, visibleTasks, filterByRepo } from "../domain/task-board";
+import { renderDevlogDay } from "../domain/devlog-render";
 import { useTaskBoard } from "./useTaskBoard";
 
 export interface TaskBoardProps {
@@ -35,6 +36,8 @@ export interface TaskBoardProps {
   onClose: () => void;
   /** Injectable for tests; defaults to the real local day. */
   today?: string;
+  /** Wiki folder the generated page is written to. Empty disables export. */
+  devlogDirectory?: string;
 }
 
 const STATUS_LABEL: Record<TaskStatus, string> = {
@@ -55,6 +58,7 @@ export function TaskBoard({
   projects,
   onClose,
   today = toLocalDate(new Date().toISOString()),
+  devlogDirectory = "",
 }: TaskBoardProps) {
   const board = useTaskBoard(backend);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -64,6 +68,8 @@ export function TaskBoard({
   const [noteText, setNoteText] = useState("");
   const [subtaskTitle, setSubtaskTitle] = useState("");
   const [labelText, setLabelText] = useState("");
+  const [preview, setPreview] = useState<string | null>(null);
+  const [exportStatus, setExportStatus] = useState<string | null>(null);
 
   const lanes = useMemo(() => {
     const scoped = filterByRepo(board.tasks, workstreams, repoFilter);
@@ -72,6 +78,41 @@ export function TaskBoard({
       today,
     });
   }, [board.tasks, board.labels, board.events, workstreams, repoFilter, showAllDone, today]);
+
+  const renderPage = () =>
+    renderDevlogDay({
+      date: today,
+      tasks: board.tasks,
+      events: board.events,
+      labels: board.labels,
+      workstreams,
+    });
+
+  /**
+   * Export is manual and one-way. It refuses outright when no folder is
+   * configured rather than guessing a path, because a wrong guess would
+   * scatter generated pages through the user's wiki.
+   */
+  const runExport = async () => {
+    if (!devlogDirectory) {
+      setExportStatus("Devlog folder is not configured — set it in Settings.");
+      return;
+    }
+    setExportStatus("Exporting…");
+    try {
+      const result = await backend.exportDevlogDay(devlogDirectory, today, renderPage(), {
+        commit: true,
+        push: true,
+      });
+      const bits = [`Wrote ${result.path}`];
+      if (result.commit) bits.push(`commit ${result.commit.slice(0, 8)}`);
+      if (result.pushed) bits.push("pushed");
+      if (result.warning) bits.push(result.warning);
+      setExportStatus(bits.join(" · "));
+    } catch (err) {
+      setExportStatus(err instanceof Error ? err.message : String(err));
+    }
+  };
 
   const selected: Task | null = board.tasks.find((t) => t.id === selectedId) ?? null;
   const selectedEvents = selected ? sortEvents(eventsForTask(board.events, selected.id)) : [];
@@ -128,10 +169,52 @@ export function TaskBoard({
             <PlusIcon style={{ width: 12, height: 12 }} />
           </button>
 
+          <button
+            data-testid="devlog-preview"
+            onClick={() => setPreview(renderPage())}
+            style={controlStyle}
+            title="Preview today's generated devlog page without writing it"
+          >
+            Preview
+          </button>
+          <button
+            data-testid="devlog-export"
+            onClick={() => void runExport()}
+            style={controlStyle}
+            title="Write, commit and push today's devlog page"
+          >
+            Export
+          </button>
+
           <button data-testid="board-close" onClick={onClose} style={controlStyle} title="Close">
             <XMarkIcon style={{ width: 14, height: 14 }} />
           </button>
         </header>
+
+        {exportStatus && (
+          <p data-testid="devlog-status" style={statusBarStyle}>
+            {exportStatus}
+          </p>
+        )}
+
+        {preview !== null && (
+          <div style={previewWrapStyle}>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+              <strong style={{ fontSize: 11 }}>Preview — nothing has been written</strong>
+              <div style={{ flex: 1 }} />
+              <button
+                data-testid="devlog-preview-close"
+                onClick={() => setPreview(null)}
+                style={controlStyle}
+              >
+                Close preview
+              </button>
+            </div>
+            <pre data-testid="devlog-preview-content" style={previewStyle}>
+              {preview}
+            </pre>
+          </div>
+        )}
 
         <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
           <div style={{ flex: 1, overflow: "auto", padding: 8 }}>
@@ -501,4 +584,32 @@ const iconBtnStyle: React.CSSProperties = {
   color: "#6c7086",
   cursor: "pointer",
   padding: 0,
+};
+
+const statusBarStyle: React.CSSProperties = {
+  margin: 0,
+  padding: "4px 10px",
+  borderBottom: "1px solid #313244",
+  color: "#a6adc8",
+  fontSize: 11,
+};
+
+const previewWrapStyle: React.CSSProperties = {
+  borderBottom: "1px solid #313244",
+  padding: "6px 10px",
+  maxHeight: "40%",
+  display: "flex",
+  flexDirection: "column",
+  minHeight: 0,
+};
+
+const previewStyle: React.CSSProperties = {
+  margin: 0,
+  overflow: "auto",
+  background: "#11111b",
+  border: "1px solid #313244",
+  borderRadius: 4,
+  padding: 8,
+  fontSize: 11,
+  whiteSpace: "pre-wrap",
 };

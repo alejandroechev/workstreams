@@ -59,6 +59,32 @@ describe("useTaskBoard", () => {
     expect(events[0].text).toContain("in review");
   });
 
+  it("records attaching and detaching a workstream as auto events", async () => {
+    const task = await backend.createTask("x");
+    const { result } = await mounted();
+
+    await act(async () => {
+      await result.current.updateTask(task.id, { workstreamId: "w1" });
+    });
+    await act(async () => {
+      await result.current.updateTask(task.id, { workstreamId: null });
+    });
+
+    const events = await backend.listTaskEvents(task.id);
+    expect(events.map((e) => e.kind)).toEqual(["workstream", "workstream"]);
+    expect(events.every((e) => e.source === "auto")).toBe(true);
+    expect(events[1].text).toContain("detached");
+  });
+
+  it("does not fabricate a workstream event for an unrelated edit", async () => {
+    const task = await backend.createTask("x");
+    const { result } = await mounted();
+    await act(async () => {
+      await result.current.updateTask(task.id, { title: "renamed" });
+    });
+    expect(await backend.listTaskEvents(task.id)).toHaveLength(0);
+  });
+
   it("ignores a blank task title rather than creating an empty card", async () => {
     const { result } = await mounted();
     await act(async () => {

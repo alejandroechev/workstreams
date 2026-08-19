@@ -76,7 +76,21 @@ export function useTaskBoard(backend: Backend): TaskBoardData {
 
   const updateTask = useCallback(
     async (id: string, updates: TaskUpdate) => {
+      // Capture the link change before writing, so the event can name what the
+      // task moved *to* without re-reading the row.
+      const linkChanged = updates.workstreamId !== undefined;
       await backend.updateTask(id, updates);
+      if (linkChanged) {
+        // Attaching a workstream is one of the few signals the app observes for
+        // free, and it is exactly the kind of thing the hand-written devlog
+        // recorded by hand ("moved this into its own branch").
+        await backend.addTaskEvent(
+          id,
+          "workstream",
+          updates.workstreamId ? "attached a workstream" : "detached its workstream",
+          "auto",
+        );
+      }
       await reload();
     },
     [backend, reload],

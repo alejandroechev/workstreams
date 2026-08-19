@@ -33,6 +33,7 @@ const SQL_KEYS = {
   terminalFontSize: "app.font.terminal",
   copilotCommand: "app.copilot_command",
   disableWebglRenderer: "app.disable_webgl_renderer",
+  devlogDirectory: "app.devlog_directory",
 } as const;
 
 export interface AppSettings {
@@ -50,6 +51,13 @@ export interface AppSettings {
    * use the DOM renderer only. Escape hatch for GPU context-loss "black
    * terminal" issues — the DOM renderer is slower but never goes black. */
   disableWebglRenderer: boolean;
+  /**
+   * Folder the generated devlog pages are written to (e.g. the user's wiki
+   * `devlog/fy2027`). Empty means unset: the export refuses to run rather than
+   * guessing, because a wrong path would scatter generated pages somewhere the
+   * user never looks -- or next to unrelated notes.
+   */
+  devlogDirectory: string;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -62,6 +70,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   // context loss (see webgl-renderer.ts); defaulting off trades some render
   // speed for reliability. Users can opt back into GPU rendering in Settings.
   disableWebglRenderer: true,
+  devlogDirectory: "",
 };
 
 export const SCROLL_SPEED_MIN = 0.1;
@@ -129,6 +138,8 @@ export function sanitize(raw: Partial<AppSettings> | null | undefined): AppSetti
       typeof raw.disableWebglRenderer === "boolean"
         ? raw.disableWebglRenderer
         : DEFAULT_SETTINGS.disableWebglRenderer,
+    devlogDirectory:
+      typeof raw.devlogDirectory === "string" ? raw.devlogDirectory.trim() : DEFAULT_SETTINGS.devlogDirectory,
   };
 }
 
@@ -168,6 +179,13 @@ async function readSqlSettings(): Promise<Partial<AppSettings>> {
       if (typeof raw === "string" && raw.trim().length > 0) {
         entries.copilotCommand = raw;
       }
+    } catch { /* ignore */ }
+  })());
+  // String-typed: devlogDirectory.
+  tasks.push((async () => {
+    try {
+      const raw = await invoke<string | null>("get_setting", { key: SQL_KEYS.devlogDirectory });
+      if (typeof raw === "string" && raw.trim().length > 0) entries.devlogDirectory = raw;
     } catch { /* ignore */ }
   })());
   // Boolean-typed: disableWebglRenderer ("1"/"0").

@@ -15,6 +15,9 @@ graph TB
             Workbench["WorkbenchTile<br/>Workbench file detail"]
             CodeReview["CodeReviewTile<br/>diff-first PR-style review (ADR 014)<br/>inline comments + in-place edit<br/>reviewer↔agent via session.db, no MCP<br/>manual Sync (no poll)"]
             InlineComments["Inline File Comments (ADR 009)<br/>view zones in FileEditorView + comments-toggle<br/>reviewer↔agent via session.db, no MCP<br/>requires a linked session"]
+            TaskBoard["TaskBoard (ADR 020)<br/>global board, not a tile<br/>7 columns + label swimlanes<br/>subtasks / labels / event feed"]
+            QuickNote["WorkstreamQuickNote<br/>log a note to this workstream's task"]
+            DevlogRender["devlog-render.ts<br/>renders the daily page (pure)"]
             StatusBar["StatusBar<br/>Shortcuts + metadata"]
             subgraph Files["Files"]
                 FileBuffers["FileBufferRegistry<br/>Editable file buffers + dirty state"]
@@ -27,6 +30,8 @@ graph TB
             PtyRS["pty.rs<br/>PtyManager: spawn, write, resize, close"]
             ShellEnvRS["shell_env.rs<br/>login-shell PATH repair (macOS GUI launch)"]
             CodeTraceRS["code_traces index<br/>list/get/delete/index + staleness"]
+            TasksRS["tasks.rs<br/>tasks / subtasks / labels / task_events<br/>ISO-8601 timestamps, append-only events"]
+            DevlogRS["devlog.rs<br/>write + commit + push<br/>refuses to clobber hand-written pages"]
             DbRS["db.rs<br/>SQLite schema + WAL"]
             FileSystemProvider["FileSystemProvider trait<br/>OS / InMemory impls"]
         end
@@ -36,6 +41,10 @@ graph TB
         AppDB["workstreams.db<br/>(SQLite — workstreams, tiles, layouts, scrollback)"]
         CopilotDB["~/.copilot/session-store.db<br/>(read-only enrichment)"]
         CopilotSessionDB["~/.copilot/session-state/&lt;id&gt;/session.db<br/>(bound session — reviews + review_comments<br/>+ file_comments, RW)"]
+    end
+
+    subgraph Wiki["User wiki (git)"]
+        DevlogDir["devlog/&lt;fy&gt;/YYYY-MM-DD.md<br/>one-way export, never read back"]
     end
 
     subgraph OS["Windows OS"]
@@ -65,6 +74,14 @@ graph TB
     Terminal -- "invoke: write_to_pty, resize_pty" --> LibRS
     LibRS -- "emit: pty-output-{id}" --> Terminal
     Sidebar -- "invoke: create/list workstreams" --> LibRS
+    App --> TaskBoard
+    App --> QuickNote
+    TaskBoard --> DevlogRender
+    TaskBoard -- "invoke: list/create/update tasks<br/>labels, subtasks, events" --> TasksRS
+    QuickNote -- "invoke: add_task_event (manual)" --> TasksRS
+    TaskBoard -- "invoke: export_devlog_day(rendered)" --> DevlogRS
+    TasksRS --> AppDB
+    DevlogRS -- "write + git commit/push<br/>guard: generated_by front matter" --> DevlogDir
     CodeView -- "invoke: read_file" --> LibRS
     DocView -- "invoke: read_file" --> LibRS
     RepoExplorer --> FileBuffers

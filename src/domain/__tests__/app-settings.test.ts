@@ -338,3 +338,21 @@ describe("createWheelLineAccumulator", () => {
     expect(out).toBeLessThan(0);
   });
 });
+
+describe("devlogDirectory", () => {
+  it("defaults to empty, because the export must never guess a path", () => {
+    // A wrong default would scatter generated pages into a folder the user
+    // never opens, or worse, next to unrelated notes.
+    expect(DEFAULT_SETTINGS.devlogDirectory).toBe("");
+  });
+
+  it("trims a configured path", () => {
+    expect(sanitize({ devlogDirectory: "  /Users/me/Wiki/devlog/fy2027 " }).devlogDirectory).toBe(
+      "/Users/me/Wiki/devlog/fy2027",
+    );
+  });
+
+  it("falls back to empty for a non-string", () => {
+    expect(sanitize({ devlogDirectory: 42 as never }).devlogDirectory).toBe("");
+  });
+});

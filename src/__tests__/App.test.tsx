@@ -126,6 +126,7 @@ function createBackend(): Backend {
   }]));
 
   return {
+    exportDevlogDay: vi.fn(),
     listTasks: vi.fn(async () => []),
     createTask: vi.fn(),
     updateTask: vi.fn(),

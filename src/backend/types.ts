@@ -280,6 +280,29 @@ export interface Backend {
    * so the log can never quietly disagree with the exported archive.
    */
   deleteTaskEvent(id: string): Promise<void>;
+
+  /**
+   * Write a rendered devlog page into `directory`, optionally committing and
+   * pushing. Rendering happens in TypeScript; this only persists the result.
+   *
+   * Never overwrites a file it did not generate -- see `DevlogExportResult`
+   * `wroteAlongside`.
+   */
+  exportDevlogDay(
+    directory: string,
+    date: string,
+    content: string,
+    opts?: { commit?: boolean; push?: boolean },
+  ): Promise<DevlogExportResult>;
+}
+
+export interface DevlogExportResult {
+  path: string;
+  /** True when the intended day file was not ours and was left untouched. */
+  wroteAlongside: boolean;
+  warning: string;
+  commit: string;
+  pushed: boolean;
 }
 
 export type TraceStaleness = "fresh" | "head_moved" | "tree_dirty" | "unknown";

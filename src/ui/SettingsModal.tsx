@@ -252,6 +252,45 @@ export default function SettingsModal({ open, onClose }: Props) {
           <div style={{ height: 1, background: "#313244", margin: "18px 0 14px" }} />
 
           <div style={{ fontSize: 11, color: "#89b4fa", marginBottom: 8, textTransform: "uppercase", letterSpacing: 0.5 }}>
+            Devlog export
+          </div>
+          <label htmlFor="devlog-directory" style={{ display: "block", marginBottom: 4 }}>
+            Devlog folder
+            {localValues.devlogDirectory !== settings.devlogDirectory ? (
+              <span style={{ color: "#f9e2af", marginLeft: 6, fontSize: 11 }}>(pending…)</span>
+            ) : null}
+          </label>
+          <input
+            id="devlog-directory"
+            data-testid="settings-devlog-directory"
+            type="text"
+            value={localValues.devlogDirectory}
+            onChange={(e) => update({ devlogDirectory: e.target.value })}
+            spellCheck={false}
+            placeholder="e.g. /Users/you/Wiki/work-wiki/devlog/fy2027"
+            style={{
+              width: "100%",
+              background: "#11111b",
+              color: "#cdd6f4",
+              border: "1px solid #313244",
+              borderRadius: 3,
+              padding: "4px 6px",
+              fontFamily: "monospace",
+              fontSize: 12,
+              boxSizing: "border-box",
+            }}
+          />
+          <div style={{ marginTop: 4, fontSize: 11, color: "#6c7086" }}>
+            Where the task board writes its generated daily page. Export is
+            one-way and never overwrites a file it did not generate: a page
+            without a <code>generated_by: workstreams</code> front-matter key
+            is left untouched and the export is written alongside it. Leave
+            empty to disable export entirely.
+          </div>
+
+          <div style={{ height: 1, background: "#313244", margin: "18px 0 14px" }} />
+
+          <div style={{ fontSize: 11, color: "#89b4fa", marginBottom: 8, textTransform: "uppercase", letterSpacing: 0.5 }}>
             Rendering
           </div>
           <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>

@@ -44,7 +44,8 @@ function renderSidebar(over: Record<string, unknown> = {}) {
     <WorkstreamSidebar
       projects={[project("p1", "waimea")]}
       workstreams={[ws("w1")]}
-      activeWorkstreamId={null}
+      activeWsId={null}
+      onChangeStatus={vi.fn()}
       onSelectWorkstream={vi.fn()}
       onCreateProject={vi.fn()}
       onImportProject={vi.fn()}
