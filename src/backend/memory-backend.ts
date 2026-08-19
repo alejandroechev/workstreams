@@ -3,7 +3,19 @@ import type { SessionFileComment } from "../domain/file-comments";
 import type { Review, ReviewComment, ChangedFile, DiffSides } from "../domain/code-review";
 import { CONTENT_SEARCH_MAX_PER_FILE } from "../domain/content-search";
 import { compareByCreatedAt } from "../domain/comment-order";
-import type { Backend, CodeTrace, TraceStaleness } from "./types";
+import type { Backend, CodeTrace, TraceStaleness, TaskUpdate } from "./types";
+import type {
+  Task,
+  Subtask,
+  Label,
+  TaskEvent,
+  TaskEventKind,
+  TaskEventSource,
+} from "../domain/tasks";
+import { makeTask, makeEvent, sortEvents } from "../domain/tasks";
+import type { TaskStatus } from "../domain/task-status";
+import { isTerminalStatus } from "../domain/task-status";
+import { resolveLabelNames } from "../domain/task-labels";
 import { parseTraceFile, type TraceFile } from "../domain/trace-format";
 import { rewriteTileCwd } from "../domain/worktree-change";
 
@@ -910,5 +922,136 @@ export class MemoryBackend implements Backend {
       throw new Error(`Cannot record ${testName}: no recorder configured`);
     }
     return this._recordedTracePath;
+  }
+
+  // ── Project tracking ──────────────────────────────────────────────────
+
+  private tasks = new Map<string, Task>();
+  private labels = new Map<string, Label>();
+  private taskEvents: TaskEvent[] = [];
+
+  /** Deep copy so callers cannot mutate stored state through the returned tree. */
+  private cloneTask(task: Task): Task {
+    return {
+      ...task,
+      flags: [...task.flags],
+      links: [...task.links],
+      labelIds: [...task.labelIds],
+      subtasks: task.subtasks.map((s) => ({ ...s })),
+    };
+  }
+
+  private requireTask(id: string): Task {
+    const task = this.tasks.get(id);
+    if (!task) throw new Error(`Task not found: ${id}`);
+    return task;
+  }
+
+  async listTasks(): Promise<Task[]> {
+    return [...this.tasks.values()].map((t) => this.cloneTask(t));
+  }
+
+  async createTask(
+    title: string,
+    opts?: { status?: TaskStatus; workstreamId?: string | null; labelNames?: string[] },
+  ): Promise<Task> {
+    const task = makeTask({
+      id: generateId(),
+      title,
+      status: opts?.status,
+      workstreamId: opts?.workstreamId ?? null,
+      createdAt: now(),
+    });
+    this.tasks.set(task.id, task);
+    if (opts?.labelNames?.length) await this.setTaskLabels(task.id, opts.labelNames);
+    return this.cloneTask(this.requireTask(task.id));
+  }
+
+  async updateTask(id: string, updates: TaskUpdate): Promise<void> {
+    const task = this.requireTask(id);
+    if (updates.title !== undefined) task.title = updates.title;
+    if (updates.flags !== undefined) task.flags = [...updates.flags];
+    if (updates.links !== undefined) task.links = [...updates.links];
+    if (updates.workstreamId !== undefined) task.workstreamId = updates.workstreamId;
+    if (updates.status !== undefined) {
+      task.status = updates.status;
+      // `completedAt` is what the Done filter and the exporter key on, so it
+      // has to be derived from the status rather than trusted from the caller
+      // -- and cleared again when a finished task is reopened.
+      task.completedAt = isTerminalStatus(updates.status) ? (task.completedAt ?? now()) : null;
+    }
+  }
+
+  async deleteTask(id: string): Promise<void> {
+    this.tasks.delete(id);
+    this.taskEvents = this.taskEvents.filter((e) => e.taskId !== id);
+  }
+
+  async listLabels(): Promise<Label[]> {
+    return [...this.labels.values()].map((l) => ({ ...l }));
+  }
+
+  async setTaskLabels(taskId: string, labelNames: string[]): Promise<Label[]> {
+    const task = this.requireTask(taskId);
+    const { labelIds, created } = resolveLabelNames(
+      [...this.labels.values()],
+      labelNames,
+      generateId,
+    );
+    for (const label of created) this.labels.set(label.id, label);
+    task.labelIds = labelIds;
+    return this.listLabels();
+  }
+
+  async createSubtask(taskId: string, title: string): Promise<Subtask> {
+    const task = this.requireTask(taskId);
+    const subtask: Subtask = { id: generateId(), title, status: "todo" };
+    task.subtasks.push(subtask);
+    return { ...subtask };
+  }
+
+  async updateSubtask(
+    id: string,
+    updates: { title?: string; status?: TaskStatus },
+  ): Promise<void> {
+    for (const task of this.tasks.values()) {
+      const subtask = task.subtasks.find((s) => s.id === id);
+      if (!subtask) continue;
+      if (updates.title !== undefined) subtask.title = updates.title;
+      if (updates.status !== undefined) subtask.status = updates.status;
+      return;
+    }
+    throw new Error(`Subtask not found: ${id}`);
+  }
+
+  async deleteSubtask(id: string): Promise<void> {
+    for (const task of this.tasks.values()) {
+      const at = task.subtasks.findIndex((s) => s.id === id);
+      if (at >= 0) {
+        task.subtasks.splice(at, 1);
+        return;
+      }
+    }
+  }
+
+  async listTaskEvents(taskId?: string): Promise<TaskEvent[]> {
+    const scoped = taskId ? this.taskEvents.filter((e) => e.taskId === taskId) : this.taskEvents;
+    return sortEvents(scoped).map((e) => ({ ...e }));
+  }
+
+  async addTaskEvent(
+    taskId: string,
+    kind: TaskEventKind,
+    text: string,
+    source: TaskEventSource = "manual",
+  ): Promise<TaskEvent> {
+    this.requireTask(taskId);
+    const event = makeEvent({ id: generateId(), taskId, kind, text, at: now(), source });
+    this.taskEvents.push(event);
+    return { ...event };
+  }
+
+  async deleteTaskEvent(id: string): Promise<void> {
+    this.taskEvents = this.taskEvents.filter((e) => e.id !== id);
   }
 }

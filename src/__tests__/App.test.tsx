@@ -126,6 +126,18 @@ function createBackend(): Backend {
   }]));
 
   return {
+    listTasks: vi.fn(async () => []),
+    createTask: vi.fn(),
+    updateTask: vi.fn(),
+    deleteTask: vi.fn(),
+    listLabels: vi.fn(async () => []),
+    setTaskLabels: vi.fn(async () => []),
+    createSubtask: vi.fn(),
+    updateSubtask: vi.fn(),
+    deleteSubtask: vi.fn(),
+    listTaskEvents: vi.fn(async () => []),
+    addTaskEvent: vi.fn(),
+    deleteTaskEvent: vi.fn(),
     listProjects: vi.fn(async (): Promise<Project[]> => []),
     createProject: vi.fn(),
     updateProject: vi.fn(),

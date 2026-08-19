@@ -180,6 +180,72 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
             truncated INTEGER NOT NULL DEFAULT 0,
             recorded_at TEXT NOT NULL
         );
+
+        -- Project tracking. `labels` is deliberately NOT the `projects` table
+        -- above: `projects` means *repository* here, while a label is the lean
+        -- grouping that replaces the devlog's `## section`, its category
+        -- bullets and its group bullets all at once. A task carries several.
+        CREATE TABLE IF NOT EXISTS labels (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            color TEXT NOT NULL DEFAULT '#89b4fa',
+            created_at TEXT NOT NULL
+        );
+
+        -- Case-insensitive uniqueness is what stops `ai crew` from forking
+        -- `AI Crew` into a second label and silently splitting the archive.
+        CREATE UNIQUE INDEX IF NOT EXISTS labels_name_unique
+            ON labels (lower(trim(name)));
+
+        -- `workstream_id` is nullable and unconstrained in both directions:
+        -- most tasks have no workstream, and workstreams exist with no task.
+        -- There is deliberately no repo column -- repos are derived from the
+        -- attached workstream, because a task can span several or none.
+        CREATE TABLE IF NOT EXISTS tasks (
+            id TEXT PRIMARY KEY,
+            title TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'todo',
+            flags_json TEXT NOT NULL DEFAULT '[]',
+            links_json TEXT NOT NULL DEFAULT '[]',
+            workstream_id TEXT REFERENCES workstreams(id) ON DELETE SET NULL,
+            position INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            completed_at TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS subtasks (
+            id TEXT PRIMARY KEY,
+            task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+            title TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'todo',
+            position INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS task_labels (
+            task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+            label_id TEXT NOT NULL REFERENCES labels(id) ON DELETE CASCADE,
+            position INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (task_id, label_id)
+        );
+
+        -- Append-only. There is no update path for `text` anywhere in the
+        -- backend: an event may be deleted (it never happened) but never
+        -- rewritten, so the log cannot quietly disagree with the archive.
+        CREATE TABLE IF NOT EXISTS task_events (
+            id TEXT PRIMARY KEY,
+            task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+            kind TEXT NOT NULL,
+            text TEXT NOT NULL,
+            source TEXT NOT NULL DEFAULT 'manual',
+            created_at TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS task_events_task_idx ON task_events (task_id);
+        CREATE INDEX IF NOT EXISTS task_events_date_idx ON task_events (created_at);
+        CREATE INDEX IF NOT EXISTS tasks_completed_idx ON tasks (completed_at);
         ",
     )?;
 
@@ -230,6 +296,11 @@ mod tests {
             "copilot_session_links",
             "settings",
             "visual_proofs",
+            "labels",
+            "tasks",
+            "subtasks",
+            "task_labels",
+            "task_events",
         ];
         for table in &expected {
             let count: i64 = conn
@@ -241,6 +312,70 @@ mod tests {
                 .unwrap();
             assert_eq!(count, 1, "table {table} missing");
         }
+    }
+
+    #[test]
+    fn labels_are_unique_case_insensitively() {
+        // Free-form labels with no seed and no merge tool mean the database
+        // itself has to refuse the duplicate; a UI-only guard would be
+        // bypassed by the CLI.
+        let conn = open_in_memory();
+        conn.execute(
+            "INSERT INTO labels (id, name, created_at) VALUES ('l1', 'AI Crew', '2026-08-19')",
+            [],
+        )
+        .unwrap();
+        let dup = conn.execute(
+            "INSERT INTO labels (id, name, created_at) VALUES ('l2', ' ai crew ', '2026-08-19')",
+            [],
+        );
+        assert!(dup.is_err(), "case/whitespace variant should be rejected");
+    }
+
+    #[test]
+    fn deleting_a_task_cascades_to_its_children() {
+        let conn = open_in_memory();
+        conn.execute_batch(
+            "PRAGMA foreign_keys = ON;
+             INSERT INTO tasks (id, title, created_at, updated_at)
+                VALUES ('t1', 'x', '2026-08-19', '2026-08-19');
+             INSERT INTO subtasks (id, task_id, title, created_at, updated_at)
+                VALUES ('s1', 't1', 'sub', '2026-08-19', '2026-08-19');
+             INSERT INTO task_events (id, task_id, kind, text, created_at)
+                VALUES ('e1', 't1', 'note', 'hi', '2026-08-19');
+             DELETE FROM tasks WHERE id = 't1';",
+        )
+        .unwrap();
+
+        for table in ["subtasks", "task_events"] {
+            let count: i64 = conn
+                .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(count, 0, "{table} rows outlived their task");
+        }
+    }
+
+    #[test]
+    fn archiving_a_workstream_leaves_its_task_alive() {
+        // A task must survive losing its workstream -- the link is optional in
+        // both directions, and archiving a workstream is routine cleanup.
+        let conn = open_in_memory();
+        conn.execute_batch(
+            "PRAGMA foreign_keys = ON;
+             INSERT INTO workstreams (id, name, created_at, updated_at)
+                VALUES ('w1', 'ws', '2026-08-19', '2026-08-19');
+             INSERT INTO tasks (id, title, workstream_id, created_at, updated_at)
+                VALUES ('t1', 'x', 'w1', '2026-08-19', '2026-08-19');
+             DELETE FROM workstreams WHERE id = 'w1';",
+        )
+        .unwrap();
+
+        let ws: Option<String> = conn
+            .query_row("SELECT workstream_id FROM tasks WHERE id = 't1'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(ws, None, "task should be detached, not deleted");
     }
 
     #[test]

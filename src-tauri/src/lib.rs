@@ -6,6 +6,7 @@ mod pty;
 mod repo_create;
 mod session_poller;
 mod shell_env;
+mod tasks;
 mod trace_record;
 
 use db::open_db;
@@ -5150,6 +5151,18 @@ pub fn run() {
             code_review::file_comments::update_session_file_comment,
             code_review::file_comments::set_session_file_comment_status,
             code_review::file_comments::delete_session_file_comment,
+            tasks::list_tasks,
+            tasks::create_task,
+            tasks::update_task,
+            tasks::delete_task,
+            tasks::list_labels,
+            tasks::set_task_labels,
+            tasks::create_subtask,
+            tasks::update_subtask,
+            tasks::delete_subtask,
+            tasks::list_task_events,
+            tasks::add_task_event,
+            tasks::delete_task_event,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

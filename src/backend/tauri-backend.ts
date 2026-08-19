@@ -3,7 +3,16 @@ import type { Project, Workstream, Tile, TileType, WorkstreamLayout, CopilotConf
 import type { SessionFileComment } from "../domain/file-comments";
 import type { Review, ReviewComment, ChangedFile, DiffSides } from "../domain/code-review";
 import { parseTraceFile, type TraceFile } from "../domain/trace-format";
-import type { Backend, CodeTrace, TraceStaleness } from "./types";
+import type { Backend, CodeTrace, TraceStaleness, TaskUpdate } from "./types";
+import type {
+  Task,
+  Subtask,
+  Label,
+  TaskEvent,
+  TaskEventKind,
+  TaskEventSource,
+} from "../domain/tasks";
+import type { TaskStatus } from "../domain/task-status";
 
 export class TauriBackend implements Backend {
   async listProjects(): Promise<Project[]> {
@@ -467,5 +476,86 @@ export class TauriBackend implements Backend {
       maxSteps: maxSteps ?? null,
       package: packageName ?? null,
     });
+  }
+
+  // ── Project tracking ──────────────────────────────────────────────────
+  //
+  // Tauri maps camelCase JS keys onto snake_case Rust params, so every key
+  // below is deliberately camelCase even though the Rust signature is not.
+
+  async listTasks(): Promise<Task[]> {
+    return invoke<Task[]>("list_tasks");
+  }
+
+  async createTask(
+    title: string,
+    opts?: { status?: TaskStatus; workstreamId?: string | null; labelNames?: string[] },
+  ): Promise<Task> {
+    return invoke<Task>("create_task", {
+      title,
+      status: opts?.status,
+      workstreamId: opts?.workstreamId ?? undefined,
+      labelNames: opts?.labelNames,
+    });
+  }
+
+  async updateTask(id: string, updates: TaskUpdate): Promise<void> {
+    const args: Record<string, unknown> = { id };
+    if (updates.title !== undefined) args.title = updates.title;
+    if (updates.status !== undefined) args.status = updates.status;
+    if (updates.flags !== undefined) args.flags = updates.flags;
+    if (updates.links !== undefined) args.links = updates.links;
+    if (updates.workstreamId !== undefined) {
+      // A bare null is indistinguishable from an absent field on the Rust side,
+      // so a detach has to be signalled explicitly or it silently no-ops.
+      if (updates.workstreamId === null) args.clearWorkstream = true;
+      else args.workstreamId = updates.workstreamId;
+    }
+    await invoke("update_task", args);
+  }
+
+  async deleteTask(id: string): Promise<void> {
+    await invoke("delete_task", { id });
+  }
+
+  async listLabels(): Promise<Label[]> {
+    return invoke<Label[]>("list_labels");
+  }
+
+  async setTaskLabels(taskId: string, labelNames: string[]): Promise<Label[]> {
+    return invoke<Label[]>("set_task_labels", { taskId, labelNames });
+  }
+
+  async createSubtask(taskId: string, title: string): Promise<Subtask> {
+    return invoke<Subtask>("create_subtask", { taskId, title });
+  }
+
+  async updateSubtask(
+    id: string,
+    updates: { title?: string; status?: TaskStatus },
+  ): Promise<void> {
+    await invoke("update_subtask", { id, title: updates.title, status: updates.status });
+  }
+
+  async deleteSubtask(id: string): Promise<void> {
+    await invoke("delete_subtask", { id });
+  }
+
+  async listTaskEvents(taskId?: string): Promise<TaskEvent[]> {
+    return invoke<TaskEvent[]>("list_task_events", { taskId });
+  }
+
+  async addTaskEvent(
+    taskId: string,
+    kind: TaskEventKind,
+    text: string,
+    source: TaskEventSource = "manual",
+  ): Promise<TaskEvent> {
+    return invoke<TaskEvent>("add_task_event", { taskId, kind, text, source });
+  }
+
+  /** No `updateTaskEvent` counterpart exists -- event text is immutable. */
+  async deleteTaskEvent(id: string): Promise<void> {
+    await invoke("delete_task_event", { id });
   }
 }

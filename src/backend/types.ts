@@ -3,6 +3,24 @@ import type { Project, Workstream, Tile, TileType, WorkstreamLayout, CopilotConf
 import type { SessionFileComment } from "../domain/file-comments";
 import type { TraceFile } from "../domain/trace-format";
 import type { Review, ReviewComment, ChangedFile, DiffSides } from "../domain/code-review";
+import type {
+  Task,
+  Subtask,
+  Label,
+  TaskEvent,
+  TaskEventKind,
+  TaskEventSource,
+} from "../domain/tasks";
+import type { TaskStatus, TaskFlag } from "../domain/task-status";
+
+/** Writable fields on a task. Labels go through `setTaskLabels`. */
+export interface TaskUpdate {
+  title?: string;
+  status?: TaskStatus;
+  flags?: TaskFlag[];
+  workstreamId?: string | null;
+  links?: string[];
+}
 
 export interface FileSearchMatch {
   path: string;
@@ -222,6 +240,46 @@ export interface Backend {
     maxSteps?: number,
     packageName?: string | null,
   ): Promise<string>;
+
+  // ── Project tracking ──────────────────────────────────────────────────
+  // Tasks are global, not workstream-scoped: a task may have no workstream,
+  // and a workstream may have no task. See ADR on project tracking.
+
+  /** Every task, with its subtasks and resolved label ids attached. */
+  listTasks(): Promise<Task[]>;
+  createTask(
+    title: string,
+    opts?: { status?: TaskStatus; workstreamId?: string | null; labelNames?: string[] },
+  ): Promise<Task>;
+  updateTask(id: string, updates: TaskUpdate): Promise<void>;
+  deleteTask(id: string): Promise<void>;
+
+  listLabels(): Promise<Label[]>;
+  /**
+   * Replace a task's labels, resolving names case-insensitively so that
+   * `ai crew` reuses `AI Crew` instead of forking it. Returns the full label
+   * set afterwards so callers can refresh without a second round trip.
+   */
+  setTaskLabels(taskId: string, labelNames: string[]): Promise<Label[]>;
+
+  createSubtask(taskId: string, title: string): Promise<Subtask>;
+  updateSubtask(id: string, updates: { title?: string; status?: TaskStatus }): Promise<void>;
+  deleteSubtask(id: string): Promise<void>;
+
+  /** Chronological. Omit `taskId` for every event across all tasks. */
+  listTaskEvents(taskId?: string): Promise<TaskEvent[]>;
+  addTaskEvent(
+    taskId: string,
+    kind: TaskEventKind,
+    text: string,
+    source?: TaskEventSource,
+  ): Promise<TaskEvent>;
+  /**
+   * Delete an event. There is deliberately **no** `updateTaskEvent`: an event
+   * may be removed (it never happened) but its text can never be rewritten,
+   * so the log can never quietly disagree with the exported archive.
+   */
+  deleteTaskEvent(id: string): Promise<void>;
 }
 
 export type TraceStaleness = "fresh" | "head_moved" | "tree_dirty" | "unknown";
