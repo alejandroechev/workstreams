@@ -5,6 +5,7 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { fileBufferRegistry } from "./files/FileBufferRegistry";
 import WorkstreamSidebar from "./workstream/WorkstreamSidebar";
+import { TaskBoard } from "./tasks/TaskBoard";
 import ProjectCreateForm from "./workstream/ProjectCreateForm";
 import RepoCreateForm from "./workstream/RepoCreateForm";
 import WorkstreamCreateForm from "./workstream/WorkstreamCreateForm";
@@ -238,6 +239,7 @@ export default function App() {
   const [linkingTileId, setLinkingTileId] = useState<string | null>(null);
   const [showProjectCreate, setShowProjectCreate] = useState(false);
   const [showRepoCreate, setShowRepoCreate] = useState(false);
+  const [showTaskBoard, setShowTaskBoard] = useState(false);
   const [showWsCreate, setShowWsCreate] = useState<{ show: boolean; projectId?: string }>({ show: false });
   const [showForkWs, setShowForkWs] = useState<{ show: boolean; wsId?: string }>({ show: false });
   const [changeWorktreeTarget, setChangeWorktreeTarget] = useState<Workstream | null>(null);
@@ -1380,6 +1382,7 @@ export default function App() {
         onRetryCreate={handleRetryCreate}
         onRetryRemove={handleRetryRemove}
         onDiscardWorkstream={handleDiscardWorkstream}
+        onOpenTaskBoard={() => setShowTaskBoard(true)}
         onCreateProject={() => setShowRepoCreate(true)}
         onImportProject={() => setShowProjectCreate(true)}
         onCreateWorkstream={(projectId) => setShowWsCreate({ show: true, projectId })}
@@ -1656,6 +1659,15 @@ export default function App() {
       )}
 
       {/* Repo create-new modal */}
+      {showTaskBoard && (
+        <TaskBoard
+          backend={backend}
+          workstreams={workstreams}
+          projects={projects}
+          onClose={() => setShowTaskBoard(false)}
+        />
+      )}
+
       {showRepoCreate && (
         <RepoCreateForm
           onCreated={async (name, directory, color, gitRemote) => {

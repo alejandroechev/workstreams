@@ -8,6 +8,7 @@ import {
   eventsForTask,
   sortEvents,
   attachWorkstream,
+  toLocalDate,
 } from "../tasks";
 import type { Task, TaskEvent } from "../tasks";
 import type { Workstream } from "../types";
@@ -88,14 +89,34 @@ describe("derivedRepoIds", () => {
   });
 });
 
+describe("toLocalDate", () => {
+  it("reports the local calendar day, not the UTC one", () => {
+    // A note typed at 21:00 in a negative-offset zone is 01:00Z the next day.
+    // Slicing the UTC string would file it on tomorrow's devlog page.
+    const local = new Date(2026, 7, 19, 21, 30, 0);
+    expect(toLocalDate(local.toISOString())).toBe("2026-08-19");
+  });
+
+  it("handles the first minute of a local day", () => {
+    const local = new Date(2026, 7, 19, 0, 5, 0);
+    expect(toLocalDate(local.toISOString())).toBe("2026-08-19");
+  });
+
+  it("falls back to a prefix slice rather than throwing on junk", () => {
+    expect(toLocalDate("not-a-date")).toBe("not-a-date");
+  });
+});
+
 describe("completionDate", () => {
   it("reports the day a task reached a terminal status", () => {
-    const t: Task = { ...makeTask({ id: "t1", title: "x" }), status: "done", completedAt: "2026-08-19T14:05:00Z" };
+    const at = new Date(2026, 7, 19, 14, 5, 0).toISOString();
+    const t: Task = { ...makeTask({ id: "t1", title: "x" }), status: "done", completedAt: at };
     expect(completionDate(t)).toBe("2026-08-19");
   });
 
   it("reports the day for cancelled too, not just done", () => {
-    const t: Task = { ...makeTask({ id: "t1", title: "x" }), status: "cancelled", completedAt: "2026-08-18T09:00:00Z" };
+    const at = new Date(2026, 7, 18, 9, 0, 0).toISOString();
+    const t: Task = { ...makeTask({ id: "t1", title: "x" }), status: "cancelled", completedAt: at };
     expect(completionDate(t)).toBe("2026-08-18");
   });
 
@@ -111,9 +132,9 @@ describe("completionDate", () => {
 
 describe("events", () => {
   const events: TaskEvent[] = [
-    makeEvent({ id: "e1", taskId: "t1", kind: "note", text: "later", at: "2026-08-19T14:00:00Z", source: "manual" }),
-    makeEvent({ id: "e2", taskId: "t1", kind: "status", text: "→ in review", at: "2026-08-19T09:00:00Z", source: "auto" }),
-    makeEvent({ id: "e3", taskId: "t2", kind: "note", text: "other task", at: "2026-08-18T09:00:00Z", source: "manual" }),
+    makeEvent({ id: "e1", taskId: "t1", kind: "note", text: "later", at: new Date(2026, 7, 19, 14, 0, 0).toISOString(), source: "manual" }),
+    makeEvent({ id: "e2", taskId: "t1", kind: "status", text: "→ in review", at: new Date(2026, 7, 19, 9, 0, 0).toISOString(), source: "auto" }),
+    makeEvent({ id: "e3", taskId: "t2", kind: "note", text: "other task", at: new Date(2026, 7, 18, 9, 0, 0).toISOString(), source: "manual" }),
   ];
 
   it("defaults an event to manual, since typed notes are the common case", () => {

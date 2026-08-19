@@ -134,11 +134,25 @@ export function derivedRepoIds(task: Task, workstreams: Workstream[]): string[] 
 /** The `YYYY-MM-DD` a task finished, or null while it is still open. */
 export function completionDate(task: Task): string | null {
   if (!isTerminalStatus(task.status) || !task.completedAt) return null;
-  return task.completedAt.slice(0, 10);
+  return toLocalDate(task.completedAt);
 }
 
 export const eventsForTask = (events: TaskEvent[], taskId: string): TaskEvent[] =>
   events.filter((e) => e.taskId === taskId);
+
+/**
+ * The local calendar day an ISO-8601 UTC instant falls on.
+ *
+ * Events are stored in UTC but the devlog page is a *local* day. Slicing the
+ * UTC string would file a 21:00 EDT note under the next day -- a silent data
+ * error that would only ever show up as a note appearing on the wrong page.
+ */
+export function toLocalDate(iso: string): string {
+  const at = new Date(iso);
+  if (Number.isNaN(at.getTime())) return iso.slice(0, 10);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())}`;
+}
 
 export const sortEvents = (events: TaskEvent[]): TaskEvent[] =>
   [...events].sort((a, b) => a.at.localeCompare(b.at));
@@ -149,6 +163,6 @@ export const sortEvents = (events: TaskEvent[]): TaskEvent[] =>
  * daily page hid.
  */
 export function touchedOn(tasks: Task[], events: TaskEvent[], date: string): Task[] {
-  const ids = new Set(events.filter((e) => e.at.startsWith(date)).map((e) => e.taskId));
+  const ids = new Set(events.filter((e) => toLocalDate(e.at) === date).map((e) => e.taskId));
   return tasks.filter((t) => ids.has(t.id));
 }

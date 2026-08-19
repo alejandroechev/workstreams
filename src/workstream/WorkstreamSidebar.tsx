@@ -13,6 +13,7 @@ import {
   ChevronDownIcon,
   ChevronRightIcon,
   FolderIcon,
+  ClipboardDocumentListIcon,
 } from "@heroicons/react/20/solid";
 import { reorderById } from "../domain/reorder";
 import { getAppSettings } from "../domain/app-settings";
@@ -29,6 +30,9 @@ interface Props {
    * set render a "stopped" indicator (gray hollow square). */
   loadedWsIds?: Set<string>;
   onSelectWorkstream: (id: string) => void;
+  /** Opens the global task board. Optional so the sidebar stays renderable
+   * without a backend (the board is owned by App, which has one). */
+  onOpenTaskBoard?: () => void;
   onCreateProject: () => void;
   onImportProject: () => void;
   onCreateWorkstream: (projectId?: string) => void;
@@ -125,6 +129,7 @@ export default function WorkstreamSidebar({
   sessionInfoByWs,
   loadedWsIds,
   onSelectWorkstream,
+  onOpenTaskBoard,
   onCreateProject,
   onImportProject,
   onCreateWorkstream,
@@ -724,6 +729,24 @@ export default function WorkstreamSidebar({
       {/* Divider */}
       <div style={{ borderTop: "1px solid #313244", margin: "4px 8px" }} />
 
+      {/* ── TASKS (global) ──
+          A sibling of the workstream list rather than a tile: a task may have
+          no workstream at all, and often outlives the one it had, so binding
+          the board to a single workstream would make most tasks unreachable. */}
+      <div style={{ borderTop: "1px solid #313244", padding: "4px 6px", flexShrink: 0 }}>
+        <button
+          data-testid="task-board-button"
+          onClick={onOpenTaskBoard}
+          style={footerButtonStyle}
+          onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "#1e1e2e"; }}
+          onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "transparent"; }}
+          title="Open the task board"
+        >
+          <ClipboardDocumentListIcon style={{ width: 12, height: 12 }} />
+          <span style={{ flex: 1, textAlign: "left" }}>Tasks</span>
+        </button>
+      </div>
+
       {/* ── REPOS (footer affordance) ──
           The repo list used to live here as a `maxHeight: 40vh` panel, i.e. up
           to ~a third of the sidebar, even though its only interactions were
@@ -817,4 +840,19 @@ const sectionHeaderStyle: React.CSSProperties = {
 const sectionCountStyle: React.CSSProperties = {
   color: "#45475a",
   fontSize: 9,
+};
+
+const footerButtonStyle: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 6,
+  width: "100%",
+  padding: "4px 6px",
+  background: "none",
+  border: "none",
+  borderRadius: 4,
+  color: "#6c7086",
+  cursor: "pointer",
+  fontSize: 10,
+  fontFamily: "inherit",
 };
