@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { act, render, cleanup } from "@testing-library/react";
+import { act, fireEvent, render, cleanup } from "@testing-library/react";
 import WorkstreamSidebar from "../WorkstreamSidebar";
 import type { Workstream } from "../../domain/types";
 
@@ -52,7 +52,10 @@ describe("WorkstreamSidebar activity indicator", () => {
   });
 
   it("renders stopped indicator for workstreams not in loadedWsIds", () => {
-    const { getAllByTestId, queryAllByTestId } = renderWith(new Set(["a"]));
+    const { getAllByTestId, queryAllByTestId, getByTestId } = renderWith(new Set(["a"]));
+    // Unloaded workstreams now live in the Idle section, which auto-collapses
+    // while something is live. Expand it to assert on the row itself.
+    fireEvent.click(getByTestId("ws-section-toggle-idle"));
     expect(getAllByTestId("ws-indicator-stopped")).toHaveLength(1);
     expect(queryAllByTestId("ws-indicator-idle").length).toBeGreaterThanOrEqual(1);
     cleanup();

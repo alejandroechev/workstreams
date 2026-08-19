@@ -12,7 +12,11 @@ tabs: one for the agent, one for `git`, one for logs, one for a quick
 markdown preview. Workstreams turns that mess into a persistent,
 project-aware workspace:
 
-- A **sidebar** of projects and their workstreams (branches / worktrees).
+- A **sidebar** of workstreams grouped by what they are doing — **Live** (tiles
+  and processes running) and **Idle** (kept, but stopped) — with archived work
+  and repo administration tucked out of the way. "Idle" is a runtime fact, not a
+  stored status, which is why closed workstreams used to be indistinguishable
+  from running ones.
 - A **tiling canvas** per workstream that adapts as you add tiles.
 - **Tiles for the things you actually do**: Copilot sessions, terminals,
   repo browser, file editor, doc viewer, scratch workbench.
@@ -153,8 +157,8 @@ shell profile**. See [ADR 017](docs/adrs/017-macos-gui-launch-path.md).
 
 ## Tour
 
-1. Click `+` in the sidebar → **Import existing repo** (pick a folder) or
-   **Create new repo** (scaffold + optional `gh repo create`). Repo creation
+1. Open **Repos** from the sidebar footer → **Import existing repo** (pick a
+   folder) or **Create new repo** (scaffold + optional `gh repo create`). Repo creation
    runs in the background with per-step progress, so the app stays responsive
    during the (network-bound) remote create + push.
 2. The workstream opens with an empty tile canvas. Add tiles via the
@@ -176,7 +180,7 @@ shell profile**. See [ADR 017](docs/adrs/017-macos-gui-launch-path.md).
    from GPU context loss and permanently drop to the DOM renderer after repeated
    losses.
 5. The Copilot command is global by default, but each **repo** can override it:
-   click a repo in the sidebar to open its edit dialog and set a **Copilot
+   open **Repos** from the sidebar footer, pick a repo and set a **Copilot
    command** (blank = inherit the global). Every workstream in that repo then
    spawns Copilot sessions with the repo's command. Handy when one repo needs a
    different launcher (e.g. `copilot --yolo`) than the rest.

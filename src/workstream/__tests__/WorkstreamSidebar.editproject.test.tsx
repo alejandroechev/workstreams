@@ -43,7 +43,10 @@ function renderWith(
   );
 }
 
+// Repo editing moved out of the sidebar body into the Repo Manager: open the
+// manager from the footer, then select the repo.
 function openEditModal(projectName: string) {
+  fireEvent.click(screen.getByTestId("repo-manager-button"));
   fireEvent.click(screen.getByText(projectName));
 }
 
@@ -53,7 +56,7 @@ describe("WorkstreamSidebar project edit — Copilot command override", () => {
   it("prefills the command field empty (inherit) and shows the global as placeholder", () => {
     renderWith(mkProject({ copilot_command: null }));
     openEditModal("App");
-    const input = screen.getByTestId("edit-project-command") as HTMLInputElement;
+    const input = screen.getByTestId("repo-manager-command") as HTMLInputElement;
     expect(input.value).toBe("");
     // Placeholder is the global command (default agency copilot --yolo).
     expect(input.placeholder).toContain("copilot");
@@ -62,7 +65,7 @@ describe("WorkstreamSidebar project edit — Copilot command override", () => {
   it("prefills the existing override when the project has one", () => {
     renderWith(mkProject({ copilot_command: "copilot --yolo" }));
     openEditModal("App");
-    const input = screen.getByTestId("edit-project-command") as HTMLInputElement;
+    const input = screen.getByTestId("repo-manager-command") as HTMLInputElement;
     expect(input.value).toBe("copilot --yolo");
   });
 
@@ -70,10 +73,10 @@ describe("WorkstreamSidebar project edit — Copilot command override", () => {
     const onUpdateProject = vi.fn();
     renderWith(mkProject(), { onUpdateProject });
     openEditModal("App");
-    fireEvent.change(screen.getByTestId("edit-project-command"), {
+    fireEvent.change(screen.getByTestId("repo-manager-command"), {
       target: { value: "  my-copilot --flag  " },
     });
-    fireEvent.click(screen.getByText("Save"));
+    fireEvent.click(screen.getByTestId("repo-manager-save"));
     expect(onUpdateProject).toHaveBeenCalledWith("p1", {
       name: "App",
       color: "#89b4fa",
@@ -85,8 +88,8 @@ describe("WorkstreamSidebar project edit — Copilot command override", () => {
     const onUpdateProject = vi.fn();
     renderWith(mkProject({ copilot_command: "copilot --yolo" }), { onUpdateProject });
     openEditModal("App");
-    fireEvent.change(screen.getByTestId("edit-project-command"), { target: { value: "   " } });
-    fireEvent.click(screen.getByText("Save"));
+    fireEvent.change(screen.getByTestId("repo-manager-command"), { target: { value: "   " } });
+    fireEvent.click(screen.getByTestId("repo-manager-save"));
     expect(onUpdateProject).toHaveBeenCalledWith("p1", {
       name: "App",
       color: "#89b4fa",

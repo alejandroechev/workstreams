@@ -2,6 +2,8 @@
 import { useState, useRef, useEffect } from "react";
 import { listen } from "@tauri-apps/api/event";
 import type { Project, Workstream } from "../domain/types";
+import { bucketWorkstreams, isSectionCollapsed } from "../domain/workstream-sections";
+import { RepoManagerModal } from "./RepoManagerModal";
 import type { ProvisioningState } from "../domain/worktree-provisioning";
 import {
   BellAlertIcon,
@@ -10,8 +12,8 @@ import {
   PlusIcon,
   ChevronDownIcon,
   ChevronRightIcon,
+  FolderIcon,
 } from "@heroicons/react/20/solid";
-import { PROJECT_PRESET_COLORS, isCustomProjectColor } from "../domain/colors";
 import { reorderById } from "../domain/reorder";
 import { getAppSettings } from "../domain/app-settings";
 import { WorkstreamActionMenu } from "./WorkstreamActionMenu";
@@ -143,31 +145,39 @@ export default function WorkstreamSidebar({
   const [renamingWsId, setRenamingWsId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const renameInputRef = useRef<HTMLInputElement>(null);
-  const [editingProject, setEditingProject] = useState<Project | null>(null);
-  const [editProjectName, setEditProjectName] = useState("");
-  const [editProjectColor, setEditProjectColor] = useState("");
-  // Per-project Copilot command override (empty = inherit the global command).
-  const [editProjectCommand, setEditProjectCommand] = useState("");
   const [actionMenuWsId, setActionMenuWsId] = useState<string | null>(null);
   const [actionMenuAnchor, setActionMenuAnchor] = useState<{ top: number; left: number }>({ top: 0, left: 0 });
   const [hoveredWsId, setHoveredWsId] = useState<string | null>(null);
   const [draggedWsId, setDraggedWsId] = useState<string | null>(null);
   const [dragOverWsId, setDragOverWsId] = useState<string | null>(null);
-  const [showRepoMenu, setShowRepoMenu] = useState(false);
-  const [reposCollapsed, setReposCollapsed] = useState(false);
   const [workstreamsCollapsed, setWorkstreamsCollapsed] = useState(false);
-  const repoMenuRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!showRepoMenu) return;
-    function onClick(e: MouseEvent) {
-      if (repoMenuRef.current && !repoMenuRef.current.contains(e.target as Node)) {
-        setShowRepoMenu(false);
-      }
-    }
-    document.addEventListener("mousedown", onClick);
-    return () => document.removeEventListener("mousedown", onClick);
-  }, [showRepoMenu]);
+  // Idle starts collapsed: it is the pile you keep but are not working on, and
+  // leaving it open reproduces exactly the crowding this split exists to fix.
+  const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean | undefined>>(
+    () => {
+      try {
+        const raw = localStorage.getItem("ws-sidebar-collapsed-sections");
+        if (raw) return JSON.parse(raw) as Record<string, boolean>;
+      } catch { /* fall through to defaults */ }
+      return {};
+    },
+  );
+  const toggleSection = (key: "live" | "idle") => {
+    setCollapsedSections((prev) => {
+      // Toggle relative to what is CURRENTLY shown, so the first click always
+      // does the visible thing even when the value is still defaulted.
+      const next = {
+        ...prev,
+        [key]: !isSectionCollapsed(key, prev, liveCountRef.current),
+      };
+      try {
+        localStorage.setItem("ws-sidebar-collapsed-sections", JSON.stringify(next));
+      } catch { /* persistence is best-effort */ }
+      return next;
+    });
+  };
+  const [showRepoManager, setShowRepoManager] = useState(false);
+  const liveCountRef = useRef(0);
 
   // Live activity status per workstream (from session poller)
   const [wsActivity, setWsActivity] = useState<Record<string, string>>({});
@@ -277,79 +287,30 @@ export default function WorkstreamSidebar({
   // logically archived; only its worktree dir is still being cleaned up).
   const activeWorkstreams = workstreams.filter((ws) => ws.status !== "archived" && ws.status !== "archiving");
   const archivedWorkstreams = workstreams.filter((ws) => ws.status === "archived" || ws.status === "archiving");
+  // Live vs Idle is a RUNTIME split (are its tiles/processes loaded?), not a
+  // persisted status — see domain/workstream-sections.ts.
+  const { live: liveWorkstreams, idle: idleWorkstreams } = bucketWorkstreams(
+    activeWorkstreams,
+    loadedWsIds,
+  );
+  // Repos with no active workstreams — a triage signal the old 240px list
+  // could never show.
+  const dormantRepoCount = projects.filter(
+    (p) => !activeWorkstreams.some((ws) => ws.project_id === p.id),
+  ).length;
+  liveCountRef.current = liveWorkstreams.length;
+  const sections = [
+    { key: "live" as const, label: "Live", rows: liveWorkstreams, collapsed: isSectionCollapsed("live", collapsedSections, liveWorkstreams.length) },
+    { key: "idle" as const, label: "Idle", rows: idleWorkstreams, collapsed: isSectionCollapsed("idle", collapsedSections, liveWorkstreams.length) },
+  ];
 
   const getProject = (projectId: string | null) =>
     projectId ? projects.find((p) => p.id === projectId) : undefined;
 
-  return (
-    <div style={{
-      width: 240,
-      minWidth: 240,
-      background: "#11111b",
-      borderRight: "1px solid #313244",
-      display: "flex",
-      flexDirection: "column",
-      overflow: "hidden",
-    }}>
-
-      {/* ── WORKSTREAMS (top section) ── */}
-      <div style={{
-        padding: "10px 10px 4px",
-        fontSize: 10,
-        fontWeight: 600,
-        color: "#585b70",
-        textTransform: "uppercase",
-        letterSpacing: 1,
-        display: "flex",
-        justifyContent: "space-between",
-        alignItems: "center",
-      }}>
-        <button
-          data-testid="workstreams-toggle"
-          onClick={() => setWorkstreamsCollapsed((v) => !v)}
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 4,
-            background: "none",
-            border: "none",
-            color: "#585b70",
-            cursor: "pointer",
-            padding: 0,
-            fontSize: 10,
-            fontWeight: 600,
-            textTransform: "uppercase",
-            letterSpacing: 1,
-            fontFamily: "inherit",
-          }}
-          title={workstreamsCollapsed ? "Show workstreams" : "Hide workstreams"}
-        >
-          {workstreamsCollapsed
-            ? <ChevronRightIcon style={{ width: 12, height: 12 }} />
-            : <ChevronDownIcon style={{ width: 12, height: 12 }} />}
-          Workstreams
-        </button>
-        <button
-          data-testid="new-workstream-button"
-          onClick={() => onCreateWorkstream()}
-          style={addButtonStyle}
-          onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "#313244"; (e.currentTarget as HTMLElement).style.color = "#cdd6f4"; }}
-          onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "transparent"; (e.currentTarget as HTMLElement).style.color = "#a6adc8"; }}
-          title="New workstream"
-        >
-          <PlusIcon style={{ width: 16, height: 16 }} />
-        </button>
-      </div>
-
-      {workstreamsCollapsed && <div style={{ flex: 1 }} />}
-      {!workstreamsCollapsed && (
-      <div style={{ flex: 1, overflowY: "auto", padding: "0 4px" }}>
-        {activeWorkstreams.length === 0 && (
-          <div style={{ padding: "8px 8px", color: "#45475a", fontSize: 11 }}>
-            No workstreams yet
-          </div>
-        )}
-        {activeWorkstreams.map((ws) => {
+  // One row implementation shared by the Live and Idle sections. Hoisted out
+  // of the old single `.map()` so splitting the list by status cannot make the
+  // two sections drift apart.
+  const renderWorkstreamRow = (ws: Workstream) => {
           const isActive = ws.id === activeWsId;
           const project = getProject(ws.project_id);
           const isDragOver = dragOverWsId === ws.id;
@@ -592,7 +553,96 @@ export default function WorkstreamSidebar({
               )}
             </div>
           );
-        })}
+  };
+
+  return (
+    <div style={{
+      width: 240,
+      minWidth: 240,
+      background: "#11111b",
+      borderRight: "1px solid #313244",
+      display: "flex",
+      flexDirection: "column",
+      overflow: "hidden",
+    }}>
+
+      {/* ── WORKSTREAMS (top section) ── */}
+      <div style={{
+        padding: "10px 10px 4px",
+        fontSize: 10,
+        fontWeight: 600,
+        color: "#585b70",
+        textTransform: "uppercase",
+        letterSpacing: 1,
+        display: "flex",
+        justifyContent: "space-between",
+        alignItems: "center",
+      }}>
+        <button
+          data-testid="workstreams-toggle"
+          onClick={() => setWorkstreamsCollapsed((v) => !v)}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 4,
+            background: "none",
+            border: "none",
+            color: "#585b70",
+            cursor: "pointer",
+            padding: 0,
+            fontSize: 10,
+            fontWeight: 600,
+            textTransform: "uppercase",
+            letterSpacing: 1,
+            fontFamily: "inherit",
+          }}
+          title={workstreamsCollapsed ? "Show workstreams" : "Hide workstreams"}
+        >
+          {workstreamsCollapsed
+            ? <ChevronRightIcon style={{ width: 12, height: 12 }} />
+            : <ChevronDownIcon style={{ width: 12, height: 12 }} />}
+          Workstreams
+        </button>
+        <button
+          data-testid="new-workstream-button"
+          onClick={() => onCreateWorkstream()}
+          style={addButtonStyle}
+          onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "#313244"; (e.currentTarget as HTMLElement).style.color = "#cdd6f4"; }}
+          onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "transparent"; (e.currentTarget as HTMLElement).style.color = "#a6adc8"; }}
+          title="New workstream"
+        >
+          <PlusIcon style={{ width: 16, height: 16 }} />
+        </button>
+      </div>
+
+      {workstreamsCollapsed && <div style={{ flex: 1 }} />}
+      {!workstreamsCollapsed && (
+      <div style={{ flex: 1, overflowY: "auto", padding: "0 4px" }}>
+        {activeWorkstreams.length === 0 && (
+          <div style={{ padding: "8px 8px", color: "#45475a", fontSize: 11 }}>
+            No workstreams yet
+          </div>
+        )}
+        {sections.map((section) => (
+          <div key={section.key} data-testid={`ws-section-${section.key}`}>
+            <button
+              data-testid={`ws-section-toggle-${section.key}`}
+              onClick={() => toggleSection(section.key)}
+              aria-expanded={!section.collapsed}
+              style={sectionHeaderStyle}
+              title={section.collapsed ? `Show ${section.label}` : `Hide ${section.label}`}
+            >
+              {section.collapsed
+                ? <ChevronRightIcon style={{ width: 10, height: 10 }} />
+                : <ChevronDownIcon style={{ width: 10, height: 10 }} />}
+              <span style={{ flex: 1, textAlign: "left" }}>{section.label}</span>
+              <span data-testid={`ws-section-count-${section.key}`} style={sectionCountStyle}>
+                {section.rows.length}
+              </span>
+            </button>
+            {!section.collapsed && section.rows.map(renderWorkstreamRow)}
+          </div>
+        ))}
 
         {/* Archived toggle */}
         {archivedWorkstreams.length > 0 && (
@@ -674,333 +724,59 @@ export default function WorkstreamSidebar({
       {/* Divider */}
       <div style={{ borderTop: "1px solid #313244", margin: "4px 8px" }} />
 
-      {/* ── REPOS (bottom section) ── */}
-      <div style={{
-        padding: "4px 10px",
-        fontSize: 10,
-        fontWeight: 600,
-        color: "#585b70",
-        textTransform: "uppercase",
-        letterSpacing: 1,
-        display: "flex",
-        justifyContent: "space-between",
-        alignItems: "center",
-      }}>
+      {/* ── REPOS (footer affordance) ──
+          The repo list used to live here as a `maxHeight: 40vh` panel, i.e. up
+          to ~a third of the sidebar, even though its only interactions were
+          administrative (edit / import / create) — it never navigated or
+          filtered. It is now one line that opens a manager with room to show
+          the path, active-workstream counts and dormant repos. */}
+      <div style={{ borderTop: "1px solid #313244", padding: "4px 6px", flexShrink: 0 }}>
         <button
-          data-testid="repos-toggle"
-          onClick={() => setReposCollapsed((v) => !v)}
+          data-testid="repo-manager-button"
+          onClick={() => setShowRepoManager(true)}
           style={{
             display: "flex",
             alignItems: "center",
-            gap: 4,
+            gap: 6,
+            width: "100%",
+            padding: "4px 6px",
             background: "none",
             border: "none",
-            color: "#585b70",
+            borderRadius: 4,
+            color: "#6c7086",
             cursor: "pointer",
-            padding: 0,
             fontSize: 10,
-            fontWeight: 600,
-            textTransform: "uppercase",
-            letterSpacing: 1,
             fontFamily: "inherit",
           }}
-          title={reposCollapsed ? "Show repos" : "Hide repos"}
+          onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "#1e1e2e"; }}
+          onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "transparent"; }}
+          title="Manage repos"
         >
-          {reposCollapsed
-            ? <ChevronRightIcon style={{ width: 12, height: 12 }} />
-            : <ChevronDownIcon style={{ width: 12, height: 12 }} />}
-          Repos
-        </button>
-        <div ref={repoMenuRef} style={{ position: "relative" }}>
-          <button
-            onClick={() => setShowRepoMenu((v) => !v)}
-            style={addButtonStyle}
-            onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "#313244"; (e.currentTarget as HTMLElement).style.color = "#cdd6f4"; }}
-            onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "transparent"; (e.currentTarget as HTMLElement).style.color = "#a6adc8"; }}
-            title="Add repo"
-          >
-            <PlusIcon style={{ width: 16, height: 16 }} />
-          </button>
-          {showRepoMenu && (
-            <div
-              style={{
-                position: "absolute",
-                top: "100%",
-                right: 0,
-                marginTop: 4,
-                background: "#181825",
-                border: "1px solid #313244",
-                borderRadius: 4,
-                boxShadow: "0 4px 12px rgba(0,0,0,0.4)",
-                zIndex: 200,
-                minWidth: 180,
-                padding: 4,
-              }}
-            >
-              <button
-                onClick={() => { setShowRepoMenu(false); onImportProject(); }}
-                style={{
-                  display: "block",
-                  width: "100%",
-                  textAlign: "left",
-                  background: "none",
-                  border: "none",
-                  color: "#cdd6f4",
-                  cursor: "pointer",
-                  fontSize: 12,
-                  padding: "6px 10px",
-                  textTransform: "none",
-                  letterSpacing: 0,
-                }}
-              >
-                Import existing repo
-              </button>
-              <button
-                onClick={() => { setShowRepoMenu(false); onCreateProject(); }}
-                style={{
-                  display: "block",
-                  width: "100%",
-                  textAlign: "left",
-                  background: "none",
-                  border: "none",
-                  color: "#cdd6f4",
-                  cursor: "pointer",
-                  fontSize: 12,
-                  padding: "6px 10px",
-                  textTransform: "none",
-                  letterSpacing: 0,
-                }}
-              >
-                Create new repo
-              </button>
-            </div>
+          <FolderIcon style={{ width: 12, height: 12 }} />
+          <span style={{ flex: 1, textAlign: "left" }}>
+            {projects.length} repo{projects.length === 1 ? "" : "s"}
+          </span>
+          {dormantRepoCount > 0 && (
+            <span data-testid="repo-dormant-count" style={{ color: "#45475a" }}>
+              {dormantRepoCount} dormant
+            </span>
           )}
-        </div>
+        </button>
       </div>
 
-      {!reposCollapsed && (
-      <div style={{ overflowY: "auto", padding: "0 4px 8px", maxHeight: "40vh", minHeight: 120 }}>
-        {projects.length === 0 && (
-          <div style={{ padding: "4px 8px", color: "#45475a", fontSize: 11 }}>
-            No repos yet
-          </div>
-        )}
-        {[...projects].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" })).map((p) => (
-          <div
-            key={p.id}
-            onClick={() => {
-              setEditingProject(p);
-              setEditProjectName(p.name);
-              setEditProjectColor(p.color);
-              setEditProjectCommand(p.copilot_command ?? "");
-            }}
-            style={{
-              padding: "4px 8px",
-              marginBottom: 1,
-              borderRadius: 4,
-              fontSize: 11,
-              color: "#a6adc8",
-              display: "flex",
-              alignItems: "center",
-              gap: 6,
-              cursor: "pointer",
-              transition: "background 0.1s",
-            }}
-            onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "#1e1e2e"; }}
-            onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "transparent"; }}
-          >
-            <span style={{
-              width: 8,
-              height: 8,
-              borderRadius: "50%",
-              background: p.color,
-              flexShrink: 0,
-            }} />
-            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>
-              {p.name}
-            </span>
-            <span style={{ fontSize: 9, color: "#45475a" }}>
-              {activeWorkstreams.filter((ws) => ws.project_id === p.id).length}
-            </span>
-          </div>
-        ))}
-      </div>
+      {showRepoManager && (
+        <RepoManagerModal
+          projects={projects}
+          workstreams={workstreams}
+          onClose={() => setShowRepoManager(false)}
+          onUpdateProject={onUpdateProject}
+          onCreateProject={() => { setShowRepoManager(false); onCreateProject(); }}
+          onImportProject={() => { setShowRepoManager(false); onImportProject(); }}
+          commandPlaceholder={getAppSettings().copilotCommand}
+        />
       )}
 
-      {/* Repo edit modal */}
-      {editingProject && (
-        <div style={{
-          position: "fixed",
-          top: 0, left: 0, right: 0, bottom: 0,
-          background: "rgba(0,0,0,0.5)",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          zIndex: 2000,
-        }} onClick={(e) => e.stopPropagation()}>
-          <div onClick={(e) => e.stopPropagation()} style={{
-            background: "#1e1e2e",
-            border: "1px solid #313244",
-            borderRadius: 8,
-            padding: "16px 20px",
-            width: 340,
-          }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
-              <div style={{ color: "#cdd6f4", fontWeight: 600, fontSize: 13 }}>
-                Edit Repo
-              </div>
-              <button
-                onClick={() => setEditingProject(null)}
-                style={{ background: "none", border: "none", color: "#585b70", cursor: "pointer", fontSize: 16, padding: "2px 6px", lineHeight: 1 }}
-                title="Close"
-              >✕</button>
-            </div>
-            <label style={{ fontSize: 11, color: "#a6adc8", display: "block", marginBottom: 4 }}>Name</label>
-            <input
-              type="text"
-              value={editProjectName}
-              onChange={(e) => setEditProjectName(e.target.value)}
-              onKeyDown={(e) => {
-                e.stopPropagation();
-                if (e.key === "Escape") setEditingProject(null);
-                if (e.key === "Enter" && editProjectName.trim()) {
-                  onUpdateProject(editingProject.id, { name: editProjectName.trim(), color: editProjectColor, copilot_command: editProjectCommand.trim() || null });
-                  setEditingProject(null);
-                }
-              }}
-              autoFocus
-              style={{
-                width: "100%",
-                background: "#313244",
-                border: "1px solid #45475a",
-                borderRadius: 4,
-                color: "#cdd6f4",
-                padding: "6px 8px",
-                fontSize: 12,
-                fontFamily: "monospace",
-                outline: "none",
-                boxSizing: "border-box",
-                marginBottom: 12,
-              }}
-            />
-            <label style={{ fontSize: 11, color: "#a6adc8", display: "block", marginBottom: 6 }}>Color</label>
-            <div style={{ display: "flex", gap: 6, marginBottom: 16, flexWrap: "wrap", alignItems: "center" }}>
-              {PROJECT_PRESET_COLORS.map((c) => (
-                <button
-                  key={c.hex}
-                  onClick={() => setEditProjectColor(c.hex)}
-                  title={c.name}
-                  style={{
-                    width: 24,
-                    height: 24,
-                    borderRadius: "50%",
-                    background: c.hex,
-                    border: editProjectColor === c.hex ? "2px solid #cdd6f4" : "2px solid transparent",
-                    cursor: "pointer",
-                    outline: editProjectColor === c.hex ? "2px solid #89b4fa" : "none",
-                    outlineOffset: 2,
-                    transition: "outline 0.1s",
-                  }}
-                />
-              ))}
-              {/* Custom color: native picker. Shows the currently-selected
-                  custom color as a swatch with a small "+" hint. */}
-              <label
-                title="Pick a custom color"
-                style={{
-                  position: "relative",
-                  width: 24,
-                  height: 24,
-                  borderRadius: "50%",
-                  background: isCustomProjectColor(editProjectColor) ? editProjectColor : "transparent",
-                  border: isCustomProjectColor(editProjectColor)
-                    ? "2px solid #cdd6f4"
-                    : "2px dashed #585b70",
-                  cursor: "pointer",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  outline: isCustomProjectColor(editProjectColor) ? "2px solid #89b4fa" : "none",
-                  outlineOffset: 2,
-                }}
-              >
-                <span style={{ color: isCustomProjectColor(editProjectColor) ? "#1e1e2e" : "#585b70", fontSize: 14, lineHeight: 1, pointerEvents: "none" }}>+</span>
-                <input
-                  type="color"
-                  value={isCustomProjectColor(editProjectColor) ? editProjectColor : "#cdd6f4"}
-                  onChange={(e) => setEditProjectColor(e.target.value)}
-                  style={{ position: "absolute", inset: 0, opacity: 0, cursor: "pointer" }}
-                />
-              </label>
-            </div>
-            <label style={{ fontSize: 11, color: "#a6adc8", display: "block", marginBottom: 4 }}>Copilot command</label>
-            <input
-              type="text"
-              data-testid="edit-project-command"
-              value={editProjectCommand}
-              onChange={(e) => setEditProjectCommand(e.target.value)}
-              onKeyDown={(e) => {
-                e.stopPropagation();
-                if (e.key === "Escape") setEditingProject(null);
-                if (e.key === "Enter" && editProjectName.trim()) {
-                  onUpdateProject(editingProject.id, { name: editProjectName.trim(), color: editProjectColor, copilot_command: editProjectCommand.trim() || null });
-                  setEditingProject(null);
-                }
-              }}
-              placeholder={getAppSettings().copilotCommand}
-              spellCheck={false}
-              style={{
-                width: "100%",
-                background: "#313244",
-                border: "1px solid #45475a",
-                borderRadius: 4,
-                color: "#cdd6f4",
-                padding: "6px 8px",
-                fontSize: 12,
-                fontFamily: "monospace",
-                outline: "none",
-                boxSizing: "border-box",
-                marginBottom: 4,
-              }}
-            />
-            <div style={{ fontSize: 10, color: "#6c7086", marginBottom: 16 }}>
-              Overrides the global Copilot command for all workstreams in this
-              repo. Leave blank to inherit the global command
-              (<code>{getAppSettings().copilotCommand}</code>). The
-              <code> --resume=&lt;id&gt;</code> flag is appended automatically.
-            </div>
-            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-              <button
-                onClick={() => setEditingProject(null)}
-                style={{ padding: "6px 14px", background: "#313244", color: "#a6adc8", border: "none", borderRadius: 4, cursor: "pointer", fontSize: 12 }}
-              >
-                Cancel
-              </button>
-              <button
-                onClick={() => {
-                  if (editProjectName.trim()) {
-                    onUpdateProject(editingProject.id, { name: editProjectName.trim(), color: editProjectColor, copilot_command: editProjectCommand.trim() || null });
-                    setEditingProject(null);
-                  }
-                }}
-                disabled={!editProjectName.trim()}
-                style={{
-                  padding: "6px 14px",
-                  background: !editProjectName.trim() ? "#45475a" : "#89b4fa",
-                  color: "#1e1e2e",
-                  border: "none",
-                  borderRadius: 4,
-                  cursor: !editProjectName.trim() ? "default" : "pointer",
-                  fontSize: 12,
-                  fontWeight: 600,
-                }}
-              >
-                Save
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+
 
       {/* Archive confirmation is handled by the parent (App) via
           ArchiveWorkstreamDialog, which also offers worktree deletion. */}
@@ -1018,4 +794,27 @@ const sidebarBtnStyle: React.CSSProperties = {
   lineHeight: 1,
   display: "flex",
   alignItems: "center",
+};
+
+const sectionHeaderStyle: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 4,
+  width: "100%",
+  padding: "3px 6px",
+  marginTop: 2,
+  background: "none",
+  border: "none",
+  color: "#585b70",
+  cursor: "pointer",
+  fontSize: 9,
+  fontWeight: 600,
+  textTransform: "uppercase",
+  letterSpacing: 0.8,
+  fontFamily: "inherit",
+};
+
+const sectionCountStyle: React.CSSProperties = {
+  color: "#45475a",
+  fontSize: 9,
 };

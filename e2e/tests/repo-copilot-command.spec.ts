@@ -77,16 +77,18 @@ test.describe("Per-repo Copilot command override", () => {
   });
 
   test("setting a project's command makes its workstreams spawn with the override", async ({ page }) => {
-    // Open the Demo project's edit modal from the sidebar and set a command.
-    await page.getByText("Demo", { exact: true }).click();
-    const field = page.locator('[data-testid="edit-project-command"]');
+    // Repo editing moved out of the sidebar body into the Repo Manager.
+    await page.locator('[data-testid="repo-manager-button"]').click();
+    await page.locator('[data-testid^="repo-manager-row-"]').first().click();
+    const field = page.locator('[data-testid="repo-manager-command"]');
     await expect(field).toBeVisible();
     // Inherits by default (blank) with the global shown as placeholder.
     await expect(field).toHaveValue("");
     await expect(field).toHaveAttribute("placeholder", GLOBAL_DEFAULT);
 
     await field.fill("e2e-copilot --marker");
-    await page.getByText("Save").click();
+    await page.locator('[data-testid="repo-manager-save"]').click();
+    await page.locator('[data-testid="repo-manager-close"]').click();
 
     await createBaseRepoWorkstreamInDemo(page, "Override WS");
     expect(await spawnCommand(page)).toBe("e2e-copilot --marker");
