@@ -1,4 +1,5 @@
 // @test-skip: Thin layout wrapper; AddTileMenu (the only logic-bearing child) has its own tests.
+import type { ReactNode } from "react";
 import { ViewColumnsIcon } from "@heroicons/react/24/outline";
 import AddTileMenu from "./AddTileMenu";
 import { isFeatureEnabled } from "../domain/feature-flags";
@@ -28,6 +29,14 @@ interface Props {
   onToggleFullscreen?: () => void;
   onToggleSideBySide?: () => void;
   onOpenSettings?: () => void;
+  /**
+   * Slot for the active workstream's quick-note bar.
+   *
+   * Passed in as a node rather than wired here so the tiling layer keeps no
+   * dependency on tasks; it renders nothing when the workstream has no bound
+   * task, so the bar does not reserve space for it.
+   */
+  quickNote?: ReactNode;
 }
 
 // Icon-only chrome buttons (settings, fullscreen, side-by-side) — beefier
@@ -66,6 +75,7 @@ export default function StatusBar({
   onToggleFullscreen,
   onToggleSideBySide,
   onOpenSettings,
+  quickNote,
 }: Props) {
   const rawItems: Array<{ key: string; label: string; icon: "session" | "terminal" | "folder" | "info" | "beaker" | "plan" | "code"; shortcut?: string; onSelect?: () => void; gated?: boolean }> = [
     { key: "session", label: "Copilot Session", icon: "session", shortcut: shortcutLabel("C"), onSelect: onAddSession },
@@ -85,6 +95,7 @@ export default function StatusBar({
 
   return (
     <div
+      data-testid="status-bar"
       style={{
         display: "flex",
         alignItems: "center",
@@ -99,7 +110,7 @@ export default function StatusBar({
         flexShrink: 0,
       }}
     >
-      <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+      <div style={{ display: "flex", gap: 12, alignItems: "center", flexShrink: 0 }}>
         {workstreamName && (
           <span style={{ color: "#89b4fa" }}>⊞ {workstreamName}</span>
         )}
@@ -112,7 +123,12 @@ export default function StatusBar({
           <span style={{ color: "#cba6f7" }}>⊟ Side-by-side</span>
         )}
       </div>
-      <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+      {/* Rendered directly, with no wrapper. A wrapper would be truthy even
+          when the note itself renders null, so a workstream with no bound task
+          would still reserve width in the bar. */}
+      {quickNote}
+
+      <div style={{ display: "flex", gap: 4, alignItems: "center", flexShrink: 0 }}>
         <AddTileMenu items={menuItems} disabled={disabled} />
         {onOpenSettings && (
           <button

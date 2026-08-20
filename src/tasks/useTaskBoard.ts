@@ -14,6 +14,7 @@ import type { Backend, TaskUpdate } from "../backend/types";
 import type { Task, Label, TaskEvent, TaskEventKind } from "../domain/tasks";
 import type { TaskStatus } from "../domain/task-status";
 import { statusEmoji } from "../domain/task-status";
+import { dispatchTasksChanged } from "../domain/task-events-bus";
 
 export interface TaskBoardData {
   tasks: Task[];
@@ -77,6 +78,10 @@ export function useTaskBoard(backend: Backend): TaskBoardData {
     try {
       setError(null);
       await run();
+      // Every mutation funnels through here, so this is the one place that
+      // has to announce a change to listeners outside the board -- notably
+      // the status-bar quick note, which reads the task list on mount.
+      dispatchTasksChanged();
       return true;
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));

@@ -63,3 +63,40 @@ describe("StatusBar feature-flag gating", () => {
     expect(screen.getByTestId("add-tile-item-plan")).toBeTruthy();
   });
 });
+
+describe("quick note slot", () => {
+  it("renders the slot alongside the tile controls", () => {
+    // The quick note lives in the bottom bar next to Add tile, rather than as
+    // a separate bar above the grid that cost vertical space on every
+    // workstream, including those with no task at all.
+    render(
+      <StatusBar
+        {...commonProps()}
+        quickNote={<span data-testid="fake-quick-note">Log to X</span>}
+      />,
+    );
+    expect(screen.getByTestId("fake-quick-note")).toBeTruthy();
+    expect(screen.getByTestId("add-tile-button")).toBeTruthy();
+  });
+
+  it("renders nothing extra when there is no slot content", () => {
+    // A workstream with no bound task must not reserve space in the bar.
+    render(<StatusBar {...commonProps()} quickNote={null} />);
+    expect(screen.queryByTestId("fake-quick-note")).toBeNull();
+    expect(screen.getByTestId("add-tile-button")).toBeTruthy();
+  });
+
+  it("adds no wrapper of its own around the slot", () => {
+    // A wrapper element would be truthy even when the note inside it renders
+    // null, so a taskless workstream would still reserve width in the bar.
+    render(
+      <StatusBar
+        {...commonProps()}
+        quickNote={<span data-testid="fake-quick-note">x</span>}
+      />,
+    );
+    const bar = screen.getByTestId("status-bar");
+    const note = screen.getByTestId("fake-quick-note");
+    expect(note.parentElement).toBe(bar);
+  });
+});

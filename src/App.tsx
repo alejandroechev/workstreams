@@ -1444,7 +1444,6 @@ export default function App() {
                   flexDirection: "column",
                 }}
               >
-                <WorkstreamQuickNote backend={backend} workstreamId={wsId} />
                 <TileGrid
                   tiles={st.tiles}
                   tileOrder={st.tileOrder}
@@ -1524,6 +1523,11 @@ export default function App() {
         </div>
 
         <StatusBar
+          quickNote={
+            activeWsId ? (
+              <WorkstreamQuickNote backend={backend} workstreamId={activeWsId} />
+            ) : null
+          }
           tileCount={orderedTiles.length}
           focusedLabel={
             focusedTile?.title || focusedTile?.tile_type || "none"

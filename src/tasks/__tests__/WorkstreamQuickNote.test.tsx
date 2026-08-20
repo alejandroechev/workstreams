@@ -1,9 +1,10 @@
 import "@testing-library/jest-dom/vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 
 import { WorkstreamQuickNote } from "../WorkstreamQuickNote";
 import { MemoryBackend } from "../../backend/memory-backend";
+import { dispatchTasksChanged } from "../../domain/task-events-bus";
 
 let backend: MemoryBackend;
 
@@ -120,6 +121,45 @@ describe("WorkstreamQuickNote", () => {
     fireEvent.keyDown(input, { key: "Enter" });
 
     expect(await screen.findByText("db is gone")).toBeInTheDocument();
+  });
+
+  it("appears once a task is created after it mounted", async () => {
+    // "Create task…" creates the task while this bar is already on screen, so
+    // a mount-only fetch would leave the bar invisible exactly when the user
+    // most wants to log against the task they just made.
+    render(<WorkstreamQuickNote backend={backend} workstreamId="w1" />);
+    await waitFor(() => expect(screen.queryByTestId("quick-note-input")).not.toBeInTheDocument());
+
+    await backend.createTask("created later", { workstreamId: "w1" });
+    dispatchTasksChanged();
+
+    expect(await screen.findByTestId("quick-note-input")).toBeInTheDocument();
+    expect(await screen.findByText("created later")).toBeInTheDocument();
+  });
+
+  it("disappears when its task is deleted", async () => {
+    const task = await backend.createTask("going away", { workstreamId: "w1" });
+    render(<WorkstreamQuickNote backend={backend} workstreamId="w1" />);
+    await screen.findByTestId("quick-note-input");
+
+    await backend.deleteTask(task.id);
+    dispatchTasksChanged();
+
+    await waitFor(() => expect(screen.queryByTestId("quick-note-input")).not.toBeInTheDocument());
+  });
+
+  it("stops listening once unmounted", async () => {
+    // A leaked listener would setState on an unmounted component every time
+    // anything on the board changed.
+    await backend.createTask("x", { workstreamId: "w1" });
+    const { unmount } = render(<WorkstreamQuickNote backend={backend} workstreamId="w1" />);
+    await screen.findByTestId("quick-note-input");
+
+    const spy = vi.spyOn(backend, "listTasks");
+    unmount();
+    dispatchTasksChanged();
+
+    expect(spy).not.toHaveBeenCalled();
   });
 
   it("ignores tasks linked to a different workstream", async () => {

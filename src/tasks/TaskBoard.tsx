@@ -42,6 +42,7 @@ import {
 } from "../domain/task-board";
 import { renderDevlogDay } from "../domain/devlog-render";
 import { useTaskBoard } from "./useTaskBoard";
+import { dispatchTasksChanged } from "../domain/task-events-bus";
 
 export interface TaskBoardProps {
   backend: Backend;
@@ -279,6 +280,10 @@ export function TaskBoard({
       .then(async (task) => {
         await board.reload();
         setSelectedId(task.id);
+        // This path bypasses the hook's guard(), so it announces the change
+        // itself; otherwise the quick note would not see the task it was
+        // just created for.
+        dispatchTasksChanged();
       })
       .finally(() => onCreateForWorkstreamHandled?.());
   }, [createForWorkstreamId, board, backend, workstreams, onCreateForWorkstreamHandled]);

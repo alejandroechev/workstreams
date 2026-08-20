@@ -297,3 +297,54 @@ test("notes and the activity log stay separate", async ({ page }) => {
     "blocked on a subscription",
   );
 });
+
+/** Create a workstream and return its sidebar row. */
+async function createWorkstream(page: Page, name: string) {
+  await page.locator('[data-testid="new-workstream-button"]').click();
+  await expect(page.locator('[data-testid="ws-create-form"]')).toBeVisible();
+  await page.locator('[data-testid="ws-create-project"]').selectOption({ label: "Demo" });
+  await page.locator('[data-testid="ws-create-repo-base_repo"] input').click();
+  await page.locator('[data-testid="ws-create-name"]').fill(name);
+  await page.locator('[data-testid="ws-create-submit"]').click();
+  const row = page.locator('[data-testid="workstream-item"]', { hasText: name });
+  await expect(row).toBeVisible();
+  return row;
+}
+
+test("the quick note lives in the bottom bar and is actually usable", async ({ page }) => {
+  // It now competes for width with the tile controls, so "renders" is not
+  // enough -- it has to be reachable and typeable at a real viewport size.
+  const row = await createWorkstream(page, "quick-note-host");
+  await row.hover();
+  await row.locator('[data-testid^="ws-actions-"]').click();
+  await page.locator('[data-testid="action-create-task"]').click();
+  await page.locator('[data-testid="board-close"]').click();
+
+  // In the status bar, beside the tile controls, not in its own strip.
+  const slot = page.locator('[data-testid="status-bar"] [data-testid="quick-note"]');
+  await expect(slot).toBeVisible();
+  await expect(slot.locator('[data-testid="quick-note-input"]')).toBeVisible();
+  await expect(page.locator('[data-testid="add-tile-button"]')).toBeVisible();
+
+  const input = slot.locator('[data-testid="quick-note-input"]');
+  await input.click();
+  await input.fill("logged straight from the status bar");
+  await input.press("Enter");
+  await expect(page.locator('[data-testid="quick-note-flash"]')).toBeVisible();
+
+  // And it reached the task's activity log.
+  await page.locator('[data-testid="task-board-button"]').click();
+  await page.locator('[data-testid^="task-card-"]').first().click();
+  await expect(page.locator('[data-testid="event-feed"]')).toContainText(
+    "logged straight from the status bar",
+  );
+});
+
+test("no quick note appears for a workstream with no task", async ({ page }) => {
+  // Most workstreams have no bound task, and a permanent empty prompt on all
+  // of them is exactly the noise that motivated moving it off its own strip.
+  await createWorkstream(page, "taskless");
+
+  await expect(page.locator('[data-testid="add-tile-button"]')).toBeVisible();
+  await expect(page.locator('[data-testid="quick-note"]')).toHaveCount(0);
+});
