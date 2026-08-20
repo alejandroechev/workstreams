@@ -57,6 +57,14 @@ export interface FileEditorViewProps extends FileCommentActions {
   path: string;
   /** Called when the user clicks the back button (returns to the tile's file list). */
   onBack: () => void;
+  /**
+   * Offered alongside Back when the file cannot be loaded, so a comment
+   * anchored to a file that no longer exists can be cleaned up from the place
+   * the user discovers it. Omitted elsewhere -- this is not a general delete.
+   */
+  onDeleteStaleComment?: () => void;
+  /** Label for the action above; lets the caller name what is being removed. */
+  deleteStaleCommentLabel?: string;
   /** Markdown rendering callback. If absent, .md files open as plain text. */
   renderMarkdownPreview?: (content: string) => ReactNode;
   /** Override for tests. Defaults to `fileBufferRegistry`. */
@@ -196,6 +204,8 @@ function conflictKeyFor(snapshot: BufferSnapshot): string {
 export function FileEditorView({
   path,
   onBack,
+  onDeleteStaleComment,
+  deleteStaleCommentLabel = "Delete comment",
   renderMarkdownPreview,
   registry = fileBufferRegistry,
   showDangerousPathConfirm = defaultDangerousPathConfirm,
@@ -699,7 +709,14 @@ export function FileEditorView({
 
   function renderBody(): ReactNode {
     if (acquireError !== null) {
-      return <MessageWithBack message={`Failed to load file: ${acquireError}`} onBack={onBack} />;
+      return (
+        <MessageWithBack
+          message={`Failed to load file: ${acquireError}`}
+          onBack={onBack}
+          onDelete={onDeleteStaleComment}
+          deleteLabel={deleteStaleCommentLabel}
+        />
+      );
     }
 
     if (snapshot === null) {
@@ -785,13 +802,35 @@ export function FileEditorView({
   }
 }
 
-function MessageWithBack({ message, onBack }: { message: string; onBack: () => void }): ReactElement {
+function MessageWithBack({
+  message,
+  onBack,
+  onDelete,
+  deleteLabel = "Delete comment",
+}: {
+  message: string;
+  onBack: () => void;
+  onDelete?: () => void;
+  deleteLabel?: string;
+}): ReactElement {
   return (
     <div style={messageStyle}>
       <div>{message}</div>
-      <button aria-label="Back" onClick={onBack} style={primaryButtonStyle}>
-        Back
-      </button>
+      <div style={{ display: "flex", gap: 8 }}>
+        <button aria-label="Back" onClick={onBack} style={primaryButtonStyle}>
+          Back
+        </button>
+        {onDelete && (
+          <button
+            aria-label={deleteLabel}
+            data-testid="delete-stale-comment"
+            onClick={onDelete}
+            style={{ ...primaryButtonStyle, borderColor: "#f38ba8", color: "#f38ba8" }}
+          >
+            {deleteLabel}
+          </button>
+        )}
+      </div>
     </div>
   );
 }

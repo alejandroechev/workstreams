@@ -351,6 +351,41 @@ pub fn set_session_file_comment_status(
         .ok_or_else(|| format!("comment {id} not found"))
 }
 
+/// Delete a whole thread regardless of who wrote it.
+///
+/// Deliberately NOT author-gated, unlike `delete_file_comment_row`. That gate
+/// protects a live review conversation: rewriting or removing someone else's
+/// words mid-discussion is not this user's call. Cleanup of a thread whose
+/// anchor file no longer exists is a different question -- the thread is
+/// unreachable, cannot be resolved in context, and there is no conversation
+/// left to protect. An imported ADO comment on a deleted file would otherwise
+/// be permanently stuck in the list.
+///
+/// Always cascades to replies, so it can never leave a headless fragment.
+pub fn delete_file_comment_thread_row(db: &Connection, id: &str) -> rusqlite::Result<bool> {
+    let n = db.execute(
+        "DELETE FROM file_comments WHERE id = ?1 OR parent_id = ?1",
+        [id],
+    )?;
+    Ok(n > 0)
+}
+
+/// Remove a stale thread (its anchor file is gone) whatever its author.
+#[tauri::command]
+pub fn delete_session_file_comment_thread(
+    state: State<'_, AppState>,
+    workstream_id: String,
+    id: String,
+) -> Result<(), String> {
+    let conn = open_bound(&state, &workstream_id)?;
+    let deleted =
+        delete_file_comment_thread_row(&conn, &id).map_err(|e| format!("DB error: {e}"))?;
+    if !deleted {
+        return Err(format!("comment {id} not found"));
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub fn delete_session_file_comment(
     state: State<'_, AppState>,
@@ -483,6 +518,50 @@ mod tests {
         assert!(list_file_comments_rows(&conn, "ws-1", "src/a.ts")
             .unwrap()
             .is_empty());
+    }
+
+    #[test]
+    fn thread_delete_removes_an_imported_thread_and_its_replies() {
+        // Stale cleanup is not review etiquette: a thread anchored to a file
+        // that no longer exists is unreachable, so it must be removable even
+        // when somebody else wrote it -- otherwise imported comments pile up
+        // forever with no way out.
+        let conn = schema_conn();
+        let ts = now();
+        conn.execute(
+            "INSERT INTO file_comments \
+                (id, workstream_id, file, anchor_line_start, anchor_line_end, anchor_text, \
+                 body, author, parent_id, status, created_at, updated_at) \
+             VALUES ('ado-9', 'ws-1', 'src/gone.ts', 4, 4, NULL, 'imported note', \
+                     'Eduardo Fernandez', NULL, 'open', ?1, ?1)",
+            [&ts],
+        )
+        .unwrap();
+        let root = get_file_comment_row(&conn, "ado-9").unwrap().unwrap();
+        insert_agent_reply(&conn, &root, "agent answer");
+
+        assert!(delete_file_comment_thread_row(&conn, "ado-9").unwrap());
+        assert!(list_file_comments_rows(&conn, "ws-1", "src/gone.ts")
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn thread_delete_reports_false_for_an_unknown_id() {
+        let conn = schema_conn();
+        assert!(!delete_file_comment_thread_row(&conn, "nope").unwrap());
+    }
+
+    #[test]
+    fn thread_delete_leaves_other_threads_alone() {
+        let conn = schema_conn();
+        let keep = add_file_comment_row(&conn, "ws-1", "src/a.ts", 1, 1, None, "keep me").unwrap();
+        let drop = add_file_comment_row(&conn, "ws-1", "src/a.ts", 2, 2, None, "drop me").unwrap();
+
+        assert!(delete_file_comment_thread_row(&conn, &drop.id).unwrap());
+        let left = list_file_comments_rows(&conn, "ws-1", "src/a.ts").unwrap();
+        assert_eq!(left.len(), 1);
+        assert_eq!(left[0].id, keep.id);
     }
 
     #[test]

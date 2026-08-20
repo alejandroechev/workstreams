@@ -74,6 +74,36 @@ export function isClosedStatus(status: string): boolean {
   return status === "resolved" || status === "wontfix";
 }
 
+/**
+ * Drop closed threads so a file shows only what still needs attention.
+ *
+ * Two rules matter:
+ *
+ * - **A resolved root takes its replies with it.** Leaving them would orphan
+ *   them, and `groupCommentThreads` drops replies whose parent is missing --
+ *   so they would silently disappear rather than render as anything useful.
+ * - **A resolved reply does NOT hide anything.** Status on a reply is not a
+ *   verdict on the thread; hiding it would tear a hole out of a conversation
+ *   the user is still working through.
+ *
+ * Returns the input reference untouched when the filter is off, so callers can
+ * pass the result straight into memoised render paths without forcing a
+ * rebuild on every render.
+ */
+export function hideResolvedComments(
+  comments: SessionFileComment[],
+  hide: boolean,
+): SessionFileComment[] {
+  if (!hide) return comments;
+  const closedRoots = new Set(
+    comments.filter((c) => c.parent_id === null && isClosedStatus(c.status)).map((c) => c.id),
+  );
+  if (closedRoots.size === 0) return comments;
+  return comments.filter(
+    (c) => !closedRoots.has(c.id) && !(c.parent_id !== null && closedRoots.has(c.parent_id)),
+  );
+}
+
 export interface CommentThread {
   root: SessionFileComment;
   replies: SessionFileComment[];

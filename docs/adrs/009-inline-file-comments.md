@@ -1,5 +1,34 @@
 # ADR 009: Inline file comments (session.db, reviewer↔agent)
 
+## Hiding resolved comments
+
+A heavily-reviewed file accumulates closed threads that crowd out the ones
+still needing attention, so the Files and Diff tabs share a **hide-resolved**
+toggle (`hideResolvedComments`). Two rules:
+
+- **A resolved root takes its replies with it.** Leaving them would orphan
+  them, and `groupCommentThreads` drops replies whose parent is missing — so
+  they would silently disappear rather than render usefully.
+- **A resolved reply hides nothing.** Status on a reply is not a verdict on the
+  thread; hiding it would tear a hole out of a conversation still in progress.
+
+The toggle is one setting across both tabs: "only show me what is still open"
+is a property of how the user is working, not of which tab they are on.
+
+## Deleting a stale thread
+
+A comment whose anchor file no longer exists is unreachable — it cannot be read
+in context or resolved in place — so the load-failure view offers **Delete**
+beside Back, which is the only place the user encounters it.
+
+That path (`delete_session_file_comment_thread`) is deliberately **not**
+author-gated, unlike `delete_session_file_comment`. The author gate protects a
+live review conversation: removing someone else's words mid-discussion is not
+this user's call. An orphaned thread has no conversation left to protect, and
+without this an imported ADO comment on a deleted file would be stuck in the
+list permanently. It always cascades to replies, so it can never leave a
+headless fragment.
+
 ## Status
 
 **Rewritten (2026-07-08, unify-commenting).** The original v1 design (a

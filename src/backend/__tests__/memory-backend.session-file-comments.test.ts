@@ -232,4 +232,38 @@ describe("MemoryBackend.session file comments", () => {
       /linked Copilot session/i,
     );
   });
+
+  describe("deleteSessionFileCommentThread", () => {
+  it("removes an imported thread the author-gated delete refuses", async () => {
+    // A thread anchored to a file that no longer exists is unreachable, so
+    // cleanup must not depend on who wrote it.
+    const imported = backend.seedSessionFileComment({
+      id: "ado-1",
+      workstream_id: "ws-1",
+      file: "src/gone.ts",
+      body: "imported note",
+      author: "Eduardo Fernandez",
+    });
+    await backend.replySessionFileComment("ws-1", imported.id, "an answer");
+
+    await expect(backend.deleteSessionFileComment("ws-1", imported.id)).rejects.toThrow();
+    await backend.deleteSessionFileCommentThread("ws-1", imported.id);
+
+    expect(await backend.listSessionFileComments("ws-1", "src/gone.ts")).toEqual([]);
+  });
+
+  it("throws for an unknown id rather than silently succeeding", async () => {
+    await expect(backend.deleteSessionFileCommentThread("ws-1", "nope")).rejects.toThrow();
+  });
+
+  it("leaves other threads alone", async () => {
+    const keep = await backend.addSessionFileComment("ws-1", "src/a.ts", 1, 1, null, "keep");
+    const drop = await backend.addSessionFileComment("ws-1", "src/a.ts", 2, 2, null, "drop");
+
+    await backend.deleteSessionFileCommentThread("ws-1", drop.id);
+
+    const left = await backend.listSessionFileComments("ws-1", "src/a.ts");
+    expect(left.map((c) => c.id)).toEqual([keep.id]);
+  });
+});
 });

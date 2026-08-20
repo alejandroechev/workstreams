@@ -5,6 +5,7 @@ import {
   formatThreadForCopy,
   isMutable,
   isClosedStatus,
+  hideResolvedComments,
   groupCommentThreads,
   estimateThreadHeightInLines,
   commentTimeValue,
@@ -223,5 +224,80 @@ describe("groupCommentThreads reply ordering across timestamp formats", () => {
     const [thread] = groupCommentThreads([root, myReply, agentReply]);
 
     expect(thread.replies.map((r) => r.id)).toEqual(["agent-reply", "my-reply"]);
+  });
+});
+
+describe("hideResolvedComments", () => {
+  const comment = (
+    id: string,
+    over: Partial<SessionFileComment> = {},
+  ): SessionFileComment => ({
+    id,
+    workstream_id: "ws-1",
+    file: "src/a.ts",
+    anchor_line_start: 1,
+    anchor_line_end: 1,
+    anchor_text: null,
+    body: id,
+    author: "reviewer",
+    parent_id: null,
+    status: "open",
+    created_at: "2026-08-20T10:00:00Z",
+    updated_at: "2026-08-20T10:00:00Z",
+    ...over,
+  });
+
+  it("returns everything untouched when the filter is off", () => {
+    const list = [comment("a"), comment("b", { status: "resolved" })];
+    expect(hideResolvedComments(list, false)).toBe(list);
+  });
+
+  it("drops resolved roots", () => {
+    const list = [comment("open"), comment("done", { status: "resolved" })];
+    expect(hideResolvedComments(list, true).map((c) => c.id)).toEqual(["open"]);
+  });
+
+  it("drops wontfix as well, since both are closed", () => {
+    const list = [comment("open"), comment("nope", { status: "wontfix" })];
+    expect(hideResolvedComments(list, true).map((c) => c.id)).toEqual(["open"]);
+  });
+
+  it("drops the replies of a hidden root, not just the root", () => {
+    // Leaving replies behind would orphan them: groupCommentThreads discards
+    // replies whose parent is absent, so they would silently vanish anyway --
+    // but any other consumer would render a headless fragment.
+    const list = [
+      comment("root", { status: "resolved" }),
+      comment("reply", { parent_id: "root", author: "agent" }),
+    ];
+    expect(hideResolvedComments(list, true)).toEqual([]);
+  });
+
+  it("keeps a reply that is itself resolved when its root is still open", () => {
+    // Status on a reply is not a thread verdict; hiding it would tear a hole
+    // in a conversation the user is still working through.
+    const list = [
+      comment("root"),
+      comment("reply", { parent_id: "root", status: "resolved" }),
+    ];
+    expect(hideResolvedComments(list, true).map((c) => c.id)).toEqual(["root", "reply"]);
+  });
+
+  it("keeps an open root with resolved siblings", () => {
+    const list = [
+      comment("a", { status: "resolved" }),
+      comment("b"),
+      comment("c", { status: "resolved" }),
+    ];
+    expect(hideResolvedComments(list, true).map((c) => c.id)).toEqual(["b"]);
+  });
+
+  it("preserves order", () => {
+    const list = [comment("a"), comment("b"), comment("c")];
+    expect(hideResolvedComments(list, true).map((c) => c.id)).toEqual(["a", "b", "c"]);
+  });
+
+  it("handles an empty list", () => {
+    expect(hideResolvedComments([], true)).toEqual([]);
   });
 });

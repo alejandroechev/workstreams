@@ -171,6 +171,13 @@ export interface Backend {
     status: string,
   ): Promise<SessionFileComment>;
   deleteSessionFileComment(workstreamId: string, id: string): Promise<void>;
+  /**
+   * Delete a whole thread regardless of author, for cleaning up a comment
+   * whose anchor file no longer exists. `deleteSessionFileComment` stays
+   * author-gated: that protects a live conversation, whereas an unreachable
+   * thread has no conversation left to protect.
+   */
+  deleteSessionFileCommentThread(workstreamId: string, id: string): Promise<void>;
   // Code Review (ADR 014) — diff-first, session-DB backed, MCP-free
   resolveWorkstreamSession(workstreamId: string): Promise<string | null>;
   codeReviewDiffFiles(directory: string, diffSource: string, baseRef?: string | null): Promise<ChangedFile[]>;

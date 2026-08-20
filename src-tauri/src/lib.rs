@@ -5157,6 +5157,7 @@ pub fn run() {
             code_review::file_comments::update_session_file_comment,
             code_review::file_comments::set_session_file_comment_status,
             code_review::file_comments::delete_session_file_comment,
+            code_review::file_comments::delete_session_file_comment_thread,
             tasks::list_tasks,
             tasks::create_task,
             tasks::update_task,

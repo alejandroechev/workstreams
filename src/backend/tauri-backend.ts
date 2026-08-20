@@ -337,6 +337,10 @@ export class TauriBackend implements Backend {
     });
   }
 
+  async deleteSessionFileCommentThread(workstreamId: string, id: string): Promise<void> {
+    await invoke("delete_session_file_comment_thread", { workstreamId, id });
+  }
+
   async deleteSessionFileComment(workstreamId: string, id: string): Promise<void> {
     return invoke("delete_session_file_comment", { workstreamId, id });
   }

@@ -635,3 +635,49 @@ describe("FileEditorView", () => {
     await waitFor(() => expect(fakeEditors[0].decorations.length).toBe(0));
   });
 });
+
+describe("stale comment cleanup in the load-failure view", () => {
+  function failingHarness() {
+    const harness = createRegistryHarness();
+    harness.registry.acquire = vi.fn(() => Promise.reject(new Error("ENOENT: no such file")));
+    return harness;
+  }
+
+  it("shows the failure with Back only when no delete handler is supplied", async () => {
+    renderEditor(failingHarness());
+    await screen.findByText(/Failed to load file/);
+    // The header carries its own Back, so scope to the message body's action.
+    expect(screen.getAllByLabelText("Back").length).toBeGreaterThan(0);
+    expect(screen.queryByTestId("delete-stale-comment")).toBeNull();
+  });
+
+  it("offers Delete beside Back when one is supplied", async () => {
+    // Without this the user reaches a dead end: a comment pointing at a file
+    // that no longer exists can only be backed out of, never cleaned up.
+    const onDeleteStaleComment = vi.fn();
+    renderEditor(failingHarness(), { onDeleteStaleComment });
+    await screen.findByText(/Failed to load file/);
+
+    const del = screen.getByTestId("delete-stale-comment");
+    expect(del).toBeTruthy();
+    fireEvent.click(del);
+    expect(onDeleteStaleComment).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps Back working alongside Delete", async () => {
+    const { onBack } = renderEditor(failingHarness(), { onDeleteStaleComment: vi.fn() });
+    await screen.findByText(/Failed to load file/);
+    const backs = screen.getAllByLabelText("Back");
+    fireEvent.click(backs[backs.length - 1]);
+    expect(onBack).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses the caller's label so the action names what it removes", async () => {
+    renderEditor(failingHarness(), {
+      onDeleteStaleComment: vi.fn(),
+      deleteStaleCommentLabel: "Delete stale comment",
+    });
+    await screen.findByText(/Failed to load file/);
+    expect(screen.getByTestId("delete-stale-comment").textContent).toBe("Delete stale comment");
+  });
+});

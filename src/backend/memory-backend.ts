@@ -634,6 +634,17 @@ export class MemoryBackend implements Backend {
     return updated;
   }
 
+  async deleteSessionFileCommentThread(workstreamId: string, id: string): Promise<void> {
+    this.requireBoundSession(workstreamId);
+    if (!this.sessionFileComments.has(id)) {
+      throw new Error(`comment ${id} not found`);
+    }
+    // Author-agnostic by design; always cascades so no headless reply is left.
+    for (const [cid, c] of Array.from(this.sessionFileComments.entries())) {
+      if (cid === id || c.parent_id === id) this.sessionFileComments.delete(cid);
+    }
+  }
+
   async deleteSessionFileComment(workstreamId: string, id: string): Promise<void> {
     this.requireBoundSession(workstreamId);
     const existing = this.sessionFileComments.get(id);

@@ -195,6 +195,7 @@ function createBackend(): Backend {
     replySessionFileComment: vi.fn(),
     updateSessionFileComment: vi.fn(),
     setSessionFileCommentStatus: vi.fn(),
+    deleteSessionFileCommentThread: vi.fn(),
     deleteSessionFileComment: vi.fn(),
     resolveWorkstreamSession: vi.fn().mockResolvedValue(null),
     codeReviewDiffFiles: vi.fn().mockResolvedValue([]),

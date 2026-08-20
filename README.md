@@ -57,7 +57,10 @@ project-aware workspace:
   type on the modified side and `Cmd+S` / `Ctrl+S` (or the Save button) writes
   straight to the working file, then re-reads the diff. Inline file comments work there too:
   select modified-side lines and use the comment toggle to create the same
-  reviewer↔agent threads shown in the Files tab. Historical modes (Last commit,
+  reviewer↔agent threads shown in the Files tab. A second toggle **hides
+  resolved threads** so a heavily-reviewed file shows only what is still open,
+  and a comment whose file no longer exists can be deleted from the
+  load-failure view. Historical modes (Last commit,
   Branch vs master, or a **custom target branch**) stay read-only and
   uncommentable because their modified side is a past commit, not a file on
   disk. The custom branch picker compares `target...HEAD` and remembers its

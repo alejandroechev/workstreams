@@ -8,6 +8,7 @@ import TerminalTile from "../tiles/TerminalTile";
 import { BackendProvider } from "../backend/context";
 import { MemoryBackend } from "../backend/memory-backend";
 import type { SessionFileComment } from "../domain/file-comments";
+import { hideResolvedComments } from "../files/comments-layer";
 import { makeInMemoryRegistry } from "./fakeRegistry";
 import type { BufferSnapshot } from "../files/FileBufferRegistry";
 import { CommentsPanel } from "../files/CommentsPanel";
@@ -437,6 +438,168 @@ const CommentsNavigationCase: FC = () => {
   );
 };
 
+
+/**
+ * Case: resolve through a REAL async round-trip.
+ *
+ * The existing `comment-zone` case updates state synchronously inside the
+ * callback, which is not what the app does: `RepoExplorerTile` passes an inline
+ * arrow that awaits `useFileComments.setStatus` (a backend call) and only then
+ * sets state. Anything that goes wrong across that await — a stale closure, a
+ * view zone torn down and rebuilt while the promise is in flight, a swallowed
+ * rejection — is invisible to the synchronous case.
+ *
+ * This case reproduces the real shape: an unstable inline callback, an awaited
+ * backend hop, and a parent that keeps re-rendering underneath it.
+ */
+const AsyncResolveCase: FC = () => {
+  const path = "C:/repo/src/example.ts";
+  const registry = useMemo(
+    () => makeInMemoryRegistry(path, "const a = 1;\nconst b = 2;\nconst c = 3;\n"),
+    [],
+  );
+
+  const [comments, setComments] = useState<SessionFileComment[]>([
+    {
+      id: "c1",
+      workstream_id: "ws-1",
+      file: "src/example.ts",
+      anchor_line_start: 2,
+      anchor_line_end: 2,
+      anchor_text: "const b = 2;",
+      body: "Rename this.",
+      author: "reviewer",
+      parent_id: null,
+      status: "open",
+      created_at: nowIso(),
+      updated_at: nowIso(),
+    },
+  ]);
+
+  // A parent that re-renders on a timer, like the real tile does while its
+  // sibling hooks settle. Rebuilding view zones underneath an in-flight click
+  // is exactly the hazard being probed.
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setTick((n) => n + 1), 100);
+    return () => clearInterval(t);
+  }, []);
+
+  return (
+    <div data-testid="harness-case" data-case="async-resolve" style={full}>
+      <span data-testid="async-resolve-tick" style={{ display: "none" }}>
+        {tick}
+      </span>
+      <FileEditorView
+        path={path}
+        registry={registry}
+        showHeader={false}
+        commentsEnabled
+        comments={comments}
+        onBack={() => {}}
+        onAddComment={() => Promise.resolve()}
+        onUpdateComment={() => Promise.resolve()}
+        onReplyComment={() => Promise.resolve()}
+        onDeleteComment={() => Promise.resolve()}
+        onSetCommentStatus={async (id, status) => {
+          // The awaited hop the synchronous case skips.
+          await new Promise((r) => setTimeout(r, 40));
+          setComments((cs) => cs.map((c) => (c.id === id ? { ...c, status } : c)));
+        }}
+      />
+    </div>
+  );
+};
+
+
+/**
+ * Case: hide-resolved filter over real Monaco view zones.
+ *
+ * The filter is a pure function, but what matters is that a hidden thread's
+ * view zone is actually torn down -- a stale zone would leave the resolved
+ * comment on screen (or worse, an empty gap) even though the data says it is
+ * gone. jsdom cannot see either outcome.
+ */
+const HideResolvedCase: FC = () => {
+  const path = "C:/repo/src/example.ts";
+  const registry = useMemo(
+    () => makeInMemoryRegistry(path, "const a = 1;\nconst b = 2;\nconst c = 3;\n"),
+    [],
+  );
+  const [hide, setHide] = useState(false);
+
+  const all = useMemo<SessionFileComment[]>(
+    () => [
+      {
+        id: "open1",
+        workstream_id: "ws-1",
+        file: "src/example.ts",
+        anchor_line_start: 1,
+        anchor_line_end: 1,
+        anchor_text: "const a = 1;",
+        body: "Still open.",
+        author: "reviewer",
+        parent_id: null,
+        status: "open",
+        created_at: nowIso(),
+        updated_at: nowIso(),
+      },
+      {
+        id: "done1",
+        workstream_id: "ws-1",
+        file: "src/example.ts",
+        anchor_line_start: 2,
+        anchor_line_end: 2,
+        anchor_text: "const b = 2;",
+        body: "Already handled.",
+        author: "reviewer",
+        parent_id: null,
+        status: "resolved",
+        created_at: nowIso(),
+        updated_at: nowIso(),
+      },
+      {
+        id: "done1reply",
+        workstream_id: "ws-1",
+        file: "src/example.ts",
+        anchor_line_start: 2,
+        anchor_line_end: 2,
+        anchor_text: "const b = 2;",
+        body: "Reply under the resolved root.",
+        author: "agent",
+        parent_id: "done1",
+        status: "open",
+        created_at: nowIso(),
+        updated_at: nowIso(),
+      },
+    ],
+    [],
+  );
+
+  const comments = useMemo(() => hideResolvedComments(all, hide), [all, hide]);
+
+  return (
+    <div data-testid="harness-case" data-case="hide-resolved" style={full}>
+      <button data-testid="hide-resolved-toggle" onClick={() => setHide((v) => !v)}>
+        {hide ? "show resolved" : "hide resolved"}
+      </button>
+      <FileEditorView
+        path={path}
+        registry={registry}
+        showHeader={false}
+        commentsEnabled
+        comments={comments}
+        onBack={() => {}}
+        onAddComment={() => Promise.resolve()}
+        onUpdateComment={() => Promise.resolve()}
+        onReplyComment={() => Promise.resolve()}
+        onDeleteComment={() => Promise.resolve()}
+        onSetCommentStatus={() => Promise.resolve()}
+      />
+    </div>
+  );
+};
+
 export interface HarnessCase {
   title: string;
   Component: FC;
@@ -454,6 +617,14 @@ export const harnessCases: Record<string, HarnessCase> = {
   "imported-comment-zone": {
     title: "Imported (ADO) file-comment zone: author name + reply order",
     Component: ImportedCommentZoneCase,
+  },
+  "hide-resolved": {
+    title: "Repo Explorer: hide resolved comments",
+    Component: HideResolvedCase,
+  },
+  "async-resolve": {
+    title: "File-comment resolve through an async backend round-trip",
+    Component: AsyncResolveCase,
   },
   "comments-navigation": {
     title: "Comments tab: cross-file navigation to a thread",

@@ -1,5 +1,5 @@
 // @test-skip: pre-existing tile shell, individual subcomponents tested separately
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import Editor, { DiffEditor } from "@monaco-editor/react";
 import type * as MonacoNs from "monaco-editor";
 import { MarkdownView } from "../ui/MarkdownView";
@@ -33,6 +33,8 @@ import {
   BoltIcon,
   MusicalNoteIcon,
   ChatBubbleLeftRightIcon,
+  EyeIcon,
+  EyeSlashIcon,
   TableCellsIcon,
   MagnifyingGlassIcon,
 } from "@heroicons/react/24/outline";
@@ -43,6 +45,7 @@ import { PdfViewer } from "../ui/components/PdfViewer";
 import { GITHUB_DARK_DIFF_THEME, defineGithubDiffTheme } from "../ui/monaco-diff-theme";
 import { openPath } from "@tauri-apps/plugin-opener";
 import { useFileComments } from "../files/useFileComments";
+import { hideResolvedComments } from "../files/comments-layer";
 import { useAllFileComments } from "../files/useAllFileComments";
 import { CommentsPanel } from "../files/CommentsPanel";
 import type { CommentFilters } from "../domain/comment-navigation";
@@ -250,6 +253,10 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
   // Comments live in the bound Copilot session's session.db (unify-commenting),
   // so a linked session is required to enable them.
   const [commentsEnabled, setCommentsEnabled] = useState(false);
+  // Hide closed threads so a heavily-reviewed file shows only what still needs
+  // attention. Separate from `commentsEnabled`: turning comments off hides
+  // everything, this narrows what is shown.
+  const [hideResolved, setHideResolved] = useState(false);
   const [hasSession, setHasSession] = useState(false);
   useEffect(() => {
     if (!workstreamId) {
@@ -308,6 +315,12 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
     if (commentsEnabled) void fileComments.reload();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [commentsEnabled]);
+  const visibleFileComments = useMemo(
+    () => hideResolvedComments(fileComments.comments, hideResolved),
+    [fileComments.comments, hideResolved],
+  );
+  const resolvedHiddenCount = fileComments.comments.length - visibleFileComments.length;
+
   const commentsAvailable = Boolean(workstreamId && hasSession);
   const toggleCommentsVisible = useCallback(() => {
     if (!commentsAvailable) return;
@@ -830,6 +843,13 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
   const diffCommentable = diffFileCommentable(activeDiffMode, diffSelectedStatus);
   const diffCommentsEnabled =
     diffCommentable && commentsEnabled && commentsAvailable;
+  // Same filter as the Files tab: the toggle is one setting across both, since
+  // "only show me what is still open" is a property of how the user is working,
+  // not of which tab they happen to be on.
+  const visibleDiffComments = useMemo(
+    () => hideResolvedComments(diffFileComments.comments, hideResolved),
+    [diffFileComments.comments, hideResolved],
+  );
   useEffect(() => { diffEditableRef.current = diffEditable; }, [diffEditable]);
   useEffect(() => { diffAfterRef.current = diffAfter; setDiffDirty(false); }, [diffAfter]);
 
@@ -1444,6 +1464,33 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
               <ChatBubbleLeftRightIcon style={{ width: 13, height: 13 }} />
             </button>
           )}
+          {diffCommentsEnabled && (
+            <button
+              onClick={() => setHideResolved((v) => !v)}
+              title={
+                hideResolved
+                  ? "Showing open comments only — click to show resolved"
+                  : "Hide resolved comments"
+              }
+              data-testid="repo-explorer-diff-hide-resolved-toggle"
+              style={{
+                ...toolbarButtonStyle,
+                display: "inline-flex",
+                alignItems: "center",
+                padding: "2px 6px",
+                borderRadius: 3,
+                background: hideResolved ? "#313244" : "transparent",
+                color: hideResolved ? "#a6e3a1" : "#89b4fa",
+                cursor: "pointer",
+              }}
+            >
+              {hideResolved ? (
+                <EyeSlashIcon style={{ width: 13, height: 13 }} />
+              ) : (
+                <EyeIcon style={{ width: 13, height: 13 }} />
+              )}
+            </button>
+          )}
         </div>
       )}
       {activeDiffMode && (
@@ -1586,7 +1633,7 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
               key={diffCommentPath ?? "no-diff-comment-file"}
               editor={diffCommentEditor}
               editorReadyToken={diffEditorReadyToken}
-              comments={diffFileComments.comments}
+              comments={visibleDiffComments}
               enabled={diffCommentsEnabled}
               onAddComment={diffFileComments.add}
               onUpdateComment={diffFileComments.update}
@@ -1700,6 +1747,33 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
             <ChatBubbleLeftRightIcon style={{ width: 14, height: 14 }} />
           </button>
         ) : null}
+        {workstreamId && filePath && commentsEnabled && commentsAvailable ? (
+          <button
+            onClick={() => setHideResolved((v) => !v)}
+            style={{
+              background: hideResolved ? "#313244" : "none",
+              border: "none",
+              color: hideResolved ? "#a6e3a1" : "#89b4fa",
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              padding: "2px 4px",
+              borderRadius: 3,
+            }}
+            title={
+              hideResolved
+                ? `Showing open comments only${resolvedHiddenCount > 0 ? ` (${resolvedHiddenCount} hidden)` : ""} — click to show resolved`
+                : "Hide resolved comments"
+            }
+            data-testid="repo-explorer-hide-resolved-toggle"
+          >
+            {hideResolved ? (
+              <EyeSlashIcon style={{ width: 14, height: 14 }} />
+            ) : (
+              <EyeIcon style={{ width: 14, height: 14 }} />
+            )}
+          </button>
+        ) : null}
       </div>
     );
 
@@ -1727,7 +1801,7 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
               )}
               onSnapshotChange={setEditorSnapshot}
               onViewStateChange={setEditorViewState}
-              comments={fileComments.comments}
+              comments={visibleFileComments}
               commentsEnabled={commentsEnabled && commentsAvailable}
               onAddComment={fileComments.add}
               onUpdateComment={fileComments.update}
@@ -2157,6 +2231,37 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
                   fileComments.setStatus(id, status).then(() => { void allComments.reload(); })
                 }
                 onBack={() => { setCommentsNavPath(null); setContent(null); setFilePath(""); }}
+                // Only offered here: this is where a comment anchored to a
+                // file that no longer exists actually surfaces, and it is the
+                // one place the user can otherwise do nothing but go Back.
+                onDeleteStaleComment={
+                  selectedCommentId && workstreamId
+                    ? () => {
+                        if (
+                          !window.confirm(
+                            "Delete this comment and its replies? The file it points at could not be opened.",
+                          )
+                        ) {
+                          return;
+                        }
+                        void backend
+                          .deleteSessionFileCommentThread(workstreamId, selectedCommentId)
+                          .then(() => {
+                            setSelectedCommentId(null);
+                            setCommentsNavPath(null);
+                            return allComments.reload();
+                          })
+                          .catch((e: unknown) => {
+                            // Surfacing this matters: a silent failure here
+                            // looks identical to a successful delete that did
+                            // not refresh.
+                            window.alert(
+                              `Could not delete the comment: ${e instanceof Error ? e.message : String(e)}`,
+                            );
+                          });
+                      }
+                    : undefined
+                }
               />
             )}
           </div>
