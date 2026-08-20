@@ -20,6 +20,8 @@ export interface TaskUpdate {
   flags?: TaskFlag[];
   workstreamId?: string | null;
   links?: string[];
+  /** Free-form scratchpad. Fully mutable, unlike an event. */
+  notes?: string;
 }
 
 export interface FileSearchMatch {

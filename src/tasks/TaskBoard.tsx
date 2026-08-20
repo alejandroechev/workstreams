@@ -17,6 +17,7 @@ import {
   PlusIcon,
   TrashIcon,
   ArrowTopRightOnSquareIcon,
+  Bars3BottomLeftIcon,
 } from "@heroicons/react/24/outline";
 
 import type { Backend } from "../backend/types";
@@ -131,6 +132,7 @@ export function TaskBoard({
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [dropColumn, setDropColumn] = useState<BoardColumnId | null>(null);
   const [titleDraft, setTitleDraft] = useState("");
+  const [notesDraft, setNotesDraft] = useState("");
 
   const lanes = useMemo(() => {
     const scoped = filterByRepo(board.tasks, workstreams, repoFilter);
@@ -214,6 +216,29 @@ export function TaskBoard({
     titleSourceRef.current = titleKey;
     if (titleDraft !== (selected?.title ?? "")) setTitleDraft(selected?.title ?? "");
   }
+
+  const notesSourceRef = useRef<string | null>(null);
+  const notesKey = selected ? `${selected.id}:${selected.notes}` : null;
+  if (notesKey !== notesSourceRef.current) {
+    notesSourceRef.current = notesKey;
+    if (notesDraft !== (selected?.notes ?? "")) setNotesDraft(selected?.notes ?? "");
+  }
+
+  /**
+   * Commit the free-form note.
+   *
+   * Deliberately NOT recorded as an event: notes are current understanding,
+   * the activity log is history. Logging every revision would bury the day's
+   * real events under successive drafts of the same paragraph.
+   *
+   * An empty note is a legitimate value here (unlike the title), because
+   * clearing the scratchpad is a real thing to want.
+   */
+  const commitNotes = () => {
+    if (!selected) return;
+    if (notesDraft === selected.notes) return;
+    void board.updateTask(selected.id, { notes: notesDraft });
+  };
 
   /**
    * Commit a rename. A blank title is refused rather than saved: the title is
@@ -455,6 +480,15 @@ export function TaskBoard({
                               {statusEmoji(task.status)}
                             </span>
                             <span style={{ flex: 1 }}>{task.title}</span>
+                            {task.notes.trim() && (
+                              <span
+                                data-testid={`card-has-notes-${task.id}`}
+                                title="Has notes"
+                                style={{ color: "#6c7086", fontSize: 9 }}
+                              >
+                                <Bars3BottomLeftIcon style={{ width: 10, height: 10 }} />
+                              </span>
+                            )}
                             {task.touchedToday && (
                               <span data-testid={`touched-${task.id}`} style={touchedStyle}>
                                 today
@@ -681,6 +715,24 @@ export function TaskBoard({
                 </button>
               </div>
 
+              <label style={fieldLabelStyle}>Notes</label>
+              <textarea
+                data-testid="detail-notes"
+                value={notesDraft}
+                onChange={(e) => setNotesDraft(e.target.value)}
+                onBlur={commitNotes}
+                placeholder="Free-form context: design decisions, open questions, whatever doesn't fit above"
+                rows={6}
+                style={{
+                  ...controlStyle,
+                  width: "100%",
+                  cursor: "text",
+                  resize: "vertical",
+                  fontFamily: "inherit",
+                  lineHeight: 1.5,
+                }}
+              />
+
               <label style={fieldLabelStyle}>Activity</label>
               <div data-testid="event-feed" style={{ maxHeight: 220, overflow: "auto" }}>
                 {selectedEvents.map((event) => (
@@ -716,9 +768,9 @@ export function TaskBoard({
               </div>
               <div style={{ display: "flex", gap: 4, marginTop: 4 }}>
                 <input
-                  data-testid="note-input"
+                  data-testid="log-input"
                   value={noteText}
-                  placeholder="Add a note"
+                  placeholder="Log what just happened"
                   onChange={(e) => setNoteText(e.target.value)}
                   onKeyDown={(e) => {
                     if (e.key === "Enter") {
@@ -728,11 +780,11 @@ export function TaskBoard({
                   style={{ ...controlStyle, flex: 1 }}
                 />
                 <button
-                  data-testid="note-submit"
+                  data-testid="log-submit"
                   onClick={() => void board.addNote(selected.id, noteText).then((ok) => clearIfUnchanged(ok, setNoteText, noteText))}
                   style={controlStyle}
                 >
-                  Note
+                  Log
                 </button>
               </div>
             </aside>

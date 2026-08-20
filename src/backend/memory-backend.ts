@@ -979,6 +979,7 @@ export class MemoryBackend implements Backend {
     if (updates.title !== undefined) task.title = updates.title;
     if (updates.flags !== undefined) task.flags = [...updates.flags];
     if (updates.links !== undefined) task.links = [...updates.links];
+    if (updates.notes !== undefined) task.notes = updates.notes;
     if (updates.workstreamId !== undefined) task.workstreamId = updates.workstreamId;
     if (updates.status !== undefined) {
       task.status = updates.status;

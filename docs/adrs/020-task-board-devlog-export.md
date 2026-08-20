@@ -89,6 +89,37 @@ asserted in tests to collide with no existing glyph.
 A task's repos come from its attached workstream. Repo is a board *filter*, not
 a field on the card. Storing it would be wrong more often than right.
 
+### Free-form notes are a third concept
+
+Measuring the archive settled this: **1470 of the 1962 nested bullets (74%) are
+context-only prose** — no status glyph, no link, no timestamp. Lines like
+*"Passing seqnum when switching from Opus to Wavelock"* or *"synced with Peter,
+have concrete feedback to improve design"*.
+
+They are neither subtasks (no status, not units of work) nor events (standing
+design context, not something that happened at 14:05), so under the original
+two-concept model they had nowhere to live. `tasks.notes` is that third thing:
+
+| | mutable | timestamped | answers |
+| --- | --- | --- | --- |
+| Subtask | yes | no | what is left to do |
+| Event | no (delete only) | yes | what happened |
+| **Notes** | **yes** | no | what this *is* / current thinking |
+
+**One note per task**, deliberately: a list of notes would immediately raise
+"which one?" and drift back towards being an event log. It is fully mutable
+because it records current understanding rather than history, and editing it is
+**not** recorded as an event — logging every revision would bury the day's real
+events under successive drafts of the same paragraph.
+
+It is exported as nested bullets, one per line, appended after subtasks and
+links. **Blank lines are dropped**: a blank line terminates a markdown list, so
+emitting one would detach every following bullet from its task and demote it to
+a top-level item in the archive.
+
+Because two things called "note" is unusable, the append-only box in the
+activity feed is labelled **Log entry**.
+
 ### Events are immutable but deletable
 
 An event may be **deleted** (it never happened) but never **rewritten**. There

@@ -511,6 +511,7 @@ export class TauriBackend implements Backend {
     if (updates.status !== undefined) args.status = updates.status;
     if (updates.flags !== undefined) args.flags = updates.flags;
     if (updates.links !== undefined) args.links = updates.links;
+    if (updates.notes !== undefined) args.notes = updates.notes;
     if (updates.workstreamId !== undefined) {
       // A bare null is indistinguishable from an absent field on the Rust side,
       // so a detach has to be signalled explicitly or it silently no-ops.

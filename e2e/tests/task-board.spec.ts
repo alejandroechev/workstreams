@@ -86,8 +86,8 @@ test("a note is logged and can be deleted, but never edited", async ({ page }) =
   await addTask(page, "offline sdk write path impl");
   await page.locator('[data-testid^="task-card-"]').first().click();
 
-  await page.locator('[data-testid="note-input"]').fill("synced with Erwin on read patterns");
-  await page.locator('[data-testid="note-submit"]').click();
+  await page.locator('[data-testid="log-input"]').fill("synced with Erwin on read patterns");
+  await page.locator('[data-testid="log-submit"]').click();
   await expect(page.locator('[data-testid="event-feed"]')).toContainText("synced with Erwin");
 
   // Immutability must hold in the real DOM, not only in the unit tests.
@@ -240,4 +240,60 @@ test("reopening the board does not create the task again", async ({ page }) => {
 
   // A replayed request would silently accumulate a duplicate on every open.
   await expect(page.locator('[data-testid^="task-card-"]')).toHaveCount(1);
+});
+
+test("a multi-line note survives editing and reaches the exported page", async ({ page }) => {
+  await openBoard(page);
+  await addTask(page, "media_store read API");
+  await page.locator('[data-testid^="task-card-"]').first().click();
+
+  const notes = page.locator('[data-testid="detail-notes"]');
+  await notes.fill("sync with Erwin on read patterns\ngather precise requirements");
+  await notes.blur();
+
+  // Editable, unlike the append-only log.
+  await notes.fill("revised: read path is blocked on the permit system");
+  await notes.blur();
+  await expect(page.locator('[data-testid^="card-has-notes-"]')).toBeVisible();
+
+  await page.locator('[data-testid="devlog-preview"]').click();
+  const preview = page.locator('[data-testid="devlog-preview-content"]');
+  await expect(preview).toContainText("revised: read path is blocked on the permit system");
+  await expect(preview).not.toContainText("sync with Erwin on read patterns");
+});
+
+test("Enter inside the note box stays a newline", async ({ page }) => {
+  // A textarea that submitted on Enter could never hold more than one line,
+  // which is the entire point of the field.
+  await openBoard(page);
+  await addTask(page, "offline sdk write path impl");
+  await page.locator('[data-testid^="task-card-"]').first().click();
+
+  const notes = page.locator('[data-testid="detail-notes"]');
+  await notes.click();
+  await notes.type("first line");
+  await notes.press("Enter");
+  await notes.type("second line");
+
+  await expect(notes).toHaveValue("first line\nsecond line");
+  await expect(page.locator('[data-testid="event-feed"]')).not.toContainText("first line");
+});
+
+test("notes and the activity log stay separate", async ({ page }) => {
+  await openBoard(page);
+  await addTask(page, "Create Kusto DB");
+  await page.locator('[data-testid^="task-card-"]').first().click();
+
+  await page.locator('[data-testid="detail-notes"]').fill("blocked on a subscription");
+  await page.locator('[data-testid="detail-notes"]').blur();
+  await page.locator('[data-testid="log-input"]').fill("chased the subscription request");
+  await page.locator('[data-testid="log-submit"]').click();
+
+  // Editing the note must not appear in the log, and vice versa.
+  const feed = page.locator('[data-testid="event-feed"]');
+  await expect(feed).toContainText("chased the subscription request");
+  await expect(feed).not.toContainText("blocked on a subscription");
+  await expect(page.locator('[data-testid="detail-notes"]')).toHaveValue(
+    "blocked on a subscription",
+  );
 });

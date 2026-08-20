@@ -208,6 +208,12 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
             flags_json TEXT NOT NULL DEFAULT '[]',
             links_json TEXT NOT NULL DEFAULT '[]',
             workstream_id TEXT REFERENCES workstreams(id) ON DELETE SET NULL,
+            -- Free-form scratchpad. A third concept alongside subtasks (units
+            -- of work) and events (things that happened): mutable standing
+            -- context with no status and no timestamp. 74% of the nested
+            -- bullets in the real devlog are exactly this, and had nowhere to
+            -- live before it existed.
+            notes TEXT NOT NULL DEFAULT '',
             position INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
@@ -255,6 +261,7 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
         "ALTER TABLE workstreams ADD COLUMN workstream_type TEXT NOT NULL DEFAULT 'standalone'",
         "ALTER TABLE workstreams ADD COLUMN worktree_branch TEXT",
         "ALTER TABLE projects ADD COLUMN copilot_command TEXT",
+        "ALTER TABLE tasks ADD COLUMN notes TEXT NOT NULL DEFAULT ''",
     ];
     for sql in &migrations {
         // SQLite errors if column already exists — ignore that error
@@ -312,6 +319,38 @@ mod tests {
                 .unwrap();
             assert_eq!(count, 1, "table {table} missing");
         }
+    }
+
+    #[test]
+    fn tasks_notes_default_to_empty_rather_than_null() {
+        // The column is added by migration on existing databases, so rows that
+        // predate it must read as "" and not NULL -- a NULL would surface as a
+        // crash or a literal "null" in the exported page.
+        let conn = open_in_memory();
+        conn.execute(
+            "INSERT INTO tasks (id, title, created_at, updated_at)
+             VALUES ('t1', 'x', '2026-08-20', '2026-08-20')",
+            [],
+        )
+        .unwrap();
+        let notes: String = conn
+            .query_row("SELECT notes FROM tasks WHERE id='t1'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(notes, "");
+    }
+
+    #[test]
+    fn notes_migration_is_safe_to_rerun_on_an_existing_database() {
+        let conn = open_in_memory();
+        init_db(&conn).unwrap();
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('tasks') WHERE name='notes'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1, "notes column duplicated or missing");
     }
 
     #[test]

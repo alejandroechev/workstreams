@@ -173,3 +173,38 @@ describe("events", () => {
     expect(await backend.listTaskEvents()).toHaveLength(2);
   });
 });
+
+describe("free-form notes", () => {
+  it("defaults to an empty string, never null", async () => {
+    const task = await backend.createTask("x");
+    expect(task.notes).toBe("");
+  });
+
+  it("stores multi-line text verbatim", async () => {
+    const task = await backend.createTask("x");
+    await backend.updateTask(task.id, { notes: "first line\nsecond line" });
+    const [stored] = await backend.listTasks();
+    expect(stored.notes).toBe("first line\nsecond line");
+  });
+
+  it("is fully mutable, unlike an event", async () => {
+    const task = await backend.createTask("x");
+    await backend.updateTask(task.id, { notes: "first thought" });
+    await backend.updateTask(task.id, { notes: "revised thought" });
+    expect((await backend.listTasks())[0].notes).toBe("revised thought");
+  });
+
+  it("can be cleared back to empty", async () => {
+    const task = await backend.createTask("x");
+    await backend.updateTask(task.id, { notes: "something" });
+    await backend.updateTask(task.id, { notes: "" });
+    expect((await backend.listTasks())[0].notes).toBe("");
+  });
+
+  it("is untouched by an unrelated update", async () => {
+    const task = await backend.createTask("x");
+    await backend.updateTask(task.id, { notes: "keep me" });
+    await backend.updateTask(task.id, { status: "done" });
+    expect((await backend.listTasks())[0].notes).toBe("keep me");
+  });
+});

@@ -166,6 +166,14 @@ export function renderDevlogDay(input: RenderDevlogInput): string {
       for (const link of task.links) {
         lines.push(`  - ${link}`);
       }
+      // Free-form notes, one bullet per line. Blank lines are dropped rather
+      // than emitted: a blank line terminates a markdown list, which would
+      // detach every following bullet from its task and reduce it to a
+      // top-level item in the archive.
+      for (const line of task.notes.split("\n")) {
+        const text = line.trimEnd();
+        if (text.trim()) lines.push(`  - ${text}`);
+      }
       for (const note of sortEvents(eventsForTask(notesByTask.get(task.id) ?? [], task.id))) {
         const time = new Date(note.at);
         const hh = String(time.getHours()).padStart(2, "0");

@@ -296,3 +296,70 @@ describe("empty days", () => {
     expect(out.endsWith("\n\n")).toBe(false);
   });
 });
+
+describe("free-form notes", () => {
+  const base = { id: "a", title: "media_store read API", labelIds: ["l1"] };
+
+  it("appends each line of the note as a nested bullet", () => {
+    // 74% of the real archive's nested bullets are exactly this shape:
+    // standing context with no glyph and no timestamp.
+    const task = makeTask({
+      ...base,
+      notes: "gather the precise requirements for video understanding\ndesign read on the refactored state machine",
+    });
+    const out = render([task]);
+    expect(out).toContain("  - gather the precise requirements for video understanding");
+    expect(out).toContain("  - design read on the refactored state machine");
+  });
+
+  it("emits nothing at all for an empty note", () => {
+    expect(render([makeTask({ ...base, notes: "" })])).not.toContain("  - \n");
+  });
+
+  it("emits nothing for a whitespace-only note", () => {
+    const out = render([makeTask({ ...base, notes: "   \n\t\n" })]);
+    expect(out.split("\n").filter((l) => l.trim() === "-")).toEqual([]);
+  });
+
+  it("skips blank lines between paragraphs, which would break the list", () => {
+    // A blank line inside a markdown list terminates it, so the following
+    // bullets would detach from the task and read as top-level items.
+    const task = makeTask({ ...base, notes: "first para\n\nsecond para" });
+    const out = render([task]);
+    const bullets = out.split("\n").filter((l) => l.startsWith("  - "));
+    expect(bullets).toEqual(["  - first para", "  - second para"]);
+  });
+
+  it("trims trailing whitespace on each line", () => {
+    const out = render([makeTask({ ...base, notes: "a note   " })]);
+    expect(out).toContain("  - a note\n");
+  });
+
+  it("places the note after subtasks and links, as an appendix to the task", () => {
+    const task = makeTask({
+      ...base,
+      notes: "standing context",
+      subtasks: [{ id: "s1", title: "a subtask", status: "done" }],
+      links: ["https://example/pr/1"],
+    });
+    const out = render([task]);
+    expect(out.indexOf("standing context")).toBeGreaterThan(out.indexOf("a subtask"));
+    expect(out.indexOf("standing context")).toBeGreaterThan(out.indexOf("https://example/pr/1"));
+  });
+
+  it("keeps the note above the day's timestamped log entries", () => {
+    // Standing context first, then what happened today -- which is how the
+    // hand-written pages already read.
+    const task = makeTask({ ...base, notes: "standing context" });
+    const events = [
+      makeEvent({ id: "e1", taskId: "a", kind: "note", text: "logged at 2pm", at: at(14) }),
+    ];
+    const out = render([task], events);
+    expect(out.indexOf("standing context")).toBeLessThan(out.indexOf("logged at 2pm"));
+  });
+
+  it("renders a note for a task that has nothing else", () => {
+    const out = render([makeTask({ ...base, notes: "just a thought" })]);
+    expect(out).toContain("  - just a thought");
+  });
+});

@@ -48,6 +48,16 @@ export interface Task {
   workstreamId: string | null;
   subtasks: Subtask[];
   links: string[];
+  /**
+   * Free-form scratchpad: mutable standing context with no status and no
+   * timestamp. The third concept alongside subtasks (units of work) and events
+   * (things that happened) -- 74% of the nested bullets in the real devlog are
+   * exactly this, and had nowhere to live before it existed.
+   *
+   * Unlike an event this is fully mutable, because it records current
+   * understanding rather than history.
+   */
+  notes: string;
   createdAt: string;
   /** Set when the task reaches a terminal status; drives the Done filter. */
   completedAt: string | null;
@@ -78,6 +88,7 @@ export function makeTask(input: {
   workstreamId?: string | null;
   subtasks?: Subtask[];
   links?: string[];
+  notes?: string;
   createdAt?: string;
   completedAt?: string | null;
 }): Task {
@@ -91,6 +102,7 @@ export function makeTask(input: {
     workstreamId: input.workstreamId ?? null,
     subtasks: input.subtasks ?? [],
     links: input.links ?? [],
+    notes: input.notes ?? "",
     createdAt: input.createdAt ?? new Date().toISOString(),
     completedAt: input.completedAt ?? null,
   };

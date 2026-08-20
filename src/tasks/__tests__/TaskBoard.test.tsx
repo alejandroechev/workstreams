@@ -139,10 +139,10 @@ describe("TaskBoard", () => {
     await screen.findByText("offline sdk with mock storage");
     fireEvent.click(screen.getByTestId(`task-card-${a.id}`));
 
-    fireEvent.change(await screen.findByTestId("note-input"), {
+    fireEvent.change(await screen.findByTestId("log-input"), {
       target: { value: "picked this back up after the review comments" },
     });
-    fireEvent.click(screen.getByTestId("note-submit"));
+    fireEvent.click(screen.getByTestId("log-submit"));
 
     await screen.findByText("picked this back up after the review comments");
     // Immutability has to hold at the UI surface, not only in the backend.
@@ -271,9 +271,9 @@ describe("failed mutations preserve typed input", () => {
     await screen.findByText("x");
     fireEvent.click(screen.getByTestId(`task-card-${task.id}`));
 
-    const input = (await screen.findByTestId("note-input")) as HTMLInputElement;
+    const input = (await screen.findByTestId("log-input")) as HTMLInputElement;
     fireEvent.change(input, { target: { value: "hard-won context" } });
-    fireEvent.click(screen.getByTestId("note-submit"));
+    fireEvent.click(screen.getByTestId("log-submit"));
 
     await screen.findByTestId("board-error");
     expect(input.value).toBe("hard-won context");
@@ -300,9 +300,9 @@ describe("failed mutations preserve typed input", () => {
     await screen.findByText("x");
     fireEvent.click(screen.getByTestId(`task-card-${task.id}`));
 
-    const input = (await screen.findByTestId("note-input")) as HTMLInputElement;
+    const input = (await screen.findByTestId("log-input")) as HTMLInputElement;
     fireEvent.change(input, { target: { value: "a note" } });
-    fireEvent.click(screen.getByTestId("note-submit"));
+    fireEvent.click(screen.getByTestId("log-submit"));
 
     await waitFor(() => expect(input.value).toBe(""));
   });
@@ -329,9 +329,9 @@ describe("slow writes do not eat newer drafts", () => {
     await screen.findByText("x");
     fireEvent.click(screen.getByTestId(`task-card-${task.id}`));
 
-    const input = (await screen.findByTestId("note-input")) as HTMLInputElement;
+    const input = (await screen.findByTestId("log-input")) as HTMLInputElement;
     fireEvent.change(input, { target: { value: "first note" } });
-    fireEvent.click(screen.getByTestId("note-submit"));
+    fireEvent.click(screen.getByTestId("log-submit"));
 
     // The user carries on typing before the write lands.
     fireEvent.change(input, { target: { value: "second note in progress" } });

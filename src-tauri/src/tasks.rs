@@ -66,6 +66,8 @@ pub struct Task {
     pub status: String,
     pub flags: Vec<String>,
     pub links: Vec<String>,
+    /// Free-form scratchpad; mutable standing context, unlike an event.
+    pub notes: String,
     pub label_ids: Vec<String>,
     pub workstream_id: Option<String>,
     pub subtasks: Vec<Subtask>,
@@ -92,7 +94,7 @@ fn read_tasks(conn: &Connection) -> Result<Vec<Task>, String> {
     let mut stmt = conn
         .prepare(
             "SELECT id, title, status, flags_json, links_json, workstream_id,
-                    created_at, completed_at
+                    created_at, completed_at, notes
              FROM tasks ORDER BY position, created_at",
         )
         .map_err(|e| e.to_string())?;
@@ -105,6 +107,7 @@ fn read_tasks(conn: &Connection) -> Result<Vec<Task>, String> {
                 status: r.get(2)?,
                 flags: json_array(&r.get::<_, String>(3)?),
                 links: json_array(&r.get::<_, String>(4)?),
+                notes: r.get::<_, Option<String>>(8)?.unwrap_or_default(),
                 label_ids: Vec::new(),
                 workstream_id: r.get(5)?,
                 subtasks: Vec::new(),
@@ -213,6 +216,7 @@ pub fn update_task(
     status: Option<String>,
     flags: Option<Vec<String>>,
     links: Option<Vec<String>>,
+    notes: Option<String>,
     workstream_id: Option<String>,
     // Explicit detach. `workstream_id: null` cannot be distinguished from an
     // absent field once serde has folded both into `None`, so clearing the
@@ -240,6 +244,10 @@ pub fn update_task(
             (&json, &id),
         )
         .map_err(|e| e.to_string())?;
+    }
+    if let Some(notes) = notes {
+        db.execute("UPDATE tasks SET notes = ?1 WHERE id = ?2", (&notes, &id))
+            .map_err(|e| e.to_string())?;
     }
     if clear_workstream.unwrap_or(false) {
         db.execute("UPDATE tasks SET workstream_id = NULL WHERE id = ?1", [&id])
@@ -720,6 +728,26 @@ mod tests {
         assert!(t1.label_ids.is_empty());
         assert!(t2.subtasks.is_empty());
         assert_eq!(t2.label_ids.len(), 1);
+    }
+
+    #[test]
+    fn notes_round_trip_including_newlines_and_empty() {
+        // The note is multi-line free text, so newlines must survive storage
+        // intact -- collapsing them would destroy the structure the exported
+        // page turns back into bullets.
+        let c = conn();
+        insert_task(&c, "t1", "a");
+        assert_eq!(read_task(&c, "t1").unwrap().notes, "");
+
+        c.execute(
+            "UPDATE tasks SET notes = ?1 WHERE id = 't1'",
+            ["first line\nsecond line"],
+        )
+        .unwrap();
+        assert_eq!(
+            read_task(&c, "t1").unwrap().notes,
+            "first line\nsecond line"
+        );
     }
 
     #[test]

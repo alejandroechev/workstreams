@@ -45,6 +45,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS labels_name_unique ON labels (lower(trim(name)
 CREATE TABLE IF NOT EXISTS tasks (
   id TEXT PRIMARY KEY,
   title TEXT NOT NULL,
+  notes TEXT NOT NULL DEFAULT '',
   status TEXT NOT NULL DEFAULT 'todo',
   flags_json TEXT NOT NULL DEFAULT '[]',
   links_json TEXT NOT NULL DEFAULT '[]',
@@ -163,6 +164,23 @@ try {
     db.prepare("SELECT status FROM subtasks WHERE id='s1'").get().status === "done",
   );
 
+  // Free-form notes: multi-line, mutable, and distinct from the event log.
+  db.prepare("UPDATE tasks SET notes = ? WHERE id = 't1'").run(
+    "sync with Erwin to understand refactoring\ngather the precise requirements",
+  );
+  check(
+    "notes survive storage with their newlines intact",
+    db.prepare("SELECT notes FROM tasks WHERE id='t1'").get().notes.split("\n").length === 2,
+  );
+  db.prepare("UPDATE tasks SET notes = ? WHERE id = 't1'").run("revised understanding");
+  check(
+    "notes are mutable, unlike events",
+    db.prepare("SELECT notes FROM tasks WHERE id='t1'").get().notes === "revised understanding",
+  );
+  db.prepare("UPDATE tasks SET notes = ? WHERE id = 't1'").run(
+    "sync with Erwin to understand refactoring\n\ngather the precise requirements",
+  );
+
   // ── 3. Devlog rendering ─────────────────────────────────────────────────
   console.log("\n3. Devlog rendering");
 
@@ -175,6 +193,7 @@ try {
     makeTask({
       id: r.id,
       title: r.title,
+      notes: r.notes ?? "",
       status: r.status,
       createdAt: r.created_at,
       completedAt: r.completed_at,
@@ -206,6 +225,15 @@ try {
   check("open tasks appear", page.includes("offline sdk with mock storage"));
   check("subtasks are nested under their task", page.includes("  - ✅ Address first round"));
   check("manual notes reach the page", page.includes("picked this back up after the review"));
+  check(
+    "free-form notes are appended as nested bullets",
+    page.includes("  - sync with Erwin to understand refactoring") &&
+      page.includes("  - gather the precise requirements"),
+  );
+  check(
+    "a blank line inside a note never breaks the markdown list",
+    !page.split("\n").some((l) => l.trim() === "-"),
+  );
   check("auto events stay out of the page", !page.includes("moved to in review"));
   check(
     "the in-progress glyph matches the archive",
