@@ -11,7 +11,7 @@
  * label split it into short rows, and the Done column is scoped to today so it
  * cannot become a graveyard.
  */
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   XMarkIcon,
   PlusIcon,
@@ -56,6 +56,14 @@ export interface TaskBoardProps {
    * isolation; the link is plain text when it is not supplied.
    */
   onOpenWorkstream?: (workstreamId: string) => void;
+  /**
+   * When set, open with a freshly created task for this workstream, named
+   * after it and already selected. Used by the sidebar's "Create task…"
+   * action so the workstream can be turned into a task in one step.
+   */
+  createForWorkstreamId?: string | null;
+  /** Fired once the request above has been carried out, so it is not replayed. */
+  onCreateForWorkstreamHandled?: () => void;
 }
 
 /** Subtasks shown inline on a card before the rest are summarised. */
@@ -107,6 +115,8 @@ export function TaskBoard({
   today = toLocalDate(new Date().toISOString()),
   devlogDirectory = "",
   onOpenWorkstream,
+  createForWorkstreamId = null,
+  onCreateForWorkstreamHandled,
 }: TaskBoardProps) {
   const board = useTaskBoard(backend);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -120,6 +130,7 @@ export function TaskBoard({
   const [exportStatus, setExportStatus] = useState<string | null>(null);
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [dropColumn, setDropColumn] = useState<BoardColumnId | null>(null);
+  const [titleDraft, setTitleDraft] = useState("");
 
   const lanes = useMemo(() => {
     const scoped = filterByRepo(board.tasks, workstreams, repoFilter);
@@ -193,6 +204,59 @@ export function TaskBoard({
   };
 
   const selected: Task | null = board.tasks.find((t) => t.id === selectedId) ?? null;
+
+  // Resync the title box when the selection changes, or it would keep showing
+  // the previously selected task's name. Keyed on id and title so an external
+  // rename lands too, but not on every render, which would fight typing.
+  const titleSourceRef = useRef<string | null>(null);
+  const titleKey = selected ? `${selected.id}:${selected.title}` : null;
+  if (titleKey !== titleSourceRef.current) {
+    titleSourceRef.current = titleKey;
+    if (titleDraft !== (selected?.title ?? "")) setTitleDraft(selected?.title ?? "");
+  }
+
+  /**
+   * Commit a rename. A blank title is refused rather than saved: the title is
+   * the only handle a task has on the board and in the exported page, so an
+   * empty one would make it unfindable. Unchanged titles skip the write.
+   */
+  const commitTitle = () => {
+    if (!selected) return;
+    const next = titleDraft.trim();
+    if (!next) {
+      setTitleDraft(selected.title);
+      return;
+    }
+    if (next === selected.title) return;
+    void board.updateTask(selected.id, { title: next });
+  };
+
+  /**
+   * Honour a "create a task for this workstream" request exactly once.
+   *
+   * The ref guard matters: StrictMode double-invokes effects and any re-render
+   * would otherwise mint a second task, so opening the board from the sidebar
+   * would quietly accumulate duplicates.
+   */
+  const handledCreateRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!createForWorkstreamId || board.loading) return;
+    if (handledCreateRef.current === createForWorkstreamId) return;
+    handledCreateRef.current = createForWorkstreamId;
+
+    const ws = workstreams.find((w) => w.id === createForWorkstreamId);
+    if (!ws) {
+      onCreateForWorkstreamHandled?.();
+      return;
+    }
+    void backend
+      .createTask(ws.name, { workstreamId: ws.id })
+      .then(async (task) => {
+        await board.reload();
+        setSelectedId(task.id);
+      })
+      .finally(() => onCreateForWorkstreamHandled?.());
+  }, [createForWorkstreamId, board, backend, workstreams, onCreateForWorkstreamHandled]);
   const selectedEvents = selected ? sortEvents(eventsForTask(board.events, selected.id)) : [];
 
   return (
@@ -471,7 +535,18 @@ export function TaskBoard({
 
           {selected && (
             <aside style={detailStyle} data-testid="task-detail">
-              <h2 style={{ fontSize: 13, margin: "0 0 8px" }}>{selected.title}</h2>
+              <label style={{ ...fieldLabelStyle, marginTop: 0 }}>Title</label>
+              <input
+                data-testid="detail-title"
+                value={titleDraft}
+                onChange={(e) => setTitleDraft(e.target.value)}
+                onBlur={commitTitle}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") commitTitle();
+                  if (e.key === "Escape") setTitleDraft(selected.title);
+                }}
+                style={{ ...controlStyle, width: "100%", fontSize: 12, cursor: "text" }}
+              />
 
               <label style={fieldLabelStyle}>Status</label>
               <select

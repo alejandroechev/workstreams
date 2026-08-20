@@ -148,3 +148,25 @@ describe("WorkstreamActionMenu", () => {
     });
   });
 });
+
+describe("create task action", () => {
+  it("offers Create task when a handler is supplied", () => {
+    renderMenu({ onCreateTask: vi.fn() });
+    expect(screen.getByTestId("action-create-task")).toBeTruthy();
+  });
+
+  it("invokes the handler and closes the menu", () => {
+    const onCreateTask = vi.fn();
+    const handlers = renderMenu({ onCreateTask });
+
+    fireEvent.click(screen.getByTestId("action-create-task"));
+
+    expect(onCreateTask).toHaveBeenCalledTimes(1);
+    expect(handlers.onClose).toHaveBeenCalled();
+  });
+
+  it("hides the action when no handler is supplied", () => {
+    renderMenu();
+    expect(screen.queryByTestId("action-create-task")).toBeNull();
+  });
+});

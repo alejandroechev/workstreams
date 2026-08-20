@@ -241,6 +241,7 @@ export default function App() {
   const [showProjectCreate, setShowProjectCreate] = useState(false);
   const [showRepoCreate, setShowRepoCreate] = useState(false);
   const [showTaskBoard, setShowTaskBoard] = useState(false);
+  const [taskForWsId, setTaskForWsId] = useState<string | null>(null);
   const [showWsCreate, setShowWsCreate] = useState<{ show: boolean; projectId?: string }>({ show: false });
   const [showForkWs, setShowForkWs] = useState<{ show: boolean; wsId?: string }>({ show: false });
   const [changeWorktreeTarget, setChangeWorktreeTarget] = useState<Workstream | null>(null);
@@ -1384,6 +1385,7 @@ export default function App() {
         onRetryRemove={handleRetryRemove}
         onDiscardWorkstream={handleDiscardWorkstream}
         onOpenTaskBoard={() => setShowTaskBoard(true)}
+        onCreateTaskForWorkstream={(wsId) => { setTaskForWsId(wsId); setShowTaskBoard(true); }}
         onCreateProject={() => setShowRepoCreate(true)}
         onImportProject={() => setShowProjectCreate(true)}
         onCreateWorkstream={(projectId) => setShowWsCreate({ show: true, projectId })}
@@ -1668,7 +1670,9 @@ export default function App() {
           projects={projects}
           devlogDirectory={getAppSettings().devlogDirectory}
           onOpenWorkstream={selectWorkstream}
-          onClose={() => setShowTaskBoard(false)}
+          createForWorkstreamId={taskForWsId}
+          onCreateForWorkstreamHandled={() => setTaskForWsId(null)}
+          onClose={() => { setShowTaskBoard(false); setTaskForWsId(null); }}
         />
       )}
 

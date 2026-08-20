@@ -188,3 +188,56 @@ test("subtasks and their state render on the card", async ({ page }) => {
   await expect(card).toContainText("1/1 subtasks");
   await expect(card).toContainText("✅");
 });
+
+test("creating a task from the workstream menu opens it ready to rename", async ({ page }) => {
+  // The whole point of the shortcut is that it is one step, so this drives the
+  // real menu rather than the board prop it eventually sets.
+  await page.locator('[data-testid="new-workstream-button"]').click();
+  await expect(page.locator('[data-testid="ws-create-form"]')).toBeVisible();
+  await page.locator('[data-testid="ws-create-project"]').selectOption({ label: "Demo" });
+  await page.locator('[data-testid="ws-create-repo-base_repo"] input').click();
+  await page.locator('[data-testid="ws-create-name"]').fill("offline-sdk-mock-store");
+  await page.locator('[data-testid="ws-create-submit"]').click();
+
+  const row = page.locator('[data-testid="workstream-item"]', {
+    hasText: "offline-sdk-mock-store",
+  });
+  await expect(row).toBeVisible();
+  await row.hover();
+  await row.locator('[data-testid^="ws-actions-"]').click();
+  await page.locator('[data-testid="action-create-task"]').click();
+
+  // The board opens with the task created, selected, and named after the
+  // workstream, with the workstream already attached.
+  await expect(page.locator('[data-testid="task-board"]')).toBeVisible();
+  await expect(page.locator('[data-testid="detail-title"]')).toHaveValue("offline-sdk-mock-store");
+  await expect(page.locator('[data-testid="detail-workstream"]')).not.toHaveValue("");
+  await expect(page.locator('[data-testid="detail-open-workstream"]')).toBeVisible();
+
+  // And the title is editable straight away.
+  await page.locator('[data-testid="detail-title"]').fill("media_store read API");
+  await page.locator('[data-testid="detail-title"]').press("Enter");
+  await expect(
+    page.locator('[data-testid^="task-card-"]').filter({ hasText: "media_store read API" }),
+  ).toBeVisible();
+});
+
+test("reopening the board does not create the task again", async ({ page }) => {
+  await page.locator('[data-testid="new-workstream-button"]').click();
+  await page.locator('[data-testid="ws-create-project"]').selectOption({ label: "Demo" });
+  await page.locator('[data-testid="ws-create-repo-base_repo"] input').click();
+  await page.locator('[data-testid="ws-create-name"]').fill("dup-check");
+  await page.locator('[data-testid="ws-create-submit"]').click();
+
+  const row = page.locator('[data-testid="workstream-item"]', { hasText: "dup-check" });
+  await row.hover();
+  await row.locator('[data-testid^="ws-actions-"]').click();
+  await page.locator('[data-testid="action-create-task"]').click();
+  await expect(page.locator('[data-testid="detail-title"]')).toHaveValue("dup-check");
+
+  await page.locator('[data-testid="board-close"]').click();
+  await page.locator('[data-testid="task-board-button"]').click();
+
+  // A replayed request would silently accumulate a duplicate on every open.
+  await expect(page.locator('[data-testid^="task-card-"]')).toHaveCount(1);
+});

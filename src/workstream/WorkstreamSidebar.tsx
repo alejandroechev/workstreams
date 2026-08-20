@@ -33,6 +33,8 @@ interface Props {
   /** Opens the global task board. Optional so the sidebar stays renderable
    * without a backend (the board is owned by App, which has one). */
   onOpenTaskBoard?: () => void;
+  /** Create a task named after this workstream and open it on the board. */
+  onCreateTaskForWorkstream?: (workstreamId: string) => void;
   onCreateProject: () => void;
   onImportProject: () => void;
   onCreateWorkstream: (projectId?: string) => void;
@@ -130,6 +132,7 @@ export default function WorkstreamSidebar({
   loadedWsIds,
   onSelectWorkstream,
   onOpenTaskBoard,
+  onCreateTaskForWorkstream,
   onCreateProject,
   onImportProject,
   onCreateWorkstream,
@@ -488,6 +491,11 @@ export default function WorkstreamSidebar({
                   onChangeWorktree={onChangeWorktree ? () => onChangeWorktree(ws) : undefined}
                   onFork={onForkWorkstream ? () => onForkWorkstream(ws.id) : undefined}
                   onArchive={() => onArchiveWorkstream(ws.id)}
+                  onCreateTask={
+                    onCreateTaskForWorkstream
+                      ? () => onCreateTaskForWorkstream(ws.id)
+                      : undefined
+                  }
                   onCloseWorkstream={onCloseWorkstream ? () => onCloseWorkstream(ws.id) : undefined}
                   isLoaded={!!loadedWsIds && loadedWsIds.has(ws.id)}
                 />

@@ -7,6 +7,7 @@ import {
   ArrowTopRightOnSquareIcon,
   ArchiveBoxIcon,
   MoonIcon,
+  ClipboardDocumentListIcon,
 } from "@heroicons/react/20/solid";
 
 type WorkstreamStatus = Workstream["status"];
@@ -20,6 +21,11 @@ export interface WorkstreamActionMenuProps {
   onChangeWorktree?: () => void;
   onFork?: () => void;
   onArchive: () => void;
+  /**
+   * Create a task for this workstream and open it on the board. Optional so
+   * the menu stays renderable without a backend.
+   */
+  onCreateTask?: () => void;
   /**
    * Stop a loaded workstream's inner tiles/processes without archiving it. The
    * workstream stays in the active list and reverts to the "stopped" (moon)
@@ -44,6 +50,7 @@ export function WorkstreamActionMenu({
   onChangeWorktree,
   onFork,
   onArchive,
+  onCreateTask,
   onCloseWorkstream,
   isLoaded,
   anchor,
@@ -111,6 +118,15 @@ export function WorkstreamActionMenu({
           label="Fork to new worktree"
           onClick={close(onFork)}
           testid="action-fork"
+        />
+      )}
+
+      {onCreateTask && (
+        <MenuItem
+          icon={<ClipboardDocumentListIcon style={iconStyle} />}
+          label="Create task…"
+          onClick={close(onCreateTask)}
+          testid="action-create-task"
         />
       )}
 

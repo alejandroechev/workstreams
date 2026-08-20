@@ -124,6 +124,14 @@ Cards show their subtasks inline with each subtask's own glyph, capped at five
 with a `+n more` summary. The cap exists because 45 tasks share one column;
 rendering every subtask of every card unbounded makes that column unusable.
 
+The sidebar's `⋯` menu offers **Create task…**, which opens the board with a
+task created, named after the workstream, attached to it and selected. The
+request is one-shot: it is guarded by a ref and cleared by the board through
+`onCreateForWorkstreamHandled`, because StrictMode double-invokes effects and a
+replayed request would silently mint a duplicate task on every open. Tasks are
+renamed inline in the detail panel; a blank title is refused rather than saved,
+since the title is the only handle a task has on the board and in the archive.
+
 A card carries a link to its workstream when it has one. The link stops click
 propagation, since the card itself is clickable and would otherwise open the
 detail panel behind the navigation, and navigating closes the board — it is a

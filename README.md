@@ -45,7 +45,9 @@ project-aware workspace:
   task. Cards are **drag-and-drop** between columns (dropping a card back on
   its own column is a no-op, so `🕵️` and `❌` keep their glyph), show their
   **subtasks with individual state** plus a done/total count, and link straight
-  to the **workstream** they are attached to. Notes can be
+  to the **workstream** they are attached to. A workstream's `⋯` menu has
+  **Create task…**, which opens the board with a task already created, named
+  after the workstream, attached to it and selected for renaming. Notes can be
   deleted but never rewritten. **Export** renders the day into your wiki as
   markdown, commits and pushes it — one-way, and it never overwrites a page it
   did not generate. **Preview** shows exactly what would be written without
