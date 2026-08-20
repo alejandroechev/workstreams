@@ -41,8 +41,11 @@ project-aware workspace:
   **Tasks**), not a tile, because a task may have no workstream and often
   outlives the one it had. Seven columns matching the status glyphs already
   used in a hand-written devlog (⚒️ 👁️ 🧊 🚗 🙋 ✅), **label swimlanes** so a
-  long in-progress column stays scannable, one level of subtasks that carry
-  their own status, and an **append-only event log** per task. Notes can be
+  long in-progress column stays scannable, and an **append-only event log** per
+  task. Cards are **drag-and-drop** between columns (dropping a card back on
+  its own column is a no-op, so `🕵️` and `❌` keep their glyph), show their
+  **subtasks with individual state** plus a done/total count, and link straight
+  to the **workstream** they are attached to. Notes can be
   deleted but never rewritten. **Export** renders the day into your wiki as
   markdown, commits and pushes it — one-way, and it never overwrites a page it
   did not generate. **Preview** shows exactly what would be written without

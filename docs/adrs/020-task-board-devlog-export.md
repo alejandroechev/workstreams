@@ -112,6 +112,24 @@ Swimlanes by label break up the 45-of-61 `in_progress` pile without asking the
 user to change how they work. The Done column shows **today's completions
 only** by default.
 
+Cards are dragged between columns, and a drop is recorded as an auto `status`
+event exactly like the dropdown. One rule is load-bearing: **dropping a card
+back on the column it already renders in is a true no-op** (`statusForDrop`
+returns null). Because `investigating` renders in In progress and `cancelled`
+renders in Done, writing the column's own status on such a drop would silently
+flatten `🕵️` into `⚒️` and `❌` into `✅` — destroying a distinction the export
+depends on, purely because a card was picked up and put down again.
+
+Cards show their subtasks inline with each subtask's own glyph, capped at five
+with a `+n more` summary. The cap exists because 45 tasks share one column;
+rendering every subtask of every card unbounded makes that column unusable.
+
+A card carries a link to its workstream when it has one. The link stops click
+propagation, since the card itself is clickable and would otherwise open the
+detail panel behind the navigation, and navigating closes the board — it is a
+full-screen overlay, so leaving it open would hide the workstream just
+navigated to.
+
 ### Export is one-way, manual, and refuses to guess
 
 The generated page is written into the same wiki folder with the same

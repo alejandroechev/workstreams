@@ -12,20 +12,33 @@
  * cannot become a graveyard.
  */
 import { useMemo, useState } from "react";
-import { XMarkIcon, PlusIcon, TrashIcon } from "@heroicons/react/24/outline";
+import {
+  XMarkIcon,
+  PlusIcon,
+  TrashIcon,
+  ArrowTopRightOnSquareIcon,
+} from "@heroicons/react/24/outline";
 
 import type { Backend } from "../backend/types";
 import type { Project, Workstream } from "../domain/types";
 import type { Task } from "../domain/tasks";
+import type { BoardColumnId } from "../domain/task-status";
 import { toLocalDate, eventsForTask, sortEvents } from "../domain/tasks";
 import {
   BOARD_COLUMNS,
   TASK_STATUSES,
   statusEmoji,
   columnForStatus,
+  isTerminalStatus,
   type TaskStatus,
 } from "../domain/task-status";
-import { swimlanes, visibleTasks, filterByRepo } from "../domain/task-board";
+import {
+  swimlanes,
+  visibleTasks,
+  filterByRepo,
+  statusForDrop,
+  subtaskProgress,
+} from "../domain/task-board";
 import { renderDevlogDay } from "../domain/devlog-render";
 import { useTaskBoard } from "./useTaskBoard";
 
@@ -38,7 +51,15 @@ export interface TaskBoardProps {
   today?: string;
   /** Wiki folder the generated page is written to. Empty disables export. */
   devlogDirectory?: string;
+  /**
+   * Navigate to a workstream. Optional so the board stays renderable in
+   * isolation; the link is plain text when it is not supplied.
+   */
+  onOpenWorkstream?: (workstreamId: string) => void;
 }
+
+/** Subtasks shown inline on a card before the rest are summarised. */
+const CARD_SUBTASK_LIMIT = 5;
 
 /**
  * Clear an input after a successful write, but only if it still holds exactly
@@ -85,6 +106,7 @@ export function TaskBoard({
   onClose,
   today = toLocalDate(new Date().toISOString()),
   devlogDirectory = "",
+  onOpenWorkstream,
 }: TaskBoardProps) {
   const board = useTaskBoard(backend);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -96,6 +118,8 @@ export function TaskBoard({
   const [labelText, setLabelText] = useState("");
   const [preview, setPreview] = useState<string | null>(null);
   const [exportStatus, setExportStatus] = useState<string | null>(null);
+  const [draggingId, setDraggingId] = useState<string | null>(null);
+  const [dropColumn, setDropColumn] = useState<BoardColumnId | null>(null);
 
   const lanes = useMemo(() => {
     const scoped = filterByRepo(board.tasks, workstreams, repoFilter);
@@ -104,6 +128,34 @@ export function TaskBoard({
       today,
     });
   }, [board.tasks, board.labels, board.events, workstreams, repoFilter, showAllDone, today]);
+
+  const endDrag = () => {
+    setDraggingId(null);
+    setDropColumn(null);
+  };
+
+  /**
+   * Apply a drop. `statusForDrop` returns null when the card landed back on
+   * the column it already rendered in, which must stay a true no-op: writing
+   * the column's own status would flatten `investigating` into `in_progress`
+   * (and `cancelled` into `done`) just because a card was picked up and put
+   * down again.
+   */
+  const handleDrop = (column: BoardColumnId) => {
+    const task = board.tasks.find((t) => t.id === draggingId);
+    endDrag();
+    if (!task) return;
+    const next = statusForDrop(task, column);
+    if (next) void board.setStatus(task.id, next);
+  };
+
+  const openWorkstream = (workstreamId: string) => {
+    if (!onOpenWorkstream) return;
+    onOpenWorkstream(workstreamId);
+    // The board is a full-screen overlay, so navigating without closing it
+    // would leave the user looking at the board they just navigated away from.
+    onClose();
+  };
 
   const renderPage = () =>
     renderDevlogDay({
@@ -274,35 +326,144 @@ export function TaskBoard({
               <section key={lane.id} data-testid={`swimlane-${lane.name}`} style={{ marginBottom: 10 }}>
                 <h3 style={{ ...laneHeadStyle, color: lane.color ?? "#6c7086" }}>{lane.name}</h3>
                 <div style={laneRowStyle}>
-                  {BOARD_COLUMNS.map((column) => (
+                  {BOARD_COLUMNS.map((column) => {
+                    const isDropTarget = dropColumn === column.id && draggingId !== null;
+                    return (
                     <div
                       key={column.id}
                       data-testid={`lane-column-${column.id}`}
-                      style={laneCellStyle}
+                      data-drop-active={isDropTarget ? "true" : "false"}
+                      onDragOver={(e) => {
+                        if (!draggingId) return;
+                        // Without preventDefault the browser refuses the drop.
+                        e.preventDefault();
+                        e.dataTransfer.dropEffect = "move";
+                        if (dropColumn !== column.id) setDropColumn(column.id);
+                      }}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        handleDrop(column.id);
+                      }}
+                      style={{
+                        ...laneCellStyle,
+                        background: isDropTarget ? "#1e1e2e" : "transparent",
+                        outline: isDropTarget ? "1px dashed #89b4fa" : "1px solid transparent",
+                        borderRadius: 4,
+                      }}
                     >
-                      {lane.columns[column.id].map((task) => (
-                        <button
+                      {lane.columns[column.id].map((task) => {
+                        const progress = subtaskProgress(task);
+                        const shown = task.subtasks.slice(0, CARD_SUBTASK_LIMIT);
+                        const hidden = task.subtasks.length - shown.length;
+                        const linkedWs = task.workstreamId
+                          ? workstreams.find((w) => w.id === task.workstreamId)
+                          : undefined;
+                        return (
+                        <div
                           key={task.id}
                           data-testid={`task-card-${task.id}`}
+                          role="button"
+                          tabIndex={0}
+                          draggable
+                          onDragStart={(e) => {
+                            setDraggingId(task.id);
+                            e.dataTransfer.effectAllowed = "move";
+                            try {
+                              e.dataTransfer.setData("text/plain", task.id);
+                            } catch {
+                              /* jsdom and some browsers reject setData */
+                            }
+                          }}
+                          onDragEnd={endDrag}
                           onClick={() => setSelectedId(task.id)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" || e.key === " ") setSelectedId(task.id);
+                          }}
                           style={{
                             ...cardStyle,
                             borderColor: task.id === selectedId ? "#89b4fa" : "#313244",
+                            opacity: draggingId === task.id ? 0.4 : 1,
+                            cursor: draggingId === task.id ? "grabbing" : "grab",
                           }}
                         >
-                          <span aria-hidden style={{ minWidth: 12 }}>
-                            {statusEmoji(task.status)}
-                          </span>
-                          <span style={{ flex: 1 }}>{task.title}</span>
-                          {task.touchedToday && (
-                            <span data-testid={`touched-${task.id}`} style={touchedStyle}>
-                              today
+                          <div style={{ display: "flex", gap: 4, alignItems: "flex-start" }}>
+                            <span aria-hidden style={{ minWidth: 12 }}>
+                              {statusEmoji(task.status)}
                             </span>
+                            <span style={{ flex: 1 }}>{task.title}</span>
+                            {task.touchedToday && (
+                              <span data-testid={`touched-${task.id}`} style={touchedStyle}>
+                                today
+                              </span>
+                            )}
+                          </div>
+
+                          {progress.total > 0 && (
+                            <div style={{ marginTop: 3 }}>
+                              <span
+                                data-testid={`card-progress-${task.id}`}
+                                style={{ color: "#6c7086", fontSize: 9 }}
+                              >
+                                {progress.done}/{progress.total} subtasks
+                              </span>
+                              {shown.map((sub) => (
+                                <div
+                                  key={sub.id}
+                                  data-testid={`card-subtask-${sub.id}`}
+                                  style={subtaskRowStyle}
+                                >
+                                  <span aria-hidden>{statusEmoji(sub.status) || "·"}</span>
+                                  <span
+                                    style={{
+                                      flex: 1,
+                                      textDecoration: isTerminalStatus(sub.status)
+                                        ? "line-through"
+                                        : "none",
+                                    }}
+                                  >
+                                    {sub.title}
+                                  </span>
+                                </div>
+                              ))}
+                              {hidden > 0 && (
+                                <div
+                                  data-testid={`card-more-${task.id}`}
+                                  style={{ ...subtaskRowStyle, color: "#585b70" }}
+                                >
+                                  +{hidden} more
+                                </div>
+                              )}
+                            </div>
                           )}
-                        </button>
-                      ))}
+
+                          {linkedWs &&
+                            (onOpenWorkstream ? (
+                              <button
+                                data-testid={`card-workstream-${task.id}`}
+                                // The card is itself clickable, so the link has
+                                // to stop the event or navigating would also
+                                // open the detail panel behind it.
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  openWorkstream(linkedWs.id);
+                                }}
+                                style={wsLinkStyle}
+                                title={`Go to ${linkedWs.name}`}
+                              >
+                                <ArrowTopRightOnSquareIcon style={{ width: 9, height: 9 }} />
+                                {linkedWs.name}
+                              </button>
+                            ) : (
+                              <span style={{ ...wsLinkStyle, cursor: "default" }}>
+                                {linkedWs.name}
+                              </span>
+                            ))}
+                        </div>
+                        );
+                      })}
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </section>
             ))}
@@ -328,6 +489,18 @@ export function TaskBoard({
               </select>
 
               <label style={fieldLabelStyle}>Workstream</label>
+              {selected.workstreamId && onOpenWorkstream && (
+                <button
+                  data-testid="detail-open-workstream"
+                  onClick={() => openWorkstream(selected.workstreamId!)}
+                  style={{ ...wsLinkStyle, marginTop: 0, marginBottom: 4 }}
+                >
+                  <ArrowTopRightOnSquareIcon style={{ width: 10, height: 10 }} />
+                  Go to{" "}
+                  {workstreams.find((w) => w.id === selected.workstreamId)?.name ??
+                    selected.workstreamId}
+                </button>
+              )}
               <select
                 data-testid="detail-workstream"
                 value={selected.workstreamId ?? ""}
@@ -574,10 +747,8 @@ const cardStyle: React.CSSProperties = {
   fontFamily: "inherit",
   padding: "4px 6px",
   textAlign: "left",
-  cursor: "pointer",
   display: "flex",
-  gap: 4,
-  alignItems: "flex-start",
+  flexDirection: "column",
 };
 
 const touchedStyle: React.CSSProperties = {
@@ -653,4 +824,29 @@ const previewStyle: React.CSSProperties = {
   padding: 8,
   fontSize: 11,
   whiteSpace: "pre-wrap",
+};
+
+const subtaskRowStyle: React.CSSProperties = {
+  display: "flex",
+  gap: 4,
+  fontSize: 9,
+  color: "#a6adc8",
+  paddingLeft: 14,
+  lineHeight: 1.5,
+};
+
+const wsLinkStyle: React.CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 3,
+  marginTop: 4,
+  padding: "1px 4px",
+  background: "#11111b",
+  border: "1px solid #313244",
+  borderRadius: 3,
+  color: "#89b4fa",
+  fontSize: 9,
+  fontFamily: "inherit",
+  cursor: "pointer",
+  alignSelf: "flex-start",
 };

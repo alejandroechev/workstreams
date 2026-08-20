@@ -5,6 +5,8 @@ import {
   visibleTasks,
   filterByRepo,
   UNLABELLED_LANE_ID,
+  statusForDrop,
+  subtaskProgress,
 } from "../task-board";
 import { makeTask, makeEvent } from "../tasks";
 import type { Task, Label, TaskEvent } from "../tasks";
@@ -199,5 +201,59 @@ describe("touched markers", () => {
     const all = lanes.flatMap((l) => Object.values(l.columns).flat());
     expect(all.find((t) => t.id === "a")?.touchedToday).toBe(true);
     expect(all.find((t) => t.id === "b")?.touchedToday).toBe(false);
+  });
+});
+
+describe("statusForDrop", () => {
+  it("returns the target column's status for a normal move", () => {
+    const task = makeTask({ id: "a", title: "x", status: "todo" });
+    expect(statusForDrop(task, "in_progress")).toBe("in_progress");
+  });
+
+  it("is a no-op when the card is dropped back on its own column", () => {
+    const task = makeTask({ id: "a", title: "x", status: "in_review" });
+    expect(statusForDrop(task, "in_review")).toBeNull();
+  });
+
+  it("preserves investigating when dropped on the column it already renders in", () => {
+    // `investigating` renders in the in_progress column. Flattening it to
+    // plain `in_progress` on a no-op drag would silently destroy the
+    // distinction the archive actually uses.
+    const task = makeTask({ id: "a", title: "x", status: "investigating" });
+    expect(statusForDrop(task, "in_progress")).toBeNull();
+  });
+
+  it("preserves cancelled when dropped on the Done column it already sits in", () => {
+    const task = makeTask({ id: "a", title: "x", status: "cancelled" });
+    expect(statusForDrop(task, "done")).toBeNull();
+  });
+
+  it("still moves investigating out to a genuinely different column", () => {
+    const task = makeTask({ id: "a", title: "x", status: "investigating" });
+    expect(statusForDrop(task, "blocked")).toBe("blocked");
+  });
+
+  it("moves a finished task back into open work", () => {
+    const task = makeTask({ id: "a", title: "x", status: "done" });
+    expect(statusForDrop(task, "in_progress")).toBe("in_progress");
+  });
+});
+
+describe("subtaskProgress", () => {
+  it("counts only terminal subtasks as finished", () => {
+    const task = makeTask({
+      id: "a",
+      title: "x",
+      subtasks: [
+        { id: "s1", title: "one", status: "done" },
+        { id: "s2", title: "two", status: "cancelled" },
+        { id: "s3", title: "three", status: "in_progress" },
+      ],
+    });
+    expect(subtaskProgress(task)).toEqual({ done: 2, total: 3 });
+  });
+
+  it("reports zeroes for a task with no subtasks", () => {
+    expect(subtaskProgress(makeTask({ id: "a", title: "x" }))).toEqual({ done: 0, total: 0 });
   });
 });

@@ -138,3 +138,53 @@ test("the board does not churn its DOM after settling", async ({ page }) => {
   expect(second).toBe(first);
   expect(third).toBe(second);
 });
+
+test("a card can be dragged to another column in a real browser", async ({ page }) => {
+  // jsdom's drag events are synthetic, so only a real browser proves the
+  // HTML5 drag-and-drop contract (draggable, preventDefault on dragover) is
+  // actually satisfied.
+  await openBoard(page);
+  await addTask(page, "offline sdk with mock storage");
+
+  const card = page.locator('[data-testid^="task-card-"]').first();
+  const blocked = page.locator('[data-testid="lane-column-blocked"]').first();
+  await card.dragTo(blocked);
+
+  // The card must land in the Blocked column and carry the blocked glyph.
+  const moved = page.locator('[data-testid^="task-card-"]').first();
+  await expect(moved).toContainText("🧊");
+  await expect(page.locator('[data-testid="lane-column-blocked"]').first()).toContainText(
+    "offline sdk with mock storage",
+  );
+});
+
+test("dragging to Done records the completion and keeps the card today", async ({ page }) => {
+  await openBoard(page);
+  await addTask(page, "media_store read API");
+
+  await page
+    .locator('[data-testid^="task-card-"]')
+    .first()
+    .dragTo(page.locator('[data-testid="lane-column-done"]').first());
+
+  await expect(page.locator('[data-testid="lane-column-done"]').first()).toContainText(
+    "media_store read API",
+  );
+  // The move is an event, so the card is marked as touched today.
+  await expect(page.locator('[data-testid^="touched-"]').first()).toBeVisible();
+});
+
+test("subtasks and their state render on the card", async ({ page }) => {
+  await openBoard(page);
+  await addTask(page, "offline sdk write path impl");
+  await page.locator('[data-testid^="task-card-"]').first().click();
+
+  await page.locator('[data-testid="new-subtask-input"]').fill("Address first round of reviews");
+  await page.locator('[data-testid="new-subtask-submit"]').click();
+  await page.locator('[data-testid^="subtask-status-"]').first().selectOption("done");
+
+  const card = page.locator('[data-testid^="task-card-"]').first();
+  await expect(card).toContainText("Address first round of reviews");
+  await expect(card).toContainText("1/1 subtasks");
+  await expect(card).toContainText("✅");
+});

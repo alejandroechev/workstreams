@@ -18,7 +18,7 @@
 import type { Task, TaskEvent, Label } from "./tasks";
 import { completionDate, derivedRepoIds, toLocalDate } from "./tasks";
 import type { Workstream } from "./types";
-import type { BoardColumnId } from "./task-status";
+import type { BoardColumnId, TaskStatus } from "./task-status";
 import { BOARD_COLUMNS, columnForStatus, isTerminalStatus } from "./task-status";
 
 /** Lane holding tasks that carry no labels at all. */
@@ -152,4 +152,32 @@ export function swimlanes(
   if (orphan) ordered.push(orphan);
 
   return ordered;
+}
+
+/**
+ * The status a task should take when dropped on `column`, or null for a no-op.
+ *
+ * The null case is doing real work. Two statuses render in a column not named
+ * after them -- `investigating` in In progress, `cancelled` in Done -- so a
+ * drop that lands a card back where it already was must NOT rewrite its status
+ * to the column's own. Doing so would silently flatten `🕵️` into `⚒️` and `❌`
+ * into `✅`, destroying a distinction the exported archive relies on, purely
+ * because the user picked a card up and put it down again.
+ */
+export function statusForDrop(task: Task, column: BoardColumnId): TaskStatus | null {
+  if (columnForStatus(task.status) === column) return null;
+  return column;
+}
+
+export interface SubtaskProgress {
+  done: number;
+  total: number;
+}
+
+/** Finished-vs-total subtasks, counting cancelled as finished like the board does. */
+export function subtaskProgress(task: Task): SubtaskProgress {
+  return {
+    done: task.subtasks.filter((s) => isTerminalStatus(s.status)).length,
+    total: task.subtasks.length,
+  };
 }

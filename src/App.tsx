@@ -1667,6 +1667,7 @@ export default function App() {
           workstreams={workstreams}
           projects={projects}
           devlogDirectory={getAppSettings().devlogDirectory}
+          onOpenWorkstream={selectWorkstream}
           onClose={() => setShowTaskBoard(false)}
         />
       )}
