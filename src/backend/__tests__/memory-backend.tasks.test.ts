@@ -208,3 +208,52 @@ describe("free-form notes", () => {
     expect((await backend.listTasks())[0].notes).toBe("keep me");
   });
 });
+
+describe("one task per workstream", () => {
+  it("refuses to attach a workstream that another task already holds", async () => {
+    // The relation is 1:1. Without this, two tasks silently share a workstream
+    // and the quick-note bar has to guess which one a note belongs to.
+    const first = await backend.createTask("first", { workstreamId: "w1" });
+    const second = await backend.createTask("second");
+
+    await expect(backend.updateTask(second.id, { workstreamId: "w1" })).rejects.toThrow(
+      /already/i,
+    );
+    expect((await backend.listTasks()).find((t) => t.id === first.id)?.workstreamId).toBe("w1");
+  });
+
+  it("refuses at creation time too", async () => {
+    await backend.createTask("first", { workstreamId: "w1" });
+    await expect(backend.createTask("second", { workstreamId: "w1" })).rejects.toThrow(/already/i);
+  });
+
+  it("allows re-attaching the same workstream to the task that holds it", async () => {
+    // A no-op write must not trip the guard.
+    const task = await backend.createTask("only", { workstreamId: "w1" });
+    await expect(backend.updateTask(task.id, { workstreamId: "w1" })).resolves.not.toThrow();
+  });
+
+  it("frees the workstream when its task detaches", async () => {
+    const first = await backend.createTask("first", { workstreamId: "w1" });
+    const second = await backend.createTask("second");
+
+    await backend.updateTask(first.id, { workstreamId: null });
+    await backend.updateTask(second.id, { workstreamId: "w1" });
+
+    expect((await backend.listTasks()).find((t) => t.id === second.id)?.workstreamId).toBe("w1");
+  });
+
+  it("frees the workstream when its task is deleted", async () => {
+    const first = await backend.createTask("first", { workstreamId: "w1" });
+    await backend.deleteTask(first.id);
+
+    const second = await backend.createTask("second", { workstreamId: "w1" });
+    expect(second.workstreamId).toBe("w1");
+  });
+
+  it("lets many tasks have no workstream at all", async () => {
+    await backend.createTask("a");
+    await backend.createTask("b");
+    expect((await backend.listTasks()).every((t) => t.workstreamId === null)).toBe(true);
+  });
+});

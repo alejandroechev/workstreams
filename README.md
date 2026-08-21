@@ -47,7 +47,9 @@ project-aware workspace:
   **subtasks with individual state** plus a done/total count, and link straight
   to the **workstream** they are attached to. A workstream's `⋯` menu has
   **Create task…**, which opens the board with a task already created, named
-  after the workstream, attached to it and selected for renaming. Notes can be
+  after the workstream, attached to it and selected for renaming — and **Go to
+  task** once it is bound, since the relation is 1:1. A **Persistent** column
+  holds standing work that never completes. Notes can be
   deleted but never rewritten. **Export** renders **yesterday** into your wiki as
   markdown (one `##` section per task, with its labels, workstream, subtasks,
   notes and event log), commits and pushes it — one-way, and it never overwrites a page it

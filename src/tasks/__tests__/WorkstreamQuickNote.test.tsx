@@ -79,10 +79,16 @@ describe("WorkstreamQuickNote", () => {
   });
 
   it("lets the user choose when several tasks share the workstream", async () => {
-    // Nothing constrains one task per workstream, and silently picking the
-    // first would file notes under the wrong task in the archive.
+    // The relation is 1:1 now, so the backend refuses to create this state --
+    // but rows predating that guard can still hold it, and silently picking
+    // the first would file notes under the wrong task in the archive. The
+    // pair is therefore built directly rather than through createTask.
     await backend.createTask("first task", { workstreamId: "w1" });
-    const second = await backend.createTask("second task", { workstreamId: "w1" });
+    const second = await backend.createTask("second task");
+    (await backend.listTasks()).forEach(() => {});
+    const stored = (backend as unknown as { tasks: Map<string, { id: string; workstreamId: string | null }> })
+      .tasks;
+    stored.get(second.id)!.workstreamId = "w1";
 
     render(<WorkstreamQuickNote backend={backend} workstreamId="w1" />);
     const picker = (await screen.findByTestId("quick-note-target")) as HTMLSelectElement;

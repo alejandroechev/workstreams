@@ -165,3 +165,30 @@ describe("activity log naming", () => {
     expect(screen.queryAllByTestId(/^event-edit-/)).toHaveLength(0);
   });
 });
+
+describe("notes layout", () => {
+  it("lets the notes box grow into the panel's spare height", async () => {
+    // A six-row box wasted the panel's vertical space on tasks with long
+    // notes, which is the field most likely to need it.
+    await openTask();
+    const box = await screen.findByTestId("detail-notes");
+    expect(box.style.flex).toBe("1 1 0%");
+    expect(box.style.minHeight).not.toBe("");
+  });
+
+  it("keeps the panel a flex column so the growth has something to fill", async () => {
+    await openTask();
+    const panel = screen.getByTestId("task-detail");
+    expect(panel.style.display).toBe("flex");
+    expect(panel.style.flexDirection).toBe("column");
+    // Without minHeight:0 a flex child cannot shrink, and the box would
+    // overflow the panel instead of filling it.
+    expect(panel.style.minHeight).toBe("0px");
+  });
+
+  it("bounds the activity feed so notes get the slack, not the log", async () => {
+    await openTask();
+    const feed = screen.getByTestId("event-feed");
+    expect(feed.style.maxHeight).not.toBe("");
+  });
+});

@@ -380,3 +380,93 @@ test("the exported page uses yesterday's date and the sectioned format", async (
   // A note that already contains bullets must not be bulleted again.
   await expect(preview).not.toContainText("- - Moving");
 });
+
+test("a bound workstream offers Go to task instead of Create task", async ({ page }) => {
+  const row = await createWorkstream(page, "bound-ws");
+
+  await row.hover();
+  await row.locator('[data-testid^="ws-actions-"]').click();
+  await expect(page.locator('[data-testid="action-create-task"]')).toBeVisible();
+  await expect(page.locator('[data-testid="action-go-to-task"]')).toHaveCount(0);
+  await page.locator('[data-testid="action-create-task"]').click();
+
+  await page.locator('[data-testid="detail-title"]').fill("Offline SDK Read Mock Storage");
+  await page.locator('[data-testid="detail-title"]').press("Enter");
+  await page.locator('[data-testid="board-close"]').click();
+
+  // Now bound: the menu must swap, since a second task could never be created.
+  await row.hover();
+  await row.locator('[data-testid^="ws-actions-"]').click();
+  await expect(page.locator('[data-testid="action-create-task"]')).toHaveCount(0);
+  await page.locator('[data-testid="action-go-to-task"]').click();
+
+  await expect(page.locator('[data-testid="task-board"]')).toBeVisible();
+  await expect(page.locator('[data-testid="detail-title"]')).toHaveValue(
+    "Offline SDK Read Mock Storage",
+  );
+  // It selects, never creates.
+  await expect(page.locator('[data-testid^="task-card-"]')).toHaveCount(1);
+});
+
+test("a task can be parked in the Persistent column", async ({ page }) => {
+  await openBoard(page);
+  await expect(page.locator('[data-testid="board-column-persistent"]')).toBeVisible();
+
+  await addTask(page, "workstreams development");
+  await page
+    .locator('[data-testid^="task-card-"]')
+    .first()
+    .dragTo(page.locator('[data-testid="lane-column-persistent"]').first());
+
+  await expect(page.locator('[data-testid="lane-column-persistent"]').first()).toContainText(
+    "workstreams development",
+  );
+
+  // Ongoing work never completes, so it must stay on the exported page.
+  await page.locator('[data-testid="devlog-preview"]').click();
+  await expect(page.locator('[data-testid="devlog-preview-content"]')).toContainText(
+    "## ♾️ workstreams development",
+  );
+});
+
+test("the notes box grows to fill the detail panel", async ({ page }) => {
+  await openBoard(page);
+  await addTask(page, "task with notes");
+  await page.locator('[data-testid^="task-card-"]').first().click();
+
+  const box = page.locator('[data-testid="detail-notes"]');
+  const panel = page.locator('[data-testid="task-detail"]');
+  const boxHeight = (await box.boundingBox())!.height;
+  const panelHeight = (await panel.boundingBox())!.height;
+
+  // Not a fixed six rows: it should claim a real share of the panel.
+  expect(boxHeight).toBeGreaterThan(150);
+  expect(boxHeight).toBeGreaterThan(panelHeight * 0.2);
+  // And it must not overflow the panel it lives in.
+  expect(boxHeight).toBeLessThanOrEqual(panelHeight);
+});
+
+test("every column stays on screen with the detail panel open", async ({ page }) => {
+  // Adding an eighth column pushed Done off the right edge at 1280 wide once
+  // the 320px detail panel opened. Columns that exist but cannot be seen are
+  // the failure mode the sidebar prototypes shipped twice.
+  await openBoard(page);
+  await addTask(page, "a task");
+  await page.locator('[data-testid^="task-card-"]').first().click();
+  await expect(page.locator('[data-testid="task-detail"]')).toBeVisible();
+
+  for (const id of [
+    "todo",
+    "in_progress",
+    "in_review",
+    "blocked",
+    "parked",
+    "delegated",
+    "persistent",
+    "done",
+  ]) {
+    // ratio 1: the default accepts ANY intersection, so a column clipped to
+    // its first two letters would still pass.
+    await expect(page.locator(`[data-testid="board-column-${id}"]`)).toBeInViewport({ ratio: 1 });
+  }
+});

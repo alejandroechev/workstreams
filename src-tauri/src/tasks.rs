@@ -18,7 +18,7 @@
 //! the wrong devlog page would be a silent data error.
 
 use crate::AppState;
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
@@ -164,6 +164,36 @@ fn read_tasks(conn: &Connection) -> Result<Vec<Task>, String> {
     Ok(tasks)
 }
 
+/// Enforce the 1:1 task↔workstream relation.
+///
+/// The UI hides "Create task" for a bound workstream, but the CLI and any
+/// future caller reach these commands directly -- and two tasks sharing a
+/// workstream leaves the quick-note bar guessing which one a note belongs to.
+/// `exclude_task` lets a task keep the workstream it already holds.
+fn assert_workstream_free(
+    conn: &Connection,
+    workstream_id: Option<&str>,
+    exclude_task: Option<&str>,
+) -> Result<(), String> {
+    let Some(ws) = workstream_id else {
+        return Ok(());
+    };
+    let holder: Option<String> = conn
+        .query_row(
+            "SELECT title FROM tasks WHERE workstream_id = ?1 AND id IS NOT ?2",
+            rusqlite::params![ws, exclude_task],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(|e| format!("DB error: {e}"))?;
+    match holder {
+        Some(title) => Err(format!(
+            "Workstream is already linked to the task \"{title}\" — a workstream can only have one task"
+        )),
+        None => Ok(()),
+    }
+}
+
 fn read_task(conn: &Connection, id: &str) -> Result<Task, String> {
     read_tasks(conn)?
         .into_iter()
@@ -187,6 +217,7 @@ pub fn create_task(
 ) -> Result<Task, String> {
     let id = uuid::Uuid::new_v4().to_string();
     let db = state.db.lock().unwrap();
+    assert_workstream_free(&db, workstream_id.as_deref(), None)?;
     let status = status.unwrap_or_else(|| "todo".into());
 
     db.execute(
@@ -593,6 +624,17 @@ mod tests {
         c
     }
 
+    fn insert_workstream(c: &Connection, id: &str) {
+        c.execute(
+            &format!(
+                "INSERT INTO workstreams (id, name, created_at, updated_at)
+                 VALUES (?1, ?1, {NOW_ISO}, {NOW_ISO})"
+            ),
+            [id],
+        )
+        .unwrap();
+    }
+
     fn insert_task(c: &Connection, id: &str, title: &str) {
         c.execute(
             &format!(
@@ -748,6 +790,52 @@ mod tests {
             read_task(&c, "t1").unwrap().notes,
             "first line\nsecond line"
         );
+    }
+
+    #[test]
+    fn a_workstream_cannot_be_claimed_by_two_tasks() {
+        let c = conn();
+        insert_workstream(&c, "w1");
+        insert_task(&c, "t1", "first");
+        insert_task(&c, "t2", "second");
+        c.execute("UPDATE tasks SET workstream_id = 'w1' WHERE id = 't1'", [])
+            .unwrap();
+
+        let err = assert_workstream_free(&c, Some("w1"), Some("t2")).unwrap_err();
+        assert!(err.contains("already linked"), "got: {err}");
+    }
+
+    #[test]
+    fn a_task_may_keep_the_workstream_it_already_holds() {
+        // A no-op rewrite of the same link must not trip the guard.
+        let c = conn();
+        insert_workstream(&c, "w1");
+        insert_task(&c, "t1", "only");
+        c.execute("UPDATE tasks SET workstream_id = 'w1' WHERE id = 't1'", [])
+            .unwrap();
+        assert!(assert_workstream_free(&c, Some("w1"), Some("t1")).is_ok());
+    }
+
+    #[test]
+    fn detaching_frees_the_workstream_for_another_task() {
+        let c = conn();
+        insert_workstream(&c, "w1");
+        insert_task(&c, "t1", "first");
+        insert_task(&c, "t2", "second");
+        c.execute("UPDATE tasks SET workstream_id = 'w1' WHERE id = 't1'", [])
+            .unwrap();
+        c.execute("UPDATE tasks SET workstream_id = NULL WHERE id = 't1'", [])
+            .unwrap();
+
+        assert!(assert_workstream_free(&c, Some("w1"), Some("t2")).is_ok());
+    }
+
+    #[test]
+    fn many_tasks_may_have_no_workstream() {
+        let c = conn();
+        insert_task(&c, "t1", "a");
+        insert_task(&c, "t2", "b");
+        assert!(assert_workstream_free(&c, None, Some("t2")).is_ok());
     }
 
     #[test]

@@ -12,7 +12,7 @@ import {
 } from "../task-status";
 
 describe("BOARD_COLUMNS", () => {
-  it("exposes exactly the seven columns the board renders", () => {
+  it("exposes exactly the columns the board renders, in order", () => {
     expect(BOARD_COLUMNS.map((c) => c.id)).toEqual([
       "todo",
       "in_progress",
@@ -20,6 +20,7 @@ describe("BOARD_COLUMNS", () => {
       "blocked",
       "parked",
       "delegated",
+      "persistent",
       "done",
     ]);
   });
@@ -134,6 +135,42 @@ describe("parseStatusPrefix", () => {
       status: "todo",
       flags: [],
       text: "🐞Bugs/Fixes",
+    });
+  });
+});
+
+describe("persistent status", () => {
+  it("gets its own column, since ongoing work never flows to Done", () => {
+    expect(BOARD_COLUMNS.map((c) => c.id)).toContain("persistent");
+    expect(columnForStatus("persistent")).toBe("persistent");
+  });
+
+  it("sits with the other non-flowing buckets, before Done", () => {
+    const ids = BOARD_COLUMNS.map((c) => c.id);
+    expect(ids.indexOf("persistent")).toBeGreaterThan(ids.indexOf("delegated"));
+    expect(ids.indexOf("persistent")).toBeLessThan(ids.indexOf("done"));
+  });
+
+  it("is never terminal — that is the whole point of it", () => {
+    expect(isTerminalStatus("persistent")).toBe(false);
+  });
+
+  it("has a glyph that collides with no other", () => {
+    const glyph = statusEmoji("persistent");
+    expect(glyph).not.toBe("");
+    const others = TASK_STATUSES.filter((s) => s !== "persistent" && s !== "todo").map(statusEmoji);
+    expect(others).not.toContain(glyph);
+  });
+
+  it("round-trips through its glyph", () => {
+    expect(statusFromEmoji(statusEmoji("persistent"))).toBe("persistent");
+  });
+
+  it("parses off the front of a line like any other status", () => {
+    expect(parseStatusPrefix(`${statusEmoji("persistent")}workstreams development`)).toEqual({
+      status: "persistent",
+      flags: [],
+      text: "workstreams development",
     });
   });
 });

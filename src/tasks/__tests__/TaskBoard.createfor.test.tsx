@@ -207,3 +207,41 @@ describe("renaming a task", () => {
     );
   });
 });
+
+describe("opening straight onto a task", () => {
+  it("selects the requested task", async () => {
+    const task = await backend.createTask("Offline SDK Read Mock Storage", { workstreamId: "w1" });
+    renderBoard({ focusTaskId: task.id });
+
+    const title = (await screen.findByTestId("detail-title")) as HTMLInputElement;
+    expect(title.value).toBe("Offline SDK Read Mock Storage");
+  });
+
+  it("tells the caller so the request is not replayed on the next open", async () => {
+    const task = await backend.createTask("x", { workstreamId: "w1" });
+    const onFocusTaskHandled = vi.fn();
+    renderBoard({ focusTaskId: task.id, onFocusTaskHandled });
+    await waitFor(() => expect(onFocusTaskHandled).toHaveBeenCalledTimes(1));
+  });
+
+  it("creates nothing — it only selects", async () => {
+    const task = await backend.createTask("x", { workstreamId: "w1" });
+    renderBoard({ focusTaskId: task.id });
+    await screen.findByTestId("detail-title");
+    expect(await backend.listTasks()).toHaveLength(1);
+    expect((await backend.listTasks())[0].id).toBe(task.id);
+  });
+
+  it("does nothing for a task that no longer exists", async () => {
+    renderBoard({ focusTaskId: "gone" });
+    await new Promise((r) => setTimeout(r, 30));
+    expect(screen.queryByTestId("task-detail")).not.toBeInTheDocument();
+  });
+
+  it("selects nothing when opened normally", async () => {
+    await backend.createTask("x");
+    renderBoard();
+    await screen.findByText("x");
+    expect(screen.queryByTestId("task-detail")).not.toBeInTheDocument();
+  });
+});

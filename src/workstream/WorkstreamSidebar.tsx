@@ -35,6 +35,13 @@ interface Props {
   onOpenTaskBoard?: () => void;
   /** Create a task named after this workstream and open it on the board. */
   onCreateTaskForWorkstream?: (workstreamId: string) => void;
+  /** Open the task bound to this workstream. */
+  onGoToTaskForWorkstream?: (workstreamId: string) => void;
+  /**
+   * Workstream ids that already have a task. The relation is 1:1, so these
+   * rows offer "Go to task" instead of "Create task…".
+   */
+  workstreamsWithTasks?: Set<string>;
   onCreateProject: () => void;
   onImportProject: () => void;
   onCreateWorkstream: (projectId?: string) => void;
@@ -133,6 +140,8 @@ export default function WorkstreamSidebar({
   onSelectWorkstream,
   onOpenTaskBoard,
   onCreateTaskForWorkstream,
+  onGoToTaskForWorkstream,
+  workstreamsWithTasks,
   onCreateProject,
   onImportProject,
   onCreateWorkstream,
@@ -492,8 +501,13 @@ export default function WorkstreamSidebar({
                   onFork={onForkWorkstream ? () => onForkWorkstream(ws.id) : undefined}
                   onArchive={() => onArchiveWorkstream(ws.id)}
                   onCreateTask={
-                    onCreateTaskForWorkstream
+                    onCreateTaskForWorkstream && !workstreamsWithTasks?.has(ws.id)
                       ? () => onCreateTaskForWorkstream(ws.id)
+                      : undefined
+                  }
+                  onGoToTask={
+                    onGoToTaskForWorkstream && workstreamsWithTasks?.has(ws.id)
+                      ? () => onGoToTaskForWorkstream(ws.id)
                       : undefined
                   }
                   onCloseWorkstream={onCloseWorkstream ? () => onCloseWorkstream(ws.id) : undefined}

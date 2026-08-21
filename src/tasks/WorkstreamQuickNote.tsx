@@ -63,9 +63,10 @@ export function WorkstreamQuickNote({ backend, workstreamId }: WorkstreamQuickNo
     };
   }, [backend, workstreamId]);
 
-  // Nothing constrains one task per workstream, so several can legitimately
-  // point here. Picking the first silently would file notes under the wrong
-  // task -- and therefore the wrong section of the archive.
+  // The relation is 1:1 and both backends now enforce it, so this picker is
+  // reachable only for rows that predate that guard. It stays because picking
+  // the first silently would file notes under the wrong task -- and therefore
+  // the wrong section of the archive.
   const task = matches.find((t) => t.id === targetId) ?? null;
 
   const submit = useCallback(async () => {

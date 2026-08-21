@@ -262,6 +262,12 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
         "ALTER TABLE workstreams ADD COLUMN worktree_branch TEXT",
         "ALTER TABLE projects ADD COLUMN copilot_command TEXT",
         "ALTER TABLE tasks ADD COLUMN notes TEXT NOT NULL DEFAULT ''",
+        // Defence in depth for the 1:1 task↔workstream relation. Partial, so
+        // the many tasks with no workstream are unaffected. On a database that
+        // already contains duplicates this create fails and is ignored (as all
+        // migrations here are) -- the command-level check in tasks.rs is the
+        // authoritative guard and still holds the line.
+        "CREATE UNIQUE INDEX IF NOT EXISTS tasks_workstream_unique          ON tasks (workstream_id) WHERE workstream_id IS NOT NULL",
     ];
     for sql in &migrations {
         // SQLite errors if column already exists — ignore that error

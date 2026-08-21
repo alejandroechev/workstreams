@@ -66,6 +66,13 @@ export interface TaskBoardProps {
   createForWorkstreamId?: string | null;
   /** Fired once the request above has been carried out, so it is not replayed. */
   onCreateForWorkstreamHandled?: () => void;
+  /**
+   * Open with this task already selected. Used by the sidebar's "Go to task"
+   * action for a workstream that already has one.
+   */
+  focusTaskId?: string | null;
+  /** Fired once the focus request has been carried out. */
+  onFocusTaskHandled?: () => void;
 }
 
 /** Subtasks shown inline on a card before the rest are summarised. */
@@ -104,6 +111,7 @@ const STATUS_LABEL: Record<TaskStatus, string> = {
   blocked: "Blocked",
   parked: "Parked",
   delegated: "Delegated",
+  persistent: "Persistent",
   done: "Done",
   investigating: "Investigating",
   cancelled: "Cancelled",
@@ -119,6 +127,8 @@ export function TaskBoard({
   onOpenWorkstream,
   createForWorkstreamId = null,
   onCreateForWorkstreamHandled,
+  focusTaskId = null,
+  onFocusTaskHandled,
 }: TaskBoardProps) {
   const board = useTaskBoard(backend);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -266,6 +276,18 @@ export function TaskBoard({
     if (next === selected.title) return;
     void board.updateTask(selected.id, { title: next });
   };
+
+  // Select a requested task once its row has loaded. Guarded like the create
+  // request so a re-render cannot keep re-selecting and fighting the user's
+  // own clicks.
+  const handledFocusRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!focusTaskId || board.loading) return;
+    if (handledFocusRef.current === focusTaskId) return;
+    handledFocusRef.current = focusTaskId;
+    if (board.tasks.some((t) => t.id === focusTaskId)) setSelectedId(focusTaskId);
+    onFocusTaskHandled?.();
+  }, [focusTaskId, board.loading, board.tasks, onFocusTaskHandled]);
 
   /**
    * Honour a "create a task for this workstream" request exactly once.
@@ -739,12 +761,17 @@ export function TaskBoard({
                 onChange={(e) => setNotesDraft(e.target.value)}
                 onBlur={commitNotes}
                 placeholder="Free-form context: design decisions, open questions, whatever doesn't fit above"
-                rows={6}
                 style={{
                   ...controlStyle,
                   width: "100%",
+                  // Take the panel's spare height rather than a fixed row
+                  // count: notes are the field most likely to be long, and
+                  // everything above them is a single line.
+                  flex: 1,
+                  minHeight: 90,
+                  boxSizing: "border-box",
                   cursor: "text",
-                  resize: "vertical",
+                  resize: "none",
                   fontFamily: "inherit",
                   lineHeight: 1.5,
                 }}
@@ -855,7 +882,7 @@ const controlStyle: React.CSSProperties = {
 
 const columnHeaderRowStyle: React.CSSProperties = {
   display: "grid",
-  gridTemplateColumns: `repeat(${BOARD_COLUMNS.length}, minmax(120px, 1fr))`,
+  gridTemplateColumns: `repeat(${BOARD_COLUMNS.length}, minmax(96px, 1fr))`,
   gap: 6,
   marginBottom: 6,
 };
@@ -871,7 +898,7 @@ const laneHeadStyle: React.CSSProperties = { fontSize: 11, margin: "0 0 4px" };
 
 const laneRowStyle: React.CSSProperties = {
   display: "grid",
-  gridTemplateColumns: `repeat(${BOARD_COLUMNS.length}, minmax(120px, 1fr))`,
+  gridTemplateColumns: `repeat(${BOARD_COLUMNS.length}, minmax(96px, 1fr))`,
   gap: 6,
 };
 
@@ -908,6 +935,11 @@ const detailStyle: React.CSSProperties = {
   borderLeft: "1px solid #313244",
   padding: 10,
   overflow: "auto",
+  // A flex column so the notes box has spare height to grow into. `minHeight:
+  // 0` is what lets it shrink inside the flex parent instead of overflowing.
+  display: "flex",
+  flexDirection: "column",
+  minHeight: 0,
 };
 
 const fieldLabelStyle: React.CSSProperties = {

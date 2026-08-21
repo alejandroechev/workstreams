@@ -76,6 +76,10 @@ Seven board columns: To do · ⚒️ In progress · 👁️ In review · 🧊 Bl
 - `🕵️ investigating` **folds into** In progress. Four occurrences in 30 days;
   a column empty 99% of the time is pure cost, and investigating *is*
   in-progress work.
+- `♾️ persistent` is standing work that never completes (the app's own
+  development, say). It sits with the other non-flowing buckets rather than in
+  the To do → Done run, because nothing ever moves out of it, and it is
+  explicitly **not** terminal so it stays on every exported page.
 - `❌ cancelled` is terminal but shares the Done column. It needs to exist
   (7 uses) without owning a graveyard nobody scrolls to.
 - `‼️ priority` and `❓ question` are **flags on an orthogonal axis**, proven by
@@ -83,6 +87,23 @@ Seven board columns: To do · ⚒️ In progress · 👁️ In review · 🧊 Bl
 
 `🙋` for Delegated is the one invention; the user had no glyph for it. It is
 asserted in tests to collide with no existing glyph.
+
+### One task per workstream
+
+The relation is 1:1. A workstream's `⋯` menu therefore offers **Go to task**
+once bound and **Create task…** only while unbound — a second task could never
+be created anyway.
+
+Enforcement lives in both backends rather than only in that menu, because the
+CLI reaches the commands directly and two tasks sharing a workstream leaves the
+quick-note bar guessing which one a note belongs to. A partial unique index
+(`WHERE workstream_id IS NOT NULL`, so the many task-less rows are unaffected)
+backs it up; on a database that already contains duplicates that index fails to
+create and is ignored, which is why the command-level check is the
+authoritative guard.
+
+The quick-note picker survives for exactly those pre-existing rows: picking the
+first silently would file notes under the wrong task.
 
 ### Repos are derived, never stored
 

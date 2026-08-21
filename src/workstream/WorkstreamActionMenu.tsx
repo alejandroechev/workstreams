@@ -27,6 +27,12 @@ export interface WorkstreamActionMenuProps {
    */
   onCreateTask?: () => void;
   /**
+   * Open this workstream's task on the board. Supplied only when one exists;
+   * its presence is what replaces "Create task…", since the task↔workstream
+   * relation is 1:1 and a second one could never be created anyway.
+   */
+  onGoToTask?: () => void;
+  /**
    * Stop a loaded workstream's inner tiles/processes without archiving it. The
    * workstream stays in the active list and reverts to the "stopped" (moon)
    * indicator. Only surfaced when the workstream is currently loaded.
@@ -51,6 +57,7 @@ export function WorkstreamActionMenu({
   onFork,
   onArchive,
   onCreateTask,
+  onGoToTask,
   onCloseWorkstream,
   isLoaded,
   anchor,
@@ -121,13 +128,22 @@ export function WorkstreamActionMenu({
         />
       )}
 
-      {onCreateTask && (
+      {onGoToTask ? (
         <MenuItem
           icon={<ClipboardDocumentListIcon style={iconStyle} />}
-          label="Create task…"
-          onClick={close(onCreateTask)}
-          testid="action-create-task"
+          label="Go to task"
+          onClick={close(onGoToTask)}
+          testid="action-go-to-task"
         />
+      ) : (
+        onCreateTask && (
+          <MenuItem
+            icon={<ClipboardDocumentListIcon style={iconStyle} />}
+            label="Create task…"
+            onClick={close(onCreateTask)}
+            testid="action-create-task"
+          />
+        )
       )}
 
       <Divider />

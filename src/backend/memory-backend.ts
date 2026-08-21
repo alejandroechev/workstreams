@@ -959,6 +959,23 @@ export class MemoryBackend implements Backend {
     };
   }
 
+  /**
+   * The task↔workstream relation is 1:1. Enforced here rather than only in the
+   * UI so the CLI cannot create the ambiguity either: two tasks sharing a
+   * workstream leaves the quick-note bar guessing which one a note belongs to.
+   */
+  private assertWorkstreamFree(workstreamId: string | null, taskId: string | null): void {
+    if (!workstreamId) return;
+    const holder = [...this.tasks.values()].find(
+      (t) => t.workstreamId === workstreamId && t.id !== taskId,
+    );
+    if (holder) {
+      throw new Error(
+        `Workstream is already linked to the task "${holder.title}" — a workstream can only have one task`,
+      );
+    }
+  }
+
   private requireTask(id: string): Task {
     const task = this.tasks.get(id);
     if (!task) throw new Error(`Task not found: ${id}`);
@@ -973,6 +990,7 @@ export class MemoryBackend implements Backend {
     title: string,
     opts?: { status?: TaskStatus; workstreamId?: string | null; labelNames?: string[] },
   ): Promise<Task> {
+    this.assertWorkstreamFree(opts?.workstreamId ?? null, null);
     const task = makeTask({
       id: generateId(),
       title,
@@ -987,6 +1005,9 @@ export class MemoryBackend implements Backend {
 
   async updateTask(id: string, updates: TaskUpdate): Promise<void> {
     const task = this.requireTask(id);
+    if (updates.workstreamId !== undefined) {
+      this.assertWorkstreamFree(updates.workstreamId, id);
+    }
     if (updates.title !== undefined) task.title = updates.title;
     if (updates.flags !== undefined) task.flags = [...updates.flags];
     if (updates.links !== undefined) task.links = [...updates.links];

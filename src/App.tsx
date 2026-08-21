@@ -7,6 +7,7 @@ import { fileBufferRegistry } from "./files/FileBufferRegistry";
 import WorkstreamSidebar from "./workstream/WorkstreamSidebar";
 import { TaskBoard } from "./tasks/TaskBoard";
 import { WorkstreamQuickNote } from "./tasks/WorkstreamQuickNote";
+import { subscribeTasksChanged } from "./domain/task-events-bus";
 import ProjectCreateForm from "./workstream/ProjectCreateForm";
 import RepoCreateForm from "./workstream/RepoCreateForm";
 import WorkstreamCreateForm from "./workstream/WorkstreamCreateForm";
@@ -242,6 +243,36 @@ export default function App() {
   const [showRepoCreate, setShowRepoCreate] = useState(false);
   const [showTaskBoard, setShowTaskBoard] = useState(false);
   const [taskForWsId, setTaskForWsId] = useState<string | null>(null);
+  const [focusTaskId, setFocusTaskId] = useState<string | null>(null);
+  // Which workstreams already have a task, so the sidebar can offer "Go to
+  // task" instead of "Create task…". Refreshed off the tasks-changed bus, or
+  // the menu would keep offering Create for a workstream just bound.
+  const [taskIdByWs, setTaskIdByWs] = useState<Map<string, string>>(new Map());
+  useEffect(() => {
+    let cancelled = false;
+    const load = () => {
+      void backend
+        .listTasks()
+        .then((tasks) => {
+          if (cancelled) return;
+          const next = new Map<string, string>();
+          for (const task of tasks) {
+            if (task.workstreamId) next.set(task.workstreamId, task.id);
+          }
+          setTaskIdByWs(next);
+        })
+        .catch(() => {
+          if (!cancelled) setTaskIdByWs(new Map());
+        });
+    };
+    load();
+    const unsubscribe = subscribeTasksChanged(load);
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, [backend]);
+  const workstreamsWithTasks = useMemo(() => new Set(taskIdByWs.keys()), [taskIdByWs]);
   const [showWsCreate, setShowWsCreate] = useState<{ show: boolean; projectId?: string }>({ show: false });
   const [showForkWs, setShowForkWs] = useState<{ show: boolean; wsId?: string }>({ show: false });
   const [changeWorktreeTarget, setChangeWorktreeTarget] = useState<Workstream | null>(null);
@@ -1386,6 +1417,13 @@ export default function App() {
         onDiscardWorkstream={handleDiscardWorkstream}
         onOpenTaskBoard={() => setShowTaskBoard(true)}
         onCreateTaskForWorkstream={(wsId) => { setTaskForWsId(wsId); setShowTaskBoard(true); }}
+        onGoToTaskForWorkstream={(wsId) => {
+          const taskId = taskIdByWs.get(wsId);
+          if (!taskId) return;
+          setFocusTaskId(taskId);
+          setShowTaskBoard(true);
+        }}
+        workstreamsWithTasks={workstreamsWithTasks}
         onCreateProject={() => setShowRepoCreate(true)}
         onImportProject={() => setShowProjectCreate(true)}
         onCreateWorkstream={(projectId) => setShowWsCreate({ show: true, projectId })}
@@ -1676,7 +1714,9 @@ export default function App() {
           onOpenWorkstream={selectWorkstream}
           createForWorkstreamId={taskForWsId}
           onCreateForWorkstreamHandled={() => setTaskForWsId(null)}
-          onClose={() => { setShowTaskBoard(false); setTaskForWsId(null); }}
+          focusTaskId={focusTaskId}
+          onFocusTaskHandled={() => setFocusTaskId(null)}
+          onClose={() => { setShowTaskBoard(false); setTaskForWsId(null); setFocusTaskId(null); }}
         />
       )}
 

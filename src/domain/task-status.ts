@@ -33,6 +33,10 @@ export const BOARD_COLUMNS = [
   { id: "blocked", label: "Blocked" },
   { id: "parked", label: "Parked" },
   { id: "delegated", label: "Delegated" },
+  // Standing work that never completes (the app's own development, say). It
+  // sits with the other non-flowing buckets rather than in the To do → Done
+  // run, because nothing ever moves out of it.
+  { id: "persistent", label: "Persistent" },
   { id: "done", label: "Done" },
 ] as const;
 
@@ -49,6 +53,7 @@ export const TASK_STATUSES = [
   "blocked",
   "parked",
   "delegated",
+  "persistent",
   "done",
   "investigating",
   "cancelled",
@@ -80,6 +85,7 @@ const EMOJI: Record<TaskStatus, string> = {
   blocked: "🧊",
   parked: "🚗",
   delegated: "🙋",
+  persistent: "♾️",
   done: "✅",
   investigating: "🕵️",
   cancelled: "❌",

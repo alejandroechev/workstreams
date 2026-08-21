@@ -170,3 +170,29 @@ describe("create task action", () => {
     expect(screen.queryByTestId("action-create-task")).toBeNull();
   });
 });
+
+describe("bound workstreams offer Go to task instead of Create task", () => {
+  it("offers Go to task when the workstream already has one", () => {
+    renderMenu({ onCreateTask: vi.fn(), onGoToTask: vi.fn() });
+    expect(screen.getByTestId("action-go-to-task")).toBeTruthy();
+  });
+
+  it("hides Create task once bound, because the relation is 1:1", () => {
+    renderMenu({ onCreateTask: vi.fn(), onGoToTask: vi.fn() });
+    expect(screen.queryByTestId("action-create-task")).toBeNull();
+  });
+
+  it("still offers Create task while unbound", () => {
+    renderMenu({ onCreateTask: vi.fn() });
+    expect(screen.getByTestId("action-create-task")).toBeTruthy();
+    expect(screen.queryByTestId("action-go-to-task")).toBeNull();
+  });
+
+  it("invokes the handler and closes the menu", () => {
+    const onGoToTask = vi.fn();
+    const handlers = renderMenu({ onCreateTask: vi.fn(), onGoToTask });
+    fireEvent.click(screen.getByTestId("action-go-to-task"));
+    expect(onGoToTask).toHaveBeenCalledTimes(1);
+    expect(handlers.onClose).toHaveBeenCalled();
+  });
+});
