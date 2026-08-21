@@ -24,7 +24,13 @@ import type { Backend } from "../backend/types";
 import type { Project, Workstream } from "../domain/types";
 import type { Task } from "../domain/tasks";
 import type { BoardColumnId } from "../domain/task-status";
-import { toLocalDate, previousLocalDate, eventsForTask, sortEvents } from "../domain/tasks";
+import {
+  toLocalDate,
+  previousLocalDate,
+  eventsForTask,
+  eventsOnDate,
+  sortEvents,
+} from "../domain/tasks";
 import {
   BOARD_COLUMNS,
   SELECTABLE_STATUSES,
@@ -153,8 +159,10 @@ export function TaskBoard({
   const [noteText, setNoteText] = useState("");
   const [subtaskTitle, setSubtaskTitle] = useState("");
   const [labelText, setLabelText] = useState("");
+  const [exportDay, setExportDay] = useState<"yesterday" | "today">("yesterday");
   const [preview, setPreview] = useState<string | null>(null);
   const [exportStatus, setExportStatus] = useState<string | null>(null);
+  const [showAllEvents, setShowAllEvents] = useState(false);
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [dropColumn, setDropColumn] = useState<BoardColumnId | null>(null);
   const [titleDraft, setTitleDraft] = useState("");
@@ -199,12 +207,14 @@ export function TaskBoard({
   /**
    * The day the export writes up.
    *
-   * Yesterday, not today: the export runs at the start of a working day and
-   * covers the day just finished, so the page is complete rather than a
-   * snapshot taken mid-morning. It also decides which event-log entries and
+   * Yesterday by default: the export normally runs at the start of a working
+   * day and covers the day just finished, so the page is complete rather than
+   * a snapshot taken mid-morning. Today is offered too, for writing up a day
+   * before it ends. The choice also decides which event-log entries and which
    * completions belong on the page.
    */
-  const exportDate = previousLocalDate(`${today}T12:00:00`);
+  const exportDate =
+    exportDay === "today" ? today : previousLocalDate(`${today}T12:00:00`);
 
   const renderPage = () =>
     renderDevlogDay({
@@ -334,7 +344,29 @@ export function TaskBoard({
       })
       .finally(() => onCreateForWorkstreamHandled?.());
   }, [createForWorkstreamId, board, backend, workstreams, onCreateForWorkstreamHandled]);
-  const selectedEvents = selected ? sortEvents(eventsForTask(board.events, selected.id)) : [];
+  // Keep an open preview in step with the selected day; a preview left showing
+  // the other day's page is worse than no preview at all.
+  useEffect(() => {
+    if (preview === null) return;
+    setPreview(renderPage());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [exportDate, board.tasks, board.events, board.labels]);
+
+  /**
+   * Today's entries only.
+   *
+   * The feed is a working view of what has happened so far today, not an
+   * archive -- yesterday's entries have already been written up. Older ones
+   * stay reachable behind a toggle rather than being hidden outright, because
+   * delete lives in this list and a typo from yesterday would otherwise be
+   * impossible to remove.
+   */
+  const allSelectedEvents = selected
+    ? sortEvents(eventsForTask(board.events, selected.id))
+    : [];
+  const todaysEvents = eventsOnDate(allSelectedEvents, today);
+  const selectedEvents = showAllEvents ? allSelectedEvents : todaysEvents;
+  const earlierEventCount = allSelectedEvents.length - todaysEvents.length;
 
   return (
     <div style={overlayStyle} data-testid="task-board">
@@ -387,6 +419,20 @@ export function TaskBoard({
           >
             <PlusIcon style={{ width: 12, height: 12 }} />
           </button>
+
+          <select
+            data-testid="devlog-day"
+            value={exportDay}
+            onChange={(e) => setExportDay(e.target.value as "yesterday" | "today")}
+            style={controlStyle}
+            title="Which day the devlog page covers"
+          >
+            <option value="yesterday">Yesterday</option>
+            <option value="today">Today</option>
+          </select>
+          <span data-testid="devlog-day-label" style={{ color: "#6c7086", fontSize: 10 }}>
+            {exportDate}
+          </span>
 
           <button
             data-testid="devlog-preview"
@@ -793,6 +839,22 @@ export function TaskBoard({
               />
 
               <label style={fieldLabelStyle}>Activity</label>
+              {earlierEventCount > 0 && (
+                <button
+                  data-testid="event-show-all"
+                  onClick={() => setShowAllEvents((v) => !v)}
+                  style={{
+                    ...controlStyle,
+                    alignSelf: "flex-start",
+                    marginBottom: 3,
+                    fontSize: 10,
+                  }}
+                >
+                  {showAllEvents
+                    ? "Show today only"
+                    : `${earlierEventCount} earlier — show all`}
+                </button>
+              )}
               <div data-testid="event-feed" style={{ maxHeight: 220, overflow: "auto" }}>
                 {selectedEvents.map((event) => (
                   <div key={event.id} style={eventRowStyle}>

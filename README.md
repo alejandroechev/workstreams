@@ -49,7 +49,7 @@ project-aware workspace:
   **Create task…**, which opens the board with a task already created, named
   after the workstream, attached to it and selected for renaming — and **Go to
   task** once it is bound, since the relation is 1:1. Notes can be
-  deleted but never rewritten. **Export** renders **yesterday** into your wiki as
+  deleted but never rewritten. **Export** renders **yesterday or today** (your pick) into your wiki as
   markdown (one `##` section per task, with its labels, workstream, subtasks,
   notes and event log), commits and pushes it — one-way, and it never overwrites a page it
   did not generate. **Preview** shows exactly what would be written without

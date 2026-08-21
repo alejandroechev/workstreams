@@ -10,6 +10,7 @@ import {
   attachWorkstream,
   toLocalDate,
   previousLocalDate,
+  eventsOnDate,
 } from "../tasks";
 import type { Task, TaskEvent } from "../tasks";
 import type { Workstream } from "../types";
@@ -191,5 +192,47 @@ describe("previousLocalDate", () => {
     // negative offsets.
     const lateNight = new Date(2026, 7, 20, 0, 30);
     expect(previousLocalDate(lateNight.toISOString())).toBe("2026-08-19");
+  });
+});
+
+describe("eventsOnDate", () => {
+  const onDay = makeEvent({
+    id: "e1",
+    taskId: "t1",
+    kind: "note",
+    text: "that day",
+    at: new Date(2026, 7, 19, 14, 0).toISOString(),
+  });
+  const nextDay = makeEvent({
+    id: "e2",
+    taskId: "t1",
+    kind: "note",
+    text: "the day after",
+    at: new Date(2026, 7, 20, 9, 0).toISOString(),
+  });
+
+  it("keeps only the entries from the given local day", () => {
+    expect(eventsOnDate([onDay, nextDay], "2026-08-19").map((e) => e.id)).toEqual(["e1"]);
+  });
+
+  it("uses the local day, so a late-evening note stays on the day it was typed", () => {
+    // 21:00 in a negative-offset zone is already tomorrow in UTC; slicing the
+    // stored string would file it under the wrong day.
+    const lateNight = makeEvent({
+      id: "e3",
+      taskId: "t1",
+      kind: "note",
+      text: "late",
+      at: new Date(2026, 7, 19, 21, 30).toISOString(),
+    });
+    expect(eventsOnDate([lateNight], "2026-08-19").map((e) => e.id)).toEqual(["e3"]);
+  });
+
+  it("returns an empty list rather than everything when nothing matches", () => {
+    expect(eventsOnDate([onDay], "2026-01-01")).toEqual([]);
+  });
+
+  it("preserves order", () => {
+    expect(eventsOnDate([onDay, nextDay, onDay], "2026-08-19")).toHaveLength(2);
   });
 });

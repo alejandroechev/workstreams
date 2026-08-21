@@ -182,6 +182,16 @@ export function toLocalDate(iso: string): string {
   return `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())}`;
 }
 
+/**
+ * Events that fall on a given local calendar day.
+ *
+ * Local, not UTC: a note typed at 21:00 in a negative-offset zone is already
+ * the next day in the stored ISO string, and slicing it would file the entry
+ * under a day the user never worked.
+ */
+export const eventsOnDate = (events: TaskEvent[], date: string): TaskEvent[] =>
+  events.filter((e) => toLocalDate(e.at) === date);
+
 export const sortEvents = (events: TaskEvent[]): TaskEvent[] =>
   [...events].sort((a, b) => a.at.localeCompare(b.at));
 

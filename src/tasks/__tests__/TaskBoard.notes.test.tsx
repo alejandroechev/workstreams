@@ -192,3 +192,79 @@ describe("notes layout", () => {
     expect(feed.style.maxHeight).not.toBe("");
   });
 });
+
+describe("the activity feed is scoped to today", () => {
+  /** Backdate an event by writing straight into the store. */
+  function backdate(id: string, iso: string) {
+    const events = (backend as unknown as { taskEvents: Array<{ id: string; at: string }> })
+      .taskEvents;
+    events.find((e) => e.id === id)!.at = iso;
+  }
+
+  it("hides entries from earlier days", async () => {
+    const task = await backend.createTask("x");
+    const old = await backend.addTaskEvent(task.id, "note", "yesterday's entry");
+    backdate(old.id, new Date(2020, 0, 1, 9, 0).toISOString());
+    await backend.addTaskEvent(task.id, "note", "today's entry");
+
+    renderBoard();
+    await screen.findByText("x");
+    fireEvent.click(screen.getByTestId(`task-card-${task.id}`));
+
+    const feed = await screen.findByTestId("event-feed");
+    expect(feed).toHaveTextContent("today's entry");
+    expect(feed).not.toHaveTextContent("yesterday's entry");
+  });
+
+  it("says how many earlier entries are hidden rather than losing them silently", async () => {
+    const task = await backend.createTask("x");
+    const old = await backend.addTaskEvent(task.id, "note", "old one");
+    backdate(old.id, new Date(2020, 0, 1, 9, 0).toISOString());
+
+    renderBoard();
+    await screen.findByText("x");
+    fireEvent.click(screen.getByTestId(`task-card-${task.id}`));
+
+    expect(await screen.findByTestId("event-show-all")).toHaveTextContent("1 earlier");
+  });
+
+  it("reveals them on demand, since delete lives in this list", async () => {
+    // Without a way back, a typo logged yesterday could never be removed.
+    const task = await backend.createTask("x");
+    const old = await backend.addTaskEvent(task.id, "note", "yesterday's typo");
+    backdate(old.id, new Date(2020, 0, 1, 9, 0).toISOString());
+
+    renderBoard();
+    await screen.findByText("x");
+    fireEvent.click(screen.getByTestId(`task-card-${task.id}`));
+    fireEvent.click(await screen.findByTestId("event-show-all"));
+
+    expect(await screen.findByTestId("event-feed")).toHaveTextContent("yesterday's typo");
+    fireEvent.click(screen.getByTestId(`event-delete-${old.id}`));
+    await waitFor(async () => expect(await backend.listTaskEvents(task.id)).toHaveLength(0));
+  });
+
+  it("offers no toggle when nothing is hidden", async () => {
+    const task = await backend.createTask("x");
+    await backend.addTaskEvent(task.id, "note", "today only");
+
+    renderBoard();
+    await screen.findByText("x");
+    fireEvent.click(screen.getByTestId(`task-card-${task.id}`));
+    await screen.findByTestId("event-feed");
+
+    expect(screen.queryByTestId("event-show-all")).not.toBeInTheDocument();
+  });
+
+  it("still shows a note the moment it is logged", async () => {
+    const task = await backend.createTask("x");
+    renderBoard();
+    await screen.findByText("x");
+    fireEvent.click(screen.getByTestId(`task-card-${task.id}`));
+
+    fireEvent.change(await screen.findByTestId("log-input"), { target: { value: "just now" } });
+    fireEvent.click(screen.getByTestId("log-submit"));
+
+    await waitFor(() => expect(screen.getByTestId("event-feed")).toHaveTextContent("just now"));
+  });
+});

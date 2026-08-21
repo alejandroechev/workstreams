@@ -200,10 +200,19 @@ navigated to.
 The generated page is written into the same wiki folder with the same
 `YYYY-MM-DD.md` naming, so the archive stays one continuous searchable series.
 
-The export writes up **yesterday**, not today: it runs at the start of a
-working day and covers the day just finished, so the page is complete rather
-than a snapshot taken mid-morning. That date also decides which event-log
-entries and which completions belong on the page.
+The export writes up **yesterday by default**: it normally runs at the start of
+a working day and covers the day just finished, so the page is complete rather
+than a snapshot taken mid-morning. **Today** is offered too, for writing a day
+up before it ends. The chosen date also decides which event-log entries and
+which completions belong on the page, so the two exports genuinely differ; the
+resolved date is shown next to the picker so it is never a guess, and an open
+preview re-renders when the choice changes rather than leaving a stale page up.
+
+The in-app activity feed shows **today's entries only**. It is a working view
+of what has happened so far, not an archive — earlier days have already been
+written up. Older entries stay reachable behind a `N earlier — show all`
+toggle rather than being hidden outright, because delete lives in that list and
+a typo logged yesterday would otherwise be impossible to remove.
 
 Format (front matter is load-bearing, see below):
 

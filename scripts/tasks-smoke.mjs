@@ -363,7 +363,10 @@ try {
     title: "finished yesterday",
     status: "done",
     labelIds: ["l1"],
-    completedAt: new Date(Date.now() - 36 * 3600 * 1000).toISOString(),
+    // Pinned one day before the page being rendered. A wall-clock offset here
+    // was time-of-day dependent: after midday, "36 hours ago" lands on the
+    // render date itself and the check silently stops testing anything.
+    completedAt: new Date(`${previousLocalDate(`${today}T12:00:00`)}T15:00:00`).toISOString(),
   });
   const later = renderDevlogDay({
     date: today,

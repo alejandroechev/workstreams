@@ -148,3 +148,72 @@ describe("export covers the previous day", () => {
     expect(await screen.findByText("finished today")).toBeInTheDocument();
   });
 });
+
+describe("choosing which day to export", () => {
+  it("defaults to yesterday, the stated workflow", async () => {
+    renderBoard({ today: "2026-08-20" });
+    await screen.findByText("offline sdk with mock storage");
+    expect(screen.getByTestId("devlog-day")).toHaveValue("yesterday");
+  });
+
+  it("names the resolved date next to the picker, so it is never a guess", async () => {
+    renderBoard({ today: "2026-08-20" });
+    await screen.findByText("offline sdk with mock storage");
+    expect(screen.getByTestId("devlog-day-label")).toHaveTextContent("2026-08-19");
+
+    fireEvent.change(screen.getByTestId("devlog-day"), { target: { value: "today" } });
+    expect(screen.getByTestId("devlog-day-label")).toHaveTextContent("2026-08-20");
+  });
+
+  it("exports today when today is selected", async () => {
+    renderBoard({ today: "2026-08-20" });
+    await screen.findByText("offline sdk with mock storage");
+
+    fireEvent.change(screen.getByTestId("devlog-day"), { target: { value: "today" } });
+    fireEvent.click(screen.getByTestId("devlog-export"));
+
+    await waitFor(() => expect(backend._devlogFiles.size).toBe(1));
+    const [path] = [...backend._devlogFiles.keys()];
+    expect(path).toContain("2026-08-20.md");
+    expect([...backend._devlogFiles.values()][0]).toContain("# 2026-08-20");
+  });
+
+  it("still exports yesterday when yesterday is selected", async () => {
+    renderBoard({ today: "2026-08-20" });
+    await screen.findByText("offline sdk with mock storage");
+    fireEvent.click(screen.getByTestId("devlog-export"));
+
+    await waitFor(() => expect(backend._devlogFiles.size).toBe(1));
+    expect([...backend._devlogFiles.keys()][0]).toContain("2026-08-19.md");
+  });
+
+  it("previews the day that is selected, not always yesterday", async () => {
+    renderBoard({ today: "2026-08-20" });
+    await screen.findByText("offline sdk with mock storage");
+
+    fireEvent.change(screen.getByTestId("devlog-day"), { target: { value: "today" } });
+    fireEvent.click(screen.getByTestId("devlog-preview"));
+
+    expect(await screen.findByTestId("devlog-preview-content")).toHaveTextContent("2026-08-20");
+  });
+
+  it("scopes the exported page's content to the chosen day", async () => {
+    // A note logged today must appear on today's page and not yesterday's --
+    // otherwise the two exports would be identical and one of them wrong.
+    const [task] = await backend.listTasks();
+    await backend.addTaskEvent(task.id, "note", "logged right now");
+
+    renderBoard({ today: toLocalDate(new Date().toISOString()) });
+    await screen.findByText("offline sdk with mock storage");
+
+    fireEvent.click(screen.getByTestId("devlog-preview"));
+    expect(await screen.findByTestId("devlog-preview-content")).not.toHaveTextContent(
+      "logged right now",
+    );
+
+    fireEvent.change(screen.getByTestId("devlog-day"), { target: { value: "today" } });
+    await waitFor(() =>
+      expect(screen.getByTestId("devlog-preview-content")).toHaveTextContent("logged right now"),
+    );
+  });
+});

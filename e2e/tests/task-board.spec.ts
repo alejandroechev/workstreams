@@ -342,7 +342,7 @@ test("no quick note appears for a workstream with no task", async ({ page }) => 
   await expect(page.locator('[data-testid="quick-note"]')).toHaveCount(0);
 });
 
-test("the exported page uses yesterday's date and the sectioned format", async ({ page }) => {
+test("the exported page defaults to yesterday and uses the sectioned format", async ({ page }) => {
   await openBoard(page);
   await addTask(page, "Agency Code Review Telemetry");
   await page.locator('[data-testid^="task-card-"]').first().click();
@@ -431,4 +431,46 @@ test("every column stays on screen with the detail panel open", async ({ page })
     // its first two letters would still pass.
     await expect(page.locator(`[data-testid="board-column-${id}"]`)).toBeInViewport({ ratio: 1 });
   }
+});
+
+test("either day can be exported, and the preview follows the choice", async ({ page }) => {
+  await openBoard(page);
+  await addTask(page, "Agency Code Review Telemetry");
+  await page.locator('[data-testid^="task-card-"]').first().click();
+  await page.locator('[data-testid="log-input"]').fill("logged just now");
+  await page.locator('[data-testid="log-submit"]').click();
+
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const stamp = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  const now = new Date();
+  const yesterday = new Date();
+  yesterday.setDate(yesterday.getDate() - 1);
+
+  const preview = page.locator('[data-testid="devlog-preview-content"]');
+  await page.locator('[data-testid="devlog-preview"]').click();
+
+  // Defaults to yesterday, so an entry logged just now is correctly absent.
+  await expect(page.locator('[data-testid="devlog-day-label"]')).toHaveText(stamp(yesterday));
+  await expect(preview).toContainText(`# ${stamp(yesterday)}`);
+  await expect(preview).not.toContainText("logged just now");
+
+  // Switching re-renders the open preview rather than leaving a stale page up.
+  await page.locator('[data-testid="devlog-day"]').selectOption("today");
+  await expect(page.locator('[data-testid="devlog-day-label"]')).toHaveText(stamp(now));
+  await expect(preview).toContainText(`# ${stamp(now)}`);
+  await expect(preview).toContainText("logged just now");
+});
+
+test("the activity feed shows today, with earlier entries a click away", async ({ page }) => {
+  await openBoard(page);
+  await addTask(page, "Offline SDK Read Mock Storage");
+  await page.locator('[data-testid^="task-card-"]').first().click();
+
+  await page.locator('[data-testid="log-input"]').fill("today's entry");
+  await page.locator('[data-testid="log-submit"]').click();
+
+  const feed = page.locator('[data-testid="event-feed"]');
+  await expect(feed).toContainText("today's entry");
+  // Everything here is from today, so there is nothing to hide behind a toggle.
+  await expect(page.locator('[data-testid="event-show-all"]')).toHaveCount(0);
 });
