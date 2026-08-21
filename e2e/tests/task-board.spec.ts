@@ -105,7 +105,8 @@ test("the preview renders a page and writes nothing", async ({ page }) => {
   const preview = page.locator('[data-testid="devlog-preview-content"]');
   await expect(preview).toBeVisible();
   await expect(preview).toContainText("generated_by: workstreams");
-  await expect(preview).toContainText("Create Kusto DB");
+  // Each task owns a heading now, rather than being a bullet under a label.
+  await expect(preview).toContainText("## Create Kusto DB");
 
   // No export ran, so no status line should claim anything was written.
   await expect(page.locator('[data-testid="devlog-status"]')).toHaveCount(0);
@@ -347,4 +348,35 @@ test("no quick note appears for a workstream with no task", async ({ page }) => 
 
   await expect(page.locator('[data-testid="add-tile-button"]')).toBeVisible();
   await expect(page.locator('[data-testid="quick-note"]')).toHaveCount(0);
+});
+
+test("the exported page uses yesterday's date and the sectioned format", async ({ page }) => {
+  await openBoard(page);
+  await addTask(page, "Agency Code Review Telemetry");
+  await page.locator('[data-testid^="task-card-"]').first().click();
+
+  await page.locator('[data-testid="new-subtask-input"]').fill("ACSMediaSDK Pipeline");
+  await page.locator('[data-testid="new-subtask-submit"]').click();
+  await page
+    .locator('[data-testid="detail-notes"]')
+    .fill("I am exploring some improvements:\n- Moving the miner logic to a shared repo\n- Adding tests");
+  await page.locator('[data-testid="detail-notes"]').blur();
+
+  await page.locator('[data-testid="devlog-preview"]').click();
+  const preview = page.locator('[data-testid="devlog-preview-content"]');
+
+  // Yesterday, because the export runs before the new day's work starts.
+  const yesterday = new Date();
+  yesterday.setDate(yesterday.getDate() - 1);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const stamp = `${yesterday.getFullYear()}-${pad(yesterday.getMonth() + 1)}-${pad(yesterday.getDate())}`;
+  await expect(preview).toContainText(`date: ${stamp}`);
+  await expect(preview).toContainText(`# ${stamp}`);
+
+  await expect(preview).toContainText("## Agency Code Review Telemetry");
+  await expect(preview).toContainText("### Subtasks");
+  await expect(preview).toContainText("### Notes");
+  await expect(preview).toContainText("I am exploring some improvements:");
+  // A note that already contains bullets must not be bulleted again.
+  await expect(preview).not.toContainText("- - Moving");
 });

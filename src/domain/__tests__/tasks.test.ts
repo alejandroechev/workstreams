@@ -9,6 +9,7 @@ import {
   sortEvents,
   attachWorkstream,
   toLocalDate,
+  previousLocalDate,
 } from "../tasks";
 import type { Task, TaskEvent } from "../tasks";
 import type { Workstream } from "../types";
@@ -162,5 +163,33 @@ describe("events", () => {
     const tasks = [makeTask({ id: "t1", title: "a" }), makeTask({ id: "t2", title: "b" })];
     expect(touchedOn(tasks, events, "2026-08-19").map((t) => t.id)).toEqual(["t1"]);
     expect(touchedOn(tasks, events, "2026-08-17")).toEqual([]);
+  });
+});
+
+describe("previousLocalDate", () => {
+  it("returns the day before the given local instant", () => {
+    // The export runs at the start of the next day, covering the day just
+    // finished -- so "yesterday" is the unit of work, not "today".
+    expect(previousLocalDate(new Date(2026, 7, 20, 9, 30).toISOString())).toBe("2026-08-19");
+  });
+
+  it("rolls back across a month boundary", () => {
+    expect(previousLocalDate(new Date(2026, 8, 1, 9, 0).toISOString())).toBe("2026-08-31");
+  });
+
+  it("rolls back across a year boundary", () => {
+    expect(previousLocalDate(new Date(2026, 0, 1, 9, 0).toISOString())).toBe("2025-12-31");
+  });
+
+  it("handles a leap day", () => {
+    expect(previousLocalDate(new Date(2028, 2, 1, 9, 0).toISOString())).toBe("2028-02-29");
+  });
+
+  it("uses the local day, not the UTC one", () => {
+    // Exporting at 00:30 local must still mean "the day that just ended",
+    // even though that instant is already the following day in UTC for
+    // negative offsets.
+    const lateNight = new Date(2026, 7, 20, 0, 30);
+    expect(previousLocalDate(lateNight.toISOString())).toBe("2026-08-19");
   });
 });

@@ -149,6 +149,22 @@ export function completionDate(task: Task): string | null {
   return toLocalDate(task.completedAt);
 }
 
+/**
+ * The local calendar day before `iso`.
+ *
+ * The devlog export runs at the *start* of the next working day and covers the
+ * day just finished, so "yesterday" is the unit being written up. Arithmetic
+ * goes through `Date#setDate`, which handles month, year and leap-day
+ * rollover, and it keeps the original clock time so a DST shift cannot land it
+ * on the wrong day.
+ */
+export function previousLocalDate(iso: string = new Date().toISOString()): string {
+  const at = new Date(iso);
+  if (Number.isNaN(at.getTime())) return toLocalDate(iso);
+  at.setDate(at.getDate() - 1);
+  return toLocalDate(at.toISOString());
+}
+
 export const eventsForTask = (events: TaskEvent[], taskId: string): TaskEvent[] =>
   events.filter((e) => e.taskId === taskId);
 

@@ -174,23 +174,65 @@ navigated to.
 The generated page is written into the same wiki folder with the same
 `YYYY-MM-DD.md` naming, so the archive stays one continuous searchable series.
 
+The export writes up **yesterday**, not today: it runs at the start of a
+working day and covers the day just finished, so the page is complete rather
+than a snapshot taken mid-morning. That date also decides which event-log
+entries and which completions belong on the page.
+
 Format (front matter is load-bearing, see below):
 
 ```markdown
 ---
-date: 2026-08-19
+date: 2026-08-20
 generated_by: workstreams
 ---
 
-# 2026-08-19
+# 2026-08-20
 
-## OfflineSDK
+## ⚒️ Agency Code Review Telemetry
 
-- ⚒️ **offline sdk with mock storage**  ·  `ws:offline-mock`  ← touched today
-  - ✅ Address first round of structural reviews
-  - ⚒️ Addressing second round of in depth comments, manually
-  - _14:05_ — picked this back up after the review comments
+### Labels
+
+`AI Crew`
+
+### Workstream
+
+`ws:PR Telemetry Pipeline`
+
+### Subtasks
+
+- 👁️ ACSMediaSDK Pipeline
+- ✅ Improve Dashboards
+
+### Notes
+
+I am exploring some improvements:
+- Moving the miner logic to a shared repo
+- Adding tests
+
+### Event log
+
+- _14:05_ — synced with Ela on the transform step
 ```
+
+Each task owns a `##` heading led by its status glyph (flags stack in front,
+as the archive writes them), with its detail in `###` subsections. Empty
+subsections are omitted: at 60-odd open tasks, empty scaffolding would triple
+the page length.
+
+**Notes are emitted verbatim, not bulletised.** Prefixing `- ` onto a line
+that already starts with `- ` produced `- - Moving the miner logic` in the
+previous format. Being a top-level block rather than a nested list item also
+means blank lines are ordinary paragraph breaks instead of something that
+terminates a list.
+
+**Labels moved into a `### Labels` subsection** when tasks took over `##`.
+They no longer group the page visually, so ordering does that job instead:
+tasks sharing a label set stay adjacent, in the order their group first
+appears. Without that, 61 tasks would be a flat, unscannable run of headings.
+
+**There is no "touched today" badge.** The presence of an `### Event log`
+section is itself the signal that a task moved that day.
 
 Three rules make the generated page **smaller** than the one it replaces:
 

@@ -26,7 +26,7 @@
  * stays what it was asked to be: a searchable archive, not a second database.
  */
 import type { Task, TaskEvent, Label } from "./tasks";
-import { completionDate, eventsForTask, sortEvents, toLocalDate } from "./tasks";
+import { completionDate, sortEvents, toLocalDate } from "./tasks";
 import type { Workstream } from "./types";
 import { statusEmoji, flagEmoji, isTerminalStatus, TASK_FLAGS } from "./task-status";
 
@@ -80,20 +80,6 @@ function statusPrefix(task: Pick<Task, "status" | "flags">): string {
   return [...flags, statusEmoji(task.status)].join("");
 }
 
-/** `- ‼️🕵️ **title**` with no stray space when there is no glyph at all. */
-function taskBullet(task: Task, workstreams: Workstream[], touched: boolean): string {
-  const prefix = statusPrefix(task);
-  const head = prefix ? `- ${prefix} **${task.title}**` : `- **${task.title}**`;
-
-  const parts = [head];
-  const ws = task.workstreamId
-    ? workstreams.find((w) => w.id === task.workstreamId)
-    : undefined;
-  if (ws) parts.push(`\`ws:${ws.name}\``);
-  if (touched) parts.push("← touched today");
-  return parts.join("  ·  ").replace("  ·  ← touched today", "  ← touched today");
-}
-
 /**
  * Whether a task belongs on this day's page.
  *
@@ -108,40 +94,43 @@ function belongsOnDay(task: Task, date: string): boolean {
   return finished === null || finished === date;
 }
 
-function headingFor(task: Task, labels: Label[]): string {
-  if (task.labelIds.length === 0) return NO_LABEL_HEADING;
-  return task.labelIds
-    .map((id) => labels.find((l) => l.id === id)?.name ?? id)
-    .join(" › ");
+/** Stable key for "these tasks carry the same labels, in the same order". */
+function labelKey(task: Task): string {
+  return task.labelIds.join("\u0000");
 }
+
+function labelNames(task: Task, labels: Label[]): string[] {
+  return task.labelIds.map((id) => labels.find((l) => l.id === id)?.name ?? id);
+}
+
+const pad = (n: number): string => String(n).padStart(2, "0");
 
 export function renderDevlogDay(input: RenderDevlogInput): string {
   const { date, tasks, events, labels, workstreams } = input;
 
-  const notesByTask = new Map<string, TaskEvent[]>();
+  // Only manual entries reach the page, and only from the day being exported.
+  // Auto events (board moves, commits) are in-app history: the hand-written
+  // archive never contained commit logs, and including them would bury the
+  // context worth re-reading.
+  const logByTask = new Map<string, TaskEvent[]>();
   for (const event of events) {
-    // Auto events are in-app history, not archive content.
     if (event.source !== "manual") continue;
     if (toLocalDate(event.at) !== date) continue;
-    const list = notesByTask.get(event.taskId) ?? [];
+    const list = logByTask.get(event.taskId) ?? [];
     list.push(event);
-    notesByTask.set(event.taskId, list);
+    logByTask.set(event.taskId, list);
   }
 
-  const touched = new Set(
-    events.filter((e) => toLocalDate(e.at) === date).map((e) => e.taskId),
-  );
-
-  // Insertion order is preserved, so sections appear in the order their first
-  // task does rather than alphabetically -- which is what a reader expects
-  // from a log and what the prototype got wrong.
-  const sections = new Map<string, Task[]>();
-  for (const task of tasks) {
-    if (!belongsOnDay(task, date)) continue;
-    const heading = headingFor(task, labels);
-    const list = sections.get(heading) ?? [];
+  // Label headings are gone now that each task owns a `##`, so ordering is the
+  // only thing left holding related work together. Grouping by label key keeps
+  // same-labelled tasks adjacent, in the order their group first appears.
+  const onDay = tasks.filter((task) => belongsOnDay(task, date));
+  const groups = new Map<string, Task[]>();
+  for (const task of onDay) {
+    const key = labelKey(task);
+    const list = groups.get(key) ?? [];
     list.push(task);
-    sections.set(heading, list);
+    groups.set(key, list);
   }
 
   const lines: string[] = [
@@ -154,34 +143,53 @@ export function renderDevlogDay(input: RenderDevlogInput): string {
     "",
   ];
 
-  for (const [heading, sectionTasks] of sections) {
-    lines.push(`## ${heading}`, "");
-    for (const task of sectionTasks) {
-      lines.push(taskBullet(task, workstreams, touched.has(task.id)));
+  /** Emit a `### <title>` block, or nothing at all when it has no content. */
+  const section = (title: string, body: string[]): void => {
+    if (body.length === 0) return;
+    lines.push(`### ${title}`, "", ...body, "");
+  };
 
-      for (const subtask of task.subtasks) {
-        const glyph = statusEmoji(subtask.status);
-        lines.push(glyph ? `  - ${glyph} ${subtask.title}` : `  - ${subtask.title}`);
-      }
-      for (const link of task.links) {
-        lines.push(`  - ${link}`);
-      }
-      // Free-form notes, one bullet per line. Blank lines are dropped rather
-      // than emitted: a blank line terminates a markdown list, which would
-      // detach every following bullet from its task and reduce it to a
-      // top-level item in the archive.
-      for (const line of task.notes.split("\n")) {
-        const text = line.trimEnd();
-        if (text.trim()) lines.push(`  - ${text}`);
-      }
-      for (const note of sortEvents(eventsForTask(notesByTask.get(task.id) ?? [], task.id))) {
-        const time = new Date(note.at);
-        const hh = String(time.getHours()).padStart(2, "0");
-        const mm = String(time.getMinutes()).padStart(2, "0");
-        lines.push(`  - _${hh}:${mm}_ — ${note.text}`);
-      }
+  for (const group of groups.values()) {
+    for (const task of group) {
+      const prefix = statusPrefix(task);
+      lines.push(prefix ? `## ${prefix} ${task.title}` : `## ${task.title}`, "");
+
+      const names = labelNames(task, labels);
+      section("Labels", names.length ? [names.map((n) => `\`${n}\``).join(" · ")] : []);
+
+      const ws = task.workstreamId
+        ? workstreams.find((w) => w.id === task.workstreamId)
+        : undefined;
+      section("Workstream", ws ? [`\`ws:${ws.name}\``] : []);
+
+      section(
+        "Subtasks",
+        task.subtasks.map((sub) => {
+          const glyph = statusEmoji(sub.status);
+          return glyph ? `- ${glyph} ${sub.title}` : `- ${sub.title}`;
+        }),
+      );
+
+      section("Links", task.links.map((link) => `- ${link}`));
+
+      // Verbatim, not bulletised. The note is already markdown, and prefixing
+      // `- ` onto a line that starts with `- ` is what produced the
+      // `- - Moving the miner logic` double bullet in the previous format.
+      // Being a top-level block also means blank lines are ordinary paragraph
+      // breaks rather than something that terminates a list.
+      const notes = task.notes.trim();
+      section("Notes", notes ? notes.split("\n").map((l) => l.trimEnd()) : []);
+
+      // The presence of this section is itself the "touched that day" signal,
+      // which is why there is no separate badge on the heading.
+      section(
+        "Event log",
+        sortEvents(logByTask.get(task.id) ?? []).map((entry) => {
+          const time = new Date(entry.at);
+          return `- _${pad(time.getHours())}:${pad(time.getMinutes())}_ — ${entry.text}`;
+        }),
+      );
     }
-    lines.push("");
   }
 
   return `${lines.join("\n").trimEnd()}\n`;

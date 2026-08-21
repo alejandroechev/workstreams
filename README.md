@@ -48,8 +48,9 @@ project-aware workspace:
   to the **workstream** they are attached to. A workstream's `⋯` menu has
   **Create task…**, which opens the board with a task already created, named
   after the workstream, attached to it and selected for renaming. Notes can be
-  deleted but never rewritten. **Export** renders the day into your wiki as
-  markdown, commits and pushes it — one-way, and it never overwrites a page it
+  deleted but never rewritten. **Export** renders **yesterday** into your wiki as
+  markdown (one `##` section per task, with its labels, workstream, subtasks,
+  notes and event log), commits and pushes it — one-way, and it never overwrites a page it
   did not generate. **Preview** shows exactly what would be written without
   writing anything. See [ADR 020](docs/adrs/020-task-board-devlog-export.md).
 - 🗂️ **Built-in repo browser** — Files / Diff / Log / Hooks / Search tabs. Diff

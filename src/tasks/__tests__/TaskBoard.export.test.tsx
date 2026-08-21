@@ -5,6 +5,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { TaskBoard } from "../TaskBoard";
 import { MemoryBackend } from "../../backend/memory-backend";
 import { isGeneratedByUs } from "../../domain/devlog-render";
+import { toLocalDate } from "../../domain/tasks";
 
 let backend: MemoryBackend;
 
@@ -37,7 +38,9 @@ describe("devlog export", () => {
 
     const preview = await screen.findByTestId("devlog-preview-content");
     expect(preview.textContent).toContain("offline sdk with mock storage");
-    expect(preview.textContent).toContain("picked this back up");
+    // The note was logged today, and the export covers yesterday -- so it
+    // correctly belongs on tomorrow's export, not this one.
+    expect(preview.textContent).not.toContain("picked this back up");
     // The whole point of a preview is that nothing reaches the wiki.
     expect(backend._devlogFiles.size).toBe(0);
   });
@@ -65,8 +68,13 @@ describe("devlog export", () => {
 
   it("surfaces the warning when it had to write alongside a hand-written page", async () => {
     // Reproduces the real hazard: a year of hand-written days share the folder.
+    // Seeded at the day the export actually targets (yesterday), not today.
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    const pad = (n: number) => String(n).padStart(2, "0");
+    const stamp = `${yesterday.getFullYear()}-${pad(yesterday.getMonth() + 1)}-${pad(yesterday.getDate())}`;
     backend._devlogFiles.set(
-      `/wiki/devlog/fy2027/${new Date().toISOString().slice(0, 10)}.md`,
+      `/wiki/devlog/fy2027/${stamp}.md`,
       "## AudioTranscoding\n- 👁️Waiting on Marcus\n",
     );
     renderBoard();
@@ -92,5 +100,51 @@ describe("devlog export", () => {
     await screen.findByText("offline sdk with mock storage");
     fireEvent.click(screen.getByTestId("devlog-preview"));
     expect(await screen.findByTestId("devlog-preview-content")).toBeInTheDocument();
+  });
+});
+
+describe("export covers the previous day", () => {
+  it("writes yesterday's page, since the export runs before the new day's work", async () => {
+    renderBoard({ today: "2026-08-20" });
+    await screen.findByText("offline sdk with mock storage");
+
+    fireEvent.click(screen.getByTestId("devlog-export"));
+
+    await waitFor(() => expect(backend._devlogFiles.size).toBe(1));
+    const [path] = [...backend._devlogFiles.keys()];
+    expect(path).toContain("2026-08-19.md");
+    const [content] = [...backend._devlogFiles.values()];
+    expect(content).toContain("date: 2026-08-19");
+    expect(content).toContain("# 2026-08-19");
+  });
+
+  it("previews the same day it would write", async () => {
+    renderBoard({ today: "2026-08-20" });
+    await screen.findByText("offline sdk with mock storage");
+
+    fireEvent.click(screen.getByTestId("devlog-preview"));
+    expect(await screen.findByTestId("devlog-preview-content")).toHaveTextContent("2026-08-19");
+  });
+
+  it("names the day in the export status, so the target is never a guess", async () => {
+    renderBoard({ today: "2026-08-20" });
+    await screen.findByText("offline sdk with mock storage");
+    fireEvent.click(screen.getByTestId("devlog-export"));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("devlog-status").textContent).toContain("2026-08-19"),
+    );
+  });
+
+  it("keeps the board's own Done filter on today, not the export day", async () => {
+    // The board shows the live state; only the export looks backwards. Pin the
+    // completion to the board's `today` so the two dates are unambiguous.
+    const done = await backend.createTask("finished today");
+    await backend.updateTask(done.id, { status: "done" });
+    const stored = (await backend.listTasks()).find((t) => t.id === done.id)!;
+    expect(stored.completedAt).not.toBeNull();
+
+    renderBoard({ today: toLocalDate(stored.completedAt!) });
+    expect(await screen.findByText("finished today")).toBeInTheDocument();
   });
 });

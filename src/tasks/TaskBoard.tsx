@@ -24,7 +24,7 @@ import type { Backend } from "../backend/types";
 import type { Project, Workstream } from "../domain/types";
 import type { Task } from "../domain/tasks";
 import type { BoardColumnId } from "../domain/task-status";
-import { toLocalDate, eventsForTask, sortEvents } from "../domain/tasks";
+import { toLocalDate, previousLocalDate, eventsForTask, sortEvents } from "../domain/tasks";
 import {
   BOARD_COLUMNS,
   TASK_STATUSES,
@@ -171,9 +171,19 @@ export function TaskBoard({
     onClose();
   };
 
+  /**
+   * The day the export writes up.
+   *
+   * Yesterday, not today: the export runs at the start of a working day and
+   * covers the day just finished, so the page is complete rather than a
+   * snapshot taken mid-morning. It also decides which event-log entries and
+   * completions belong on the page.
+   */
+  const exportDate = previousLocalDate(`${today}T12:00:00`);
+
   const renderPage = () =>
     renderDevlogDay({
-      date: today,
+      date: exportDate,
       tasks: board.tasks,
       events: board.events,
       labels: board.labels,
@@ -192,11 +202,11 @@ export function TaskBoard({
     }
     setExportStatus("Exporting…");
     try {
-      const result = await backend.exportDevlogDay(devlogDirectory, today, renderPage(), {
+      const result = await backend.exportDevlogDay(devlogDirectory, exportDate, renderPage(), {
         commit: true,
         push: true,
       });
-      const bits = [`Wrote ${result.path}`];
+      const bits = [`Wrote ${exportDate} → ${result.path}`];
       if (result.commit) bits.push(`commit ${result.commit.slice(0, 8)}`);
       if (result.pushed) bits.push("pushed");
       if (result.warning) bits.push(result.warning);
@@ -345,7 +355,7 @@ export function TaskBoard({
             data-testid="devlog-preview"
             onClick={() => setPreview(renderPage())}
             style={controlStyle}
-            title="Preview today's generated devlog page without writing it"
+            title={`Preview the generated devlog page for ${exportDate} without writing it`}
           >
             Preview
           </button>
@@ -353,7 +363,7 @@ export function TaskBoard({
             data-testid="devlog-export"
             onClick={() => void runExport()}
             style={controlStyle}
-            title="Write, commit and push today's devlog page"
+            title={`Write, commit and push the devlog page for ${exportDate}`}
           >
             Export
           </button>
@@ -384,7 +394,9 @@ export function TaskBoard({
         {preview !== null && (
           <div style={previewWrapStyle}>
             <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
-              <strong style={{ fontSize: 11 }}>Preview — nothing has been written</strong>
+              <strong style={{ fontSize: 11 }}>
+                Preview for {exportDate} — nothing has been written
+              </strong>
               <div style={{ flex: 1 }} />
               <button
                 data-testid="devlog-preview-close"

@@ -31,7 +31,7 @@ import path from "node:path";
 
 import { renderDevlogDay, isGeneratedByUs } from "../src/domain/devlog-render.ts";
 import { normalizeLabelName, resolveLabelNames } from "../src/domain/task-labels.ts";
-import { makeTask, makeEvent, toLocalDate } from "../src/domain/tasks.ts";
+import { makeTask, makeEvent, toLocalDate, previousLocalDate } from "../src/domain/tasks.ts";
 import { parseStatusPrefix, statusEmoji } from "../src/domain/task-status.ts";
 
 const SCHEMA = `
@@ -177,14 +177,18 @@ try {
     "notes are mutable, unlike events",
     db.prepare("SELECT notes FROM tasks WHERE id='t1'").get().notes === "revised understanding",
   );
+  // Deliberately contains its own markdown bullets: that is the shape that
+  // produced the `- - Moving the miner logic` double bullet, and a note
+  // without them cannot detect the regression at all.
   db.prepare("UPDATE tasks SET notes = ? WHERE id = 't1'").run(
-    "sync with Erwin to understand refactoring\n\ngather the precise requirements",
+    "sync with Erwin to understand refactoring\n\n- gather the precise requirements\n- design the read path",
   );
 
   // ── 3. Devlog rendering ─────────────────────────────────────────────────
   console.log("\n3. Devlog rendering");
 
-  const today = toLocalDate(new Date().toISOString());
+  // The export covers the day just finished, not the one in progress.
+  const today = previousLocalDate(new Date().toISOString());
   const rows = db.prepare("SELECT * FROM tasks ORDER BY position, created_at").all();
   const subs = db.prepare("SELECT * FROM subtasks").all();
   const evts = db.prepare("SELECT * FROM task_events").all();
@@ -213,7 +217,7 @@ try {
       taskId: e.task_id,
       kind: e.kind,
       text: e.text,
-      at: new Date().toISOString(),
+      at: new Date(`${today}T14:05:00`).toISOString(),
       source: e.source,
     }),
   );
@@ -223,29 +227,34 @@ try {
 
   check("the page carries the generated_by marker", isGeneratedByUs(page));
   check("open tasks appear", page.includes("offline sdk with mock storage"));
-  check("subtasks are nested under their task", page.includes("  - ✅ Address first round"));
-  check("manual notes reach the page", page.includes("picked this back up after the review"));
+  check("each task owns a heading led by its status glyph", page.includes("## ⚒️ offline sdk with mock storage"));
+  check("subtasks sit under their own subheading", page.includes("### Subtasks") && page.includes("- ✅ Address first round"));
   check(
-    "free-form notes are appended as nested bullets",
-    page.includes("  - sync with Erwin to understand refactoring") &&
-      page.includes("  - gather the precise requirements"),
+    "the day's log entries reach the page",
+    page.includes("### Event log") && page.includes("picked this back up after the review"),
   );
   check(
-    "a blank line inside a note never breaks the markdown list",
-    !page.split("\n").some((l) => l.trim() === "-"),
+    "free-form notes are emitted verbatim under their own subheading",
+    page.includes("### Notes") &&
+      page.includes("sync with Erwin to understand refactoring") &&
+      page.includes("- gather the precise requirements"),
+  );
+  check(
+    "a note that already contains bullets is never double-bulleted",
+    !page.includes("- - "),
   );
   check("auto events stay out of the page", !page.includes("moved to in review"));
   check(
     "the in-progress glyph matches the archive",
-    page.includes(`- ${statusEmoji("in_progress")} **offline sdk with mock storage**`),
+    page.includes(`## ${statusEmoji("in_progress")} offline sdk with mock storage`),
   );
 
   // The renderer and the parser must agree, or a page we generate could not be
   // read back consistently by anything downstream (including a human).
-  const bullet = page
+  const heading = page
     .split("\n")
-    .find((l) => l.startsWith("- ") && l.includes("offline sdk"));
-  const parsed = parseStatusPrefix(bullet.slice(2));
+    .find((l) => l.startsWith("## ") && l.includes("offline sdk"));
+  const parsed = parseStatusPrefix(heading.slice(3));
   check("the parser reads back the status the renderer wrote", parsed.status === "in_progress");
 
   // ── 4. The clobber guard ────────────────────────────────────────────────

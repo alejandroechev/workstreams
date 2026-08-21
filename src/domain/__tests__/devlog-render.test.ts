@@ -92,55 +92,26 @@ describe("isGeneratedByUs", () => {
   });
 });
 
-describe("sections", () => {
-  it("derives a breadcrumb heading from the task's labels, in their stored order", () => {
-    // The prototype round-trip lost section *ordering*, not content. Storing an
-    // explicit label order on the task is what fixes it.
+
+describe("task headings", () => {
+  it("promotes each task to its own section, led by its status glyph", () => {
     const task = makeTask({
-      id: "t1",
-      title: "my reply to comments appear before agent replies",
-      status: "done",
-      labelIds: ["l2", "l3", "l4"],
-      completedAt: at(11),
+      id: "a",
+      title: "Agency Code Review Telemetry",
+      status: "in_progress",
+      labelIds: ["l1"],
     });
-    expect(render([task])).toContain("## Workstreams › Bugs/Fixes › FileComments");
+    expect(render([task])).toContain("## ⚒️ Agency Code Review Telemetry");
   });
 
-  it("groups tasks that share a label set under one heading", () => {
-    const a = makeTask({ id: "a", title: "one", labelIds: ["l1"] });
-    const b = makeTask({ id: "b", title: "two", labelIds: ["l1"] });
-    const out = render([a, b]);
-    expect(out.match(/^## OfflineSDK$/gm)).toHaveLength(1);
-  });
-
-  it("keeps a different label order as a distinct section rather than merging", () => {
-    const a = makeTask({ id: "a", title: "one", labelIds: ["l2", "l3"] });
-    const b = makeTask({ id: "b", title: "two", labelIds: ["l3", "l2"] });
-    const out = render([a, b]);
-    expect(out).toContain("## Workstreams › Bugs/Fixes");
-    expect(out).toContain("## Bugs/Fixes › Workstreams");
-  });
-
-  it("files unlabelled work under its own heading rather than dropping it", () => {
-    const out = render([makeTask({ id: "a", title: "unlabelled chore" })]);
-    expect(out).toContain("## No label");
-    expect(out).toContain("unlabelled chore");
-  });
-});
-
-describe("task lines", () => {
-  it("prefixes the status glyph already used in the archive", () => {
-    const task = makeTask({ id: "a", title: "media_store read API", status: "in_progress", labelIds: ["l1"] });
-    expect(render([task])).toContain("- ⚒️ **media_store read API**");
-  });
-
-  it("emits no glyph for a to-do, matching the plain bullets in the real files", () => {
+  it("emits no glyph for a to-do, matching the plain bullets in the archive", () => {
     const task = makeTask({ id: "a", title: "Switch repo in a ws", labelIds: ["l1"] });
-    expect(render([task])).toContain("- **Switch repo in a ws**");
-    expect(render([task])).not.toContain("-  **Switch");
+    const out = render([task]);
+    expect(out).toContain("## Switch repo in a ws");
+    expect(out).not.toContain("##  Switch");
   });
 
-  it("renders flags in front of the status, the way the archive stacks them", () => {
+  it("stacks flags in front of the status, the way the archive writes them", () => {
     const task = makeTask({
       id: "a",
       title: "offline sdk write path impl",
@@ -148,91 +119,173 @@ describe("task lines", () => {
       flags: ["priority"],
       labelIds: ["l1"],
     });
-    expect(render([task])).toContain("- ‼️🕵️ **offline sdk write path impl**");
+    expect(render([task])).toContain("## ‼️🕵️ offline sdk write path impl");
   });
 
-  it("shows the linked workstream as an inline code ref", () => {
-    const task = makeTask({ id: "a", title: "x", labelIds: ["l1"], workstreamId: "w1" });
-    expect(render([task], [], [ws("w1", "offline-mock")])).toContain("`ws:offline-mock`");
+  it("does not bold the title, which a heading already emphasises", () => {
+    const task = makeTask({ id: "a", title: "plain", status: "done", completedAt: at(10) });
+    expect(render([task])).not.toContain("**plain**");
   });
 
-  it("omits the workstream ref entirely when there is none", () => {
-    const task = makeTask({ id: "a", title: "x", labelIds: ["l1"] });
-    expect(render([task])).not.toContain("`ws:");
-  });
-
-  it("marks the handful of tasks touched that day", () => {
-    const a = makeTask({ id: "a", title: "touched", labelIds: ["l1"] });
-    const b = makeTask({ id: "b", title: "untouched", labelIds: ["l1"] });
-    const events = [makeEvent({ id: "e1", taskId: "a", kind: "note", text: "x", at: at(9) })];
-    const out = render([a, b], events);
-    expect(out).toMatch(/touched\*\*.*← touched today/);
-    expect(out).not.toMatch(/untouched\*\*.*← touched today/);
+  it("keeps tasks sharing a label set adjacent, so grouping survives", () => {
+    // The label headings are gone, so ordering is the only thing left holding
+    // related work together on the page.
+    const a = makeTask({ id: "a", title: "alpha", labelIds: ["l1"] });
+    const b = makeTask({ id: "b", title: "beta", labelIds: ["l2"] });
+    const c = makeTask({ id: "c", title: "gamma", labelIds: ["l1"] });
+    const out = render([a, b, c]);
+    expect(out.indexOf("## alpha")).toBeLessThan(out.indexOf("## gamma"));
+    expect(out.indexOf("## gamma")).toBeLessThan(out.indexOf("## beta"));
   });
 });
 
-describe("subtasks and links", () => {
-  it("nests subtasks with their own status glyphs", () => {
+describe("task subsections", () => {
+  const base = { id: "a", title: "Offline SDK Read Mock Storage", labelIds: ["l1"] };
+
+  it("puts the linked workstream under its own heading", () => {
+    const task = makeTask({ ...base, workstreamId: "w1" });
+    const out = render([task], [], [ws("w1", "Offline SDK")]);
+    expect(out).toContain("### Workstream");
+    expect(out).toContain("`ws:Offline SDK`");
+  });
+
+  it("lists subtasks with their own glyphs", () => {
     const task = makeTask({
-      id: "a",
-      title: "offline sdk with mock storage",
-      status: "in_progress",
-      labelIds: ["l1"],
+      ...base,
       subtasks: [
-        { id: "s1", title: "Address first round of structural reviews", status: "done" },
-        { id: "s2", title: "Addressing second round, manually", status: "in_progress" },
+        { id: "s1", title: "ACSMediaSDK Pipeline", status: "in_review" },
+        { id: "s2", title: "Improve Dashboards", status: "done" },
+        { id: "s3", title: "Backend Base", status: "todo" },
       ],
     });
     const out = render([task]);
-    expect(out).toContain("  - ✅ Address first round of structural reviews");
-    expect(out).toContain("  - ⚒️ Addressing second round, manually");
+    expect(out).toContain("### Subtasks");
+    expect(out).toContain("- 👁️ ACSMediaSDK Pipeline");
+    expect(out).toContain("- ✅ Improve Dashboards");
+    expect(out).toContain("- Backend Base");
   });
 
-  it("nests links under the task", () => {
-    const task = makeTask({ id: "a", title: "x", labelIds: ["l1"], links: ["https://example/pr/1"] });
-    expect(render([task])).toContain("  - https://example/pr/1");
+  it("lists labels so the page stays filterable without label headings", () => {
+    const task = makeTask({ ...base, labelIds: ["l2", "l3"] });
+    const out = render([task]);
+    expect(out).toContain("### Labels");
+    expect(out).toContain("`Workstreams` · `Bugs/Fixes`");
+  });
+
+  it("lists links under their own heading", () => {
+    const task = makeTask({ ...base, links: ["https://example/pr/1"] });
+    const out = render([task]);
+    expect(out).toContain("### Links");
+    expect(out).toContain("- https://example/pr/1");
+  });
+
+  it("omits every subsection a task has nothing for", () => {
+    // At 60-odd open tasks, empty scaffolding would triple the page length.
+    const out = render([makeTask({ ...base, labelIds: [] })]);
+    for (const heading of ["### Workstream", "### Subtasks", "### Notes", "### Links", "### Labels", "### Event log"]) {
+      expect(out).not.toContain(heading);
+    }
+  });
+
+  it("orders the subsections consistently", () => {
+    const task = makeTask({
+      ...base,
+      workstreamId: "w1",
+      subtasks: [{ id: "s1", title: "sub", status: "todo" }],
+      links: ["https://example/pr/1"],
+      notes: "some context",
+    });
+    const out = render(
+      [task],
+      [makeEvent({ id: "e1", taskId: "a", kind: "note", text: "logged", at: at(14) })],
+      [ws("w1", "Offline SDK")],
+    );
+    const order = ["### Labels", "### Workstream", "### Subtasks", "### Links", "### Notes", "### Event log"];
+    const positions = order.map((h) => out.indexOf(h));
+    expect(positions).toEqual([...positions].sort((x, y) => x - y));
+    expect(positions.every((p) => p > -1)).toBe(true);
   });
 });
 
 describe("notes", () => {
-  const task = makeTask({ id: "a", title: "x", labelIds: ["l1"] });
+  const base = { id: "a", title: "task", labelIds: ["l1"] };
 
-  it("renders a manual note as a timestamped sub-bullet", () => {
-    const events = [
-      makeEvent({ id: "e1", taskId: "a", kind: "note", text: "picked this back up", at: at(14, 5), source: "manual" }),
-    ];
-    expect(render([task], events)).toContain("  - _14:05_ — picked this back up");
+  it("emits the note verbatim rather than bulleting each line", () => {
+    // Prefixing `- ` onto a line that already starts with `- ` produced the
+    // `- - Moving the miner logic` double bullet in the old format.
+    const task = makeTask({
+      ...base,
+      notes: "I am exploring some improvements:\n- Moving the miner logic to a shared repo\n- Adding tests",
+    });
+    const out = render([task]);
+    expect(out).toContain("I am exploring some improvements:\n- Moving the miner logic to a shared repo\n- Adding tests");
+    expect(out).not.toContain("- - Moving");
   });
 
-  it("leaves auto events out of the page", () => {
-    // Commit and board-move noise never appeared in the hand-written archive;
-    // including it would bury the context the page exists to preserve.
+  it("preserves blank lines between paragraphs", () => {
+    // Notes are no longer nested inside a list, so a blank line is just a
+    // paragraph break rather than something that terminates the list.
+    const task = makeTask({ ...base, notes: "first para\n\nsecond para" });
+    expect(render([task])).toContain("first para\n\nsecond para");
+  });
+
+  it("omits the section for a whitespace-only note", () => {
+    expect(render([makeTask({ ...base, notes: "  \n\t\n" })])).not.toContain("### Notes");
+  });
+
+  it("trims trailing whitespace without touching the interior", () => {
+    const out = render([makeTask({ ...base, notes: "  a note  \n" })]);
+    expect(out).toContain("a note");
+    expect(out).not.toContain("a note  ");
+  });
+});
+
+describe("event log", () => {
+  const task = makeTask({ id: "a", title: "task", labelIds: ["l1"] });
+
+  it("lists the day's manual entries with their times", () => {
+    const events = [
+      makeEvent({ id: "e1", taskId: "a", kind: "note", text: "picked this back up", at: at(14, 5) }),
+    ];
+    const out = render([task], events);
+    expect(out).toContain("### Event log");
+    expect(out).toContain("- _14:05_ — picked this back up");
+  });
+
+  it("replaces the touched marker entirely", () => {
+    // The presence of an event log is itself the signal that a task moved
+    // that day, so a separate badge is redundant.
+    const events = [makeEvent({ id: "e1", taskId: "a", kind: "note", text: "x", at: at(9) })];
+    expect(render([task], events)).not.toContain("touched today");
+  });
+
+  it("leaves auto events out", () => {
     const events = [
       makeEvent({ id: "e1", taskId: "a", kind: "status", text: "→ in review", at: at(9), source: "auto" }),
-      makeEvent({ id: "e2", taskId: "a", kind: "commit", text: "abc123", at: at(10), source: "auto" }),
     ];
     const out = render([task], events);
     expect(out).not.toContain("→ in review");
-    expect(out).not.toContain("abc123");
+    expect(out).not.toContain("### Event log");
   });
 
-  it("includes only notes written on the day being rendered", () => {
+  it("only includes entries from the day being exported", () => {
+    // The export covers yesterday, so today's entries must not leak into it.
     const events = [
-      makeEvent({ id: "e1", taskId: "a", kind: "note", text: "today's note", at: at(9) }),
+      makeEvent({ id: "e1", taskId: "a", kind: "note", text: "that day", at: at(9) }),
       makeEvent({
         id: "e2",
         taskId: "a",
         kind: "note",
-        text: "yesterday's note",
-        at: new Date(2026, 7, 18, 9, 0, 0).toISOString(),
+        text: "the day after",
+        at: new Date(2026, 7, 20, 9, 0).toISOString(),
       }),
     ];
     const out = render([task], events);
-    expect(out).toContain("today's note");
-    expect(out).not.toContain("yesterday's note");
+    expect(out).toContain("that day");
+    expect(out).not.toContain("the day after");
   });
 
-  it("orders notes chronologically", () => {
+  it("orders entries chronologically", () => {
     const events = [
       makeEvent({ id: "e2", taskId: "a", kind: "note", text: "later", at: at(16) }),
       makeEvent({ id: "e1", taskId: "a", kind: "note", text: "earlier", at: at(9) }),
@@ -246,34 +299,34 @@ describe("completed work", () => {
   it("includes a task on the day it finished", () => {
     const task = makeTask({
       id: "a",
-      title: "finished today",
+      title: "finished that day",
       status: "done",
       labelIds: ["l1"],
       completedAt: at(15),
     });
-    expect(render([task])).toContain("✅ **finished today**");
+    expect(render([task])).toContain("## ✅ finished that day");
   });
 
-  it("drops it from every later day, which is the 76% that used to be copied", () => {
+  it("drops it from every later day", () => {
     const task = makeTask({
       id: "a",
-      title: "finished yesterday",
+      title: "finished earlier",
       status: "done",
       labelIds: ["l1"],
       completedAt: new Date(2026, 7, 18, 15, 0, 0).toISOString(),
     });
-    expect(render([task])).not.toContain("finished yesterday");
+    expect(render([task])).not.toContain("finished earlier");
   });
 
   it("treats cancelled the same way, with its own glyph", () => {
     const task = makeTask({
       id: "a",
-      title: "dropped today",
+      title: "dropped",
       status: "cancelled",
       labelIds: ["l1"],
       completedAt: at(15),
     });
-    expect(render([task])).toContain("❌ **dropped today**");
+    expect(render([task])).toContain("## ❌ dropped");
   });
 
   it("keeps a terminal task with no timestamp rather than losing it silently", () => {
@@ -290,76 +343,8 @@ describe("empty days", () => {
   });
 
   it("ends with exactly one trailing newline", () => {
-    const task = makeTask({ id: "a", title: "x", labelIds: ["l1"] });
-    const out = render([task]);
+    const out = render([makeTask({ id: "a", title: "x", labelIds: ["l1"] })]);
     expect(out.endsWith("\n")).toBe(true);
     expect(out.endsWith("\n\n")).toBe(false);
-  });
-});
-
-describe("free-form notes", () => {
-  const base = { id: "a", title: "media_store read API", labelIds: ["l1"] };
-
-  it("appends each line of the note as a nested bullet", () => {
-    // 74% of the real archive's nested bullets are exactly this shape:
-    // standing context with no glyph and no timestamp.
-    const task = makeTask({
-      ...base,
-      notes: "gather the precise requirements for video understanding\ndesign read on the refactored state machine",
-    });
-    const out = render([task]);
-    expect(out).toContain("  - gather the precise requirements for video understanding");
-    expect(out).toContain("  - design read on the refactored state machine");
-  });
-
-  it("emits nothing at all for an empty note", () => {
-    expect(render([makeTask({ ...base, notes: "" })])).not.toContain("  - \n");
-  });
-
-  it("emits nothing for a whitespace-only note", () => {
-    const out = render([makeTask({ ...base, notes: "   \n\t\n" })]);
-    expect(out.split("\n").filter((l) => l.trim() === "-")).toEqual([]);
-  });
-
-  it("skips blank lines between paragraphs, which would break the list", () => {
-    // A blank line inside a markdown list terminates it, so the following
-    // bullets would detach from the task and read as top-level items.
-    const task = makeTask({ ...base, notes: "first para\n\nsecond para" });
-    const out = render([task]);
-    const bullets = out.split("\n").filter((l) => l.startsWith("  - "));
-    expect(bullets).toEqual(["  - first para", "  - second para"]);
-  });
-
-  it("trims trailing whitespace on each line", () => {
-    const out = render([makeTask({ ...base, notes: "a note   " })]);
-    expect(out).toContain("  - a note\n");
-  });
-
-  it("places the note after subtasks and links, as an appendix to the task", () => {
-    const task = makeTask({
-      ...base,
-      notes: "standing context",
-      subtasks: [{ id: "s1", title: "a subtask", status: "done" }],
-      links: ["https://example/pr/1"],
-    });
-    const out = render([task]);
-    expect(out.indexOf("standing context")).toBeGreaterThan(out.indexOf("a subtask"));
-    expect(out.indexOf("standing context")).toBeGreaterThan(out.indexOf("https://example/pr/1"));
-  });
-
-  it("keeps the note above the day's timestamped log entries", () => {
-    // Standing context first, then what happened today -- which is how the
-    // hand-written pages already read.
-    const task = makeTask({ ...base, notes: "standing context" });
-    const events = [
-      makeEvent({ id: "e1", taskId: "a", kind: "note", text: "logged at 2pm", at: at(14) }),
-    ];
-    const out = render([task], events);
-    expect(out.indexOf("standing context")).toBeLessThan(out.indexOf("logged at 2pm"));
-  });
-
-  it("renders a note for a task that has nothing else", () => {
-    const out = render([makeTask({ ...base, notes: "just a thought" })]);
-    expect(out).toContain("  - just a thought");
   });
 });
