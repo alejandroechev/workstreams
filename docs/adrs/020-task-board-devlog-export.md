@@ -70,16 +70,21 @@ in-progress parent, and degrading that to "not done" would corrupt the export.
 
 ### Statuses, folds, and flags
 
-Seven board columns: To do · ⚒️ In progress · 👁️ In review · 🧊 Blocked ·
-🚗 Parked · 🙋 Delegated · ✅ Done.
+Five board columns: To do · ⚒️ In progress · 👁️ In review · 🧊 Blocked · ✅ Done.
+
+`🚗 parked`, `🙋 delegated` and `♾️ persistent` were tried and **retired**: they
+fragmented the board without earning their width. They stay in the status
+vocabulary rather than being deleted, for two reasons — rows already hold them,
+and `🚗` appears 8 times in the real archive, so removing the status would
+strand that glyph in the task title when a page is read back. They fold to a
+live column (`parked`/`delegated` → Blocked, `persistent` → In progress) and are
+dropped from the picker, except on a task already using one: a `<select>` whose
+value matches no option silently shows the first, which would make a parked task
+read as To do until somebody touched it.
 
 - `🕵️ investigating` **folds into** In progress. Four occurrences in 30 days;
   a column empty 99% of the time is pure cost, and investigating *is*
   in-progress work.
-- `♾️ persistent` is standing work that never completes (the app's own
-  development, say). It sits with the other non-flowing buckets rather than in
-  the To do → Done run, because nothing ever moves out of it, and it is
-  explicitly **not** terminal so it stays on every exported page.
 - `❌ cancelled` is terminal but shares the Done column. It needs to exist
   (7 uses) without owning a graveyard nobody scrolls to.
 - `‼️ priority` and `❓ question` are **flags on an orthogonal axis**, proven by
@@ -212,12 +217,7 @@ generated_by: workstreams
 
 ## ⚒️ Agency Code Review Telemetry
 
-### Labels
-
-`AI Crew`
-
-### Workstream
-
+`ai-crew`
 `ws:PR Telemetry Pipeline`
 
 ### Subtasks
@@ -247,10 +247,12 @@ previous format. Being a top-level block rather than a nested list item also
 means blank lines are ordinary paragraph breaks instead of something that
 terminates a list.
 
-**Labels moved into a `### Labels` subsection** when tasks took over `##`.
-They no longer group the page visually, so ordering does that job instead:
-tasks sharing a label set stay adjacent, in the order their group first
-appears. Without that, 61 tasks would be a flat, unscannable run of headings.
+**Labels and the workstream ref sit inline** directly under the task heading,
+one per line, with no `###` of their own — each is a single short token, and a
+heading per token buried the page in scaffolding. They no longer group the page
+visually, so ordering does that job instead: tasks sharing a label set stay
+adjacent, in the order their group first appears. Without that, 61 tasks would
+be a flat, unscannable run of headings.
 
 **There is no "touched today" badge.** The presence of an `### Event log`
 section is itself the signal that a task moved that day.

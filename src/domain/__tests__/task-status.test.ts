@@ -9,6 +9,7 @@ import {
   TASK_FLAGS,
   flagEmoji,
   parseStatusPrefix,
+  SELECTABLE_STATUSES,
 } from "../task-status";
 
 describe("BOARD_COLUMNS", () => {
@@ -18,9 +19,6 @@ describe("BOARD_COLUMNS", () => {
       "in_progress",
       "in_review",
       "blocked",
-      "parked",
-      "delegated",
-      "persistent",
       "done",
     ]);
   });
@@ -139,38 +137,59 @@ describe("parseStatusPrefix", () => {
   });
 });
 
-describe("persistent status", () => {
-  it("gets its own column, since ongoing work never flows to Done", () => {
-    expect(BOARD_COLUMNS.map((c) => c.id)).toContain("persistent");
-    expect(columnForStatus("persistent")).toBe("persistent");
+describe("retired statuses", () => {
+  it("keeps them in the vocabulary so stored rows and the archive still parse", () => {
+    // `🚗` appears 8 times in the real devlog. Dropping the status would leave
+    // its glyph stranded in the task title when the page is read back.
+    for (const retired of ["parked", "delegated", "persistent"] as const) {
+      expect(TASK_STATUSES).toContain(retired);
+      expect(statusEmoji(retired)).not.toBe("");
+      expect(statusFromEmoji(statusEmoji(retired))).toBe(retired);
+    }
   });
 
-  it("sits with the other non-flowing buckets, before Done", () => {
-    const ids = BOARD_COLUMNS.map((c) => c.id);
-    expect(ids.indexOf("persistent")).toBeGreaterThan(ids.indexOf("delegated"));
-    expect(ids.indexOf("persistent")).toBeLessThan(ids.indexOf("done"));
+  it("gives none of them a column of their own", () => {
+    const columns = BOARD_COLUMNS.map((c) => c.id) as string[];
+    for (const retired of ["parked", "delegated", "persistent"]) {
+      expect(columns).not.toContain(retired);
+    }
   });
 
-  it("is never terminal — that is the whole point of it", () => {
-    expect(isTerminalStatus("persistent")).toBe(false);
+  it("folds waiting-on-someone-else statuses into Blocked", () => {
+    // A task already holding one of these must still land somewhere visible;
+    // returning a column that no longer exists would drop it off the board
+    // entirely, with no way to reach it.
+    expect(columnForStatus("parked")).toBe("blocked");
+    expect(columnForStatus("delegated")).toBe("blocked");
   });
 
-  it("has a glyph that collides with no other", () => {
-    const glyph = statusEmoji("persistent");
-    expect(glyph).not.toBe("");
-    const others = TASK_STATUSES.filter((s) => s !== "persistent" && s !== "todo").map(statusEmoji);
-    expect(others).not.toContain(glyph);
+  it("folds persistent into In progress, since it is ongoing work", () => {
+    expect(columnForStatus("persistent")).toBe("in_progress");
   });
 
-  it("round-trips through its glyph", () => {
-    expect(statusFromEmoji(statusEmoji("persistent"))).toBe("persistent");
+  it("keeps none of them terminal", () => {
+    for (const retired of ["parked", "delegated", "persistent"] as const) {
+      expect(isTerminalStatus(retired)).toBe(false);
+    }
   });
 
-  it("parses off the front of a line like any other status", () => {
-    expect(parseStatusPrefix(`${statusEmoji("persistent")}workstreams development`)).toEqual({
-      status: "persistent",
-      flags: [],
-      text: "workstreams development",
-    });
+  it("offers none of them in the picker", () => {
+    // Selectable is narrower than the full vocabulary: retired statuses are
+    // readable and renderable, but no longer something new work can be put in.
+    for (const retired of ["parked", "delegated", "persistent"]) {
+      expect(SELECTABLE_STATUSES).not.toContain(retired);
+    }
+  });
+
+  it("still offers every status that owns a column, plus the folded live ones", () => {
+    expect([...SELECTABLE_STATUSES]).toEqual([
+      "todo",
+      "in_progress",
+      "in_review",
+      "blocked",
+      "investigating",
+      "done",
+      "cancelled",
+    ]);
   });
 });

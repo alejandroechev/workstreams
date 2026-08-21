@@ -228,6 +228,10 @@ try {
   check("the page carries the generated_by marker", isGeneratedByUs(page));
   check("open tasks appear", page.includes("offline sdk with mock storage"));
   check("each task owns a heading led by its status glyph", page.includes("## ⚒️ offline sdk with mock storage"));
+  check(
+    "labels sit inline under the heading, with no subheading of their own",
+    page.includes("`OfflineSDK`") && !page.includes("### Labels") && !page.includes("### Workstream"),
+  );
   check("subtasks sit under their own subheading", page.includes("### Subtasks") && page.includes("- ✅ Address first round"));
   check(
     "the day's log entries reach the page",

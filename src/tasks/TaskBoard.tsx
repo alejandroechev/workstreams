@@ -27,7 +27,7 @@ import type { BoardColumnId } from "../domain/task-status";
 import { toLocalDate, previousLocalDate, eventsForTask, sortEvents } from "../domain/tasks";
 import {
   BOARD_COLUMNS,
-  TASK_STATUSES,
+  SELECTABLE_STATUSES,
   statusEmoji,
   columnForStatus,
   isTerminalStatus,
@@ -94,6 +94,21 @@ function clearIfUnchanged(
 ): void {
   if (!ok) return;
   set((current) => (current === submitted ? "" : current));
+}
+
+/**
+ * Options for a status picker: the selectable set, plus whatever the row
+ * currently holds.
+ *
+ * The `current` part matters. A task still on a retired status would otherwise
+ * render a `<select>` whose value matches no option, which browsers resolve by
+ * silently showing the first one -- so the task would look like a To do until
+ * somebody touched it.
+ */
+function statusOptions(current: TaskStatus): TaskStatus[] {
+  const options: TaskStatus[] = [...SELECTABLE_STATUSES];
+  if (!options.includes(current)) options.push(current);
+  return options;
 }
 
 /** `HH:MM` in the user's own timezone. */
@@ -628,7 +643,7 @@ export function TaskBoard({
                 onChange={(e) => void board.setStatus(selected.id, e.target.value as TaskStatus)}
                 style={controlStyle}
               >
-                {TASK_STATUSES.map((status) => (
+                {statusOptions(selected.status).map((status) => (
                   <option key={status} value={status}>
                     {STATUS_LABEL[status]}
                     {columnForStatus(status) !== status ? ` (in ${columnForStatus(status)})` : ""}
@@ -719,7 +734,7 @@ export function TaskBoard({
                     }
                     style={{ ...controlStyle, width: 90 }}
                   >
-                    {TASK_STATUSES.map((status) => (
+                    {statusOptions(sub.status).map((status) => (
                       <option key={status} value={status}>
                         {STATUS_LABEL[status]}
                       </option>
@@ -882,7 +897,7 @@ const controlStyle: React.CSSProperties = {
 
 const columnHeaderRowStyle: React.CSSProperties = {
   display: "grid",
-  gridTemplateColumns: `repeat(${BOARD_COLUMNS.length}, minmax(96px, 1fr))`,
+  gridTemplateColumns: `repeat(${BOARD_COLUMNS.length}, minmax(120px, 1fr))`,
   gap: 6,
   marginBottom: 6,
 };
@@ -898,7 +913,7 @@ const laneHeadStyle: React.CSSProperties = { fontSize: 11, margin: "0 0 4px" };
 
 const laneRowStyle: React.CSSProperties = {
   display: "grid",
-  gridTemplateColumns: `repeat(${BOARD_COLUMNS.length}, minmax(96px, 1fr))`,
+  gridTemplateColumns: `repeat(${BOARD_COLUMNS.length}, minmax(120px, 1fr))`,
   gap: 6,
 };
 

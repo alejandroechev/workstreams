@@ -154,13 +154,17 @@ export function renderDevlogDay(input: RenderDevlogInput): string {
       const prefix = statusPrefix(task);
       lines.push(prefix ? `## ${prefix} ${task.title}` : `## ${task.title}`, "");
 
-      const names = labelNames(task, labels);
-      section("Labels", names.length ? [names.map((n) => `\`${n}\``).join(" · ")] : []);
-
+      // Labels and the workstream ref sit directly under the task heading with
+      // no `###` of their own: each is a single short token, and a heading per
+      // token buried the page in scaffolding.
       const ws = task.workstreamId
         ? workstreams.find((w) => w.id === task.workstreamId)
         : undefined;
-      section("Workstream", ws ? [`\`ws:${ws.name}\``] : []);
+      const refs = [
+        ...labelNames(task, labels).map((n) => `\`${n}\``),
+        ...(ws ? [`\`ws:${ws.name}\``] : []),
+      ];
+      if (refs.length) lines.push(...refs, "");
 
       section(
         "Subtasks",

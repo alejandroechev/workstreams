@@ -31,20 +31,20 @@ export const BOARD_COLUMNS = [
   { id: "in_progress", label: "In progress" },
   { id: "in_review", label: "In review" },
   { id: "blocked", label: "Blocked" },
-  { id: "parked", label: "Parked" },
-  { id: "delegated", label: "Delegated" },
-  // Standing work that never completes (the app's own development, say). It
-  // sits with the other non-flowing buckets rather than in the To do → Done
-  // run, because nothing ever moves out of it.
-  { id: "persistent", label: "Persistent" },
   { id: "done", label: "Done" },
 ] as const;
 
 export type BoardColumnId = (typeof BOARD_COLUMNS)[number]["id"];
 
 /**
- * Every status a task or subtask can hold. Supersets the columns: the two
- * extras (`investigating`, `cancelled`) render in a column they do not own.
+ * Every status a task or subtask can hold.
+ *
+ * A superset of the columns. `investigating` and `cancelled` render in a
+ * column they do not own, and `parked`, `delegated` and `persistent` are
+ * **retired**: they own no column and cannot be selected any more, but they
+ * stay in the vocabulary because rows already hold them and because `🚗`
+ * appears 8 times in the real devlog -- dropping the status would strand that
+ * glyph in the task title when a page is read back.
  */
 export const TASK_STATUSES = [
   "todo",
@@ -61,6 +61,22 @@ export const TASK_STATUSES = [
 
 export type TaskStatus = (typeof TASK_STATUSES)[number];
 
+/**
+ * Statuses offered when setting a task's status.
+ *
+ * Narrower than `TASK_STATUSES`: retired statuses stay readable and renderable
+ * but are no longer somewhere new work can be put.
+ */
+export const SELECTABLE_STATUSES = [
+  "todo",
+  "in_progress",
+  "in_review",
+  "blocked",
+  "investigating",
+  "done",
+  "cancelled",
+] as const satisfies ReadonlyArray<TaskStatus>;
+
 /** Statuses that end a task's life -- excluded from the board after their day. */
 const TERMINAL: ReadonlySet<TaskStatus> = new Set(["done", "cancelled"]);
 
@@ -68,6 +84,12 @@ const TERMINAL: ReadonlySet<TaskStatus> = new Set(["done", "cancelled"]);
 const FOLDED: Partial<Record<TaskStatus, BoardColumnId>> = {
   investigating: "in_progress",
   cancelled: "done",
+  // Retired columns fold rather than vanish. A task still holding one of these
+  // must land somewhere visible: returning a column that no longer exists
+  // would drop it off the board with no way to reach it again.
+  parked: "blocked",
+  delegated: "blocked",
+  persistent: "in_progress",
 };
 
 /**

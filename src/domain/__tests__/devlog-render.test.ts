@@ -142,11 +142,11 @@ describe("task headings", () => {
 describe("task subsections", () => {
   const base = { id: "a", title: "Offline SDK Read Mock Storage", labelIds: ["l1"] };
 
-  it("puts the linked workstream under its own heading", () => {
+  it("puts the linked workstream inline, with no heading of its own", () => {
     const task = makeTask({ ...base, workstreamId: "w1" });
     const out = render([task], [], [ws("w1", "Offline SDK")]);
-    expect(out).toContain("### Workstream");
     expect(out).toContain("`ws:Offline SDK`");
+    expect(out).not.toContain("### Workstream");
   });
 
   it("lists subtasks with their own glyphs", () => {
@@ -165,11 +165,23 @@ describe("task subsections", () => {
     expect(out).toContain("- Backend Base");
   });
 
-  it("lists labels so the page stays filterable without label headings", () => {
+  it("puts each label inline on its own line, with no heading", () => {
     const task = makeTask({ ...base, labelIds: ["l2", "l3"] });
     const out = render([task]);
-    expect(out).toContain("### Labels");
-    expect(out).toContain("`Workstreams` · `Bugs/Fixes`");
+    expect(out).toContain("`Workstreams`\n`Bugs/Fixes`");
+    expect(out).not.toContain("### Labels");
+  });
+
+  it("puts labels above the workstream, directly under the task heading", () => {
+    const task = makeTask({ ...base, status: "in_progress", labelIds: ["l1"], workstreamId: "w1" });
+    const out = render([task], [], [ws("w1", "Offline SDK")]);
+    expect(out).toContain(`## ⚒️ ${base.title}\n\n\`OfflineSDK\`\n\`ws:Offline SDK\`\n`);
+  });
+
+  it("emits nothing at all when a task has neither", () => {
+    const out = render([makeTask({ ...base, status: "in_progress", labelIds: [] })]);
+    expect(out).toContain(`## ⚒️ ${base.title}\n`);
+    expect(out).not.toContain("`");
   });
 
   it("lists links under their own heading", () => {
@@ -182,7 +194,7 @@ describe("task subsections", () => {
   it("omits every subsection a task has nothing for", () => {
     // At 60-odd open tasks, empty scaffolding would triple the page length.
     const out = render([makeTask({ ...base, labelIds: [] })]);
-    for (const heading of ["### Workstream", "### Subtasks", "### Notes", "### Links", "### Labels", "### Event log"]) {
+    for (const heading of ["### Subtasks", "### Notes", "### Links", "### Event log"]) {
       expect(out).not.toContain(heading);
     }
   });
@@ -191,6 +203,7 @@ describe("task subsections", () => {
     const task = makeTask({
       ...base,
       workstreamId: "w1",
+      labelIds: ["l1"],
       subtasks: [{ id: "s1", title: "sub", status: "todo" }],
       links: ["https://example/pr/1"],
       notes: "some context",
@@ -200,7 +213,7 @@ describe("task subsections", () => {
       [makeEvent({ id: "e1", taskId: "a", kind: "note", text: "logged", at: at(14) })],
       [ws("w1", "Offline SDK")],
     );
-    const order = ["### Labels", "### Workstream", "### Subtasks", "### Links", "### Notes", "### Event log"];
+    const order = ["### Subtasks", "### Links", "### Notes", "### Event log"];
     const positions = order.map((h) => out.indexOf(h));
     expect(positions).toEqual([...positions].sort((x, y) => x - y));
     expect(positions.every((p) => p > -1)).toBe(true);

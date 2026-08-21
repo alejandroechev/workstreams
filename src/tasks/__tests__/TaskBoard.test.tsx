@@ -66,7 +66,7 @@ describe("TaskBoard", () => {
   it("renders every column, including the empty ones", async () => {
     renderBoard();
     await screen.findByText("offline sdk with mock storage");
-    for (const id of ["todo", "in_progress", "in_review", "blocked", "parked", "delegated", "done"]) {
+    for (const id of ["todo", "in_progress", "in_review", "blocked", "done"]) {
       expect(screen.getByTestId(`board-column-${id}`)).toBeInTheDocument();
     }
   });
@@ -341,5 +341,61 @@ describe("slow writes do not eat newer drafts", () => {
       expect(await backend.listTaskEvents(task.id)).toHaveLength(1);
     });
     expect(input.value).toBe("second note in progress");
+  });
+});
+
+describe("retired statuses stay reachable", () => {
+  it("shows a task still on a retired status in the column it folds to", async () => {
+    // Parked/Delegated/Persistent lost their columns. A task holding one must
+    // land somewhere visible -- otherwise it is stranded on the board with no
+    // way to reach or re-triage it.
+    const parked = await backend.createTask("parked long ago");
+    const stored = (backend as unknown as { tasks: Map<string, { status: string }> }).tasks;
+    stored.get(parked.id)!.status = "parked";
+
+    render(<TaskBoard backend={backend} workstreams={[]} projects={[]} onClose={vi.fn()} />);
+    await screen.findByText("parked long ago");
+
+    const blocked = screen.getAllByTestId("lane-column-blocked");
+    expect(
+      blocked.some((c) => within(c).queryByText("parked long ago") !== null),
+    ).toBe(true);
+  });
+
+  it("keeps its own glyph rather than borrowing the column's", async () => {
+    const parked = await backend.createTask("still parked");
+    const stored = (backend as unknown as { tasks: Map<string, { status: string }> }).tasks;
+    stored.get(parked.id)!.status = "parked";
+
+    render(<TaskBoard backend={backend} workstreams={[]} projects={[]} onClose={vi.fn()} />);
+    const card = await screen.findByTestId(`task-card-${parked.id}`);
+    expect(card).toHaveTextContent("🚗");
+  });
+
+  it("offers the retired status in its own picker so the value is not silently rewritten", async () => {
+    // A <select> whose value matches no option shows the first one, which
+    // would make a parked task read as To do until somebody touched it.
+    const parked = await backend.createTask("still parked");
+    const stored = (backend as unknown as { tasks: Map<string, { status: string }> }).tasks;
+    stored.get(parked.id)!.status = "parked";
+
+    render(<TaskBoard backend={backend} workstreams={[]} projects={[]} onClose={vi.fn()} />);
+    await screen.findByText("still parked");
+    fireEvent.click(screen.getByTestId(`task-card-${parked.id}`));
+
+    expect(await screen.findByTestId("detail-status")).toHaveValue("parked");
+  });
+
+  it("does not offer retired statuses on a task that is not using one", async () => {
+    const task = await backend.createTask("normal task");
+    render(<TaskBoard backend={backend} workstreams={[]} projects={[]} onClose={vi.fn()} />);
+    await screen.findByText("normal task");
+    fireEvent.click(screen.getByTestId(`task-card-${task.id}`));
+
+    const select = (await screen.findByTestId("detail-status")) as HTMLSelectElement;
+    const values = [...select.options].map((o) => o.value);
+    expect(values).not.toContain("parked");
+    expect(values).not.toContain("delegated");
+    expect(values).not.toContain("persistent");
   });
 });

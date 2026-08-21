@@ -44,15 +44,7 @@ test.beforeEach(async ({ page }) => {
 
 test("the board opens from the sidebar and shows all seven columns", async ({ page }) => {
   await openBoard(page);
-  for (const id of [
-    "todo",
-    "in_progress",
-    "in_review",
-    "blocked",
-    "parked",
-    "delegated",
-    "done",
-  ]) {
+  for (const id of ["todo", "in_progress", "in_review", "blocked", "done"]) {
     await expect(page.locator(`[data-testid="board-column-${id}"]`)).toBeVisible();
   }
 });
@@ -408,27 +400,6 @@ test("a bound workstream offers Go to task instead of Create task", async ({ pag
   await expect(page.locator('[data-testid^="task-card-"]')).toHaveCount(1);
 });
 
-test("a task can be parked in the Persistent column", async ({ page }) => {
-  await openBoard(page);
-  await expect(page.locator('[data-testid="board-column-persistent"]')).toBeVisible();
-
-  await addTask(page, "workstreams development");
-  await page
-    .locator('[data-testid^="task-card-"]')
-    .first()
-    .dragTo(page.locator('[data-testid="lane-column-persistent"]').first());
-
-  await expect(page.locator('[data-testid="lane-column-persistent"]').first()).toContainText(
-    "workstreams development",
-  );
-
-  // Ongoing work never completes, so it must stay on the exported page.
-  await page.locator('[data-testid="devlog-preview"]').click();
-  await expect(page.locator('[data-testid="devlog-preview-content"]')).toContainText(
-    "## ♾️ workstreams development",
-  );
-});
-
 test("the notes box grows to fill the detail panel", async ({ page }) => {
   await openBoard(page);
   await addTask(page, "task with notes");
@@ -455,16 +426,7 @@ test("every column stays on screen with the detail panel open", async ({ page })
   await page.locator('[data-testid^="task-card-"]').first().click();
   await expect(page.locator('[data-testid="task-detail"]')).toBeVisible();
 
-  for (const id of [
-    "todo",
-    "in_progress",
-    "in_review",
-    "blocked",
-    "parked",
-    "delegated",
-    "persistent",
-    "done",
-  ]) {
+  for (const id of ["todo", "in_progress", "in_review", "blocked", "done"]) {
     // ratio 1: the default accepts ANY intersection, so a column clipped to
     // its first two letters would still pass.
     await expect(page.locator(`[data-testid="board-column-${id}"]`)).toBeInViewport({ ratio: 1 });

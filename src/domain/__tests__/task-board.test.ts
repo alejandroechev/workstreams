@@ -73,7 +73,7 @@ describe("groupByColumn", () => {
     const grouped = groupByColumn(realShapedBoard());
     expect(grouped.in_progress).toHaveLength(45);
     expect(grouped.todo).toHaveLength(5);
-    expect(grouped.parked).toHaveLength(0);
+    expect(grouped.done).toHaveLength(0);
   });
 
   it("places investigating in the in_progress column", () => {
@@ -163,7 +163,7 @@ describe("visibleTasks", () => {
   });
 
   it("never hides open work regardless of age", () => {
-    const old = makeTask({ id: "old", title: "x", status: "parked" });
+    const old = makeTask({ id: "old", title: "x", status: "blocked" });
     expect(visibleTasks([old], today).map((t) => t.id)).toEqual(["old"]);
   });
 });
