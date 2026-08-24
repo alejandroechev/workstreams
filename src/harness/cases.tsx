@@ -378,13 +378,16 @@ const CommentsNavigationCase: FC = () => {
     created_at: "2026-08-17T10:00:00Z",
     updated_at: "2026-08-17T10:00:00Z",
   } as const;
-  const comments: SessionFileComment[] = [
+  const seeded: SessionFileComment[] = [
     { ...base, id: "near-top", file: "src/example.ts", anchor_line_start: 3, anchor_line_end: 3, body: "NEAR_TOP note", author: "Eduardo Fernandez" },
     { ...base, id: "far-down", file: "src/example.ts", anchor_line_start: 48, anchor_line_end: 48, body: "FAR_DOWN note", author: "reviewer" },
     // Snapshot deliberately does NOT match line 5 -> must badge as drifted.
     { ...base, id: "drifted", file: "src/example.ts", anchor_line_start: 5, anchor_line_end: 5, anchor_text: "THIS_LINE_IS_GONE();", body: "DRIFTED note", author: "reviewer" },
     { ...base, id: "other-file", file: "src/other.ts", anchor_line_start: 2, anchor_line_end: 2, body: "OTHER_FILE note", author: "agent" },
+    // A reply, so deleting its root has to cascade.
+    { ...base, id: "far-down-reply", file: "src/example.ts", anchor_line_start: 48, anchor_line_end: 48, body: "REPLY note", author: "agent", parent_id: "far-down" },
   ];
+  const [comments, setComments] = useState<SessionFileComment[]>(seeded);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [openPath, setOpenPath] = useState<string | null>(null);
   const [revealLine, setRevealLine] = useState<number | undefined>(undefined);
@@ -409,6 +412,13 @@ const CommentsNavigationCase: FC = () => {
           setSelectedId(c.id);
           setOpenPath(c.file === "src/other.ts" ? pathB : pathA);
           setRevealLine(c.anchor_line_start);
+        }}
+        onDelete={(root) => {
+          setComments((cs) => cs.filter((c) => c.id !== root.id && c.parent_id !== root.id));
+          if (selectedId === root.id) {
+            setSelectedId(null);
+            setOpenPath(null);
+          }
         }}
       />
       <div style={{ flex: 1, minWidth: 0 }} data-testid="comments-editor-pane">

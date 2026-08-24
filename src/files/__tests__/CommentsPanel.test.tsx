@@ -181,3 +181,111 @@ describe("CommentsPanel", () => {
     expect(screen.queryByTestId("comments-drift-fresh-1")).not.toBeInTheDocument();
   });
 });
+
+describe("deleting from the list", () => {
+  it("offers no delete control when no handler is supplied", () => {
+    render(<CommentsPanel comments={[c({ id: "a1" })]} selectedId={null} onSelect={noop} />);
+    expect(screen.queryByTestId("comments-delete-a1")).not.toBeInTheDocument();
+  });
+
+  it("deletes the thread root it belongs to", () => {
+    const onDelete = vi.fn();
+    render(
+      <CommentsPanel
+        comments={[c({ id: "a1" })]}
+        selectedId={null}
+        onSelect={noop}
+        onDelete={onDelete}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId("comments-delete-a1"));
+    expect(onDelete).toHaveBeenCalledWith(expect.objectContaining({ id: "a1" }));
+  });
+
+  it("does not select the row when its delete button is clicked", () => {
+    // The button sits inside a clickable row; without stopPropagation the
+    // click would also navigate to the file being deleted from.
+    const onSelect = vi.fn();
+    const onDelete = vi.fn();
+    render(
+      <CommentsPanel
+        comments={[c({ id: "a1" })]}
+        selectedId={null}
+        onSelect={onSelect}
+        onDelete={onDelete}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId("comments-delete-a1"));
+    expect(onDelete).toHaveBeenCalled();
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it("offers delete on an imported thread too", () => {
+    // Imported rows are a local copy of somebody else's words -- deleting one
+    // here does not touch the source review, and these are exactly the
+    // comments that most need clearing out.
+    const onDelete = vi.fn();
+    render(
+      <CommentsPanel
+        comments={[c({ id: "ado-1", author: "Eduardo Fernandez" })]}
+        selectedId={null}
+        onSelect={noop}
+        onDelete={onDelete}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId("comments-delete-ado-1"));
+    expect(onDelete).toHaveBeenCalledWith(expect.objectContaining({ id: "ado-1" }));
+  });
+
+  it("offers delete on a resolved thread", () => {
+    const onDelete = vi.fn();
+    render(
+      <CommentsPanel
+        comments={[c({ id: "a1", status: "resolved" })]}
+        selectedId={null}
+        onSelect={noop}
+        onDelete={onDelete}
+      />,
+    );
+    expect(screen.getByTestId("comments-delete-a1")).toBeInTheDocument();
+  });
+
+  it("puts the control on roots only, never on replies", () => {
+    // Replies have no row of their own; deleting a root already cascades, so a
+    // per-reply control would be both unreachable and misleading.
+    const onDelete = vi.fn();
+    render(
+      <CommentsPanel
+        comments={[c({ id: "a1" }), c({ id: "r1", parent_id: "a1", author: "agent" })]}
+        selectedId={null}
+        onSelect={noop}
+        onDelete={onDelete}
+      />,
+    );
+    expect(screen.getByTestId("comments-delete-a1")).toBeInTheDocument();
+    expect(screen.queryByTestId("comments-delete-r1")).not.toBeInTheDocument();
+  });
+
+  it("names the reply count so a cascade is never a surprise", () => {
+    const onDelete = vi.fn();
+    render(
+      <CommentsPanel
+        comments={[
+          c({ id: "a1" }),
+          c({ id: "r1", parent_id: "a1", author: "agent" }),
+          c({ id: "r2", parent_id: "a1", author: "agent" }),
+        ]}
+        selectedId={null}
+        onSelect={noop}
+        onDelete={onDelete}
+      />,
+    );
+    expect(screen.getByTestId("comments-delete-a1")).toHaveAttribute(
+      "title",
+      expect.stringContaining("2 replies"),
+    );
+  });
+});

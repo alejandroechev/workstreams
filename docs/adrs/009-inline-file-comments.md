@@ -15,6 +15,28 @@ toggle (`hideResolvedComments`). Two rules:
 The toggle is one setting across both tabs: "only show me what is still open"
 is a property of how the user is working, not of which tab they are on.
 
+## Deleting from the Comments tab list
+
+The Comments panel is otherwise navigation-only — resolve, reply and edit live
+in the editor's view zone so there is one code path per mutation. **Delete is
+the exception**: it is cleanup rather than participation in a conversation, the
+list is where a thread whose file has moved or gone is actually discoverable,
+and clearing several handled threads one at a time through the editor means
+loading each file first.
+
+It is offered on **every** thread, including imported ones, and therefore uses
+the author-agnostic `delete_session_file_comment_thread`. Deleting an imported
+row removes a *local copy* of somebody else's words — the source review is
+untouched — and those are exactly the threads that most need clearing once
+handled. This follows the same reasoning as resolve: triage and cleanup are not
+authorship. The caller confirms first, and names the reply count so a cascade
+is never a surprise.
+
+The button stops click propagation, since the row itself navigates; without
+that, deleting also opens the file being deleted from. Deleting the thread
+currently open clears the editor pane, or it would keep showing a comment that
+no longer exists.
+
 ## Deleting a stale thread
 
 A comment whose anchor file no longer exists is unreachable — it cannot be read

@@ -2188,6 +2188,37 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
               // the buffer registry, so the path alone is enough.
               setCommentsNavPath(absolute);
             }}
+            onDelete={
+              workstreamId
+                ? (root) => {
+                    const replies = allComments.comments.filter(
+                      (c) => c.parent_id === root.id,
+                    ).length;
+                    const suffix = replies > 0 ? ` and its ${replies} repl${replies === 1 ? "y" : "ies"}` : "";
+                    if (!window.confirm(`Delete this comment${suffix}?`)) return;
+
+                    void backend
+                      .deleteSessionFileCommentThread(workstreamId, root.id)
+                      .then(() => {
+                        // Clear the open file when the thread being viewed is
+                        // the one deleted, or the pane keeps showing a comment
+                        // that no longer exists.
+                        if (selectedCommentId === root.id) {
+                          setSelectedCommentId(null);
+                          setCommentsNavPath(null);
+                        }
+                        return Promise.all([allComments.reload(), fileComments.reload()]);
+                      })
+                      .catch((e: unknown) => {
+                        // A silent failure here looks exactly like a delete
+                        // that worked but did not refresh.
+                        window.alert(
+                          `Could not delete the comment: ${e instanceof Error ? e.message : String(e)}`,
+                        );
+                      });
+                  }
+                : undefined
+            }
           />
           <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
             {!commentsFile && (

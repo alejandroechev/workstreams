@@ -63,8 +63,8 @@ project-aware workspace:
   select modified-side lines and use the comment toggle to create the same
   reviewer↔agent threads shown in the Files tab. A second toggle **hides
   resolved threads** so a heavily-reviewed file shows only what is still open,
-  and a comment whose file no longer exists can be deleted from the
-  load-failure view. Historical modes (Last commit,
+  and comments can be deleted straight from the Comments tab
+  list — or, when their file no longer exists, from the load-failure view. Historical modes (Last commit,
   Branch vs master, or a **custom target branch**) stay read-only and
   uncommentable because their modified side is a past commit, not a file on
   disk. The custom branch picker compares `target...HEAD` and remembers its

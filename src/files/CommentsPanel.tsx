@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import {
   ChatBubbleLeftRightIcon,
   ExclamationTriangleIcon,
+  TrashIcon,
 } from "@heroicons/react/24/outline";
 
 import type { SessionFileComment } from "../domain/file-comments";
@@ -29,6 +30,16 @@ export interface CommentsPanelProps {
   fileLines?: Record<string, string[] | undefined>;
   filters?: CommentFilters;
   onFiltersChange?: (filters: CommentFilters) => void;
+  /**
+   * Delete a whole thread, given its root. Optional; the control is hidden
+   * when absent so the panel stays usable in read-only contexts.
+   *
+   * Offered on **every** thread, not just this user's own. Deleting an
+   * imported row removes a local copy of somebody else's words -- the source
+   * review is untouched -- and those are exactly the threads that most need
+   * clearing out once handled. Confirmation is the caller's job.
+   */
+  onDelete?: (root: SessionFileComment) => void;
 }
 
 const DEFAULT_FILTERS: CommentFilters = { statuses: [], authors: [], text: "" };
@@ -37,10 +48,16 @@ const DEFAULT_FILTERS: CommentFilters = { statuses: [], authors: [], text: "" };
  * Left pane of the Repo Explorer **Comments tab**: every comment in the
  * workstream, grouped by file, one row per thread root.
  *
- * Deliberately **navigation-only** — no resolve/reply here. Those actions live
- * in the editor's view zone, so there is exactly one code path for mutations
- * and status changes. Resolved threads stay in the list (dimmed) rather than
- * disappearing under the cursor; the status filter decides visibility.
+ * Navigation-first: **no resolve or reply here**. Those actions live in the
+ * editor's view zone, so there is exactly one code path for editing a comment
+ * and for changing its status. Resolved threads stay in the list (dimmed)
+ * rather than disappearing under the cursor; the status filter decides
+ * visibility.
+ *
+ * Delete is the deliberate exception. It is cleanup rather than participation
+ * in a conversation, the list is where a thread whose file has moved or gone
+ * is actually discoverable, and clearing several handled threads one at a time
+ * through the editor means loading each file first.
  */
 export function CommentsPanel({
   comments,
@@ -50,6 +67,7 @@ export function CommentsPanel({
   fileLines,
   filters: controlledFilters,
   onFiltersChange,
+  onDelete,
 }: CommentsPanelProps) {
   const [localFilters, setLocalFilters] = useState<CommentFilters>(DEFAULT_FILTERS);
   const filters = controlledFilters ?? localFilters;
@@ -178,6 +196,26 @@ export function CommentsPanel({
                         {replyCount}
                       </span>
                     )}
+                    {onDelete && (
+                      <button
+                        data-testid={`comments-delete-${root.id}`}
+                        // The row itself navigates, so this must not bubble --
+                        // otherwise deleting also opens the file being deleted
+                        // from.
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onDelete(root);
+                        }}
+                        title={
+                          replyCount > 0
+                            ? `Delete this comment and its ${replyCount} replies`
+                            : "Delete this comment"
+                        }
+                        style={deleteButtonStyle}
+                      >
+                        <TrashIcon style={{ width: 11, height: 11 }} />
+                      </button>
+                    )}
                   </div>
                   <div
                     style={{
@@ -284,4 +322,14 @@ const emptyStyle: React.CSSProperties = {
   padding: "10px 8px",
   fontSize: 11,
   color: "#585b70",
+};
+
+const deleteButtonStyle: React.CSSProperties = {
+  background: "none",
+  border: "none",
+  color: "#6c7086",
+  cursor: "pointer",
+  padding: 0,
+  display: "inline-flex",
+  alignItems: "center",
 };
