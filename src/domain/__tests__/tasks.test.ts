@@ -11,6 +11,8 @@ import {
   toLocalDate,
   previousLocalDate,
   eventsOnDate,
+  previousWorkDay,
+  isWeekend,
 } from "../tasks";
 import type { Task, TaskEvent } from "../tasks";
 import type { Workstream } from "../types";
@@ -234,5 +236,60 @@ describe("eventsOnDate", () => {
 
   it("preserves order", () => {
     expect(eventsOnDate([onDay, nextDay, onDay], "2026-08-19")).toHaveLength(2);
+  });
+});
+
+describe("previousWorkDay", () => {
+  // Local construction throughout: a UTC-built date shifts the weekday in
+  // negative-offset zones and would silently test the wrong day.
+  const on = (y: number, m: number, d: number) => new Date(y, m, d, 9, 0).toISOString();
+
+  it("skips back over the weekend from a Monday", () => {
+    // Mon 2026-08-24 → Fri 2026-08-21. Exporting on Monday must write up
+    // Friday, not an empty Sunday.
+    expect(previousWorkDay(on(2026, 7, 24))).toBe("2026-08-21");
+  });
+
+  it("returns the previous day midweek", () => {
+    expect(previousWorkDay(on(2026, 7, 20))).toBe("2026-08-19");
+  });
+
+  it("returns Friday when run on a Saturday", () => {
+    expect(previousWorkDay(on(2026, 7, 22))).toBe("2026-08-21");
+  });
+
+  it("returns Friday when run on a Sunday", () => {
+    expect(previousWorkDay(on(2026, 7, 23))).toBe("2026-08-21");
+  });
+
+  it("returns Thursday when run on a Friday", () => {
+    expect(previousWorkDay(on(2026, 7, 21))).toBe("2026-08-20");
+  });
+
+  it("crosses a month boundary", () => {
+    expect(previousWorkDay(on(2026, 8, 1))).toBe("2026-08-31");
+  });
+
+  it("crosses a year boundary", () => {
+    expect(previousWorkDay(on(2027, 0, 1))).toBe("2026-12-31");
+  });
+
+  it("crosses a month boundary that lands on a weekend", () => {
+    // Mon 2026-06-01 → Fri 2026-05-29, skipping both the weekend and the
+    // month end in one step.
+    expect(previousWorkDay(on(2026, 5, 1))).toBe("2026-05-29");
+  });
+});
+
+describe("isWeekend", () => {
+  it("recognises Saturday and Sunday", () => {
+    expect(isWeekend("2026-08-22")).toBe(true);
+    expect(isWeekend("2026-08-23")).toBe(true);
+  });
+
+  it("treats weekdays as work days", () => {
+    for (const d of ["2026-08-21", "2026-08-24", "2026-08-25", "2026-08-26", "2026-08-27"]) {
+      expect(isWeekend(d)).toBe(false);
+    }
   });
 });

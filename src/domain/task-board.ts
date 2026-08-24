@@ -181,3 +181,14 @@ export function subtaskProgress(task: Task): SubtaskProgress {
     total: task.subtasks.length,
   };
 }
+
+/**
+ * Tasks that render in the In progress column.
+ *
+ * Keyed on the *column* rather than the raw status, so the statuses that fold
+ * into it (`investigating`, and the retired `persistent`) are included — an
+ * always-on "what am I doing" view that dropped them would hide live work.
+ */
+export function inProgressTasks(tasks: Task[]): Task[] {
+  return tasks.filter((task) => columnForStatus(task.status) === "in_progress");
+}

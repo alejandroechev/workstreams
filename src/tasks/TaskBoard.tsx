@@ -26,7 +26,7 @@ import type { Task } from "../domain/tasks";
 import type { BoardColumnId } from "../domain/task-status";
 import {
   toLocalDate,
-  previousLocalDate,
+  previousWorkDay,
   eventsForTask,
   eventsOnDate,
   sortEvents,
@@ -207,14 +207,14 @@ export function TaskBoard({
   /**
    * The day the export writes up.
    *
-   * Yesterday by default: the export normally runs at the start of a working
-   * day and covers the day just finished, so the page is complete rather than
-   * a snapshot taken mid-morning. Today is offered too, for writing up a day
-   * before it ends. The choice also decides which event-log entries and which
+   * The last **work day** by default: the export normally runs at the start of
+   * a working day and covers the one just finished, so on a Monday that means
+   * Friday rather than an empty Sunday. Today is offered too, for writing a day
+   * up before it ends -- and stays literal, since picking it on a Sunday means
+   * that Sunday. The choice also decides which event-log entries and which
    * completions belong on the page.
    */
-  const exportDate =
-    exportDay === "today" ? today : previousLocalDate(`${today}T12:00:00`);
+  const exportDate = exportDay === "today" ? today : previousWorkDay(`${today}T12:00:00`);
 
   const renderPage = () =>
     renderDevlogDay({
@@ -427,7 +427,7 @@ export function TaskBoard({
             style={controlStyle}
             title="Which day the devlog page covers"
           >
-            <option value="yesterday">Yesterday</option>
+            <option value="yesterday">Last work day</option>
             <option value="today">Today</option>
           </select>
           <span data-testid="devlog-day-label" style={{ color: "#6c7086", fontSize: 10 }}>

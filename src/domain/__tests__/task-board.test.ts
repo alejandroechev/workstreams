@@ -7,6 +7,7 @@ import {
   UNLABELLED_LANE_ID,
   statusForDrop,
   subtaskProgress,
+  inProgressTasks,
 } from "../task-board";
 import { makeTask, makeEvent } from "../tasks";
 import type { Task, Label, TaskEvent } from "../tasks";
@@ -255,5 +256,45 @@ describe("subtaskProgress", () => {
 
   it("reports zeroes for a task with no subtasks", () => {
     expect(subtaskProgress(makeTask({ id: "a", title: "x" }))).toEqual({ done: 0, total: 0 });
+  });
+});
+
+describe("inProgressTasks", () => {
+  it("selects only tasks that render in the In progress column", () => {
+    const tasks = [
+      makeTask({ id: "a", title: "doing", status: "in_progress" }),
+      makeTask({ id: "b", title: "waiting", status: "blocked" }),
+      makeTask({ id: "c", title: "later", status: "todo" }),
+    ];
+    expect(inProgressTasks(tasks).map((t) => t.id)).toEqual(["a"]);
+  });
+
+  it("includes statuses that fold into that column", () => {
+    // `investigating` and the retired `persistent` both render there, so an
+    // always-on view that dropped them would hide live work.
+    const tasks = [
+      makeTask({ id: "a", title: "digging", status: "investigating" }),
+      makeTask({ id: "b", title: "ongoing", status: "persistent" }),
+    ];
+    expect(inProgressTasks(tasks).map((t) => t.id)).toEqual(["a", "b"]);
+  });
+
+  it("excludes finished work even on its completion day", () => {
+    const tasks = [
+      makeTask({ id: "a", title: "done", status: "done", completedAt: new Date().toISOString() }),
+    ];
+    expect(inProgressTasks(tasks)).toEqual([]);
+  });
+
+  it("preserves board order", () => {
+    const tasks = [
+      makeTask({ id: "a", title: "first", status: "in_progress" }),
+      makeTask({ id: "b", title: "second", status: "in_progress" }),
+    ];
+    expect(inProgressTasks(tasks).map((t) => t.id)).toEqual(["a", "b"]);
+  });
+
+  it("returns an empty list rather than everything when nothing is in progress", () => {
+    expect(inProgressTasks([makeTask({ id: "a", title: "x", status: "todo" })])).toEqual([]);
   });
 });

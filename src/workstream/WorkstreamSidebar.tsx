@@ -33,6 +33,11 @@ interface Props {
   /** Opens the global task board. Optional so the sidebar stays renderable
    * without a backend (the board is owned by App, which has one). */
   onOpenTaskBoard?: () => void;
+  /**
+   * Always-on list of in-progress tasks, rendered under the Tasks button.
+   * Passed in as a node so the sidebar keeps no backend dependency.
+   */
+  inProgressTasks?: React.ReactNode;
   /** Create a task named after this workstream and open it on the board. */
   onCreateTaskForWorkstream?: (workstreamId: string) => void;
   /** Open the task bound to this workstream. */
@@ -139,6 +144,7 @@ export default function WorkstreamSidebar({
   loadedWsIds,
   onSelectWorkstream,
   onOpenTaskBoard,
+  inProgressTasks,
   onCreateTaskForWorkstream,
   onGoToTaskForWorkstream,
   workstreamsWithTasks,
@@ -767,6 +773,7 @@ export default function WorkstreamSidebar({
           <ClipboardDocumentListIcon style={{ width: 12, height: 12 }} />
           <span style={{ flex: 1, textAlign: "left" }}>Tasks</span>
         </button>
+        {inProgressTasks}
       </div>
 
       {/* ── REPOS (footer affordance) ──

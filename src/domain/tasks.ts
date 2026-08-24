@@ -189,6 +189,32 @@ export function toLocalDate(iso: string): string {
  * the next day in the stored ISO string, and slicing it would file the entry
  * under a day the user never worked.
  */
+/** Whether a `YYYY-MM-DD` falls on a Saturday or Sunday. */
+export function isWeekend(date: string): boolean {
+  const [y, m, d] = date.split("-").map(Number);
+  // Local construction on purpose: `new Date("2026-08-22")` parses as UTC and
+  // reports the wrong weekday in negative-offset zones.
+  const day = new Date(y, (m ?? 1) - 1, d ?? 1).getDay();
+  return day === 0 || day === 6;
+}
+
+/**
+ * The last work day before `iso`.
+ *
+ * The export normally runs at the start of a working day and writes up the one
+ * just finished — so on a Monday that means Friday, not an empty Sunday.
+ * Public holidays are not modelled; the user fixes those by hand.
+ */
+export function previousWorkDay(iso: string = new Date().toISOString()): string {
+  let date = previousLocalDate(iso);
+  // At most two steps back from any weekday, but bounded anyway so a bad input
+  // can never spin.
+  for (let i = 0; i < 7 && isWeekend(date); i += 1) {
+    date = previousLocalDate(`${date}T12:00:00`);
+  }
+  return date;
+}
+
 export const eventsOnDate = (events: TaskEvent[], date: string): TaskEvent[] =>
   events.filter((e) => toLocalDate(e.at) === date);
 

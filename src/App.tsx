@@ -7,6 +7,7 @@ import { fileBufferRegistry } from "./files/FileBufferRegistry";
 import WorkstreamSidebar from "./workstream/WorkstreamSidebar";
 import { TaskBoard } from "./tasks/TaskBoard";
 import { WorkstreamQuickNote } from "./tasks/WorkstreamQuickNote";
+import { InProgressTaskList } from "./tasks/InProgressTaskList";
 import { subscribeTasksChanged } from "./domain/task-events-bus";
 import ProjectCreateForm from "./workstream/ProjectCreateForm";
 import RepoCreateForm from "./workstream/RepoCreateForm";
@@ -1416,6 +1417,15 @@ export default function App() {
         onRetryRemove={handleRetryRemove}
         onDiscardWorkstream={handleDiscardWorkstream}
         onOpenTaskBoard={() => setShowTaskBoard(true)}
+        inProgressTasks={
+          <InProgressTaskList
+            backend={backend}
+            workstreams={workstreams}
+            activeWsId={activeWsId}
+            onOpenWorkstream={selectWorkstream}
+            onOpenTask={(taskId) => { setFocusTaskId(taskId); setShowTaskBoard(true); }}
+          />
+        }
         onCreateTaskForWorkstream={(wsId) => { setTaskForWsId(wsId); setShowTaskBoard(true); }}
         onGoToTaskForWorkstream={(wsId) => {
           const taskId = taskIdByWs.get(wsId);

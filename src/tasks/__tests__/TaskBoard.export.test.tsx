@@ -5,7 +5,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { TaskBoard } from "../TaskBoard";
 import { MemoryBackend } from "../../backend/memory-backend";
 import { isGeneratedByUs } from "../../domain/devlog-render";
-import { toLocalDate } from "../../domain/tasks";
+import { toLocalDate, previousWorkDay } from "../../domain/tasks";
 
 let backend: MemoryBackend;
 
@@ -68,11 +68,10 @@ describe("devlog export", () => {
 
   it("surfaces the warning when it had to write alongside a hand-written page", async () => {
     // Reproduces the real hazard: a year of hand-written days share the folder.
-    // Seeded at the day the export actually targets (yesterday), not today.
-    const yesterday = new Date();
-    yesterday.setDate(yesterday.getDate() - 1);
-    const pad = (n: number) => String(n).padStart(2, "0");
-    const stamp = `${yesterday.getFullYear()}-${pad(yesterday.getMonth() + 1)}-${pad(yesterday.getDate())}`;
+    // Seeded at the day the export actually targets. Computing "yesterday" by
+    // hand here broke the moment the default became the last WORK day: on a
+    // Monday the export writes Friday and never touches the seeded file.
+    const stamp = previousWorkDay(new Date().toISOString());
     backend._devlogFiles.set(
       `/wiki/devlog/fy2027/${stamp}.md`,
       "## AudioTranscoding\n- 👁️Waiting on Marcus\n",
@@ -215,5 +214,38 @@ describe("choosing which day to export", () => {
     await waitFor(() =>
       expect(screen.getByTestId("devlog-preview-content")).toHaveTextContent("logged right now"),
     );
+  });
+});
+
+describe("the default export day skips weekends", () => {
+  it("writes up Friday when opened on a Monday", async () => {
+    // Mon 2026-08-24. Defaulting to "yesterday" would target an empty Sunday.
+    renderBoard({ today: "2026-08-24" });
+    await screen.findByText("offline sdk with mock storage");
+    expect(screen.getByTestId("devlog-day-label")).toHaveTextContent("2026-08-21");
+
+    fireEvent.click(screen.getByTestId("devlog-export"));
+    await waitFor(() => expect(backend._devlogFiles.size).toBe(1));
+    expect([...backend._devlogFiles.keys()][0]).toContain("2026-08-21.md");
+  });
+
+  it("writes up Friday when opened on a Sunday", async () => {
+    renderBoard({ today: "2026-08-23" });
+    await screen.findByText("offline sdk with mock storage");
+    expect(screen.getByTestId("devlog-day-label")).toHaveTextContent("2026-08-21");
+  });
+
+  it("still means yesterday midweek", async () => {
+    renderBoard({ today: "2026-08-20" });
+    await screen.findByText("offline sdk with mock storage");
+    expect(screen.getByTestId("devlog-day-label")).toHaveTextContent("2026-08-19");
+  });
+
+  it("leaves Today alone — that is a literal choice, not a work-day one", async () => {
+    // Picking Today on a Sunday must write up that Sunday.
+    renderBoard({ today: "2026-08-23" });
+    await screen.findByText("offline sdk with mock storage");
+    fireEvent.change(screen.getByTestId("devlog-day"), { target: { value: "today" } });
+    expect(screen.getByTestId("devlog-day-label")).toHaveTextContent("2026-08-23");
   });
 });

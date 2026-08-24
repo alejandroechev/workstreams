@@ -110,6 +110,23 @@ authoritative guard.
 The quick-note picker survives for exactly those pre-existing rows: picking the
 first silently would file notes under the wrong task.
 
+### The in-progress list
+
+The sidebar carries an always-on list of in-progress tasks under the Tasks
+button, so "what am I doing right now" is answerable without opening the board.
+It mirrors the workstream-row style because it sits directly beneath that list
+and reads as part of the same column.
+
+It keys on the **column** rather than the raw status, so statuses that fold into
+In progress (`investigating`, and the retired `persistent`) are included — an
+always-on view that dropped them would hide live work.
+
+Clicking a row navigates to the bound workstream, since that is where the work
+happens; a task with no workstream falls back to opening it on the board rather
+than being inert. The list is capped at roughly three rows and scrolls: with 45
+tasks in progress, letting it grow would push the workstream list off screen.
+It shows an empty state rather than collapsing, so the sidebar does not jump.
+
 ### Repos are derived, never stored
 
 A task's repos come from its attached workstream. Repo is a board *filter*, not
@@ -200,10 +217,12 @@ navigated to.
 The generated page is written into the same wiki folder with the same
 `YYYY-MM-DD.md` naming, so the archive stays one continuous searchable series.
 
-The export writes up **yesterday by default**: it normally runs at the start of
-a working day and covers the day just finished, so the page is complete rather
-than a snapshot taken mid-morning. **Today** is offered too, for writing a day
-up before it ends. The chosen date also decides which event-log entries and
+The export writes up the **last work day** by default: it normally runs at the
+start of a working day and covers the one just finished, so the page is
+complete rather than a snapshot taken mid-morning — and on a Monday that means
+Friday rather than an empty Sunday. Public holidays are not modelled; those are
+fixed by hand. **Today** stays literal: picking it on a Sunday writes up that
+Sunday. The chosen date also decides which event-log entries and
 which completions belong on the page, so the two exports genuinely differ; the
 resolved date is shown next to the picker so it is never a guess, and an open
 preview re-renders when the choice changes rather than leaving a stale page up.

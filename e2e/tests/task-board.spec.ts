@@ -37,6 +37,15 @@ async function addTask(page: Page, title: string) {
   await expect(page.getByText(title, { exact: true })).toBeVisible();
 }
 
+/** The date the export defaults to: yesterday, walked back over weekends. */
+function lastWorkDayStamp(): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const d = new Date();
+  d.setDate(d.getDate() - 1);
+  while (d.getDay() === 0 || d.getDay() === 6) d.setDate(d.getDate() - 1);
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
 test.beforeEach(async ({ page }) => {
   await configureInvokeHandlers(page);
   await page.goto("/");
@@ -342,7 +351,7 @@ test("no quick note appears for a workstream with no task", async ({ page }) => 
   await expect(page.locator('[data-testid="quick-note"]')).toHaveCount(0);
 });
 
-test("the exported page defaults to yesterday and uses the sectioned format", async ({ page }) => {
+test("the exported page defaults to the last work day and uses the sectioned format", async ({ page }) => {
   await openBoard(page);
   await addTask(page, "Agency Code Review Telemetry");
   await page.locator('[data-testid^="task-card-"]').first().click();
@@ -357,11 +366,9 @@ test("the exported page defaults to yesterday and uses the sectioned format", as
   await page.locator('[data-testid="devlog-preview"]').click();
   const preview = page.locator('[data-testid="devlog-preview-content"]');
 
-  // Yesterday, because the export runs before the new day's work starts.
-  const yesterday = new Date();
-  yesterday.setDate(yesterday.getDate() - 1);
-  const pad = (n: number) => String(n).padStart(2, "0");
-  const stamp = `${yesterday.getFullYear()}-${pad(yesterday.getMonth() + 1)}-${pad(yesterday.getDate())}`;
+  // The last work day, because the export runs before the new day's work
+  // starts -- and on a Monday that means Friday, not an empty Sunday.
+  const stamp = lastWorkDayStamp();
   await expect(preview).toContainText(`date: ${stamp}`);
   await expect(preview).toContainText(`# ${stamp}`);
 
@@ -443,15 +450,14 @@ test("either day can be exported, and the preview follows the choice", async ({ 
   const pad = (n: number) => String(n).padStart(2, "0");
   const stamp = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
   const now = new Date();
-  const yesterday = new Date();
-  yesterday.setDate(yesterday.getDate() - 1);
+  const lastWorkDay = lastWorkDayStamp();
 
   const preview = page.locator('[data-testid="devlog-preview-content"]');
   await page.locator('[data-testid="devlog-preview"]').click();
 
-  // Defaults to yesterday, so an entry logged just now is correctly absent.
-  await expect(page.locator('[data-testid="devlog-day-label"]')).toHaveText(stamp(yesterday));
-  await expect(preview).toContainText(`# ${stamp(yesterday)}`);
+  // Defaults to the last work day, so an entry logged just now is absent.
+  await expect(page.locator('[data-testid="devlog-day-label"]')).toHaveText(lastWorkDay);
+  await expect(preview).toContainText(`# ${lastWorkDay}`);
   await expect(preview).not.toContainText("logged just now");
 
   // Switching re-renders the open preview rather than leaving a stale page up.
@@ -473,4 +479,56 @@ test("the activity feed shows today, with earlier entries a click away", async (
   await expect(feed).toContainText("today's entry");
   // Everything here is from today, so there is nothing to hide behind a toggle.
   await expect(page.locator('[data-testid="event-show-all"]')).toHaveCount(0);
+});
+
+test("in-progress tasks are always visible under the Tasks button", async ({ page }) => {
+  const row = await createWorkstream(page, "offline-sdk-ws");
+  await row.hover();
+  await row.locator('[data-testid^="ws-actions-"]').click();
+  await page.locator('[data-testid="action-create-task"]').click();
+
+  await page.locator('[data-testid="detail-title"]').fill("Offline SDK Read Mock Storage");
+  await page.locator('[data-testid="detail-title"]').press("Enter");
+  await page.locator('[data-testid="detail-status"]').selectOption("in_progress");
+  await page.locator('[data-testid="board-close"]').click();
+
+  // The list is in the sidebar, not behind the board, and reachable at a real
+  // viewport size rather than merely present in the DOM.
+  const list = page.locator('[data-testid="in-progress-list"]');
+  await expect(list).toBeVisible();
+  const entry = list.locator('[data-testid^="in-progress-task-"]');
+  await expect(entry).toBeVisible();
+  await expect(entry).toContainText("Offline SDK Read Mock Storage");
+  await expect(entry).toContainText("ws:offline-sdk-ws");
+
+  // Clicking navigates to the bound workstream.
+  await entry.click();
+  await expect(entry).toHaveAttribute("data-active", "true");
+});
+
+test("the in-progress list stays put and drops finished work", async ({ page }) => {
+  await openBoard(page);
+  await addTask(page, "a task in flight");
+  await page.locator('[data-testid^="task-card-"]').first().click();
+  await page.locator('[data-testid="detail-status"]').selectOption("in_progress");
+  await page.locator('[data-testid="board-close"]').click();
+
+  const list = page.locator('[data-testid="in-progress-list"]');
+  await expect(list.locator('[data-testid^="in-progress-task-"]')).toHaveCount(1);
+
+  // Finishing it must remove the row without the app being reloaded.
+  await page.locator('[data-testid="task-board-button"]').click();
+  await page.locator('[data-testid^="task-card-"]').first().click();
+  await page.locator('[data-testid="detail-status"]').selectOption("done");
+  await page.locator('[data-testid="board-close"]').click();
+
+  await expect(list.locator('[data-testid^="in-progress-task-"]')).toHaveCount(0);
+  // Always on: it shows an empty state rather than collapsing.
+  await expect(page.locator('[data-testid="in-progress-empty"]')).toBeVisible();
+});
+
+test("the export day picker says Last work day", async ({ page }) => {
+  await openBoard(page);
+  await expect(page.locator('[data-testid="devlog-day"]')).toHaveValue("yesterday");
+  await expect(page.locator('[data-testid="devlog-day-label"]')).toHaveText(lastWorkDayStamp());
 });
