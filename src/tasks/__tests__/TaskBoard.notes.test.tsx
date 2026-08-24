@@ -268,3 +268,97 @@ describe("the activity feed is scoped to today", () => {
     await waitFor(() => expect(screen.getByTestId("event-feed")).toHaveTextContent("just now"));
   });
 });
+
+describe("multi-line log entries", () => {
+  it("uses a textarea so Enter is a newline", async () => {
+    await openTask();
+    const box = await screen.findByTestId("log-input");
+    expect(box.tagName).toBe("TEXTAREA");
+  });
+
+  it("does not commit on a bare Enter", async () => {
+    // Enter must insert a newline, or an entry could never hold more than one
+    // line -- which is the whole point of the change.
+    const task = await openTask();
+    const box = (await screen.findByTestId("log-input")) as HTMLTextAreaElement;
+
+    fireEvent.change(box, { target: { value: "line one" } });
+    fireEvent.keyDown(box, { key: "Enter" });
+
+    await new Promise((r) => setTimeout(r, 20));
+    expect(await backend.listTaskEvents(task.id)).toEqual([]);
+    expect(box.value).toBe("line one");
+  });
+
+  it("commits on Cmd+Enter", async () => {
+    const task = await openTask();
+    const box = await screen.findByTestId("log-input");
+
+    fireEvent.change(box, { target: { value: "first\nsecond" } });
+    fireEvent.keyDown(box, { key: "Enter", metaKey: true });
+
+    await waitFor(async () => {
+      expect((await backend.listTaskEvents(task.id)).map((e) => e.text)).toEqual(["first\nsecond"]);
+    });
+  });
+
+  it("commits on Ctrl+Enter too, for the Windows build", async () => {
+    const task = await openTask();
+    const box = await screen.findByTestId("log-input");
+
+    fireEvent.change(box, { target: { value: "typed on windows" } });
+    fireEvent.keyDown(box, { key: "Enter", ctrlKey: true });
+
+    await waitFor(async () => {
+      expect((await backend.listTaskEvents(task.id))[0].text).toBe("typed on windows");
+    });
+  });
+
+  it("still commits from the button", async () => {
+    const task = await openTask();
+    fireEvent.change(await screen.findByTestId("log-input"), {
+      target: { value: "via the button\nwith a second line" },
+    });
+    fireEvent.click(screen.getByTestId("log-submit"));
+
+    await waitFor(async () => {
+      expect((await backend.listTaskEvents(task.id))[0].text).toBe(
+        "via the button\nwith a second line",
+      );
+    });
+  });
+
+  it("clears the box after a successful commit", async () => {
+    await openTask();
+    const box = (await screen.findByTestId("log-input")) as HTMLTextAreaElement;
+    fireEvent.change(box, { target: { value: "one\ntwo" } });
+    fireEvent.keyDown(box, { key: "Enter", metaKey: true });
+
+    await waitFor(() => expect(box.value).toBe(""));
+  });
+
+  it("preserves the newlines when rendering the entry back", async () => {
+    // Collapsing them in the feed would make a multi-line entry look like it
+    // had been mangled on save.
+    // Seed before rendering: openTask() renders, so adding a second render
+    // here would duplicate every test id.
+    const task = await backend.createTask("multi-line host");
+    const event = await backend.addTaskEvent(task.id, "note", "first line\nsecond line");
+
+    renderBoard();
+    await screen.findByText("multi-line host");
+    fireEvent.click(screen.getByTestId(`task-card-${task.id}`));
+
+    const body = await screen.findByTestId(`event-text-${event.id}`);
+    expect(body.style.whiteSpace).toBe("pre-wrap");
+    expect(body).toHaveTextContent("first line");
+    expect(body).toHaveTextContent("second line");
+  });
+
+  it("grows with the content rather than staying one line", async () => {
+    await openTask();
+    const box = await screen.findByTestId("log-input");
+    expect(box.style.resize).toBe("none");
+    expect(Number.parseInt(box.style.maxHeight, 10)).toBeGreaterThan(0);
+  });
+});

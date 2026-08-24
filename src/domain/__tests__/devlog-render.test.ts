@@ -361,3 +361,79 @@ describe("empty days", () => {
     expect(out.endsWith("\n\n")).toBe(false);
   });
 });
+
+describe("multi-line log entries", () => {
+  const task = makeTask({ id: "a", title: "task", labelIds: ["l1"] });
+
+  it("timestamps the first line and leaves continuations unprefixed", () => {
+    // One event, one timestamp. Repeating `- _14:05_ —` down the page would
+    // read as several events that never happened.
+    const events = [
+      makeEvent({
+        id: "e1",
+        taskId: "a",
+        kind: "note",
+        text: "Sebastian has a PR with the write path.\nBob is pushing to get it checked in.",
+        at: at(14, 5),
+      }),
+    ];
+    const out = render([task], events);
+    expect(out).toContain(
+      "- _14:05_ — Sebastian has a PR with the write path.\n  Bob is pushing to get it checked in.",
+    );
+  });
+
+  it("never double-bullets an entry that already contains a list", () => {
+    // Same failure the notes field had: prefixing a line that starts with
+    // `- ` produced `- - Moving the miner logic`.
+    const events = [
+      makeEvent({
+        id: "e1",
+        taskId: "a",
+        kind: "note",
+        text: "Plan:\n- split the PR\n- land protocol first",
+        at: at(9),
+      }),
+    ];
+    const out = render([task], events);
+    expect(out).toContain("  - split the PR");
+    expect(out).not.toContain("- - split");
+  });
+
+  it("keeps a blank line inside an entry from breaking the list", () => {
+    // A blank line terminates a markdown list, which would detach everything
+    // after it from the entry it belongs to.
+    const events = [
+      makeEvent({ id: "e1", taskId: "a", kind: "note", text: "first\n\nsecond", at: at(9) }),
+    ];
+    const out = render([task], events);
+    const lines = out.split("\n");
+    const start = lines.findIndex((l) => l.includes("first"));
+    expect(lines[start + 1].trim()).not.toBe("");
+    expect(out).toContain("second");
+  });
+
+  it("trims trailing whitespace on continuation lines", () => {
+    const events = [
+      makeEvent({ id: "e1", taskId: "a", kind: "note", text: "one\ntwo   ", at: at(9) }),
+    ];
+    expect(render([task], events)).toContain("  two\n");
+  });
+
+  it("still renders a single-line entry exactly as before", () => {
+    const events = [
+      makeEvent({ id: "e1", taskId: "a", kind: "note", text: "Preparing demo", at: at(16, 19) }),
+    ];
+    expect(render([task], events)).toContain("- _16:19_ — Preparing demo");
+  });
+
+  it("keeps entries distinct when several are multi-line", () => {
+    const events = [
+      makeEvent({ id: "e1", taskId: "a", kind: "note", text: "first\nline two", at: at(9) }),
+      makeEvent({ id: "e2", taskId: "a", kind: "note", text: "second\nline two", at: at(11) }),
+    ];
+    const out = render([task], events);
+    expect(out).toContain("- _09:00_ — first");
+    expect(out).toContain("- _11:00_ — second");
+  });
+});

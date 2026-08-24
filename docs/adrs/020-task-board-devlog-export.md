@@ -227,6 +227,26 @@ which completions belong on the page, so the two exports genuinely differ; the
 resolved date is shown next to the picker so it is never a guess, and an open
 preview re-renders when the choice changes rather than leaving a stale page up.
 
+**A log entry can hold multiple lines.** Measured against real use, the two
+fields had drifted into different jobs — notes averaged 301 chars of narrative
+state, while 4 of 6 log entries were a bare URL — and the reason long form never
+landed in the timeline was mechanical, not conceptual: the box was a single-line
+input that committed on Enter. It is now a textarea that commits on
+`Cmd/Ctrl+Enter`, so a paragraph can be timestamped without giving up the
+mutable scratchpad. Blur-commit was rejected: clicking away must never silently
+append a draft to an append-only list.
+
+Notes stayed exactly as they are. One real note is a 20-line nested backlog
+with `✅` marks ticked off in place — a living document that append-only would
+have destroyed.
+
+A multi-line entry exports as **one timestamped paragraph**, continuation lines
+indented to the bullet's content column. Prefixing each line with its own
+`- _14:05_ —` would read as several events that never happened, and prefixing
+with `- ` would re-create the double-bullet bug on an entry that already
+contains a list. Blank lines inside an entry are dropped, since a blank line
+terminates a markdown list.
+
 The in-app activity feed shows **today's entries only**. It is a working view
 of what has happened so far, not an archive — earlier days have already been
 written up. Older entries stay reachable behind a `N earlier — show all`

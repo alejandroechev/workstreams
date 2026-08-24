@@ -532,3 +532,40 @@ test("the export day picker says Last work day", async ({ page }) => {
   await expect(page.locator('[data-testid="devlog-day"]')).toHaveValue("yesterday");
   await expect(page.locator('[data-testid="devlog-day-label"]')).toHaveText(lastWorkDayStamp());
 });
+
+test("a log entry can hold multiple lines and reaches the exported page", async ({ page }) => {
+  await openBoard(page);
+  await addTask(page, "Offline SDK Write Path");
+  await page.locator('[data-testid^="task-card-"]').first().click();
+
+  const box = page.locator('[data-testid="log-input"]');
+  await box.click();
+  await box.type("Sebastian has a PR with the write path.");
+  await box.press("Enter");
+  await box.type("Plan:");
+  await box.press("Enter");
+  await box.type("- work on his feature branch");
+
+  // Enter is a newline, so nothing has been logged yet.
+  await expect(page.locator('[data-testid="event-feed"]')).not.toContainText("Sebastian");
+  await expect(box).toHaveValue(
+    "Sebastian has a PR with the write path.\nPlan:\n- work on his feature branch",
+  );
+
+  // Cmd/Ctrl+Enter commits.
+  await box.press("ControlOrMeta+Enter");
+  await expect(box).toHaveValue("");
+
+  const feed = page.locator('[data-testid="event-feed"]');
+  await expect(feed).toContainText("Sebastian has a PR with the write path.");
+  await expect(feed).toContainText("work on his feature branch");
+
+  // The export keeps one timestamp for the entry and never double-bullets a
+  // line that is already a list item.
+  await page.locator('[data-testid="devlog-day"]').selectOption("today");
+  await page.locator('[data-testid="devlog-preview"]').click();
+  const preview = page.locator('[data-testid="devlog-preview-content"]');
+  await expect(preview).toContainText("Sebastian has a PR with the write path.");
+  await expect(preview).toContainText("work on his feature branch");
+  await expect(preview).not.toContainText("- - work on");
+});

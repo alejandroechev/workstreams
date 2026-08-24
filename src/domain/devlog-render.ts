@@ -188,9 +188,21 @@ export function renderDevlogDay(input: RenderDevlogInput): string {
       // which is why there is no separate badge on the heading.
       section(
         "Event log",
-        sortEvents(logByTask.get(task.id) ?? []).map((entry) => {
+        sortEvents(logByTask.get(task.id) ?? []).flatMap((entry) => {
           const time = new Date(entry.at);
-          return `- _${pad(time.getHours())}:${pad(time.getMinutes())}_ — ${entry.text}`;
+          const stamp = `_${pad(time.getHours())}:${pad(time.getMinutes())}_`;
+          const [first, ...rest] = entry.text.split("\n");
+          // One event, one timestamp. Continuation lines are indented to the
+          // bullet's content column so markdown keeps them inside the same
+          // list item -- prefixing each with its own `- _14:05_ —` would read
+          // as several events that never happened, and prefixing with `- `
+          // would double-bullet an entry that already contains a list.
+          return [
+            `- ${stamp} — ${first.trimEnd()}`,
+            // Blank lines are dropped rather than emitted: a blank line ends a
+            // markdown list, detaching everything after it from its entry.
+            ...rest.map((line) => line.trimEnd()).filter(Boolean).map((line) => `  ${line}`),
+          ];
         }),
       );
     }

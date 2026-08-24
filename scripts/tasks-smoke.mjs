@@ -158,6 +158,16 @@ try {
   );
   insertEvent.run("e1", "t1", "note", "picked this back up after the review", "manual", ts);
   insertEvent.run("e2", "t1", "status", "moved to in review", "auto", ts);
+  // Long form lives in the log now, so an entry can span lines and carry its
+  // own markdown list.
+  insertEvent.run(
+    "e3",
+    "t1",
+    "note",
+    "Plan for now:\n- work on the feature branch\n- reuse existing read",
+    "manual",
+    ts,
+  );
 
   check(
     "a subtask keeps its own status rather than a checkbox",
@@ -246,6 +256,12 @@ try {
   check(
     "a note that already contains bullets is never double-bulleted",
     !page.includes("- - "),
+  );
+  check(
+    "a multi-line log entry keeps one timestamp and its own list",
+    page.includes("- _14:05_ — Plan for now:") &&
+      page.includes("  - work on the feature branch") &&
+      !page.includes("- - work on the feature branch"),
   );
   check("auto events stay out of the page", !page.includes("moved to in review"));
   check(

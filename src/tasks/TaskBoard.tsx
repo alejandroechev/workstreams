@@ -865,11 +865,16 @@ export function TaskBoard({
                       {localClock(event.at)}
                     </span>
                     <span
+                      data-testid={`event-text-${event.id}`}
                       style={{
                         flex: 1,
                         fontSize: 11,
                         fontStyle: event.source === "auto" ? "italic" : "normal",
                         color: event.source === "auto" ? "#6c7086" : "#cdd6f4",
+                        // Entries can hold newlines now; collapsing them here
+                        // would make a multi-line entry look mangled on save.
+                        whiteSpace: "pre-wrap",
+                        wordBreak: "break-word",
                       }}
                     >
                       {event.text}
@@ -888,22 +893,41 @@ export function TaskBoard({
                 ))}
               </div>
               <div style={{ display: "flex", gap: 4, marginTop: 4 }}>
-                <input
+                <textarea
                   data-testid="log-input"
                   value={noteText}
-                  placeholder="Log what just happened"
+                  placeholder="Log what just happened (⌘⏎ to log)"
+                  rows={Math.min(6, Math.max(1, noteText.split("\n").length))}
                   onChange={(e) => setNoteText(e.target.value)}
                   onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      void board.addNote(selected.id, noteText).then((ok) => clearIfUnchanged(ok, setNoteText, noteText));
+                    // Enter inserts a newline; the log holds long form now.
+                    // Cmd/Ctrl+Enter commits, matching every chat and PR box.
+                    // Deliberately NOT blur-commit: clicking away must never
+                    // silently append a draft to an append-only list.
+                    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                      e.preventDefault();
+                      void board
+                        .addNote(selected.id, noteText)
+                        .then((ok) => clearIfUnchanged(ok, setNoteText, noteText));
                     }
                   }}
-                  style={{ ...controlStyle, flex: 1 }}
+                  style={{
+                    ...controlStyle,
+                    flex: 1,
+                    // Grows with the content up to a few rows, then scrolls:
+                    // the common case is still a one-line URL drop.
+                    maxHeight: 120,
+                    resize: "none",
+                    cursor: "text",
+                    fontFamily: "inherit",
+                    lineHeight: 1.4,
+                  }}
                 />
                 <button
                   data-testid="log-submit"
                   onClick={() => void board.addNote(selected.id, noteText).then((ok) => clearIfUnchanged(ok, setNoteText, noteText))}
-                  style={controlStyle}
+                  style={{ ...controlStyle, alignSelf: "flex-start" }}
+                  title="Log this entry (⌘⏎)"
                 >
                   Log
                 </button>
