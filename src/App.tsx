@@ -1755,6 +1755,7 @@ export default function App() {
         <ChangeWorktreeForm
           workstream={changeWorktreeTarget}
           tiles={changeWorktreeTiles}
+          projects={projects}
           onSubmit={handleChangeWorktreeSubmit}
           onCancel={() => setChangeWorktreeTarget(null)}
         />

@@ -521,3 +521,118 @@ describe("MemoryBackend", () => {
     });
   });
 });
+
+describe("MemoryBackend switching repo via change-worktree", () => {
+  let backend: MemoryBackend;
+  beforeEach(() => {
+    backend = new MemoryBackend();
+  });
+
+  it("moves the workstream to the project that owns the chosen directory", async () => {
+    // Switching worktree and switching repo are the same gesture; leaving
+    // project_id behind would render the wrong repo colour and group the
+    // workstream under a repo it no longer lives in.
+    const waimea = await backend.createProject("waimea", "/Code/waimea");
+    const sdk = await backend.createProject("sdk", "/Code/sdk");
+    const ws = await backend.createWorkstream("WS", "/Code/waimea", { projectId: waimea.id });
+
+    const result = await backend.changeWorkstreamWorktree(ws.id, "switch_existing", {
+      directory: "/Code/sdk",
+    });
+
+    expect(result.workstream.project_id).toBe(sdk.id);
+    expect((await backend.listWorkstreams())[0].project_id).toBe(sdk.id);
+  });
+
+  it("keeps the project when switching within the same repo", async () => {
+    const waimea = await backend.createProject("waimea", "/Code/waimea");
+    const ws = await backend.createWorkstream("WS", "/Code/waimea", { projectId: waimea.id });
+
+    const result = await backend.changeWorkstreamWorktree(ws.id, "switch_existing", {
+      directory: "/Code/waimea",
+    });
+
+    expect(result.workstream.project_id).toBe(waimea.id);
+  });
+
+  it("refuses a directory that belongs to no known repo", async () => {
+    // Refusing is the decision: importing silently would turn a mistyped path
+    // into a stray project.
+    const waimea = await backend.createProject("waimea", "/Code/waimea");
+    const ws = await backend.createWorkstream("WS", "/Code/waimea", { projectId: waimea.id });
+
+    await expect(
+      backend.changeWorkstreamWorktree(ws.id, "switch_existing", { directory: "/Code/unknown" }),
+    ).rejects.toThrow(/not part of any repo/i);
+  });
+
+  it("leaves the workstream untouched when it refuses", async () => {
+    const waimea = await backend.createProject("waimea", "/Code/waimea");
+    const ws = await backend.createWorkstream("WS", "/Code/waimea", { projectId: waimea.id });
+
+    await expect(
+      backend.changeWorkstreamWorktree(ws.id, "switch_existing", { directory: "/Code/unknown" }),
+    ).rejects.toThrow();
+
+    const [stored] = await backend.listWorkstreams();
+    expect(stored.directory).toBe("/Code/waimea");
+    expect(stored.project_id).toBe(waimea.id);
+  });
+
+  it("matches a directory nested inside a repo, not just the repo root", async () => {
+    // A worktree lives beside or below its repo; only matching the exact root
+    // would refuse every real worktree.
+    const sdk = await backend.createProject("sdk", "/Code/sdk");
+    await backend.createProject("waimea", "/Code/waimea");
+    const ws = await backend.createWorkstream("WS", "/Code/waimea");
+
+    const result = await backend.changeWorkstreamWorktree(ws.id, "switch_existing", {
+      directory: "/Code/sdk/worktrees/feature-x",
+    });
+
+    expect(result.workstream.project_id).toBe(sdk.id);
+  });
+
+  it("keeps create_new on the workstream's own repo", async () => {
+    const waimea = await backend.createProject("waimea", "/Code/waimea");
+    const ws = await backend.createWorkstream("WS", "/Code/waimea", { projectId: waimea.id });
+
+    const result = await backend.changeWorkstreamWorktree(ws.id, "create_new", {
+      branchName: "feature/x",
+    });
+
+    expect(result.workstream.project_id).toBe(waimea.id);
+  });
+});
+
+describe("MemoryBackend repo switch for project-less workstreams", () => {
+  let backend: MemoryBackend;
+  beforeEach(() => {
+    backend = new MemoryBackend();
+  });
+
+  it("still lets a workstream with no repo switch anywhere", async () => {
+    // A workstream can be created without picking a repo. It never had a
+    // binding to lose, so refusing here would be a regression unrelated to
+    // changing repo.
+    const ws = await backend.createWorkstream("WS", "C:/Repos/app");
+
+    const result = await backend.changeWorkstreamWorktree(ws.id, "switch_existing", {
+      directory: "D:/Worktrees/app-fix",
+    });
+
+    expect(result.workstream.directory).toBe("D:/Worktrees/app-fix");
+    expect(result.workstream.project_id).toBeNull();
+  });
+
+  it("adopts a repo when a project-less workstream switches into one", async () => {
+    const sdk = await backend.createProject("sdk", "/Code/sdk");
+    const ws = await backend.createWorkstream("WS", "/somewhere/else");
+
+    const result = await backend.changeWorkstreamWorktree(ws.id, "switch_existing", {
+      directory: "/Code/sdk",
+    });
+
+    expect(result.workstream.project_id).toBe(sdk.id);
+  });
+});

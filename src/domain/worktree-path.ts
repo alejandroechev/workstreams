@@ -54,3 +54,41 @@ export function deriveWorktreePath(
   const parent = parentDirOf(projectDirectory);
   return parent ? `${parent}${sep}${folder}` : folder;
 }
+
+/**
+ * Normalize a path for repo comparison.
+ *
+ * A folder picker and a stored project path routinely differ by a trailing
+ * separator, and macOS and Windows are both case-insensitive in practice, so a
+ * raw compare would report "unknown repo" for a directory plainly visible in
+ * the repo list. Mirrors `normalize_repo_path` in `src-tauri/src/lib.rs`.
+ */
+export function normalizeRepoPath(path: string): string {
+  return path.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+}
+
+/**
+ * The project whose directory contains `path`, or null when none does.
+ *
+ * Matching accepts a path *below* the repo root, because a worktree lives
+ * beside or under it — only accepting the exact root would refuse every real
+ * worktree. The innermost match wins, so a repo nested inside another resolves
+ * to the inner one, and the `/` boundary check stops `/Code/app` from
+ * swallowing the sibling `/Code/app-two`.
+ */
+export function projectOwningPath<T extends { directory: string }>(
+  projects: T[],
+  path: string,
+): T | null {
+  const key = normalizeRepoPath(path);
+  if (!key) return null;
+
+  let best: T | null = null;
+  for (const project of projects) {
+    const root = normalizeRepoPath(project.directory);
+    if (!root) continue;
+    if (key !== root && !key.startsWith(`${root}/`)) continue;
+    if (!best || normalizeRepoPath(best.directory).length < root.length) best = project;
+  }
+  return best;
+}

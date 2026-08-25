@@ -2,11 +2,18 @@ import { useState } from "react";
 import type { CSSProperties, JSX } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import type { Tile, Workstream } from "../domain/types";
+import type { Project, Tile, Workstream } from "../domain/types";
+import { projectOwningPath } from "../domain/worktree-path";
 
 export interface ChangeWorktreeFormProps {
   workstream: Workstream;
   tiles: Tile[];
+  /**
+   * Known repos, used to tell the user *before* they submit when the chosen
+   * directory belongs to a different repo — or to none. Optional so the form
+   * stays usable in contexts that do not have the list.
+   */
+  projects?: Project[];
   onCancel: () => void;
   onSubmit: (
     mode: "switch_existing" | "create_new",
@@ -84,7 +91,7 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-export function ChangeWorktreeForm({ workstream, tiles, onCancel, onSubmit }: ChangeWorktreeFormProps): JSX.Element {
+export function ChangeWorktreeForm({ workstream, tiles, projects, onCancel, onSubmit }: ChangeWorktreeFormProps): JSX.Element {
   const [mode, setMode] = useState<ChangeWorktreeMode>("switch_existing");
   const [directory, setDirectory] = useState("");
   const [branchName, setBranchName] = useState("");
@@ -96,7 +103,32 @@ export function ChangeWorktreeForm({ workstream, tiles, onCancel, onSubmit }: Ch
 
   const derivedFolderName = deriveFolderName(branchName);
   const effectiveFolderName = folderNameOverride.trim() || derivedFolderName;
-  const canSubmit = mode === "switch_existing" ? !!directory.trim() : !!branchName.trim();
+  // Which repo the chosen directory belongs to. Resolved from the detected
+  // repo ROOT, not the directory itself, so a worktree resolves to its parent
+  // repo exactly as the backend does.
+  const targetRepo =
+    projects && worktreeInfo?.parent_repo_path
+      ? projectOwningPath(projects, worktreeInfo.parent_repo_path)
+      : null;
+  const currentRepo = projects?.find((p) => p.id === workstream.project_id) ?? null;
+
+  const repoChange =
+    mode === "switch_existing" && targetRepo && targetRepo.id !== workstream.project_id
+      ? { from: currentRepo?.name ?? "no repo", to: targetRepo.name }
+      : null;
+
+  // Only a workstream with a repo to lose is blocked; one created without a
+  // repo could always switch freely, and blocking that would be a regression
+  // unrelated to changing repo. Mirrors the backend rule.
+  const repoUnknown =
+    mode === "switch_existing" &&
+    Boolean(projects) &&
+    Boolean(directory.trim()) &&
+    Boolean(workstream.project_id) &&
+    !targetRepo;
+
+  const canSubmit =
+    mode === "switch_existing" ? !!directory.trim() && !repoUnknown : !!branchName.trim();
 
   const pickDirectory = async () => {
     const selectedDirectory = await open({ directory: true, title: "Select worktree directory" });
@@ -216,6 +248,25 @@ export function ChangeWorktreeForm({ workstream, tiles, onCancel, onSubmit }: Ch
             {directory && (
               <div style={{ fontSize: 11, color: "#6c7086", marginBottom: 8, paddingLeft: 2 }}>
                 Selected: <span style={{ color: "#cdd6f4" }}>{directory}</span>
+              </div>
+            )}
+            {repoChange && (
+              <div
+                data-testid="cwt-repo-change"
+                style={{ fontSize: 11, color: "#f9e2af", marginBottom: 10, padding: "6px 8px", background: "#181825", borderRadius: 4 }}
+              >
+                Repo change: <span style={{ color: "#cdd6f4" }}>{repoChange.from}</span> →{" "}
+                <span style={{ color: "#cdd6f4" }}>{repoChange.to}</span>
+              </div>
+            )}
+            {repoUnknown && (
+              <div
+                data-testid="cwt-repo-unknown"
+                role="alert"
+                style={{ fontSize: 11, color: "#f38ba8", marginBottom: 10, padding: "6px 8px", background: "#181825", borderRadius: 4 }}
+              >
+                This directory is not part of any repo Workstreams knows about. Import the repo
+                first, then switch to it.
               </div>
             )}
             {worktreeInfo && (

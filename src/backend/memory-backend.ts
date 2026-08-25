@@ -25,6 +25,7 @@ import { resolveLabelNames } from "../domain/task-labels";
 import { isGeneratedByUs } from "../domain/devlog-render";
 import { parseTraceFile, type TraceFile } from "../domain/trace-format";
 import { rewriteTileCwd } from "../domain/worktree-change";
+import { projectOwningPath } from "../domain/worktree-path";
 
 function generateId(): string {
   return Math.random().toString(36).slice(2, 10);
@@ -184,16 +185,39 @@ export class MemoryBackend implements Backend {
 
     let finalDir: string;
     let finalBranch = ws.worktree_branch;
+    let newProjectId: string | null = null;
     if (mode === "switch_existing") {
       if (!opts.directory) throw new Error("Directory is required");
       finalDir = opts.directory;
+
+      // The chosen directory may belong to a different repo -- switching repo
+      // is the same gesture as switching worktree. The real backend resolves
+      // this from git; here it is path containment, which is the same shape.
+      const owner = projectOwningPath([...this.projects.values()], finalDir);
+      if (owner) {
+        newProjectId = owner.id;
+      } else if (ws.project_id) {
+        // Refuse rather than importing: a mistyped path would otherwise become
+        // a stray project. Only when there is a binding to lose, though --
+        // a workstream created without a repo could always switch freely, and
+        // blocking that would be a regression unrelated to changing repo.
+        throw new Error(
+          `${finalDir} is not part of any repo Workstreams knows about — import the repo first, then switch to it`,
+        );
+      }
     } else {
       if (!opts.branchName) throw new Error("Branch name is required");
       finalDir = pathJoin(parentDirectory(ws.directory ?? ""), opts.folderName || lastSlashSegment(opts.branchName));
       finalBranch = opts.branchName;
     }
 
-    Object.assign(ws, { directory: finalDir, worktree_branch: finalBranch, updated_at: now() });
+    Object.assign(ws, {
+      directory: finalDir,
+      worktree_branch: finalBranch,
+      updated_at: now(),
+      // create_new branches from the workstream's own repo, so it never moves.
+      ...(newProjectId ? { project_id: newProjectId } : {}),
+    });
 
     const affectedTileIds: string[] = [];
     for (const tile of this.tiles.values()) {

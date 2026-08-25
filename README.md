@@ -32,6 +32,10 @@ project-aware workspace:
   workstream, with live activity indicator + bell on idle. Configurable CLI
   command (default `agency copilot --yolo`; switch to `copilot --yolo` for
   the public CLI).
+- 🔀 **Switch a workstream to another repo** — the same **Change worktree…**
+  action. Pick a directory in a different repo and the workstream moves repo
+  with it (colour, grouping and tile cwds follow). A directory in no known repo
+  is refused up front rather than importing itself.
 - 🌙 **Close (stop) a workstream** — the row's `⋯` menu has **Close (stop
   processes)**, which tears down a loaded workstream's tiles/terminals (killing
   its PTYs) without archiving it. It stays in the active list and reverts to

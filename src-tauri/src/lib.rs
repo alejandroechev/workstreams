@@ -223,6 +223,12 @@ fn create_project(
 #[tauri::command]
 fn list_projects(state: State<'_, AppState>) -> Result<Vec<Project>, String> {
     let db = state.db.lock().unwrap();
+    read_projects(&db)
+}
+
+/// Read every project. Shared so callers that already hold the DB lock (e.g.
+/// `change_workstream_worktree`) do not duplicate the column list.
+fn read_projects(db: &Connection) -> Result<Vec<Project>, String> {
     let mut stmt = db
         .prepare("SELECT id, name, directory, git_remote, color, copilot_command, created_at, updated_at FROM projects ORDER BY name")
         .map_err(|e| format!("DB error: {e}"))?;
@@ -460,14 +466,47 @@ fn change_workstream_worktree(
     folder_name: Option<String>,
     pull_base_first: Option<bool>,
 ) -> Result<ChangeWorktreeResult, String> {
-    let (final_dir, final_branch) = match mode.as_str() {
+    // `project_id`/`git_repo` are Some only when the mode can change repo.
+    let (final_dir, final_branch, new_project_id, new_git_repo) = match mode.as_str() {
         "switch_existing" => {
             let dir = directory.ok_or("directory is required for switch_existing")?;
             if !std::path::Path::new(&dir).exists() {
                 return Err(format!("Directory does not exist: {dir}"));
             }
             let info = detect_worktree_info(dir.clone())?;
-            (dir, info.branch)
+
+            // The chosen directory may belong to a DIFFERENT repo than the
+            // workstream currently points at -- switching repo is the same
+            // gesture as switching worktree. Resolve it here so the repo move
+            // is committed in the same transaction as the directory move; a
+            // workstream whose directory and project_id disagree would show
+            // the wrong repo colour and spawn tiles against the wrong root.
+            let (resolved, had_repo) = {
+                let db = state.db.lock().unwrap();
+                let projects = read_projects(&db)?;
+                let hit = resolve_project_for_repo(
+                    &projects,
+                    info.parent_repo_path.as_deref(),
+                    info.git_remote.as_deref(),
+                )
+                .map(|p| p.id.clone());
+                let had_repo = get_workstream_by_id(&db, &ws_id)?.project_id.is_some();
+                (hit, had_repo)
+            };
+            match resolved {
+                Some(project_id) => (dir, info.branch, Some(project_id), info.git_remote),
+                // Refuse rather than importing: silently creating a project row
+                // would turn a mistyped path into a stray repo. Only when there
+                // is a binding to lose, though -- a workstream created without a
+                // repo could always switch freely, and blocking that would be a
+                // regression unrelated to changing repo.
+                None if had_repo => {
+                    return Err(format!(
+                        "{dir} is not part of any repo Workstreams knows about — import the repo first, then switch to it"
+                    ))
+                }
+                None => (dir, info.branch, None, None),
+            }
         }
         "create_new" => {
             let branch = branch_name.ok_or("branch_name is required for create_new")?;
@@ -494,7 +533,9 @@ fn change_workstream_worktree(
                 folder_name.as_deref(),
                 pull_base_first.unwrap_or(false),
             )?;
-            (created_dir, Some(branch))
+            // create_new branches from the workstream's existing repo, so the
+            // repo cannot change here.
+            (created_dir, Some(branch), None, None)
         }
         _ => return Err(format!("Unknown worktree change mode: {mode}")),
     };
@@ -507,6 +548,17 @@ fn change_workstream_worktree(
         (&final_dir, &final_branch, &ts, &ws_id),
     )
     .map_err(|e| format!("DB error: {e}"))?;
+
+    // Same transaction as the directory move: a committed directory with a
+    // stale project_id would render the wrong repo colour and group the
+    // workstream under a repo it no longer lives in.
+    if let Some(project_id) = &new_project_id {
+        tx.execute(
+            "UPDATE workstreams SET project_id = ?1, git_repo = ?2 WHERE id = ?3",
+            (project_id, &new_git_repo, &ws_id),
+        )
+        .map_err(|e| format!("DB error: {e}"))?;
+    }
 
     let tile_rows: Vec<(String, String, String)> = {
         let mut stmt = tx
@@ -2684,6 +2736,50 @@ struct WorktreeInfo {
     parent_repo_name: Option<String>,
     branch: Option<String>,
     git_remote: Option<String>,
+}
+
+/// Normalize a filesystem path for comparison.
+///
+/// A folder picker and a stored project path routinely differ by a trailing
+/// separator, and macOS and Windows are both case-insensitive in practice, so
+/// a raw string compare would report "unknown repo" for a directory the user
+/// can plainly see in their repo list.
+fn normalize_repo_path(path: &str) -> String {
+    path.replace('\\', "/").trim_end_matches('/').to_lowercase()
+}
+
+/// Find the project a repo root belongs to.
+///
+/// Matches on the repo root path first and the git remote second: two projects
+/// can legitimately share a remote (a fork, or a second clone kept on purpose),
+/// so the path is the more specific answer. Returns `None` for a directory that
+/// belongs to no known project -- the caller refuses rather than importing,
+/// because silently creating a repo entry would turn a mistyped path into a
+/// stray project.
+fn resolve_project_for_repo<'a>(
+    projects: &'a [Project],
+    repo_root: Option<&str>,
+    git_remote: Option<&str>,
+) -> Option<&'a Project> {
+    let root = repo_root?;
+    let key = normalize_repo_path(root);
+    if let Some(hit) = projects
+        .iter()
+        .find(|p| normalize_repo_path(&p.directory) == key)
+    {
+        return Some(hit);
+    }
+
+    // Only a non-empty remote can match, or every remote-less project would
+    // match every remote-less repo.
+    let remote = git_remote.map(str::trim).filter(|r| !r.is_empty())?;
+    projects.iter().find(|p| {
+        p.git_remote
+            .as_deref()
+            .map(str::trim)
+            .filter(|r| !r.is_empty())
+            .is_some_and(|r| r.eq_ignore_ascii_case(remote))
+    })
 }
 
 #[tauri::command]
@@ -5186,6 +5282,151 @@ pub fn run() {
 mod tests {
     use super::*;
     use std::io::Write;
+
+    fn project(id: &str, dir: &str, remote: Option<&str>) -> Project {
+        Project {
+            id: id.into(),
+            name: id.into(),
+            directory: dir.into(),
+            git_remote: remote.map(|r| r.into()),
+            color: "#89b4fa".into(),
+            copilot_command: None,
+            created_at: String::new(),
+            updated_at: String::new(),
+        }
+    }
+
+    #[test]
+    fn resolve_project_matches_on_repo_root_path() {
+        let projects = vec![
+            project("waimea", "/Code/waimea", None),
+            project("other", "/Code/other", None),
+        ];
+        let hit = resolve_project_for_repo(&projects, Some("/Code/waimea"), None);
+        assert_eq!(hit.map(|p| p.id.as_str()), Some("waimea"));
+    }
+
+    #[test]
+    fn resolve_project_ignores_trailing_slashes_and_case_on_the_path() {
+        // A folder picker and a stored path routinely differ by a trailing
+        // separator, and macOS/Windows paths are case-insensitive in practice.
+        let projects = vec![project("waimea", "/Code/waimea/", None)];
+        assert!(resolve_project_for_repo(&projects, Some("/code/WAIMEA"), None).is_some());
+    }
+
+    #[test]
+    fn resolve_project_falls_back_to_the_git_remote() {
+        // The same repo cloned twice sits at two paths but is one project.
+        let projects = vec![project(
+            "waimea",
+            "/Code/waimea",
+            Some("https://example.com/waimea.git"),
+        )];
+        let hit = resolve_project_for_repo(
+            &projects,
+            Some("/elsewhere/waimea-clone"),
+            Some("https://example.com/waimea.git"),
+        );
+        assert_eq!(hit.map(|p| p.id.as_str()), Some("waimea"));
+    }
+
+    #[test]
+    fn resolve_project_prefers_a_path_match_over_a_remote_match() {
+        // Two projects can share a remote (a fork, or a second clone kept on
+        // purpose); the path is the more specific answer.
+        let projects = vec![
+            project("clone-a", "/Code/a", Some("https://example.com/x.git")),
+            project("clone-b", "/Code/b", Some("https://example.com/x.git")),
+        ];
+        let hit = resolve_project_for_repo(
+            &projects,
+            Some("/Code/b"),
+            Some("https://example.com/x.git"),
+        );
+        assert_eq!(hit.map(|p| p.id.as_str()), Some("clone-b"));
+    }
+
+    #[test]
+    fn resolve_project_returns_none_for_an_unknown_repo() {
+        // Refusing is the point: silently importing would let a typo'd path
+        // create a stray repo entry.
+        let projects = vec![project("waimea", "/Code/waimea", None)];
+        assert!(resolve_project_for_repo(&projects, Some("/Code/unknown"), None).is_none());
+    }
+
+    #[test]
+    fn resolve_project_returns_none_when_the_directory_is_not_a_repo() {
+        let projects = vec![project("waimea", "/Code/waimea", None)];
+        assert!(resolve_project_for_repo(&projects, None, None).is_none());
+    }
+
+    #[test]
+    fn resolve_project_ignores_an_empty_remote() {
+        // A project row with no remote must not match every repo that also
+        // reports none.
+        let projects = vec![project("waimea", "/Code/waimea", None)];
+        assert!(resolve_project_for_repo(&projects, Some("/Code/elsewhere"), None).is_none());
+    }
+
+    fn switch_repo_conn() -> Connection {
+        let c = Connection::open_in_memory().unwrap();
+        crate::db::init_db(&c).unwrap();
+        c.execute(
+            "INSERT INTO projects (id, name, directory, color, created_at, updated_at)
+             VALUES ('waimea', 'waimea', '/Code/waimea', '#89b4fa', '', ''),
+                    ('sdk', 'sdk', '/Code/sdk', '#f38ba8', '', '')",
+            [],
+        )
+        .unwrap();
+        c.execute(
+            "INSERT INTO workstreams (id, name, directory, project_id, created_at, updated_at)
+             VALUES ('w1', 'ws', '/Code/waimea', 'waimea', '', '')",
+            [],
+        )
+        .unwrap();
+        c
+    }
+
+    #[test]
+    fn switching_to_another_repos_directory_moves_the_project_too() {
+        // The gesture is "change worktree", but the chosen directory can belong
+        // to a different repo. Leaving project_id behind would show the wrong
+        // repo colour and group the workstream under a repo it left.
+        let c = switch_repo_conn();
+        let projects = read_projects(&c).unwrap();
+        let hit = resolve_project_for_repo(&projects, Some("/Code/sdk"), None).unwrap();
+        assert_eq!(hit.id, "sdk");
+
+        c.execute(
+            "UPDATE workstreams SET directory = ?1, project_id = ?2 WHERE id = 'w1'",
+            ("/Code/sdk", &hit.id),
+        )
+        .unwrap();
+
+        let (dir, project): (String, String) = c
+            .query_row(
+                "SELECT directory, project_id FROM workstreams WHERE id = 'w1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(dir, "/Code/sdk");
+        assert_eq!(project, "sdk");
+    }
+
+    #[test]
+    fn switching_within_the_same_repo_keeps_the_project() {
+        let c = switch_repo_conn();
+        let projects = read_projects(&c).unwrap();
+        let hit = resolve_project_for_repo(&projects, Some("/Code/waimea"), None).unwrap();
+        assert_eq!(hit.id, "waimea");
+    }
+
+    #[test]
+    fn read_projects_returns_every_row() {
+        let c = switch_repo_conn();
+        assert_eq!(read_projects(&c).unwrap().len(), 2);
+    }
 
     #[test]
     fn rewrite_tile_cwd_updates_terminal_cwd() {
