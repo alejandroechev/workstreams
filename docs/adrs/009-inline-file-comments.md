@@ -37,6 +37,17 @@ that, deleting also opens the file being deleted from. Deleting the thread
 currently open clears the editor pane, or it would keep showing a comment that
 no longer exists.
 
+**Delete all** is scoped to the **filtered view**, not the workstream. The list
+is what the user is looking at, so deleting rows they cannot see would be a
+nasty surprise — and filtering first is precisely how you bulk-clear one status
+or one author. The control names its own count (`Delete all 4`, or
+`Delete all 2 shown` when a filter is hiding something) so the scope is never a
+guess, and the word "shown" appears only when it is load-bearing. Deletes run
+sequentially rather than in parallel: they hit one SQLite file, and a partial
+failure should stop rather than fire every remaining delete at a backend
+already erroring. The list reloads either way, since a partial delete still
+changed it.
+
 ## Deleting a stale thread
 
 A comment whose anchor file no longer exists is unreachable — it cannot be read

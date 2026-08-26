@@ -420,6 +420,14 @@ const CommentsNavigationCase: FC = () => {
             setOpenPath(null);
           }
         }}
+        onDeleteAll={(roots) => {
+          const ids = new Set(roots.map((r) => r.id));
+          setComments((cs) => cs.filter((c) => !ids.has(c.id) && !ids.has(c.parent_id ?? "")));
+          if (selectedId && ids.has(selectedId)) {
+            setSelectedId(null);
+            setOpenPath(null);
+          }
+        }}
       />
       <div style={{ flex: 1, minWidth: 0 }} data-testid="comments-editor-pane">
         {openPath === null ? (

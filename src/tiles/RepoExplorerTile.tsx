@@ -2219,6 +2219,53 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
                   }
                 : undefined
             }
+            onDeleteAll={
+              workstreamId
+                ? (roots) => {
+                    if (roots.length === 0) return;
+                    const replies = allComments.comments.filter(
+                      (c) => c.parent_id !== null && roots.some((r) => r.id === c.parent_id),
+                    ).length;
+                    const suffix =
+                      replies > 0
+                        ? ` and ${replies} repl${replies === 1 ? "y" : "ies"}`
+                        : "";
+                    // Bulk and irreversible, so the count is named rather than
+                    // left as "all".
+                    if (
+                      !window.confirm(
+                        `Delete ${roots.length} comment${roots.length === 1 ? "" : "s"}${suffix}? This cannot be undone.`,
+                      )
+                    ) {
+                      return;
+                    }
+
+                    // Sequential rather than Promise.all: these hit one SQLite
+                    // file, and a partial failure should stop rather than fire
+                    // every remaining delete at a backend already erroring.
+                    void (async () => {
+                      try {
+                        for (const root of roots) {
+                          await backend.deleteSessionFileCommentThread(workstreamId, root.id);
+                        }
+                      } catch (e: unknown) {
+                        window.alert(
+                          `Could not delete every comment: ${e instanceof Error ? e.message : String(e)}`,
+                        );
+                      } finally {
+                        // Reload regardless: a partial delete still changed the
+                        // list, and leaving it stale would show comments that
+                        // no longer exist.
+                        if (selectedCommentId && roots.some((r) => r.id === selectedCommentId)) {
+                          setSelectedCommentId(null);
+                          setCommentsNavPath(null);
+                        }
+                        await Promise.all([allComments.reload(), fileComments.reload()]);
+                      }
+                    })();
+                  }
+                : undefined
+            }
           />
           <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
             {!commentsFile && (

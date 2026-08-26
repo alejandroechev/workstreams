@@ -288,4 +288,121 @@ describe("deleting from the list", () => {
       expect.stringContaining("2 replies"),
     );
   });
+
+  describe("deleting everything shown", () => {
+    it("offers no bulk control when no handler is supplied", () => {
+      render(<CommentsPanel comments={[c({ id: "a1" })]} selectedId={null} onSelect={noop} />);
+      expect(screen.queryByTestId("comments-delete-all")).toBeNull();
+    });
+
+    it("offers none when there is nothing to delete", () => {
+      render(
+        <CommentsPanel comments={[]} selectedId={null} onSelect={noop} onDeleteAll={vi.fn()} />,
+      );
+      expect(screen.queryByTestId("comments-delete-all")).toBeNull();
+    });
+
+    it("hands back every visible thread root", () => {
+      const onDeleteAll = vi.fn();
+      render(
+        <CommentsPanel
+          comments={[c({ id: "a1" }), c({ id: "b1", file: "src/b.ts" })]}
+          selectedId={null}
+          onSelect={noop}
+          onDeleteAll={onDeleteAll}
+        />,
+      );
+
+      fireEvent.click(screen.getByTestId("comments-delete-all"));
+
+      expect(onDeleteAll).toHaveBeenCalledTimes(1);
+      expect(onDeleteAll.mock.calls[0][0].map((r: { id: string }) => r.id).sort()).toEqual([
+        "a1",
+        "b1",
+      ]);
+    });
+
+    it("hands back roots only, since deleting one cascades to its replies", () => {
+      const onDeleteAll = vi.fn();
+      render(
+        <CommentsPanel
+          comments={[c({ id: "a1" }), c({ id: "r1", parent_id: "a1", author: "agent" })]}
+          selectedId={null}
+          onSelect={noop}
+          onDeleteAll={onDeleteAll}
+        />,
+      );
+
+      fireEvent.click(screen.getByTestId("comments-delete-all"));
+      expect(onDeleteAll.mock.calls[0][0].map((r: { id: string }) => r.id)).toEqual(["a1"]);
+    });
+
+    it("deletes only what the filters leave visible", () => {
+      // Deleting comments the user cannot see would be a nasty surprise, and
+      // filtering first is how you'd bulk-clear one status or one author.
+      const onDeleteAll = vi.fn();
+      render(
+        <CommentsPanel
+          comments={[c({ id: "open1" }), c({ id: "done1", status: "resolved" })]}
+          selectedId={null}
+          onSelect={noop}
+          onDeleteAll={onDeleteAll}
+        />,
+      );
+
+      fireEvent.change(screen.getByTestId("comments-filter-status"), {
+        target: { value: "resolved" },
+      });
+      fireEvent.click(screen.getByTestId("comments-delete-all"));
+
+      expect(onDeleteAll.mock.calls[0][0].map((r: { id: string }) => r.id)).toEqual(["done1"]);
+    });
+
+    it("names the count so the scope is never a guess", () => {
+      const onDeleteAll = vi.fn();
+      render(
+        <CommentsPanel
+          comments={[c({ id: "a1" }), c({ id: "b1", file: "src/b.ts" })]}
+          selectedId={null}
+          onSelect={noop}
+          onDeleteAll={onDeleteAll}
+        />,
+      );
+      expect(screen.getByTestId("comments-delete-all").textContent).toContain("2");
+    });
+
+    it("says the count is a filtered subset only when it actually is", () => {
+      // The word "shown" is load-bearing exactly when a filter is hiding
+      // something; saying it unconditionally would train the user to ignore it.
+      const onDeleteAll = vi.fn();
+      render(
+        <CommentsPanel
+          comments={[c({ id: "open1" }), c({ id: "done1", status: "resolved" })]}
+          selectedId={null}
+          onSelect={noop}
+          onDeleteAll={onDeleteAll}
+        />,
+      );
+      expect(screen.getByTestId("comments-delete-all").textContent).not.toMatch(/shown/i);
+
+      fireEvent.change(screen.getByTestId("comments-filter-status"), {
+        target: { value: "resolved" },
+      });
+      expect(screen.getByTestId("comments-delete-all").textContent).toMatch(/shown/i);
+    });
+
+    it("still offers the per-thread delete alongside it", () => {
+      render(
+        <CommentsPanel
+          comments={[c({ id: "a1" })]}
+          selectedId={null}
+          onSelect={noop}
+          onDelete={vi.fn()}
+          onDeleteAll={vi.fn()}
+        />,
+      );
+      expect(screen.getByTestId("comments-delete-a1")).toBeInTheDocument();
+      expect(screen.getByTestId("comments-delete-all")).toBeInTheDocument();
+    });
+  });
 });

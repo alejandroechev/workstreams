@@ -80,3 +80,57 @@ test("deleting the open thread clears the editor pane", async ({ page }) => {
   await expect(page.locator('[data-testid="comments-thread-near-top"]')).toHaveCount(0);
   await expect(page.locator(".monaco-editor")).toHaveCount(0);
 });
+
+test("every visible thread can be deleted at once", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(e.message));
+  await openCase(page);
+
+  const button = page.locator('[data-testid="comments-delete-all"]');
+  // The count is on the control itself, so the scope is never a guess.
+  await expect(button).toContainText("4");
+  await expect(button).not.toContainText("shown");
+
+  await button.click();
+
+  await expect(page.locator('[data-testid^="comments-thread-"]')).toHaveCount(0);
+  // The control retires with the last thread rather than sitting there inert.
+  await expect(button).toHaveCount(0);
+  expect(errors).toEqual([]);
+});
+
+test("filtering first narrows what delete-all removes", async ({ page }) => {
+  // Deleting rows the user cannot see would be a nasty surprise, and this is
+  // how you would bulk-clear one author.
+  await openCase(page);
+
+  await page.locator('[data-testid="comments-filter-author"]').selectOption("reviewer");
+  const button = page.locator('[data-testid="comments-delete-all"]');
+  await expect(button).toContainText("shown");
+
+  const before = await page.locator('[data-testid^="comments-thread-"]').count();
+  await button.click();
+
+  await expect(page.locator('[data-testid^="comments-thread-"]')).toHaveCount(0);
+
+  // Clearing the filter must reveal the threads it protected.
+  await page.locator('[data-testid="comments-filter-author"]').selectOption("");
+  const after = await page.locator('[data-testid^="comments-thread-"]').count();
+  expect(after).toBeGreaterThan(0);
+  expect(before).toBeGreaterThan(0);
+});
+
+test("deleting everything clears an open thread's editor pane", async ({ page }) => {
+  await openCase(page);
+
+  await page.locator('[data-testid="comments-thread-near-top"]').click();
+  await page.waitForFunction(() => document.querySelectorAll(".monaco-editor").length > 0, null, {
+    timeout: 30_000,
+  });
+
+  await page.locator('[data-testid="comments-delete-all"]').click();
+
+  // Leaving the file up would show a comment that no longer exists.
+  await expect(page.locator('[data-testid^="comments-thread-"]')).toHaveCount(0);
+  await expect(page.locator(".monaco-editor")).toHaveCount(0);
+});

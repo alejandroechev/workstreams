@@ -40,6 +40,15 @@ export interface CommentsPanelProps {
    * clearing out once handled. Confirmation is the caller's job.
    */
   onDelete?: (root: SessionFileComment) => void;
+  /**
+   * Delete every thread currently **visible**, given their roots.
+   *
+   * Scoped to the filtered view rather than the whole workstream: the list is
+   * what the user is looking at, deleting rows they cannot see would be a
+   * nasty surprise, and filtering first is how you would bulk-clear one status
+   * or one author. Confirmation is the caller's job.
+   */
+  onDeleteAll?: (roots: SessionFileComment[]) => void;
 }
 
 const DEFAULT_FILTERS: CommentFilters = { statuses: [], authors: [], text: "" };
@@ -68,6 +77,7 @@ export function CommentsPanel({
   filters: controlledFilters,
   onFiltersChange,
   onDelete,
+  onDeleteAll,
 }: CommentsPanelProps) {
   const [localFilters, setLocalFilters] = useState<CommentFilters>(DEFAULT_FILTERS);
   const filters = controlledFilters ?? localFilters;
@@ -88,6 +98,14 @@ export function CommentsPanel({
     () => groupByFile(filterComments(comments, filters)),
     [comments, filters],
   );
+
+  const visibleRoots = useMemo(
+    () => groups.flatMap((group) => group.threads.map((thread) => thread.root)),
+    [groups],
+  );
+  // "shown" is load-bearing exactly when a filter is hiding something; saying
+  // it unconditionally would train the user to ignore it.
+  const isFiltered = visibleRoots.length < comments.filter((c) => c.parent_id === null).length;
 
   if (unbound) {
     return (
@@ -137,6 +155,22 @@ export function CommentsPanel({
             ))}
           </select>
         </div>
+        {onDeleteAll && visibleRoots.length > 0 && (
+          <button
+            data-testid="comments-delete-all"
+            onClick={() => onDeleteAll(visibleRoots)}
+            title={
+              isFiltered
+                ? "Delete every thread matching the current filters"
+                : "Delete every thread in this workstream"
+            }
+            style={deleteAllStyle}
+          >
+            <TrashIcon style={{ width: 11, height: 11 }} />
+            Delete all {visibleRoots.length}
+            {isFiltered ? " shown" : ""}
+          </button>
+        )}
       </div>
 
       <div style={{ flex: 1, overflowY: "auto" }}>
@@ -332,4 +366,20 @@ const deleteButtonStyle: React.CSSProperties = {
   padding: 0,
   display: "inline-flex",
   alignItems: "center",
+};
+
+const deleteAllStyle: React.CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 4,
+  alignSelf: "flex-start",
+  marginTop: 4,
+  padding: "2px 6px",
+  background: "none",
+  border: "1px solid #45475a",
+  borderRadius: 3,
+  color: "#f38ba8",
+  fontSize: 10,
+  fontFamily: "inherit",
+  cursor: "pointer",
 };

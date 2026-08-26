@@ -69,7 +69,7 @@ project-aware workspace:
   reviewer↔agent threads shown in the Files tab. A second toggle **hides
   resolved threads** so a heavily-reviewed file shows only what is still open,
   and comments can be deleted straight from the Comments tab
-  list — or, when their file no longer exists, from the load-failure view. Historical modes (Last commit,
+  list — one thread, or every thread the filters leave visible — or, when their file no longer exists, from the load-failure view. Historical modes (Last commit,
   Branch vs master, or a **custom target branch**) stay read-only and
   uncommentable because their modified side is a past commit, not a file on
   disk. The custom branch picker compares `target...HEAD` and remembers its
