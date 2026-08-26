@@ -54,7 +54,8 @@ project-aware workspace:
   after the workstream, attached to it and selected for renaming — and **Go to
   task** once it is bound, since the relation is 1:1. Notes can be
   deleted but never rewritten. The sidebar keeps an always-on list of **in-progress tasks** that navigates
-  straight to the bound workstream. **Export** renders the **last work day or
+  straight to the bound workstream — or, when you are already in it, opens the
+  task on the board. **Export** renders the **last work day or
   today** (your pick, skipping weekends) into your wiki as
   markdown (one `##` section per task, with its labels, workstream, subtasks,
   notes and event log), commits and pushes it — one-way, and it never overwrites a page it

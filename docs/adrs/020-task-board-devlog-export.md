@@ -122,8 +122,11 @@ In progress (`investigating`, and the retired `persistent`) are included — an
 always-on view that dropped them would hide live work.
 
 Clicking a row navigates to the bound workstream, since that is where the work
-happens; a task with no workstream falls back to opening it on the board rather
-than being inert. The list is capped at roughly three rows and scrolls: with 45
+happens — **unless that workstream is already active**, in which case
+navigating is a no-op and the click would appear to do nothing; there it opens
+the task on the board instead. A task with no workstream always opens on the
+board, since there is nowhere else for it to go. The row's tooltip names
+whichever of the two the click will do. The list is capped at roughly three rows and scrolls: with 45
 tasks in progress, letting it grow would push the workstream list off screen.
 It shows an empty state rather than collapsing, so the sidebar does not jump.
 

@@ -71,12 +71,22 @@ export function InProgressTaskList({
     };
   }, [backend]);
 
+  /**
+   * Clicking a row goes to the bound workstream -- unless you are already in
+   * it, in which case navigating would be a no-op and the click would appear
+   * to do nothing. There, opening the task on the board is the only useful
+   * thing left. A task with no workstream always opens on the board, since
+   * there is nowhere else for it to go.
+   */
   const open = useCallback(
     (task: Task) => {
-      if (task.workstreamId) onOpenWorkstream(task.workstreamId);
-      else onOpenTask(task.id);
+      if (task.workstreamId && task.workstreamId !== activeWsId) {
+        onOpenWorkstream(task.workstreamId);
+      } else {
+        onOpenTask(task.id);
+      }
     },
-    [onOpenWorkstream, onOpenTask],
+    [onOpenWorkstream, onOpenTask, activeWsId],
   );
 
   return (
@@ -105,7 +115,9 @@ export function InProgressTaskList({
             onKeyDown={(e) => {
               if (e.key === "Enter" || e.key === " ") open(task);
             }}
-            title={ws ? `Go to ${ws.name}` : "Open on the task board"}
+            title={
+              ws && !isActive ? `Go to ${ws.name}` : "Open this task on the board"
+            }
             style={{
               ...rowStyle,
               background: isActive ? "#313244" : "transparent",

@@ -167,3 +167,73 @@ describe("InProgressTaskList", () => {
     expect(row).toHaveAttribute("data-active", "true");
   });
 });
+
+describe("clicking a task whose workstream is already active", () => {
+  it("opens the task instead of re-navigating to where you already are", async () => {
+    // Navigating to the workstream you are already in is a no-op, so the
+    // click had no visible effect at all. Opening the task is the only useful
+    // thing left to do with it.
+    const task = await backend.createTask("a task", {
+      status: "in_progress",
+      workstreamId: "w1",
+    });
+    const onOpenWorkstream = vi.fn();
+    const onOpenTask = vi.fn();
+    renderList({ activeWsId: "w1", onOpenWorkstream, onOpenTask });
+
+    fireEvent.click(await screen.findByTestId(`in-progress-task-${task.id}`));
+
+    expect(onOpenTask).toHaveBeenCalledWith(task.id);
+    expect(onOpenWorkstream).not.toHaveBeenCalled();
+  });
+
+  it("still navigates when a different workstream is active", async () => {
+    const task = await backend.createTask("a task", {
+      status: "in_progress",
+      workstreamId: "w1",
+    });
+    const onOpenWorkstream = vi.fn();
+    const onOpenTask = vi.fn();
+    renderList({ activeWsId: "w2", onOpenWorkstream, onOpenTask });
+
+    fireEvent.click(await screen.findByTestId(`in-progress-task-${task.id}`));
+
+    expect(onOpenWorkstream).toHaveBeenCalledWith("w1");
+    expect(onOpenTask).not.toHaveBeenCalled();
+  });
+
+  it("still navigates when no workstream is active at all", async () => {
+    const task = await backend.createTask("a task", {
+      status: "in_progress",
+      workstreamId: "w1",
+    });
+    const onOpenWorkstream = vi.fn();
+    renderList({ activeWsId: null, onOpenWorkstream });
+
+    fireEvent.click(await screen.findByTestId(`in-progress-task-${task.id}`));
+
+    expect(onOpenWorkstream).toHaveBeenCalledWith("w1");
+  });
+
+  it("says what the click will do, so the two behaviours are not a guess", async () => {
+    const task = await backend.createTask("a task", {
+      status: "in_progress",
+      workstreamId: "w1",
+    });
+    renderList({ activeWsId: "w1" });
+
+    const row = await screen.findByTestId(`in-progress-task-${task.id}`);
+    expect(row.title).toMatch(/task/i);
+    expect(row.title).not.toMatch(/go to/i);
+  });
+
+  it("keeps opening the task for an unbound one regardless of the active workstream", async () => {
+    const task = await backend.createTask("unbound", { status: "in_progress" });
+    const onOpenTask = vi.fn();
+    renderList({ activeWsId: "w1", onOpenTask });
+
+    fireEvent.click(await screen.findByTestId(`in-progress-task-${task.id}`));
+
+    expect(onOpenTask).toHaveBeenCalledWith(task.id);
+  });
+});

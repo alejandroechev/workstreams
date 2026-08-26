@@ -569,3 +569,51 @@ test("a log entry can hold multiple lines and reaches the exported page", async 
   await expect(preview).toContainText("work on his feature branch");
   await expect(preview).not.toContainText("- - work on");
 });
+
+test("clicking an in-progress task inside its own workstream opens the task", async ({ page }) => {
+  // Navigating to the workstream you are already in is a no-op, so the click
+  // used to appear to do nothing at all.
+  const row = await createWorkstream(page, "already-active-ws");
+  await row.hover();
+  await row.locator('[data-testid^="ws-actions-"]').click();
+  await page.locator('[data-testid="action-create-task"]').click();
+
+  await page.locator('[data-testid="detail-title"]').fill("Offline SDK Read Mock Storage");
+  await page.locator('[data-testid="detail-title"]').press("Enter");
+  await page.locator('[data-testid="detail-status"]').selectOption("in_progress");
+  await page.locator('[data-testid="board-close"]').click();
+
+  // Select the workstream so it is the active one.
+  await row.click();
+  const entry = page.locator('[data-testid^="in-progress-task-"]').first();
+  await expect(entry).toHaveAttribute("data-active", "true");
+
+  await entry.click();
+
+  // The board opens with that task already selected, not just opened blank.
+  await expect(page.locator('[data-testid="task-board"]')).toBeVisible();
+  await expect(page.locator('[data-testid="detail-title"]')).toHaveValue(
+    "Offline SDK Read Mock Storage",
+  );
+});
+
+test("clicking an in-progress task in another workstream still navigates", async ({ page }) => {
+  const host = await createWorkstream(page, "task-host-ws");
+  await host.hover();
+  await host.locator('[data-testid^="ws-actions-"]').click();
+  await page.locator('[data-testid="action-create-task"]').click();
+  await page.locator('[data-testid="detail-status"]').selectOption("in_progress");
+  await page.locator('[data-testid="board-close"]').click();
+
+  // Make a different workstream active.
+  const other = await createWorkstream(page, "somewhere-else");
+  await other.click();
+
+  const entry = page.locator('[data-testid^="in-progress-task-"]').first();
+  await expect(entry).toHaveAttribute("data-active", "false");
+  await entry.click();
+
+  // Navigated rather than opening the board.
+  await expect(page.locator('[data-testid="task-board"]')).toHaveCount(0);
+  await expect(entry).toHaveAttribute("data-active", "true");
+});
