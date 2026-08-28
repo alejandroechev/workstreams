@@ -56,6 +56,7 @@ describe("TauriBackend", () => {
       runTimeoutMs: 60_000,
       maxTaskIterations: 2,
     });
+
     await backend.setWorkstreamLoopEnabled(spec.id, true);
     const run = await backend.runWorkstreamLoopNow("ws-1");
     await backend.controlWorkstreamLoop(run.id, "pause");
@@ -90,6 +91,18 @@ describe("TauriBackend", () => {
       4,
       "control_workstream_loop",
       { runId: "run-1", action: "pause" },
+    );
+  });
+
+  it("loads the lightweight loop progress version", async () => {
+    invoke.mockResolvedValueOnce("run-1:working:task-1");
+
+    await expect(
+      backend.getWorkstreamLoopProgressVersion("ws-1"),
+    ).resolves.toBe("run-1:working:task-1");
+    expect(invoke).toHaveBeenCalledWith(
+      "get_workstream_loop_progress_version",
+      { workstreamId: "ws-1" },
     );
   });
 

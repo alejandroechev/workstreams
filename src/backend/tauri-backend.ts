@@ -198,6 +198,12 @@ export class TauriBackend implements Backend {
     return decodeLoopSnapshot(snapshot);
   }
 
+  async getWorkstreamLoopProgressVersion(workstreamId: string): Promise<string> {
+    return invoke<string>("get_workstream_loop_progress_version", {
+      workstreamId,
+    });
+  }
+
   async saveWorkstreamLoop(
     workstreamId: string,
     input: LoopSpecDraft,

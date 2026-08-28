@@ -51,6 +51,7 @@ pub struct LoopSpec {
 #[serde(rename_all = "snake_case")]
 pub enum LoopRunState {
     Starting,
+    Resuming,
     Orchestrating,
     Working,
     Verifying,
@@ -66,6 +67,7 @@ impl LoopRunState {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Starting => "starting",
+            Self::Resuming => "resuming",
             Self::Orchestrating => "orchestrating",
             Self::Working => "working",
             Self::Verifying => "verifying",
@@ -81,6 +83,7 @@ impl LoopRunState {
     fn parse(value: &str) -> rusqlite::Result<Self> {
         match value {
             "starting" => Ok(Self::Starting),
+            "resuming" => Ok(Self::Resuming),
             "orchestrating" => Ok(Self::Orchestrating),
             "working" => Ok(Self::Working),
             "verifying" => Ok(Self::Verifying),
@@ -723,7 +726,7 @@ fn claim_paused_run(conn: &Connection, run_id: &str) -> Result<LoopRun, String> 
     let claimed = conn
         .execute(
             "UPDATE loop_runs
-             SET state = 'starting', control_requested = 'resume'
+             SET state = 'resuming', control_requested = 'none'
              WHERE id = ?1 AND state = 'paused'",
             [run_id],
         )
@@ -1029,6 +1032,24 @@ fn append_loop_event(
     event_type: &str,
     payload: &serde_json::Value,
 ) -> Result<(), String> {
+    const MAX_EVENT_PAYLOAD_BYTES: usize = 16 * 1024;
+    let encoded = payload.to_string();
+    let payload_json = if encoded.len() <= MAX_EVENT_PAYLOAD_BYTES {
+        encoded
+    } else {
+        let preview_end = encoded
+            .char_indices()
+            .take_while(|(index, _)| *index < MAX_EVENT_PAYLOAD_BYTES / 2)
+            .map(|(index, character)| index + character.len_utf8())
+            .last()
+            .unwrap_or(0);
+        serde_json::json!({
+            "truncated": true,
+            "original_bytes": encoded.len(),
+            "preview": &encoded[..preview_end],
+        })
+        .to_string()
+    };
     conn.execute(
         "INSERT INTO loop_events (
             loop_spec_id, loop_run_id, loop_task_id, event_type, payload_json, created_at
@@ -1038,7 +1059,7 @@ fn append_loop_event(
             run_id,
             task_id,
             event_type,
-            payload.to_string(),
+            payload_json,
             crate::now()
         ],
     )
@@ -1070,7 +1091,21 @@ fn record_runtime_events(
 }
 
 fn should_persist_agent_event(event_type: &str) -> bool {
-    !event_type.ends_with("_delta")
+    matches!(
+        event_type,
+        "session.started"
+            | "session.idle"
+            | "session.task_complete"
+            | "session.error"
+            | "assistant.message"
+            | "assistant.turn_start"
+            | "assistant.turn_end"
+            | "tool.execution_start"
+            | "tool.execution_complete"
+            | "model.call_failure"
+            | "abort"
+            | "events.lagged"
+    )
 }
 
 async fn start_agent_stage(
@@ -1452,7 +1487,7 @@ async fn execute_manual_loop_inner(
         .ok_or_else(|| format!("Loop run not found: {run_id}"))?;
     let spec = get_loop_spec_by_id(&db.lock().unwrap(), &run.loop_spec_id)?
         .ok_or_else(|| format!("Loop specification not found: {}", run.loop_spec_id))?;
-    let tasks = if run.state == LoopRunState::Paused || run.control_requested == "resume" {
+    let tasks = if run.state == LoopRunState::Paused || run.state == LoopRunState::Resuming {
         let conn = db.lock().unwrap();
         set_run_control(&conn, run_id, "none")?;
         list_loop_tasks(&conn, run_id)?
@@ -2030,6 +2065,71 @@ pub fn list_workstream_loop_summaries(
         .map_err(|error| format!("Failed to decode loop summaries: {error}"))
 }
 
+fn loop_progress_version(conn: &Connection, workstream_id: &str) -> Result<String, String> {
+    let spec = get_loop_spec(conn, workstream_id)?;
+    let Some(spec) = spec else {
+        return Ok("unconfigured".to_string());
+    };
+    let run = latest_loop_run(conn, &spec.id)?;
+    let Some(run) = run else {
+        return Ok(format!("{}:idle", spec.updated_at));
+    };
+    let mut statement = conn
+        .prepare(
+            "SELECT id, state, revision_count, updated_at
+             FROM loop_tasks WHERE loop_run_id = ?1 ORDER BY ordinal",
+        )
+        .map_err(|error| format!("Failed to prepare loop progress query: {error}"))?;
+    let task_versions = statement
+        .query_map([&run.id], |row| {
+            Ok(format!(
+                "{}:{}:{}:{}",
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, u32>(2)?,
+                row.get::<_, String>(3)?
+            ))
+        })
+        .map_err(|error| format!("Failed to query loop progress: {error}"))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("Failed to decode loop progress: {error}"))?;
+    let verification_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM loop_verifications v
+             JOIN loop_tasks t ON t.id = v.loop_task_id
+             WHERE t.loop_run_id = ?1",
+            [&run.id],
+            |row| row.get(0),
+        )
+        .map_err(|error| format!("Failed to count loop verifications: {error}"))?;
+    let evaluation_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM loop_evaluations e
+             JOIN loop_tasks t ON t.id = e.loop_task_id
+             WHERE t.loop_run_id = ?1",
+            [&run.id],
+            |row| row.get(0),
+        )
+        .map_err(|error| format!("Failed to count loop evaluations: {error}"))?;
+    Ok(format!(
+        "{}:{}:{}:{}:{}:{}",
+        run.id,
+        run.state.as_str(),
+        run.control_requested,
+        task_versions.join("|"),
+        verification_count,
+        evaluation_count
+    ))
+}
+
+#[tauri::command]
+pub fn get_workstream_loop_progress_version(
+    state: tauri::State<'_, crate::AppState>,
+    workstream_id: String,
+) -> Result<String, String> {
+    loop_progress_version(&state.db.lock().unwrap(), &workstream_id)
+}
+
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct LoopUpdatedEvent {
@@ -2077,12 +2177,12 @@ async fn run_with_sdk(
             let is_resume_claim = get_loop_run(&conn, &run_id)
                 .ok()
                 .flatten()
-                .is_some_and(|run| run.control_requested == "resume");
+                .is_some_and(|run| run.state == LoopRunState::Resuming);
             if is_resume_claim {
                 let _ = conn.execute(
                     "UPDATE loop_runs
                      SET state = 'paused', control_requested = 'none'
-                     WHERE id = ?1 AND control_requested = 'resume'",
+                     WHERE id = ?1 AND state = 'resuming'",
                     [&run_id],
                 );
             } else {
@@ -2882,8 +2982,8 @@ mod tests {
         set_run_state(&conn, &run.id, LoopRunState::Paused, None).expect("pause run");
 
         let claimed = claim_paused_run(&conn, &run.id).expect("claim paused run");
-        assert_eq!(claimed.state, LoopRunState::Starting);
-        assert_eq!(claimed.control_requested, "resume");
+        assert_eq!(claimed.state, LoopRunState::Resuming);
+        assert_eq!(claimed.control_requested, "none");
         assert!(claim_paused_run(&conn, &run.id).is_err());
     }
 
@@ -3179,6 +3279,8 @@ mod tests {
     fn token_deltas_are_not_persisted_and_event_reads_are_bounded() {
         assert!(!should_persist_agent_event("assistant.message_delta"));
         assert!(!should_persist_agent_event("assistant.reasoning_delta"));
+        assert!(!should_persist_agent_event("tool.execution_partial_result"));
+        assert!(!should_persist_agent_event("tool.execution_progress"));
         assert!(should_persist_agent_event("assistant.message"));
 
         let conn = test_db();
@@ -3210,6 +3312,23 @@ mod tests {
                 .last()
                 .and_then(|event| event.payload["index"].as_i64()),
             Some(509)
+        );
+
+        append_loop_event(
+            &conn,
+            &spec.id,
+            &run.id,
+            None,
+            "agent.tool.execution_complete",
+            &serde_json::json!({ "output": "x".repeat(32 * 1024) }),
+        )
+        .expect("append bounded event");
+        let events = list_loop_events(&conn, &run.id).expect("list bounded events");
+        assert_eq!(
+            events
+                .last()
+                .and_then(|event| event.payload["truncated"].as_bool()),
+            Some(true)
         );
     }
 }

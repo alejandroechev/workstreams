@@ -94,6 +94,7 @@ export interface Backend {
   closeTerminal(tileId: string): Promise<void>;
   // Manual coding goal loop
   getWorkstreamLoopSnapshot(workstreamId: string): Promise<PersistedLoopSnapshot>;
+  getWorkstreamLoopProgressVersion(workstreamId: string): Promise<string>;
   saveWorkstreamLoop(workstreamId: string, input: LoopSpecDraft): Promise<LoopSpec>;
   setWorkstreamLoopEnabled(loopSpecId: string, enabled: boolean): Promise<void>;
   listWorkstreamLoopSummaries(): Promise<LoopSummary[]>;

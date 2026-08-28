@@ -334,6 +334,7 @@ export default function WorkstreamSidebar({
   ];
   const runningLoopStates = new Set([
     "starting",
+    "resuming",
     "orchestrating",
     "working",
     "verifying",

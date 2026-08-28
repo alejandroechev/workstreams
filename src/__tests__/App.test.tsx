@@ -172,6 +172,7 @@ function createBackend(): Backend {
       evaluations: [],
       events: [],
     })),
+    getWorkstreamLoopProgressVersion: vi.fn(async () => "unconfigured"),
     saveWorkstreamLoop: vi.fn(),
     setWorkstreamLoopEnabled: vi.fn(),
     listWorkstreamLoopSummaries: vi.fn(async () => []),

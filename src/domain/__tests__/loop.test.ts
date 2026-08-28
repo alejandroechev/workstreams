@@ -65,6 +65,7 @@ describe("loop contracts", () => {
   it("exposes the exact run and task state vocabularies", () => {
     expect([...LOOP_RUN_STATES]).toEqual([
       "starting",
+      "resuming",
       "orchestrating",
       "working",
       "verifying",

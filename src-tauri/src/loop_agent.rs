@@ -1,10 +1,12 @@
 use async_trait::async_trait;
 use github_copilot_sdk::handler::ApproveAllHandler;
 use github_copilot_sdk::session::Session;
+use github_copilot_sdk::subscription::RecvErrorKind;
 use github_copilot_sdk::{Client, ClientOptions, MessageOptions, SessionConfig};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{mpsc, Mutex};
@@ -76,6 +78,7 @@ pub trait LoopAgentRuntime: Send + Sync {
 pub struct SdkAgentRuntime {
     client: Client,
     sessions: Mutex<HashMap<String, Arc<Session>>>,
+    cancelled: AtomicBool,
 }
 
 impl SdkAgentRuntime {
@@ -86,6 +89,7 @@ impl SdkAgentRuntime {
         Ok(Self {
             client,
             sessions: Mutex::new(HashMap::new()),
+            cancelled: AtomicBool::new(false),
         })
     }
 
@@ -98,15 +102,42 @@ impl SdkAgentRuntime {
         let mut subscription = session.subscribe();
         let event_sender = events.clone();
         let event_task = tokio::spawn(async move {
-            while let Ok(event) = subscription.recv().await {
-                if event_sender
-                    .send(AgentRuntimeEvent {
-                        event_type: event.event_type,
-                        data: event.data,
-                    })
-                    .is_err()
-                {
-                    break;
+            loop {
+                match subscription.recv().await {
+                    Ok(event) => {
+                        // `send_and_wait` returns the final assistant message
+                        // directly. Forward it below after the operation
+                        // completes so it cannot be lost or duplicated here.
+                        if event.event_type == "assistant.message" {
+                            continue;
+                        }
+                        if event_sender
+                            .send(AgentRuntimeEvent {
+                                event_type: event.event_type,
+                                data: event.data,
+                            })
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                    Err(error) => match error.kind() {
+                        RecvErrorKind::Lagged(lagged) => {
+                            if event_sender
+                                .send(AgentRuntimeEvent {
+                                    event_type: "events.lagged".to_string(),
+                                    data: serde_json::json!({
+                                        "skipped": lagged.skipped(),
+                                    }),
+                                })
+                                .is_err()
+                            {
+                                break;
+                            }
+                        }
+                        RecvErrorKind::Closed => break,
+                        _ => break,
+                    },
                 }
             }
         });
@@ -116,6 +147,7 @@ impl SdkAgentRuntime {
             .await
             .map_err(|error| format!("Copilot session failed: {error}"));
         event_task.abort();
+        let _ = event_task.await;
 
         let event = response?.ok_or_else(|| {
             "Copilot session became idle without an assistant response".to_string()
@@ -126,6 +158,10 @@ impl SdkAgentRuntime {
             .and_then(serde_json::Value::as_str)
             .ok_or_else(|| "Copilot assistant response did not contain text content".to_string())?
             .to_string();
+        let _ = events.send(AgentRuntimeEvent {
+            event_type: event.event_type,
+            data: event.data,
+        });
         Ok(AgentResponse {
             session_id: session.id().to_string(),
             content,
@@ -140,6 +176,9 @@ impl LoopAgentRuntime for SdkAgentRuntime {
         request: AgentRequest,
         events: mpsc::UnboundedSender<AgentRuntimeEvent>,
     ) -> Result<AgentResponse, String> {
+        if self.cancelled.load(Ordering::Acquire) {
+            return Err("Copilot runtime was cancelled".to_string());
+        }
         let mut config = SessionConfig::default();
         config.model = request.model;
         config.working_directory = Some(request.working_directory);
@@ -151,6 +190,11 @@ impl LoopAgentRuntime for SdkAgentRuntime {
                 .await
                 .map_err(|error| format!("Failed to create Copilot session: {error}"))?,
         );
+        if self.cancelled.load(Ordering::Acquire) {
+            let _ = session.abort().await;
+            let _ = session.disconnect().await;
+            return Err("Copilot runtime was cancelled during session creation".to_string());
+        }
         let session_id = session.id().to_string();
         self.sessions
             .lock()
@@ -202,6 +246,7 @@ impl LoopAgentRuntime for SdkAgentRuntime {
     }
 
     async fn abort_all(&self) -> Result<(), String> {
+        self.cancelled.store(true, Ordering::Release);
         let sessions = self
             .sessions
             .lock()

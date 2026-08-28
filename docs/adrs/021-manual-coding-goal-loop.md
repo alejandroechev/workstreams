@@ -81,11 +81,17 @@ The agent conversation is an execution artifact, not workflow truth.
 - `loop_evaluations` — fresh-agent verdict and feedback;
 - `loop_events` — append-only SDK and controller evidence.
 
-Token-level `assistant.*_delta` events are presentation traffic and are not
-persisted one row at a time. Final messages/tool lifecycle events are retained;
-the control tile loads the newest 500 events in chronological order. Verifier
-stdout/stderr lives only in `loop_verifications`; its event carries the
-verification row id and status rather than duplicating up to 512 KiB.
+Only an explicit allowlist of final message, turn, tool lifecycle, session,
+failure, abort, and lag events is persisted. Token deltas, partial tool results,
+and progress chunks are presentation traffic, not one row per chunk. Every
+event payload is capped at 16 KiB; the control tile loads the newest 500 events
+in chronological order. Verifier stdout/stderr lives only in
+`loop_verifications`; its event carries the verification row id and status
+rather than duplicating up to 512 KiB.
+
+While active, the tile updates elapsed time locally and polls a lightweight
+version made only from run/task states and verification/evaluation counts. It
+reloads the full bounded snapshot only when that version changes.
 
 An accepted or in-flight `(loop_spec_id, task_key)` is not enqueued again.
 Restart reconciliation marks nonterminal work interrupted/attention rather than
@@ -141,6 +147,11 @@ one before the LoopSpec is enabled.
   deferred request.
 - **Kill** aborts active SDK sessions immediately, marks the active task
   interrupted, preserves the worktree for inspection, and ends the run.
+
+Resume atomically moves `paused` to a dedicated `resuming` state before
+starting a new SDK runtime. This state is separate from the user-controlled
+pause/stop/kill request, so a control during SDK startup cannot turn a resume
+into a fresh orchestration pass.
 
 The pre-existing PTY lifecycle was fixed as a prerequisite: every
 `portable_pty::Child` is transferred to a dedicated waiter, natural exits are

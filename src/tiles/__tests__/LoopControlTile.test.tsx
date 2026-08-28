@@ -373,12 +373,30 @@ describe("LoopControlTile run monitoring", () => {
     await waitFor(() => expect(getSnapshot.mock.calls.length).toBeGreaterThan(beforeTauri));
   });
 
-  it("polls snapshots while a run is nonterminal", async () => {
-    const interval = vi.spyOn(window, "setInterval");
-    setup(snapshot({ spec: loopSpec(), latestRun: run(), tasks: [task()] }));
+  it("polls a lightweight progress version while a run is nonterminal", async () => {
+    vi.useFakeTimers();
+    const { backend, getSnapshot } = setup(
+      snapshot({ spec: loopSpec(), latestRun: run(), tasks: [task()] }),
+    );
+    const progress = vi
+      .spyOn(backend, "getWorkstreamLoopProgressVersion")
+      .mockResolvedValue("version-1");
 
-    await screen.findByTestId("loop-run-state");
-    expect(interval).toHaveBeenCalledWith(expect.any(Function), 1000);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    const initialLoads = getSnapshot.mock.calls.length;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    expect(progress).toHaveBeenCalledTimes(1);
+    expect(getSnapshot.mock.calls.length).toBe(initialLoads + 1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    expect(progress).toHaveBeenCalledTimes(2);
+    expect(getSnapshot.mock.calls.length).toBe(initialLoads + 1);
   });
 
   it("surfaces run-control errors visibly", async () => {

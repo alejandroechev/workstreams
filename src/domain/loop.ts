@@ -2,6 +2,7 @@ export const MAX_TASK_ITERATIONS = 2 as const;
 
 export const LOOP_RUN_STATES = [
   "starting",
+  "resuming",
   "orchestrating",
   "working",
   "verifying",

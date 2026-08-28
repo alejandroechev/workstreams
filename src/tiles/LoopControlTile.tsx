@@ -222,6 +222,7 @@ function formatDuration(milliseconds: number): string {
 function nextEvidence(run: LoopRun, spec: LoopSpec): string {
   switch (run.state) {
     case "starting":
+    case "resuming":
     case "orchestrating":
       return "Orchestrator task evidence pending";
     case "working":
@@ -739,6 +740,7 @@ export default function LoopControlTile({
   const [error, setError] = useState<string | null>(null);
   const [now, setNow] = useState(0);
   const draftVersionRef = useRef("");
+  const progressVersionRef = useRef("");
 
   const load = useCallback(async () => {
     try {
@@ -807,10 +809,18 @@ export default function LoopControlTile({
     if (!runIsActive) return;
     const interval = window.setInterval(() => {
       setNow(Date.now());
-      void load();
+      void backend
+        .getWorkstreamLoopProgressVersion(workstreamId)
+        .then((version) => {
+          if (version !== progressVersionRef.current) {
+            progressVersionRef.current = version;
+            void load();
+          }
+        })
+        .catch((cause) => setError(message(cause)));
     }, 1000);
     return () => window.clearInterval(interval);
-  }, [load, runIsActive]);
+  }, [backend, load, runIsActive, workstreamId]);
 
   const perform = useCallback(
     async (operation: () => Promise<void>) => {

@@ -396,6 +396,28 @@ export class MemoryBackend implements Backend {
     };
   }
 
+  async getWorkstreamLoopProgressVersion(workstreamId: string): Promise<string> {
+    const snapshot = await this.getWorkstreamLoopSnapshot(workstreamId);
+    return JSON.stringify({
+      spec: snapshot.spec?.updatedAt ?? null,
+      run: snapshot.latestRun
+        ? {
+            id: snapshot.latestRun.id,
+            state: snapshot.latestRun.state,
+            control: snapshot.latestRun.controlRequested,
+          }
+        : null,
+      tasks: snapshot.tasks.map((task) => [
+        task.id,
+        task.state,
+        task.revisionCount,
+        task.updatedAt,
+      ]),
+      verifications: snapshot.verifications.length,
+      evaluations: snapshot.evaluations.length,
+    });
+  }
+
   async saveWorkstreamLoop(
     workstreamId: string,
     input: LoopSpecDraft,
