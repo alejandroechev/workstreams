@@ -15,6 +15,84 @@ describe("TauriBackend", () => {
     backend = new TauriBackend();
   });
 
+  it("maps loop setup and lifecycle commands", async () => {
+    invoke
+      .mockResolvedValueOnce({
+        id: "spec-1",
+        workstream_id: "ws-1",
+        orchestrator_prompt: "discover",
+        worker_prompt: "work",
+        evaluator_prompt: "judge",
+        orchestrator_model: null,
+        worker_model: null,
+        evaluator_model: null,
+        verifier_program: null,
+        verifier_args: [],
+        verifier_cwd: null,
+        run_timeout_seconds: 60,
+        max_task_iterations: 2,
+        enabled: false,
+        created_at: "created",
+        updated_at: "updated",
+      })
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce({
+        id: "run-1",
+        loop_spec_id: "spec-1",
+        state: "starting",
+        current_task_id: null,
+        control_requested: "none",
+        error: null,
+        started_at: "started",
+        finished_at: null,
+        deadline_at: "deadline",
+      })
+      .mockResolvedValueOnce(undefined);
+
+    const spec = await backend.saveWorkstreamLoop("ws-1", {
+      orchestrator: { prompt: "discover", model: "" },
+      worker: { prompt: "work", model: "" },
+      evaluator: { prompt: "judge", model: "" },
+      runTimeoutMs: 60_000,
+      maxTaskIterations: 2,
+    });
+    await backend.setWorkstreamLoopEnabled(spec.id, true);
+    const run = await backend.runWorkstreamLoopNow("ws-1");
+    await backend.controlWorkstreamLoop(run.id, "pause");
+
+    expect(invoke).toHaveBeenNthCalledWith(1, "save_workstream_loop", {
+      workstreamId: "ws-1",
+      input: {
+        orchestrator_prompt: "discover",
+        worker_prompt: "work",
+        evaluator_prompt: "judge",
+        orchestrator_model: null,
+        worker_model: null,
+        evaluator_model: null,
+        verifier_program: null,
+        verifier_args: [],
+        verifier_cwd: null,
+        run_timeout_seconds: 60,
+        max_task_iterations: 2,
+      },
+    });
+    expect(invoke).toHaveBeenNthCalledWith(
+      2,
+      "set_workstream_loop_enabled",
+      { loopSpecId: "spec-1", enabled: true },
+    );
+    expect(invoke).toHaveBeenNthCalledWith(
+      3,
+      "run_workstream_loop_now",
+      { workstreamId: "ws-1" },
+    );
+    expect(invoke).toHaveBeenNthCalledWith(
+      4,
+      "control_workstream_loop",
+      { runId: "run-1", action: "pause" },
+    );
+  });
+
   it("listProjects calls list_projects", async () => {
     invoke.mockResolvedValueOnce([]);
     await backend.listProjects();

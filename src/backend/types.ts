@@ -12,6 +12,13 @@ import type {
   TaskEventSource,
 } from "../domain/tasks";
 import type { TaskStatus, TaskFlag } from "../domain/task-status";
+import type {
+  LoopRun,
+  LoopSpec,
+  LoopSpecDraft,
+  LoopSummary,
+  PersistedLoopSnapshot,
+} from "../domain/loop";
 
 /** Writable fields on a task. Labels go through `setTaskLabels`. */
 export interface TaskUpdate {
@@ -85,6 +92,17 @@ export interface Backend {
   writeToTerminal(tileId: string, data: string): Promise<void>;
   resizeTerminal(tileId: string, rows: number, cols: number): Promise<void>;
   closeTerminal(tileId: string): Promise<void>;
+  // Manual coding goal loop
+  getWorkstreamLoopSnapshot(workstreamId: string): Promise<PersistedLoopSnapshot>;
+  saveWorkstreamLoop(workstreamId: string, input: LoopSpecDraft): Promise<LoopSpec>;
+  setWorkstreamLoopEnabled(loopSpecId: string, enabled: boolean): Promise<void>;
+  listWorkstreamLoopSummaries(): Promise<LoopSummary[]>;
+  runWorkstreamLoopNow(workstreamId: string): Promise<LoopRun>;
+  resumeWorkstreamLoop(runId: string): Promise<LoopRun>;
+  controlWorkstreamLoop(
+    runId: string,
+    action: "pause" | "stop" | "kill",
+  ): Promise<void>;
   // Scrollback
   saveScrollback(tileId: string, data: string): Promise<void>;
   loadScrollback(tileId: string): Promise<string | null>;

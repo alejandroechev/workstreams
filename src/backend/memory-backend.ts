@@ -26,6 +26,14 @@ import { isGeneratedByUs } from "../domain/devlog-render";
 import { parseTraceFile, type TraceFile } from "../domain/trace-format";
 import { rewriteTileCwd } from "../domain/worktree-change";
 import { projectOwningPath } from "../domain/worktree-path";
+import {
+  type LoopRun,
+  type LoopSpec,
+  type LoopSpecDraft,
+  type LoopSummary,
+  type LoopTask,
+  type PersistedLoopSnapshot,
+} from "../domain/loop";
 
 function generateId(): string {
   return Math.random().toString(36).slice(2, 10);
@@ -81,6 +89,10 @@ export class MemoryBackend implements Backend {
    * payload is empty features + null currentPlanId.
    */
   private sessionFeatures = new Map<string, import("./types").SessionFeaturesPayload>();
+  private loopSpecs = new Map<string, LoopSpec>();
+  private loopSnapshots = new Map<string, PersistedLoopSnapshot>();
+  private loopRunWorkstreams = new Map<string, string>();
+  private loopTimers = new Map<string, Array<ReturnType<typeof setTimeout>>>();
 
   seedFile(path: string, content: string): void {
     this.files.set(path, content);
@@ -366,6 +378,295 @@ export class MemoryBackend implements Backend {
 
   async closeTerminal(tileId: string): Promise<void> {
     this.terminals.delete(tileId);
+  }
+
+  async getWorkstreamLoopSnapshot(
+    workstreamId: string,
+  ): Promise<PersistedLoopSnapshot> {
+    return this.loopSnapshots.get(workstreamId) ?? {
+      spec: this.loopSpecs.get(workstreamId) ?? null,
+      latestRun: null,
+      tasks: [],
+      verifications: [],
+      evaluations: [],
+      events: [],
+    };
+  }
+
+  async saveWorkstreamLoop(
+    workstreamId: string,
+    input: LoopSpecDraft,
+  ): Promise<LoopSpec> {
+    const existing = this.loopSpecs.get(workstreamId);
+    if (existing?.enabled) {
+      throw new Error("Disable the loop before changing its configuration");
+    }
+    const timestamp = now();
+    const spec: LoopSpec = {
+      ...input,
+      id: existing?.id ?? generateId(),
+      workstreamId,
+      enabled: false,
+      createdAt: existing?.createdAt ?? timestamp,
+      updatedAt: timestamp,
+    };
+    this.loopSpecs.set(workstreamId, spec);
+    this.loopSnapshots.set(workstreamId, {
+      spec,
+      latestRun: this.loopSnapshots.get(workstreamId)?.latestRun ?? null,
+      tasks: this.loopSnapshots.get(workstreamId)?.tasks ?? [],
+      verifications: this.loopSnapshots.get(workstreamId)?.verifications ?? [],
+      evaluations: this.loopSnapshots.get(workstreamId)?.evaluations ?? [],
+      events: this.loopSnapshots.get(workstreamId)?.events ?? [],
+    });
+    this.emitLoopUpdate(workstreamId);
+    return spec;
+  }
+
+  async setWorkstreamLoopEnabled(
+    loopSpecId: string,
+    enabled: boolean,
+  ): Promise<void> {
+    const entry = [...this.loopSpecs.entries()].find(([, spec]) => spec.id === loopSpecId);
+    if (!entry) throw new Error(`Loop specification not found: ${loopSpecId}`);
+    const [workstreamId, spec] = entry;
+    const updated = { ...spec, enabled, updatedAt: now() };
+    this.loopSpecs.set(workstreamId, updated);
+    const snapshot = await this.getWorkstreamLoopSnapshot(workstreamId);
+    this.loopSnapshots.set(workstreamId, { ...snapshot, spec: updated });
+    this.emitLoopUpdate(workstreamId);
+  }
+
+  async listWorkstreamLoopSummaries(): Promise<LoopSummary[]> {
+    return [...this.loopSpecs.entries()].map(([workstreamId, spec]) => {
+      const run = this.loopSnapshots.get(workstreamId)?.latestRun;
+      return {
+        workstreamId,
+        loopSpecId: spec.id,
+        enabled: spec.enabled,
+        runId: run?.id,
+        runState: run?.state,
+        controlRequested: run?.controlRequested,
+        currentTaskId: run?.activeTaskId ?? undefined,
+        startedAt: run?.startedAt,
+      };
+    });
+  }
+
+  async runWorkstreamLoopNow(workstreamId: string): Promise<LoopRun> {
+    const spec = this.loopSpecs.get(workstreamId);
+    if (!spec) throw new Error("Configure this workstream's loop first");
+    if (!spec.enabled) throw new Error("Enable the loop before starting it");
+    const active = this.loopSnapshots.get(workstreamId)?.latestRun;
+    if (
+      active &&
+      !["completed", "attention", "killed"].includes(active.state)
+    ) {
+      throw new Error("This loop already has an active run");
+    }
+    const timestamp = now();
+    const run: LoopRun = {
+      id: generateId(),
+      loopSpecId: spec.id,
+      state: "starting",
+      activeTaskId: null,
+      pauseRequested: false,
+      stopRequested: false,
+      pendingAction: null,
+      controlRequested: "none",
+      startedAt: timestamp,
+      deadlineAt: new Date(Date.now() + spec.runTimeoutMs).toISOString(),
+    };
+    this.loopRunWorkstreams.set(run.id, workstreamId);
+    this.loopSnapshots.set(workstreamId, {
+      spec,
+      latestRun: run,
+      tasks: [],
+      verifications: [],
+      evaluations: [],
+      events: [{
+        id: 1,
+        loopSpecId: spec.id,
+        loopRunId: run.id,
+        eventType: "run.started",
+        payload: {},
+        createdAt: timestamp,
+      }],
+    });
+    this.scheduleMemoryLoop(workstreamId, run.id);
+    this.emitLoopUpdate(workstreamId);
+    return run;
+  }
+
+  async resumeWorkstreamLoop(runId: string): Promise<LoopRun> {
+    const workstreamId = this.loopRunWorkstreams.get(runId);
+    if (!workstreamId) throw new Error(`Loop run not found: ${runId}`);
+    const snapshot = await this.getWorkstreamLoopSnapshot(workstreamId);
+    const run = snapshot.latestRun;
+    if (!run || run.state !== "paused") {
+      throw new Error("Only a paused loop run can be resumed");
+    }
+    const resumed: LoopRun = {
+      ...run,
+      state: snapshot.tasks.length > 0 ? "working" : "orchestrating",
+      controlRequested: "none",
+      pauseRequested: false,
+    };
+    this.loopSnapshots.set(workstreamId, { ...snapshot, latestRun: resumed });
+    this.scheduleMemoryLoop(workstreamId, runId);
+    this.emitLoopUpdate(workstreamId);
+    return resumed;
+  }
+
+  async controlWorkstreamLoop(
+    runId: string,
+    action: "pause" | "stop" | "kill",
+  ): Promise<void> {
+    const workstreamId = this.loopRunWorkstreams.get(runId);
+    if (!workstreamId) throw new Error(`Loop run not found: ${runId}`);
+    const snapshot = await this.getWorkstreamLoopSnapshot(workstreamId);
+    if (!snapshot.latestRun) throw new Error(`Loop run not found: ${runId}`);
+    this.clearLoopTimers(runId);
+    const state = action === "pause" ? "paused" : action === "kill" ? "killed" : "completed";
+    const tasks = snapshot.tasks.map((task) =>
+      action === "kill" && !["accepted", "blocked"].includes(task.state)
+        ? { ...task, state: "interrupted" as const, error: "Loop killed" }
+        : task,
+    );
+    this.loopSnapshots.set(workstreamId, {
+      ...snapshot,
+      latestRun: {
+        ...snapshot.latestRun,
+        state,
+        controlRequested: action,
+        activeTaskId: action === "pause" ? snapshot.latestRun.activeTaskId : null,
+        finishedAt: action === "pause" ? undefined : now(),
+      },
+      tasks,
+    });
+    this.emitLoopUpdate(workstreamId);
+  }
+
+  private emitLoopUpdate(workstreamId: string): void {
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(
+        new CustomEvent("memory-loop-updated", { detail: { workstreamId } }),
+      );
+    }
+  }
+
+  private clearLoopTimers(runId: string): void {
+    for (const timer of this.loopTimers.get(runId) ?? []) clearTimeout(timer);
+    this.loopTimers.delete(runId);
+  }
+
+  private scheduleMemoryLoop(workstreamId: string, runId: string): void {
+    this.clearLoopTimers(runId);
+    const transition = (
+      delay: number,
+      update: (snapshot: PersistedLoopSnapshot) => PersistedLoopSnapshot,
+    ) =>
+      setTimeout(() => {
+        const snapshot = this.loopSnapshots.get(workstreamId);
+        if (!snapshot || snapshot.latestRun?.id !== runId) return;
+        if (["paused", "completed", "killed"].includes(snapshot.latestRun.state)) return;
+        this.loopSnapshots.set(workstreamId, update(snapshot));
+        this.emitLoopUpdate(workstreamId);
+      }, delay);
+
+    const timers = [
+      transition(40, (snapshot) => ({
+        ...snapshot,
+        latestRun: snapshot.latestRun
+          ? { ...snapshot.latestRun, state: "orchestrating" }
+          : null,
+      })),
+      transition(120, (snapshot) => {
+        const task: LoopTask = snapshot.tasks[0] ?? {
+          id: generateId(),
+          loopRunId: runId,
+          loopSpecId: snapshot.spec?.id ?? "",
+          key: "memory-coding-task",
+          title: "Implement the coding objective",
+          objective: "Complete the configured coding objective.",
+          state: "working",
+          workerSessionId: "memory-worker-session",
+          revisionCount: 0,
+          createdAt: now(),
+          updatedAt: now(),
+        };
+        return {
+          ...snapshot,
+          latestRun: snapshot.latestRun
+            ? { ...snapshot.latestRun, state: "working", activeTaskId: task.id }
+            : null,
+          tasks: [{ ...task, state: "working" }],
+        };
+      }),
+      transition(240, (snapshot) => ({
+        ...snapshot,
+        latestRun: snapshot.latestRun
+          ? { ...snapshot.latestRun, state: "verifying" }
+          : null,
+        tasks: snapshot.tasks.map((task) => ({
+          ...task,
+          state: "verifying",
+          workerResult: JSON.stringify({
+            status: "completed",
+            summary: "Implemented the configured objective",
+            evidence: ["memory fixture"],
+          }),
+        })),
+      })),
+      transition(360, (snapshot) => ({
+        ...snapshot,
+        latestRun: snapshot.latestRun
+          ? { ...snapshot.latestRun, state: "evaluating" }
+          : null,
+        tasks: snapshot.tasks.map((task) => ({ ...task, state: "evaluating" })),
+        verifications: snapshot.spec?.verifier && snapshot.tasks[0]
+          ? [{
+              id: generateId(),
+              loopTaskId: snapshot.tasks[0].id,
+              attempt: 1,
+              status: "passed",
+              program: snapshot.spec.verifier.program,
+              args: [...snapshot.spec.verifier.args],
+              cwd: snapshot.spec.verifier.cwd,
+              durationMs: 12,
+              stdout: "Verification passed",
+              stderr: "",
+              truncated: false,
+              createdAt: now(),
+            }]
+          : [],
+      })),
+      transition(520, (snapshot) => ({
+        ...snapshot,
+        latestRun: snapshot.latestRun
+          ? {
+              ...snapshot.latestRun,
+              state: "completed",
+              activeTaskId: null,
+              finishedAt: now(),
+            }
+          : null,
+        tasks: snapshot.tasks.map((task) => ({ ...task, state: "accepted" })),
+        evaluations: snapshot.tasks[0]
+          ? [{
+              id: generateId(),
+              loopTaskId: snapshot.tasks[0].id,
+              attempt: 1,
+              sessionId: "memory-evaluator-session",
+              verdict: "accepted",
+              summary: "The result satisfies the objective.",
+              evidence: ["memory fixture"],
+              createdAt: now(),
+            }]
+          : [],
+      })),
+    ];
+    this.loopTimers.set(runId, timers);
   }
 
   async saveScrollback(tileId: string, data: string): Promise<void> {

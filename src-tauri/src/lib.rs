@@ -3,6 +3,9 @@ mod db;
 mod devlog;
 mod file_io;
 mod fs_watcher;
+mod loop_agent;
+mod loop_verifier;
+mod loops;
 mod pty;
 mod repo_create;
 mod session_poller;
@@ -80,7 +83,9 @@ pub struct WorkstreamLayout {
 
 struct AppState {
     db: Mutex<Connection>,
+    db_path: std::path::PathBuf,
     pty: PtyManager,
+    loop_manager: Arc<loops::LoopManager>,
     session_poller: Arc<SessionPoller>,
     fs_watcher: Arc<FsWatcher>,
     /// Monotonic counter shared by every search; bumping this cancels in-flight searches.
@@ -5108,7 +5113,9 @@ pub fn run() {
 
     let app_state = AppState {
         db: Mutex::new(conn),
+        db_path: db_path.clone(),
         pty: PtyManager::new(),
+        loop_manager: Arc::new(loops::LoopManager::new()),
         session_poller: poller.clone(),
         fs_watcher,
         search_epoch: Arc::new(std::sync::atomic::AtomicU64::new(0)),
@@ -5122,6 +5129,13 @@ pub fn run() {
         .manage(app_state)
         .manage(file_io::WatcherState::new())
         .setup(move |app| {
+            {
+                let state = app.state::<AppState>();
+                let conn = state.db.lock().unwrap();
+                if let Err(error) = loops::reconcile_interrupted_runs(&conn) {
+                    eprintln!("[loop] Startup reconciliation failed: {error}");
+                }
+            }
             // Start the session stats poller background thread
             session_poller::start_poller(app.handle().clone(), poller);
             // Start the filesystem watcher
@@ -5154,6 +5168,14 @@ pub fn run() {
             write_to_pty,
             resize_pty,
             close_terminal,
+            // Manual coding goal loops
+            loops::get_workstream_loop_snapshot,
+            loops::save_workstream_loop,
+            loops::set_workstream_loop_enabled,
+            loops::list_workstream_loop_summaries,
+            loops::run_workstream_loop_now,
+            loops::resume_workstream_loop,
+            loops::control_workstream_loop,
             // Scrollback
             save_scrollback,
             load_scrollback,

@@ -274,6 +274,8 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
         let _ = conn.execute_batch(sql);
     }
 
+    crate::loops::init_loop_schema(conn)?;
+
     Ok(())
 }
 

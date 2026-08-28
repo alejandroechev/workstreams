@@ -19,6 +19,24 @@ import type {
   TaskEventSource,
 } from "../domain/tasks";
 import type { TaskStatus } from "../domain/task-status";
+import type {
+  LoopRun,
+  LoopSpec,
+  LoopSpecDraft,
+  LoopSummary,
+  PersistedLoopSnapshot,
+} from "../domain/loop";
+import {
+  decodeLoopRun,
+  decodeLoopSnapshot,
+  decodeLoopSpec,
+  decodeLoopSummaries,
+  encodeLoopSpecDraft,
+  type LoopRunWire,
+  type LoopSnapshotWire,
+  type LoopSpecWire,
+  type LoopSummaryWire,
+} from "./loop-wire";
 
 export class TauriBackend implements Backend {
   async listProjects(): Promise<Project[]> {
@@ -168,6 +186,60 @@ export class TauriBackend implements Backend {
 
   async closeTerminal(tileId: string): Promise<void> {
     await invoke("close_terminal", { tileId });
+  }
+
+  async getWorkstreamLoopSnapshot(
+    workstreamId: string,
+  ): Promise<PersistedLoopSnapshot> {
+    const snapshot = await invoke<LoopSnapshotWire>(
+      "get_workstream_loop_snapshot",
+      { workstreamId },
+    );
+    return decodeLoopSnapshot(snapshot);
+  }
+
+  async saveWorkstreamLoop(
+    workstreamId: string,
+    input: LoopSpecDraft,
+  ): Promise<LoopSpec> {
+    const spec = await invoke<LoopSpecWire>("save_workstream_loop", {
+      workstreamId,
+      input: encodeLoopSpecDraft(input),
+    });
+    return decodeLoopSpec(spec);
+  }
+
+  async setWorkstreamLoopEnabled(
+    loopSpecId: string,
+    enabled: boolean,
+  ): Promise<void> {
+    await invoke("set_workstream_loop_enabled", { loopSpecId, enabled });
+  }
+
+  async listWorkstreamLoopSummaries(): Promise<LoopSummary[]> {
+    const summaries = await invoke<LoopSummaryWire[]>(
+      "list_workstream_loop_summaries",
+    );
+    return decodeLoopSummaries(summaries);
+  }
+
+  async runWorkstreamLoopNow(workstreamId: string): Promise<LoopRun> {
+    const run = await invoke<LoopRunWire>("run_workstream_loop_now", {
+      workstreamId,
+    });
+    return decodeLoopRun(run);
+  }
+
+  async resumeWorkstreamLoop(runId: string): Promise<LoopRun> {
+    const run = await invoke<LoopRunWire>("resume_workstream_loop", { runId });
+    return decodeLoopRun(run);
+  }
+
+  async controlWorkstreamLoop(
+    runId: string,
+    action: "pause" | "stop" | "kill",
+  ): Promise<void> {
+    await invoke("control_workstream_loop", { runId, action });
   }
 
   async saveScrollback(tileId: string, scrollback: string): Promise<void> {
