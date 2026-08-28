@@ -415,6 +415,7 @@ export class MemoryBackend implements Backend {
       ]),
       verifications: snapshot.verifications.length,
       evaluations: snapshot.evaluations.length,
+      events: snapshot.events.length,
     });
   }
 

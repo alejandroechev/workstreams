@@ -101,15 +101,14 @@ impl SdkAgentRuntime {
     ) -> Result<AgentResponse, String> {
         let mut subscription = session.subscribe();
         let event_sender = events.clone();
+        let last_assistant_id = Arc::new(Mutex::new(None::<String>));
+        let forwarded_assistant_id = Arc::clone(&last_assistant_id);
         let event_task = tokio::spawn(async move {
             loop {
                 match subscription.recv().await {
                     Ok(event) => {
-                        // `send_and_wait` returns the final assistant message
-                        // directly. Forward it below after the operation
-                        // completes so it cannot be lost or duplicated here.
                         if event.event_type == "assistant.message" {
-                            continue;
+                            *forwarded_assistant_id.lock().await = Some(event.id.to_string());
                         }
                         if event_sender
                             .send(AgentRuntimeEvent {
@@ -158,10 +157,17 @@ impl SdkAgentRuntime {
             .and_then(serde_json::Value::as_str)
             .ok_or_else(|| "Copilot assistant response did not contain text content".to_string())?
             .to_string();
-        let _ = events.send(AgentRuntimeEvent {
-            event_type: event.event_type,
-            data: event.data,
-        });
+        let final_was_forwarded = last_assistant_id
+            .lock()
+            .await
+            .as_deref()
+            .is_some_and(|id| id == event.id.as_str());
+        if !final_was_forwarded {
+            let _ = events.send(AgentRuntimeEvent {
+                event_type: event.event_type,
+                data: event.data,
+            });
+        }
         Ok(AgentResponse {
             session_id: session.id().to_string(),
             content,
@@ -200,6 +206,12 @@ impl LoopAgentRuntime for SdkAgentRuntime {
             .lock()
             .await
             .insert(session_id.clone(), Arc::clone(&session));
+        if self.cancelled.load(Ordering::Acquire) {
+            self.sessions.lock().await.remove(&session_id);
+            let _ = session.abort().await;
+            let _ = session.disconnect().await;
+            return Err("Copilot runtime was cancelled during session registration".to_string());
+        }
         let _ = events.send(AgentRuntimeEvent {
             event_type: "session.started".to_string(),
             data: serde_json::json!({

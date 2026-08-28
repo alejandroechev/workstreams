@@ -90,8 +90,9 @@ in chronological order. Verifier stdout/stderr lives only in
 rather than duplicating up to 512 KiB.
 
 While active, the tile updates elapsed time locally and polls a lightweight
-version made only from run/task states and verification/evaluation counts. It
-reloads the full bounded snapshot only when that version changes.
+version made from run/task states, verification/evaluation counts, and the
+latest retained event id. It reloads the full bounded snapshot only when that
+version changes.
 
 An accepted or in-flight `(loop_spec_id, task_key)` is not enqueued again.
 Restart reconciliation marks nonterminal work interrupted/attention rather than

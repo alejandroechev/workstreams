@@ -1489,7 +1489,6 @@ async fn execute_manual_loop_inner(
         .ok_or_else(|| format!("Loop specification not found: {}", run.loop_spec_id))?;
     let tasks = if run.state == LoopRunState::Paused || run.state == LoopRunState::Resuming {
         let conn = db.lock().unwrap();
-        set_run_control(&conn, run_id, "none")?;
         list_loop_tasks(&conn, run_id)?
             .into_iter()
             .filter(|task| task.state == LoopTaskState::Queued)
@@ -2111,14 +2110,22 @@ fn loop_progress_version(conn: &Connection, workstream_id: &str) -> Result<Strin
             |row| row.get(0),
         )
         .map_err(|error| format!("Failed to count loop evaluations: {error}"))?;
+    let latest_event_id: i64 = conn
+        .query_row(
+            "SELECT COALESCE(MAX(id), 0) FROM loop_events WHERE loop_run_id = ?1",
+            [&run.id],
+            |row| row.get(0),
+        )
+        .map_err(|error| format!("Failed to read loop event version: {error}"))?;
     Ok(format!(
-        "{}:{}:{}:{}:{}:{}",
+        "{}:{}:{}:{}:{}:{}:{}",
         run.id,
         run.state.as_str(),
         run.control_requested,
         task_versions.join("|"),
         verification_count,
-        evaluation_count
+        evaluation_count,
+        latest_event_id
     ))
 }
 
@@ -3150,6 +3157,61 @@ mod tests {
         assert_eq!(
             list_loop_tasks(&conn, &run.id).expect("list tasks")[0].state,
             LoopTaskState::Accepted
+        );
+    }
+
+    #[tokio::test]
+    async fn pause_requested_while_resuming_is_not_cleared() {
+        use crate::loop_agent::ScriptedAgentRuntime;
+        use std::sync::{Arc, Mutex};
+
+        let conn = test_db();
+        let spec = save_loop_spec(&conn, "ws-1", spec_input()).expect("save loop spec");
+        set_loop_enabled(&conn, &spec.id, true).expect("enable loop");
+        let run = create_loop_run(&conn, &spec.id, 600).expect("create run");
+        let task = enqueue_task(
+            &conn,
+            &run.id,
+            &spec.id,
+            &DiscoveredTask {
+                key: "queued".to_string(),
+                title: "Queued".to_string(),
+                objective: "Do not start while pausing".to_string(),
+            },
+        )
+        .expect("enqueue task")
+        .expect("task inserted");
+        set_run_state(&conn, &run.id, LoopRunState::Paused, None).expect("pause run");
+        let claimed = claim_paused_run(&conn, &run.id).expect("claim resume");
+        assert_eq!(claimed.state, LoopRunState::Resuming);
+        set_run_control(&conn, &run.id, "pause").expect("request pause during startup");
+        let db = Arc::new(Mutex::new(conn));
+        let runtime = Arc::new(ScriptedAgentRuntime::new(vec![])) as Arc<dyn LoopAgentRuntime>;
+
+        execute_manual_loop(
+            Arc::clone(&db),
+            runtime,
+            &run.id,
+            std::path::PathBuf::from("/tmp/repo"),
+        )
+        .await
+        .expect("honor pause before starting worker");
+
+        let conn = db.lock().unwrap();
+        assert_eq!(
+            get_loop_run(&conn, &run.id)
+                .expect("load run")
+                .expect("run exists")
+                .state,
+            LoopRunState::Paused
+        );
+        assert_eq!(
+            list_loop_tasks(&conn, &run.id).expect("list tasks")[0].id,
+            task.id
+        );
+        assert_eq!(
+            list_loop_tasks(&conn, &run.id).expect("list tasks")[0].state,
+            LoopTaskState::Queued
         );
     }
 
