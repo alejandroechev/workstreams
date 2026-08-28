@@ -136,6 +136,6 @@ describe("MemoryBackend manual coding loops", () => {
     await vi.advanceTimersByTimeAsync(1_500);
     expect(
       (await backend.getWorkstreamLoopSnapshot(workstreamId)).latestRun?.state,
-    ).toBe("completed");
+    ).toBe("attention");
   });
 });

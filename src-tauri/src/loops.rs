@@ -283,6 +283,32 @@ impl LoopManager {
             Ok(())
         }
     }
+
+    pub(crate) async fn abort_all(&self) -> Result<(), String> {
+        let active = self
+            .runtimes
+            .lock()
+            .await
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut errors = Vec::new();
+        for run in active {
+            run.cancelled.store(true, Ordering::Release);
+            if let Err(error) = run.runtime.abort_all().await {
+                errors.push(error);
+            }
+        }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors.join("; "))
+        }
+    }
+
+    async fn is_active(&self, run_id: &str) -> bool {
+        self.runtimes.lock().await.contains_key(run_id)
+    }
 }
 
 pub fn init_loop_schema(conn: &Connection) -> rusqlite::Result<()> {
@@ -709,6 +735,44 @@ fn claim_paused_run(conn: &Connection, run_id: &str) -> Result<LoopRun, String> 
         .ok_or_else(|| format!("Loop run not found after resume claim: {run_id}"))
 }
 
+pub(crate) fn transition_unfinished_tasks(
+    conn: &Connection,
+    run_id: &str,
+    state: LoopTaskState,
+    error: &str,
+) -> Result<usize, String> {
+    conn.execute(
+        "UPDATE loop_tasks
+         SET state = ?1, error = ?2, updated_at = ?3
+         WHERE loop_run_id = ?4
+           AND state IN ('queued', 'working', 'verifying', 'evaluating')",
+        params![state.as_str(), error, crate::now(), run_id],
+    )
+    .map_err(|db_error| format!("Failed to transition unfinished loop tasks: {db_error}"))
+}
+
+fn finish_run_from_persisted_tasks(conn: &Connection, run_id: &str) -> Result<(), String> {
+    let attention_tasks: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM loop_tasks
+             WHERE loop_run_id = ?1
+               AND state IN ('blocked', 'attention', 'interrupted')",
+            [run_id],
+            |row| row.get(0),
+        )
+        .map_err(|error| format!("Failed to derive loop disposition: {error}"))?;
+    if attention_tasks > 0 {
+        set_run_state(
+            conn,
+            run_id,
+            LoopRunState::Attention,
+            Some("One or more tasks require human attention"),
+        )
+    } else {
+        set_run_state(conn, run_id, LoopRunState::Completed, None)
+    }
+}
+
 fn apply_control_boundary(conn: &Connection, run_id: &str) -> Result<bool, String> {
     let run = get_loop_run(conn, run_id)?.ok_or_else(|| format!("Loop run not found: {run_id}"))?;
     match run.control_requested.as_str() {
@@ -719,15 +783,13 @@ fn apply_control_boundary(conn: &Connection, run_id: &str) -> Result<bool, Strin
         }
         "stop" => {
             set_run_state(conn, run_id, LoopRunState::Stopping, None)?;
-            conn.execute(
-                "UPDATE loop_tasks
-                 SET state = 'blocked', error = 'Loop stopped before this task started',
-                     updated_at = ?1
-                 WHERE loop_run_id = ?2 AND state = 'queued'",
-                params![crate::now(), run_id],
-            )
-            .map_err(|error| format!("Failed to stop queued loop tasks: {error}"))?;
-            set_run_state(conn, run_id, LoopRunState::Completed, None)?;
+            transition_unfinished_tasks(
+                conn,
+                run_id,
+                LoopTaskState::Blocked,
+                "Loop stopped before this task started",
+            )?;
+            finish_run_from_persisted_tasks(conn, run_id)?;
             Ok(false)
         }
         "kill" => Ok(false),
@@ -992,6 +1054,9 @@ fn record_runtime_events(
     events: &mut tokio::sync::mpsc::UnboundedReceiver<AgentRuntimeEvent>,
 ) -> Result<(), String> {
     while let Ok(event) = events.try_recv() {
+        if !should_persist_agent_event(&event.event_type) {
+            continue;
+        }
         append_loop_event(
             conn,
             loop_spec_id,
@@ -1002,6 +1067,10 @@ fn record_runtime_events(
         )?;
     }
     Ok(())
+}
+
+fn should_persist_agent_event(event_type: &str) -> bool {
+    !event_type.ends_with("_delta")
 }
 
 async fn start_agent_stage(
@@ -1039,14 +1108,16 @@ async fn start_agent_stage(
             }
             event = event_rx.recv() => {
                 if let Some(event) = event {
-                    append_loop_event(
-                        &db.lock().unwrap(),
-                        loop_spec_id,
-                        run_id,
-                        task_id,
-                        &format!("agent.{}", event.event_type),
-                        &event.data,
-                    )?;
+                    if should_persist_agent_event(&event.event_type) {
+                        append_loop_event(
+                            &db.lock().unwrap(),
+                            loop_spec_id,
+                            run_id,
+                            task_id,
+                            &format!("agent.{}", event.event_type),
+                            &event.data,
+                        )?;
+                    }
                 }
             }
         }
@@ -1084,14 +1155,16 @@ async fn revise_worker_stage(
             }
             event = event_rx.recv() => {
                 if let Some(event) = event {
-                    append_loop_event(
-                        &db.lock().unwrap(),
-                        identity.loop_spec_id,
-                        identity.run_id,
-                        Some(identity.task_id),
-                        &format!("agent.{}", event.event_type),
-                        &event.data,
-                    )?;
+                    if should_persist_agent_event(&event.event_type) {
+                        append_loop_event(
+                            &db.lock().unwrap(),
+                            identity.loop_spec_id,
+                            identity.run_id,
+                            Some(identity.task_id),
+                            &format!("agent.{}", event.event_type),
+                            &event.data,
+                        )?;
+                    }
                 }
             }
         }
@@ -1186,11 +1259,12 @@ fn record_verification(
     attempt: u32,
     spec: &LoopSpec,
     result: &VerificationResult,
-) -> Result<(), String> {
+) -> Result<String, String> {
     let program = spec
         .verifier_program
         .as_deref()
         .ok_or_else(|| "Cannot record a verifier that is not configured".to_string())?;
+    let id = Uuid::new_v4().to_string();
     conn.execute(
         "INSERT INTO loop_verifications (
             id, loop_task_id, attempt, status, program, args_json, cwd,
@@ -1198,7 +1272,7 @@ fn record_verification(
             created_at
          ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
         params![
-            Uuid::new_v4().to_string(),
+            id,
             task_id,
             attempt,
             result.status.as_str(),
@@ -1216,7 +1290,7 @@ fn record_verification(
         ],
     )
     .map_err(|error| format!("Failed to record verification result: {error}"))?;
-    Ok(())
+    Ok(id)
 }
 
 async fn verify_task(
@@ -1251,15 +1325,18 @@ async fn verify_task(
     })
     .await;
     let conn = db.lock().unwrap();
-    record_verification(&conn, task_id, attempt, spec, &result)?;
+    let verification_id = record_verification(&conn, task_id, attempt, spec, &result)?;
     append_loop_event(
         &conn,
         &spec.id,
         run_id,
         Some(task_id),
         "verification.completed",
-        &serde_json::to_value(&result)
-            .map_err(|error| format!("Failed to encode verification event: {error}"))?,
+        &serde_json::json!({
+            "verification_id": verification_id,
+            "status": result.status,
+            "attempt": attempt,
+        }),
     )?;
     Ok(Some(result))
 }
@@ -1425,7 +1502,6 @@ async fn execute_manual_loop_inner(
         tasks
     };
 
-    let mut needs_attention = false;
     for task in tasks {
         {
             let conn = db.lock().unwrap();
@@ -1469,7 +1545,6 @@ async fn execute_manual_loop_inner(
             };
             set_task_state(&db.lock().unwrap(), &task.id, state, None)?;
             runtime.disconnect(&worker_response.session_id).await?;
-            needs_attention = true;
             continue;
         }
         let first_verification = verify_task(
@@ -1493,7 +1568,6 @@ async fn execute_manual_loop_inner(
                 None,
             )?;
             runtime.disconnect(&worker_response.session_id).await?;
-            needs_attention = true;
             continue;
         }
 
@@ -1550,7 +1624,6 @@ async fn execute_manual_loop_inner(
                 };
                 set_task_state(&db.lock().unwrap(), &task.id, state, None)?;
                 runtime.disconnect(&worker_response.session_id).await?;
-                needs_attention = true;
                 continue;
             }
             let revised_verification = verify_task(
@@ -1574,7 +1647,6 @@ async fn execute_manual_loop_inner(
                     None,
                 )?;
                 runtime.disconnect(&worker_response.session_id).await?;
-                needs_attention = true;
                 continue;
             }
             evaluate_task(
@@ -1597,14 +1669,8 @@ async fn execute_manual_loop_inner(
 
         let task_state = match final_verdict.verdict {
             EvaluatorVerdict::Accepted => LoopTaskState::Accepted,
-            EvaluatorVerdict::Blocked => {
-                needs_attention = true;
-                LoopTaskState::Blocked
-            }
-            EvaluatorVerdict::Revise | EvaluatorVerdict::Invalid => {
-                needs_attention = true;
-                LoopTaskState::Attention
-            }
+            EvaluatorVerdict::Blocked => LoopTaskState::Blocked,
+            EvaluatorVerdict::Revise | EvaluatorVerdict::Invalid => LoopTaskState::Attention,
         };
         set_task_state(&db.lock().unwrap(), &task.id, task_state, None)?;
         runtime.disconnect(&worker_response.session_id).await?;
@@ -1615,16 +1681,7 @@ async fn execute_manual_loop_inner(
         return Ok(());
     }
     update_run_current_task(&conn, run_id, None)?;
-    if needs_attention {
-        set_run_state(
-            &conn,
-            run_id,
-            LoopRunState::Attention,
-            Some("One or more tasks require human attention"),
-        )
-    } else {
-        set_run_state(&conn, run_id, LoopRunState::Completed, None)
-    }
+    finish_run_from_persisted_tasks(&conn, run_id)
 }
 
 pub async fn execute_manual_loop(
@@ -1664,6 +1721,7 @@ async fn execute_manual_loop_with_cancel(
                     )
                 });
         if !preserve_control_state {
+            let _ = transition_unfinished_tasks(&conn, run_id, LoopTaskState::Interrupted, error);
             let _ = set_run_state(&conn, run_id, LoopRunState::Attention, Some(error));
         }
     }
@@ -1837,7 +1895,15 @@ fn list_loop_events(conn: &Connection, run_id: &str) -> Result<Vec<LoopEventReco
         .prepare(
             "SELECT id, loop_spec_id, loop_run_id, loop_task_id, event_type,
                     payload_json, created_at
-             FROM loop_events WHERE loop_run_id = ?1 ORDER BY id",
+             FROM (
+                 SELECT id, loop_spec_id, loop_run_id, loop_task_id, event_type,
+                        payload_json, created_at
+                 FROM loop_events
+                 WHERE loop_run_id = ?1
+                 ORDER BY id DESC
+                 LIMIT 500
+             )
+             ORDER BY id",
         )
         .map_err(|error| format!("Failed to prepare loop event query: {error}"))?;
     let rows = statement
@@ -1972,7 +2038,7 @@ struct LoopUpdatedEvent {
 }
 
 async fn run_with_sdk(
-    db_path: PathBuf,
+    db: Arc<Mutex<Connection>>,
     manager: Arc<LoopManager>,
     app: tauri::AppHandle,
     workstream_id: String,
@@ -1985,9 +2051,12 @@ async fn run_with_sdk(
     let runtime = match SdkAgentRuntime::connect().await {
         Ok(runtime) => Arc::new(runtime) as Arc<dyn LoopAgentRuntime>,
         Err(error) => {
-            if let Ok(conn) = crate::db::open_db(&db_path) {
-                let _ = set_run_state(&conn, &run_id, LoopRunState::Attention, Some(&error));
-            }
+            let _ = set_run_state(
+                &db.lock().unwrap(),
+                &run_id,
+                LoopRunState::Attention,
+                Some(&error),
+            );
             let _ = app.emit(
                 "loop-updated",
                 LoopUpdatedEvent {
@@ -2003,8 +2072,22 @@ async fn run_with_sdk(
         .register(&run_id, Arc::clone(&runtime), Arc::clone(&cancelled))
         .await
     {
-        if let Ok(conn) = crate::db::open_db(&db_path) {
-            let _ = set_run_state(&conn, &run_id, LoopRunState::Attention, Some(&error));
+        {
+            let conn = db.lock().unwrap();
+            let is_resume_claim = get_loop_run(&conn, &run_id)
+                .ok()
+                .flatten()
+                .is_some_and(|run| run.control_requested == "resume");
+            if is_resume_claim {
+                let _ = conn.execute(
+                    "UPDATE loop_runs
+                     SET state = 'paused', control_requested = 'none'
+                     WHERE id = ?1 AND control_requested = 'resume'",
+                    [&run_id],
+                );
+            } else {
+                let _ = set_run_state(&conn, &run_id, LoopRunState::Attention, Some(&error));
+            }
         }
         let _ = runtime.shutdown().await;
         let _ = app.emit(
@@ -2016,22 +2099,14 @@ async fn run_with_sdk(
         );
         return;
     }
-    match crate::db::open_db(&db_path) {
-        Ok(conn) => {
-            let db = Arc::new(Mutex::new(conn));
-            let _ = execute_manual_loop_with_cancel(
-                db,
-                Arc::clone(&runtime),
-                &run_id,
-                working_directory,
-                Some(cancelled),
-            )
-            .await;
-        }
-        Err(error) => {
-            eprintln!("[loop] Failed to open database for run {run_id}: {error}");
-        }
-    }
+    let _ = execute_manual_loop_with_cancel(
+        db,
+        Arc::clone(&runtime),
+        &run_id,
+        working_directory,
+        Some(cancelled),
+    )
+    .await;
     if let Err(error) = runtime.shutdown().await {
         eprintln!("[loop] Failed to shut down runtime for {run_id}: {error}");
     }
@@ -2088,7 +2163,7 @@ pub fn run_workstream_loop_now(
     };
     let run_id = run.id.clone();
     tauri::async_runtime::spawn(run_with_sdk(
-        state.db_path.clone(),
+        Arc::clone(&state.db),
         Arc::clone(&state.loop_manager),
         app,
         workstream_id,
@@ -2099,11 +2174,14 @@ pub fn run_workstream_loop_now(
 }
 
 #[tauri::command]
-pub fn resume_workstream_loop(
+pub async fn resume_workstream_loop(
     app: tauri::AppHandle,
     state: tauri::State<'_, crate::AppState>,
     run_id: String,
 ) -> Result<LoopRun, String> {
+    if state.loop_manager.is_active(&run_id).await {
+        return Err("The paused loop executor is still shutting down; retry Resume".to_string());
+    }
     let (run, workstream_id, directory) = {
         let conn = state.db.lock().unwrap();
         let run =
@@ -2116,7 +2194,7 @@ pub fn resume_workstream_loop(
         (claimed_run, workstream_id, directory)
     };
     tauri::async_runtime::spawn(run_with_sdk(
-        state.db_path.clone(),
+        Arc::clone(&state.db),
         Arc::clone(&state.loop_manager),
         app,
         workstream_id,
@@ -2124,6 +2202,39 @@ pub fn resume_workstream_loop(
         directory,
     ));
     Ok(run)
+}
+
+fn apply_control_request(conn: &Connection, run: &LoopRun, action: &str) -> Result<bool, String> {
+    match action {
+        "pause" => {
+            if run.state != LoopRunState::Paused {
+                set_run_control(conn, &run.id, "pause")?;
+            }
+            Ok(false)
+        }
+        "stop" if run.state == LoopRunState::Paused => {
+            transition_unfinished_tasks(
+                conn,
+                &run.id,
+                LoopTaskState::Blocked,
+                "Loop stopped while paused",
+            )?;
+            set_run_control(conn, &run.id, "none")?;
+            finish_run_from_persisted_tasks(conn, &run.id)?;
+            Ok(false)
+        }
+        "stop" => {
+            set_run_control(conn, &run.id, "stop")?;
+            Ok(false)
+        }
+        "kill" => {
+            set_run_control(conn, &run.id, "kill")?;
+            transition_unfinished_tasks(conn, &run.id, LoopTaskState::Interrupted, "Loop killed")?;
+            set_run_state(conn, &run.id, LoopRunState::Killed, None)?;
+            Ok(true)
+        }
+        _ => Err("Loop action must be pause, stop, or kill".to_string()),
+    }
 }
 
 #[tauri::command]
@@ -2135,25 +2246,15 @@ pub async fn control_workstream_loop(
 ) -> Result<(), String> {
     use tauri::Emitter;
 
-    let workstream_id = {
+    let (workstream_id, abort_runtime) = {
         let conn = state.db.lock().unwrap();
         let run =
             get_loop_run(&conn, &run_id)?.ok_or_else(|| format!("Loop run not found: {run_id}"))?;
         let (workstream_id, _) = workstream_directory_for_spec(&conn, &run.loop_spec_id)?;
-        match action.as_str() {
-            "pause" | "stop" => set_run_control(&conn, &run_id, &action)?,
-            "kill" => {
-                set_run_control(&conn, &run_id, "kill")?;
-                if let Some(task_id) = &run.current_task_id {
-                    set_task_state(&conn, task_id, LoopTaskState::Interrupted, None)?;
-                }
-                set_run_state(&conn, &run_id, LoopRunState::Killed, None)?;
-            }
-            _ => return Err("Loop action must be pause, stop, or kill".to_string()),
-        }
-        workstream_id
+        let abort_runtime = apply_control_request(&conn, &run, &action)?;
+        (workstream_id, abort_runtime)
     };
-    if action == "kill" {
+    if abort_runtime {
         state.loop_manager.abort(&run_id).await?;
     }
     let _ = app.emit(
@@ -2760,7 +2861,7 @@ mod tests {
                 .expect("load stopped run")
                 .expect("run exists")
                 .state,
-            LoopRunState::Completed
+            LoopRunState::Attention
         );
         assert_eq!(
             list_loop_tasks(&conn, &stopped_run.id).expect("list tasks")[0].state,
@@ -2784,6 +2885,110 @@ mod tests {
         assert_eq!(claimed.state, LoopRunState::Starting);
         assert_eq!(claimed.control_requested, "resume");
         assert!(claim_paused_run(&conn, &run.id).is_err());
+    }
+
+    #[test]
+    fn kill_preserves_terminal_tasks_and_releases_unfinished_keys() {
+        let conn = test_db();
+        let spec = save_loop_spec(&conn, "ws-1", spec_input()).expect("save loop spec");
+        set_loop_enabled(&conn, &spec.id, true).expect("enable loop");
+        let run = create_loop_run(&conn, &spec.id, 600).expect("create run");
+        let accepted = enqueue_task(
+            &conn,
+            &run.id,
+            &spec.id,
+            &DiscoveredTask {
+                key: "accepted".to_string(),
+                title: "Accepted".to_string(),
+                objective: "Already done".to_string(),
+            },
+        )
+        .expect("enqueue accepted")
+        .expect("accepted inserted");
+        set_task_state(&conn, &accepted.id, LoopTaskState::Accepted, None).expect("accept task");
+        let queued = enqueue_task(
+            &conn,
+            &run.id,
+            &spec.id,
+            &DiscoveredTask {
+                key: "queued".to_string(),
+                title: "Queued".to_string(),
+                objective: "Not started".to_string(),
+            },
+        )
+        .expect("enqueue queued")
+        .expect("queued inserted");
+        conn.execute(
+            "UPDATE loop_runs SET current_task_id = ?1 WHERE id = ?2",
+            params![accepted.id, run.id],
+        )
+        .expect("point at terminal task");
+        let current = get_loop_run(&conn, &run.id)
+            .expect("load run")
+            .expect("run exists");
+
+        assert!(apply_control_request(&conn, &current, "kill").expect("kill run"));
+
+        assert_eq!(
+            get_loop_run(&conn, &run.id)
+                .expect("load killed run")
+                .expect("run exists")
+                .state,
+            LoopRunState::Killed
+        );
+        let tasks = list_loop_tasks(&conn, &run.id).expect("list tasks");
+        assert_eq!(
+            tasks
+                .iter()
+                .find(|task| task.id == accepted.id)
+                .unwrap()
+                .state,
+            LoopTaskState::Accepted
+        );
+        assert_eq!(
+            tasks
+                .iter()
+                .find(|task| task.id == queued.id)
+                .unwrap()
+                .state,
+            LoopTaskState::Interrupted
+        );
+    }
+
+    #[test]
+    fn stop_is_applied_immediately_to_a_paused_run() {
+        let conn = test_db();
+        let spec = save_loop_spec(&conn, "ws-1", spec_input()).expect("save loop spec");
+        set_loop_enabled(&conn, &spec.id, true).expect("enable loop");
+        let run = create_loop_run(&conn, &spec.id, 600).expect("create run");
+        enqueue_task(
+            &conn,
+            &run.id,
+            &spec.id,
+            &DiscoveredTask {
+                key: "queued".to_string(),
+                title: "Queued".to_string(),
+                objective: "Not started".to_string(),
+            },
+        )
+        .expect("enqueue queued");
+        set_run_state(&conn, &run.id, LoopRunState::Paused, None).expect("pause run");
+        let paused = get_loop_run(&conn, &run.id)
+            .expect("load run")
+            .expect("run exists");
+
+        assert!(!apply_control_request(&conn, &paused, "stop").expect("stop paused run"));
+        assert_eq!(
+            get_loop_run(&conn, &run.id)
+                .expect("load stopped run")
+                .expect("run exists")
+                .state,
+            LoopRunState::Attention
+        );
+        assert_eq!(
+            list_loop_tasks(&conn, &run.id).expect("list tasks")[0].state,
+            LoopTaskState::Blocked
+        );
     }
 
     #[tokio::test]
@@ -2906,6 +3111,61 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn executor_error_releases_current_and_queued_task_keys() {
+        use crate::loop_agent::{AgentRole, ScriptedAgentResponse, ScriptedAgentRuntime};
+        use std::sync::{Arc, Mutex};
+
+        let conn = test_db();
+        let mut input = spec_input();
+        input.verifier_program = None;
+        let spec = save_loop_spec(&conn, "ws-1", input).expect("save loop spec");
+        set_loop_enabled(&conn, &spec.id, true).expect("enable loop");
+        let run = create_loop_run(&conn, &spec.id, 600).expect("create run");
+        let runtime = Arc::new(ScriptedAgentRuntime::new(vec![
+            ScriptedAgentResponse {
+                role: AgentRole::Orchestrator,
+                session_id: "orchestrator-1".to_string(),
+                content: r#"{"tasks":[
+                    {"key":"first","title":"First","objective":"Fail parsing"},
+                    {"key":"second","title":"Second","objective":"Wait in queue"}
+                ]}"#
+                .to_string(),
+                events: vec![],
+            },
+            ScriptedAgentResponse {
+                role: AgentRole::Worker,
+                session_id: "worker-1".to_string(),
+                content: "not-json".to_string(),
+                events: vec![],
+            },
+        ]));
+        let db = Arc::new(Mutex::new(conn));
+
+        let error = execute_manual_loop(
+            Arc::clone(&db),
+            runtime,
+            &run.id,
+            std::path::PathBuf::from("/tmp/repo"),
+        )
+        .await
+        .expect_err("malformed worker result must fail");
+
+        assert!(error.contains("invalid result JSON"));
+        let conn = db.lock().unwrap();
+        assert_eq!(
+            get_loop_run(&conn, &run.id)
+                .expect("load run")
+                .expect("run exists")
+                .state,
+            LoopRunState::Attention
+        );
+        assert!(list_loop_tasks(&conn, &run.id)
+            .expect("list tasks")
+            .iter()
+            .all(|task| task.state == LoopTaskState::Interrupted));
+    }
+
     #[test]
     fn malformed_orchestrator_tasks_are_rejected_without_guessing() {
         let error =
@@ -2913,5 +3173,43 @@ mod tests {
                 .expect_err("missing key must fail");
 
         assert!(error.contains("key"));
+    }
+
+    #[test]
+    fn token_deltas_are_not_persisted_and_event_reads_are_bounded() {
+        assert!(!should_persist_agent_event("assistant.message_delta"));
+        assert!(!should_persist_agent_event("assistant.reasoning_delta"));
+        assert!(should_persist_agent_event("assistant.message"));
+
+        let conn = test_db();
+        let spec = save_loop_spec(&conn, "ws-1", spec_input()).expect("save loop spec");
+        set_loop_enabled(&conn, &spec.id, true).expect("enable loop");
+        let run = create_loop_run(&conn, &spec.id, 600).expect("create run");
+        for index in 0..510 {
+            append_loop_event(
+                &conn,
+                &spec.id,
+                &run.id,
+                None,
+                "agent.tool",
+                &serde_json::json!({ "index": index }),
+            )
+            .expect("append event");
+        }
+
+        let events = list_loop_events(&conn, &run.id).expect("list events");
+        assert_eq!(events.len(), 500);
+        assert_eq!(
+            events
+                .first()
+                .and_then(|event| event.payload["index"].as_i64()),
+            Some(10)
+        );
+        assert_eq!(
+            events
+                .last()
+                .and_then(|event| event.payload["index"].as_i64()),
+            Some(509)
+        );
     }
 }

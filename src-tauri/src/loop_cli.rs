@@ -3,8 +3,8 @@ use crate::loop_agent::{
 };
 use crate::loops::{
     create_loop_run, execute_manual_loop, get_loop_run, get_loop_spec, loop_snapshot,
-    save_loop_spec, set_loop_enabled, set_run_control, set_run_state, LoopRunState, LoopSnapshot,
-    LoopSpecInput,
+    save_loop_spec, set_loop_enabled, set_run_control, set_run_state, transition_unfinished_tasks,
+    LoopRunState, LoopSnapshot, LoopSpecInput, LoopTaskState,
 };
 use rusqlite::{params, Connection};
 use serde::Serialize;
@@ -116,19 +116,16 @@ fn control(args: &[String]) -> Result<(), String> {
         return Err("Control action must be pause, stop, or kill".to_string());
     }
     let conn = open(Path::new(db_path))?;
-    let run =
+    let _run =
         get_loop_run(&conn, run_id)?.ok_or_else(|| format!("Loop run not found: {run_id}"))?;
     set_run_control(&conn, run_id, action)?;
     if action == "kill" {
-        if let Some(task_id) = run.current_task_id {
-            conn.execute(
-                "UPDATE loop_tasks
-                 SET state = 'interrupted', error = 'Loop killed from CLI', updated_at = ?1
-                 WHERE id = ?2",
-                params![crate::now(), task_id],
-            )
-            .map_err(|error| format!("Failed to interrupt loop task: {error}"))?;
-        }
+        transition_unfinished_tasks(
+            &conn,
+            run_id,
+            LoopTaskState::Interrupted,
+            "Loop killed from CLI",
+        )?;
         set_run_state(&conn, run_id, LoopRunState::Killed, None)?;
     }
     print_json(

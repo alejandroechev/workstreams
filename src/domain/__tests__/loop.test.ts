@@ -450,7 +450,7 @@ describe("transitionLoop", () => {
     expect(ignored.action).toEqual({ type: "none" });
 
     const completed = transitionLoop(ignored.snapshot, { type: "stop_completed" });
-    expect(completed.snapshot.run.state).toBe("completed");
+    expect(completed.snapshot.run.state).toBe("attention");
   });
 
   it("honors a graceful stop even when the current stage fails", () => {

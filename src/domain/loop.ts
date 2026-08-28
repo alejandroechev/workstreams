@@ -462,7 +462,11 @@ export function transitionLoop(
   if (current.run.state === "stopping") {
     if (outcome.type !== "stop_completed") return unchanged(current);
     const next = copySnapshot(current);
-    next.run.state = "completed";
+    next.run.state = next.tasks.some((task) =>
+      ["blocked", "attention", "interrupted"].includes(task.state),
+    )
+      ? "attention"
+      : "completed";
     return { snapshot: next, action: noAction() };
   }
 

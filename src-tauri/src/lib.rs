@@ -87,8 +87,7 @@ pub struct WorkstreamLayout {
 }
 
 struct AppState {
-    db: Mutex<Connection>,
-    db_path: std::path::PathBuf,
+    db: Arc<Mutex<Connection>>,
     pty: PtyManager,
     loop_manager: Arc<loops::LoopManager>,
     session_poller: Arc<SessionPoller>,
@@ -5117,8 +5116,7 @@ pub fn run() {
     let fs_watcher_clone = fs_watcher.clone();
 
     let app_state = AppState {
-        db: Mutex::new(conn),
-        db_path: db_path.clone(),
+        db: Arc::new(Mutex::new(conn)),
         pty: PtyManager::new(),
         loop_manager: Arc::new(loops::LoopManager::new()),
         session_poller: poller.clone(),
@@ -5299,6 +5297,9 @@ pub fn run() {
         .run(|app_handle, event| {
             if let tauri::RunEvent::ExitRequested { .. } = event {
                 let state = app_handle.state::<AppState>();
+                if let Err(error) = tauri::async_runtime::block_on(state.loop_manager.abort_all()) {
+                    eprintln!("[loop] Failed to stop every active loop: {error}");
+                }
                 state.pty.close_all();
             }
         });

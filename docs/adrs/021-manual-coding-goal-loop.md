@@ -81,6 +81,12 @@ The agent conversation is an execution artifact, not workflow truth.
 - `loop_evaluations` — fresh-agent verdict and feedback;
 - `loop_events` — append-only SDK and controller evidence.
 
+Token-level `assistant.*_delta` events are presentation traffic and are not
+persisted one row at a time. Final messages/tool lifecycle events are retained;
+the control tile loads the newest 500 events in chronological order. Verifier
+stdout/stderr lives only in `loop_verifications`; its event carries the
+verification row id and status rather than duplicating up to 512 KiB.
+
 An accepted or in-flight `(loop_spec_id, task_key)` is not enqueued again.
 Restart reconciliation marks nonterminal work interrupted/attention rather than
 silently rerunning it.
@@ -130,7 +136,9 @@ one before the LoopSpec is enabled.
 - **Pause** requests a stop at the next persisted task boundary and preserves
   queued tasks for Resume.
 - **Stop** finishes the current boundary, blocks work not yet started, and
-  ends the run.
+  ends the run in attention when unfinished tasks remain. Stopping an already
+  paused run is applied synchronously because no executor exists to consume a
+  deferred request.
 - **Kill** aborts active SDK sessions immediately, marks the active task
   interrupted, preserves the worktree for inspection, and ends the run.
 
@@ -138,6 +146,8 @@ The pre-existing PTY lifecycle was fixed as a prerequisite: every
 `portable_pty::Child` is transferred to a dedicated waiter, natural exits are
 collected, and explicit close kills then joins the waiter. A generation token
 prevents an old process exit from removing a replacement tile's handle.
+App exit also cancels every registered SDK session and verifier process group
+before closing PTYs.
 
 ### UI and CLI are peers
 
