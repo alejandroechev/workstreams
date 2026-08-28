@@ -14,6 +14,7 @@ graph TB
             SessionMeta["SessionMetaTile<br/>Session + file detail"]
             Workbench["WorkbenchTile<br/>Workbench file detail"]
             CodeReview["CodeReviewTile<br/>diff-first PR-style review (ADR 014)<br/>inline comments + in-place edit<br/>reviewer↔agent via session.db, no MCP<br/>manual Sync (no poll)"]
+            LoopControl["LoopControlTile (ADR 021)<br/>manual coding goal loop<br/>setup + Run/Pause/Resume/Stop/Kill<br/>tasks + verifier + evaluator evidence"]
             InlineComments["Inline File Comments (ADR 009)<br/>view zones in FileEditorView + comments-toggle<br/>reviewer↔agent via session.db, no MCP<br/>requires a linked session"]
             TaskBoard["TaskBoard (ADR 020)<br/>global board, not a tile<br/>7 columns + label swimlanes<br/>subtasks / labels / event feed"]
             QuickNote["WorkstreamQuickNote<br/>log a note to this workstream's task"]
@@ -28,6 +29,9 @@ graph TB
         subgraph Backend["Rust Backend"]
             LibRS["lib.rs<br/>22 Tauri commands"]
             PtyRS["pty.rs<br/>PtyManager: spawn, write, resize, close"]
+            LoopRS["loops.rs<br/>durable manual-loop controller<br/>task ledger + dedupe + controls"]
+            LoopAgentRS["loop_agent.rs<br/>Rust Copilot SDK runtime<br/>SDK + scripted implementations"]
+            LoopVerifierRS["loop_verifier.rs<br/>bounded external verification<br/>process-group timeout + output cap"]
             ShellEnvRS["shell_env.rs<br/>login-shell PATH repair (macOS GUI launch)"]
             CodeTraceRS["code_traces index<br/>list/get/delete/index + staleness"]
             TasksRS["tasks.rs<br/>tasks / subtasks / labels / task_events<br/>ISO-8601 timestamps, append-only events"]
@@ -39,6 +43,7 @@ graph TB
 
     subgraph Storage["Persistence"]
         AppDB["workstreams.db<br/>(SQLite — workstreams, tiles, layouts, scrollback)"]
+        LoopDB["workstreams.db loop ledger<br/>specs / runs / tasks / verifications<br/>evaluations / append-only events"]
         CopilotDB["~/.copilot/session-store.db<br/>(read-only enrichment)"]
         CopilotSessionDB["~/.copilot/session-state/&lt;id&gt;/session.db<br/>(bound session — reviews + review_comments<br/>+ file_comments, RW)"]
     end
@@ -47,9 +52,11 @@ graph TB
         DevlogDir["devlog/&lt;fy&gt;/YYYY-MM-DD.md<br/>one-way export, never read back"]
     end
 
-    subgraph OS["Windows OS"]
-        ConPTY["ConPTY<br/>via portable-pty"]
-        Shell["pwsh.exe / agency copilot --yolo"]
+    subgraph OS["Host OS"]
+        ConPTY["ConPTY / Unix PTY<br/>via portable-pty"]
+        Shell["shell / interactive Copilot CLI"]
+        CopilotServer["Bundled compatible Copilot CLI<br/>server mode / JSON-RPC"]
+        VerifierProcess["Verifier process group<br/>program + argument array"]
         GhCli["gh CLI<br/>(optional, for repo create)"]
         FileSystem["Filesystem"]
     end
@@ -68,6 +75,7 @@ graph TB
     TileGrid --> SessionMeta
     TileGrid --> Workbench
     TileGrid --> CodeReview
+    TileGrid --> LoopControl
     App --> StatusBar
     App -- "close-requested / switch guard" --> FileBuffers
 
@@ -92,6 +100,13 @@ graph TB
     FileBuffers -- "invoke: read/write/watch/canonicalize" --> LibRS
 
     LibRS --> PtyRS
+    LibRS --> LoopRS
+    LoopControl -- "invoke: save/enable/run/snapshot/control" --> LoopRS
+    LoopRS --> LoopAgentRS
+    LoopAgentRS --> CopilotServer
+    LoopRS --> LoopVerifierRS
+    LoopVerifierRS --> VerifierProcess
+    LoopRS --> LoopDB
     PtyRS --> ShellEnvRS
     LibRS --> DbRS
     LibRS --> CodeTraceRS

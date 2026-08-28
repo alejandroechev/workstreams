@@ -32,6 +32,17 @@ project-aware workspace:
   workstream, with live activity indicator + bell on idle. Configurable CLI
   command (default `agency copilot --yolo`; switch to `copilot --yolo` for
   the public CLI).
+- 🔁 **Manual coding goal loops** — attach one generic loop to a workstream,
+  configure orchestrator / worker / evaluator prompts, and press **Run now**.
+  The orchestrator emits deduplicated coding tasks; each runs in a bounded
+  Copilot SDK session, passes an optional external verification command, and
+  is judged by a fresh evaluator. One evaluator-requested revision is allowed
+  before human attention. The **Goal Loop** tile exposes live stage, task,
+  output, verifier evidence, verdicts, limits, and distinct
+  Pause / Resume / Stop / Kill controls; the sidebar shows running-loop state
+  even when the tile is closed. MVP1 is manual and local while Workstreams is
+  open—recurring schedules are intentionally next. See
+  [ADR 021](docs/adrs/021-manual-coding-goal-loop.md).
 - 🔀 **Switch a workstream to another repo** — the same **Change worktree…**
   action. Pick a directory in a different repo and the workstream moves repo
   with it (colour, grouping and tile cwds follow). A directory in no known repo
@@ -43,7 +54,7 @@ project-aware workspace:
   opened yet this session; selecting it again reloads and respawns everything.
 - 📋 **Task board with daily devlog export** — a global board (sidebar →
   **Tasks**), not a tile, because a task may have no workstream and often
-  outlives the one it had. Seven columns matching the status glyphs already
+  outlives the one it had. Five columns matching the active status vocabulary
   used in a hand-written devlog (⚒️ 👁️ 🧊 🚗 🙋 ✅), **label swimlanes** so a
   long in-progress column stays scannable, an **append-only activity log** per task (entries can be multi-line; `⌘⏎` logs), and one **free-form Notes**
   field per task — editable multi-line context that lands in the exported page. Cards are **drag-and-drop** between columns (dropping a card back on
@@ -196,6 +207,7 @@ shell profile**. See [ADR 017](docs/adrs/017-macos-gui-launch-path.md).
    - `Alt+M` Session Meta
    - `Alt+B` Workbench
    - `Alt+A` Code Review
+   - **Goal Loop** from the Add tile menu
 3. Navigate between tiles with `Alt+Arrows`. Fullscreen the focused one
    with `Alt+F`.
 4. Open the settings dialog (gear icon) to tune font sizes, terminal scroll
@@ -269,6 +281,7 @@ presented as a slide deck:
 | Editor | Monaco Editor |
 | Doc viewer | react-markdown + remark-gfm + Mermaid (vendored) |
 | Persistence | SQLite (rusqlite) with WAL |
+| Agent runtime | GitHub Copilot SDK for Rust (bundled compatible CLI) |
 | Theme | Catppuccin Mocha |
 
 ## Documentation
