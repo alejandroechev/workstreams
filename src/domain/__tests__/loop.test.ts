@@ -98,6 +98,35 @@ describe("loop contracts", () => {
       reason: "Workstream ws-1 already has a loop spec",
     });
   });
+
+  it("builds default and explicitly resumed run state", () => {
+    expect(makeLoopRun({ id: "run", loopSpecId: "spec" })).toEqual({
+      id: "run",
+      loopSpecId: "spec",
+      state: "starting",
+      activeTaskId: null,
+      pauseRequested: false,
+      stopRequested: false,
+      pendingAction: null,
+    });
+    expect(
+      makeLoopRun({
+        id: "run",
+        loopSpecId: "spec",
+        state: "paused",
+        activeTaskId: "task",
+        pauseRequested: true,
+        stopRequested: true,
+        pendingAction: { type: "evaluate", taskId: "task" },
+      }),
+    ).toMatchObject({
+      state: "paused",
+      activeTaskId: "task",
+      pauseRequested: true,
+      stopRequested: true,
+      pendingAction: { type: "evaluate", taskId: "task" },
+    });
+  });
 });
 
 describe("task-key dedupe", () => {
@@ -133,6 +162,22 @@ describe("task-key dedupe", () => {
     expect(dedupeTaskKeys([task({ id: "new", key: "retry" })], existing)).toEqual({
       ok: true,
     });
+  });
+
+  it("permits retrying keys whose prior tasks need attention or were blocked", () => {
+    const existing = [
+      task({ id: "blocked", key: "blocked-key", state: "blocked" }),
+      task({ id: "attention", key: "attention-key", state: "attention" }),
+    ];
+    expect(
+      dedupeTaskKeys(
+        [
+          task({ id: "new-blocked", key: "blocked-key" }),
+          task({ id: "new-attention", key: "attention-key" }),
+        ],
+        existing,
+      ),
+    ).toEqual({ ok: true });
   });
 });
 
@@ -451,5 +496,151 @@ describe("transitionLoop", () => {
       type: "attention",
       reason: "Loop run exceeded its timeout",
     });
+  });
+
+  it("leaves completed runs terminal", () => {
+    const current = snapshot("completed", [task({ state: "accepted" })]);
+    expect(transitionLoop(current, { type: "run_started" })).toEqual({
+      snapshot: current,
+      action: { type: "none" },
+    });
+  });
+
+  it("pauses before orchestration and resumes its pending action", () => {
+    const paused = transitionLoop(snapshot("starting"), {
+      type: "pause_requested",
+    });
+    expect(paused.snapshot.run).toMatchObject({
+      state: "paused",
+      pendingAction: { type: "orchestrate" },
+    });
+    const resumed = transitionLoop(paused.snapshot, { type: "resume_requested" });
+    expect(resumed.snapshot.run.state).toBe("orchestrating");
+    expect(resumed.action).toEqual({ type: "orchestrate" });
+  });
+
+  it.each([
+    [{ type: "start_worker", taskId: "task-1" } as const, "working"],
+    [{ type: "run_verifier", taskId: "task-1" } as const, "verifying"],
+    [{ type: "evaluate", taskId: "task-1" } as const, "evaluating"],
+    [{ type: "stop" } as const, "stopping"],
+    [{ type: "kill" } as const, "killed"],
+    [{ type: "attention", reason: "check" } as const, "attention"],
+    [{ type: "none" } as const, "completed"],
+  ])("restores the state represented by paused action $type", (action, state) => {
+    const current = snapshot("paused", [task()]);
+    current.run.pendingAction = action;
+    const resumed = transitionLoop(current, { type: "resume_requested" });
+    expect(resumed.snapshot.run.state).toBe(state);
+    expect(resumed.action).toEqual(action);
+  });
+
+  it("keeps a paused run unchanged without a resumable pending action", () => {
+    const paused = snapshot("paused");
+    expect(transitionLoop(paused, { type: "resume_requested" })).toEqual({
+      snapshot: paused,
+      action: { type: "none" },
+    });
+    paused.run.pendingAction = { type: "orchestrate" };
+    expect(transitionLoop(paused, { type: "pause_requested" })).toEqual({
+      snapshot: paused,
+      action: { type: "none" },
+    });
+  });
+
+  it.each(["paused", "attention"] as const)(
+    "stops immediately from %s",
+    (state) => {
+      const current = snapshot(state, [
+        task({ state: "queued" }),
+        task({ id: "accepted", key: "accepted", state: "accepted" }),
+      ]);
+      const stopped = transitionLoop(current, { type: "stop_requested" });
+      expect(stopped.snapshot.run.state).toBe("stopping");
+      expect(stopped.snapshot.tasks.map((candidate) => candidate.state)).toEqual([
+        "interrupted",
+        "accepted",
+      ]);
+      expect(stopped.action).toEqual({ type: "stop" });
+    },
+  );
+
+  it("ignores unrelated outcomes while stopping or awaiting attention", () => {
+    const stopping = snapshot("stopping");
+    expect(transitionLoop(stopping, { type: "run_started" })).toEqual({
+      snapshot: stopping,
+      action: { type: "none" },
+    });
+    const attention = snapshot("attention");
+    expect(transitionLoop(attention, { type: "run_started" })).toEqual({
+      snapshot: attention,
+      action: { type: "none" },
+    });
+  });
+
+  it("rejects a run bound to the wrong spec", () => {
+    const current = snapshot("starting");
+    current.run.loopSpecId = "other-spec";
+    const result = transitionLoop(current, { type: "run_started" });
+    expect(result.snapshot.run.state).toBe("attention");
+    expect(result.action).toEqual({
+      type: "attention",
+      reason: "Loop run and loop spec do not match",
+    });
+  });
+
+  it.each([
+    ["starting", { type: "worker_completed", workerSessionId: "x" } as const],
+    ["orchestrating", { type: "worker_completed", workerSessionId: "x" } as const],
+    ["working", { type: "tasks_proposed", tasks: [] } as const],
+    ["verifying", { type: "worker_completed", workerSessionId: "x" } as const],
+    ["evaluating", { type: "worker_completed", workerSessionId: "x" } as const],
+  ] as const)("surfaces an unexpected outcome while %s", (state, outcome) => {
+    const tasks =
+      state === "working" || state === "verifying" || state === "evaluating"
+        ? [task({ state })]
+        : [];
+    const current = snapshot(state, tasks);
+    if (tasks.length > 0) current.run.activeTaskId = "task-1";
+    expect(transitionLoop(current, outcome).snapshot.run.state).toBe("attention");
+  });
+
+  it.each(["working", "verifying", "evaluating"] as const)(
+    "requires an active task while %s",
+    (state) => {
+      const result = transitionLoop(snapshot(state), {
+        type:
+          state === "verifying"
+            ? "verification_completed"
+            : state === "evaluating"
+              ? "evaluation_completed"
+              : "worker_completed",
+        ...(state === "verifying"
+          ? { result: { kind: "passed" as const } }
+          : state === "evaluating"
+            ? { verdict: "accepted" as const }
+            : { workerSessionId: "worker" }),
+      } as Parameters<typeof transitionLoop>[1]);
+      expect(result.snapshot.run.state).toBe("attention");
+    },
+  );
+
+  it("surfaces worker and orchestrator failures", () => {
+    const orchestrator = transitionLoop(snapshot("orchestrating"), {
+      type: "orchestrator_failed",
+      reason: "discovery failed",
+    });
+    expect(orchestrator.action).toEqual({
+      type: "attention",
+      reason: "discovery failed",
+    });
+
+    const working = snapshot("working", [task({ state: "working" })]);
+    working.run.activeTaskId = "task-1";
+    const worker = transitionLoop(working, {
+      type: "worker_failed",
+      reason: "implementation failed",
+    });
+    expect(worker.snapshot.tasks[0].state).toBe("attention");
   });
 });

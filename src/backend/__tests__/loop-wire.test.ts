@@ -1,5 +1,33 @@
 import { describe, expect, it } from "vitest";
-import { decodeLoopSnapshot, decodeLoopSummaries, encodeLoopSpecDraft } from "../loop-wire";
+import {
+  decodeLoopSnapshot,
+  decodeLoopSpec,
+  decodeLoopSummaries,
+  encodeLoopSpecDraft,
+  type LoopSpecWire,
+} from "../loop-wire";
+
+function specWire(overrides: Partial<LoopSpecWire> = {}): LoopSpecWire {
+  return {
+    id: "spec-1",
+    workstream_id: "ws-1",
+    orchestrator_prompt: "discover",
+    worker_prompt: "work",
+    evaluator_prompt: "judge",
+    orchestrator_model: null,
+    worker_model: null,
+    evaluator_model: null,
+    verifier_program: null,
+    verifier_args: [],
+    verifier_cwd: null,
+    run_timeout_seconds: 60,
+    max_task_iterations: 2,
+    enabled: false,
+    created_at: "100",
+    updated_at: "101",
+    ...overrides,
+  };
+}
 
 describe("loop wire mapping", () => {
   it("encodes the nested frontend spec for the flat Rust command", () => {
@@ -150,6 +178,68 @@ describe("loop wire mapping", () => {
       controlRequested: "none",
       currentTaskId: "task-1",
       startedAt: "started",
+    }]);
+  });
+
+  it("normalizes epoch timestamps and supports a verifier without a cwd", () => {
+    const decoded = decodeLoopSpec(specWire({
+      verifier_program: "npm",
+      verifier_args: ["test"],
+    }));
+
+    expect(decoded.createdAt).toBe("1970-01-01T00:01:40.000Z");
+    expect(decoded.updatedAt).toBe("1970-01-01T00:01:41.000Z");
+    expect(decoded.verifier).toEqual({
+      program: "npm",
+      args: ["test"],
+    });
+  });
+
+  it("rejects unsupported iteration contracts", () => {
+    expect(() =>
+      decodeLoopSpec(specWire({ max_task_iterations: 3 })),
+    ).toThrow("Unsupported max task iterations");
+  });
+
+  it("decodes an unconfigured workstream and nullable sidebar run fields", () => {
+    expect(
+      decodeLoopSnapshot({
+        spec: null,
+        latest_run: null,
+        tasks: [],
+        verifications: [],
+        evaluations: [],
+        events: [],
+      }),
+    ).toEqual({
+      spec: null,
+      latestRun: null,
+      tasks: [],
+      verifications: [],
+      evaluations: [],
+      events: [],
+    });
+
+    expect(
+      decodeLoopSummaries([{
+        workstream_id: "ws-1",
+        loop_spec_id: "spec-1",
+        enabled: false,
+        run_id: null,
+        run_state: null,
+        control_requested: null,
+        current_task_id: null,
+        started_at: null,
+      }]),
+    ).toEqual([{
+      workstreamId: "ws-1",
+      loopSpecId: "spec-1",
+      enabled: false,
+      runId: undefined,
+      runState: undefined,
+      controlRequested: undefined,
+      currentTaskId: undefined,
+      startedAt: undefined,
     }]);
   });
 });

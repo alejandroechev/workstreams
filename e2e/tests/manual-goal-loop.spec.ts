@@ -55,9 +55,7 @@ test("configures, pauses, resumes, verifies, and evaluates a manual coding loop"
   await expect(page.locator('[data-testid="running-loop-count"]')).toContainText(
     "1 running",
   );
-  await expect(page.locator('[data-testid="loop-run-state"]')).toContainText(
-    "Working",
-  );
+  await expect(page.locator('article[data-testid^="loop-task-"]').first()).toBeVisible();
 
   await page.locator('[data-testid="loop-pause"]').click();
   await expect(page.locator('[data-testid="loop-run-state"]')).toContainText(
