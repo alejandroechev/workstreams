@@ -117,7 +117,7 @@ export interface LoopVerificationRecord {
   id: string;
   loopTaskId: string;
   attempt: number;
-  status: "passed" | "nonzero" | "timed_out" | "spawn_error";
+  status: "passed" | "nonzero" | "timed_out" | "spawn_error" | "cancelled";
   program: string;
   args: string[];
   cwd?: string;

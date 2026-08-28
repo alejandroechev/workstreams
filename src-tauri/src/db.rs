@@ -284,6 +284,7 @@ pub fn open_db(path: &Path) -> rusqlite::Result<Connection> {
         std::fs::create_dir_all(parent).ok();
     }
     let conn = Connection::open(path)?;
+    conn.busy_timeout(std::time::Duration::from_secs(5))?;
     conn.execute_batch("PRAGMA foreign_keys = ON;")?;
     init_db(&conn)?;
     Ok(conn)
@@ -316,6 +317,12 @@ mod tests {
             "subtasks",
             "task_labels",
             "task_events",
+            "loop_specs",
+            "loop_runs",
+            "loop_tasks",
+            "loop_verifications",
+            "loop_evaluations",
+            "loop_events",
         ];
         for table in &expected {
             let count: i64 = conn
@@ -446,6 +453,23 @@ mod tests {
             )
             .unwrap();
         assert_eq!(count, 1);
+        drop(conn);
+        std::fs::remove_file(&tmp).ok();
+    }
+
+    #[test]
+    fn open_db_waits_for_concurrent_writers() {
+        let tmp = std::env::temp_dir().join(format!(
+            "ws_busy_timeout_{}_{}.db",
+            std::process::id(),
+            crate::now()
+        ));
+        std::fs::remove_file(&tmp).ok();
+        let conn = open_db(&tmp).unwrap();
+        let timeout_ms: u64 = conn
+            .query_row("PRAGMA busy_timeout", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(timeout_ms, 5_000);
         drop(conn);
         std::fs::remove_file(&tmp).ok();
     }

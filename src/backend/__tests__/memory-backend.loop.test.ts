@@ -85,4 +85,57 @@ describe("MemoryBackend manual coding loops", () => {
       error: "Loop killed",
     });
   });
+
+  it("rejects invalid setup and lifecycle requests", async () => {
+    await expect(backend.runWorkstreamLoopNow(workstreamId)).rejects.toThrow(
+      "Configure",
+    );
+    const spec = await backend.saveWorkstreamLoop(workstreamId, {
+      orchestrator: { prompt: "Discover", model: "" },
+      worker: { prompt: "Work", model: "" },
+      evaluator: { prompt: "Evaluate", model: "" },
+      runTimeoutMs: 60_000,
+      maxTaskIterations: 2,
+    });
+    await expect(backend.runWorkstreamLoopNow(workstreamId)).rejects.toThrow(
+      "Enable",
+    );
+    await expect(
+      backend.setWorkstreamLoopEnabled("missing", true),
+    ).rejects.toThrow("not found");
+    await expect(backend.resumeWorkstreamLoop("missing")).rejects.toThrow(
+      "not found",
+    );
+    await expect(
+      backend.controlWorkstreamLoop("missing", "kill"),
+    ).rejects.toThrow("not found");
+    await backend.setWorkstreamLoopEnabled(spec.id, true);
+    await backend.runWorkstreamLoopNow(workstreamId);
+    await expect(backend.runWorkstreamLoopNow(workstreamId)).rejects.toThrow(
+      "active run",
+    );
+  });
+
+  it("uses domain safe boundaries for pause, resume, and stop", async () => {
+    await configure();
+    const run = await backend.runWorkstreamLoopNow(workstreamId);
+    await vi.advanceTimersByTimeAsync(320);
+
+    await backend.controlWorkstreamLoop(run.id, "pause");
+    expect(
+      (await backend.getWorkstreamLoopSnapshot(workstreamId)).latestRun,
+    ).toMatchObject({ state: "working", pauseRequested: true });
+
+    await vi.advanceTimersByTimeAsync(400);
+    expect(
+      (await backend.getWorkstreamLoopSnapshot(workstreamId)).latestRun?.state,
+    ).toBe("paused");
+
+    await backend.resumeWorkstreamLoop(run.id);
+    await backend.controlWorkstreamLoop(run.id, "stop");
+    await vi.advanceTimersByTimeAsync(1_500);
+    expect(
+      (await backend.getWorkstreamLoopSnapshot(workstreamId)).latestRun?.state,
+    ).toBe("completed");
+  });
 });

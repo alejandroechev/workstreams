@@ -19,6 +19,7 @@ use tauri::{AppHandle, Emitter};
 // threshold for interactive feedback.
 const FLUSH_INTERVAL: Duration = Duration::from_millis(16);
 const FLUSH_BYTES: usize = 4096;
+const PROCESS_EXIT_GRACE: Duration = Duration::from_secs(2);
 
 /// Returns how many leading bytes of `buf` are safe to emit now such that the
 /// retained remainder (if any) is only an *incomplete trailing* UTF-8 sequence.
@@ -125,6 +126,8 @@ pub struct PtyHandle {
     master: Arc<Mutex<Box<dyn portable_pty::MasterPty + Send>>>,
     killer: Box<dyn ChildKiller + Send + Sync>,
     waiter: Option<JoinHandle<()>>,
+    wait_done: mpsc::Receiver<()>,
+    process_group_id: Option<i32>,
     generation: u64,
     #[allow(dead_code)]
     pid: Option<u32>,
@@ -152,6 +155,62 @@ fn terminate_and_wait(mut child: Box<dyn Child + Send + Sync>) -> Result<ExitSta
         (Some(kill), Err(wait)) => Err(format!("Failed to terminate PTY child: {kill}; {wait}")),
         (None, Err(wait)) => Err(wait),
     }
+}
+
+#[cfg(unix)]
+fn force_kill_process(pid: Option<u32>, process_group_id: Option<i32>) -> Result<(), String> {
+    let target = process_group_id
+        .map(|group| -group)
+        .or_else(|| pid.map(|value| value as i32))
+        .ok_or_else(|| "PTY child has no process id".to_string())?;
+    let result = unsafe { libc::kill(target, libc::SIGKILL) };
+    if result == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH) {
+        Ok(())
+    } else {
+        Err(format!(
+            "Failed to force-kill PTY process {target}: {}",
+            std::io::Error::last_os_error()
+        ))
+    }
+}
+
+#[cfg(not(unix))]
+fn force_kill_process(_pid: Option<u32>, _process_group_id: Option<i32>) -> Result<(), String> {
+    Err("PTY child did not exit after termination request".to_string())
+}
+
+fn finish_pty_handle(mut handle: PtyHandle) -> Result<(), String> {
+    let terminate_error = handle.killer.kill().err();
+    drop(handle.writer);
+    drop(handle.master);
+
+    match handle.wait_done.recv_timeout(PROCESS_EXIT_GRACE) {
+        Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => {}
+        Err(mpsc::RecvTimeoutError::Timeout) => {
+            force_kill_process(handle.pid, handle.process_group_id)?;
+            handle
+                .wait_done
+                .recv_timeout(PROCESS_EXIT_GRACE)
+                .map_err(|_| "PTY child did not exit after force-kill".to_string())?;
+        }
+    }
+    if let Some(waiter) = handle.waiter.take() {
+        waiter
+            .join()
+            .map_err(|_| "PTY process waiter panicked".to_string())?;
+    }
+
+    if let Some(error) = terminate_error {
+        #[cfg(unix)]
+        if error.raw_os_error() == Some(libc::ESRCH) {
+            return Ok(());
+        }
+        eprintln!(
+            "[pty] Initial termination request for {:?} failed after process exit: {error}",
+            handle.pid
+        );
+    }
+    Ok(())
 }
 
 /// Pick a sane default shell when a terminal tile doesn't specify a command.
@@ -323,6 +382,10 @@ impl PtyManager {
             .try_clone_reader()
             .map_err(|e| format!("Failed to get reader: {e}"))?;
 
+        #[cfg(unix)]
+        let process_group_id = pair.master.process_group_leader();
+        #[cfg(not(unix))]
+        let process_group_id = None;
         let master = Arc::new(Mutex::new(pair.master));
 
         let generation = self.next_generation.fetch_add(1, Ordering::Relaxed);
@@ -330,6 +393,7 @@ impl PtyManager {
         let handles_for_waiter = Arc::clone(&self.handles);
         let app_for_waiter = app.clone();
         let (child_tx, child_rx) = mpsc::sync_channel::<Box<dyn Child + Send + Sync>>(0);
+        let (wait_done_tx, wait_done_rx) = mpsc::sync_channel(1);
         let waiter = match std::thread::Builder::new()
             .name(format!("pty-wait-{tile_id}"))
             .spawn(move || {
@@ -350,6 +414,7 @@ impl PtyManager {
                         error: Some(error.to_string()),
                     },
                 };
+                let _ = wait_done_tx.send(());
 
                 let mut handles = handles_for_waiter.lock().unwrap();
                 if handles
@@ -383,6 +448,8 @@ impl PtyManager {
                     master,
                     killer,
                     waiter: Some(waiter),
+                    wait_done: wait_done_rx,
+                    process_group_id,
                     generation,
                     pid,
                 },
@@ -487,42 +554,23 @@ impl PtyManager {
         let mut handles = self.handles.lock().unwrap();
         let handle = handles.remove(tile_id);
         drop(handles);
-        let Some(mut handle) = handle else {
+        let Some(handle) = handle else {
             return Ok(());
         };
 
-        let kill_result = handle
-            .killer
-            .kill()
-            .map_err(|error| format!("Failed to terminate PTY child: {error}"));
-        drop(handle.writer);
-        drop(handle.master);
-        if let Some(waiter) = handle.waiter.take() {
-            waiter
-                .join()
-                .map_err(|_| "PTY process waiter panicked".to_string())?;
-        }
-        kill_result
+        finish_pty_handle(handle)
     }
 
     /// Close all PTY sessions (used on app shutdown)
     pub fn close_all(&self) {
         let mut handles = self.handles.lock().unwrap();
         let count = handles.len();
-        let mut drained: Vec<PtyHandle> = handles.drain().map(|(_, handle)| handle).collect();
+        let drained: Vec<PtyHandle> = handles.drain().map(|(_, handle)| handle).collect();
         drop(handles);
-        for handle in &mut drained {
-            if let Err(error) = handle.killer.kill() {
-                eprintln!("[pty] Failed to terminate {:?}: {error}", handle.pid);
-            }
-        }
-        for mut handle in drained {
-            drop(handle.writer);
-            drop(handle.master);
-            if let Some(waiter) = handle.waiter.take() {
-                if waiter.join().is_err() {
-                    eprintln!("[pty] Process waiter panicked for {:?}", handle.pid);
-                }
+        for handle in drained {
+            let pid = handle.pid;
+            if let Err(error) = finish_pty_handle(handle) {
+                eprintln!("[pty] Failed to close {pid:?}: {error}");
             }
         }
         if count > 0 {
@@ -767,6 +815,60 @@ mod tests {
             std::io::Error::last_os_error().raw_os_error(),
             Some(libc::ECHILD),
             "a second wait must report that no child remains"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bounded_close_force_kills_a_child_that_ignores_hangup() {
+        let pty_system = native_pty_system();
+        let pair = pty_system
+            .openpty(PtySize {
+                rows: 24,
+                cols: 80,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .expect("open test PTY");
+        let mut command = CommandBuilder::new("/bin/sh");
+        command.arg("-c");
+        command.arg("trap '' HUP; sleep 30");
+        let child = pair
+            .slave
+            .spawn_command(command)
+            .expect("spawn HUP-resistant PTY child");
+        let pid = child.process_id();
+        let killer = child.clone_killer();
+        drop(pair.slave);
+        let writer = pair.master.take_writer().expect("take writer");
+        let process_group_id = pair.master.process_group_leader();
+        let master = Arc::new(Mutex::new(pair.master));
+        let (done_tx, done_rx) = mpsc::sync_channel(1);
+        let waiter = std::thread::spawn(move || {
+            let result = wait_for_child(child);
+            let _ = done_tx.send(());
+            result
+        });
+        std::thread::sleep(Duration::from_millis(100));
+
+        let started = Instant::now();
+        finish_pty_handle(PtyHandle {
+            writer,
+            master,
+            killer,
+            waiter: Some(std::thread::spawn(move || {
+                let _ = waiter.join();
+            })),
+            wait_done: done_rx,
+            process_group_id,
+            generation: 1,
+            pid,
+        })
+        .expect("bounded close");
+
+        assert!(
+            started.elapsed() < Duration::from_secs(6),
+            "close must not wait for the ignored SIGHUP process"
         );
     }
 

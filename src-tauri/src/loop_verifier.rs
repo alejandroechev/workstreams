@@ -3,6 +3,8 @@ use sha2::{Digest, Sha256};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone)]
@@ -12,6 +14,7 @@ pub struct VerifierConfig {
     pub cwd: Option<PathBuf>,
     pub timeout: Duration,
     pub output_limit_bytes: usize,
+    pub cancelled: Option<Arc<AtomicBool>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -21,6 +24,7 @@ pub enum VerificationStatus {
     NonZero,
     TimedOut,
     SpawnError,
+    Cancelled,
 }
 
 impl VerificationStatus {
@@ -30,6 +34,7 @@ impl VerificationStatus {
             Self::NonZero => "nonzero",
             Self::TimedOut => "timed_out",
             Self::SpawnError => "spawn_error",
+            Self::Cancelled => "cancelled",
         }
     }
 }
@@ -62,21 +67,70 @@ fn hash_file(path: &Path) -> Option<String> {
     Some(format!("{:x}", hasher.finalize()))
 }
 
-fn read_bounded<R: Read>(mut reader: R, limit: usize) -> (String, bool) {
+struct CapturedOutput {
+    text: String,
+    truncated: bool,
+    error: Option<String>,
+}
+
+fn read_bounded<R: Read>(mut reader: R, limit: usize) -> CapturedOutput {
     let mut retained = Vec::with_capacity(limit.min(16 * 1024));
     let mut truncated = false;
     let mut buffer = [0_u8; 8 * 1024];
-    while let Ok(read) = reader.read(&mut buffer) {
-        if read == 0 {
-            break;
-        }
+    let error = loop {
+        let read = match reader.read(&mut buffer) {
+            Ok(0) => break None,
+            Ok(read) => read,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) => {
+                truncated = true;
+                break Some(error.to_string());
+            }
+        };
         let remaining = limit.saturating_sub(retained.len());
         let keep = read.min(remaining);
         retained.extend_from_slice(&buffer[..keep]);
         truncated |= keep < read;
+    };
+    CapturedOutput {
+        text: String::from_utf8_lossy(&retained).into_owned(),
+        truncated,
+        error,
     }
-    (String::from_utf8_lossy(&retained).into_owned(), truncated)
 }
+
+fn receive_output(receiver: mpsc::Receiver<CapturedOutput>, stream: &str) -> CapturedOutput {
+    receiver
+        .recv_timeout(Duration::from_secs(1))
+        .unwrap_or_else(|_| CapturedOutput {
+            text: String::new(),
+            truncated: true,
+            error: Some(format!("{stream} reader did not close after process exit")),
+        })
+}
+
+fn append_read_error(text: String, error: Option<String>) -> String {
+    match error {
+        Some(error) if text.is_empty() => format!("Output read failed: {error}"),
+        Some(error) => format!("{text}\nOutput read failed: {error}"),
+        None => text,
+    }
+}
+
+#[cfg(unix)]
+fn kill_process_group(process_id: u32) {
+    let process_group = -(process_id as libc::pid_t);
+    let result = unsafe { libc::kill(process_group, libc::SIGKILL) };
+    if result != 0 {
+        let error = std::io::Error::last_os_error();
+        if error.raw_os_error() != Some(libc::ESRCH) {
+            eprintln!("[loop-verifier] Failed to kill process group {process_id}: {error}");
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn kill_process_group(_process_id: u32) {}
 
 #[cfg(unix)]
 fn configure_process_group(command: &mut Command) {
@@ -89,9 +143,9 @@ fn configure_process_group(_command: &mut Command) {}
 
 #[cfg(unix)]
 fn kill_process_tree(child: &mut std::process::Child) {
-    let process_group = -(child.id() as libc::pid_t);
-    let killed = unsafe { libc::kill(process_group, libc::SIGKILL) };
-    if killed != 0 {
+    let process_id = child.id();
+    kill_process_group(process_id);
+    if child.try_wait().ok().flatten().is_none() {
         let _ = child.kill();
     }
 }
@@ -132,68 +186,81 @@ fn run_verifier_blocking(config: VerifierConfig) -> VerificationResult {
     let stdout = child.stdout.take().expect("piped verifier stdout");
     let stderr = child.stderr.take().expect("piped verifier stderr");
     let limit = config.output_limit_bytes;
-    let stdout_reader = std::thread::spawn(move || read_bounded(stdout, limit));
-    let stderr_reader = std::thread::spawn(move || read_bounded(stderr, limit));
+    let (stdout_tx, stdout_rx) = mpsc::sync_channel(1);
+    let (stderr_tx, stderr_rx) = mpsc::sync_channel(1);
+    std::thread::spawn(move || {
+        let _ = stdout_tx.send(read_bounded(stdout, limit));
+    });
+    std::thread::spawn(move || {
+        let _ = stderr_tx.send(read_bounded(stderr, limit));
+    });
 
-    let (status, timed_out) = loop {
+    let (status, terminal_status) = loop {
         match child.try_wait() {
-            Ok(Some(status)) => break (Some(status), false),
+            Ok(Some(status)) => {
+                kill_process_group(child.id());
+                break (Some(status), None);
+            }
+            Ok(None)
+                if config
+                    .cancelled
+                    .as_ref()
+                    .is_some_and(|cancelled| cancelled.load(Ordering::Acquire)) =>
+            {
+                kill_process_tree(&mut child);
+                break (child.wait().ok(), Some(VerificationStatus::Cancelled));
+            }
             Ok(None) if started.elapsed() < config.timeout => {
                 std::thread::sleep(Duration::from_millis(20));
             }
             Ok(None) => {
                 kill_process_tree(&mut child);
-                break (child.wait().ok(), true);
+                break (child.wait().ok(), Some(VerificationStatus::TimedOut));
             }
             Err(error) => {
                 kill_process_tree(&mut child);
                 let _ = child.wait();
-                let (stdout, stdout_truncated) = stdout_reader
-                    .join()
-                    .unwrap_or_else(|_| (String::new(), false));
-                let (stderr, stderr_truncated) = stderr_reader
-                    .join()
-                    .unwrap_or_else(|_| (String::new(), false));
+                let stdout = receive_output(stdout_rx, "stdout");
+                let stderr = receive_output(stderr_rx, "stderr");
                 return VerificationResult {
                     status: VerificationStatus::SpawnError,
                     exit_code: None,
                     duration_ms: started.elapsed().as_millis() as u64,
-                    stdout,
-                    stderr: format!("{stderr}\nFailed to wait for verifier: {error}")
-                        .trim()
-                        .to_string(),
-                    truncated: stdout_truncated || stderr_truncated,
+                    stdout: append_read_error(stdout.text, stdout.error),
+                    stderr: format!(
+                        "{}\nFailed to wait for verifier: {error}",
+                        append_read_error(stderr.text, stderr.error)
+                    )
+                    .trim()
+                    .to_string(),
+                    truncated: stdout.truncated || stderr.truncated,
                     program_hash,
                 };
             }
         }
     };
 
-    let (stdout, stdout_truncated) = stdout_reader
-        .join()
-        .unwrap_or_else(|_| (String::new(), false));
-    let (stderr, stderr_truncated) = stderr_reader
-        .join()
-        .unwrap_or_else(|_| (String::new(), false));
+    let stdout = receive_output(stdout_rx, "stdout");
+    let stderr = receive_output(stderr_rx, "stderr");
     let exit_code = status.as_ref().and_then(std::process::ExitStatus::code);
-    let verification_status = if timed_out {
-        VerificationStatus::TimedOut
-    } else if status
-        .as_ref()
-        .is_some_and(std::process::ExitStatus::success)
-    {
-        VerificationStatus::Passed
-    } else {
-        VerificationStatus::NonZero
-    };
+    let verification_status = terminal_status.unwrap_or_else(|| {
+        if status
+            .as_ref()
+            .is_some_and(std::process::ExitStatus::success)
+        {
+            VerificationStatus::Passed
+        } else {
+            VerificationStatus::NonZero
+        }
+    });
 
     VerificationResult {
         status: verification_status,
         exit_code,
         duration_ms: started.elapsed().as_millis() as u64,
-        stdout,
-        stderr,
-        truncated: stdout_truncated || stderr_truncated,
+        stdout: append_read_error(stdout.text, stdout.error),
+        stderr: append_read_error(stderr.text, stderr.error),
+        truncated: stdout.truncated || stderr.truncated,
         program_hash,
     }
 }
@@ -216,6 +283,7 @@ pub async fn run_verifier(config: VerifierConfig) -> VerificationResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io;
 
     #[cfg(unix)]
     #[tokio::test]
@@ -229,6 +297,7 @@ mod tests {
             cwd: None,
             timeout: std::time::Duration::from_secs(5),
             output_limit_bytes: 1024,
+            cancelled: None,
         })
         .await;
 
@@ -249,6 +318,7 @@ mod tests {
             cwd: None,
             timeout: std::time::Duration::from_secs(5),
             output_limit_bytes: 1024,
+            cancelled: None,
         })
         .await;
         let timeout = run_verifier(VerifierConfig {
@@ -257,6 +327,7 @@ mod tests {
             cwd: None,
             timeout: std::time::Duration::from_millis(100),
             output_limit_bytes: 1024,
+            cancelled: None,
         })
         .await;
 
@@ -278,11 +349,92 @@ mod tests {
             cwd: None,
             timeout: std::time::Duration::from_secs(5),
             output_limit_bytes: 128,
+            cancelled: None,
         })
         .await;
 
         assert_eq!(result.status, VerificationStatus::Passed);
         assert_eq!(result.stdout.len(), 128);
         assert!(result.truncated);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn verifier_cancels_the_whole_process_group() {
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let run = tokio::spawn(run_verifier(VerifierConfig {
+            program: "/bin/sh".to_string(),
+            args: vec!["-c".to_string(), "sleep 30".to_string()],
+            cwd: None,
+            timeout: std::time::Duration::from_secs(20),
+            output_limit_bytes: 1024,
+            cancelled: Some(Arc::clone(&cancelled)),
+        }));
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        cancelled.store(true, Ordering::Release);
+
+        let result = run.await.expect("verifier task");
+
+        assert_eq!(result.status, VerificationStatus::Cancelled);
+        assert!(result.duration_ms < 5_000);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn verifier_does_not_wait_for_a_lingering_grandchild_pipe() {
+        let result = run_verifier(VerifierConfig {
+            program: "/bin/sh".to_string(),
+            args: vec![
+                "-c".to_string(),
+                "sleep 30 & printf parent-done".to_string(),
+            ],
+            cwd: None,
+            timeout: std::time::Duration::from_secs(5),
+            output_limit_bytes: 1024,
+            cancelled: None,
+        })
+        .await;
+
+        assert_eq!(result.status, VerificationStatus::Passed);
+        assert_eq!(result.stdout, "parent-done");
+        assert!(result.duration_ms < 5_000);
+    }
+
+    #[test]
+    fn bounded_reader_retries_interrupts_and_reports_other_errors() {
+        struct InterruptThenData {
+            interrupted: bool,
+            data: io::Cursor<Vec<u8>>,
+        }
+        impl Read for InterruptThenData {
+            fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+                if !self.interrupted {
+                    self.interrupted = true;
+                    return Err(io::Error::from(io::ErrorKind::Interrupted));
+                }
+                self.data.read(buffer)
+            }
+        }
+        struct BrokenReader;
+        impl Read for BrokenReader {
+            fn read(&mut self, _buffer: &mut [u8]) -> io::Result<usize> {
+                Err(io::Error::other("broken pipe reader"))
+            }
+        }
+
+        let recovered = read_bounded(
+            InterruptThenData {
+                interrupted: false,
+                data: io::Cursor::new(b"complete".to_vec()),
+            },
+            64,
+        );
+        assert_eq!(recovered.text, "complete");
+        assert!(!recovered.truncated);
+        assert!(recovered.error.is_none());
+
+        let failed = read_bounded(BrokenReader, 64);
+        assert!(failed.truncated);
+        assert_eq!(failed.error.as_deref(), Some("broken pipe reader"));
     }
 }

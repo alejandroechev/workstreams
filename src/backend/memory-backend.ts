@@ -27,7 +27,10 @@ import { parseTraceFile, type TraceFile } from "../domain/trace-format";
 import { rewriteTileCwd } from "../domain/worktree-change";
 import { projectOwningPath } from "../domain/worktree-path";
 import {
+  transitionLoop,
+  type LoopObservedOutcome,
   type LoopRun,
+  type LoopSnapshot,
   type LoopSpec,
   type LoopSpecDraft,
   type LoopSummary,
@@ -478,7 +481,7 @@ export class MemoryBackend implements Backend {
       deadlineAt: new Date(Date.now() + spec.runTimeoutMs).toISOString(),
     };
     this.loopRunWorkstreams.set(run.id, workstreamId);
-    this.loopSnapshots.set(workstreamId, {
+    const initial: PersistedLoopSnapshot = {
       spec,
       latestRun: run,
       tasks: [],
@@ -492,7 +495,11 @@ export class MemoryBackend implements Backend {
         payload: {},
         createdAt: timestamp,
       }],
-    });
+    };
+    this.loopSnapshots.set(
+      workstreamId,
+      this.applyMemoryOutcome(initial, { type: "run_started" }),
+    );
     this.scheduleMemoryLoop(workstreamId, run.id);
     this.emitLoopUpdate(workstreamId);
     return run;
@@ -506,16 +513,14 @@ export class MemoryBackend implements Backend {
     if (!run || run.state !== "paused") {
       throw new Error("Only a paused loop run can be resumed");
     }
-    const resumed: LoopRun = {
-      ...run,
-      state: snapshot.tasks.length > 0 ? "working" : "orchestrating",
-      controlRequested: "none",
-      pauseRequested: false,
-    };
-    this.loopSnapshots.set(workstreamId, { ...snapshot, latestRun: resumed });
+    const resumed = this.applyMemoryOutcome(snapshot, { type: "resume_requested" });
+    if (resumed.latestRun?.state === "paused") {
+      throw new Error("Paused loop has no pending action to resume");
+    }
+    this.loopSnapshots.set(workstreamId, resumed);
     this.scheduleMemoryLoop(workstreamId, runId);
     this.emitLoopUpdate(workstreamId);
-    return resumed;
+    return resumed.latestRun!;
   }
 
   async controlWorkstreamLoop(
@@ -526,23 +531,28 @@ export class MemoryBackend implements Backend {
     if (!workstreamId) throw new Error(`Loop run not found: ${runId}`);
     const snapshot = await this.getWorkstreamLoopSnapshot(workstreamId);
     if (!snapshot.latestRun) throw new Error(`Loop run not found: ${runId}`);
-    this.clearLoopTimers(runId);
-    const state = action === "pause" ? "paused" : action === "kill" ? "killed" : "completed";
-    const tasks = snapshot.tasks.map((task) =>
-      action === "kill" && !["accepted", "blocked"].includes(task.state)
-        ? { ...task, state: "interrupted" as const, error: "Loop killed" }
-        : task,
-    );
+    if (action === "kill") this.clearLoopTimers(runId);
+    const outcome: LoopObservedOutcome =
+      action === "pause"
+        ? { type: "pause_requested" }
+        : action === "stop"
+          ? { type: "stop_requested" }
+          : { type: "kill_requested" };
+    const next = this.applyMemoryOutcome(snapshot, outcome);
     this.loopSnapshots.set(workstreamId, {
-      ...snapshot,
-      latestRun: {
-        ...snapshot.latestRun,
-        state,
-        controlRequested: action,
-        activeTaskId: action === "pause" ? snapshot.latestRun.activeTaskId : null,
-        finishedAt: action === "pause" ? undefined : now(),
-      },
-      tasks,
+      ...next,
+      latestRun: next.latestRun
+        ? {
+            ...next.latestRun,
+            controlRequested: action,
+            finishedAt: action === "kill" ? now() : next.latestRun.finishedAt,
+          }
+        : null,
+      tasks: next.tasks.map((task) =>
+        action === "kill" && task.state === "interrupted"
+          ? { ...task, error: "Loop killed" }
+          : task
+      ),
     });
     this.emitLoopUpdate(workstreamId);
   }
@@ -560,6 +570,24 @@ export class MemoryBackend implements Backend {
     this.loopTimers.delete(runId);
   }
 
+  private applyMemoryOutcome(
+    snapshot: PersistedLoopSnapshot,
+    outcome: LoopObservedOutcome,
+  ): PersistedLoopSnapshot {
+    if (!snapshot.spec || !snapshot.latestRun) return snapshot;
+    const domainSnapshot: LoopSnapshot = {
+      spec: snapshot.spec,
+      run: snapshot.latestRun,
+      tasks: snapshot.tasks,
+    };
+    const transitioned = transitionLoop(domainSnapshot, outcome);
+    return {
+      ...snapshot,
+      latestRun: transitioned.snapshot.run,
+      tasks: transitioned.snapshot.tasks,
+    };
+  }
+
   private scheduleMemoryLoop(workstreamId: string, runId: string): void {
     this.clearLoopTimers(runId);
     const transition = (
@@ -575,13 +603,8 @@ export class MemoryBackend implements Backend {
       }, delay);
 
     const timers = [
-      transition(80, (snapshot) => ({
-        ...snapshot,
-        latestRun: snapshot.latestRun
-          ? { ...snapshot.latestRun, state: "orchestrating" }
-          : null,
-      })),
       transition(300, (snapshot) => {
+        if (snapshot.latestRun?.state !== "orchestrating") return snapshot;
         const task: LoopTask = snapshot.tasks[0] ?? {
           id: generateId(),
           loopRunId: runId,
@@ -595,36 +618,40 @@ export class MemoryBackend implements Backend {
           createdAt: now(),
           updatedAt: now(),
         };
-        return {
-          ...snapshot,
-          latestRun: snapshot.latestRun
-            ? { ...snapshot.latestRun, state: "working", activeTaskId: task.id }
-            : null,
-          tasks: [{ ...task, state: "working" }],
-        };
+        return this.applyMemoryOutcome(
+          { ...snapshot, tasks: snapshot.tasks.length > 0 ? snapshot.tasks : [] },
+          { type: "tasks_proposed", tasks: [{ ...task, state: "queued" }] },
+        );
       }),
-      transition(650, (snapshot) => ({
-        ...snapshot,
-        latestRun: snapshot.latestRun
-          ? { ...snapshot.latestRun, state: "verifying" }
-          : null,
-        tasks: snapshot.tasks.map((task) => ({
+      transition(650, (snapshot) => {
+        if (snapshot.latestRun?.state !== "working") return snapshot;
+        const transitioned = this.applyMemoryOutcome(snapshot, {
+          type: "worker_completed",
+          workerSessionId: "memory-worker-session",
+        });
+        return {
+          ...transitioned,
+          tasks: transitioned.tasks.map((task) => ({
           ...task,
-          state: "verifying",
           workerResult: JSON.stringify({
             status: "completed",
             summary: "Implemented the configured objective",
             evidence: ["memory fixture"],
           }),
         })),
-      })),
-      transition(1_000, (snapshot) => ({
-        ...snapshot,
-        latestRun: snapshot.latestRun
-          ? { ...snapshot.latestRun, state: "evaluating" }
-          : null,
-        tasks: snapshot.tasks.map((task) => ({ ...task, state: "evaluating" })),
-        verifications: snapshot.spec?.verifier && snapshot.tasks[0]
+        };
+      }),
+      transition(1_000, (snapshot) => {
+        const transitioned =
+          snapshot.latestRun?.state === "verifying"
+            ? this.applyMemoryOutcome(snapshot, {
+                type: "verification_completed",
+                result: { kind: "passed" },
+              })
+            : snapshot;
+        return {
+          ...transitioned,
+          verifications: snapshot.spec?.verifier && snapshot.tasks[0]
           ? [{
               id: generateId(),
               loopTaskId: snapshot.tasks[0].id,
@@ -640,19 +667,25 @@ export class MemoryBackend implements Backend {
               createdAt: now(),
             }]
           : [],
-      })),
-      transition(1_450, (snapshot) => ({
-        ...snapshot,
-        latestRun: snapshot.latestRun
-          ? {
-              ...snapshot.latestRun,
-              state: "completed",
-              activeTaskId: null,
-              finishedAt: now(),
-            }
-          : null,
-        tasks: snapshot.tasks.map((task) => ({ ...task, state: "accepted" })),
-        evaluations: snapshot.tasks[0]
+        };
+      }),
+      transition(1_450, (snapshot) => {
+        const transitioned =
+          snapshot.latestRun?.state === "stopping"
+            ? this.applyMemoryOutcome(snapshot, { type: "stop_completed" })
+            : snapshot.latestRun?.state === "evaluating"
+              ? this.applyMemoryOutcome(snapshot, {
+                  type: "evaluation_completed",
+                  verdict: "accepted",
+                })
+              : snapshot;
+        return {
+          ...transitioned,
+          latestRun:
+            transitioned.latestRun?.state === "completed"
+              ? { ...transitioned.latestRun, finishedAt: now() }
+              : transitioned.latestRun,
+          evaluations: snapshot.tasks[0] && snapshot.latestRun?.state === "evaluating"
           ? [{
               id: generateId(),
               loopTaskId: snapshot.tasks[0].id,
@@ -664,7 +697,8 @@ export class MemoryBackend implements Backend {
               createdAt: now(),
             }]
           : [],
-      })),
+        };
+      }),
     ];
     this.loopTimers.set(runId, timers);
   }

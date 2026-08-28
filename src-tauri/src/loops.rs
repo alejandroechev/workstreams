@@ -2,6 +2,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use uuid::Uuid;
@@ -239,7 +240,13 @@ pub struct LoopTask {
 }
 
 pub struct LoopManager {
-    runtimes: tokio::sync::Mutex<HashMap<String, Arc<dyn LoopAgentRuntime>>>,
+    runtimes: tokio::sync::Mutex<HashMap<String, ActiveLoopRuntime>>,
+}
+
+#[derive(Clone)]
+struct ActiveLoopRuntime {
+    runtime: Arc<dyn LoopAgentRuntime>,
+    cancelled: Arc<AtomicBool>,
 }
 
 impl LoopManager {
@@ -249,11 +256,18 @@ impl LoopManager {
         }
     }
 
-    async fn register(&self, run_id: &str, runtime: Arc<dyn LoopAgentRuntime>) {
-        self.runtimes
-            .lock()
-            .await
-            .insert(run_id.to_string(), runtime);
+    async fn register(
+        &self,
+        run_id: &str,
+        runtime: Arc<dyn LoopAgentRuntime>,
+        cancelled: Arc<AtomicBool>,
+    ) -> Result<(), String> {
+        let mut runtimes = self.runtimes.lock().await;
+        if runtimes.contains_key(run_id) {
+            return Err(format!("Loop run already has an executor: {run_id}"));
+        }
+        runtimes.insert(run_id.to_string(), ActiveLoopRuntime { runtime, cancelled });
+        Ok(())
     }
 
     async fn unregister(&self, run_id: &str) {
@@ -261,9 +275,10 @@ impl LoopManager {
     }
 
     async fn abort(&self, run_id: &str) -> Result<(), String> {
-        let runtime = self.runtimes.lock().await.get(run_id).cloned();
-        if let Some(runtime) = runtime {
-            runtime.abort_all().await
+        let active = self.runtimes.lock().await.get(run_id).cloned();
+        if let Some(active) = active {
+            active.cancelled.store(true, Ordering::Release);
+            active.runtime.abort_all().await
         } else {
             Ok(())
         }
@@ -315,11 +330,11 @@ pub fn init_loop_schema(conn: &Connection) -> rusqlite::Result<()> {
             state TEXT NOT NULL,
             worker_session_id TEXT,
             revision_count INTEGER NOT NULL DEFAULT 0,
+            ordinal INTEGER NOT NULL,
             worker_result TEXT,
             error TEXT,
             created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            UNIQUE(loop_spec_id, task_key)
+            updated_at TEXT NOT NULL
         );
 
         CREATE TABLE IF NOT EXISTS loop_verifications (
@@ -364,11 +379,21 @@ pub fn init_loop_schema(conn: &Connection) -> rusqlite::Result<()> {
         CREATE INDEX IF NOT EXISTS loop_runs_spec_idx
             ON loop_runs(loop_spec_id, started_at DESC);
         CREATE INDEX IF NOT EXISTS loop_tasks_run_idx
-            ON loop_tasks(loop_run_id, created_at);
+            ON loop_tasks(loop_run_id, ordinal);
+        CREATE UNIQUE INDEX IF NOT EXISTS loop_tasks_occupied_key_unique
+            ON loop_tasks(loop_spec_id, task_key)
+            WHERE state IN ('queued', 'working', 'verifying', 'evaluating', 'accepted');
         CREATE INDEX IF NOT EXISTS loop_events_run_idx
             ON loop_events(loop_run_id, id);
         ",
-    )
+    )?;
+    let _ = conn.execute_batch(
+        "ALTER TABLE loop_tasks ADD COLUMN ordinal INTEGER NOT NULL DEFAULT 0;
+         CREATE UNIQUE INDEX IF NOT EXISTS loop_tasks_occupied_key_unique
+             ON loop_tasks(loop_spec_id, task_key)
+             WHERE state IN ('queued', 'working', 'verifying', 'evaluating', 'accepted');",
+    );
+    Ok(())
 }
 
 fn validate_spec(input: &LoopSpecInput) -> Result<(), String> {
@@ -381,8 +406,8 @@ fn validate_spec(input: &LoopSpecInput) -> Result<(), String> {
     if input.run_timeout_seconds == 0 {
         return Err("Run timeout must be greater than zero".to_string());
     }
-    if input.max_task_iterations == 0 {
-        return Err("Maximum task iterations must be greater than zero".to_string());
+    if input.max_task_iterations != 2 {
+        return Err("MVP1 supports exactly two task attempts".to_string());
     }
     if input
         .verifier_program
@@ -626,12 +651,27 @@ pub fn set_run_state(
         .execute(
             "UPDATE loop_runs
              SET state = ?1, error = ?2, finished_at = COALESCE(?3, finished_at)
-             WHERE id = ?4",
+             WHERE id = ?4
+               AND (state NOT IN ('completed', 'attention', 'killed') OR state = ?1)",
             params![state.as_str(), error, finished_at, run_id],
         )
         .map_err(|db_error| format!("Failed to update loop run: {db_error}"))?;
     if changed == 0 {
-        return Err(format!("Loop run not found: {run_id}"));
+        let current: Option<String> = conn
+            .query_row(
+                "SELECT state FROM loop_runs WHERE id = ?1",
+                [run_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|db_error| format!("Failed to inspect loop run: {db_error}"))?;
+        return match current {
+            Some(current) => Err(format!(
+                "Loop run {run_id} is terminal ({current}) and cannot transition to {}",
+                state.as_str()
+            )),
+            None => Err(format!("Loop run not found: {run_id}")),
+        };
     }
     Ok(())
 }
@@ -651,6 +691,22 @@ pub(crate) fn set_run_control(
         return Err(format!("Loop run not found: {run_id}"));
     }
     Ok(())
+}
+
+fn claim_paused_run(conn: &Connection, run_id: &str) -> Result<LoopRun, String> {
+    let claimed = conn
+        .execute(
+            "UPDATE loop_runs
+             SET state = 'starting', control_requested = 'resume'
+             WHERE id = ?1 AND state = 'paused'",
+            [run_id],
+        )
+        .map_err(|error| format!("Failed to claim paused loop run: {error}"))?;
+    if claimed != 1 {
+        return Err("This loop run is not paused or is already resuming".to_string());
+    }
+    get_loop_run(conn, run_id)?
+        .ok_or_else(|| format!("Loop run not found after resume claim: {run_id}"))
 }
 
 fn apply_control_boundary(conn: &Connection, run_id: &str) -> Result<bool, String> {
@@ -714,15 +770,41 @@ pub fn enqueue_task(
     {
         return Err("Discovered tasks require a key, title, and objective".to_string());
     }
+    let occupied: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM loop_tasks
+             WHERE loop_spec_id = ?1 AND task_key = ?2
+               AND state IN ('queued', 'working', 'verifying', 'evaluating', 'accepted')",
+            params![loop_spec_id, task.key.trim()],
+            |row| row.get(0),
+        )
+        .map_err(|error| format!("Failed to check loop task identity: {error}"))?;
+    if occupied > 0 {
+        append_loop_event(
+            conn,
+            loop_spec_id,
+            run_id,
+            None,
+            "task.deduplicated",
+            &serde_json::json!({ "key": task.key.trim() }),
+        )?;
+        return Ok(None);
+    }
+    let ordinal: i64 = conn
+        .query_row(
+            "SELECT COALESCE(MAX(ordinal), -1) + 1 FROM loop_tasks WHERE loop_run_id = ?1",
+            [run_id],
+            |row| row.get(0),
+        )
+        .map_err(|error| format!("Failed to allocate loop task order: {error}"))?;
     let id = Uuid::new_v4().to_string();
     let now = crate::now();
     let changed = conn
         .execute(
             "INSERT INTO loop_tasks (
                 id, loop_run_id, loop_spec_id, task_key, title, objective,
-                state, created_at, updated_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'queued', ?7, ?7)
-             ON CONFLICT(loop_spec_id, task_key) DO NOTHING",
+                state, ordinal, created_at, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'queued', ?7, ?8, ?8)",
             params![
                 id,
                 run_id,
@@ -730,6 +812,7 @@ pub fn enqueue_task(
                 task.key.trim(),
                 task.title.trim(),
                 task.objective.trim(),
+                ordinal,
                 now,
             ],
         )
@@ -750,7 +833,7 @@ pub fn list_loop_tasks(conn: &Connection, run_id: &str) -> Result<Vec<LoopTask>,
     let mut statement = conn
         .prepare(&format!(
             "SELECT {TASK_COLUMNS} FROM loop_tasks
-             WHERE loop_run_id = ?1 ORDER BY created_at, id"
+             WHERE loop_run_id = ?1 ORDER BY ordinal"
         ))
         .map_err(|error| format!("Failed to prepare loop task query: {error}"))?;
     let rows = statement
@@ -772,12 +855,30 @@ pub fn set_task_state(
              SET state = ?1,
                  worker_session_id = COALESCE(?2, worker_session_id),
                  updated_at = ?3
-             WHERE id = ?4",
+             WHERE id = ?4
+               AND (
+                   state NOT IN ('accepted', 'blocked', 'attention', 'interrupted')
+                   OR state = ?1
+               )",
             params![state.as_str(), worker_session_id, crate::now(), task_id],
         )
         .map_err(|error| format!("Failed to update loop task: {error}"))?;
     if changed == 0 {
-        return Err(format!("Loop task not found: {task_id}"));
+        let current: Option<String> = conn
+            .query_row(
+                "SELECT state FROM loop_tasks WHERE id = ?1",
+                [task_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|error| format!("Failed to inspect loop task: {error}"))?;
+        return match current {
+            Some(current) => Err(format!(
+                "Loop task {task_id} is terminal ({current}) and cannot transition to {}",
+                state.as_str()
+            )),
+            None => Err(format!("Loop task not found: {task_id}")),
+        };
     }
     Ok(())
 }
@@ -1125,6 +1226,7 @@ async fn verify_task(
     task_id: &str,
     working_directory: &Path,
     attempt: u32,
+    cancelled: Option<Arc<AtomicBool>>,
 ) -> Result<Option<VerificationResult>, String> {
     let Some(program) = &spec.verifier_program else {
         return Ok(None);
@@ -1145,6 +1247,7 @@ async fn verify_task(
         ),
         timeout: remaining_run_timeout(db, run_id)?,
         output_limit_bytes: 256 * 1024,
+        cancelled,
     })
     .await;
     let conn = db.lock().unwrap();
@@ -1266,12 +1369,13 @@ async fn execute_manual_loop_inner(
     runtime: Arc<dyn LoopAgentRuntime>,
     run_id: &str,
     working_directory: PathBuf,
+    cancelled: Option<Arc<AtomicBool>>,
 ) -> Result<(), String> {
     let run = get_loop_run(&db.lock().unwrap(), run_id)?
         .ok_or_else(|| format!("Loop run not found: {run_id}"))?;
     let spec = get_loop_spec_by_id(&db.lock().unwrap(), &run.loop_spec_id)?
         .ok_or_else(|| format!("Loop specification not found: {}", run.loop_spec_id))?;
-    let tasks = if run.state == LoopRunState::Paused {
+    let tasks = if run.state == LoopRunState::Paused || run.control_requested == "resume" {
         let conn = db.lock().unwrap();
         set_run_control(&conn, run_id, "none")?;
         list_loop_tasks(&conn, run_id)?
@@ -1368,8 +1472,16 @@ async fn execute_manual_loop_inner(
             needs_attention = true;
             continue;
         }
-        let first_verification =
-            verify_task(&db, &spec, run_id, &task.id, &working_directory, 1).await?;
+        let first_verification = verify_task(
+            &db,
+            &spec,
+            run_id,
+            &task.id,
+            &working_directory,
+            1,
+            cancelled.clone(),
+        )
+        .await?;
         if first_verification
             .as_ref()
             .is_some_and(|result| result.status != VerificationStatus::Passed)
@@ -1406,9 +1518,6 @@ async fn execute_manual_loop_inner(
                 .ok_or_else(|| "Evaluator revision feedback was missing".to_string())?;
             {
                 let conn = db.lock().unwrap();
-                if !apply_control_boundary(&conn, run_id)? {
-                    return Ok(());
-                }
                 set_run_state(&conn, run_id, LoopRunState::Working, None)?;
                 set_task_state(&conn, &task.id, LoopTaskState::Working, None)?;
             }
@@ -1433,8 +1542,27 @@ async fn execute_manual_loop_inner(
                 &worker_output,
                 1,
             )?;
-            let revised_verification =
-                verify_task(&db, &spec, run_id, &task.id, &working_directory, 2).await?;
+            if worker_output.status != WorkerStatus::Completed {
+                let state = if worker_output.status == WorkerStatus::Blocked {
+                    LoopTaskState::Blocked
+                } else {
+                    LoopTaskState::Attention
+                };
+                set_task_state(&db.lock().unwrap(), &task.id, state, None)?;
+                runtime.disconnect(&worker_response.session_id).await?;
+                needs_attention = true;
+                continue;
+            }
+            let revised_verification = verify_task(
+                &db,
+                &spec,
+                run_id,
+                &task.id,
+                &working_directory,
+                2,
+                cancelled.clone(),
+            )
+            .await?;
             if revised_verification
                 .as_ref()
                 .is_some_and(|result| result.status != VerificationStatus::Passed)
@@ -1483,6 +1611,9 @@ async fn execute_manual_loop_inner(
     }
 
     let conn = db.lock().unwrap();
+    if !apply_control_boundary(&conn, run_id)? {
+        return Ok(());
+    }
     update_run_current_task(&conn, run_id, None)?;
     if needs_attention {
         set_run_state(
@@ -1502,8 +1633,24 @@ pub async fn execute_manual_loop(
     run_id: &str,
     working_directory: PathBuf,
 ) -> Result<(), String> {
-    let result =
-        execute_manual_loop_inner(Arc::clone(&db), runtime, run_id, working_directory).await;
+    execute_manual_loop_with_cancel(db, runtime, run_id, working_directory, None).await
+}
+
+async fn execute_manual_loop_with_cancel(
+    db: Arc<Mutex<Connection>>,
+    runtime: Arc<dyn LoopAgentRuntime>,
+    run_id: &str,
+    working_directory: PathBuf,
+    cancelled: Option<Arc<AtomicBool>>,
+) -> Result<(), String> {
+    let result = execute_manual_loop_inner(
+        Arc::clone(&db),
+        runtime,
+        run_id,
+        working_directory,
+        cancelled,
+    )
+    .await;
     if let Err(error) = &result {
         let conn = db.lock().unwrap();
         let preserve_control_state =
@@ -1851,11 +1998,35 @@ async fn run_with_sdk(
             return;
         }
     };
-    manager.register(&run_id, Arc::clone(&runtime)).await;
+    let cancelled = Arc::new(AtomicBool::new(false));
+    if let Err(error) = manager
+        .register(&run_id, Arc::clone(&runtime), Arc::clone(&cancelled))
+        .await
+    {
+        if let Ok(conn) = crate::db::open_db(&db_path) {
+            let _ = set_run_state(&conn, &run_id, LoopRunState::Attention, Some(&error));
+        }
+        let _ = runtime.shutdown().await;
+        let _ = app.emit(
+            "loop-updated",
+            LoopUpdatedEvent {
+                workstream_id,
+                run_id,
+            },
+        );
+        return;
+    }
     match crate::db::open_db(&db_path) {
         Ok(conn) => {
             let db = Arc::new(Mutex::new(conn));
-            let _ = execute_manual_loop(db, Arc::clone(&runtime), &run_id, working_directory).await;
+            let _ = execute_manual_loop_with_cancel(
+                db,
+                Arc::clone(&runtime),
+                &run_id,
+                working_directory,
+                Some(cancelled),
+            )
+            .await;
         }
         Err(error) => {
             eprintln!("[loop] Failed to open database for run {run_id}: {error}");
@@ -1941,8 +2112,8 @@ pub fn resume_workstream_loop(
             return Err("Only a paused loop run can be resumed".to_string());
         }
         let (workstream_id, directory) = workstream_directory_for_spec(&conn, &run.loop_spec_id)?;
-        set_run_control(&conn, &run_id, "none")?;
-        (run, workstream_id, directory)
+        let claimed_run = claim_paused_run(&conn, &run_id)?;
+        (claimed_run, workstream_id, directory)
     };
     tauri::async_runtime::spawn(run_with_sdk(
         state.db_path.clone(),
@@ -2082,6 +2253,61 @@ mod tests {
     }
 
     #[test]
+    fn retryable_task_states_release_their_identity_key() {
+        let conn = test_db();
+        let spec = save_loop_spec(&conn, "ws-1", spec_input()).expect("save loop spec");
+        set_loop_enabled(&conn, &spec.id, true).expect("enable loop");
+        let first_run = create_loop_run(&conn, &spec.id, 600).expect("create first run");
+        let candidate = DiscoveredTask {
+            key: "retryable".to_string(),
+            title: "Retryable task".to_string(),
+            objective: "Try the task again".to_string(),
+        };
+        let first = enqueue_task(&conn, &first_run.id, &spec.id, &candidate)
+            .expect("enqueue first task")
+            .expect("insert first task");
+        set_task_state(&conn, &first.id, LoopTaskState::Attention, None).expect("mark retryable");
+        set_run_state(&conn, &first_run.id, LoopRunState::Attention, None)
+            .expect("finish first run");
+
+        let second_run = create_loop_run(&conn, &spec.id, 600).expect("create retry run");
+        let retried =
+            enqueue_task(&conn, &second_run.id, &spec.id, &candidate).expect("enqueue retry");
+
+        assert!(retried.is_some());
+    }
+
+    #[test]
+    fn task_ordinals_preserve_orchestrator_order() {
+        let conn = test_db();
+        let spec = save_loop_spec(&conn, "ws-1", spec_input()).expect("save loop spec");
+        set_loop_enabled(&conn, &spec.id, true).expect("enable loop");
+        let run = create_loop_run(&conn, &spec.id, 600).expect("create run");
+        for key in ["first", "second", "third"] {
+            enqueue_task(
+                &conn,
+                &run.id,
+                &spec.id,
+                &DiscoveredTask {
+                    key: key.to_string(),
+                    title: key.to_string(),
+                    objective: "Work".to_string(),
+                },
+            )
+            .expect("enqueue task");
+        }
+
+        assert_eq!(
+            list_loop_tasks(&conn, &run.id)
+                .expect("list tasks")
+                .into_iter()
+                .map(|task| task.key)
+                .collect::<Vec<_>>(),
+            vec!["first", "second", "third"]
+        );
+    }
+
+    #[test]
     fn restart_reconciliation_marks_nonterminal_runs_and_tasks_interrupted() {
         let conn = test_db();
         let spec = save_loop_spec(&conn, "ws-1", spec_input()).expect("save loop spec");
@@ -2176,6 +2402,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn loop_manager_refuses_a_second_executor_for_one_run() {
+        use crate::loop_agent::ScriptedAgentRuntime;
+        use std::sync::atomic::AtomicBool;
+        use std::sync::Arc;
+
+        let manager = LoopManager::new();
+        let first = Arc::new(ScriptedAgentRuntime::new(vec![])) as Arc<dyn LoopAgentRuntime>;
+        let second = Arc::new(ScriptedAgentRuntime::new(vec![])) as Arc<dyn LoopAgentRuntime>;
+        manager
+            .register("run-1", first, Arc::new(AtomicBool::new(false)))
+            .await
+            .expect("register first executor");
+
+        let error = manager
+            .register("run-1", second, Arc::new(AtomicBool::new(false)))
+            .await
+            .expect_err("duplicate executor must fail");
+
+        assert!(error.contains("already has an executor"));
+        manager.unregister("run-1").await;
+    }
+
+    #[tokio::test]
     async fn evaluator_can_request_exactly_one_worker_revision() {
         use crate::loop_agent::{AgentRole, ScriptedAgentResponse, ScriptedAgentRuntime};
         use std::sync::{Arc, Mutex};
@@ -2242,6 +2491,162 @@ mod tests {
             )
             .expect("count evaluations");
         assert_eq!(evaluations, 2);
+    }
+
+    #[tokio::test]
+    async fn blocked_worker_revision_does_not_reach_a_second_evaluator() {
+        use crate::loop_agent::{AgentRole, ScriptedAgentResponse, ScriptedAgentRuntime};
+        use std::sync::{Arc, Mutex};
+
+        let conn = test_db();
+        let mut input = spec_input();
+        input.verifier_program = None;
+        let spec = save_loop_spec(&conn, "ws-1", input).expect("save loop spec");
+        set_loop_enabled(&conn, &spec.id, true).expect("enable loop");
+        let run = create_loop_run(&conn, &spec.id, 600).expect("create run");
+        let runtime = Arc::new(ScriptedAgentRuntime::new(vec![
+            ScriptedAgentResponse {
+                role: AgentRole::Orchestrator,
+                session_id: "orchestrator-1".to_string(),
+                content:
+                    r#"{"tasks":[{"key":"task-1","title":"Task","objective":"Do work"}]}"#
+                        .to_string(),
+                events: vec![],
+            },
+            ScriptedAgentResponse {
+                role: AgentRole::Worker,
+                session_id: "worker-1".to_string(),
+                content: r#"{"status":"completed","summary":"First","evidence":[]}"#.to_string(),
+                events: vec![],
+            },
+            ScriptedAgentResponse {
+                role: AgentRole::Evaluator,
+                session_id: "evaluator-1".to_string(),
+                content: r#"{"verdict":"revise","summary":"Revise","feedback":"Try again","evidence":[]}"#.to_string(),
+                events: vec![],
+            },
+            ScriptedAgentResponse {
+                role: AgentRole::Worker,
+                session_id: "worker-1".to_string(),
+                content: r#"{"status":"blocked","summary":"Cannot continue","evidence":[]}"#
+                    .to_string(),
+                events: vec![],
+            },
+        ]));
+        let db = Arc::new(Mutex::new(conn));
+
+        execute_manual_loop(
+            Arc::clone(&db),
+            runtime,
+            &run.id,
+            std::path::PathBuf::from("/tmp/repo"),
+        )
+        .await
+        .expect("blocked revision is handled");
+
+        let conn = db.lock().unwrap();
+        assert_eq!(
+            get_loop_run(&conn, &run.id)
+                .expect("load run")
+                .expect("run exists")
+                .state,
+            LoopRunState::Attention
+        );
+        assert_eq!(
+            list_loop_tasks(&conn, &run.id).expect("list tasks")[0].state,
+            LoopTaskState::Blocked
+        );
+        let evaluations: i64 = conn
+            .query_row("SELECT COUNT(*) FROM loop_evaluations", [], |row| {
+                row.get(0)
+            })
+            .expect("count evaluations");
+        assert_eq!(evaluations, 1);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn kill_during_verification_cancels_it_and_preserves_terminal_state() {
+        use crate::loop_agent::{AgentRole, ScriptedAgentResponse, ScriptedAgentRuntime};
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::{Arc, Mutex};
+
+        let conn = test_db();
+        let mut input = spec_input();
+        input.verifier_program = Some("/bin/sh".to_string());
+        input.verifier_args = vec!["-c".to_string(), "sleep 30".to_string()];
+        input.verifier_cwd = None;
+        let spec = save_loop_spec(&conn, "ws-1", input).expect("save loop spec");
+        set_loop_enabled(&conn, &spec.id, true).expect("enable loop");
+        let run = create_loop_run(&conn, &spec.id, 60).expect("create run");
+        let runtime = Arc::new(ScriptedAgentRuntime::new(vec![
+            ScriptedAgentResponse {
+                role: AgentRole::Orchestrator,
+                session_id: "orchestrator-1".to_string(),
+                content: r#"{"tasks":[{"key":"task-1","title":"Task","objective":"Do work"}]}"#
+                    .to_string(),
+                events: vec![],
+            },
+            ScriptedAgentResponse {
+                role: AgentRole::Worker,
+                session_id: "worker-1".to_string(),
+                content: r#"{"status":"completed","summary":"Done","evidence":[]}"#.to_string(),
+                events: vec![],
+            },
+        ])) as Arc<dyn LoopAgentRuntime>;
+        let db = Arc::new(Mutex::new(conn));
+        let cancelled = Arc::new(AtomicBool::new(false));
+
+        let executor = execute_manual_loop_with_cancel(
+            Arc::clone(&db),
+            runtime,
+            &run.id,
+            std::env::current_dir().expect("current directory"),
+            Some(Arc::clone(&cancelled)),
+        );
+        let killer = async {
+            loop {
+                let task = {
+                    let conn = db.lock().unwrap();
+                    list_loop_tasks(&conn, &run.id)
+                        .expect("list tasks")
+                        .into_iter()
+                        .next()
+                };
+                if task
+                    .as_ref()
+                    .is_some_and(|task| task.state == LoopTaskState::Verifying)
+                {
+                    let task = task.expect("verifying task");
+                    let conn = db.lock().unwrap();
+                    set_run_control(&conn, &run.id, "kill").expect("request kill");
+                    set_task_state(&conn, &task.id, LoopTaskState::Interrupted, None)
+                        .expect("interrupt task");
+                    set_run_state(&conn, &run.id, LoopRunState::Killed, None).expect("kill run");
+                    cancelled.store(true, Ordering::Release);
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        };
+
+        let (result, ()) = tokio::join!(executor, killer);
+        assert!(
+            result.is_err(),
+            "the cancelled verifier must stop the executor"
+        );
+        let conn = db.lock().unwrap();
+        assert_eq!(
+            get_loop_run(&conn, &run.id)
+                .expect("load run")
+                .expect("run exists")
+                .state,
+            LoopRunState::Killed
+        );
+        assert_eq!(
+            list_loop_tasks(&conn, &run.id).expect("list tasks")[0].state,
+            LoopTaskState::Interrupted
+        );
     }
 
     #[cfg(unix)]
@@ -2365,6 +2770,20 @@ mod tests {
             list_loop_tasks(&conn, &stopped_run.id).expect("list tasks")[0].id,
             task.id
         );
+    }
+
+    #[test]
+    fn a_paused_run_can_be_claimed_for_resume_only_once() {
+        let conn = test_db();
+        let spec = save_loop_spec(&conn, "ws-1", spec_input()).expect("save loop spec");
+        set_loop_enabled(&conn, &spec.id, true).expect("enable loop");
+        let run = create_loop_run(&conn, &spec.id, 600).expect("create run");
+        set_run_state(&conn, &run.id, LoopRunState::Paused, None).expect("pause run");
+
+        let claimed = claim_paused_run(&conn, &run.id).expect("claim paused run");
+        assert_eq!(claimed.state, LoopRunState::Starting);
+        assert_eq!(claimed.control_requested, "resume");
+        assert!(claim_paused_run(&conn, &run.id).is_err());
     }
 
     #[tokio::test]

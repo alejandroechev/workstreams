@@ -34,7 +34,7 @@ fn print_json<T: Serialize>(value: &T) -> Result<(), String> {
 
 fn runtime() -> Result<tokio::runtime::Runtime, String> {
     tokio::runtime::Builder::new_current_thread()
-        .enable_time()
+        .enable_all()
         .build()
         .map_err(|error| format!("Failed to start async runtime: {error}"))
 }
@@ -315,5 +315,35 @@ mod tests {
         assert_eq!(result.verification_status, "passed");
         assert_eq!(result.second_run_tasks, 0);
         std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    #[ignore = "requires authenticated GitHub Copilot access"]
+    fn cli_runtime_supports_sdk_process_io() {
+        use crate::loop_agent::{AgentRequest, AgentRuntimeEvent};
+        use std::time::Duration;
+
+        runtime().expect("CLI Tokio runtime").block_on(async {
+            let sdk = SdkAgentRuntime::connect().await.expect("connect SDK");
+            let (event_tx, mut event_rx) =
+                tokio::sync::mpsc::unbounded_channel::<AgentRuntimeEvent>();
+            let response = sdk
+                .start(
+                    AgentRequest {
+                        role: AgentRole::Orchestrator,
+                        prompt: "Reply with exactly CLI_SDK_IO_OK and nothing else.".to_string(),
+                        working_directory: std::env::current_dir().expect("current directory"),
+                        model: None,
+                        timeout: Duration::from_secs(120),
+                        keep_session: false,
+                    },
+                    event_tx,
+                )
+                .await
+                .expect("SDK request over process pipes");
+            assert_eq!(response.content.trim(), "CLI_SDK_IO_OK");
+            assert!(event_rx.try_recv().is_ok());
+            sdk.shutdown().await.expect("shutdown SDK");
+        });
     }
 }
