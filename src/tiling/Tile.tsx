@@ -8,6 +8,7 @@ import WorkbenchTile from "../tiles/WorkbenchTile";
 import PlanTile from "../tiles/PlanTile";
 import CodeReviewTile from "../tiles/CodeReviewTile";
 import DebugWalkthroughTile from "../tiles/DebugWalkthroughTile";
+import LoopControlTile from "../tiles/LoopControlTile";
 import { isFeatureEnabled, featureDescriptor } from "../domain/feature-flags";
 import { shortcutLabel, defaultRootDir } from "../domain/platform";
 
@@ -328,6 +329,25 @@ function TileWrapperImpl({
             headCommitSha={headCommitSha ?? null}
             workstreamDir={workstreamDir ?? null}
             linkedSessionIds={linkedSessionIds}
+          />
+        );
+      }
+      break;
+    }
+    case "loop_control": {
+      if (!workstreamId) {
+        content = (
+          <div style={{ padding: 16, color: "#f38ba8" }}>
+            Goal Loop tile requires a workstream.
+          </div>
+        );
+      } else {
+        content = (
+          <LoopControlTile
+            tileId={tile.id}
+            workstreamId={workstreamId}
+            workstreamDir={workstreamDir ?? ""}
+            isFocused={isFocused}
           />
         );
       }

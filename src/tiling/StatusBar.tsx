@@ -4,6 +4,7 @@ import { ViewColumnsIcon } from "@heroicons/react/24/outline";
 import AddTileMenu from "./AddTileMenu";
 import { isFeatureEnabled } from "../domain/feature-flags";
 import { supportsWsl, terminalTileLabel, shortcutLabel } from "../domain/platform";
+import type { TileIconKey } from "./tile-icons";
 
 interface Props {
   tileCount: number;
@@ -26,6 +27,7 @@ interface Props {
   onAddPlan?: () => void;
   onAddCodeReview?: () => void;
   onAddWalkthrough?: () => void;
+  onAddLoop?: () => void;
   onToggleFullscreen?: () => void;
   onToggleSideBySide?: () => void;
   onOpenSettings?: () => void;
@@ -72,12 +74,13 @@ export default function StatusBar({
   onAddPlan,
   onAddCodeReview,
   onAddWalkthrough,
+  onAddLoop,
   onToggleFullscreen,
   onToggleSideBySide,
   onOpenSettings,
   quickNote,
 }: Props) {
-  const rawItems: Array<{ key: string; label: string; icon: "session" | "terminal" | "folder" | "info" | "beaker" | "plan" | "code"; shortcut?: string; onSelect?: () => void; gated?: boolean }> = [
+  const rawItems: Array<{ key: string; label: string; icon: TileIconKey; shortcut?: string; onSelect?: () => void; gated?: boolean }> = [
     { key: "session", label: "Copilot Session", icon: "session", shortcut: shortcutLabel("C"), onSelect: onAddSession },
     { key: "terminal", label: terminalTileLabel(), icon: "terminal", shortcut: shortcutLabel("T"), onSelect: onAddTerminal },
     // WSL is Windows-only — hide the entry entirely on macOS/Linux.
@@ -88,6 +91,7 @@ export default function StatusBar({
     { key: "plan", label: "Plan", icon: "plan", shortcut: shortcutLabel("P"), onSelect: onAddPlan, gated: !isFeatureEnabled("plan-tile") },
     { key: "code-review", label: "Code Review", icon: "code", shortcut: shortcutLabel("A"), onSelect: onAddCodeReview },
     { key: "walkthrough", label: "Code Walkthrough", icon: "code", shortcut: shortcutLabel("D"), onSelect: onAddWalkthrough, gated: !isFeatureEnabled("debug-walkthrough") },
+    { key: "loop", label: "Goal Loop", icon: "loop", onSelect: onAddLoop },
   ];
   const menuItems = rawItems
     .filter((it) => typeof it.onSelect === "function" && !it.gated)

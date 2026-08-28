@@ -58,11 +58,11 @@ describe("MemoryBackend manual coding loops", () => {
     const run = await backend.runWorkstreamLoopNow(workstreamId);
     expect(run.state).toBe("starting");
 
-    await vi.advanceTimersByTimeAsync(130);
+    await vi.advanceTimersByTimeAsync(320);
     expect((await backend.getWorkstreamLoopSnapshot(workstreamId)).latestRun)
       .toMatchObject({ state: "working" });
 
-    await vi.advanceTimersByTimeAsync(500);
+    await vi.advanceTimersByTimeAsync(1_200);
     const snapshot = await backend.getWorkstreamLoopSnapshot(workstreamId);
     expect(snapshot.latestRun?.state).toBe("completed");
     expect(snapshot.tasks[0].state).toBe("accepted");
@@ -73,7 +73,7 @@ describe("MemoryBackend manual coding loops", () => {
   it("kills an active run and preserves interrupted task evidence", async () => {
     await configure();
     const run = await backend.runWorkstreamLoopNow(workstreamId);
-    await vi.advanceTimersByTimeAsync(130);
+    await vi.advanceTimersByTimeAsync(320);
 
     await backend.controlWorkstreamLoop(run.id, "kill");
     await vi.advanceTimersByTimeAsync(1_000);

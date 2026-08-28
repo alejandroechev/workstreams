@@ -14,10 +14,13 @@ import {
   ChevronRightIcon,
   FolderIcon,
   ClipboardDocumentListIcon,
+  ArrowPathRoundedSquareIcon,
+  ExclamationTriangleIcon,
 } from "@heroicons/react/20/solid";
 import { reorderById } from "../domain/reorder";
 import { getAppSettings } from "../domain/app-settings";
 import { WorkstreamActionMenu } from "./WorkstreamActionMenu";
+import type { LoopSummary } from "../domain/loop";
 
 interface Props {
   projects: Project[];
@@ -25,6 +28,8 @@ interface Props {
   activeWsId: string | null;
   /** Optional: map of wsId → linked-session summary (from pinned tile config). */
   sessionInfoByWs?: Record<string, string | undefined>;
+  /** Persisted loop state, surfaced even when the Loop Control tile is closed. */
+  loopSummaries?: LoopSummary[];
   /** Optional: set of workstream ids that have been loaded into the app's
    * `wsStates` map (i.e. tiles + activity wired up). Workstreams not in this
    * set render a "stopped" indicator (gray hollow square). */
@@ -141,6 +146,7 @@ export default function WorkstreamSidebar({
   workstreams,
   activeWsId,
   sessionInfoByWs,
+  loopSummaries = [],
   loadedWsIds,
   onSelectWorkstream,
   onOpenTaskBoard,
@@ -326,6 +332,20 @@ export default function WorkstreamSidebar({
     { key: "live" as const, label: "Live", rows: liveWorkstreams, collapsed: isSectionCollapsed("live", collapsedSections, liveWorkstreams.length) },
     { key: "idle" as const, label: "Idle", rows: idleWorkstreams, collapsed: isSectionCollapsed("idle", collapsedSections, liveWorkstreams.length) },
   ];
+  const runningLoopStates = new Set([
+    "starting",
+    "orchestrating",
+    "working",
+    "verifying",
+    "evaluating",
+    "stopping",
+  ]);
+  const runningLoopCount = loopSummaries.filter((summary) =>
+    runningLoopStates.has(summary.runState ?? ""),
+  ).length;
+  const loopByWorkstream = new Map(
+    loopSummaries.map((summary) => [summary.workstreamId, summary]),
+  );
 
   const getProject = (projectId: string | null) =>
     projectId ? projects.find((p) => p.id === projectId) : undefined;
@@ -338,6 +358,9 @@ export default function WorkstreamSidebar({
           const project = getProject(ws.project_id);
           const isDragOver = dragOverWsId === ws.id;
           const isBeingDragged = draggedWsId === ws.id;
+          const loop = loopByWorkstream.get(ws.id);
+          const loopRunning = runningLoopStates.has(loop?.runState ?? "");
+          const loopNeedsAttention = loop?.runState === "attention";
           return (
             <div
               key={ws.id}
@@ -428,6 +451,20 @@ export default function WorkstreamSidebar({
                     <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                       {ws.name}
                     </span>
+                  )}
+                  {loopRunning && (
+                    <ArrowPathRoundedSquareIcon
+                      data-testid={`ws-loop-running-${ws.id}`}
+                      title={`Goal loop: ${loop?.runState}`}
+                      style={{ width: 13, height: 13, color: "#cba6f7", flexShrink: 0 }}
+                    />
+                  )}
+                  {loopNeedsAttention && (
+                    <ExclamationTriangleIcon
+                      data-testid={`ws-loop-attention-${ws.id}`}
+                      title="Goal loop needs attention"
+                      style={{ width: 13, height: 13, color: "#f9e2af", flexShrink: 0 }}
+                    />
                   )}
                 </div>
                 {renamingWsId !== ws.id && (
@@ -636,6 +673,15 @@ export default function WorkstreamSidebar({
             : <ChevronDownIcon style={{ width: 12, height: 12 }} />}
           Workstreams
         </button>
+        {runningLoopCount > 0 && (
+          <span
+            data-testid="running-loop-count"
+            title={`${runningLoopCount} goal ${runningLoopCount === 1 ? "loop" : "loops"} running`}
+            style={{ color: "#cba6f7", fontSize: 9, marginLeft: "auto", marginRight: 6 }}
+          >
+            {runningLoopCount} running
+          </span>
+        )}
         <button
           data-testid="new-workstream-button"
           onClick={() => onCreateWorkstream()}

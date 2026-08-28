@@ -575,13 +575,13 @@ export class MemoryBackend implements Backend {
       }, delay);
 
     const timers = [
-      transition(40, (snapshot) => ({
+      transition(80, (snapshot) => ({
         ...snapshot,
         latestRun: snapshot.latestRun
           ? { ...snapshot.latestRun, state: "orchestrating" }
           : null,
       })),
-      transition(120, (snapshot) => {
+      transition(300, (snapshot) => {
         const task: LoopTask = snapshot.tasks[0] ?? {
           id: generateId(),
           loopRunId: runId,
@@ -603,7 +603,7 @@ export class MemoryBackend implements Backend {
           tasks: [{ ...task, state: "working" }],
         };
       }),
-      transition(240, (snapshot) => ({
+      transition(650, (snapshot) => ({
         ...snapshot,
         latestRun: snapshot.latestRun
           ? { ...snapshot.latestRun, state: "verifying" }
@@ -618,7 +618,7 @@ export class MemoryBackend implements Backend {
           }),
         })),
       })),
-      transition(360, (snapshot) => ({
+      transition(1_000, (snapshot) => ({
         ...snapshot,
         latestRun: snapshot.latestRun
           ? { ...snapshot.latestRun, state: "evaluating" }
@@ -641,7 +641,7 @@ export class MemoryBackend implements Backend {
             }]
           : [],
       })),
-      transition(520, (snapshot) => ({
+      transition(1_450, (snapshot) => ({
         ...snapshot,
         latestRun: snapshot.latestRun
           ? {

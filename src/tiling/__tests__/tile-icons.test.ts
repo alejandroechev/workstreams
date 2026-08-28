@@ -11,6 +11,7 @@ describe("tile-icons", () => {
 
   it.each<[TileType, string]>([
     ["copilot_session", "session"],
+    ["loop_control", "loop"],
     ["terminal", "terminal"],
     ["file_explorer", "folder"],
     ["file_viewer", "document"],

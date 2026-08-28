@@ -138,6 +138,16 @@ function optional(value: string | null): string | undefined {
   return value ?? undefined;
 }
 
+function timestamp(value: string): string {
+  return /^\d+$/.test(value)
+    ? new Date(Number(value) * 1000).toISOString()
+    : value;
+}
+
+function optionalTimestamp(value: string | null): string | undefined {
+  return value === null ? undefined : timestamp(value);
+}
+
 function model(value: string): string | null {
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : null;
@@ -174,8 +184,8 @@ function decodeSpec(spec: LoopSpecWire): LoopSpec {
     runTimeoutMs: spec.run_timeout_seconds * 1000,
     maxTaskIterations: MAX_TASK_ITERATIONS,
     enabled: spec.enabled,
-    createdAt: spec.created_at,
-    updatedAt: spec.updated_at,
+    createdAt: timestamp(spec.created_at),
+    updatedAt: timestamp(spec.updated_at),
   };
 }
 
@@ -190,9 +200,9 @@ function decodeRun(run: LoopRunWire): LoopRun {
     pendingAction: null,
     controlRequested: run.control_requested,
     error: optional(run.error),
-    startedAt: run.started_at,
-    finishedAt: optional(run.finished_at),
-    deadlineAt: run.deadline_at,
+    startedAt: timestamp(run.started_at),
+    finishedAt: optionalTimestamp(run.finished_at),
+    deadlineAt: timestamp(run.deadline_at),
   };
 }
 
@@ -209,8 +219,8 @@ function decodeTask(task: LoopTaskWire): LoopTask {
     revisionCount: task.revision_count,
     workerResult: optional(task.worker_result),
     error: optional(task.error),
-    createdAt: task.created_at,
-    updatedAt: task.updated_at,
+    createdAt: timestamp(task.created_at),
+    updatedAt: timestamp(task.updated_at),
   };
 }
 
@@ -231,7 +241,7 @@ function decodeVerification(
     stdout: verification.stdout,
     stderr: verification.stderr,
     truncated: verification.truncated,
-    createdAt: verification.created_at,
+    createdAt: timestamp(verification.created_at),
   };
 }
 
@@ -245,7 +255,7 @@ function decodeEvaluation(evaluation: LoopEvaluationWire): LoopEvaluationRecord 
     summary: evaluation.summary,
     feedback: optional(evaluation.feedback),
     evidence: evaluation.evidence,
-    createdAt: evaluation.created_at,
+    createdAt: timestamp(evaluation.created_at),
   };
 }
 
@@ -257,7 +267,7 @@ function decodeEvent(event: LoopEventWire): LoopEventRecord {
     loopTaskId: optional(event.loop_task_id),
     eventType: event.event_type,
     payload: event.payload,
-    createdAt: event.created_at,
+    createdAt: timestamp(event.created_at),
   };
 }
 
@@ -309,6 +319,6 @@ export function decodeLoopSummaries(
     runState: summary.run_state ?? undefined,
     controlRequested: summary.control_requested ?? undefined,
     currentTaskId: optional(summary.current_task_id),
-    startedAt: optional(summary.started_at),
+    startedAt: optionalTimestamp(summary.started_at),
   }));
 }

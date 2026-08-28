@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import { act, fireEvent, render, cleanup } from "@testing-library/react";
 import WorkstreamSidebar from "../WorkstreamSidebar";
 import type { Workstream } from "../../domain/types";
+import type { LoopSummary } from "../../domain/loop";
 
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn().mockResolvedValue(() => {}),
@@ -23,13 +24,18 @@ const mk = (id: string, name: string): Workstream => ({
   updated_at: now,
 });
 
-function renderWith(loadedWsIds?: Set<string>, activeWsId: string | null = "a") {
+function renderWith(
+  loadedWsIds?: Set<string>,
+  activeWsId: string | null = "a",
+  loopSummaries: LoopSummary[] = [],
+) {
   return render(
     <WorkstreamSidebar
       projects={[]}
       workstreams={[mk("a", "Alpha"), mk("b", "Beta")]}
       activeWsId={activeWsId}
       loadedWsIds={loadedWsIds}
+      loopSummaries={loopSummaries}
       onSelectWorkstream={vi.fn()}
       onCreateProject={vi.fn()}
       onImportProject={vi.fn()}
@@ -79,5 +85,33 @@ describe("WorkstreamSidebar activity indicator", () => {
       cleanup();
     });
   });
-});
 
+  it("surfaces per-workstream loop state and the running total", () => {
+    const { getByTestId, queryByTestId } = renderWith(
+      new Set(["a", "b"]),
+      "a",
+      [
+        {
+          workstreamId: "a",
+          loopSpecId: "spec-a",
+          enabled: true,
+          runId: "run-a",
+          runState: "working",
+        },
+        {
+          workstreamId: "b",
+          loopSpecId: "spec-b",
+          enabled: true,
+          runId: "run-b",
+          runState: "attention",
+        },
+      ],
+    );
+
+    expect(getByTestId("running-loop-count").textContent).toContain("1 running");
+    expect(getByTestId("ws-loop-running-a")).toBeTruthy();
+    expect(getByTestId("ws-loop-attention-b")).toBeTruthy();
+    expect(queryByTestId("ws-loop-running-b")).toBeNull();
+    cleanup();
+  });
+});

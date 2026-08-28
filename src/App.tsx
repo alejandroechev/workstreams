@@ -40,6 +40,7 @@ import { workbenchStore } from "./domain/workbench-store-instance";
 import { setWorkbenchStoreForDispatcher } from "./domain/workbench-events";
 import { useBackend } from "./backend/context";
 import type { Project, Workstream, Tile, TileType } from "./domain/types";
+import type { LoopSummary } from "./domain/loop";
 
 // Wire the persistent Workbench store into the cross-tile dispatcher
 // so right-clicks from anywhere persist to the workstream's setting
@@ -50,6 +51,7 @@ export default function App() {
   const backend = useBackend();
   const [projects, setProjects] = useState<Project[]>([]);
   const [workstreams, setWorkstreams] = useState<Workstream[]>([]);
+  const [loopSummaries, setLoopSummaries] = useState<LoopSummary[]>([]);
   // Latest projects/workstreams held in refs so spawn helpers invoked from
   // effects/event handlers resolve the CURRENT per-project Copilot command
   // (like getAppSettings() reads the live global) without stale closures.
@@ -298,6 +300,27 @@ export default function App() {
     (window as unknown as { __wsIntentionalRestartIds?: Set<string> }).__wsIntentionalRestartIds =
       intentionalRestartIds.current;
   }, []);
+
+  const refreshLoopSummaries = useCallback(() => {
+    if (typeof backend.listWorkstreamLoopSummaries !== "function") return;
+    void backend
+      .listWorkstreamLoopSummaries()
+      .then(setLoopSummaries)
+      .catch((error) => console.error("Failed to load loop summaries:", error));
+  }, [backend]);
+
+  useEffect(() => {
+    refreshLoopSummaries();
+    const interval = window.setInterval(refreshLoopSummaries, 2_000);
+    const onMemoryUpdate = () => refreshLoopSummaries();
+    window.addEventListener("memory-loop-updated", onMemoryUpdate);
+    const unlisten = listen("loop-updated", refreshLoopSummaries);
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener("memory-loop-updated", onMemoryUpdate);
+      void unlisten.then((dispose) => dispose());
+    };
+  }, [refreshLoopSummaries]);
   const previousWsTiles = useRef<Map<string, { tiles: Tile[]; order: string[] }>>(new Map());
 
   const getDirtyFileBuffers = useCallback(() => fileBufferRegistry.listAll().filter((snapshot) => snapshot.dirty), []);
@@ -1129,6 +1152,7 @@ export default function App() {
       plan: "Plan",
       code_review: "Code Review",
       debug_walkthrough: "Walkthrough",
+      loop_control: "Goal Loop",
     };
     // Count by sub-shell (PowerShell vs WSL) so each gets its own
     // numbered sequence.
@@ -1410,6 +1434,7 @@ export default function App() {
         workstreams={workstreams}
         activeWsId={activeWsId}
         sessionInfoByWs={sessionInfoByWs}
+        loopSummaries={loopSummaries}
         loadedWsIds={loadedWsIds}
         onSelectWorkstream={selectWorkstream}
         provisioning={provisioning}
@@ -1597,6 +1622,7 @@ export default function App() {
           onAddPlan={() => addTile("plan")}
           onAddCodeReview={() => addTile("code_review")}
           onAddWalkthrough={() => addTile("debug_walkthrough")}
+          onAddLoop={() => addTile("loop_control")}
           onOpenSettings={() => setShowSettings(true)}
           onToggleFullscreen={() => {
             if (orderedTiles.length > 0 && orderedTiles[focusedIndex]) {
