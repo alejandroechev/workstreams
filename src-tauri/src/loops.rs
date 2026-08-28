@@ -573,17 +573,36 @@ pub fn create_loop_run(
     }
     let id = Uuid::new_v4().to_string();
     let started_at = crate::now();
+    let deadline_at = std::time::SystemTime::now()
+        .checked_add(Duration::from_secs(timeout_seconds))
+        .and_then(|deadline| deadline.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|duration| duration.as_secs().to_string())
+        .ok_or_else(|| "Failed to calculate the loop deadline".to_string())?;
     conn.execute(
         "INSERT INTO loop_runs (
             id, loop_spec_id, state, control_requested, started_at, deadline_at
-         ) VALUES (
-            ?1, ?2, 'starting', 'none', ?3,
-            datetime('now', '+' || ?4 || ' seconds')
-         )",
-        params![id, loop_spec_id, started_at, timeout_seconds],
+         ) VALUES (?1, ?2, 'starting', 'none', ?3, ?4)",
+        params![id, loop_spec_id, started_at, deadline_at],
     )
     .map_err(|error| format!("Failed to create loop run: {error}"))?;
     get_loop_run(conn, &id)?.ok_or_else(|| "Created loop run could not be reloaded".to_string())
+}
+
+fn remaining_run_timeout(db: &Arc<Mutex<Connection>>, run_id: &str) -> Result<Duration, String> {
+    let run = get_loop_run(&db.lock().unwrap(), run_id)?
+        .ok_or_else(|| format!("Loop run not found: {run_id}"))?;
+    let deadline = run
+        .deadline_at
+        .parse::<u64>()
+        .map_err(|_| "Loop run has an invalid deadline".to_string())?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|error| format!("System clock is before the Unix epoch: {error}"))?
+        .as_secs();
+    if deadline <= now {
+        return Err("Loop run exceeded its wall-time limit".to_string());
+    }
+    Ok(Duration::from_secs(deadline - now))
 }
 
 pub fn get_loop_run(conn: &Connection, run_id: &str) -> Result<Option<LoopRun>, String> {
@@ -1124,7 +1143,7 @@ async fn verify_task(
                 .map(PathBuf::from)
                 .unwrap_or_else(|| working_directory.to_path_buf()),
         ),
-        timeout: Duration::from_secs(spec.run_timeout_seconds),
+        timeout: remaining_run_timeout(db, run_id)?,
         output_limit_bytes: 256 * 1024,
     })
     .await;
@@ -1223,7 +1242,7 @@ async fn evaluate_task(
             prompt: evaluator_prompt(context.spec, context.task, worker, verification),
             working_directory: context.working_directory.to_path_buf(),
             model: context.spec.evaluator_model.clone(),
-            timeout: Duration::from_secs(context.spec.run_timeout_seconds),
+            timeout: remaining_run_timeout(context.db, context.run_id)?,
             keep_session: false,
         },
         &context.spec.id,
@@ -1281,7 +1300,7 @@ async fn execute_manual_loop_inner(
                 prompt: orchestrator_prompt(&spec),
                 working_directory: working_directory.clone(),
                 model: spec.orchestrator_model.clone(),
-                timeout: Duration::from_secs(spec.run_timeout_seconds),
+                timeout: remaining_run_timeout(&db, run_id)?,
                 keep_session: false,
             },
             &spec.id,
@@ -1321,7 +1340,7 @@ async fn execute_manual_loop_inner(
                 prompt: worker_prompt(&spec, &task),
                 working_directory: working_directory.clone(),
                 model: spec.worker_model.clone(),
-                timeout: Duration::from_secs(spec.run_timeout_seconds),
+                timeout: remaining_run_timeout(&db, run_id)?,
                 keep_session: true,
             },
             &spec.id,
@@ -1346,7 +1365,7 @@ async fn execute_manual_loop_inner(
             };
             set_task_state(&db.lock().unwrap(), &task.id, state, None)?;
             runtime.disconnect(&worker_response.session_id).await?;
-            needs_attention |= state == LoopTaskState::Attention;
+            needs_attention = true;
             continue;
         }
         let first_verification =
@@ -1398,7 +1417,7 @@ async fn execute_manual_loop_inner(
                 &runtime,
                 &worker_response.session_id,
                 &revision_prompt(feedback),
-                Duration::from_secs(spec.run_timeout_seconds),
+                remaining_run_timeout(&db, run_id)?,
                 StageIdentity {
                     loop_spec_id: &spec.id,
                     run_id,
@@ -1450,7 +1469,10 @@ async fn execute_manual_loop_inner(
 
         let task_state = match final_verdict.verdict {
             EvaluatorVerdict::Accepted => LoopTaskState::Accepted,
-            EvaluatorVerdict::Blocked => LoopTaskState::Blocked,
+            EvaluatorVerdict::Blocked => {
+                needs_attention = true;
+                LoopTaskState::Blocked
+            }
             EvaluatorVerdict::Revise | EvaluatorVerdict::Invalid => {
                 needs_attention = true;
                 LoopTaskState::Attention
@@ -1796,6 +1818,7 @@ pub fn list_workstream_loop_summaries(
 }
 
 #[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct LoopUpdatedEvent {
     workstream_id: String,
     run_id: String,
@@ -2403,6 +2426,64 @@ mod tests {
         assert_eq!(
             list_loop_tasks(&conn, &run.id).expect("list tasks")[0].state,
             LoopTaskState::Accepted
+        );
+    }
+
+    #[tokio::test]
+    async fn blocked_evaluator_verdict_requires_human_attention() {
+        use crate::loop_agent::{AgentRole, ScriptedAgentResponse, ScriptedAgentRuntime};
+        use std::sync::{Arc, Mutex};
+
+        let conn = test_db();
+        let mut input = spec_input();
+        input.verifier_program = None;
+        let spec = save_loop_spec(&conn, "ws-1", input).expect("save loop spec");
+        set_loop_enabled(&conn, &spec.id, true).expect("enable loop");
+        let run = create_loop_run(&conn, &spec.id, 600).expect("create run");
+        let runtime = Arc::new(ScriptedAgentRuntime::new(vec![
+            ScriptedAgentResponse {
+                role: AgentRole::Orchestrator,
+                session_id: "orchestrator-1".to_string(),
+                content: r#"{"tasks":[{"key":"task-1","title":"Task","objective":"Do work"}]}"#
+                    .to_string(),
+                events: vec![],
+            },
+            ScriptedAgentResponse {
+                role: AgentRole::Worker,
+                session_id: "worker-1".to_string(),
+                content: r#"{"status":"completed","summary":"Done","evidence":[]}"#.to_string(),
+                events: vec![],
+            },
+            ScriptedAgentResponse {
+                role: AgentRole::Evaluator,
+                session_id: "evaluator-1".to_string(),
+                content: r#"{"verdict":"blocked","summary":"Needs human input","evidence":[]}"#
+                    .to_string(),
+                events: vec![],
+            },
+        ]));
+        let db = Arc::new(Mutex::new(conn));
+
+        execute_manual_loop(
+            Arc::clone(&db),
+            runtime,
+            &run.id,
+            std::path::PathBuf::from("/tmp/repo"),
+        )
+        .await
+        .expect("blocked is a handled outcome");
+
+        let conn = db.lock().unwrap();
+        assert_eq!(
+            get_loop_run(&conn, &run.id)
+                .expect("load run")
+                .expect("run exists")
+                .state,
+            LoopRunState::Attention
+        );
+        assert_eq!(
+            list_loop_tasks(&conn, &run.id).expect("list tasks")[0].state,
+            LoopTaskState::Blocked
         );
     }
 
