@@ -446,7 +446,7 @@ fn delete_workstream(state: State<'_, AppState>, id: String) -> Result<(), Strin
     drop(stmt);
 
     for tid in &tile_ids {
-        state.pty.close(tid);
+        state.pty.close(tid)?;
     }
 
     db.execute("DELETE FROM workstreams WHERE id = ?1", [&id])
@@ -680,7 +680,7 @@ fn list_tiles(state: State<'_, AppState>, workstream_id: String) -> Result<Vec<T
 
 #[tauri::command]
 fn delete_tile(state: State<'_, AppState>, tile_id: String) -> Result<(), String> {
-    state.pty.close(&tile_id);
+    state.pty.close(&tile_id)?;
     let db = state.db.lock().unwrap();
 
     // Remove from layout order
@@ -944,8 +944,7 @@ fn resize_pty(
 
 #[tauri::command]
 fn close_terminal(state: State<'_, AppState>, tile_id: String) -> Result<(), String> {
-    state.pty.close(&tile_id);
-    Ok(())
+    state.pty.close(&tile_id)
 }
 
 // ── Scrollback Commands ────────────────────────────────────────────────

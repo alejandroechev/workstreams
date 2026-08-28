@@ -1,8 +1,10 @@
-use portable_pty::{native_pty_system, CommandBuilder, PtySize};
+use portable_pty::{native_pty_system, Child, ChildKiller, CommandBuilder, ExitStatus, PtySize};
 use std::collections::HashMap;
 use std::io::{Read, Write};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
 
@@ -121,8 +123,35 @@ pub fn run_batcher<F>(
 pub struct PtyHandle {
     writer: Box<dyn Write + Send>,
     master: Arc<Mutex<Box<dyn portable_pty::MasterPty + Send>>>,
+    killer: Box<dyn ChildKiller + Send + Sync>,
+    waiter: Option<JoinHandle<()>>,
+    generation: u64,
     #[allow(dead_code)]
     pid: Option<u32>,
+}
+
+#[derive(Clone, serde::Serialize)]
+struct PtyProcessExit {
+    pid: Option<u32>,
+    exit_code: Option<u32>,
+    success: bool,
+    error: Option<String>,
+}
+
+fn wait_for_child(mut child: Box<dyn Child + Send + Sync>) -> std::io::Result<ExitStatus> {
+    child.wait()
+}
+
+fn terminate_and_wait(mut child: Box<dyn Child + Send + Sync>) -> Result<ExitStatus, String> {
+    let kill_error = child.kill().err();
+    let wait_result = child
+        .wait()
+        .map_err(|error| format!("Failed to wait for PTY child: {error}"));
+    match (kill_error, wait_result) {
+        (_, Ok(status)) => Ok(status),
+        (Some(kill), Err(wait)) => Err(format!("Failed to terminate PTY child: {kill}; {wait}")),
+        (None, Err(wait)) => Err(wait),
+    }
 }
 
 /// Pick a sane default shell when a terminal tile doesn't specify a command.
@@ -224,13 +253,15 @@ fn spawn_env_overrides_with(
 }
 
 pub struct PtyManager {
-    handles: Mutex<HashMap<String, PtyHandle>>,
+    handles: Arc<Mutex<HashMap<String, PtyHandle>>>,
+    next_generation: AtomicU64,
 }
 
 impl PtyManager {
     pub fn new() -> Self {
         Self {
-            handles: Mutex::new(HashMap::new()),
+            handles: Arc::new(Mutex::new(HashMap::new())),
+            next_generation: AtomicU64::new(1),
         }
     }
 
@@ -280,6 +311,7 @@ impl PtyManager {
             .map_err(|e| format!("Failed to spawn: {e}"))?;
 
         let pid = child.process_id();
+        let killer = child.clone_killer();
         drop(pair.slave);
 
         let writer = pair
@@ -293,15 +325,88 @@ impl PtyManager {
 
         let master = Arc::new(Mutex::new(pair.master));
 
-        let handle = PtyHandle {
-            writer,
-            master,
-            pid,
+        let generation = self.next_generation.fetch_add(1, Ordering::Relaxed);
+        let id_for_waiter = tile_id.to_string();
+        let handles_for_waiter = Arc::clone(&self.handles);
+        let app_for_waiter = app.clone();
+        let (child_tx, child_rx) = mpsc::sync_channel::<Box<dyn Child + Send + Sync>>(0);
+        let waiter = match std::thread::Builder::new()
+            .name(format!("pty-wait-{tile_id}"))
+            .spawn(move || {
+                let Ok(child) = child_rx.recv() else {
+                    return;
+                };
+                let exit = match wait_for_child(child) {
+                    Ok(status) => PtyProcessExit {
+                        pid,
+                        exit_code: Some(status.exit_code()),
+                        success: status.success(),
+                        error: None,
+                    },
+                    Err(error) => PtyProcessExit {
+                        pid,
+                        exit_code: None,
+                        success: false,
+                        error: Some(error.to_string()),
+                    },
+                };
+
+                let mut handles = handles_for_waiter.lock().unwrap();
+                if handles
+                    .get(&id_for_waiter)
+                    .is_some_and(|handle| handle.generation == generation)
+                {
+                    handles.remove(&id_for_waiter);
+                }
+                drop(handles);
+
+                let _ = app_for_waiter.emit(&format!("pty-process-exit-{id_for_waiter}"), exit);
+            }) {
+            Ok(waiter) => waiter,
+            Err(error) => {
+                let cleanup = terminate_and_wait(child)
+                    .err()
+                    .map(|cleanup| format!("; cleanup also failed: {cleanup}"))
+                    .unwrap_or_default();
+                return Err(format!(
+                    "Failed to start PTY process waiter: {error}{cleanup}"
+                ));
+            }
         };
 
         {
             let mut handles = self.handles.lock().unwrap();
-            handles.insert(tile_id.to_string(), handle);
+            handles.insert(
+                tile_id.to_string(),
+                PtyHandle {
+                    writer,
+                    master,
+                    killer,
+                    waiter: Some(waiter),
+                    generation,
+                    pid,
+                },
+            );
+        }
+
+        if let Err(error) = child_tx.send(child) {
+            let mut handles = self.handles.lock().unwrap();
+            let handle = handles.remove(tile_id);
+            drop(handles);
+            if let Some(handle) = handle {
+                drop(handle.writer);
+                drop(handle.master);
+                if let Some(waiter) = handle.waiter {
+                    let _ = waiter.join();
+                }
+            }
+            let cleanup = terminate_and_wait(error.0)
+                .err()
+                .map(|cleanup| format!("; cleanup also failed: {cleanup}"))
+                .unwrap_or_default();
+            return Err(format!(
+                "Failed to hand PTY child to process waiter{cleanup}"
+            ));
         }
 
         // Background reader thread: PTY output → mpsc channel → batcher
@@ -378,17 +483,48 @@ impl PtyManager {
     }
 
     /// Close/kill a PTY session
-    pub fn close(&self, tile_id: &str) {
+    pub fn close(&self, tile_id: &str) -> Result<(), String> {
         let mut handles = self.handles.lock().unwrap();
-        handles.remove(tile_id);
-        // Dropping the handle closes the writer and master, which terminates the PTY
+        let handle = handles.remove(tile_id);
+        drop(handles);
+        let Some(mut handle) = handle else {
+            return Ok(());
+        };
+
+        let kill_result = handle
+            .killer
+            .kill()
+            .map_err(|error| format!("Failed to terminate PTY child: {error}"));
+        drop(handle.writer);
+        drop(handle.master);
+        if let Some(waiter) = handle.waiter.take() {
+            waiter
+                .join()
+                .map_err(|_| "PTY process waiter panicked".to_string())?;
+        }
+        kill_result
     }
 
     /// Close all PTY sessions (used on app shutdown)
     pub fn close_all(&self) {
         let mut handles = self.handles.lock().unwrap();
         let count = handles.len();
-        handles.clear();
+        let mut drained: Vec<PtyHandle> = handles.drain().map(|(_, handle)| handle).collect();
+        drop(handles);
+        for handle in &mut drained {
+            if let Err(error) = handle.killer.kill() {
+                eprintln!("[pty] Failed to terminate {:?}: {error}", handle.pid);
+            }
+        }
+        for mut handle in drained {
+            drop(handle.writer);
+            drop(handle.master);
+            if let Some(waiter) = handle.waiter.take() {
+                if waiter.join().is_err() {
+                    eprintln!("[pty] Process waiter panicked for {:?}", handle.pid);
+                }
+            }
+        }
         if count > 0 {
             eprintln!("[pty] Closed {} PTY sessions on shutdown", count);
         }
@@ -552,9 +688,86 @@ mod tests {
     #[test]
     fn pty_manager_close_missing_pty_is_idempotent() {
         let mgr = PtyManager::new();
-        mgr.close("nonexistent-tile");
+        mgr.close("nonexistent-tile").unwrap();
         // Should not panic
         assert!(!mgr.is_active("nonexistent-tile"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn waiting_for_a_pty_child_collects_its_process() {
+        let pty_system = native_pty_system();
+        let pair = pty_system
+            .openpty(PtySize {
+                rows: 24,
+                cols: 80,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .expect("open test PTY");
+        let mut command = CommandBuilder::new("/bin/sh");
+        command.arg("-c");
+        command.arg("exit 7");
+        let child = pair
+            .slave
+            .spawn_command(command)
+            .expect("spawn short-lived PTY child");
+        let pid = child.process_id().expect("unix PTY child has a pid");
+        drop(pair.slave);
+
+        let status = wait_for_child(child).expect("wait for PTY child");
+        drop(pair.master);
+        assert_eq!(status.exit_code(), 7);
+
+        let mut raw_status = 0;
+        let wait_result =
+            unsafe { libc::waitpid(pid as libc::pid_t, &mut raw_status, libc::WNOHANG) };
+        assert_eq!(
+            wait_result, -1,
+            "the child must already have been collected"
+        );
+        assert_eq!(
+            std::io::Error::last_os_error().raw_os_error(),
+            Some(libc::ECHILD),
+            "a second wait must report that no child remains"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn terminating_a_pty_child_also_collects_its_process() {
+        let pty_system = native_pty_system();
+        let pair = pty_system
+            .openpty(PtySize {
+                rows: 24,
+                cols: 80,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .expect("open test PTY");
+        let mut command = CommandBuilder::new("/bin/sh");
+        command.arg("-c");
+        command.arg("sleep 30");
+        let child = pair
+            .slave
+            .spawn_command(command)
+            .expect("spawn long-lived PTY child");
+        let pid = child.process_id().expect("unix PTY child has a pid");
+        drop(pair.slave);
+
+        let status = terminate_and_wait(child).expect("terminate and wait for PTY child");
+        drop(pair.master);
+        assert!(!status.success());
+
+        let mut raw_status = 0;
+        let wait_result =
+            unsafe { libc::waitpid(pid as libc::pid_t, &mut raw_status, libc::WNOHANG) };
+        assert_eq!(wait_result, -1, "the terminated child must be collected");
+        assert_eq!(
+            std::io::Error::last_os_error().raw_os_error(),
+            Some(libc::ECHILD),
+            "a second wait must report that no child remains"
+        );
     }
 
     // ── PTY output batcher tests ─────────────────────────────────────────
