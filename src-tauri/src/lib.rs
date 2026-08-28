@@ -4,6 +4,7 @@ mod devlog;
 mod file_io;
 mod fs_watcher;
 mod loop_agent;
+mod loop_cli;
 mod loop_verifier;
 mod loops;
 mod pty;
@@ -21,6 +22,10 @@ use serde::{Deserialize, Serialize};
 use session_poller::SessionPoller;
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, Manager, State};
+
+pub fn run_loop_cli(args: Vec<String>) -> Result<(), String> {
+    loop_cli::run(args)
+}
 
 // ── Types ──────────────────────────────────────────────────────────────
 

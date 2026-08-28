@@ -3,9 +3,7 @@ use github_copilot_sdk::handler::ApproveAllHandler;
 use github_copilot_sdk::session::Session;
 use github_copilot_sdk::{Client, ClientOptions, MessageOptions, SessionConfig};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-#[cfg(test)]
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -261,7 +259,6 @@ impl LoopAgentRuntime for SdkAgentRuntime {
     }
 }
 
-#[cfg(test)]
 #[derive(Debug, Clone)]
 pub struct ScriptedAgentResponse {
     pub role: AgentRole,
@@ -270,13 +267,11 @@ pub struct ScriptedAgentResponse {
     pub events: Vec<AgentRuntimeEvent>,
 }
 
-#[cfg(test)]
 pub struct ScriptedAgentRuntime {
     responses: Mutex<VecDeque<ScriptedAgentResponse>>,
     retained_sessions: Mutex<HashSet<String>>,
 }
 
-#[cfg(test)]
 impl ScriptedAgentRuntime {
     pub fn new(responses: Vec<ScriptedAgentResponse>) -> Self {
         Self {
@@ -311,7 +306,6 @@ impl ScriptedAgentRuntime {
     }
 }
 
-#[cfg(test)]
 #[async_trait]
 impl LoopAgentRuntime for ScriptedAgentRuntime {
     async fn start(

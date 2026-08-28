@@ -62,7 +62,7 @@ pub enum LoopRunState {
 }
 
 impl LoopRunState {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Starting => "starting",
             Self::Orchestrating => "orchestrating",
@@ -129,7 +129,7 @@ pub enum LoopTaskState {
 }
 
 impl LoopTaskState {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Queued => "queued",
             Self::Working => "working",
@@ -617,7 +617,11 @@ pub fn set_run_state(
     Ok(())
 }
 
-fn set_run_control(conn: &Connection, run_id: &str, control: &str) -> Result<(), String> {
+pub(crate) fn set_run_control(
+    conn: &Connection,
+    run_id: &str,
+    control: &str,
+) -> Result<(), String> {
     let changed = conn
         .execute(
             "UPDATE loop_runs SET control_requested = ?1 WHERE id = ?2",
@@ -1692,7 +1696,10 @@ fn list_loop_events(conn: &Connection, run_id: &str) -> Result<Vec<LoopEventReco
         .map_err(|error| format!("Failed to decode loop events: {error}"))
 }
 
-fn loop_snapshot(conn: &Connection, workstream_id: &str) -> Result<LoopSnapshot, String> {
+pub(crate) fn loop_snapshot(
+    conn: &Connection,
+    workstream_id: &str,
+) -> Result<LoopSnapshot, String> {
     let spec = get_loop_spec(conn, workstream_id)?;
     let Some(spec_ref) = spec.as_ref() else {
         return Ok(LoopSnapshot {
