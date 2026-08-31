@@ -33,7 +33,7 @@
     "hooks:install": "node scripts/install-hooks.mjs",
     "postinstall": "node scripts/install-hooks.mjs",
     "tasks:smoke": "npx vite-node scripts/tasks-smoke.mjs",
-    "loop:cli": "cargo run --quiet --manifest-path src-tauri/Cargo.toml --bin workstreams-loop --"
+    "loop:cli": "cargo run --quiet --manifest-path src-tauri/Cargo.toml --bin workstreams -- loop"
   },
   "dependencies": {
     "@heroicons/react": "^2.2.0",

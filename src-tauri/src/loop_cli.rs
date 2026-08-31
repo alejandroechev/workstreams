@@ -12,12 +12,12 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 const USAGE: &str = "Usage:
-  workstreams-loop configure <db-path> <workstream-id> <spec-json-file>
-  workstreams-loop enable <db-path> <workstream-id> <true|false>
-  workstreams-loop run <db-path> <workstream-id>
-  workstreams-loop status <db-path> <workstream-id>
-  workstreams-loop control <db-path> <run-id> <pause|stop|kill>
-  workstreams-loop scenario <db-path> <workspace>";
+  workstreams loop configure <db-path> <workstream-id> <spec-json-file>
+  workstreams loop enable <db-path> <workstream-id> <true|false>
+  workstreams loop run <db-path> <workstream-id>
+  workstreams loop status <db-path> <workstream-id>
+  workstreams loop control <db-path> <run-id> <pause|stop|kill>
+  workstreams loop scenario <db-path> <workspace>";
 
 fn open(path: &Path) -> Result<Connection, String> {
     crate::db::open_db(path).map_err(|error| format!("Failed to open Workstreams DB: {error}"))

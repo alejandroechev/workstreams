@@ -173,9 +173,10 @@ The workstream sidebar shows per-workstream running/attention state and the
 number of running loops. MVP1 intentionally has one active episode per
 workstream and no global concurrency cap.
 
-`workstreams-loop` provides configure, enable, run, status, and control
-commands. Its deterministic `scenario` runs the same controller with the
-scripted runtime and a real verifier.
+The existing `workstreams` executable exposes `workstreams loop configure`,
+`enable`, `run`, `status`, and `control` subcommands. Its deterministic
+`scenario` runs the same controller with the scripted runtime and a real
+verifier. Keeping one Cargo binary avoids ambiguity for `cargo tauri dev`.
 
 ## Permissions
 
@@ -227,7 +228,7 @@ generic loop contract.
   disconnects, and shuts down a real bundled-CLI session.
 - Vitest covers the pure state machine, wire mapping, both backends, Loop
   Control tile, sidebar projection, and App compatibility.
-- `workstreams-loop scenario` exercises task discovery, a real verifier,
+- `workstreams loop scenario` exercises task discovery, a real verifier,
   evaluator acceptance, and second-run deduplication.
 - Playwright covers configure/enable/run/pause/resume/verify/evaluate and Kill.
 - `e2e/features/manual-coding-loop.mjs` is the real-Tauri CDP probe. It can only
