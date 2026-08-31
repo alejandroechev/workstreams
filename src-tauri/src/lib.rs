@@ -5,6 +5,7 @@ mod file_io;
 mod fs_watcher;
 mod loop_agent;
 mod loop_cli;
+mod loop_definition;
 mod loop_verifier;
 mod loops;
 mod pty;
@@ -5173,11 +5174,13 @@ pub fn run() {
             close_terminal,
             // Manual coding goal loops
             loops::get_workstream_loop_snapshot,
+            loops::list_loop_definitions,
             loops::get_workstream_loop_progress_version,
             loops::save_workstream_loop,
             loops::set_workstream_loop_enabled,
             loops::list_workstream_loop_summaries,
             loops::run_workstream_loop_now,
+            loops::run_loop_definition_now,
             loops::resume_workstream_loop,
             loops::control_workstream_loop,
             // Scrollback

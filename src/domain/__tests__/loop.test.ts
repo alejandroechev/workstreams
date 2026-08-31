@@ -287,6 +287,22 @@ describe("transitionLoop", () => {
     expect(result.action).toEqual({ type: "evaluate", taskId: "task-1" });
   });
 
+  it("accepts a verification-only task after its script passes", () => {
+    const current = snapshot("verifying", [task({ state: "verifying" })], {
+      spec: spec({ evaluator: undefined }),
+    });
+    current.run.activeTaskId = "task-1";
+
+    const result = transitionLoop(current, {
+      type: "verification_completed",
+      result: { kind: "passed" },
+    });
+
+    expect(result.snapshot.run.state).toBe("completed");
+    expect(result.snapshot.tasks[0].state).toBe("accepted");
+    expect(result.action).toEqual({ type: "none" });
+  });
+
   it.each<VerificationResult>([
     { kind: "nonzero", exitCode: 1 },
     { kind: "timeout" },

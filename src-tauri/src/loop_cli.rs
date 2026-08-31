@@ -2,9 +2,10 @@ use crate::loop_agent::{
     AgentRole, LoopAgentRuntime, ScriptedAgentResponse, ScriptedAgentRuntime, SdkAgentRuntime,
 };
 use crate::loops::{
-    create_loop_run, execute_manual_loop, get_loop_run, get_loop_spec, loop_snapshot,
-    save_loop_spec, set_loop_enabled, set_run_control, set_run_state, transition_unfinished_tasks,
-    LoopRunState, LoopSnapshot, LoopSpecInput, LoopTaskState,
+    create_loop_run, definition_to_materialized, execute_manual_loop, get_loop_run, get_loop_spec,
+    loop_snapshot, materialize_loop_definition, save_loop_spec, set_loop_enabled, set_run_control,
+    set_run_state, transition_unfinished_tasks, LoopRunState, LoopSnapshot, LoopSpecInput,
+    LoopTaskState,
 };
 use rusqlite::{params, Connection};
 use serde::Serialize;
@@ -17,6 +18,9 @@ const USAGE: &str = "Usage:
   workstreams loop run <db-path> <workstream-id>
   workstreams loop status <db-path> <workstream-id>
   workstreams loop control <db-path> <run-id> <pause|stop|kill>
+  workstreams loop validate <workspace> <definition-file>
+  workstreams loop list <workspace>
+  workstreams loop run-file <db-path> <workspace> <definition-file>
   workstreams loop scenario <db-path> <workspace>";
 
 fn open(path: &Path) -> Result<Connection, String> {
@@ -72,6 +76,47 @@ fn run_real_loop(db_path: &Path, workstream_id: &str) -> Result<LoopSnapshot, St
     })?;
     let conn = db.lock().unwrap();
     loop_snapshot(&conn, workstream_id)
+}
+
+fn run_definition_file(
+    db_path: &Path,
+    workspace: &Path,
+    definition_path: &Path,
+) -> Result<LoopSnapshot, String> {
+    let conn = open(db_path)?;
+    conn.execute(
+        "INSERT INTO workstreams (
+            id, name, directory, status, workstream_type, created_at, updated_at
+         ) VALUES ('cli-loop-file', 'CLI Loop File', ?1, 'active', 'worktree', ?2, ?2)
+         ON CONFLICT(id) DO UPDATE SET directory=excluded.directory, updated_at=excluded.updated_at",
+        params![workspace.to_string_lossy(), crate::now()],
+    )
+    .map_err(|error| format!("Failed to bind CLI loop workspace: {error}"))?;
+    let (definition, yaml) =
+        crate::loop_definition::load_validated_definition(workspace, definition_path)?;
+    let spec = materialize_loop_definition(
+        &conn,
+        "cli-loop-file",
+        definition_to_materialized(definition, yaml),
+    )?;
+    let run = create_loop_run(&conn, &spec.id, spec.run_timeout_seconds)?;
+    drop(conn);
+    let db = Arc::new(Mutex::new(open(db_path)?));
+    runtime()?.block_on(async {
+        let runtime = Arc::new(SdkAgentRuntime::connect().await?) as Arc<dyn LoopAgentRuntime>;
+        let result = execute_manual_loop(
+            Arc::clone(&db),
+            Arc::clone(&runtime),
+            &run.id,
+            workspace.to_path_buf(),
+        )
+        .await;
+        let shutdown = runtime.shutdown().await;
+        result?;
+        shutdown
+    })?;
+    let snapshot = loop_snapshot(&db.lock().unwrap(), "cli-loop-file");
+    snapshot
 }
 
 fn configure(args: &[String]) -> Result<(), String> {
@@ -142,6 +187,39 @@ pub fn run(args: Vec<String>) -> Result<(), String> {
         "enable" => enable(rest),
         "status" => status(rest),
         "control" => control(rest),
+        "validate" => {
+            let [workspace, definition_path] = rest else {
+                return Err(USAGE.to_string());
+            };
+            let result = crate::loop_definition::load_loop_definition(
+                Path::new(workspace),
+                Path::new(definition_path),
+            );
+            print_json(&result)?;
+            if result.valid {
+                Ok(())
+            } else {
+                Err("Loop definition is invalid".to_string())
+            }
+        }
+        "list" => {
+            let [workspace] = rest else {
+                return Err(USAGE.to_string());
+            };
+            print_json(&crate::loop_definition::catalog_for_root(Path::new(
+                workspace,
+            ))?)
+        }
+        "run-file" => {
+            let [db_path, workspace, definition_path] = rest else {
+                return Err(USAGE.to_string());
+            };
+            print_json(&run_definition_file(
+                Path::new(db_path),
+                Path::new(workspace),
+                Path::new(definition_path),
+            )?)
+        }
         "run" => {
             let [db_path, workstream_id] = rest else {
                 return Err(USAGE.to_string());
@@ -200,13 +278,14 @@ fn run_scenario(db_path: &Path, workspace: &Path) -> Result<ScenarioResult, Stri
         LoopSpecInput {
             orchestrator_prompt: "Return one deterministic coding task".to_string(),
             worker_prompt: "Complete the deterministic fixture task".to_string(),
-            evaluator_prompt: "Accept only with passing verifier evidence".to_string(),
+            evaluator_prompt: Some("Accept only with passing verifier evidence".to_string()),
             orchestrator_model: None,
             worker_model: None,
             evaluator_model: None,
             verifier_program: Some(program),
             verifier_args,
             verifier_cwd: Some(workspace.to_string_lossy().into_owned()),
+            verifier_timeout_seconds: Some(30),
             run_timeout_seconds: 30,
             max_task_iterations: 2,
         },
@@ -342,5 +421,69 @@ mod tests {
             assert!(event_rx.try_recv().is_ok());
             sdk.shutdown().await.expect("shutdown SDK");
         });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn validates_and_lists_yaml_definitions() {
+        let root = std::env::temp_dir().join(format!(
+            "workstreams-loop-yaml-cli-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let loops = root.join(".workstreams").join("loops");
+        let scripts = root.join("scripts");
+        std::fs::create_dir_all(&loops).expect("create loop directory");
+        std::fs::create_dir_all(&scripts).expect("create scripts directory");
+        std::fs::write(scripts.join("verify.sh"), "#!/bin/sh\nexit 0\n").expect("write verifier");
+        let definition = loops.join("simple.loop.yaml");
+        std::fs::write(
+            &definition,
+            r#"apiVersion: workstreams.dev/v1alpha1
+kind: Loop
+metadata:
+  id: simple-loop
+  name: Simple loop
+spec:
+  objective: Create an output file.
+  trigger:
+    type: manual
+  orchestrator:
+    prompt: Return one task.
+    model: inherit
+    maxTasksPerRun: 1
+  worker:
+    prompt: Do the task.
+    model: inherit
+  verification:
+    command:
+      program: scripts/verify.sh
+      args: []
+      cwd: .
+      timeout: 1m
+  limits:
+    runTimeout: 5m
+    taskAttempts: 2
+  permissions:
+    tools: full
+    publicEffects: deny
+  flowControl:
+    maxActiveRuns: 1
+"#,
+        )
+        .expect("write definition");
+
+        run(vec![
+            "validate".to_string(),
+            root.to_string_lossy().into_owned(),
+            definition.to_string_lossy().into_owned(),
+        ])
+        .expect("validate definition");
+        run(vec![
+            "list".to_string(),
+            root.to_string_lossy().into_owned(),
+        ])
+        .expect("list definitions");
+
+        std::fs::remove_dir_all(root).ok();
     }
 }

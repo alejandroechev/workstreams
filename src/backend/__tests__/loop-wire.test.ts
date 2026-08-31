@@ -50,6 +50,7 @@ describe("loop wire mapping", () => {
       verifier_program: "npm",
       verifier_args: ["test"],
       verifier_cwd: "/repo",
+      verifier_timeout_seconds: null,
       run_timeout_seconds: 90,
       max_task_iterations: 2,
     });
@@ -193,6 +194,18 @@ describe("loop wire mapping", () => {
       program: "npm",
       args: ["test"],
     });
+  });
+
+  it("supports a verification-only loop with no evaluator", () => {
+    const decoded = decodeLoopSpec(specWire({
+      evaluator_prompt: null,
+      evaluator_model: null,
+      verifier_program: "scripts/verify.sh",
+      verifier_args: [],
+    }));
+
+    expect(decoded.evaluator).toBeUndefined();
+    expect(decoded.verifier?.program).toBe("scripts/verify.sh");
   });
 
   it("rejects unsupported iteration contracts", () => {

@@ -16,13 +16,14 @@ use crate::loop_verifier::{run_verifier, VerificationResult, VerificationStatus,
 pub struct LoopSpecInput {
     pub orchestrator_prompt: String,
     pub worker_prompt: String,
-    pub evaluator_prompt: String,
+    pub evaluator_prompt: Option<String>,
     pub orchestrator_model: Option<String>,
     pub worker_model: Option<String>,
     pub evaluator_model: Option<String>,
     pub verifier_program: Option<String>,
     pub verifier_args: Vec<String>,
     pub verifier_cwd: Option<String>,
+    pub verifier_timeout_seconds: Option<u64>,
     pub run_timeout_seconds: u64,
     pub max_task_iterations: u32,
 }
@@ -33,18 +34,26 @@ pub struct LoopSpec {
     pub workstream_id: String,
     pub orchestrator_prompt: String,
     pub worker_prompt: String,
-    pub evaluator_prompt: String,
+    pub evaluator_prompt: Option<String>,
     pub orchestrator_model: Option<String>,
     pub worker_model: Option<String>,
     pub evaluator_model: Option<String>,
     pub verifier_program: Option<String>,
     pub verifier_args: Vec<String>,
     pub verifier_cwd: Option<String>,
+    pub verifier_timeout_seconds: Option<u64>,
     pub run_timeout_seconds: u64,
     pub max_task_iterations: u32,
     pub enabled: bool,
     pub created_at: String,
     pub updated_at: String,
+    pub definition_id: Option<String>,
+    pub definition_path: Option<String>,
+    pub definition_hash: Option<String>,
+    pub definition_name: Option<String>,
+    pub objective: Option<String>,
+    pub portable: Option<bool>,
+    pub definition_yaml: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -117,6 +126,8 @@ pub struct LoopRun {
     pub started_at: String,
     pub finished_at: Option<String>,
     pub deadline_at: String,
+    pub definition_hash: Option<String>,
+    pub definition_yaml: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -330,11 +341,19 @@ pub fn init_loop_schema(conn: &Connection) -> rusqlite::Result<()> {
             verifier_program TEXT,
             verifier_args_json TEXT NOT NULL DEFAULT '[]',
             verifier_cwd TEXT,
+            verifier_timeout_seconds INTEGER,
             run_timeout_seconds INTEGER NOT NULL,
             max_task_iterations INTEGER NOT NULL DEFAULT 2,
             enabled INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
+            ,definition_id TEXT
+            ,definition_path TEXT
+            ,definition_hash TEXT
+            ,definition_name TEXT
+            ,objective TEXT
+            ,portable INTEGER
+            ,definition_yaml TEXT
         );
 
         CREATE TABLE IF NOT EXISTS loop_runs (
@@ -347,6 +366,8 @@ pub fn init_loop_schema(conn: &Connection) -> rusqlite::Result<()> {
             started_at TEXT NOT NULL,
             finished_at TEXT,
             deadline_at TEXT NOT NULL
+            ,definition_hash TEXT
+            ,definition_yaml TEXT
         );
 
         CREATE TABLE IF NOT EXISTS loop_tasks (
@@ -363,7 +384,8 @@ pub fn init_loop_schema(conn: &Connection) -> rusqlite::Result<()> {
             worker_result TEXT,
             error TEXT,
             created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL
+            updated_at TEXT NOT NULL,
+            definition_id TEXT NOT NULL DEFAULT ''
         );
 
         CREATE TABLE IF NOT EXISTS loop_verifications (
@@ -409,28 +431,51 @@ pub fn init_loop_schema(conn: &Connection) -> rusqlite::Result<()> {
             ON loop_runs(loop_spec_id, started_at DESC);
         CREATE INDEX IF NOT EXISTS loop_tasks_run_idx
             ON loop_tasks(loop_run_id, ordinal);
-        CREATE UNIQUE INDEX IF NOT EXISTS loop_tasks_occupied_key_unique
-            ON loop_tasks(loop_spec_id, task_key)
-            WHERE state IN ('queued', 'working', 'verifying', 'evaluating', 'accepted');
         CREATE INDEX IF NOT EXISTS loop_events_run_idx
             ON loop_events(loop_run_id, id);
         ",
     )?;
-    let _ = conn.execute_batch(
-        "ALTER TABLE loop_tasks ADD COLUMN ordinal INTEGER NOT NULL DEFAULT 0;
-         CREATE UNIQUE INDEX IF NOT EXISTS loop_tasks_occupied_key_unique
-             ON loop_tasks(loop_spec_id, task_key)
-             WHERE state IN ('queued', 'working', 'verifying', 'evaluating', 'accepted');",
-    );
+    for migration in [
+        "ALTER TABLE loop_tasks ADD COLUMN ordinal INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE loop_specs ADD COLUMN definition_id TEXT",
+        "ALTER TABLE loop_specs ADD COLUMN definition_path TEXT",
+        "ALTER TABLE loop_specs ADD COLUMN definition_hash TEXT",
+        "ALTER TABLE loop_specs ADD COLUMN definition_name TEXT",
+        "ALTER TABLE loop_specs ADD COLUMN objective TEXT",
+        "ALTER TABLE loop_specs ADD COLUMN portable INTEGER",
+        "ALTER TABLE loop_specs ADD COLUMN definition_yaml TEXT",
+        "ALTER TABLE loop_specs ADD COLUMN verifier_timeout_seconds INTEGER",
+        "ALTER TABLE loop_runs ADD COLUMN definition_hash TEXT",
+        "ALTER TABLE loop_runs ADD COLUMN definition_yaml TEXT",
+        "ALTER TABLE loop_tasks ADD COLUMN definition_id TEXT NOT NULL DEFAULT ''",
+    ] {
+        let _ = conn.execute_batch(migration);
+    }
+    conn.execute_batch(
+        "DROP INDEX IF EXISTS loop_tasks_occupied_key_unique;
+         CREATE UNIQUE INDEX loop_tasks_occupied_key_unique
+         ON loop_tasks(loop_spec_id, definition_id, task_key)
+         WHERE state IN ('queued', 'working', 'verifying', 'evaluating', 'accepted');",
+    )?;
     Ok(())
 }
 
 fn validate_spec(input: &LoopSpecInput) -> Result<(), String> {
-    if input.orchestrator_prompt.trim().is_empty()
-        || input.worker_prompt.trim().is_empty()
-        || input.evaluator_prompt.trim().is_empty()
+    if input.orchestrator_prompt.trim().is_empty() || input.worker_prompt.trim().is_empty() {
+        return Err("Orchestrator and worker prompts are required".to_string());
+    }
+    if input
+        .evaluator_prompt
+        .as_deref()
+        .is_some_and(|prompt| prompt.trim().is_empty())
     {
-        return Err("All three role prompts are required".to_string());
+        return Err("Evaluator prompt cannot be blank".to_string());
+    }
+    if input.evaluator_prompt.is_none() && input.evaluator_model.is_some() {
+        return Err("Evaluator model requires an evaluator prompt".to_string());
+    }
+    if input.evaluator_prompt.is_none() && input.verifier_program.is_none() {
+        return Err("At least one verification or evaluator must be configured".to_string());
     }
     if input.run_timeout_seconds == 0 {
         return Err("Run timeout must be greater than zero".to_string());
@@ -458,25 +503,38 @@ fn decode_spec_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<LoopSpec> {
         workstream_id: row.get(1)?,
         orchestrator_prompt: row.get(2)?,
         worker_prompt: row.get(3)?,
-        evaluator_prompt: row.get(4)?,
+        evaluator_prompt: {
+            let prompt: String = row.get(4)?;
+            (!prompt.trim().is_empty()).then_some(prompt)
+        },
         orchestrator_model: row.get(5)?,
         worker_model: row.get(6)?,
         evaluator_model: row.get(7)?,
         verifier_program: row.get(8)?,
         verifier_args,
         verifier_cwd: row.get(10)?,
-        run_timeout_seconds: row.get(11)?,
-        max_task_iterations: row.get(12)?,
-        enabled: row.get::<_, i64>(13)? != 0,
-        created_at: row.get(14)?,
-        updated_at: row.get(15)?,
+        verifier_timeout_seconds: row.get(11)?,
+        run_timeout_seconds: row.get(12)?,
+        max_task_iterations: row.get(13)?,
+        enabled: row.get::<_, i64>(14)? != 0,
+        created_at: row.get(15)?,
+        updated_at: row.get(16)?,
+        definition_id: row.get(17)?,
+        definition_path: row.get(18)?,
+        definition_hash: row.get(19)?,
+        definition_name: row.get(20)?,
+        objective: row.get(21)?,
+        portable: row.get::<_, Option<i64>>(22)?.map(|value| value != 0),
+        definition_yaml: row.get(23)?,
     })
 }
 
 const SPEC_COLUMNS: &str = "id, workstream_id, orchestrator_prompt, worker_prompt,
     evaluator_prompt, orchestrator_model, worker_model, evaluator_model,
-    verifier_program, verifier_args_json, verifier_cwd, run_timeout_seconds,
-    max_task_iterations, enabled, created_at, updated_at";
+    verifier_program, verifier_args_json, verifier_cwd, verifier_timeout_seconds,
+    run_timeout_seconds, max_task_iterations, enabled, created_at, updated_at, definition_id,
+    definition_path, definition_hash, definition_name, objective, portable,
+    definition_yaml";
 
 pub fn get_loop_spec(conn: &Connection, workstream_id: &str) -> Result<Option<LoopSpec>, String> {
     conn.query_row(
@@ -511,6 +569,7 @@ pub fn save_loop_spec(
     if existing.as_ref().is_some_and(|spec| spec.enabled) {
         return Err("Disable the loop before changing its configuration".to_string());
     }
+
     let id = existing
         .as_ref()
         .map(|spec| spec.id.clone())
@@ -528,9 +587,9 @@ pub fn save_loop_spec(
             id, workstream_id, orchestrator_prompt, worker_prompt, evaluator_prompt,
             orchestrator_model, worker_model, evaluator_model, verifier_program,
             verifier_args_json, verifier_cwd, run_timeout_seconds,
-            max_task_iterations, enabled, created_at, updated_at
+            verifier_timeout_seconds, max_task_iterations, enabled, created_at, updated_at
          ) VALUES (
-            ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, 0, ?14, ?15
+            ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, 0, ?15, ?16
          )
          ON CONFLICT(workstream_id) DO UPDATE SET
             orchestrator_prompt = excluded.orchestrator_prompt,
@@ -542,6 +601,7 @@ pub fn save_loop_spec(
             verifier_program = excluded.verifier_program,
             verifier_args_json = excluded.verifier_args_json,
             verifier_cwd = excluded.verifier_cwd,
+            verifier_timeout_seconds = excluded.verifier_timeout_seconds,
             run_timeout_seconds = excluded.run_timeout_seconds,
             max_task_iterations = excluded.max_task_iterations,
             updated_at = excluded.updated_at",
@@ -550,7 +610,11 @@ pub fn save_loop_spec(
             workstream_id,
             input.orchestrator_prompt.trim(),
             input.worker_prompt.trim(),
-            input.evaluator_prompt.trim(),
+            input
+                .evaluator_prompt
+                .as_deref()
+                .map(str::trim)
+                .unwrap_or(""),
             input.orchestrator_model,
             input.worker_model,
             input.evaluator_model,
@@ -558,6 +622,7 @@ pub fn save_loop_spec(
             args_json,
             input.verifier_cwd,
             input.run_timeout_seconds,
+            input.verifier_timeout_seconds,
             input.max_task_iterations,
             created_at,
             updated_at,
@@ -566,6 +631,194 @@ pub fn save_loop_spec(
     .map_err(|error| format!("Failed to save loop specification: {error}"))?;
     get_loop_spec(conn, workstream_id)?
         .ok_or_else(|| "Saved loop specification could not be reloaded".to_string())
+}
+
+pub struct MaterializedLoopDefinition {
+    pub definition_id: String,
+    pub definition_path: String,
+    pub definition_hash: String,
+    pub definition_name: String,
+    pub objective: String,
+    pub portable: bool,
+    pub yaml: String,
+    pub spec: LoopSpecInput,
+}
+
+fn inherited_model(value: &str) -> Option<String> {
+    (!value.eq_ignore_ascii_case("inherit")).then(|| value.to_string())
+}
+
+fn worker_prompt_from_definition(fields: &crate::loop_definition::LoopSpecInputFields) -> String {
+    let mut sections = vec![fields.worker_prompt.clone()];
+    if !fields.worker_skills.is_empty() {
+        sections.push(format!(
+            "Required skills:\n{}",
+            fields
+                .worker_skills
+                .iter()
+                .map(|skill| format!("- {skill}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        ));
+    }
+    if !fields.worker_context_files.is_empty() {
+        sections.push(format!(
+            "Read these context files before editing:\n{}",
+            fields
+                .worker_context_files
+                .iter()
+                .map(|path| format!("- {path}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        ));
+    }
+    if !fields.worker_golden_patterns.is_empty() {
+        sections.push(format!(
+            "Follow these golden pattern files:\n{}",
+            fields
+                .worker_golden_patterns
+                .iter()
+                .map(|path| format!("- {path}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        ));
+    }
+    sections.join("\n\n")
+}
+
+pub(crate) fn definition_to_materialized(
+    definition: crate::loop_definition::ValidatedLoopDefinition,
+    yaml: String,
+) -> MaterializedLoopDefinition {
+    let fields = definition.to_loop_spec_input_fields();
+    MaterializedLoopDefinition {
+        definition_id: fields.definition_id.clone(),
+        definition_path: definition.path.to_string_lossy().into_owned(),
+        definition_hash: definition.hash.clone(),
+        definition_name: fields.name.clone(),
+        objective: fields.objective.clone(),
+        portable: definition.portable,
+        yaml,
+        spec: LoopSpecInput {
+            orchestrator_prompt: format!(
+                "{}\n\nReturn at most {} task.",
+                fields.orchestrator_prompt, fields.max_tasks_per_run
+            ),
+            worker_prompt: worker_prompt_from_definition(&fields),
+            evaluator_prompt: fields.evaluator_prompt,
+            orchestrator_model: inherited_model(&fields.orchestrator_model),
+            worker_model: inherited_model(&fields.worker_model),
+            evaluator_model: fields.evaluator_model.as_deref().and_then(inherited_model),
+            verifier_program: fields.verifier_program,
+            verifier_args: fields.verifier_args.unwrap_or_default(),
+            verifier_cwd: fields.verifier_cwd,
+            verifier_timeout_seconds: fields.verifier_timeout_seconds,
+            run_timeout_seconds: fields.run_timeout_seconds,
+            max_task_iterations: fields.task_attempts,
+        },
+    }
+}
+
+pub fn materialize_loop_definition(
+    conn: &Connection,
+    workstream_id: &str,
+    definition: MaterializedLoopDefinition,
+) -> Result<LoopSpec, String> {
+    validate_spec(&definition.spec)?;
+    let active: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM loop_runs r
+             JOIN loop_specs s ON s.id = r.loop_spec_id
+             WHERE s.workstream_id = ?1
+               AND r.state NOT IN ('completed', 'attention', 'killed')",
+            [workstream_id],
+            |row| row.get(0),
+        )
+        .map_err(|error| format!("Failed to check active definition run: {error}"))?;
+    if active > 0 {
+        return Err("Stop the active loop run before selecting another definition".to_string());
+    }
+
+    let existing = get_loop_spec(conn, workstream_id)?;
+    let id = existing
+        .as_ref()
+        .map(|spec| spec.id.clone())
+        .unwrap_or_else(|| Uuid::new_v4().to_string());
+    let created_at = existing
+        .as_ref()
+        .map(|spec| spec.created_at.clone())
+        .unwrap_or_else(crate::now);
+    let updated_at = crate::now();
+    let args_json = serde_json::to_string(&definition.spec.verifier_args)
+        .map_err(|error| format!("Failed to encode verifier arguments: {error}"))?;
+    conn.execute(
+        "INSERT INTO loop_specs (
+            id, workstream_id, orchestrator_prompt, worker_prompt, evaluator_prompt,
+            orchestrator_model, worker_model, evaluator_model, verifier_program,
+            verifier_args_json, verifier_cwd, run_timeout_seconds,
+            verifier_timeout_seconds, max_task_iterations, enabled, created_at, updated_at, definition_id,
+            definition_path, definition_hash, definition_name, objective, portable,
+            definition_yaml
+         ) VALUES (
+            ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, 1,
+            ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23
+         )
+         ON CONFLICT(workstream_id) DO UPDATE SET
+            orchestrator_prompt = excluded.orchestrator_prompt,
+            worker_prompt = excluded.worker_prompt,
+            evaluator_prompt = excluded.evaluator_prompt,
+            orchestrator_model = excluded.orchestrator_model,
+            worker_model = excluded.worker_model,
+            evaluator_model = excluded.evaluator_model,
+            verifier_program = excluded.verifier_program,
+            verifier_args_json = excluded.verifier_args_json,
+            verifier_cwd = excluded.verifier_cwd,
+            verifier_timeout_seconds = excluded.verifier_timeout_seconds,
+            run_timeout_seconds = excluded.run_timeout_seconds,
+            max_task_iterations = excluded.max_task_iterations,
+            enabled = 1,
+            definition_id = excluded.definition_id,
+            definition_path = excluded.definition_path,
+            definition_hash = excluded.definition_hash,
+            definition_name = excluded.definition_name,
+            objective = excluded.objective,
+            portable = excluded.portable,
+            definition_yaml = excluded.definition_yaml,
+            updated_at = excluded.updated_at",
+        params![
+            id,
+            workstream_id,
+            definition.spec.orchestrator_prompt.trim(),
+            definition.spec.worker_prompt.trim(),
+            definition
+                .spec
+                .evaluator_prompt
+                .as_deref()
+                .map(str::trim)
+                .unwrap_or(""),
+            definition.spec.orchestrator_model,
+            definition.spec.worker_model,
+            definition.spec.evaluator_model,
+            definition.spec.verifier_program,
+            args_json,
+            definition.spec.verifier_cwd,
+            definition.spec.run_timeout_seconds,
+            definition.spec.verifier_timeout_seconds,
+            definition.spec.max_task_iterations,
+            created_at,
+            updated_at,
+            definition.definition_id,
+            definition.definition_path,
+            definition.definition_hash,
+            definition.definition_name,
+            definition.objective,
+            i64::from(definition.portable),
+            definition.yaml,
+        ],
+    )
+    .map_err(|error| format!("Failed to bind loop definition: {error}"))?;
+    get_loop_spec(conn, workstream_id)?
+        .ok_or_else(|| "Bound loop definition could not be reloaded".to_string())
 }
 
 pub fn set_loop_enabled(
@@ -597,11 +850,14 @@ fn decode_run_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<LoopRun> {
         started_at: row.get(6)?,
         finished_at: row.get(7)?,
         deadline_at: row.get(8)?,
+        definition_hash: row.get(9)?,
+        definition_yaml: row.get(10)?,
     })
 }
 
 const RUN_COLUMNS: &str = "id, loop_spec_id, state, current_task_id,
-    control_requested, error, started_at, finished_at, deadline_at";
+    control_requested, error, started_at, finished_at, deadline_at,
+    definition_hash, definition_yaml";
 
 pub fn create_loop_run(
     conn: &Connection,
@@ -634,9 +890,17 @@ pub fn create_loop_run(
         .ok_or_else(|| "Failed to calculate the loop deadline".to_string())?;
     conn.execute(
         "INSERT INTO loop_runs (
-            id, loop_spec_id, state, control_requested, started_at, deadline_at
-         ) VALUES (?1, ?2, 'starting', 'none', ?3, ?4)",
-        params![id, loop_spec_id, started_at, deadline_at],
+            id, loop_spec_id, state, control_requested, started_at, deadline_at,
+            definition_hash, definition_yaml
+         ) VALUES (?1, ?2, 'starting', 'none', ?3, ?4, ?5, ?6)",
+        params![
+            id,
+            loop_spec_id,
+            started_at,
+            deadline_at,
+            spec.definition_hash,
+            spec.definition_yaml
+        ],
     )
     .map_err(|error| format!("Failed to create loop run: {error}"))?;
     get_loop_run(conn, &id)?.ok_or_else(|| "Created loop run could not be reloaded".to_string())
@@ -835,12 +1099,19 @@ pub fn enqueue_task(
     {
         return Err("Discovered tasks require a key, title, and objective".to_string());
     }
+    let definition_id: String = conn
+        .query_row(
+            "SELECT COALESCE(definition_id, '') FROM loop_specs WHERE id = ?1",
+            [loop_spec_id],
+            |row| row.get(0),
+        )
+        .map_err(|error| format!("Failed to load loop definition identity: {error}"))?;
     let occupied: i64 = conn
         .query_row(
             "SELECT COUNT(*) FROM loop_tasks
-             WHERE loop_spec_id = ?1 AND task_key = ?2
+             WHERE loop_spec_id = ?1 AND definition_id = ?2 AND task_key = ?3
                AND state IN ('queued', 'working', 'verifying', 'evaluating', 'accepted')",
-            params![loop_spec_id, task.key.trim()],
+            params![loop_spec_id, definition_id, task.key.trim()],
             |row| row.get(0),
         )
         .map_err(|error| format!("Failed to check loop task identity: {error}"))?;
@@ -868,8 +1139,8 @@ pub fn enqueue_task(
         .execute(
             "INSERT INTO loop_tasks (
                 id, loop_run_id, loop_spec_id, task_key, title, objective,
-                state, ordinal, created_at, updated_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'queued', ?7, ?8, ?8)",
+                state, ordinal, created_at, updated_at, definition_id
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'queued', ?7, ?8, ?8, ?9)",
             params![
                 id,
                 run_id,
@@ -879,6 +1150,7 @@ pub fn enqueue_task(
                 task.objective.trim(),
                 ordinal,
                 now,
+                definition_id,
             ],
         )
         .map_err(|error| format!("Failed to enqueue loop task: {error}"))?;
@@ -1354,7 +1626,11 @@ async fn verify_task(
                 .map(PathBuf::from)
                 .unwrap_or_else(|| working_directory.to_path_buf()),
         ),
-        timeout: remaining_run_timeout(db, run_id)?,
+        timeout: Duration::from_secs(
+            spec.verifier_timeout_seconds
+                .unwrap_or(remaining_run_timeout(db, run_id)?.as_secs())
+                .min(remaining_run_timeout(db, run_id)?.as_secs()),
+        ),
         output_limit_bytes: 256 * 1024,
         cancelled,
     })
@@ -1402,6 +1678,10 @@ fn evaluator_prompt(
     worker: &WorkerOutput,
     verification: Option<&VerificationResult>,
 ) -> String {
+    let evaluator_instructions = spec
+        .evaluator_prompt
+        .as_deref()
+        .expect("evaluator_prompt is checked before evaluating");
     format!(
         "{}\n\nTask: {}\nObjective: {}\nWorker summary: {}\nEvidence: {}\n\
          Deterministic verification: {}\n\n\
@@ -1409,7 +1689,7 @@ fn evaluator_prompt(
          {{\"verdict\":\"accepted|revise|blocked|invalid\",\
          \"summary\":\"judgment\",\"feedback\":null,\"evidence\":[]}}.\n\
          A revise verdict must include actionable feedback.",
-        spec.evaluator_prompt,
+        evaluator_instructions,
         task.title,
         task.objective,
         worker.summary,
@@ -1524,6 +1804,9 @@ async fn execute_manual_loop_inner(
         )
         .await?;
         let discovered = parse_discovered_tasks(&orchestrator.content)?;
+        if spec.definition_id.is_some() && discovered.len() > 1 {
+            return Err("YAML v1 loops may emit at most one task per run".to_string());
+        }
         let mut tasks = Vec::new();
         {
             let conn = db.lock().unwrap();
@@ -1601,6 +1884,11 @@ async fn execute_manual_loop_inner(
                 LoopTaskState::Attention,
                 None,
             )?;
+            runtime.disconnect(&worker_response.session_id).await?;
+            continue;
+        }
+        if spec.evaluator_prompt.is_none() {
+            set_task_state(&db.lock().unwrap(), &task.id, LoopTaskState::Accepted, None)?;
             runtime.disconnect(&worker_response.session_id).await?;
             continue;
         }
@@ -2011,6 +2299,13 @@ pub fn get_workstream_loop_snapshot(
 }
 
 #[tauri::command]
+pub fn list_loop_definitions(
+    root_dir: String,
+) -> Result<crate::loop_definition::LoopCatalog, String> {
+    crate::loop_definition::catalog_for_root(Path::new(&root_dir))
+}
+
+#[tauri::command]
 pub fn save_workstream_loop(
     state: tauri::State<'_, crate::AppState>,
     workstream_id: String,
@@ -2252,6 +2547,20 @@ fn workstream_directory_for_spec(
     })
 }
 
+fn workstream_directory(conn: &Connection, workstream_id: &str) -> Result<PathBuf, String> {
+    let directory: Option<String> = conn
+        .query_row(
+            "SELECT directory FROM workstreams WHERE id = ?1",
+            [workstream_id],
+            |row| row.get(0),
+        )
+        .map_err(|error| format!("Failed to resolve loop workstream: {error}"))?;
+    directory
+        .filter(|value| !value.trim().is_empty())
+        .map(PathBuf::from)
+        .ok_or_else(|| "The loop workstream has no directory".to_string())
+}
+
 #[tauri::command]
 pub fn run_workstream_loop_now(
     app: tauri::AppHandle,
@@ -2265,6 +2574,42 @@ pub fn run_workstream_loop_now(
         let (_, directory) = workstream_directory_for_spec(&conn, &spec.id)?;
         (
             create_loop_run(&conn, &spec.id, spec.run_timeout_seconds)?,
+            directory,
+        )
+    };
+    let run_id = run.id.clone();
+    tauri::async_runtime::spawn(run_with_sdk(
+        Arc::clone(&state.db),
+        Arc::clone(&state.loop_manager),
+        app,
+        workstream_id,
+        run_id,
+        directory,
+    ));
+    Ok(run)
+}
+
+#[tauri::command]
+pub fn run_loop_definition_now(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, crate::AppState>,
+    workstream_id: String,
+    definition_path: String,
+) -> Result<LoopRun, String> {
+    let (run, directory) = {
+        let conn = state.db.lock().unwrap();
+        let directory = workstream_directory(&conn, &workstream_id)?;
+        let (definition, yaml) = crate::loop_definition::load_validated_definition(
+            &directory,
+            Path::new(&definition_path),
+        )?;
+        let materialized = materialize_loop_definition(
+            &conn,
+            &workstream_id,
+            definition_to_materialized(definition, yaml),
+        )?;
+        (
+            create_loop_run(&conn, &materialized.id, materialized.run_timeout_seconds)?,
             directory,
         )
     };
@@ -2396,13 +2741,14 @@ mod tests {
         LoopSpecInput {
             orchestrator_prompt: "Find coding work".to_string(),
             worker_prompt: "Implement the task".to_string(),
-            evaluator_prompt: "Evaluate the result".to_string(),
+            evaluator_prompt: Some("Evaluate the result".to_string()),
             orchestrator_model: None,
             worker_model: None,
             evaluator_model: None,
             verifier_program: Some("cargo".to_string()),
             verifier_args: vec!["test".to_string()],
             verifier_cwd: Some("/tmp/repo".to_string()),
+            verifier_timeout_seconds: Some(300),
             run_timeout_seconds: 600,
             max_task_iterations: 2,
         }
@@ -2512,6 +2858,67 @@ mod tests {
                 .map(|task| task.key)
                 .collect::<Vec<_>>(),
             vec!["first", "second", "third"]
+        );
+    }
+
+    #[test]
+    fn materialized_definition_is_pinned_and_scopes_task_deduplication() {
+        let conn = test_db();
+        let first = materialize_loop_definition(
+            &conn,
+            "ws-1",
+            MaterializedLoopDefinition {
+                definition_id: "first-loop".to_string(),
+                definition_path: "/repo/.workstreams/loops/first.loop.yaml".to_string(),
+                definition_hash: "hash-1".to_string(),
+                definition_name: "First loop".to_string(),
+                objective: "First objective".to_string(),
+                portable: true,
+                yaml: "first yaml".to_string(),
+                spec: spec_input(),
+            },
+        )
+        .expect("materialize first definition");
+        let first_run = create_loop_run(&conn, &first.id, 600).expect("create first run");
+        let task = DiscoveredTask {
+            key: "same-key".to_string(),
+            title: "Task".to_string(),
+            objective: "Work".to_string(),
+        };
+        enqueue_task(&conn, &first_run.id, &first.id, &task)
+            .expect("enqueue first")
+            .expect("insert first");
+        set_run_state(&conn, &first_run.id, LoopRunState::Completed, None)
+            .expect("complete first run");
+        assert_eq!(first.definition_id.as_deref(), Some("first-loop"));
+        assert_eq!(first.definition_hash.as_deref(), Some("hash-1"));
+        let pinned = get_loop_run(&conn, &first_run.id)
+            .expect("load run")
+            .expect("run exists");
+        assert_eq!(pinned.definition_hash.as_deref(), Some("hash-1"));
+        assert_eq!(pinned.definition_yaml.as_deref(), Some("first yaml"));
+
+        let second = materialize_loop_definition(
+            &conn,
+            "ws-1",
+            MaterializedLoopDefinition {
+                definition_id: "second-loop".to_string(),
+                definition_path: "/repo/.workstreams/loops/second.loop.yaml".to_string(),
+                definition_hash: "hash-2".to_string(),
+                definition_name: "Second loop".to_string(),
+                objective: "Second objective".to_string(),
+                portable: true,
+                yaml: "second yaml".to_string(),
+                spec: spec_input(),
+            },
+        )
+        .expect("materialize second definition");
+        let second_run = create_loop_run(&conn, &second.id, 600).expect("create second run");
+        assert!(
+            enqueue_task(&conn, &second_run.id, &second.id, &task)
+                .expect("enqueue second")
+                .is_some(),
+            "the same task key in another definition must not be deduplicated"
         );
     }
 
@@ -2928,6 +3335,81 @@ mod tests {
             )
             .expect("count evaluations");
         assert_eq!(evaluations, 0);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn verification_only_loop_accepts_without_starting_an_evaluator() {
+        use crate::loop_agent::{AgentRole, ScriptedAgentResponse, ScriptedAgentRuntime};
+        use std::sync::{Arc, Mutex};
+
+        let conn = test_db();
+        let mut input = spec_input();
+        input.evaluator_prompt = None;
+        input.verifier_program = Some("/bin/sh".to_string());
+        input.verifier_args = vec!["-c".to_string(), "printf verified".to_string()];
+        input.verifier_cwd = None;
+        let spec = save_loop_spec(&conn, "ws-1", input).expect("save verification-only spec");
+        set_loop_enabled(&conn, &spec.id, true).expect("enable loop");
+        let run = create_loop_run(&conn, &spec.id, 600).expect("create run");
+        let runtime = Arc::new(ScriptedAgentRuntime::new(vec![
+            ScriptedAgentResponse {
+                role: AgentRole::Orchestrator,
+                session_id: "orchestrator-1".to_string(),
+                content: r#"{"tasks":[{"key":"task-1","title":"Task","objective":"Do work"}]}"#
+                    .to_string(),
+                events: vec![],
+            },
+            ScriptedAgentResponse {
+                role: AgentRole::Worker,
+                session_id: "worker-1".to_string(),
+                content: r#"{"status":"completed","summary":"Done","evidence":[]}"#.to_string(),
+                events: vec![],
+            },
+        ]));
+        let db = Arc::new(Mutex::new(conn));
+
+        execute_manual_loop(
+            Arc::clone(&db),
+            runtime,
+            &run.id,
+            std::env::current_dir().expect("current directory"),
+        )
+        .await
+        .expect("execute verification-only loop");
+
+        let conn = db.lock().unwrap();
+        assert_eq!(
+            get_loop_run(&conn, &run.id)
+                .expect("load run")
+                .expect("run exists")
+                .state,
+            LoopRunState::Completed
+        );
+        assert_eq!(
+            list_loop_tasks(&conn, &run.id).expect("list tasks")[0].state,
+            LoopTaskState::Accepted
+        );
+        let evaluations: i64 = conn
+            .query_row("SELECT COUNT(*) FROM loop_evaluations", [], |row| {
+                row.get(0)
+            })
+            .expect("count evaluations");
+        assert_eq!(evaluations, 0);
+    }
+
+    #[test]
+    fn loop_requires_verification_or_an_evaluator() {
+        let conn = test_db();
+        let mut input = spec_input();
+        input.evaluator_prompt = None;
+        input.verifier_program = None;
+        input.verifier_args.clear();
+
+        let error =
+            save_loop_spec(&conn, "ws-1", input).expect_err("unverified loop must be rejected");
+
+        assert!(error.contains("verification or evaluator"));
     }
 
     #[test]

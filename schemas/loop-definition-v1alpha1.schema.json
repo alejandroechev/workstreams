@@ -1,0 +1,195 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://workstreams.dev/schemas/loop-definition-v1alpha1.schema.json",
+  "title": "Workstreams Loop Definition v1alpha1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "metadata", "spec"],
+  "properties": {
+    "apiVersion": { "const": "workstreams.dev/v1alpha1" },
+    "kind": { "const": "Loop" },
+    "metadata": { "$ref": "#/$defs/metadata" },
+    "spec": { "$ref": "#/$defs/spec" }
+  },
+  "$defs": {
+    "nonblank": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": ".*\\S.*"
+    },
+    "duration": {
+      "type": "string",
+      "pattern": "^[1-9][0-9]*(s|m|h)$"
+    },
+    "model": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": ".*\\S.*"
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{2,63}$"
+        },
+        "name": { "$ref": "#/$defs/nonblank" },
+        "description": { "$ref": "#/$defs/nonblank" },
+        "tags": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/nonblank" },
+          "uniqueItems": true
+        }
+      }
+    },
+    "trigger": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type"],
+      "properties": {
+        "type": { "const": "manual" }
+      }
+    },
+    "role": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["model", "prompt"],
+      "properties": {
+        "model": { "$ref": "#/$defs/model" },
+        "prompt": { "$ref": "#/$defs/nonblank" }
+      }
+    },
+    "orchestrator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["model", "prompt", "maxTasksPerRun"],
+      "properties": {
+        "model": { "$ref": "#/$defs/model" },
+        "prompt": { "$ref": "#/$defs/nonblank" },
+        "maxTasksPerRun": { "const": 1 }
+      }
+    },
+    "worker": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["model", "prompt"],
+      "properties": {
+        "model": { "$ref": "#/$defs/model" },
+        "prompt": { "$ref": "#/$defs/nonblank" },
+        "skills": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/nonblank" },
+          "uniqueItems": true
+        },
+        "context": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "files": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/nonblank" },
+              "uniqueItems": true
+            },
+            "goldenPatterns": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/nonblank" },
+              "uniqueItems": true
+            }
+          }
+        }
+      }
+    },
+    "verification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["command"],
+      "properties": {
+        "command": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["program", "args", "cwd", "timeout"],
+          "properties": {
+            "program": { "$ref": "#/$defs/nonblank" },
+            "args": {
+              "type": "array",
+              "items": { "type": "string" }
+            },
+            "cwd": { "$ref": "#/$defs/nonblank" },
+            "timeout": { "$ref": "#/$defs/duration" }
+          }
+        }
+      }
+    },
+    "evaluator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["model", "prompt", "onReject"],
+      "properties": {
+        "model": { "$ref": "#/$defs/model" },
+        "prompt": { "$ref": "#/$defs/nonblank" },
+        "onReject": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["action", "maxRevisions"],
+          "properties": {
+            "action": { "const": "revise" },
+            "maxRevisions": { "const": 1 }
+          }
+        }
+      }
+    },
+    "spec": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "objective",
+        "trigger",
+        "orchestrator",
+        "worker",
+        "limits",
+        "permissions",
+        "flowControl"
+      ],
+      "properties": {
+        "objective": { "$ref": "#/$defs/nonblank" },
+        "trigger": { "$ref": "#/$defs/trigger" },
+        "orchestrator": { "$ref": "#/$defs/orchestrator" },
+        "worker": { "$ref": "#/$defs/worker" },
+        "verification": { "$ref": "#/$defs/verification" },
+        "evaluator": { "$ref": "#/$defs/evaluator" },
+        "limits": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["runTimeout", "taskAttempts"],
+          "properties": {
+            "runTimeout": { "$ref": "#/$defs/duration" },
+            "taskAttempts": { "const": 2 }
+          }
+        },
+        "permissions": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["tools", "publicEffects"],
+          "properties": {
+            "tools": { "const": "full" },
+            "publicEffects": { "const": "deny" }
+          }
+        },
+        "flowControl": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["maxActiveRuns"],
+          "properties": {
+            "maxActiveRuns": { "const": 1 }
+          }
+        }
+      },
+      "anyOf": [
+        { "required": ["verification"] },
+        { "required": ["evaluator"] }
+      ]
+    }
+  }
+}

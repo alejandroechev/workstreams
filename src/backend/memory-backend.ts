@@ -30,6 +30,8 @@ import {
   transitionLoop,
   type LoopObservedOutcome,
   type LoopRun,
+  type LoopDefinition,
+  type LoopDefinitionCatalog,
   type LoopSnapshot,
   type LoopSpec,
   type LoopSpecDraft,
@@ -96,6 +98,10 @@ export class MemoryBackend implements Backend {
   private loopSnapshots = new Map<string, PersistedLoopSnapshot>();
   private loopRunWorkstreams = new Map<string, string>();
   private loopTimers = new Map<string, Array<ReturnType<typeof setTimeout>>>();
+  private loopDefinitions = new Map<
+    string,
+    { definition: LoopDefinition; spec: LoopSpecDraft }
+  >();
 
   seedFile(path: string, content: string): void {
     this.files.set(path, content);
@@ -111,6 +117,13 @@ export class MemoryBackend implements Backend {
     payload: import("./types").SessionFeaturesPayload,
   ): void {
     this.sessionFeatures.set(sessionId, payload);
+  }
+
+  seedLoopDefinition(
+    definition: LoopDefinition,
+    spec: LoopSpecDraft,
+  ): void {
+    this.loopDefinitions.set(definition.path, { definition, spec });
   }
 
   async listProjects(): Promise<Project[]> {
@@ -419,6 +432,20 @@ export class MemoryBackend implements Backend {
     });
   }
 
+  async listLoopDefinitions(rootDir: string): Promise<LoopDefinitionCatalog> {
+    const prefix = `${rootDir.replace(/[\\/]$/, "")}/.workstreams/loops/`
+      .replace(/\\/g, "/");
+    return {
+      definitions: [...this.loopDefinitions.values()]
+        .map(({ definition }) => definition)
+        .filter((definition) =>
+          definition.path.replace(/\\/g, "/").startsWith(prefix),
+        )
+        .sort((left, right) => left.path.localeCompare(right.path)),
+      invalid: [],
+    };
+  }
+
   async saveWorkstreamLoop(
     workstreamId: string,
     input: LoopSpecDraft,
@@ -490,6 +517,7 @@ export class MemoryBackend implements Backend {
     ) {
       throw new Error("This loop already has an active run");
     }
+
     const timestamp = now();
     const run: LoopRun = {
       id: generateId(),
@@ -526,6 +554,33 @@ export class MemoryBackend implements Backend {
     this.scheduleMemoryLoop(workstreamId, run.id);
     this.emitLoopUpdate(workstreamId);
     return run;
+  }
+
+  async runLoopDefinitionNow(
+    workstreamId: string,
+    definitionPath: string,
+  ): Promise<LoopRun> {
+    const entry = this.loopDefinitions.get(definitionPath);
+    if (!entry) throw new Error(`Loop definition not found: ${definitionPath}`);
+    const existing = this.loopSpecs.get(workstreamId);
+    if (existing?.enabled) {
+      await this.setWorkstreamLoopEnabled(existing.id, false);
+    }
+    const saved = await this.saveWorkstreamLoop(workstreamId, entry.spec);
+    const bound: LoopSpec = {
+      ...saved,
+      enabled: true,
+      definitionId: entry.definition.id,
+      definitionPath: entry.definition.path,
+      definitionHash: entry.definition.hash,
+      definitionName: entry.definition.name,
+      objective: entry.definition.objective,
+      portable: entry.definition.portable,
+    };
+    this.loopSpecs.set(workstreamId, bound);
+    const snapshot = await this.getWorkstreamLoopSnapshot(workstreamId);
+    this.loopSnapshots.set(workstreamId, { ...snapshot, spec: bound });
+    return this.runWorkstreamLoopNow(workstreamId);
   }
 
   async resumeWorkstreamLoop(runId: string): Promise<LoopRun> {

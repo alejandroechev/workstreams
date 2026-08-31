@@ -21,6 +21,7 @@ import type {
 import type { TaskStatus } from "../domain/task-status";
 import type {
   LoopRun,
+  LoopDefinitionCatalog,
   LoopSpec,
   LoopSpecDraft,
   LoopSummary,
@@ -204,6 +205,39 @@ export class TauriBackend implements Backend {
     });
   }
 
+  async listLoopDefinitions(rootDir: string): Promise<LoopDefinitionCatalog> {
+    const catalog = await invoke<{
+      definitions: Array<{
+        id: string;
+        name: string;
+        description: string | null;
+        tags: string[];
+        path: string;
+        hash: string;
+        portable: boolean;
+        objective: string;
+        hasVerification: boolean;
+        hasEvaluator: boolean;
+      }>;
+      invalid: Array<{ path: string; error: string }>;
+    }>("list_loop_definitions", { rootDir });
+    return {
+      definitions: catalog.definitions.map((definition) => ({
+        id: definition.id,
+        name: definition.name,
+        description: definition.description ?? undefined,
+        tags: definition.tags,
+        path: definition.path,
+        hash: definition.hash,
+        portable: definition.portable,
+        objective: definition.objective,
+        hasVerification: definition.hasVerification,
+        hasEvaluator: definition.hasEvaluator,
+      })),
+      invalid: catalog.invalid,
+    };
+  }
+
   async saveWorkstreamLoop(
     workstreamId: string,
     input: LoopSpecDraft,
@@ -232,6 +266,17 @@ export class TauriBackend implements Backend {
   async runWorkstreamLoopNow(workstreamId: string): Promise<LoopRun> {
     const run = await invoke<LoopRunWire>("run_workstream_loop_now", {
       workstreamId,
+    });
+    return decodeLoopRun(run);
+  }
+
+  async runLoopDefinitionNow(
+    workstreamId: string,
+    definitionPath: string,
+  ): Promise<LoopRun> {
+    const run = await invoke<LoopRunWire>("run_loop_definition_now", {
+      workstreamId,
+      definitionPath,
     });
     return decodeLoopRun(run);
   }

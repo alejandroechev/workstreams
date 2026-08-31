@@ -45,13 +45,19 @@ export interface LoopSpec {
   workstreamId: string;
   orchestrator: LoopRoleSpec;
   worker: LoopRoleSpec;
-  evaluator: LoopRoleSpec;
+  evaluator?: LoopRoleSpec;
   verifier?: LoopVerifierSpec;
   runTimeoutMs: number;
   maxTaskIterations: typeof MAX_TASK_ITERATIONS;
   enabled: boolean;
   createdAt?: string;
   updatedAt?: string;
+  definitionId?: string;
+  definitionPath?: string;
+  definitionHash?: string;
+  definitionName?: string;
+  objective?: string;
+  portable?: boolean;
 }
 
 export type LoopSpecDraft = Omit<
@@ -106,6 +112,7 @@ export interface LoopRun {
   startedAt?: string;
   finishedAt?: string;
   deadlineAt?: string;
+  definitionHash?: string;
 }
 
 export interface LoopSnapshot {
@@ -171,6 +178,29 @@ export interface LoopSummary {
   controlRequested?: "none" | "pause" | "stop" | "kill";
   currentTaskId?: string;
   startedAt?: string;
+}
+
+export interface LoopDefinition {
+  id: string;
+  name: string;
+  description?: string;
+  tags: string[];
+  path: string;
+  hash: string;
+  portable: boolean;
+  objective: string;
+  hasVerification: boolean;
+  hasEvaluator: boolean;
+}
+
+export interface InvalidLoopDefinition {
+  path: string;
+  error: string;
+}
+
+export interface LoopDefinitionCatalog {
+  definitions: LoopDefinition[];
+  invalid: InvalidLoopDefinition[];
 }
 
 export type LoopObservedOutcome =
@@ -596,6 +626,11 @@ export function transitionLoop(
     const next = copySnapshot(current);
     const nextTask = activeTask(next, "verifying");
     if (!nextTask) return attention(current, "Verifying task disappeared");
+    if (!next.spec.evaluator) {
+      nextTask.state = "accepted";
+      next.run.activeTaskId = null;
+      return atSafeBoundary(startNextQueued(next));
+    }
     nextTask.state = "evaluating";
     next.run.state = "evaluating";
     return atSafeBoundary({

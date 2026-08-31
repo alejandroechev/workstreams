@@ -138,4 +138,42 @@ describe("MemoryBackend manual coding loops", () => {
       (await backend.getWorkstreamLoopSnapshot(workstreamId)).latestRun?.state,
     ).toBe("attention");
   });
+
+  it("discovers and runs a seeded YAML definition", async () => {
+    backend.seedLoopDefinition(
+      {
+        id: "simple-loop",
+        name: "Simple loop",
+        tags: ["demo"],
+        path: "/repo/.workstreams/loops/simple.loop.yaml",
+        hash: "hash-1",
+        portable: true,
+        objective: "Create output",
+        hasVerification: true,
+        hasEvaluator: false,
+      },
+      {
+        orchestrator: { prompt: "Plan", model: "" },
+        worker: { prompt: "Work", model: "" },
+        verifier: { program: "verify", args: [] },
+        runTimeoutMs: 60_000,
+        maxTaskIterations: 2,
+      },
+    );
+
+    await expect(backend.listLoopDefinitions("/repo")).resolves.toMatchObject({
+      definitions: [{ id: "simple-loop" }],
+    });
+    const run = await backend.runLoopDefinitionNow(
+      workstreamId,
+      "/repo/.workstreams/loops/simple.loop.yaml",
+    );
+    expect(run.state).toBe("starting");
+    const snapshot = await backend.getWorkstreamLoopSnapshot(workstreamId);
+    expect(snapshot.spec).toMatchObject({
+      definitionId: "simple-loop",
+      definitionHash: "hash-1",
+    });
+    expect(snapshot.spec?.evaluator).toBeUndefined();
+  });
 });

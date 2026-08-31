@@ -29,6 +29,7 @@ describe("TauriBackend", () => {
         verifier_program: null,
         verifier_args: [],
         verifier_cwd: null,
+        verifier_timeout_seconds: null,
         run_timeout_seconds: 60,
         max_task_iterations: 2,
         enabled: false,
@@ -73,6 +74,7 @@ describe("TauriBackend", () => {
         verifier_program: null,
         verifier_args: [],
         verifier_cwd: null,
+        verifier_timeout_seconds: null,
         run_timeout_seconds: 60,
         max_task_iterations: 2,
       },
@@ -104,6 +106,56 @@ describe("TauriBackend", () => {
       "get_workstream_loop_progress_version",
       { workstreamId: "ws-1" },
     );
+  });
+
+  it("lists and runs YAML loop definitions", async () => {
+    invoke
+      .mockResolvedValueOnce({
+        definitions: [{
+          id: "simple-loop",
+          name: "Simple loop",
+          description: null,
+          tags: ["demo"],
+          path: "/repo/.workstreams/loops/simple.loop.yaml",
+          hash: "abc",
+          portable: true,
+          objective: "Create a file",
+          hasVerification: true,
+          hasEvaluator: false,
+        }],
+        invalid: [],
+      })
+      .mockResolvedValueOnce({
+        id: "run-1",
+        loop_spec_id: "spec-1",
+        state: "starting",
+        current_task_id: null,
+        control_requested: "none",
+        error: null,
+        started_at: "started",
+        finished_at: null,
+        deadline_at: "deadline",
+      });
+
+    await expect(backend.listLoopDefinitions("/repo")).resolves.toMatchObject({
+      definitions: [{
+        id: "simple-loop",
+        hasVerification: true,
+        hasEvaluator: false,
+      }],
+    });
+    await backend.runLoopDefinitionNow(
+      "ws-1",
+      "/repo/.workstreams/loops/simple.loop.yaml",
+    );
+
+    expect(invoke).toHaveBeenNthCalledWith(1, "list_loop_definitions", {
+      rootDir: "/repo",
+    });
+    expect(invoke).toHaveBeenNthCalledWith(2, "run_loop_definition_now", {
+      workstreamId: "ws-1",
+      definitionPath: "/repo/.workstreams/loops/simple.loop.yaml",
+    });
   });
 
   it("listProjects calls list_projects", async () => {

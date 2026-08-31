@@ -19,30 +19,38 @@ export interface LoopSpecWire {
   workstream_id: string;
   orchestrator_prompt: string;
   worker_prompt: string;
-  evaluator_prompt: string;
+  evaluator_prompt: string | null;
   orchestrator_model: string | null;
   worker_model: string | null;
   evaluator_model: string | null;
   verifier_program: string | null;
   verifier_args: string[];
   verifier_cwd: string | null;
+  verifier_timeout_seconds?: number | null;
   run_timeout_seconds: number;
   max_task_iterations: number;
   enabled: boolean;
   created_at: string;
   updated_at: string;
+  definition_id?: string | null;
+  definition_path?: string | null;
+  definition_hash?: string | null;
+  definition_name?: string | null;
+  objective?: string | null;
+  portable?: boolean | null;
 }
 
 export interface LoopSpecInputWire {
   orchestrator_prompt: string;
   worker_prompt: string;
-  evaluator_prompt: string;
+  evaluator_prompt: string | null;
   orchestrator_model: string | null;
   worker_model: string | null;
   evaluator_model: string | null;
   verifier_program: string | null;
   verifier_args: string[];
   verifier_cwd: string | null;
+  verifier_timeout_seconds: number | null;
   run_timeout_seconds: number;
   max_task_iterations: number;
 }
@@ -57,6 +65,7 @@ export interface LoopRunWire {
   started_at: string;
   finished_at: string | null;
   deadline_at: string;
+  definition_hash?: string | null;
 }
 
 export interface LoopTaskWire {
@@ -170,10 +179,12 @@ function decodeSpec(spec: LoopSpecWire): LoopSpec {
       prompt: spec.worker_prompt,
       model: spec.worker_model ?? "",
     },
-    evaluator: {
-      prompt: spec.evaluator_prompt,
-      model: spec.evaluator_model ?? "",
-    },
+    evaluator: spec.evaluator_prompt
+      ? {
+          prompt: spec.evaluator_prompt,
+          model: spec.evaluator_model ?? "",
+        }
+      : undefined,
     verifier: spec.verifier_program
       ? {
           program: spec.verifier_program,
@@ -186,6 +197,12 @@ function decodeSpec(spec: LoopSpecWire): LoopSpec {
     enabled: spec.enabled,
     createdAt: timestamp(spec.created_at),
     updatedAt: timestamp(spec.updated_at),
+    definitionId: optional(spec.definition_id ?? null),
+    definitionPath: optional(spec.definition_path ?? null),
+    definitionHash: optional(spec.definition_hash ?? null),
+    definitionName: optional(spec.definition_name ?? null),
+    objective: optional(spec.objective ?? null),
+    portable: spec.portable ?? undefined,
   };
 }
 
@@ -203,6 +220,7 @@ function decodeRun(run: LoopRunWire): LoopRun {
     startedAt: timestamp(run.started_at),
     finishedAt: optionalTimestamp(run.finished_at),
     deadlineAt: timestamp(run.deadline_at),
+    definitionHash: optional(run.definition_hash ?? null),
   };
 }
 
@@ -275,13 +293,14 @@ export function encodeLoopSpecDraft(input: LoopSpecDraft): LoopSpecInputWire {
   return {
     orchestrator_prompt: input.orchestrator.prompt.trim(),
     worker_prompt: input.worker.prompt.trim(),
-    evaluator_prompt: input.evaluator.prompt.trim(),
+    evaluator_prompt: input.evaluator?.prompt.trim() || null,
     orchestrator_model: model(input.orchestrator.model),
     worker_model: model(input.worker.model),
-    evaluator_model: model(input.evaluator.model),
+    evaluator_model: input.evaluator ? model(input.evaluator.model) : null,
     verifier_program: input.verifier?.program.trim() || null,
     verifier_args: input.verifier ? [...input.verifier.args] : [],
     verifier_cwd: input.verifier?.cwd?.trim() || null,
+    verifier_timeout_seconds: null,
     run_timeout_seconds: Math.max(1, Math.ceil(input.runTimeoutMs / 1000)),
     max_task_iterations: input.maxTaskIterations,
   };
