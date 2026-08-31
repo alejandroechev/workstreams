@@ -14,7 +14,7 @@ graph TB
             SessionMeta["SessionMetaTile<br/>Session + file detail"]
             Workbench["WorkbenchTile<br/>Workbench file detail"]
             CodeReview["CodeReviewTile<br/>diff-first PR-style review (ADR 014)<br/>inline comments + in-place edit<br/>reviewer↔agent via session.db, no MCP<br/>manual Sync (no poll)"]
-            LoopControl["LoopControlTile (ADR 021)<br/>manual coding goal loop<br/>setup + Run/Pause/Resume/Stop/Kill<br/>tasks + verifier + evaluator evidence"]
+            LoopControl["LoopControlTile (ADR 021/022)<br/>YAML loop catalog<br/>Run/Pause/Resume/Stop/Kill<br/>tasks + verifier/evaluator evidence"]
             InlineComments["Inline File Comments (ADR 009)<br/>view zones in FileEditorView + comments-toggle<br/>reviewer↔agent via session.db, no MCP<br/>requires a linked session"]
             TaskBoard["TaskBoard (ADR 020)<br/>global board, not a tile<br/>7 columns + label swimlanes<br/>subtasks / labels / event feed"]
             QuickNote["WorkstreamQuickNote<br/>log a note to this workstream's task"]
@@ -32,6 +32,7 @@ graph TB
             LoopRS["loops.rs<br/>durable manual-loop controller<br/>task ledger + dedupe + controls"]
             LoopAgentRS["loop_agent.rs<br/>Rust Copilot SDK runtime<br/>SDK + scripted implementations"]
             LoopVerifierRS["loop_verifier.rs<br/>bounded external verification<br/>process-group timeout + output cap"]
+            LoopDefinitionRS["loop_definition.rs<br/>strict YAML parser + catalog<br/>path resolution + SHA-256 snapshot"]
             ShellEnvRS["shell_env.rs<br/>login-shell PATH repair (macOS GUI launch)"]
             CodeTraceRS["code_traces index<br/>list/get/delete/index + staleness"]
             TasksRS["tasks.rs<br/>tasks / subtasks / labels / task_events<br/>ISO-8601 timestamps, append-only events"]
@@ -44,6 +45,7 @@ graph TB
     subgraph Storage["Persistence"]
         AppDB["workstreams.db<br/>(SQLite — workstreams, tiles, layouts, scrollback)"]
         LoopDB["workstreams.db loop ledger<br/>specs / runs / tasks / verifications<br/>evaluations / append-only events"]
+        LoopYAML[".workstreams/loops/*.loop.yaml<br/>versioned loop authority"]
         CopilotDB["~/.copilot/session-store.db<br/>(read-only enrichment)"]
         CopilotSessionDB["~/.copilot/session-state/&lt;id&gt;/session.db<br/>(bound session — reviews + review_comments<br/>+ file_comments, RW)"]
     end
@@ -101,7 +103,10 @@ graph TB
 
     LibRS --> PtyRS
     LibRS --> LoopRS
-    LoopControl -- "invoke: save/enable/run/snapshot/control" --> LoopRS
+    LoopControl -- "invoke: list/run definition<br/>snapshot/control" --> LoopRS
+    LoopControl -- "catalog metadata" --> LoopDefinitionRS
+    LoopDefinitionRS --> LoopYAML
+    LoopRS --> LoopDefinitionRS
     LoopRS --> LoopAgentRS
     LoopAgentRS --> CopilotServer
     LoopRS --> LoopVerifierRS

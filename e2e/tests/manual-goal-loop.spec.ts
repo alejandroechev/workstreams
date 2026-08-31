@@ -24,6 +24,48 @@ async function createAndOpenWorkstream(page: Page) {
   await row.click();
 }
 
+async function seedLoopDefinition(page: Page) {
+  await page.evaluate(async () => {
+    const backend = (window as unknown as {
+      __WS_BACKEND__?: {
+        listWorkstreams: () => Promise<Array<{ id: string; directory: string }>>;
+        seedLoopDefinition: (
+          definition: Record<string, unknown>,
+          spec: Record<string, unknown>,
+        ) => void;
+      };
+    }).__WS_BACKEND__;
+    if (!backend) throw new Error("Memory backend is unavailable");
+    const workstream = (await backend.listWorkstreams()).find(
+      (candidate) => candidate.id,
+    );
+    if (!workstream) throw new Error("Goal Loop Demo workstream was not created");
+    const path = `${workstream.directory}/.workstreams/loops/frontend.loop.yaml`;
+    backend.seedLoopDefinition(
+      {
+        id: "frontend-loop",
+        name: "Frontend verification loop",
+        description: "Implements and verifies one frontend task.",
+        tags: ["frontend", "demo"],
+        path,
+        hash: "sha256:e2e-frontend-loop",
+        portable: true,
+        objective: "Deliver a verified frontend change",
+        hasVerification: true,
+        hasEvaluator: true,
+      },
+      {
+        orchestrator: { prompt: "Discover one coding task", model: "" },
+        worker: { prompt: "Implement the coding task", model: "" },
+        evaluator: { prompt: "Independently evaluate the result", model: "" },
+        verifier: { program: "npm", args: ["test"], cwd: workstream.directory },
+        runTimeoutMs: 5 * 60_000,
+        maxTaskIterations: 2,
+      },
+    );
+  });
+}
+
 async function addLoopTile(page: Page) {
   await page.locator('[data-testid="add-tile-button"]').click();
   await page.locator('[data-testid="add-tile-item-loop"]').click();
@@ -35,23 +77,20 @@ test.beforeEach(async ({ page }) => {
   await page.goto("/");
   await page.waitForLoadState("networkidle");
   await createAndOpenWorkstream(page);
+  await seedLoopDefinition(page);
   await addLoopTile(page);
 });
 
-test("configures, pauses, resumes, verifies, and evaluates a manual coding loop", async ({
+test("selects, pauses, resumes, verifies, and evaluates a YAML loop", async ({
   page,
 }) => {
-  await page.getByLabel("Orchestrator prompt").fill("Discover one coding task");
-  await page.getByLabel("Worker prompt").fill("Implement the coding task");
-  await page.getByLabel("Evaluator prompt").fill("Independently evaluate the result");
-  await page.getByLabel("Run timeout minutes").fill("5");
-  await page.getByLabel("Verifier program").fill("npm");
-  await page.getByLabel("Verifier arguments").fill("test");
-  await page.getByLabel("Verifier working directory").fill("C:\\repos\\demo");
-  await page.locator('[data-testid="loop-save-enable"]').click();
-
-  await expect(page.locator('[data-testid="loop-config-readonly"]')).toBeVisible();
-  await page.locator('[data-testid="loop-run-now"]').click();
+  await expect(page.locator('[data-testid="loop-definition-frontend-loop"]')).toContainText(
+    "Verification + Evaluator",
+  );
+  await expect(page.locator('[data-testid="loop-definition-selected"]')).toContainText(
+    "Frontend verification loop",
+  );
+  await page.locator('[data-testid="loop-run-selected"]').click();
   await expect(page.locator('[data-testid="running-loop-count"]')).toContainText(
     "1 running",
   );
@@ -80,11 +119,7 @@ test("configures, pauses, resumes, verifies, and evaluates a manual coding loop"
 });
 
 test("kills an active loop and preserves an interrupted task", async ({ page }) => {
-  await page.getByLabel("Orchestrator prompt").fill("Discover one coding task");
-  await page.getByLabel("Worker prompt").fill("Implement it");
-  await page.getByLabel("Evaluator prompt").fill("Evaluate it");
-  await page.locator('[data-testid="loop-save-enable"]').click();
-  await page.locator('[data-testid="loop-run-now"]').click();
+  await page.locator('[data-testid="loop-run-selected"]').click();
   await expect(page.locator('article[data-testid^="loop-task-"]').first()).toBeVisible();
 
   await page.locator('[data-testid="loop-kill"]').click();

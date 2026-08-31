@@ -163,20 +163,21 @@ before closing PTYs.
 
 ### UI and CLI are peers
 
-The `loop_control` tile configures and enables the loop, starts Run now, and
-projects backend state: stage, task, elapsed/deadline, streamed events, worker
-result, verifier output, evaluator feedback, and errors. It exposes separate
-Pause, Resume, Stop, and Kill actions. Closing the tile does not own or erase
-the run.
+The `loop_control` tile starts Run now and projects backend state: stage, task,
+elapsed/deadline, streamed events, worker result, verifier output, evaluator
+feedback, and errors. It exposes separate Pause, Resume, Stop, and Kill
+actions. Closing the tile does not own or erase the run. ADR 022 replaces the
+original setup form with a catalog of versioned YAML definitions.
 
 The workstream sidebar shows per-workstream running/attention state and the
 number of running loops. MVP1 intentionally has one active episode per
 workstream and no global concurrency cap.
 
-The existing `workstreams` executable exposes `workstreams loop configure`,
-`enable`, `run`, `status`, and `control` subcommands. Its deterministic
-`scenario` runs the same controller with the scripted runtime and a real
-verifier. Keeping one Cargo binary avoids ambiguity for `cargo tauri dev`.
+The existing `workstreams` executable exposes legacy `configure`, `enable`,
+`run`, `status`, and `control` subcommands plus the YAML-first `validate`,
+`list`, and `run-file` commands defined by ADR 022. Its deterministic `scenario`
+runs the same controller with the scripted runtime and a real verifier.
+Keeping one Cargo binary avoids ambiguity for `cargo tauri dev`.
 
 ## Permissions
 
@@ -230,6 +231,7 @@ generic loop contract.
   Control tile, sidebar projection, and App compatibility.
 - `workstreams loop scenario` exercises task discovery, a real verifier,
   evaluator acceptance, and second-run deduplication.
-- Playwright covers configure/enable/run/pause/resume/verify/evaluate and Kill.
+- Playwright covers YAML catalog discovery/selection, path-based Run,
+  Pause/Resume, verifier/evaluator evidence, and Kill.
 - `e2e/features/manual-coding-loop.mjs` is the real-Tauri CDP probe. It can only
   run on Windows because macOS WKWebView does not expose CDP (ADR 003/018).

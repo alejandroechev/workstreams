@@ -83,6 +83,8 @@ fn run_definition_file(
     workspace: &Path,
     definition_path: &Path,
 ) -> Result<LoopSnapshot, String> {
+    let workspace = canonical_loop_workspace(workspace)?;
+    let definition_path = canonical_loop_definition_path(definition_path)?;
     let conn = open(db_path)?;
     conn.execute(
         "INSERT INTO workstreams (
@@ -93,7 +95,7 @@ fn run_definition_file(
     )
     .map_err(|error| format!("Failed to bind CLI loop workspace: {error}"))?;
     let (definition, yaml) =
-        crate::loop_definition::load_validated_definition(workspace, definition_path)?;
+        crate::loop_definition::load_validated_definition(&workspace, &definition_path)?;
     let spec = materialize_loop_definition(
         &conn,
         "cli-loop-file",
@@ -108,7 +110,7 @@ fn run_definition_file(
             Arc::clone(&db),
             Arc::clone(&runtime),
             &run.id,
-            workspace.to_path_buf(),
+            workspace.clone(),
         )
         .await;
         let shutdown = runtime.shutdown().await;
@@ -117,6 +119,18 @@ fn run_definition_file(
     })?;
     let snapshot = loop_snapshot(&db.lock().unwrap(), "cli-loop-file");
     snapshot
+}
+
+fn canonical_loop_workspace(workspace: &Path) -> Result<PathBuf, String> {
+    workspace
+        .canonicalize()
+        .map_err(|error| format!("Failed to resolve loop workspace: {error}"))
+}
+
+fn canonical_loop_definition_path(definition_path: &Path) -> Result<PathBuf, String> {
+    definition_path
+        .canonicalize()
+        .map_err(|error| format!("Failed to resolve loop definition: {error}"))
 }
 
 fn configure(args: &[String]) -> Result<(), String> {
@@ -485,5 +499,36 @@ spec:
         .expect("list definitions");
 
         std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn canonicalizes_relative_loop_workspaces_for_sdk_sessions() {
+        let resolved = canonical_loop_workspace(Path::new(".")).expect("canonicalize workspace");
+        assert!(resolved.is_absolute());
+        assert_eq!(
+            resolved,
+            std::env::current_dir()
+                .expect("current directory")
+                .canonicalize()
+                .expect("canonical current directory")
+        );
+    }
+
+    #[test]
+    fn canonicalizes_definition_paths_independently_from_the_workspace() {
+        let absolute = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("loop_cli.rs");
+        let current = std::env::current_dir().expect("current directory");
+        let definition = absolute
+            .strip_prefix(&current)
+            .expect("definition is below the test working directory");
+        let resolved = canonical_loop_definition_path(definition).expect("canonicalize definition");
+
+        assert!(resolved.is_absolute());
+        assert_eq!(
+            resolved,
+            absolute.canonicalize().expect("canonical definition")
+        );
     }
 }

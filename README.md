@@ -32,17 +32,17 @@ project-aware workspace:
   workstream, with live activity indicator + bell on idle. Configurable CLI
   command (default `agency copilot --yolo`; switch to `copilot --yolo` for
   the public CLI).
-- 🔁 **Manual coding goal loops** — attach one generic loop to a workstream,
-  configure orchestrator / worker / evaluator prompts, and press **Run now**.
-  The orchestrator emits deduplicated coding tasks; each runs in a bounded
-  Copilot SDK session, passes an optional external verification command, and
-  is judged by a fresh evaluator. One evaluator-requested revision is allowed
-  before human attention. The **Goal Loop** tile exposes live stage, task,
-  output, verifier evidence, verdicts, limits, and distinct
-  Pause / Resume / Stop / Kill controls; the sidebar shows running-loop state
-  even when the tile is closed. MVP1 is manual and local while Workstreams is
-  open—recurring schedules are intentionally next. See
-  [ADR 021](docs/adrs/021-manual-coding-goal-loop.md).
+- 🔁 **Versioned coding loops** — author reusable definitions as strict
+  `.workstreams/loops/*.loop.yaml` files (or ask the `create-loop` skill to
+  generate one), then select and run them from the **Goal Loop** catalog.
+  Every loop uses a bounded orchestrator → worker pipeline and must include
+  deterministic verification, an independent evaluator, or both. Verifiers
+  can be repository scripts outside the definition folder; each run pins the
+  exact YAML and SHA-256 hash for durable evidence. The tile exposes live
+  stage, task, output, verifier evidence, verdicts, and distinct Pause /
+  Resume / Stop / Kill controls. MVP1 is manual and local while Workstreams is
+  open. See [ADR 021](docs/adrs/021-manual-coding-goal-loop.md) and
+  [ADR 022](docs/adrs/022-versioned-loop-definitions.md).
 - 🔀 **Switch a workstream to another repo** — the same **Change worktree…**
   action. Pick a directory in a different repo and the workstream moves repo
   with it (colour, grouping and tile cwds follow). A directory in no known repo

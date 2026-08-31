@@ -1,4 +1,4 @@
-// Windows-only CDP visual probe for the manual coding goal-loop control tile.
+// Windows-only CDP visual probe for the YAML loop catalog.
 // macOS WKWebView does not expose CDP; see ADR 003 and ADR 018.
 
 async function openFirstWorkstream(page) {
@@ -35,8 +35,14 @@ export async function run({ page, screenshot }) {
     .locator('[data-testid="loop-control-tile"]')
     .waitFor({ timeout: 10000 });
   await page
-    .locator('[data-testid="loop-setup-form"], [data-testid="loop-config-readonly"]')
-    .first()
+    .locator('[data-testid="loop-catalog"]')
+    .waitFor({ timeout: 10000 });
+  await page
+    .locator('[data-testid="loop-definition-showcase-loop"]')
+    .waitFor({ timeout: 10000 });
+  await page
+    .locator('[data-testid="loop-definition-selected"]')
+    .filter({ hasText: "Showcase loop" })
     .waitFor({ timeout: 10000 });
 
   await screenshot();

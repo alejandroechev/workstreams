@@ -1,28 +1,30 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import {
-  ArrowDownTrayIcon,
   ArrowPathIcon,
+  CheckBadgeIcon,
+  DocumentTextIcon,
+  ExclamationTriangleIcon,
   PauseIcon,
   PlayIcon,
-  PowerIcon,
   StopIcon,
+  TagIcon,
   XCircleIcon,
 } from "@heroicons/react/24/outline";
 
 import { useBackend } from "../backend/context";
-import {
-  MAX_TASK_ITERATIONS,
-  type LoopAction,
-  type LoopEvaluationRecord,
-  type LoopEventRecord,
-  type LoopRun,
-  type LoopRunState,
-  type LoopSpec,
-  type LoopSpecDraft,
-  type LoopTask,
-  type LoopVerificationRecord,
-  type PersistedLoopSnapshot,
+import type {
+  LoopAction,
+  LoopDefinition,
+  LoopDefinitionCatalog,
+  LoopEvaluationRecord,
+  LoopEventRecord,
+  LoopRun,
+  LoopRunState,
+  LoopSpec,
+  LoopTask,
+  LoopVerificationRecord,
+  PersistedLoopSnapshot,
 } from "../domain/loop";
 
 export interface LoopControlTileProps {
@@ -30,19 +32,6 @@ export interface LoopControlTileProps {
   workstreamId: string;
   workstreamDir: string;
   isFocused?: boolean;
-}
-
-interface DraftForm {
-  orchestratorPrompt: string;
-  orchestratorModel: string;
-  workerPrompt: string;
-  workerModel: string;
-  evaluatorPrompt: string;
-  evaluatorModel: string;
-  timeoutMinutes: string;
-  verifierProgram: string;
-  verifierArgs: string;
-  verifierCwd: string;
 }
 
 const EMPTY_SNAPSHOT: PersistedLoopSnapshot = {
@@ -54,17 +43,9 @@ const EMPTY_SNAPSHOT: PersistedLoopSnapshot = {
   events: [],
 };
 
-const EMPTY_DRAFT: DraftForm = {
-  orchestratorPrompt: "",
-  orchestratorModel: "",
-  workerPrompt: "",
-  workerModel: "",
-  evaluatorPrompt: "",
-  evaluatorModel: "",
-  timeoutMinutes: "30",
-  verifierProgram: "",
-  verifierArgs: "",
-  verifierCwd: "",
+const EMPTY_CATALOG: LoopDefinitionCatalog = {
+  definitions: [],
+  invalid: [],
 };
 
 const TERMINAL_RUN_STATES: ReadonlySet<LoopRunState> = new Set([
@@ -106,24 +87,6 @@ const headingStyle: React.CSSProperties = {
   color: "#a6adc8",
 };
 
-const fieldStyle: React.CSSProperties = {
-  display: "grid",
-  gap: 4,
-  marginBottom: 8,
-  color: "#bac2de",
-};
-
-const inputStyle: React.CSSProperties = {
-  width: "100%",
-  boxSizing: "border-box",
-  border: "1px solid #45475a",
-  borderRadius: 4,
-  padding: "5px 7px",
-  background: "#11111b",
-  color: "#cdd6f4",
-  font: "inherit",
-};
-
 const buttonStyle: React.CSSProperties = {
   display: "inline-flex",
   alignItems: "center",
@@ -137,75 +100,10 @@ const buttonStyle: React.CSSProperties = {
   font: "inherit",
 };
 
-const iconStyle: React.CSSProperties = { width: 14, height: 14 };
+const iconStyle: React.CSSProperties = { width: 14, height: 14, flexShrink: 0 };
 
 function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-function draftFromSpec(spec: LoopSpec): DraftForm {
-  return {
-    orchestratorPrompt: spec.orchestrator.prompt,
-    orchestratorModel: spec.orchestrator.model,
-    workerPrompt: spec.worker.prompt,
-    workerModel: spec.worker.model,
-    evaluatorPrompt: spec.evaluator.prompt,
-    evaluatorModel: spec.evaluator.model,
-    timeoutMinutes: String(spec.runTimeoutMs / 60_000),
-    verifierProgram: spec.verifier?.program ?? "",
-    verifierArgs: spec.verifier?.args.join("\n") ?? "",
-    verifierCwd: spec.verifier?.cwd ?? "",
-  };
-}
-
-function specDraft(form: DraftForm): LoopSpecDraft | string {
-  const orchestratorPrompt = form.orchestratorPrompt.trim();
-  const workerPrompt = form.workerPrompt.trim();
-  const evaluatorPrompt = form.evaluatorPrompt.trim();
-  if (!orchestratorPrompt || !workerPrompt || !evaluatorPrompt) {
-    return "All three prompts are required";
-  }
-
-  const timeoutMinutes = Number(form.timeoutMinutes);
-  if (!Number.isFinite(timeoutMinutes) || timeoutMinutes <= 0) {
-    return "Run timeout must be greater than zero";
-  }
-
-  const verifierProgram = form.verifierProgram.trim();
-  const verifierArgs = form.verifierArgs.trim();
-  const verifierCwd = form.verifierCwd.trim();
-  if (!verifierProgram && (verifierArgs || verifierCwd)) {
-    return "Verifier arguments and working directory require a verifier program";
-  }
-
-  return {
-    orchestrator: {
-      prompt: orchestratorPrompt,
-      model: form.orchestratorModel.trim(),
-    },
-    worker: {
-      prompt: workerPrompt,
-      model: form.workerModel.trim(),
-    },
-    evaluator: {
-      prompt: evaluatorPrompt,
-      model: form.evaluatorModel.trim(),
-    },
-    verifier: verifierProgram
-      ? {
-          program: verifierProgram,
-          args: verifierArgs
-            ? verifierArgs
-                .split(/\r?\n/)
-                .map((argument) => argument.trim())
-                .filter(Boolean)
-            : [],
-          cwd: verifierCwd || undefined,
-        }
-      : undefined,
-    runTimeoutMs: timeoutMinutes * 60_000,
-    maxTaskIterations: MAX_TASK_ITERATIONS,
-  };
 }
 
 function stateLabel(state: LoopRunState): string {
@@ -226,7 +124,9 @@ function nextEvidence(run: LoopRun, spec: LoopSpec): string {
     case "orchestrating":
       return "Orchestrator task evidence pending";
     case "working":
-      return spec.verifier ? "Verifier is next" : "Evaluator is next";
+      if (spec.verifier) return "Verifier is next";
+      if (spec.evaluator) return "Evaluator is next";
+      return "Completion is next";
     case "verifying":
       return "Verifier evidence in progress";
     case "evaluating":
@@ -241,6 +141,15 @@ function nextEvidence(run: LoopRun, spec: LoopSpec): string {
     case "killed":
       return "No next stage";
   }
+}
+
+function feedbackMode(definition: LoopDefinition): string {
+  if (definition.hasVerification && definition.hasEvaluator) {
+    return "Verification + Evaluator";
+  }
+  if (definition.hasVerification) return "Verification";
+  if (definition.hasEvaluator) return "Evaluator";
+  return "Completion only";
 }
 
 function formatPayload(payload: unknown): string {
@@ -272,7 +181,11 @@ function ActionButton({
       aria-label={label}
       disabled={disabled}
       onClick={onClick}
-      style={{ ...buttonStyle, opacity: disabled ? 0.55 : 1 }}
+      style={{
+        ...buttonStyle,
+        cursor: disabled ? "not-allowed" : "pointer",
+        opacity: disabled ? 0.55 : 1,
+      }}
     >
       <Icon aria-hidden="true" style={iconStyle} />
       {label}
@@ -280,204 +193,179 @@ function ActionButton({
   );
 }
 
-function SetupForm({
-  form,
-  setForm,
-  existing,
-  busy,
-  workstreamDir,
-  onSave,
-  onEnable,
+function DefinitionRow({
+  definition,
+  selected,
+  onSelect,
 }: {
-  form: DraftForm;
-  setForm: React.Dispatch<React.SetStateAction<DraftForm>>;
-  existing: LoopSpec | null;
-  busy: boolean;
-  workstreamDir: string;
-  onSave: (enableAfterSave: boolean) => void;
-  onEnable: () => void;
+  definition: LoopDefinition;
+  selected: boolean;
+  onSelect: () => void;
 }) {
-  const update = (field: keyof DraftForm, value: string) => {
-    setForm((current) => ({ ...current, [field]: value }));
-  };
-
   return (
-    <form
-      data-testid="loop-setup-form"
-      style={sectionStyle}
-      onSubmit={(event) => event.preventDefault()}
+    <button
+      type="button"
+      data-testid={`loop-definition-${definition.id}`}
+      aria-pressed={selected}
+      onClick={onSelect}
+      style={{
+        width: "100%",
+        boxSizing: "border-box",
+        display: "grid",
+        gap: 5,
+        marginBottom: 7,
+        padding: 9,
+        border: `1px solid ${selected ? "#89b4fa" : "#313244"}`,
+        borderRadius: 5,
+        background: selected ? "#243047" : "#11111b",
+        color: "#cdd6f4",
+        cursor: "pointer",
+        font: "inherit",
+        textAlign: "left",
+      }}
     >
-      <h2 style={headingStyle}>{existing ? "Loop configuration" : "Set up loop"}</h2>
-      {(["Orchestrator", "Worker", "Evaluator"] as const).map((role) => {
-        const key = role.toLowerCase() as "orchestrator" | "worker" | "evaluator";
-        const promptField = `${key}Prompt` as keyof DraftForm;
-        const modelField = `${key}Model` as keyof DraftForm;
-        return (
-          <div key={role} style={{ marginBottom: 10 }}>
-            <label style={fieldStyle}>
-              <span>{role} prompt</span>
-              <textarea
-                aria-label={`${role} prompt`}
-                data-testid={`loop-${key}-prompt`}
-                rows={3}
-                value={form[promptField]}
-                onChange={(event) => update(promptField, event.target.value)}
-                style={{ ...inputStyle, resize: "vertical" }}
-              />
-            </label>
-            <label style={fieldStyle}>
-              <span>{role} model</span>
-              <input
-                aria-label={`${role} model`}
-                data-testid={`loop-${key}-model`}
-                value={form[modelField]}
-                onChange={(event) => update(modelField, event.target.value)}
-                placeholder="Optional"
-                style={inputStyle}
-              />
-            </label>
-          </div>
-        );
-      })}
-
-      <label style={fieldStyle}>
-        <span>Run timeout minutes</span>
-        <input
-          type="number"
-          min="1"
-          step="1"
-          aria-label="Run timeout minutes"
-          data-testid="loop-timeout-minutes"
-          value={form.timeoutMinutes}
-          onChange={(event) => update("timeoutMinutes", event.target.value)}
-          style={inputStyle}
-        />
-      </label>
-
-      <fieldset
-        style={{
-          border: "1px solid #313244",
-          borderRadius: 4,
-          padding: 8,
-          margin: "10px 0",
-        }}
-      >
-        <legend style={{ color: "#a6adc8" }}>Optional deterministic verifier</legend>
-        <label style={fieldStyle}>
-          <span>Verifier program</span>
-          <input
-            aria-label="Verifier program"
-            data-testid="loop-verifier-program"
-            value={form.verifierProgram}
-            onChange={(event) => update("verifierProgram", event.target.value)}
-            style={inputStyle}
-          />
-        </label>
-        <label style={fieldStyle}>
-          <span>Verifier arguments</span>
-          <textarea
-            aria-label="Verifier arguments"
-            data-testid="loop-verifier-args"
-            value={form.verifierArgs}
-            onChange={(event) => update("verifierArgs", event.target.value)}
-            placeholder="One argument per line"
-            rows={3}
-            style={{ ...inputStyle, resize: "vertical" }}
-          />
-        </label>
-        <label style={fieldStyle}>
-          <span>Verifier working directory</span>
-          <input
-            aria-label="Verifier working directory"
-            data-testid="loop-verifier-cwd"
-            value={form.verifierCwd}
-            onChange={(event) => update("verifierCwd", event.target.value)}
-            placeholder={workstreamDir}
-            style={inputStyle}
-          />
-        </label>
-      </fieldset>
-
-      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-        {existing ? (
-          <>
-            <ActionButton
-              testId="loop-save"
-              label="Save"
-              icon={ArrowDownTrayIcon}
-              disabled={busy}
-              onClick={() => onSave(false)}
-            />
-            <ActionButton
-              testId="loop-enable"
-              label="Enable"
-              icon={PowerIcon}
-              disabled={busy}
-              onClick={onEnable}
-            />
-          </>
-        ) : (
-          <ActionButton
-            testId="loop-save-enable"
-            label="Save and enable"
-            icon={PowerIcon}
-            disabled={busy}
-            onClick={() => onSave(true)}
-          />
-        )}
-      </div>
-    </form>
+      <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        <DocumentTextIcon aria-hidden="true" style={iconStyle} />
+        <strong>{definition.name}</strong>
+      </span>
+      <span style={{ color: "#bac2de" }}>{definition.objective}</span>
+      <span style={{ display: "flex", alignItems: "center", gap: 5, flexWrap: "wrap" }}>
+        <CheckBadgeIcon aria-hidden="true" style={iconStyle} />
+        <span>{feedbackMode(definition)}</span>
+        {definition.tags.map((tag) => (
+          <span
+            key={tag}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 3,
+              border: "1px solid #45475a",
+              borderRadius: 999,
+              padding: "1px 6px",
+              color: "#a6adc8",
+            }}
+          >
+            <TagIcon aria-hidden="true" style={{ width: 11, height: 11 }} />
+            {tag}
+          </span>
+        ))}
+      </span>
+      {!definition.portable && (
+        <span
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 5,
+            color: "#f9e2af",
+          }}
+        >
+          <ExclamationTriangleIcon aria-hidden="true" style={iconStyle} />
+          Not portable: this definition uses machine-specific configuration.
+        </span>
+      )}
+    </button>
   );
 }
 
-function ReadonlyConfig({
-  spec,
+function CatalogPanel({
+  catalog,
+  selected,
   busy,
-  hasActiveRun,
-  onDisable,
+  runIsActive,
+  onSelect,
   onRun,
 }: {
-  spec: LoopSpec;
+  catalog: LoopDefinitionCatalog;
+  selected: LoopDefinition | null;
   busy: boolean;
-  hasActiveRun: boolean;
-  onDisable: () => void;
+  runIsActive: boolean;
+  onSelect: (definitionId: string) => void;
   onRun: () => void;
 }) {
-  const verifier = spec.verifier
-    ? [spec.verifier.program, ...spec.verifier.args].join(" ")
-    : "Not configured";
   return (
-    <section data-testid="loop-config-readonly" style={sectionStyle}>
-      <h2 style={headingStyle}>Enabled configuration</h2>
-      <dl style={{ display: "grid", gridTemplateColumns: "90px 1fr", gap: "5px 8px" }}>
-        <dt style={{ color: "#6c7086" }}>Orchestrator</dt>
-        <dd style={{ margin: 0, whiteSpace: "pre-wrap" }}>{spec.orchestrator.prompt}</dd>
-        <dt style={{ color: "#6c7086" }}>Worker</dt>
-        <dd style={{ margin: 0, whiteSpace: "pre-wrap" }}>{spec.worker.prompt}</dd>
-        <dt style={{ color: "#6c7086" }}>Evaluator</dt>
-        <dd style={{ margin: 0, whiteSpace: "pre-wrap" }}>{spec.evaluator.prompt}</dd>
-        <dt style={{ color: "#6c7086" }}>Timeout</dt>
-        <dd style={{ margin: 0 }}>{spec.runTimeoutMs / 60_000} minutes</dd>
-        <dt style={{ color: "#6c7086" }}>Verifier</dt>
-        <dd style={{ margin: 0, fontFamily: "monospace" }}>{verifier}</dd>
-      </dl>
-      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 10 }}>
-        <ActionButton
-          testId="loop-run-now"
-          label="Run now"
-          icon={PlayIcon}
-          disabled={busy || hasActiveRun}
-          onClick={onRun}
-        />
-        <ActionButton
-          testId="loop-disable"
-          label="Disable"
-          icon={PowerIcon}
-          disabled={busy || hasActiveRun}
-          onClick={onDisable}
-        />
-      </div>
-    </section>
+    <>
+      <section style={sectionStyle}>
+        <h2 style={headingStyle}>Definitions</h2>
+        {catalog.definitions.length === 0 ? (
+          <div
+            data-testid="loop-definition-empty"
+            style={{ color: "#a6adc8", lineHeight: 1.5 }}
+          >
+            Create <code>.workstreams/loops/&lt;id&gt;.loop.yaml</code> in this
+            workstream, or use the <code>create-loop</code> skill to author one.
+            YAML files are the only loop authoring surface.
+          </div>
+        ) : (
+          catalog.definitions.map((definition) => (
+            <DefinitionRow
+              key={definition.id}
+              definition={definition}
+              selected={definition.id === selected?.id}
+              onSelect={() => onSelect(definition.id)}
+            />
+          ))
+        )}
+      </section>
+
+      {selected && (
+        <section data-testid="loop-definition-selected" style={sectionStyle}>
+          <h2 style={headingStyle}>Selected definition</h2>
+          <div style={{ fontSize: 15, fontWeight: 700 }}>{selected.name}</div>
+          <div style={{ color: "#bac2de", marginTop: 5 }}>{selected.objective}</div>
+          <div style={{ color: "#a6adc8", marginTop: 7, whiteSpace: "pre-wrap" }}>
+            {selected.description ?? "No description provided."}
+          </div>
+          <dl
+            style={{
+              display: "grid",
+              gridTemplateColumns: "55px minmax(0, 1fr)",
+              gap: "5px 8px",
+              margin: "9px 0 0",
+            }}
+          >
+            <dt style={{ color: "#6c7086" }}>Path</dt>
+            <dd style={{ margin: 0, fontFamily: "monospace", overflowWrap: "anywhere" }}>
+              {selected.path}
+            </dd>
+            <dt style={{ color: "#6c7086" }}>Hash</dt>
+            <dd style={{ margin: 0, fontFamily: "monospace", overflowWrap: "anywhere" }}>
+              {selected.hash}
+            </dd>
+          </dl>
+          <div style={{ marginTop: 10 }}>
+            <ActionButton
+              testId="loop-run-selected"
+              label="Run"
+              icon={PlayIcon}
+              disabled={busy || runIsActive}
+              onClick={onRun}
+            />
+          </div>
+        </section>
+      )}
+
+      {catalog.invalid.length > 0 && (
+        <section data-testid="loop-invalid-definitions" style={sectionStyle}>
+          <h2 style={{ ...headingStyle, color: "#f38ba8" }}>Invalid definitions</h2>
+          {catalog.invalid.map((invalid) => (
+            <div
+              key={`${invalid.path}:${invalid.error}`}
+              style={{
+                marginTop: 7,
+                padding: 8,
+                borderLeft: "2px solid #f38ba8",
+                background: "#24171d",
+              }}
+            >
+              <div style={{ fontFamily: "monospace", overflowWrap: "anywhere" }}>
+                {invalid.path}
+              </div>
+              <div style={{ color: "#f5c2e7", marginTop: 3 }}>{invalid.error}</div>
+            </div>
+          ))}
+        </section>
+      )}
+    </>
   );
 }
 
@@ -561,7 +449,7 @@ function TaskList({
             <div style={{ color: "#a6adc8", marginTop: 3 }}>{task.objective}</div>
             <div style={{ color: "#6c7086", marginTop: 3 }}>
               Revisions: {task.revisionCount}
-              {task.workerSessionId ? ` · Worker session: ${task.workerSessionId}` : ""}
+              {task.workerSessionId ? ` / Worker session: ${task.workerSessionId}` : ""}
             </div>
             {task.workerResult && (
               <div
@@ -598,26 +486,58 @@ function EventTimeline({ events }: { events: LoopEventRecord[] }) {
         <div style={{ color: "#6c7086" }}>No loop events yet.</div>
       ) : (
         <ol style={{ listStyle: "none", padding: 0, margin: 0 }}>
-          {events.map((event) => (
-            <li
-              key={event.id}
-              data-testid={`loop-event-${event.id}`}
-              style={{ borderLeft: "2px solid #45475a", padding: "3px 0 6px 8px" }}
-            >
-              <div>
-                <strong>{event.eventType}</strong>
-                <span style={{ color: "#6c7086", marginLeft: 6 }}>{event.createdAt}</span>
-              </div>
-              {formatPayload(event.payload) && (
-                <code style={{ color: "#a6adc8", whiteSpace: "pre-wrap" }}>
-                  {formatPayload(event.payload)}
-                </code>
-              )}
-            </li>
-          ))}
+          {events.map((event) => {
+            const payload = formatPayload(event.payload);
+            return (
+              <li
+                key={event.id}
+                data-testid={`loop-event-${event.id}`}
+                style={{ borderLeft: "2px solid #45475a", padding: "3px 0 6px 8px" }}
+              >
+                <div>
+                  <strong>{event.eventType}</strong>
+                  <span style={{ color: "#6c7086", marginLeft: 6 }}>
+                    {event.createdAt}
+                  </span>
+                </div>
+                {payload && (
+                  <code style={{ color: "#a6adc8", whiteSpace: "pre-wrap" }}>
+                    {payload}
+                  </code>
+                )}
+              </li>
+            );
+          })}
         </ol>
       )}
     </section>
+  );
+}
+
+function RunDefinition({ run, spec }: { run: LoopRun; spec: LoopSpec }) {
+  const name = spec.definitionName ?? spec.definitionId;
+  const hash = run.definitionHash ?? spec.definitionHash;
+  if (!name && !spec.definitionPath && !spec.objective && !hash) return null;
+
+  return (
+    <div
+      data-testid="loop-run-definition"
+      style={{ marginTop: 8, padding: 7, background: "#11111b", borderRadius: 4 }}
+    >
+      <strong>Latest run definition</strong>
+      {name && <div>{name}</div>}
+      {spec.objective && <div style={{ color: "#bac2de" }}>{spec.objective}</div>}
+      {spec.definitionPath && (
+        <div style={{ color: "#a6adc8", fontFamily: "monospace", overflowWrap: "anywhere" }}>
+          {spec.definitionPath}
+        </div>
+      )}
+      {hash && (
+        <div style={{ color: "#6c7086", fontFamily: "monospace", overflowWrap: "anywhere" }}>
+          Pinned hash: {hash}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -646,9 +566,11 @@ function RunPanel({
   }
 
   const currentTask =
-    snapshot.tasks.find((task) => task.id === run.activeTaskId) ?? null;
+    snapshot.tasks.find((candidate) => candidate.id === run.activeTaskId) ?? null;
   const elapsed = run.startedAt
-    ? formatDuration((run.finishedAt ? Date.parse(run.finishedAt) : now) - Date.parse(run.startedAt))
+    ? formatDuration(
+        (run.finishedAt ? Date.parse(run.finishedAt) : now) - Date.parse(run.startedAt),
+      )
     : "Not available";
   const canControl = !TERMINAL_RUN_STATES.has(run.state);
 
@@ -663,10 +585,9 @@ function RunPanel({
         </div>
         <div data-testid="loop-elapsed">Elapsed: {elapsed}</div>
         <div data-testid="loop-next-evidence">Next evidence: {nextEvidence(run, spec)}</div>
-        {run.deadlineAt && (
-          <div style={{ color: "#6c7086" }}>Deadline: {run.deadlineAt}</div>
-        )}
+        {run.deadlineAt && <div style={{ color: "#6c7086" }}>Deadline: {run.deadlineAt}</div>}
         {run.error && <div style={{ color: "#f38ba8" }}>{run.error}</div>}
+        <RunDefinition run={run} spec={spec} />
         <div
           data-testid="loop-current-task"
           style={{ marginTop: 8, padding: 7, background: "#11111b", borderRadius: 4 }}
@@ -734,46 +655,66 @@ export default function LoopControlTile({
 }: LoopControlTileProps) {
   const backend = useBackend();
   const [snapshot, setSnapshot] = useState<PersistedLoopSnapshot>(EMPTY_SNAPSHOT);
-  const [draft, setDraft] = useState<DraftForm>(EMPTY_DRAFT);
+  const [catalog, setCatalog] = useState<LoopDefinitionCatalog>(EMPTY_CATALOG);
+  const [selectedDefinitionId, setSelectedDefinitionId] = useState<string | null>(
+    null,
+  );
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [now, setNow] = useState(0);
-  const draftVersionRef = useRef("");
   const progressVersionRef = useRef("");
 
-  const load = useCallback(async () => {
+  const applyCatalog = useCallback((loaded: LoopDefinitionCatalog) => {
+    setCatalog(loaded);
+    setSelectedDefinitionId((current) => {
+      if (current && loaded.definitions.some((definition) => definition.id === current)) {
+        return current;
+      }
+      return loaded.definitions[0]?.id ?? null;
+    });
+  }, []);
+
+  const loadSnapshot = useCallback(async () => {
     try {
       const loaded = await backend.getWorkstreamLoopSnapshot(workstreamId);
       setSnapshot(loaded);
       setNow(Date.now());
-      const draftVersion = loaded.spec
-        ? `${loaded.spec.id}:${loaded.spec.updatedAt ?? ""}`
-        : `${workstreamId}:new`;
-      if (
-        draftVersionRef.current !== draftVersion &&
-        (!loaded.spec || !loaded.spec.enabled)
-      ) {
-        draftVersionRef.current = draftVersion;
-        setDraft(loaded.spec ? draftFromSpec(loaded.spec) : EMPTY_DRAFT);
-      }
+      setError(null);
+    } catch (cause) {
+      setError(message(cause));
+    }
+  }, [backend, workstreamId]);
+
+  const refreshAll = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      const [loadedSnapshot, loadedCatalog] = await Promise.all([
+        backend.getWorkstreamLoopSnapshot(workstreamId),
+        backend.listLoopDefinitions(workstreamDir),
+      ]);
+      setSnapshot(loadedSnapshot);
+      applyCatalog(loadedCatalog);
+      setNow(Date.now());
       setError(null);
     } catch (cause) {
       setError(message(cause));
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
-  }, [backend, workstreamId]);
+  }, [applyCatalog, backend, workstreamDir, workstreamId]);
 
   useEffect(() => {
-    const initialLoad = window.setTimeout(() => void load(), 0);
+    const initialLoad = window.setTimeout(() => void refreshAll(), 0);
 
     const onMemoryUpdate = (event: Event) => {
       if (
         event instanceof CustomEvent &&
         event.detail?.workstreamId === workstreamId
       ) {
-        void load();
+        void loadSnapshot();
       }
     };
     window.addEventListener("memory-loop-updated", onMemoryUpdate);
@@ -782,7 +723,7 @@ export default function LoopControlTile({
     let unlisten: (() => void) | undefined;
     void listen<{ workstreamId?: string }>("loop-updated", (event) => {
       if (!event.payload?.workstreamId || event.payload.workstreamId === workstreamId) {
-        void load();
+        void loadSnapshot();
       }
     })
       .then((dispose) => {
@@ -799,11 +740,16 @@ export default function LoopControlTile({
       window.removeEventListener("memory-loop-updated", onMemoryUpdate);
       unlisten?.();
     };
-  }, [load, workstreamId]);
+  }, [loadSnapshot, refreshAll, workstreamId]);
 
   const runIsActive =
     snapshot.latestRun !== null &&
     !TERMINAL_RUN_STATES.has(snapshot.latestRun.state);
+  const activeRunId = runIsActive ? snapshot.latestRun?.id ?? null : null;
+
+  useEffect(() => {
+    progressVersionRef.current = "";
+  }, [activeRunId]);
 
   useEffect(() => {
     if (!runIsActive) return;
@@ -814,13 +760,13 @@ export default function LoopControlTile({
         .then((version) => {
           if (version !== progressVersionRef.current) {
             progressVersionRef.current = version;
-            void load();
+            void loadSnapshot();
           }
         })
         .catch((cause) => setError(message(cause)));
     }, 1000);
     return () => window.clearInterval(interval);
-  }, [backend, load, runIsActive, workstreamId]);
+  }, [backend, loadSnapshot, runIsActive, workstreamId]);
 
   const perform = useCallback(
     async (operation: () => Promise<void>) => {
@@ -829,59 +775,44 @@ export default function LoopControlTile({
       setError(null);
       try {
         await operation();
-        await load();
+        await loadSnapshot();
       } catch (cause) {
         setError(message(cause));
       } finally {
         setBusy(false);
       }
     },
-    [busy, load],
+    [busy, loadSnapshot],
   );
 
-  const save = (enableAfterSave: boolean) => {
-    const parsed = specDraft(draft);
-    if (typeof parsed === "string") {
-      setError(parsed);
-      return;
-    }
+  const selectedDefinition = useMemo(
+    () =>
+      catalog.definitions.find(
+        (definition) => definition.id === selectedDefinitionId,
+      ) ??
+      catalog.definitions[0] ??
+      null,
+    [catalog.definitions, selectedDefinitionId],
+  );
+
+  const runSelected = () => {
+    if (!selectedDefinition) return;
     void perform(async () => {
-      const saved = await backend.saveWorkstreamLoop(workstreamId, parsed);
-      if (enableAfterSave) {
-        await backend.setWorkstreamLoopEnabled(saved.id, true);
-      }
-    });
-  };
-
-  const enable = () => {
-    const spec = snapshot.spec;
-    if (!spec) return;
-    void perform(() => backend.setWorkstreamLoopEnabled(spec.id, true));
-  };
-
-  const disable = () => {
-    const spec = snapshot.spec;
-    if (!spec) return;
-    void perform(() => backend.setWorkstreamLoopEnabled(spec.id, false));
-  };
-
-  const runNow = () => {
-    void perform(async () => {
-      await backend.runWorkstreamLoopNow(workstreamId);
+      await backend.runLoopDefinitionNow(workstreamId, selectedDefinition.path);
     });
   };
 
   const control = (action: "pause" | "stop" | "kill") => {
-    const run = snapshot.latestRun;
-    if (!run) return;
-    void perform(() => backend.controlWorkstreamLoop(run.id, action));
+    const currentRun = snapshot.latestRun;
+    if (!currentRun) return;
+    void perform(() => backend.controlWorkstreamLoop(currentRun.id, action));
   };
 
   const resume = () => {
-    const run = snapshot.latestRun;
-    if (!run) return;
+    const currentRun = snapshot.latestRun;
+    if (!currentRun) return;
     void perform(async () => {
-      await backend.resumeWorkstreamLoop(run.id);
+      await backend.resumeWorkstreamLoop(currentRun.id);
     });
   };
 
@@ -899,6 +830,7 @@ export default function LoopControlTile({
       style={rootStyle}
     >
       <header
+        data-testid="loop-catalog"
         style={{
           display: "flex",
           alignItems: "center",
@@ -908,14 +840,18 @@ export default function LoopControlTile({
           flexShrink: 0,
         }}
       >
-        <strong>Autonomous loop</strong>
+        <strong>Loop catalog</strong>
         <button
           type="button"
-          aria-label="Refresh loop"
+          aria-label="Refresh"
           data-testid="loop-refresh"
-          disabled={busy}
-          onClick={() => void load()}
-          style={buttonStyle}
+          disabled={busy || refreshing}
+          onClick={() => void refreshAll()}
+          style={{
+            ...buttonStyle,
+            cursor: busy || refreshing ? "not-allowed" : "pointer",
+            opacity: busy || refreshing ? 0.55 : 1,
+          }}
         >
           <ArrowPathIcon aria-hidden="true" style={iconStyle} />
           Refresh
@@ -941,7 +877,7 @@ export default function LoopControlTile({
         )}
 
         {loading ? (
-          <div data-testid="loop-loading">Loading loop configuration...</div>
+          <div data-testid="loop-loading">Loading loop catalog...</div>
         ) : (
           <>
             {snapshot.latestRun && (
@@ -953,25 +889,14 @@ export default function LoopControlTile({
                 onResume={resume}
               />
             )}
-            {snapshot.spec?.enabled ? (
-              <ReadonlyConfig
-                spec={snapshot.spec}
-                busy={busy}
-                hasActiveRun={runIsActive}
-                onDisable={disable}
-                onRun={runNow}
-              />
-            ) : (
-              <SetupForm
-                form={draft}
-                setForm={setDraft}
-                existing={snapshot.spec}
-                busy={busy}
-                workstreamDir={workstreamDir}
-                onSave={save}
-                onEnable={enable}
-              />
-            )}
+            <CatalogPanel
+              catalog={catalog}
+              selected={selectedDefinition}
+              busy={busy}
+              runIsActive={runIsActive}
+              onSelect={setSelectedDefinitionId}
+              onRun={runSelected}
+            />
             {statusHint && (
               <div style={{ color: "#6c7086", marginBottom: 8 }}>{statusHint}</div>
             )}

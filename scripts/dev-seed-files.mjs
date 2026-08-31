@@ -87,6 +87,40 @@ sequenceDiagram
 End of showcase.
 `;
 
+const SAMPLE_LOOP_YAML = `apiVersion: workstreams.dev/v1alpha1
+kind: Loop
+metadata:
+  id: showcase-loop
+  name: Showcase loop
+  description: Catalog fixture for real-Tauri visual validation.
+  tags: [showcase]
+spec:
+  objective: Demonstrate a valid evaluator-only loop in the catalog.
+  trigger:
+    type: manual
+  orchestrator:
+    model: inherit
+    prompt: Return at most one small documentation task.
+    maxTasksPerRun: 1
+  worker:
+    model: inherit
+    prompt: Complete the proposed documentation task.
+  evaluator:
+    model: inherit
+    prompt: Confirm the result satisfies the task objective.
+    onReject:
+      action: revise
+      maxRevisions: 1
+  limits:
+    runTimeout: 5m
+    taskAttempts: 2
+  permissions:
+    tools: full
+    publicEffects: deny
+  flowControl:
+    maxActiveRuns: 1
+`;
+
 function ensureShowcaseFiles(dir = SHOWCASE_DIR) {
   fs.mkdirSync(dir, { recursive: true });
   const readme = path.join(dir, "README.md");
@@ -96,6 +130,15 @@ function ensureShowcaseFiles(dir = SHOWCASE_DIR) {
   } else {
     console.log(`[seed] showcase already present: ${readme}`);
   }
+  const loopsDir = path.join(dir, ".workstreams", "loops");
+  const loopDefinition = path.join(loopsDir, "showcase.loop.yaml");
+  fs.mkdirSync(loopsDir, { recursive: true });
+  if (!fs.existsSync(loopDefinition)) {
+    fs.writeFileSync(loopDefinition, SAMPLE_LOOP_YAML, "utf8");
+    console.log(`[seed] wrote ${loopDefinition}`);
+  } else {
+    console.log(`[seed] showcase loop already present: ${loopDefinition}`);
+  }
 }
 
-export { ensureShowcaseFiles, SAMPLE_MD, SHOWCASE_DIR, DEV_DIR };
+export { ensureShowcaseFiles, SAMPLE_LOOP_YAML, SAMPLE_MD, SHOWCASE_DIR, DEV_DIR };
