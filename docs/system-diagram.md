@@ -14,7 +14,7 @@ graph TB
             SessionMeta["SessionMetaTile<br/>Session + file detail"]
             Workbench["WorkbenchTile<br/>Workbench file detail"]
             CodeReview["CodeReviewTile<br/>diff-first PR-style review (ADR 014)<br/>inline comments + in-place edit<br/>reviewer↔agent via session.db, no MCP<br/>manual Sync (no poll)"]
-            LoopControl["LoopControlTile (ADR 021/022)<br/>YAML loop catalog<br/>Run/Pause/Resume/Stop/Kill<br/>tasks + verifier/evaluator evidence"]
+            LoopControl["LoopControlTile (ADR 021/022/023)<br/>YAML loop catalog<br/>Run/Pause/Resume/Stop/Kill<br/>human Approve/Revise/Reject<br/>all sensor evidence"]
             InlineComments["Inline File Comments (ADR 009)<br/>view zones in FileEditorView + comments-toggle<br/>reviewer↔agent via session.db, no MCP<br/>requires a linked session"]
             TaskBoard["TaskBoard (ADR 020)<br/>global board, not a tile<br/>7 columns + label swimlanes<br/>subtasks / labels / event feed"]
             QuickNote["WorkstreamQuickNote<br/>log a note to this workstream's task"]
@@ -44,7 +44,7 @@ graph TB
 
     subgraph Storage["Persistence"]
         AppDB["workstreams.db<br/>(SQLite — workstreams, tiles, layouts, scrollback)"]
-        LoopDB["workstreams.db loop ledger<br/>specs / runs / tasks / verifications<br/>evaluations / append-only events"]
+        LoopDB["workstreams.db loop ledger<br/>specs / runs / tasks / verifications<br/>evaluations / human approvals / events"]
         LoopYAML[".workstreams/loops/*.loop.yaml<br/>versioned loop authority"]
         CopilotDB["~/.copilot/session-store.db<br/>(read-only enrichment)"]
         CopilotSessionDB["~/.copilot/session-state/&lt;id&gt;/session.db<br/>(bound session — reviews + review_comments<br/>+ file_comments, RW)"]

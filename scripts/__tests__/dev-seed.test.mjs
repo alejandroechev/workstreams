@@ -52,5 +52,6 @@ describe("dev-seed", () => {
     expect(SAMPLE_MD).toMatch(/\| Column A/);
     expect(SAMPLE_LOOP_YAML).toContain("id: showcase-loop");
     expect(SAMPLE_LOOP_YAML).toContain("evaluator:");
+    expect(SAMPLE_LOOP_YAML).toContain("humanApproval:");
   });
 });

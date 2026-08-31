@@ -102,6 +102,11 @@ export interface Backend {
   listWorkstreamLoopSummaries(): Promise<LoopSummary[]>;
   runWorkstreamLoopNow(workstreamId: string): Promise<LoopRun>;
   runLoopDefinitionNow(workstreamId: string, definitionPath: string): Promise<LoopRun>;
+  decideLoopHumanApproval(
+    runId: string,
+    decision: "approve" | "revise" | "reject",
+    feedback?: string,
+  ): Promise<LoopRun>;
   resumeWorkstreamLoop(runId: string): Promise<LoopRun>;
   controlWorkstreamLoop(
     runId: string,

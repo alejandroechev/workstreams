@@ -39,7 +39,8 @@ Run now
   -> zero or more structured tasks
   -> one worker episode per task
   -> optional deterministic verifier
-  -> fresh evaluator agent
+  -> optional fresh evaluator agent
+  -> optional human approval
   -> at most one worker revision
   -> completed or attention
 ```
@@ -79,6 +80,7 @@ The agent conversation is an execution artifact, not workflow truth.
 - `loop_tasks` — immutable orchestrator task keys and stage/revision state;
 - `loop_verifications` — command, hash, bounded output, exit/timeout result;
 - `loop_evaluations` — fresh-agent verdict and feedback;
+- `loop_approvals` — pending and decided human approval requests;
 - `loop_events` — append-only SDK and controller evidence.
 
 Only an explicit allowlist of final message, turn, tool lifecycle, session,
@@ -121,6 +123,10 @@ Workers and evaluators likewise return bounded JSON result/verdict contracts.
 The evaluator is a fresh Copilot session. `revise` returns actionable feedback
 to the retained worker session once; a second rejection requires human
 attention.
+
+ADR 023 adds a final human approval sensor. Human-requested revision starts a
+fresh worker episode from persisted task context and feedback, so approval
+remains restart-safe and does not depend on an in-memory SDK session.
 
 ### Deterministic checks precede semantic judgment
 

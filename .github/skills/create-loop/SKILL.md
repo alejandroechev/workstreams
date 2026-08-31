@@ -25,10 +25,13 @@ runtime history.
   ```
 
 - Fix every validation error. Never bypass or weaken the schema.
+- Treat `schemas/loop-definition-v1alpha1.schema.json` and the
+  `workstreams loop validate` parser as authoritative. This document is
+  authoring guidance, not a second schema.
 - Use one small task per run. This DSL is not a DAG or arbitrary workflow
   language.
-- At least one independent sensor is required:
-  `spec.verification` or `spec.evaluator`. Both may be present.
+- At least one independent sensor is required: `spec.verification`,
+  `spec.evaluator`, or `spec.humanApproval`. They may be combined.
 - `publicEffects` is always `deny`.
 
 ## Authoring workflow
@@ -51,6 +54,7 @@ runtime history.
 
 ## Exact v1 syntax
 
+<!-- loop-example:start -->
 ```yaml
 apiVersion: workstreams.dev/v1alpha1
 kind: Loop
@@ -80,19 +84,12 @@ spec:
     model: inherit
     prompt: |
       Implement only the assigned task and keep the diff narrowly scoped.
-    skills:
-      - optional-skill-name
-    context:
-      files:
-        - optional/context.md
-      goldenPatterns:
-        - optional/example.ts
 
   verification:
     command:
-      program: scripts/loops/verify-example.sh
+      program: npm
       args:
-        - --strict
+        - test
       cwd: .
       timeout: 10m
 
@@ -103,6 +100,10 @@ spec:
     onReject:
       action: revise
       maxRevisions: 1
+
+  humanApproval:
+    prompt: |
+      Review the task result and all automated evidence before accepting it.
 
   limits:
     runTimeout: 30m
@@ -115,11 +116,12 @@ spec:
   flowControl:
     maxActiveRuns: 1
 ```
+<!-- loop-example:end -->
 
 ## Optional blocks
 
 `metadata.description`, `metadata.tags`, `worker.skills`, `worker.context`,
-`verification`, and `evaluator` are optional.
+`verification`, `evaluator`, and `humanApproval` are optional.
 
 At least one of these must exist:
 
@@ -133,8 +135,13 @@ spec:
   evaluator: ...
 ```
 
-When both exist, deterministic verification must pass before the evaluator
-runs. A verifier failure cannot be overridden.
+```yaml
+spec:
+  humanApproval: ...
+```
+
+When combined, the order is deterministic verification, evaluator, then human
+approval. A verifier failure cannot be overridden.
 
 ## Verifier paths
 

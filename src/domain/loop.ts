@@ -7,6 +7,7 @@ export const LOOP_RUN_STATES = [
   "working",
   "verifying",
   "evaluating",
+  "awaiting_approval",
   "paused",
   "stopping",
   "completed",
@@ -21,6 +22,7 @@ export const LOOP_TASK_STATES = [
   "working",
   "verifying",
   "evaluating",
+  "awaiting_approval",
   "accepted",
   "blocked",
   "attention",
@@ -40,6 +42,10 @@ export interface LoopVerifierSpec {
   cwd?: string;
 }
 
+export interface LoopHumanApprovalSpec {
+  prompt: string;
+}
+
 export interface LoopSpec {
   id: string;
   workstreamId: string;
@@ -47,6 +53,7 @@ export interface LoopSpec {
   worker: LoopRoleSpec;
   evaluator?: LoopRoleSpec;
   verifier?: LoopVerifierSpec;
+  humanApproval?: LoopHumanApprovalSpec;
   runTimeoutMs: number;
   maxTaskIterations: typeof MAX_TASK_ITERATIONS;
   enabled: boolean;
@@ -88,6 +95,7 @@ export type VerificationResult =
   | { kind: "spawn_error"; message: string };
 
 export type EvaluatorVerdict = "accepted" | "revise" | "blocked" | "invalid";
+export type LoopApprovalDecision = "approve" | "revise" | "reject";
 
 export type LoopAction =
   | { type: "none" }
@@ -95,6 +103,7 @@ export type LoopAction =
   | { type: "start_worker"; taskId: string }
   | { type: "run_verifier"; taskId: string }
   | { type: "evaluate"; taskId: string }
+  | { type: "await_approval"; taskId: string }
   | { type: "stop" }
   | { type: "kill" }
   | { type: "attention"; reason: string };
@@ -150,6 +159,24 @@ export interface LoopEvaluationRecord {
   createdAt: string;
 }
 
+export type LoopApprovalStatus =
+  | "pending"
+  | "approved"
+  | "revision_requested"
+  | "rejected"
+  | "cancelled";
+
+export interface LoopApprovalRecord {
+  id: string;
+  loopTaskId: string;
+  attempt: number;
+  status: LoopApprovalStatus;
+  prompt: string;
+  feedback?: string;
+  createdAt: string;
+  decidedAt?: string;
+}
+
 export interface LoopEventRecord {
   id: number;
   loopSpecId: string;
@@ -166,6 +193,7 @@ export interface PersistedLoopSnapshot {
   tasks: LoopTask[];
   verifications: LoopVerificationRecord[];
   evaluations: LoopEvaluationRecord[];
+  approvals: LoopApprovalRecord[];
   events: LoopEventRecord[];
 }
 
@@ -191,6 +219,7 @@ export interface LoopDefinition {
   objective: string;
   hasVerification: boolean;
   hasEvaluator: boolean;
+  hasHumanApproval: boolean;
 }
 
 export interface InvalidLoopDefinition {
@@ -212,6 +241,7 @@ export type LoopObservedOutcome =
   | { type: "worker_failed"; reason: string }
   | { type: "verification_completed"; result: VerificationResult }
   | { type: "evaluation_completed"; verdict: EvaluatorVerdict }
+  | { type: "approval_decided"; decision: LoopApprovalDecision }
   | { type: "pause_requested" }
   | { type: "resume_requested" }
   | { type: "stop_requested" }
@@ -250,6 +280,7 @@ const DEDUPE_OCCUPIED_STATES: ReadonlySet<LoopTaskState> = new Set([
   "working",
   "verifying",
   "evaluating",
+  "awaiting_approval",
   "accepted",
 ]);
 
@@ -258,6 +289,7 @@ const INTERRUPTIBLE_TASK_STATES: ReadonlySet<LoopTaskState> = new Set([
   "working",
   "verifying",
   "evaluating",
+  "awaiting_approval",
 ]);
 
 export function dedupeTaskKeys(
@@ -355,6 +387,8 @@ function stateForAction(action: LoopAction): LoopRunState {
       return "verifying";
     case "evaluate":
       return "evaluating";
+    case "await_approval":
+      return "awaiting_approval";
     case "stop":
       return "stopping";
     case "kill":
@@ -454,6 +488,32 @@ function startNextQueued(snapshot: LoopSnapshot): LoopTransition {
   };
 }
 
+function awaitHumanApproval(snapshot: LoopSnapshot): LoopTransition {
+  const next = copySnapshot(snapshot);
+  const task = next.run.activeTaskId
+    ? next.tasks.find((candidate) => candidate.id === next.run.activeTaskId)
+    : undefined;
+  if (!task) return attention(snapshot, "Human approval requires an active task");
+  task.state = "awaiting_approval";
+  next.run.state = "awaiting_approval";
+  next.run.pendingAction = null;
+  return {
+    snapshot: next,
+    action: { type: "await_approval", taskId: task.id },
+  };
+}
+
+function acceptActiveTask(snapshot: LoopSnapshot): LoopTransition {
+  const next = copySnapshot(snapshot);
+  const task = next.run.activeTaskId
+    ? next.tasks.find((candidate) => candidate.id === next.run.activeTaskId)
+    : undefined;
+  if (!task) return attention(snapshot, "Accepted task disappeared");
+  task.state = "accepted";
+  next.run.activeTaskId = null;
+  return startNextQueued(next);
+}
+
 function verificationFailureReason(result: Exclude<VerificationResult, { kind: "passed" }>): string {
   switch (result.kind) {
     case "nonzero":
@@ -502,7 +562,11 @@ export function transitionLoop(
   }
 
   if (outcome.type === "stop_requested") {
-    if (current.run.state === "paused" || current.run.state === "attention") {
+    if (
+      current.run.state === "paused" ||
+      current.run.state === "attention" ||
+      current.run.state === "awaiting_approval"
+    ) {
       const next = copySnapshot(current);
       interruptUnfinished(next.tasks);
       next.run.state = "stopping";
@@ -529,6 +593,35 @@ export function transitionLoop(
   }
 
   if (current.run.state === "attention") return unchanged(current);
+
+  if (current.run.state === "awaiting_approval") {
+    const task = activeTask(current, "awaiting_approval");
+    if (!task) {
+      return attention(current, "Human approval run has no active approval task");
+    }
+    if (outcome.type !== "approval_decided") {
+      return unchanged(current);
+    }
+    if (outcome.decision === "approve") {
+      return acceptActiveTask(current);
+    }
+    if (outcome.decision === "reject") {
+      return attention(current, "Human reviewer rejected the task", "blocked");
+    }
+    if (task.revisionCount + 1 >= current.spec.maxTaskIterations) {
+      return attention(current, "Human reviewer requested more than one revision", "attention");
+    }
+    const next = copySnapshot(current);
+    const nextTask = activeTask(next, "awaiting_approval");
+    if (!nextTask) return attention(current, "Human approval task disappeared");
+    nextTask.revisionCount += 1;
+    nextTask.state = "working";
+    next.run.state = "working";
+    return {
+      snapshot: next,
+      action: { type: "start_worker", taskId: nextTask.id },
+    };
+  }
 
   if (outcome.type === "pause_requested") {
     const next = copySnapshot(current);
@@ -603,12 +696,17 @@ export function transitionLoop(
         action: { type: "run_verifier", taskId: nextTask.id },
       });
     }
-    nextTask.state = "evaluating";
-    next.run.state = "evaluating";
-    return atSafeBoundary({
-      snapshot: next,
-      action: { type: "evaluate", taskId: nextTask.id },
-    });
+    if (next.spec.evaluator) {
+      nextTask.state = "evaluating";
+      next.run.state = "evaluating";
+      return atSafeBoundary({
+        snapshot: next,
+        action: { type: "evaluate", taskId: nextTask.id },
+      });
+    }
+    return next.spec.humanApproval
+      ? atSafeBoundary(awaitHumanApproval(next))
+      : atSafeBoundary(acceptActiveTask(next));
   }
 
   if (current.run.state === "verifying") {
@@ -627,9 +725,9 @@ export function transitionLoop(
     const nextTask = activeTask(next, "verifying");
     if (!nextTask) return attention(current, "Verifying task disappeared");
     if (!next.spec.evaluator) {
-      nextTask.state = "accepted";
-      next.run.activeTaskId = null;
-      return atSafeBoundary(startNextQueued(next));
+      return next.spec.humanApproval
+        ? atSafeBoundary(awaitHumanApproval(next))
+        : atSafeBoundary(acceptActiveTask(next));
     }
     nextTask.state = "evaluating";
     next.run.state = "evaluating";
@@ -646,12 +744,9 @@ export function transitionLoop(
   }
 
   if (outcome.verdict === "accepted") {
-    const next = copySnapshot(current);
-    const nextTask = activeTask(next, "evaluating");
-    if (!nextTask) return attention(current, "Evaluating task disappeared");
-    nextTask.state = "accepted";
-    next.run.activeTaskId = null;
-    return atSafeBoundary(startNextQueued(next));
+    return current.spec.humanApproval
+      ? atSafeBoundary(awaitHumanApproval(current))
+      : atSafeBoundary(acceptActiveTask(current));
   }
 
   if (outcome.verdict === "revise") {

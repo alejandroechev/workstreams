@@ -98,6 +98,7 @@ export class MemoryBackend implements Backend {
   private loopSnapshots = new Map<string, PersistedLoopSnapshot>();
   private loopRunWorkstreams = new Map<string, string>();
   private loopTimers = new Map<string, Array<ReturnType<typeof setTimeout>>>();
+  private loopApprovalDecisions = new Set<string>();
   private loopDefinitions = new Map<
     string,
     { definition: LoopDefinition; spec: LoopSpecDraft }
@@ -405,6 +406,7 @@ export class MemoryBackend implements Backend {
       tasks: [],
       verifications: [],
       evaluations: [],
+      approvals: [],
       events: [],
     };
   }
@@ -470,6 +472,7 @@ export class MemoryBackend implements Backend {
       tasks: this.loopSnapshots.get(workstreamId)?.tasks ?? [],
       verifications: this.loopSnapshots.get(workstreamId)?.verifications ?? [],
       evaluations: this.loopSnapshots.get(workstreamId)?.evaluations ?? [],
+      approvals: this.loopSnapshots.get(workstreamId)?.approvals ?? [],
       events: this.loopSnapshots.get(workstreamId)?.events ?? [],
     });
     this.emitLoopUpdate(workstreamId);
@@ -538,6 +541,7 @@ export class MemoryBackend implements Backend {
       tasks: [],
       verifications: [],
       evaluations: [],
+      approvals: [],
       events: [{
         id: 1,
         loopSpecId: spec.id,
@@ -583,6 +587,87 @@ export class MemoryBackend implements Backend {
     return this.runWorkstreamLoopNow(workstreamId);
   }
 
+  async decideLoopHumanApproval(
+    runId: string,
+    decision: "approve" | "revise" | "reject",
+    feedback?: string,
+  ): Promise<LoopRun> {
+    if (this.loopApprovalDecisions.has(runId)) {
+      throw new Error("Human approval is already being decided");
+    }
+    this.loopApprovalDecisions.add(runId);
+    try {
+      const workstreamId = this.loopRunWorkstreams.get(runId);
+      if (!workstreamId) throw new Error(`Loop run not found: ${runId}`);
+      const snapshot = await this.getWorkstreamLoopSnapshot(workstreamId);
+      if (
+        snapshot.latestRun?.id !== runId ||
+        snapshot.latestRun.state !== "awaiting_approval" ||
+        !snapshot.latestRun.activeTaskId
+      ) {
+        throw new Error("This loop run is not awaiting human approval");
+      }
+      const pending = [...snapshot.approvals]
+        .reverse()
+        .find(
+          (approval) =>
+            approval.status === "pending" &&
+            approval.loopTaskId === snapshot.latestRun?.activeTaskId,
+        );
+      if (!pending) throw new Error("Pending human approval was not found");
+      const trimmedFeedback = feedback?.trim();
+      if (decision === "revise" && !trimmedFeedback) {
+        throw new Error("Revision feedback is required");
+      }
+      const decidedAt = now();
+      const next = this.applyMemoryOutcome(snapshot, {
+        type: "approval_decided",
+        decision,
+      });
+      const updated: PersistedLoopSnapshot = {
+        ...next,
+        latestRun: next.latestRun
+          ? {
+              ...next.latestRun,
+              finishedAt:
+                decision === "approve" || decision === "reject"
+                  ? decidedAt
+                  : undefined,
+            }
+          : null,
+        approvals: snapshot.approvals.map((approval) =>
+          approval.id === pending.id
+            ? {
+                ...approval,
+                status:
+                  decision === "approve"
+                    ? "approved"
+                    : decision === "revise"
+                      ? "revision_requested"
+                      : "rejected",
+                feedback: trimmedFeedback,
+                decidedAt,
+              }
+            : approval,
+        ),
+      };
+      this.loopSnapshots.set(workstreamId, updated);
+      if (
+        decision === "revise" ||
+        (updated.latestRun &&
+          !["completed", "attention", "killed"].includes(updated.latestRun.state))
+      ) {
+        this.scheduleMemoryLoop(workstreamId, runId);
+      } else {
+        this.clearLoopTimers(runId);
+      }
+      this.emitLoopUpdate(workstreamId);
+      return updated.latestRun!;
+    } finally {
+      this.loopApprovalDecisions.delete(runId);
+    }
+  }
+
   async resumeWorkstreamLoop(runId: string): Promise<LoopRun> {
     const workstreamId = this.loopRunWorkstreams.get(runId);
     if (!workstreamId) throw new Error(`Loop run not found: ${runId}`);
@@ -595,10 +680,11 @@ export class MemoryBackend implements Backend {
     if (resumed.latestRun?.state === "paused") {
       throw new Error("Paused loop has no pending action to resume");
     }
-    this.loopSnapshots.set(workstreamId, resumed);
+    const restored = this.addPendingApproval(snapshot, resumed);
+    this.loopSnapshots.set(workstreamId, restored);
     this.scheduleMemoryLoop(workstreamId, runId);
     this.emitLoopUpdate(workstreamId);
-    return resumed.latestRun!;
+    return restored.latestRun!;
   }
 
   async controlWorkstreamLoop(
@@ -616,7 +702,12 @@ export class MemoryBackend implements Backend {
         : action === "stop"
           ? { type: "stop_requested" }
           : { type: "kill_requested" };
-    const next = this.applyMemoryOutcome(snapshot, outcome);
+    const transitioned = this.applyMemoryOutcome(snapshot, outcome);
+    const next =
+      action === "stop" && snapshot.latestRun.state === "awaiting_approval"
+        ? this.applyMemoryOutcome(transitioned, { type: "stop_completed" })
+        : transitioned;
+    const decidedAt = now();
     this.loopSnapshots.set(workstreamId, {
       ...next,
       latestRun: next.latestRun
@@ -630,6 +721,16 @@ export class MemoryBackend implements Backend {
         action === "kill" && task.state === "interrupted"
           ? { ...task, error: "Loop killed" }
           : task
+      ),
+      approvals: next.approvals.map((approval) =>
+        approval.status === "pending" && (action === "stop" || action === "kill")
+          ? {
+              ...approval,
+              status: "cancelled",
+              feedback: action === "kill" ? "Loop killed" : "Loop stopped",
+              decidedAt,
+            }
+          : approval,
       ),
     });
     this.emitLoopUpdate(workstreamId);
@@ -666,6 +767,36 @@ export class MemoryBackend implements Backend {
     };
   }
 
+  private addPendingApproval(
+    previous: PersistedLoopSnapshot,
+    next: PersistedLoopSnapshot,
+  ): PersistedLoopSnapshot {
+    if (
+      previous.latestRun?.state === "awaiting_approval" ||
+      next.latestRun?.state !== "awaiting_approval" ||
+      !next.spec?.humanApproval ||
+      !next.latestRun.activeTaskId
+    ) {
+      return next;
+    }
+    return {
+      ...next,
+      approvals: [
+        ...next.approvals,
+        {
+          id: generateId(),
+          loopTaskId: next.latestRun.activeTaskId,
+          attempt:
+            (next.tasks.find((task) => task.id === next.latestRun?.activeTaskId)
+              ?.revisionCount ?? 0) + 1,
+          status: "pending",
+          prompt: next.spec.humanApproval.prompt,
+          createdAt: now(),
+        },
+      ],
+    };
+  }
+
   private scheduleMemoryLoop(workstreamId: string, runId: string): void {
     this.clearLoopTimers(runId);
     const transition = (
@@ -676,7 +807,8 @@ export class MemoryBackend implements Backend {
         const snapshot = this.loopSnapshots.get(workstreamId);
         if (!snapshot || snapshot.latestRun?.id !== runId) return;
         if (["paused", "completed", "killed"].includes(snapshot.latestRun.state)) return;
-        this.loopSnapshots.set(workstreamId, update(snapshot));
+        const next = update(snapshot);
+        this.loopSnapshots.set(workstreamId, this.addPendingApproval(snapshot, next));
         this.emitLoopUpdate(workstreamId);
       }, delay);
 
@@ -729,22 +861,26 @@ export class MemoryBackend implements Backend {
             : snapshot;
         return {
           ...transitioned,
-          verifications: snapshot.spec?.verifier && snapshot.tasks[0]
-          ? [{
-              id: generateId(),
-              loopTaskId: snapshot.tasks[0].id,
-              attempt: 1,
-              status: "passed",
-              program: snapshot.spec.verifier.program,
-              args: [...snapshot.spec.verifier.args],
-              cwd: snapshot.spec.verifier.cwd,
-              durationMs: 12,
-              stdout: "Verification passed",
-              stderr: "",
-              truncated: false,
-              createdAt: now(),
-            }]
-          : [],
+          verifications:
+            snapshot.spec?.verifier && snapshot.tasks[0]
+              ? [
+                  ...snapshot.verifications,
+                  {
+                    id: generateId(),
+                    loopTaskId: snapshot.tasks[0].id,
+                    attempt: snapshot.tasks[0].revisionCount + 1,
+                    status: "passed",
+                    program: snapshot.spec.verifier.program,
+                    args: [...snapshot.spec.verifier.args],
+                    cwd: snapshot.spec.verifier.cwd,
+                    durationMs: 12,
+                    stdout: "Verification passed",
+                    stderr: "",
+                    truncated: false,
+                    createdAt: now(),
+                  },
+                ]
+              : snapshot.verifications,
         };
       }),
       transition(1_450, (snapshot) => {
@@ -763,18 +899,22 @@ export class MemoryBackend implements Backend {
             transitioned.latestRun?.state === "completed"
               ? { ...transitioned.latestRun, finishedAt: now() }
               : transitioned.latestRun,
-          evaluations: snapshot.tasks[0] && snapshot.latestRun?.state === "evaluating"
-          ? [{
-              id: generateId(),
-              loopTaskId: snapshot.tasks[0].id,
-              attempt: 1,
-              sessionId: "memory-evaluator-session",
-              verdict: "accepted",
-              summary: "The result satisfies the objective.",
-              evidence: ["memory fixture"],
-              createdAt: now(),
-            }]
-          : [],
+          evaluations:
+            snapshot.tasks[0] && snapshot.latestRun?.state === "evaluating"
+              ? [
+                  ...snapshot.evaluations,
+                  {
+                    id: generateId(),
+                    loopTaskId: snapshot.tasks[0].id,
+                    attempt: snapshot.tasks[0].revisionCount + 1,
+                    sessionId: "memory-evaluator-session",
+                    verdict: "accepted",
+                    summary: "The result satisfies the objective.",
+                    evidence: ["memory fixture"],
+                    createdAt: now(),
+                  },
+                ]
+              : snapshot.evaluations,
         };
       }),
     ];

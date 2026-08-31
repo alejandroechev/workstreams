@@ -2,9 +2,10 @@ use crate::loop_agent::{
     AgentRole, LoopAgentRuntime, ScriptedAgentResponse, ScriptedAgentRuntime, SdkAgentRuntime,
 };
 use crate::loops::{
-    create_loop_run, definition_to_materialized, execute_manual_loop, get_loop_run, get_loop_spec,
-    loop_snapshot, materialize_loop_definition, save_loop_spec, set_loop_enabled, set_run_control,
-    set_run_state, transition_unfinished_tasks, LoopRunState, LoopSnapshot, LoopSpecInput,
+    apply_control_request, create_loop_run, decide_human_approval, definition_to_materialized,
+    execute_human_revision, execute_manual_loop, get_loop_run, get_loop_spec, loop_snapshot,
+    materialize_loop_definition, save_loop_spec, set_loop_enabled, set_run_state,
+    transition_unfinished_tasks, HumanApprovalDecision, LoopRunState, LoopSnapshot, LoopSpecInput,
     LoopTaskState,
 };
 use rusqlite::{params, Connection};
@@ -21,7 +22,9 @@ const USAGE: &str = "Usage:
   workstreams loop validate <workspace> <definition-file>
   workstreams loop list <workspace>
   workstreams loop run-file <db-path> <workspace> <definition-file>
-  workstreams loop scenario <db-path> <workspace>";
+  workstreams loop approval <db-path> <run-id> <approve|revise|reject> [feedback]
+  workstreams loop scenario <db-path> <workspace>
+  workstreams loop approval-scenario <db-path> <workspace>";
 
 fn open(path: &Path) -> Result<Connection, String> {
     crate::db::open_db(path).map_err(|error| format!("Failed to open Workstreams DB: {error}"))
@@ -175,21 +178,87 @@ fn control(args: &[String]) -> Result<(), String> {
         return Err("Control action must be pause, stop, or kill".to_string());
     }
     let conn = open(Path::new(db_path))?;
-    let _run =
+    let run =
         get_loop_run(&conn, run_id)?.ok_or_else(|| format!("Loop run not found: {run_id}"))?;
-    set_run_control(&conn, run_id, action)?;
-    if action == "kill" {
-        transition_unfinished_tasks(
-            &conn,
-            run_id,
-            LoopTaskState::Interrupted,
-            "Loop killed from CLI",
-        )?;
-        set_run_state(&conn, run_id, LoopRunState::Killed, None)?;
-    }
+    apply_control_request(&conn, &run, action)?;
     print_json(
         &get_loop_run(&conn, run_id)?.ok_or_else(|| format!("Loop run not found: {run_id}"))?,
     )
+}
+
+fn parse_approval_decision(value: &str) -> Result<HumanApprovalDecision, String> {
+    match value {
+        "approve" => Ok(HumanApprovalDecision::Approve),
+        "revise" => Ok(HumanApprovalDecision::Revise),
+        "reject" => Ok(HumanApprovalDecision::Reject),
+        _ => Err("Approval decision must be approve, revise, or reject".to_string()),
+    }
+}
+
+fn approval(args: &[String]) -> Result<(), String> {
+    let [db_path, run_id, decision, rest @ ..] = args else {
+        return Err(USAGE.to_string());
+    };
+    if rest.len() > 1 {
+        return Err(USAGE.to_string());
+    }
+    let feedback = rest.first().map(String::as_str);
+    let decision = parse_approval_decision(decision)?;
+    let conn = open(Path::new(db_path))?;
+    let run =
+        get_loop_run(&conn, run_id)?.ok_or_else(|| format!("Loop run not found: {run_id}"))?;
+    let workstream_id: String = conn
+        .query_row(
+            "SELECT workstream_id FROM loop_specs WHERE id = ?1",
+            [&run.loop_spec_id],
+            |row| row.get(0),
+        )
+        .map_err(|error| format!("Failed to resolve approval workstream: {error}"))?;
+    let directory = workstream_directory(&conn, &workstream_id)?;
+    let decided_run = decide_human_approval(&conn, run_id, decision, feedback)?;
+    drop(conn);
+
+    if decision == HumanApprovalDecision::Revise {
+        let db = Arc::new(Mutex::new(open(Path::new(db_path))?));
+        runtime()?.block_on(async {
+            let runtime = match SdkAgentRuntime::connect().await {
+                Ok(runtime) => Arc::new(runtime) as Arc<dyn LoopAgentRuntime>,
+                Err(error) => {
+                    let conn = db.lock().unwrap();
+                    let _ = transition_unfinished_tasks(
+                        &conn,
+                        run_id,
+                        LoopTaskState::Interrupted,
+                        &error,
+                    );
+                    let _ = set_run_state(&conn, run_id, LoopRunState::Attention, Some(&error));
+                    return Err(error);
+                }
+            };
+            let result = execute_human_revision(
+                Arc::clone(&db),
+                Arc::clone(&runtime),
+                run_id,
+                directory,
+                feedback.unwrap_or_default().to_string(),
+            )
+            .await;
+            let shutdown = runtime.shutdown().await;
+            result?;
+            shutdown
+        })?;
+    } else if decided_run.state == LoopRunState::Resuming {
+        let db = Arc::new(Mutex::new(open(Path::new(db_path))?));
+        runtime()?.block_on(async {
+            let runtime = Arc::new(SdkAgentRuntime::connect().await?) as Arc<dyn LoopAgentRuntime>;
+            let result =
+                execute_manual_loop(Arc::clone(&db), Arc::clone(&runtime), run_id, directory).await;
+            let shutdown = runtime.shutdown().await;
+            result?;
+            shutdown
+        })?;
+    }
+    print_json(&loop_snapshot(&open(Path::new(db_path))?, &workstream_id)?)
 }
 
 pub fn run(args: Vec<String>) -> Result<(), String> {
@@ -201,6 +270,7 @@ pub fn run(args: Vec<String>) -> Result<(), String> {
         "enable" => enable(rest),
         "status" => status(rest),
         "control" => control(rest),
+        "approval" => approval(rest),
         "validate" => {
             let [workspace, definition_path] = rest else {
                 return Err(USAGE.to_string());
@@ -246,6 +316,15 @@ pub fn run(args: Vec<String>) -> Result<(), String> {
             };
             print_json(&run_scenario(Path::new(db_path), Path::new(workspace))?)
         }
+        "approval-scenario" => {
+            let [db_path, workspace] = rest else {
+                return Err(USAGE.to_string());
+            };
+            print_json(&run_approval_scenario(
+                Path::new(db_path),
+                Path::new(workspace),
+            )?)
+        }
         _ => Err(USAGE.to_string()),
     }
 }
@@ -257,6 +336,118 @@ struct ScenarioResult {
     accepted_tasks: usize,
     verification_status: String,
     second_run_tasks: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct ApprovalScenarioResult {
+    run_state: String,
+    task_state: String,
+    revision_count: u32,
+    approval_statuses: Vec<String>,
+}
+
+fn run_approval_scenario(
+    db_path: &Path,
+    workspace: &Path,
+) -> Result<ApprovalScenarioResult, String> {
+    let conn = open(db_path)?;
+    conn.execute(
+        "INSERT OR IGNORE INTO workstreams (
+            id, name, directory, status, workstream_type, created_at, updated_at
+         ) VALUES ('cli-loop-approval', 'CLI Loop Approval', ?1, 'active', 'worktree', ?2, ?2)",
+        params![workspace.to_string_lossy(), crate::now()],
+    )
+    .map_err(|error| format!("Failed to seed approval scenario: {error}"))?;
+    let spec = save_loop_spec(
+        &conn,
+        "cli-loop-approval",
+        LoopSpecInput {
+            orchestrator_prompt: "Return one deterministic coding task".to_string(),
+            worker_prompt: "Complete the deterministic fixture task".to_string(),
+            evaluator_prompt: None,
+            orchestrator_model: None,
+            worker_model: None,
+            evaluator_model: None,
+            human_approval_prompt: Some("Review the fixture evidence".to_string()),
+            verifier_program: None,
+            verifier_args: Vec::new(),
+            verifier_cwd: None,
+            verifier_timeout_seconds: None,
+            run_timeout_seconds: 30,
+            max_task_iterations: 2,
+        },
+    )?;
+    set_loop_enabled(&conn, &spec.id, true)?;
+    let run = create_loop_run(&conn, &spec.id, 30)?;
+    drop(conn);
+
+    let db = Arc::new(Mutex::new(open(db_path)?));
+    let first_runtime = Arc::new(ScriptedAgentRuntime::new(vec![
+        ScriptedAgentResponse {
+            role: AgentRole::Orchestrator,
+            session_id: "approval-orchestrator".to_string(),
+            content: r#"{"tasks":[{"key":"approval-task","title":"Approval task","objective":"Complete the fixture"}]}"#.to_string(),
+            events: vec![],
+        },
+        ScriptedAgentResponse {
+            role: AgentRole::Worker,
+            session_id: "approval-worker-1".to_string(),
+            content: r#"{"status":"completed","summary":"First attempt","evidence":["first"]}"#
+                .to_string(),
+            events: vec![],
+        },
+    ])) as Arc<dyn LoopAgentRuntime>;
+    runtime()?.block_on(execute_manual_loop(
+        Arc::clone(&db),
+        first_runtime,
+        &run.id,
+        workspace.to_path_buf(),
+    ))?;
+    decide_human_approval(
+        &db.lock().unwrap(),
+        &run.id,
+        HumanApprovalDecision::Revise,
+        Some("Add the reviewed edge case"),
+    )?;
+    let revision_runtime = Arc::new(ScriptedAgentRuntime::new(vec![ScriptedAgentResponse {
+        role: AgentRole::Worker,
+        session_id: "approval-worker-2".to_string(),
+        content: r#"{"status":"completed","summary":"Revised attempt","evidence":["second"]}"#
+            .to_string(),
+        events: vec![],
+    }])) as Arc<dyn LoopAgentRuntime>;
+    runtime()?.block_on(execute_human_revision(
+        Arc::clone(&db),
+        revision_runtime,
+        &run.id,
+        workspace.to_path_buf(),
+        "Add the reviewed edge case".to_string(),
+    ))?;
+    decide_human_approval(
+        &db.lock().unwrap(),
+        &run.id,
+        HumanApprovalDecision::Approve,
+        None,
+    )?;
+    let snapshot = loop_snapshot(&db.lock().unwrap(), "cli-loop-approval")?;
+    let task = snapshot
+        .tasks
+        .first()
+        .ok_or_else(|| "Approval scenario produced no task".to_string())?;
+    Ok(ApprovalScenarioResult {
+        run_state: snapshot
+            .latest_run
+            .as_ref()
+            .map(|run| run.state.as_str().to_string())
+            .unwrap_or_else(|| "missing".to_string()),
+        task_state: task.state.as_str().to_string(),
+        revision_count: task.revision_count,
+        approval_statuses: snapshot
+            .approvals
+            .iter()
+            .map(|approval| approval.status.clone())
+            .collect(),
+    })
 }
 
 fn run_scenario(db_path: &Path, workspace: &Path) -> Result<ScenarioResult, String> {
@@ -296,6 +487,7 @@ fn run_scenario(db_path: &Path, workspace: &Path) -> Result<ScenarioResult, Stri
             orchestrator_model: None,
             worker_model: None,
             evaluator_model: None,
+            human_approval_prompt: None,
             verifier_program: Some(program),
             verifier_args,
             verifier_cwd: Some(workspace.to_string_lossy().into_owned()),
@@ -404,6 +596,27 @@ mod tests {
         assert_eq!(result.accepted_tasks, 1);
         assert_eq!(result.verification_status, "passed");
         assert_eq!(result.second_run_tasks, 0);
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn approval_scenario_revises_once_and_finishes_with_human_acceptance() {
+        let root = std::env::temp_dir().join(format!(
+            "workstreams-loop-approval-cli-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).expect("create scenario directory");
+        let db_path = root.join("scenario.db");
+
+        let result = run_approval_scenario(&db_path, &root).expect("run approval scenario");
+
+        assert_eq!(result.run_state, "completed");
+        assert_eq!(result.task_state, "accepted");
+        assert_eq!(result.revision_count, 1);
+        assert_eq!(
+            result.approval_statuses,
+            vec!["revision_requested", "approved"]
+        );
         std::fs::remove_dir_all(root).ok();
     }
 

@@ -6,6 +6,7 @@ import { MemoryBackend } from "../../backend/memory-backend";
 import type {
   LoopDefinition,
   LoopDefinitionCatalog,
+  LoopApprovalRecord,
   LoopEvaluationRecord,
   LoopEventRecord,
   LoopRun,
@@ -31,6 +32,7 @@ function definition(overrides: Partial<LoopDefinition> = {}): LoopDefinition {
     objective: "Deliver the selected frontend behavior",
     hasVerification: true,
     hasEvaluator: false,
+    hasHumanApproval: false,
     ...overrides,
   };
 }
@@ -89,7 +91,20 @@ function snapshot(overrides: Partial<PersistedLoopSnapshot> = {}): PersistedLoop
     tasks: [],
     verifications: [],
     evaluations: [],
+    approvals: [],
     events: [],
+    ...overrides,
+  };
+}
+
+function approval(overrides: Partial<LoopApprovalRecord> = {}): LoopApprovalRecord {
+  return {
+    id: "approval-1",
+    loopTaskId: "task-1",
+    attempt: 1,
+    status: "pending",
+    prompt: "Review the implementation and evidence.",
+    createdAt: "2026-08-28T18:07:00.000Z",
     ...overrides,
   };
 }
@@ -401,6 +416,62 @@ describe("LoopControlTile run monitoring", () => {
     fireEvent.click(await screen.findByTestId("loop-resume"));
     await waitFor(() => expect(resume).toHaveBeenCalledWith("run-1"));
     expect(screen.queryByTestId("loop-pause")).toBeNull();
+  });
+
+  it("surfaces pending human approval and sends all three decisions", async () => {
+    const awaitingRun = run({ state: "awaiting_approval" });
+    const { backend } = setup(
+      snapshot({
+        spec: loopSpec({
+          humanApproval: { prompt: "Review the implementation and evidence." },
+        }),
+        latestRun: awaitingRun,
+        tasks: [task({ state: "awaiting_approval" })],
+        approvals: [approval()],
+      }),
+      {
+        definitions: [
+          definition({
+            hasHumanApproval: true,
+          }),
+        ],
+        invalid: [],
+      },
+    );
+    const decide = vi
+      .spyOn(backend, "decideLoopHumanApproval")
+      .mockResolvedValue(awaitingRun);
+
+    expect((await screen.findByTestId("loop-human-approval")).textContent).toContain(
+      "Review the implementation and evidence.",
+    );
+    expect(screen.queryByTestId("loop-pause")).toBeNull();
+    expect(screen.getByTestId("loop-stop")).toBeTruthy();
+    expect(screen.getByTestId("loop-kill")).toBeTruthy();
+    fireEvent.click(screen.getByTestId("loop-approval-approve"));
+    await waitFor(() =>
+      expect(decide).toHaveBeenCalledWith("run-1", "approve", undefined),
+    );
+
+    fireEvent.change(screen.getByLabelText("Human review feedback"), {
+      target: { value: "Add the missing timeout case" },
+    });
+    fireEvent.click(screen.getByTestId("loop-approval-revise"));
+    await waitFor(() =>
+      expect(decide).toHaveBeenCalledWith(
+        "run-1",
+        "revise",
+        "Add the missing timeout case",
+      ),
+    );
+    fireEvent.click(screen.getByTestId("loop-approval-reject"));
+    await waitFor(() =>
+      expect(decide).toHaveBeenCalledWith(
+        "run-1",
+        "reject",
+        "Add the missing timeout case",
+      ),
+    );
   });
 
   it.each([

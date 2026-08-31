@@ -39,6 +39,7 @@ export async function run({ page, screenshot }) {
     .waitFor({ timeout: 10000 });
   await page
     .locator('[data-testid="loop-definition-showcase-loop"]')
+    .filter({ hasText: "Human approval" })
     .waitFor({ timeout: 10000 });
   await page
     .locator('[data-testid="loop-definition-selected"]')

@@ -20,6 +20,7 @@ pub struct LoopSpecInput {
     pub orchestrator_model: Option<String>,
     pub worker_model: Option<String>,
     pub evaluator_model: Option<String>,
+    pub human_approval_prompt: Option<String>,
     pub verifier_program: Option<String>,
     pub verifier_args: Vec<String>,
     pub verifier_cwd: Option<String>,
@@ -38,6 +39,7 @@ pub struct LoopSpec {
     pub orchestrator_model: Option<String>,
     pub worker_model: Option<String>,
     pub evaluator_model: Option<String>,
+    pub human_approval_prompt: Option<String>,
     pub verifier_program: Option<String>,
     pub verifier_args: Vec<String>,
     pub verifier_cwd: Option<String>,
@@ -65,6 +67,7 @@ pub enum LoopRunState {
     Working,
     Verifying,
     Evaluating,
+    AwaitingApproval,
     Paused,
     Stopping,
     Completed,
@@ -81,6 +84,7 @@ impl LoopRunState {
             Self::Working => "working",
             Self::Verifying => "verifying",
             Self::Evaluating => "evaluating",
+            Self::AwaitingApproval => "awaiting_approval",
             Self::Paused => "paused",
             Self::Stopping => "stopping",
             Self::Completed => "completed",
@@ -97,6 +101,7 @@ impl LoopRunState {
             "working" => Ok(Self::Working),
             "verifying" => Ok(Self::Verifying),
             "evaluating" => Ok(Self::Evaluating),
+            "awaiting_approval" => Ok(Self::AwaitingApproval),
             "paused" => Ok(Self::Paused),
             "stopping" => Ok(Self::Stopping),
             "completed" => Ok(Self::Completed),
@@ -137,6 +142,7 @@ pub enum LoopTaskState {
     Working,
     Verifying,
     Evaluating,
+    AwaitingApproval,
     Accepted,
     Blocked,
     Attention,
@@ -150,6 +156,7 @@ impl LoopTaskState {
             Self::Working => "working",
             Self::Verifying => "verifying",
             Self::Evaluating => "evaluating",
+            Self::AwaitingApproval => "awaiting_approval",
             Self::Accepted => "accepted",
             Self::Blocked => "blocked",
             Self::Attention => "attention",
@@ -163,6 +170,7 @@ impl LoopTaskState {
             "working" => Ok(Self::Working),
             "verifying" => Ok(Self::Verifying),
             "evaluating" => Ok(Self::Evaluating),
+            "awaiting_approval" => Ok(Self::AwaitingApproval),
             "accepted" => Ok(Self::Accepted),
             "blocked" => Ok(Self::Blocked),
             "attention" => Ok(Self::Attention),
@@ -213,6 +221,24 @@ pub enum EvaluatorVerdict {
     Revise,
     Blocked,
     Invalid,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HumanApprovalDecision {
+    Approve,
+    Revise,
+    Reject,
+}
+
+impl HumanApprovalDecision {
+    fn as_status(self) -> &'static str {
+        match self {
+            Self::Approve => "approved",
+            Self::Revise => "revision_requested",
+            Self::Reject => "rejected",
+        }
+    }
 }
 
 impl EvaluatorVerdict {
@@ -338,6 +364,7 @@ pub fn init_loop_schema(conn: &Connection) -> rusqlite::Result<()> {
             orchestrator_model TEXT,
             worker_model TEXT,
             evaluator_model TEXT,
+            human_approval_prompt TEXT,
             verifier_program TEXT,
             verifier_args_json TEXT NOT NULL DEFAULT '[]',
             verifier_cwd TEXT,
@@ -417,6 +444,17 @@ pub fn init_loop_schema(conn: &Connection) -> rusqlite::Result<()> {
             created_at TEXT NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS loop_approvals (
+            id TEXT PRIMARY KEY,
+            loop_task_id TEXT NOT NULL REFERENCES loop_tasks(id) ON DELETE CASCADE,
+            attempt INTEGER NOT NULL,
+            status TEXT NOT NULL,
+            prompt TEXT NOT NULL,
+            feedback TEXT,
+            created_at TEXT NOT NULL,
+            decided_at TEXT
+        );
+
         CREATE TABLE IF NOT EXISTS loop_events (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             loop_spec_id TEXT NOT NULL REFERENCES loop_specs(id) ON DELETE CASCADE,
@@ -433,6 +471,8 @@ pub fn init_loop_schema(conn: &Connection) -> rusqlite::Result<()> {
             ON loop_tasks(loop_run_id, ordinal);
         CREATE INDEX IF NOT EXISTS loop_events_run_idx
             ON loop_events(loop_run_id, id);
+        CREATE UNIQUE INDEX IF NOT EXISTS loop_approvals_task_attempt_idx
+            ON loop_approvals(loop_task_id, attempt);
         ",
     )?;
     for migration in [
@@ -448,6 +488,7 @@ pub fn init_loop_schema(conn: &Connection) -> rusqlite::Result<()> {
         "ALTER TABLE loop_runs ADD COLUMN definition_hash TEXT",
         "ALTER TABLE loop_runs ADD COLUMN definition_yaml TEXT",
         "ALTER TABLE loop_tasks ADD COLUMN definition_id TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE loop_specs ADD COLUMN human_approval_prompt TEXT",
     ] {
         let _ = conn.execute_batch(migration);
     }
@@ -455,7 +496,7 @@ pub fn init_loop_schema(conn: &Connection) -> rusqlite::Result<()> {
         "DROP INDEX IF EXISTS loop_tasks_occupied_key_unique;
          CREATE UNIQUE INDEX loop_tasks_occupied_key_unique
          ON loop_tasks(loop_spec_id, definition_id, task_key)
-         WHERE state IN ('queued', 'working', 'verifying', 'evaluating', 'accepted');",
+         WHERE state IN ('queued', 'working', 'verifying', 'evaluating', 'awaiting_approval', 'accepted');",
     )?;
     Ok(())
 }
@@ -474,8 +515,21 @@ fn validate_spec(input: &LoopSpecInput) -> Result<(), String> {
     if input.evaluator_prompt.is_none() && input.evaluator_model.is_some() {
         return Err("Evaluator model requires an evaluator prompt".to_string());
     }
-    if input.evaluator_prompt.is_none() && input.verifier_program.is_none() {
-        return Err("At least one verification or evaluator must be configured".to_string());
+    if input
+        .human_approval_prompt
+        .as_deref()
+        .is_some_and(|prompt| prompt.trim().is_empty())
+    {
+        return Err("Human approval prompt cannot be blank".to_string());
+    }
+    if input.evaluator_prompt.is_none()
+        && input.verifier_program.is_none()
+        && input.human_approval_prompt.is_none()
+    {
+        return Err(
+            "At least one verification, evaluator, or human approval must be configured"
+                .to_string(),
+        );
     }
     if input.run_timeout_seconds == 0 {
         return Err("Run timeout must be greater than zero".to_string());
@@ -494,9 +548,9 @@ fn validate_spec(input: &LoopSpecInput) -> Result<(), String> {
 }
 
 fn decode_spec_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<LoopSpec> {
-    let args_json: String = row.get(9)?;
+    let args_json: String = row.get(10)?;
     let verifier_args = serde_json::from_str(&args_json).map_err(|error| {
-        rusqlite::Error::FromSqlConversionFailure(9, rusqlite::types::Type::Text, Box::new(error))
+        rusqlite::Error::FromSqlConversionFailure(10, rusqlite::types::Type::Text, Box::new(error))
     })?;
     Ok(LoopSpec {
         id: row.get(0)?,
@@ -510,28 +564,29 @@ fn decode_spec_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<LoopSpec> {
         orchestrator_model: row.get(5)?,
         worker_model: row.get(6)?,
         evaluator_model: row.get(7)?,
-        verifier_program: row.get(8)?,
+        human_approval_prompt: row.get(8)?,
+        verifier_program: row.get(9)?,
         verifier_args,
-        verifier_cwd: row.get(10)?,
-        verifier_timeout_seconds: row.get(11)?,
-        run_timeout_seconds: row.get(12)?,
-        max_task_iterations: row.get(13)?,
-        enabled: row.get::<_, i64>(14)? != 0,
-        created_at: row.get(15)?,
-        updated_at: row.get(16)?,
-        definition_id: row.get(17)?,
-        definition_path: row.get(18)?,
-        definition_hash: row.get(19)?,
-        definition_name: row.get(20)?,
-        objective: row.get(21)?,
-        portable: row.get::<_, Option<i64>>(22)?.map(|value| value != 0),
-        definition_yaml: row.get(23)?,
+        verifier_cwd: row.get(11)?,
+        verifier_timeout_seconds: row.get(12)?,
+        run_timeout_seconds: row.get(13)?,
+        max_task_iterations: row.get(14)?,
+        enabled: row.get::<_, i64>(15)? != 0,
+        created_at: row.get(16)?,
+        updated_at: row.get(17)?,
+        definition_id: row.get(18)?,
+        definition_path: row.get(19)?,
+        definition_hash: row.get(20)?,
+        definition_name: row.get(21)?,
+        objective: row.get(22)?,
+        portable: row.get::<_, Option<i64>>(23)?.map(|value| value != 0),
+        definition_yaml: row.get(24)?,
     })
 }
 
 const SPEC_COLUMNS: &str = "id, workstream_id, orchestrator_prompt, worker_prompt,
     evaluator_prompt, orchestrator_model, worker_model, evaluator_model,
-    verifier_program, verifier_args_json, verifier_cwd, verifier_timeout_seconds,
+    human_approval_prompt, verifier_program, verifier_args_json, verifier_cwd, verifier_timeout_seconds,
     run_timeout_seconds, max_task_iterations, enabled, created_at, updated_at, definition_id,
     definition_path, definition_hash, definition_name, objective, portable,
     definition_yaml";
@@ -585,11 +640,11 @@ pub fn save_loop_spec(
     conn.execute(
         "INSERT INTO loop_specs (
             id, workstream_id, orchestrator_prompt, worker_prompt, evaluator_prompt,
-            orchestrator_model, worker_model, evaluator_model, verifier_program,
+            orchestrator_model, worker_model, evaluator_model, human_approval_prompt, verifier_program,
             verifier_args_json, verifier_cwd, run_timeout_seconds,
             verifier_timeout_seconds, max_task_iterations, enabled, created_at, updated_at
          ) VALUES (
-            ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, 0, ?15, ?16
+            ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, 0, ?16, ?17
          )
          ON CONFLICT(workstream_id) DO UPDATE SET
             orchestrator_prompt = excluded.orchestrator_prompt,
@@ -598,6 +653,7 @@ pub fn save_loop_spec(
             orchestrator_model = excluded.orchestrator_model,
             worker_model = excluded.worker_model,
             evaluator_model = excluded.evaluator_model,
+            human_approval_prompt = excluded.human_approval_prompt,
             verifier_program = excluded.verifier_program,
             verifier_args_json = excluded.verifier_args_json,
             verifier_cwd = excluded.verifier_cwd,
@@ -618,6 +674,7 @@ pub fn save_loop_spec(
             input.orchestrator_model,
             input.worker_model,
             input.evaluator_model,
+            input.human_approval_prompt.as_deref().map(str::trim),
             input.verifier_program,
             args_json,
             input.verifier_cwd,
@@ -709,6 +766,7 @@ pub(crate) fn definition_to_materialized(
             orchestrator_model: inherited_model(&fields.orchestrator_model),
             worker_model: inherited_model(&fields.worker_model),
             evaluator_model: fields.evaluator_model.as_deref().and_then(inherited_model),
+            human_approval_prompt: fields.human_approval_prompt,
             verifier_program: fields.verifier_program,
             verifier_args: fields.verifier_args.unwrap_or_default(),
             verifier_cwd: fields.verifier_cwd,
@@ -754,14 +812,14 @@ pub fn materialize_loop_definition(
     conn.execute(
         "INSERT INTO loop_specs (
             id, workstream_id, orchestrator_prompt, worker_prompt, evaluator_prompt,
-            orchestrator_model, worker_model, evaluator_model, verifier_program,
+            orchestrator_model, worker_model, evaluator_model, human_approval_prompt, verifier_program,
             verifier_args_json, verifier_cwd, run_timeout_seconds,
             verifier_timeout_seconds, max_task_iterations, enabled, created_at, updated_at, definition_id,
             definition_path, definition_hash, definition_name, objective, portable,
             definition_yaml
          ) VALUES (
-            ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, 1,
-            ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23
+            ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, 1,
+            ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24
          )
          ON CONFLICT(workstream_id) DO UPDATE SET
             orchestrator_prompt = excluded.orchestrator_prompt,
@@ -770,6 +828,7 @@ pub fn materialize_loop_definition(
             orchestrator_model = excluded.orchestrator_model,
             worker_model = excluded.worker_model,
             evaluator_model = excluded.evaluator_model,
+            human_approval_prompt = excluded.human_approval_prompt,
             verifier_program = excluded.verifier_program,
             verifier_args_json = excluded.verifier_args_json,
             verifier_cwd = excluded.verifier_cwd,
@@ -799,6 +858,7 @@ pub fn materialize_loop_definition(
             definition.spec.orchestrator_model,
             definition.spec.worker_model,
             definition.spec.evaluator_model,
+            definition.spec.human_approval_prompt.as_deref().map(str::trim),
             definition.spec.verifier_program,
             args_json,
             definition.spec.verifier_cwd,
@@ -1012,7 +1072,7 @@ pub(crate) fn transition_unfinished_tasks(
         "UPDATE loop_tasks
          SET state = ?1, error = ?2, updated_at = ?3
          WHERE loop_run_id = ?4
-           AND state IN ('queued', 'working', 'verifying', 'evaluating')",
+           AND state IN ('queued', 'working', 'verifying', 'evaluating', 'awaiting_approval')",
         params![state.as_str(), error, crate::now(), run_id],
     )
     .map_err(|db_error| format!("Failed to transition unfinished loop tasks: {db_error}"))
@@ -1224,7 +1284,7 @@ pub fn reconcile_interrupted_runs(conn: &Connection) -> Result<usize, String> {
     let count: i64 = conn
         .query_row(
             "SELECT COUNT(*) FROM loop_runs
-             WHERE state NOT IN ('completed', 'attention', 'killed')",
+             WHERE state NOT IN ('completed', 'attention', 'killed', 'awaiting_approval')",
             [],
             |row| row.get(0),
         )
@@ -1235,7 +1295,7 @@ pub fn reconcile_interrupted_runs(conn: &Connection) -> Result<usize, String> {
              updated_at = ?1
          WHERE loop_run_id IN (
              SELECT id FROM loop_runs
-             WHERE state NOT IN ('completed', 'attention', 'killed')
+             WHERE state NOT IN ('completed', 'attention', 'killed', 'awaiting_approval')
          )
          AND state IN ('queued', 'working', 'verifying', 'evaluating')",
         [crate::now()],
@@ -1246,7 +1306,7 @@ pub fn reconcile_interrupted_runs(conn: &Connection) -> Result<usize, String> {
          SET state = 'attention',
              error = 'Workstreams exited before this run completed',
              finished_at = ?1
-         WHERE state NOT IN ('completed', 'attention', 'killed')",
+         WHERE state NOT IN ('completed', 'attention', 'killed', 'awaiting_approval')",
         [crate::now()],
     )
     .map_err(|error| format!("Failed to reconcile loop runs: {error}"))?;
@@ -1709,6 +1769,17 @@ fn revision_prompt(feedback: &str) -> String {
     )
 }
 
+fn human_revision_prompt(spec: &LoopSpec, task: &LoopTask, feedback: &str) -> String {
+    format!(
+        "{}\n\nTask: {}\nObjective: {}\n\n\
+         The human reviewer requested one revision:\n{}\n\n\
+         Address the feedback, re-run relevant checks, and return only JSON:\n\
+         {{\"status\":\"completed|blocked|failed\",\"summary\":\"what changed\",\
+         \"evidence\":[\"observable evidence\"]}}",
+        spec.worker_prompt, task.title, task.objective, feedback
+    )
+}
+
 struct EvaluationContext<'a> {
     db: &'a Arc<Mutex<Connection>>,
     runtime: &'a Arc<dyn LoopAgentRuntime>,
@@ -1754,6 +1825,490 @@ async fn evaluate_task(
         &output,
     )?;
     Ok(output)
+}
+
+fn enter_human_approval(
+    conn: &Connection,
+    spec: &LoopSpec,
+    run_id: &str,
+    task: &LoopTask,
+) -> Result<(), String> {
+    let prompt = spec
+        .human_approval_prompt
+        .as_deref()
+        .ok_or_else(|| "Human approval is not configured".to_string())?;
+    let transaction = conn
+        .unchecked_transaction()
+        .map_err(|error| format!("Failed to start human approval request: {error}"))?;
+    let revision_count: u32 = transaction
+        .query_row(
+            "SELECT revision_count FROM loop_tasks WHERE id = ?1",
+            [&task.id],
+            |row| row.get(0),
+        )
+        .map_err(|error| format!("Failed to load approval attempt: {error}"))?;
+    let attempt = revision_count + 1;
+    set_task_state(
+        &transaction,
+        &task.id,
+        LoopTaskState::AwaitingApproval,
+        None,
+    )?;
+    set_run_state(&transaction, run_id, LoopRunState::AwaitingApproval, None)?;
+    transaction
+        .execute(
+            "INSERT INTO loop_approvals (
+            id, loop_task_id, attempt, status, prompt, created_at
+         ) VALUES (?1, ?2, ?3, 'pending', ?4, ?5)",
+            params![
+                Uuid::new_v4().to_string(),
+                task.id,
+                attempt,
+                prompt,
+                crate::now(),
+            ],
+        )
+        .map_err(|error| format!("Failed to create human approval request: {error}"))?;
+    append_loop_event(
+        &transaction,
+        &spec.id,
+        run_id,
+        Some(&task.id),
+        "approval.requested",
+        &serde_json::json!({ "attempt": attempt }),
+    )?;
+    transaction
+        .commit()
+        .map_err(|error| format!("Failed to commit human approval request: {error}"))
+}
+
+pub fn decide_human_approval(
+    conn: &Connection,
+    run_id: &str,
+    decision: HumanApprovalDecision,
+    feedback: Option<&str>,
+) -> Result<LoopRun, String> {
+    let feedback = feedback.map(str::trim).filter(|value| !value.is_empty());
+    if decision == HumanApprovalDecision::Revise && feedback.is_none() {
+        return Err("Revision feedback is required".to_string());
+    }
+    let transaction = conn
+        .unchecked_transaction()
+        .map_err(|error| format!("Failed to start approval decision: {error}"))?;
+    let run = get_loop_run(&transaction, run_id)?
+        .ok_or_else(|| format!("Loop run not found: {run_id}"))?;
+    if run.state != LoopRunState::AwaitingApproval {
+        return Err("This loop run is not awaiting human approval".to_string());
+    }
+    let task_id = run
+        .current_task_id
+        .as_deref()
+        .ok_or_else(|| "Human approval run has no active task".to_string())?;
+    let task = transaction
+        .query_row(
+            &format!("SELECT {TASK_COLUMNS} FROM loop_tasks WHERE id = ?1"),
+            [task_id],
+            decode_task_row,
+        )
+        .map_err(|error| format!("Failed to load approval task: {error}"))?;
+    if task.state != LoopTaskState::AwaitingApproval {
+        return Err("The active task is not awaiting human approval".to_string());
+    }
+    if decision == HumanApprovalDecision::Revise && task.revision_count + 1 >= 2 {
+        return Err("Human approval supports at most one revision".to_string());
+    }
+    let approval_id: String = transaction
+        .query_row(
+            "SELECT id FROM loop_approvals
+             WHERE loop_task_id = ?1 AND status = 'pending'
+             ORDER BY attempt DESC LIMIT 1",
+            [task_id],
+            |row| row.get(0),
+        )
+        .map_err(|error| format!("Pending human approval was not found: {error}"))?;
+    let decided_at = crate::now();
+    let changed = transaction
+        .execute(
+            "UPDATE loop_approvals
+             SET status = ?1, feedback = ?2, decided_at = ?3
+             WHERE id = ?4 AND status = 'pending'",
+            params![decision.as_status(), feedback, decided_at, approval_id],
+        )
+        .map_err(|error| format!("Failed to record approval decision: {error}"))?;
+    if changed != 1 {
+        return Err("Human approval was already decided".to_string());
+    }
+
+    match decision {
+        HumanApprovalDecision::Approve => {
+            transaction
+                .execute(
+                    "UPDATE loop_tasks SET state = 'accepted', error = NULL, updated_at = ?1
+                     WHERE id = ?2",
+                    params![decided_at, task_id],
+                )
+                .map_err(|error| format!("Failed to accept approved task: {error}"))?;
+            let queued_tasks: i64 = transaction
+                .query_row(
+                    "SELECT COUNT(*) FROM loop_tasks
+                     WHERE loop_run_id = ?1 AND state = 'queued'",
+                    [run_id],
+                    |row| row.get(0),
+                )
+                .map_err(|error| format!("Failed to count queued approval tasks: {error}"))?;
+            if queued_tasks > 0 {
+                let timeout_seconds: u64 = transaction
+                    .query_row(
+                        "SELECT s.run_timeout_seconds
+                         FROM loop_specs s JOIN loop_runs r ON r.loop_spec_id = s.id
+                         WHERE r.id = ?1",
+                        [run_id],
+                        |row| row.get(0),
+                    )
+                    .map_err(|error| format!("Failed to load continuation timeout: {error}"))?;
+                let deadline_at = std::time::SystemTime::now()
+                    .checked_add(Duration::from_secs(timeout_seconds))
+                    .and_then(|deadline| deadline.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|duration| duration.as_secs().to_string())
+                    .ok_or_else(|| "Failed to calculate the continuation deadline".to_string())?;
+                transaction
+                    .execute(
+                        "UPDATE loop_runs
+                         SET state = 'resuming', current_task_id = NULL,
+                             control_requested = 'none', error = NULL, finished_at = NULL,
+                             deadline_at = ?1
+                         WHERE id = ?2",
+                        params![deadline_at, run_id],
+                    )
+                    .map_err(|error| format!("Failed to continue approved run: {error}"))?;
+            } else {
+                transaction
+                    .execute(
+                        "UPDATE loop_runs
+                         SET current_task_id = NULL, control_requested = 'none', error = NULL
+                         WHERE id = ?1",
+                        [run_id],
+                    )
+                    .map_err(|error| format!("Failed to finalize approved run: {error}"))?;
+                finish_run_from_persisted_tasks(&transaction, run_id)?;
+            }
+        }
+        HumanApprovalDecision::Reject => {
+            transaction
+                .execute(
+                    "UPDATE loop_tasks
+                     SET state = 'blocked', error = ?1, updated_at = ?2
+                     WHERE id = ?3",
+                    params![
+                        feedback.unwrap_or("Human reviewer rejected the task"),
+                        decided_at,
+                        task_id
+                    ],
+                )
+                .map_err(|error| format!("Failed to reject approval task: {error}"))?;
+            transaction
+                .execute(
+                    "UPDATE loop_runs
+                     SET state = 'attention', control_requested = 'none', error = ?1,
+                         finished_at = ?2
+                     WHERE id = ?3",
+                    params![
+                        feedback.unwrap_or("Human reviewer rejected the task"),
+                        decided_at,
+                        run_id
+                    ],
+                )
+                .map_err(|error| format!("Failed to reject approval run: {error}"))?;
+        }
+        HumanApprovalDecision::Revise => {
+            let timeout_seconds: u64 = transaction
+                .query_row(
+                    "SELECT s.run_timeout_seconds
+                     FROM loop_specs s JOIN loop_runs r ON r.loop_spec_id = s.id
+                     WHERE r.id = ?1",
+                    [run_id],
+                    |row| row.get(0),
+                )
+                .map_err(|error| format!("Failed to load revision timeout: {error}"))?;
+            let deadline_at = std::time::SystemTime::now()
+                .checked_add(Duration::from_secs(timeout_seconds))
+                .and_then(|deadline| deadline.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|duration| duration.as_secs().to_string())
+                .ok_or_else(|| "Failed to calculate the revision deadline".to_string())?;
+            transaction
+                .execute(
+                    "UPDATE loop_tasks
+                     SET state = 'working', revision_count = revision_count + 1,
+                         worker_session_id = NULL, error = NULL, updated_at = ?1
+                     WHERE id = ?2",
+                    params![decided_at, task_id],
+                )
+                .map_err(|error| format!("Failed to claim approval revision task: {error}"))?;
+            transaction
+                .execute(
+                    "UPDATE loop_runs
+                     SET state = 'resuming', control_requested = 'none', error = NULL,
+                         finished_at = NULL, deadline_at = ?1
+                     WHERE id = ?2",
+                    params![deadline_at, run_id],
+                )
+                .map_err(|error| format!("Failed to claim approval revision run: {error}"))?;
+        }
+    }
+    append_loop_event(
+        &transaction,
+        &task.loop_spec_id,
+        run_id,
+        Some(task_id),
+        "approval.decided",
+        &serde_json::json!({
+            "decision": decision,
+            "approval_id": approval_id,
+        }),
+    )?;
+    transaction
+        .commit()
+        .map_err(|error| format!("Failed to commit approval decision: {error}"))?;
+    get_loop_run(conn, run_id)?.ok_or_else(|| format!("Loop run not found: {run_id}"))
+}
+
+async fn execute_human_revision_inner(
+    db: Arc<Mutex<Connection>>,
+    runtime: Arc<dyn LoopAgentRuntime>,
+    run_id: &str,
+    working_directory: PathBuf,
+    feedback: &str,
+    cancelled: Option<Arc<AtomicBool>>,
+) -> Result<(), String> {
+    let run = get_loop_run(&db.lock().unwrap(), run_id)?
+        .ok_or_else(|| format!("Loop run not found: {run_id}"))?;
+    if run.state != LoopRunState::Resuming {
+        return Err("Human revision run is not claimed".to_string());
+    }
+    let spec = get_loop_spec_by_id(&db.lock().unwrap(), &run.loop_spec_id)?
+        .ok_or_else(|| format!("Loop specification not found: {}", run.loop_spec_id))?;
+    let task_id = run
+        .current_task_id
+        .as_deref()
+        .ok_or_else(|| "Human revision run has no active task".to_string())?;
+    let task = list_loop_tasks(&db.lock().unwrap(), run_id)?
+        .into_iter()
+        .find(|task| task.id == task_id)
+        .ok_or_else(|| "Human revision task was not found".to_string())?;
+    if !apply_human_revision_control_boundary(&db.lock().unwrap(), run_id)? {
+        return Ok(());
+    }
+    let response = start_agent_stage(
+        &db,
+        &runtime,
+        AgentRequest {
+            role: AgentRole::Worker,
+            prompt: human_revision_prompt(&spec, &task, feedback),
+            working_directory: working_directory.clone(),
+            model: spec.worker_model.clone(),
+            timeout: remaining_run_timeout(&db, run_id)?,
+            keep_session: false,
+        },
+        &spec.id,
+        run_id,
+        Some(&task.id),
+    )
+    .await?;
+    let worker = parse_worker_output(&response.content)?;
+    store_worker_result(
+        &db.lock().unwrap(),
+        &task.id,
+        &response.session_id,
+        &worker,
+        task.revision_count,
+    )?;
+    if worker.status != WorkerStatus::Completed {
+        let state = if worker.status == WorkerStatus::Blocked {
+            LoopTaskState::Blocked
+        } else {
+            LoopTaskState::Attention
+        };
+        set_task_state(&db.lock().unwrap(), &task.id, state, None)?;
+        finish_run_from_persisted_tasks(&db.lock().unwrap(), run_id)?;
+        return Ok(());
+    }
+    if !apply_human_revision_control_boundary(&db.lock().unwrap(), run_id)? {
+        return Ok(());
+    }
+    let verification = verify_task(
+        &db,
+        &spec,
+        run_id,
+        &task.id,
+        &working_directory,
+        task.revision_count + 1,
+        cancelled,
+    )
+    .await?;
+    if verification
+        .as_ref()
+        .is_some_and(|result| result.status != VerificationStatus::Passed)
+    {
+        set_task_state(
+            &db.lock().unwrap(),
+            &task.id,
+            LoopTaskState::Attention,
+            None,
+        )?;
+        finish_run_from_persisted_tasks(&db.lock().unwrap(), run_id)?;
+        return Ok(());
+    }
+    if !apply_human_revision_control_boundary(&db.lock().unwrap(), run_id)? {
+        return Ok(());
+    }
+    if spec.evaluator_prompt.is_some() {
+        let verdict = evaluate_task(
+            EvaluationContext {
+                db: &db,
+                runtime: &runtime,
+                spec: &spec,
+                run_id,
+                task: &task,
+                working_directory: &working_directory,
+            },
+            &worker,
+            verification.as_ref(),
+            task.revision_count + 1,
+        )
+        .await?;
+        if verdict.verdict != EvaluatorVerdict::Accepted {
+            let state = if verdict.verdict == EvaluatorVerdict::Blocked {
+                LoopTaskState::Blocked
+            } else {
+                LoopTaskState::Attention
+            };
+            set_task_state(&db.lock().unwrap(), &task.id, state, None)?;
+            finish_run_from_persisted_tasks(&db.lock().unwrap(), run_id)?;
+            return Ok(());
+        }
+    }
+    if !apply_human_revision_control_boundary(&db.lock().unwrap(), run_id)? {
+        return Ok(());
+    }
+    enter_human_approval(&db.lock().unwrap(), &spec, run_id, &task)
+}
+
+fn apply_human_revision_control_boundary(conn: &Connection, run_id: &str) -> Result<bool, String> {
+    let run = get_loop_run(conn, run_id)?.ok_or_else(|| format!("Loop run not found: {run_id}"))?;
+    match run.control_requested.as_str() {
+        "none" => Ok(true),
+        "pause" => {
+            if let Some(task_id) = run.current_task_id.as_deref() {
+                set_task_state(conn, task_id, LoopTaskState::Working, None)?;
+            }
+            set_run_state(conn, run_id, LoopRunState::Paused, None)?;
+            Ok(false)
+        }
+        "stop" => {
+            transition_unfinished_tasks(
+                conn,
+                run_id,
+                LoopTaskState::Blocked,
+                "Loop stopped during human-requested revision",
+            )?;
+            set_run_control(conn, run_id, "none")?;
+            finish_run_from_persisted_tasks(conn, run_id)?;
+            Ok(false)
+        }
+        "kill" => Ok(false),
+        other => Err(format!("Unknown loop control request: {other}")),
+    }
+}
+
+fn apply_pre_approval_control_boundary(conn: &Connection, run_id: &str) -> Result<bool, String> {
+    let run = get_loop_run(conn, run_id)?.ok_or_else(|| format!("Loop run not found: {run_id}"))?;
+    match run.control_requested.as_str() {
+        "none" => Ok(true),
+        "pause" => {
+            set_run_control(conn, run_id, "none")?;
+            Ok(true)
+        }
+        "stop" => {
+            transition_unfinished_tasks(
+                conn,
+                run_id,
+                LoopTaskState::Blocked,
+                "Loop stopped before human approval",
+            )?;
+            set_run_control(conn, run_id, "none")?;
+            finish_run_from_persisted_tasks(conn, run_id)?;
+            Ok(false)
+        }
+        "kill" => Ok(false),
+        other => Err(format!("Unknown loop control request: {other}")),
+    }
+}
+
+fn human_revision_feedback(conn: &Connection, run_id: &str) -> Result<Option<String>, String> {
+    conn.query_row(
+        "SELECT a.feedback
+         FROM loop_approvals a
+         JOIN loop_tasks t ON t.id = a.loop_task_id
+         WHERE t.loop_run_id = ?1
+           AND a.status = 'revision_requested'
+           AND a.feedback IS NOT NULL
+         ORDER BY a.attempt DESC
+         LIMIT 1",
+        [run_id],
+        |row| row.get(0),
+    )
+    .optional()
+    .map_err(|error| format!("Failed to load human revision feedback: {error}"))
+}
+
+pub async fn execute_human_revision(
+    db: Arc<Mutex<Connection>>,
+    runtime: Arc<dyn LoopAgentRuntime>,
+    run_id: &str,
+    working_directory: PathBuf,
+    feedback: String,
+) -> Result<(), String> {
+    execute_human_revision_with_cancel(db, runtime, run_id, working_directory, feedback, None).await
+}
+
+async fn execute_human_revision_with_cancel(
+    db: Arc<Mutex<Connection>>,
+    runtime: Arc<dyn LoopAgentRuntime>,
+    run_id: &str,
+    working_directory: PathBuf,
+    feedback: String,
+    cancelled: Option<Arc<AtomicBool>>,
+) -> Result<(), String> {
+    let result = execute_human_revision_inner(
+        Arc::clone(&db),
+        runtime,
+        run_id,
+        working_directory,
+        &feedback,
+        cancelled,
+    )
+    .await;
+    if let Err(error) = &result {
+        let conn = db.lock().unwrap();
+        let preserve_control_state =
+            get_loop_run(&conn, run_id)
+                .ok()
+                .flatten()
+                .is_some_and(|run| {
+                    matches!(
+                        run.state,
+                        LoopRunState::Killed
+                            | LoopRunState::Paused
+                            | LoopRunState::Completed
+                            | LoopRunState::AwaitingApproval
+                    )
+                });
+        if !preserve_control_state {
+            let _ = transition_unfinished_tasks(&conn, run_id, LoopTaskState::Interrupted, error);
+            let _ = set_run_state(&conn, run_id, LoopRunState::Attention, Some(error));
+        }
+    }
+    result
 }
 
 async fn execute_manual_loop_inner(
@@ -1888,6 +2443,14 @@ async fn execute_manual_loop_inner(
             continue;
         }
         if spec.evaluator_prompt.is_none() {
+            if spec.human_approval_prompt.is_some() {
+                runtime.disconnect(&worker_response.session_id).await?;
+                if !apply_pre_approval_control_boundary(&db.lock().unwrap(), run_id)? {
+                    return Ok(());
+                }
+                enter_human_approval(&db.lock().unwrap(), &spec, run_id, &task)?;
+                return Ok(());
+            }
             set_task_state(&db.lock().unwrap(), &task.id, LoopTaskState::Accepted, None)?;
             runtime.disconnect(&worker_response.session_id).await?;
             continue;
@@ -1989,6 +2552,16 @@ async fn execute_manual_loop_inner(
             first_verdict
         };
 
+        if final_verdict.verdict == EvaluatorVerdict::Accepted
+            && spec.human_approval_prompt.is_some()
+        {
+            runtime.disconnect(&worker_response.session_id).await?;
+            if !apply_pre_approval_control_boundary(&db.lock().unwrap(), run_id)? {
+                return Ok(());
+            }
+            enter_human_approval(&db.lock().unwrap(), &spec, run_id, &task)?;
+            return Ok(());
+        }
         let task_state = match final_verdict.verdict {
             EvaluatorVerdict::Accepted => LoopTaskState::Accepted,
             EvaluatorVerdict::Blocked => LoopTaskState::Blocked,
@@ -2082,6 +2655,18 @@ pub struct LoopEvaluationRecord {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LoopApprovalRecord {
+    pub id: String,
+    pub loop_task_id: String,
+    pub attempt: u32,
+    pub status: String,
+    pub prompt: String,
+    pub feedback: Option<String>,
+    pub created_at: String,
+    pub decided_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LoopEventRecord {
     pub id: i64,
     pub loop_spec_id: String,
@@ -2099,6 +2684,7 @@ pub struct LoopSnapshot {
     pub tasks: Vec<LoopTask>,
     pub verifications: Vec<LoopVerificationRecord>,
     pub evaluations: Vec<LoopEvaluationRecord>,
+    pub approvals: Vec<LoopApprovalRecord>,
     pub events: Vec<LoopEventRecord>,
 }
 
@@ -2212,6 +2798,35 @@ fn list_evaluations(conn: &Connection, run_id: &str) -> Result<Vec<LoopEvaluatio
         .map_err(|error| format!("Failed to decode evaluations: {error}"))
 }
 
+fn list_approvals(conn: &Connection, run_id: &str) -> Result<Vec<LoopApprovalRecord>, String> {
+    let mut statement = conn
+        .prepare(
+            "SELECT a.id, a.loop_task_id, a.attempt, a.status, a.prompt,
+                    a.feedback, a.created_at, a.decided_at
+             FROM loop_approvals a
+             JOIN loop_tasks t ON t.id = a.loop_task_id
+             WHERE t.loop_run_id = ?1
+             ORDER BY t.created_at, a.attempt",
+        )
+        .map_err(|error| format!("Failed to prepare approval query: {error}"))?;
+    let rows = statement
+        .query_map([run_id], |row| {
+            Ok(LoopApprovalRecord {
+                id: row.get(0)?,
+                loop_task_id: row.get(1)?,
+                attempt: row.get(2)?,
+                status: row.get(3)?,
+                prompt: row.get(4)?,
+                feedback: row.get(5)?,
+                created_at: row.get(6)?,
+                decided_at: row.get(7)?,
+            })
+        })
+        .map_err(|error| format!("Failed to query approvals: {error}"))?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("Failed to decode approvals: {error}"))
+}
+
 fn list_loop_events(conn: &Connection, run_id: &str) -> Result<Vec<LoopEventRecord>, String> {
     let mut statement = conn
         .prepare(
@@ -2265,6 +2880,7 @@ pub(crate) fn loop_snapshot(
             tasks: Vec::new(),
             verifications: Vec::new(),
             evaluations: Vec::new(),
+            approvals: Vec::new(),
             events: Vec::new(),
         });
     };
@@ -2276,6 +2892,7 @@ pub(crate) fn loop_snapshot(
             tasks: Vec::new(),
             verifications: Vec::new(),
             evaluations: Vec::new(),
+            approvals: Vec::new(),
             events: Vec::new(),
         });
     };
@@ -2286,6 +2903,7 @@ pub(crate) fn loop_snapshot(
         tasks: list_loop_tasks(conn, &run_id)?,
         verifications: list_verifications(conn, &run_id)?,
         evaluations: list_evaluations(conn, &run_id)?,
+        approvals: list_approvals(conn, &run_id)?,
         events: list_loop_events(conn, &run_id)?,
     })
 }
@@ -2405,6 +3023,15 @@ fn loop_progress_version(conn: &Connection, workstream_id: &str) -> Result<Strin
             |row| row.get(0),
         )
         .map_err(|error| format!("Failed to count loop evaluations: {error}"))?;
+    let approval_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM loop_approvals a
+             JOIN loop_tasks t ON t.id = a.loop_task_id
+             WHERE t.loop_run_id = ?1",
+            [&run.id],
+            |row| row.get(0),
+        )
+        .map_err(|error| format!("Failed to count loop approvals: {error}"))?;
     let latest_event_id: i64 = conn
         .query_row(
             "SELECT COALESCE(MAX(id), 0) FROM loop_events WHERE loop_run_id = ?1",
@@ -2413,13 +3040,14 @@ fn loop_progress_version(conn: &Connection, workstream_id: &str) -> Result<Strin
         )
         .map_err(|error| format!("Failed to read loop event version: {error}"))?;
     Ok(format!(
-        "{}:{}:{}:{}:{}:{}:{}",
+        "{}:{}:{}:{}:{}:{}:{}:{}",
         run.id,
         run.state.as_str(),
         run.control_requested,
         task_versions.join("|"),
         verification_count,
         evaluation_count,
+        approval_count,
         latest_event_id
     ))
 }
@@ -2453,12 +3081,9 @@ async fn run_with_sdk(
     let runtime = match SdkAgentRuntime::connect().await {
         Ok(runtime) => Arc::new(runtime) as Arc<dyn LoopAgentRuntime>,
         Err(error) => {
-            let _ = set_run_state(
-                &db.lock().unwrap(),
-                &run_id,
-                LoopRunState::Attention,
-                Some(&error),
-            );
+            let conn = db.lock().unwrap();
+            let _ = transition_unfinished_tasks(&conn, &run_id, LoopTaskState::Interrupted, &error);
+            let _ = set_run_state(&conn, &run_id, LoopRunState::Attention, Some(&error));
             let _ = app.emit(
                 "loop-updated",
                 LoopUpdatedEvent {
@@ -2511,6 +3136,76 @@ async fn run_with_sdk(
     .await;
     if let Err(error) = runtime.shutdown().await {
         eprintln!("[loop] Failed to shut down runtime for {run_id}: {error}");
+    }
+    manager.unregister(&run_id).await;
+    let _ = app.emit(
+        "loop-updated",
+        LoopUpdatedEvent {
+            workstream_id,
+            run_id,
+        },
+    );
+}
+
+async fn run_human_revision_with_sdk(
+    db: Arc<Mutex<Connection>>,
+    manager: Arc<LoopManager>,
+    app: tauri::AppHandle,
+    workstream_id: String,
+    run_id: String,
+    working_directory: PathBuf,
+    feedback: String,
+) {
+    use crate::loop_agent::SdkAgentRuntime;
+    use tauri::Emitter;
+
+    let runtime = match SdkAgentRuntime::connect().await {
+        Ok(runtime) => Arc::new(runtime) as Arc<dyn LoopAgentRuntime>,
+        Err(error) => {
+            let conn = db.lock().unwrap();
+            let _ = transition_unfinished_tasks(&conn, &run_id, LoopTaskState::Interrupted, &error);
+            let _ = set_run_state(&conn, &run_id, LoopRunState::Attention, Some(&error));
+            let _ = app.emit(
+                "loop-updated",
+                LoopUpdatedEvent {
+                    workstream_id,
+                    run_id,
+                },
+            );
+            return;
+        }
+    };
+    let cancelled = Arc::new(AtomicBool::new(false));
+    if let Err(error) = manager
+        .register(&run_id, Arc::clone(&runtime), Arc::clone(&cancelled))
+        .await
+    {
+        {
+            let conn = db.lock().unwrap();
+            let _ = transition_unfinished_tasks(&conn, &run_id, LoopTaskState::Interrupted, &error);
+            let _ = set_run_state(&conn, &run_id, LoopRunState::Attention, Some(&error));
+        }
+        let _ = runtime.shutdown().await;
+        let _ = app.emit(
+            "loop-updated",
+            LoopUpdatedEvent {
+                workstream_id,
+                run_id,
+            },
+        );
+        return;
+    }
+    let _ = execute_human_revision_with_cancel(
+        db,
+        Arc::clone(&runtime),
+        &run_id,
+        working_directory,
+        feedback,
+        Some(cancelled),
+    )
+    .await;
+    if let Err(error) = runtime.shutdown().await {
+        eprintln!("[loop] Failed to shut down revision runtime for {run_id}: {error}");
     }
     manager.unregister(&run_id).await;
     let _ = app.emit(
@@ -2634,7 +3329,7 @@ pub async fn resume_workstream_loop(
     if state.loop_manager.is_active(&run_id).await {
         return Err("The paused loop executor is still shutting down; retry Resume".to_string());
     }
-    let (run, workstream_id, directory) = {
+    let (run, workstream_id, directory, revision_feedback) = {
         let conn = state.db.lock().unwrap();
         let run =
             get_loop_run(&conn, &run_id)?.ok_or_else(|| format!("Loop run not found: {run_id}"))?;
@@ -2642,29 +3337,122 @@ pub async fn resume_workstream_loop(
             return Err("Only a paused loop run can be resumed".to_string());
         }
         let (workstream_id, directory) = workstream_directory_for_spec(&conn, &run.loop_spec_id)?;
+        let revision_feedback = human_revision_feedback(&conn, &run_id)?;
         let claimed_run = claim_paused_run(&conn, &run_id)?;
-        (claimed_run, workstream_id, directory)
+        (claimed_run, workstream_id, directory, revision_feedback)
     };
-    tauri::async_runtime::spawn(run_with_sdk(
-        Arc::clone(&state.db),
-        Arc::clone(&state.loop_manager),
-        app,
-        workstream_id,
-        run_id,
-        directory,
-    ));
+    if let Some(feedback) = revision_feedback {
+        tauri::async_runtime::spawn(run_human_revision_with_sdk(
+            Arc::clone(&state.db),
+            Arc::clone(&state.loop_manager),
+            app,
+            workstream_id,
+            run_id,
+            directory,
+            feedback,
+        ));
+    } else {
+        tauri::async_runtime::spawn(run_with_sdk(
+            Arc::clone(&state.db),
+            Arc::clone(&state.loop_manager),
+            app,
+            workstream_id,
+            run_id,
+            directory,
+        ));
+    }
     Ok(run)
 }
 
-fn apply_control_request(conn: &Connection, run: &LoopRun, action: &str) -> Result<bool, String> {
+#[tauri::command]
+pub async fn decide_loop_human_approval(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, crate::AppState>,
+    run_id: String,
+    decision: HumanApprovalDecision,
+    feedback: Option<String>,
+) -> Result<LoopRun, String> {
+    use tauri::Emitter;
+
+    if state.loop_manager.is_active(&run_id).await {
+        return Err(
+            "The previous loop executor is still shutting down; retry the approval decision"
+                .to_string(),
+        );
+    }
+    let (run, workstream_id, directory) = {
+        let conn = state.db.lock().unwrap();
+        let current =
+            get_loop_run(&conn, &run_id)?.ok_or_else(|| format!("Loop run not found: {run_id}"))?;
+        let (workstream_id, directory) =
+            workstream_directory_for_spec(&conn, &current.loop_spec_id)?;
+        let run = decide_human_approval(&conn, &run_id, decision, feedback.as_deref())?;
+        (run, workstream_id, directory)
+    };
+    if decision == HumanApprovalDecision::Revise {
+        tauri::async_runtime::spawn(run_human_revision_with_sdk(
+            Arc::clone(&state.db),
+            Arc::clone(&state.loop_manager),
+            app,
+            workstream_id,
+            run_id,
+            directory,
+            feedback.expect("revision feedback was validated"),
+        ));
+    } else if run.state == LoopRunState::Resuming {
+        tauri::async_runtime::spawn(run_with_sdk(
+            Arc::clone(&state.db),
+            Arc::clone(&state.loop_manager),
+            app,
+            workstream_id,
+            run_id,
+            directory,
+        ));
+    } else {
+        let _ = app.emit(
+            "loop-updated",
+            LoopUpdatedEvent {
+                workstream_id,
+                run_id,
+            },
+        );
+    }
+    Ok(run)
+}
+
+pub(crate) fn apply_control_request(
+    conn: &Connection,
+    run: &LoopRun,
+    action: &str,
+) -> Result<bool, String> {
     match action {
+        "pause" if run.state == LoopRunState::AwaitingApproval => {
+            Err("A loop awaiting approval is already paused for human input".to_string())
+        }
         "pause" => {
             if run.state != LoopRunState::Paused {
                 set_run_control(conn, &run.id, "pause")?;
             }
             Ok(false)
         }
-        "stop" if run.state == LoopRunState::Paused => {
+        "stop"
+            if matches!(
+                run.state,
+                LoopRunState::Paused | LoopRunState::AwaitingApproval
+            ) =>
+        {
+            if run.state == LoopRunState::AwaitingApproval {
+                conn.execute(
+                    "UPDATE loop_approvals
+                     SET status = 'cancelled', feedback = 'Loop stopped',
+                         decided_at = ?1
+                     WHERE loop_task_id IN (
+                         SELECT id FROM loop_tasks WHERE loop_run_id = ?2
+                     ) AND status = 'pending'",
+                    params![crate::now(), run.id],
+                )
+                .map_err(|error| format!("Failed to cancel pending approval: {error}"))?;
+            }
             transition_unfinished_tasks(
                 conn,
                 &run.id,
@@ -2680,6 +3468,15 @@ fn apply_control_request(conn: &Connection, run: &LoopRun, action: &str) -> Resu
             Ok(false)
         }
         "kill" => {
+            conn.execute(
+                "UPDATE loop_approvals
+                 SET status = 'cancelled', feedback = 'Loop killed', decided_at = ?1
+                 WHERE loop_task_id IN (
+                     SELECT id FROM loop_tasks WHERE loop_run_id = ?2
+                 ) AND status = 'pending'",
+                params![crate::now(), run.id],
+            )
+            .map_err(|error| format!("Failed to cancel pending approval: {error}"))?;
             set_run_control(conn, &run.id, "kill")?;
             transition_unfinished_tasks(conn, &run.id, LoopTaskState::Interrupted, "Loop killed")?;
             set_run_state(conn, &run.id, LoopRunState::Killed, None)?;
@@ -2745,6 +3542,7 @@ mod tests {
             orchestrator_model: None,
             worker_model: None,
             evaluator_model: None,
+            human_approval_prompt: None,
             verifier_program: Some("cargo".to_string()),
             verifier_args: vec!["test".to_string()],
             verifier_cwd: Some("/tmp/repo".to_string()),
@@ -2752,6 +3550,40 @@ mod tests {
             run_timeout_seconds: 600,
             max_task_iterations: 2,
         }
+    }
+
+    fn pending_approval_run(conn: &Connection, key: &str) -> (LoopSpec, LoopRun, LoopTask) {
+        let spec = match get_loop_spec(conn, "ws-1").expect("load spec") {
+            Some(spec) => spec,
+            None => {
+                let mut input = spec_input();
+                input.human_approval_prompt = Some("Review the evidence".to_string());
+                save_loop_spec(conn, "ws-1", input).expect("save approval loop")
+            }
+        };
+        set_loop_enabled(conn, &spec.id, true).expect("enable loop");
+        let run = create_loop_run(conn, &spec.id, 600).expect("create run");
+        let task = enqueue_task(
+            conn,
+            &run.id,
+            &spec.id,
+            &DiscoveredTask {
+                key: key.to_string(),
+                title: "Task".to_string(),
+                objective: "Work".to_string(),
+            },
+        )
+        .expect("enqueue")
+        .expect("task");
+        update_run_current_task(conn, &run.id, Some(&task.id)).expect("set active task");
+        enter_human_approval(conn, &spec, &run.id, &task).expect("request approval");
+        (
+            spec,
+            get_loop_run(conn, &run.id)
+                .expect("load approval run")
+                .expect("approval run"),
+            task,
+        )
     }
 
     #[test]
@@ -2864,6 +3696,8 @@ mod tests {
     #[test]
     fn materialized_definition_is_pinned_and_scopes_task_deduplication() {
         let conn = test_db();
+        let mut first_input = spec_input();
+        first_input.human_approval_prompt = Some("Review first".to_string());
         let first = materialize_loop_definition(
             &conn,
             "ws-1",
@@ -2875,7 +3709,7 @@ mod tests {
                 objective: "First objective".to_string(),
                 portable: true,
                 yaml: "first yaml".to_string(),
-                spec: spec_input(),
+                spec: first_input,
             },
         )
         .expect("materialize first definition");
@@ -2913,6 +3747,7 @@ mod tests {
             },
         )
         .expect("materialize second definition");
+        assert_eq!(second.human_approval_prompt, None);
         let second_run = create_loop_run(&conn, &second.id, 600).expect("create second run");
         assert!(
             enqueue_task(&conn, &second_run.id, &second.id, &task)
@@ -3398,8 +4233,625 @@ mod tests {
         assert_eq!(evaluations, 0);
     }
 
+    #[tokio::test]
+    async fn human_approval_only_loop_waits_with_a_persisted_request() {
+        use crate::loop_agent::{AgentRole, ScriptedAgentResponse, ScriptedAgentRuntime};
+        use std::sync::{Arc, Mutex};
+
+        let conn = test_db();
+        let mut input = spec_input();
+        input.evaluator_prompt = None;
+        input.verifier_program = None;
+        input.verifier_args.clear();
+        input.human_approval_prompt = Some("Review the evidence".to_string());
+        let spec = save_loop_spec(&conn, "ws-1", input).expect("save approval loop");
+        set_loop_enabled(&conn, &spec.id, true).expect("enable loop");
+        let run = create_loop_run(&conn, &spec.id, 600).expect("create run");
+        let runtime = Arc::new(ScriptedAgentRuntime::new(vec![
+            ScriptedAgentResponse {
+                role: AgentRole::Orchestrator,
+                session_id: "orchestrator-1".to_string(),
+                content: r#"{"tasks":[{"key":"task-1","title":"Task","objective":"Do work"}]}"#
+                    .to_string(),
+                events: vec![],
+            },
+            ScriptedAgentResponse {
+                role: AgentRole::Worker,
+                session_id: "worker-1".to_string(),
+                content: r#"{"status":"completed","summary":"Done","evidence":["diff"]}"#
+                    .to_string(),
+                events: vec![],
+            },
+        ]));
+        let db = Arc::new(Mutex::new(conn));
+
+        execute_manual_loop(
+            Arc::clone(&db),
+            runtime,
+            &run.id,
+            std::path::PathBuf::from("/tmp/repo"),
+        )
+        .await
+        .expect("execute approval loop");
+
+        let snapshot = loop_snapshot(&db.lock().unwrap(), "ws-1").expect("load snapshot");
+        assert_eq!(
+            snapshot.latest_run.as_ref().unwrap().state,
+            LoopRunState::AwaitingApproval
+        );
+        assert_eq!(snapshot.tasks[0].state, LoopTaskState::AwaitingApproval);
+        assert_eq!(snapshot.approvals.len(), 1);
+        assert_eq!(snapshot.approvals[0].status, "pending");
+        assert_eq!(snapshot.approvals[0].prompt, "Review the evidence");
+    }
+
+    #[tokio::test]
+    async fn human_approval_decisions_are_persisted_and_revision_rechecks_evidence() {
+        use crate::loop_agent::{AgentRole, ScriptedAgentResponse, ScriptedAgentRuntime};
+        use std::sync::{Arc, Mutex};
+
+        let conn = test_db();
+        let mut input = spec_input();
+        input.evaluator_prompt = None;
+        input.verifier_program = None;
+        input.verifier_args.clear();
+        input.human_approval_prompt = Some("Review the evidence".to_string());
+        let spec = save_loop_spec(&conn, "ws-1", input).expect("save approval loop");
+        set_loop_enabled(&conn, &spec.id, true).expect("enable loop");
+        let run = create_loop_run(&conn, &spec.id, 600).expect("create run");
+        let first_runtime = Arc::new(ScriptedAgentRuntime::new(vec![
+            ScriptedAgentResponse {
+                role: AgentRole::Orchestrator,
+                session_id: "orchestrator-1".to_string(),
+                content: r#"{"tasks":[{"key":"task-1","title":"Task","objective":"Do work"}]}"#
+                    .to_string(),
+                events: vec![],
+            },
+            ScriptedAgentResponse {
+                role: AgentRole::Worker,
+                session_id: "worker-1".to_string(),
+                content: r#"{"status":"completed","summary":"First","evidence":[]}"#.to_string(),
+                events: vec![],
+            },
+        ]));
+        let db = Arc::new(Mutex::new(conn));
+        execute_manual_loop(
+            Arc::clone(&db),
+            first_runtime,
+            &run.id,
+            std::path::PathBuf::from("/tmp/repo"),
+        )
+        .await
+        .expect("reach approval");
+
+        let feedback = "Add the missing edge case";
+        decide_human_approval(
+            &db.lock().unwrap(),
+            &run.id,
+            HumanApprovalDecision::Revise,
+            Some(feedback),
+        )
+        .expect("request revision");
+        let revision_runtime = Arc::new(ScriptedAgentRuntime::new(vec![ScriptedAgentResponse {
+            role: AgentRole::Worker,
+            session_id: "worker-2".to_string(),
+            content: r#"{"status":"completed","summary":"Revised","evidence":["edge case"]}"#
+                .to_string(),
+            events: vec![],
+        }]));
+        execute_human_revision(
+            Arc::clone(&db),
+            revision_runtime,
+            &run.id,
+            std::path::PathBuf::from("/tmp/repo"),
+            feedback.to_string(),
+        )
+        .await
+        .expect("execute human revision");
+
+        let awaiting = loop_snapshot(&db.lock().unwrap(), "ws-1").expect("load revised snapshot");
+        assert_eq!(
+            awaiting.latest_run.as_ref().unwrap().state,
+            LoopRunState::AwaitingApproval
+        );
+        assert_eq!(awaiting.tasks[0].revision_count, 1);
+        assert_eq!(awaiting.approvals.len(), 2);
+        assert_eq!(awaiting.approvals[0].status, "revision_requested");
+        assert_eq!(awaiting.approvals[0].feedback.as_deref(), Some(feedback));
+        let second_revision = decide_human_approval(
+            &db.lock().unwrap(),
+            &run.id,
+            HumanApprovalDecision::Revise,
+            Some("Revise again"),
+        )
+        .expect_err("a task can only be revised once");
+        assert!(second_revision.contains("at most one revision"));
+
+        decide_human_approval(
+            &db.lock().unwrap(),
+            &run.id,
+            HumanApprovalDecision::Approve,
+            None,
+        )
+        .expect("approve revision");
+        let approved = loop_snapshot(&db.lock().unwrap(), "ws-1").expect("load approved snapshot");
+        assert_eq!(
+            approved.latest_run.as_ref().unwrap().state,
+            LoopRunState::Completed
+        );
+        assert_eq!(approved.tasks[0].state, LoopTaskState::Accepted);
+        assert_eq!(approved.approvals[1].status, "approved");
+    }
+
+    #[tokio::test]
+    async fn approval_attempt_matches_an_evaluator_requested_revision() {
+        use crate::loop_agent::{AgentRole, ScriptedAgentResponse, ScriptedAgentRuntime};
+        use std::sync::{Arc, Mutex};
+
+        let conn = test_db();
+        let mut input = spec_input();
+        input.verifier_program = None;
+        input.verifier_args.clear();
+        input.human_approval_prompt = Some("Review the evidence".to_string());
+        let spec = save_loop_spec(&conn, "ws-1", input).expect("save approval loop");
+        set_loop_enabled(&conn, &spec.id, true).expect("enable loop");
+        let run = create_loop_run(&conn, &spec.id, 600).expect("create run");
+        let runtime = Arc::new(ScriptedAgentRuntime::new(vec![
+            ScriptedAgentResponse {
+                role: AgentRole::Orchestrator,
+                session_id: "orchestrator-1".to_string(),
+                content: r#"{"tasks":[{"key":"task-1","title":"Task","objective":"Do work"}]}"#
+                    .to_string(),
+                events: vec![],
+            },
+            ScriptedAgentResponse {
+                role: AgentRole::Worker,
+                session_id: "worker-1".to_string(),
+                content: r#"{"status":"completed","summary":"First","evidence":[]}"#.to_string(),
+                events: vec![],
+            },
+            ScriptedAgentResponse {
+                role: AgentRole::Evaluator,
+                session_id: "evaluator-1".to_string(),
+                content:
+                    r#"{"verdict":"revise","summary":"Revise","feedback":"Fix it","evidence":[]}"#
+                        .to_string(),
+                events: vec![],
+            },
+            ScriptedAgentResponse {
+                role: AgentRole::Worker,
+                session_id: "worker-1".to_string(),
+                content: r#"{"status":"completed","summary":"Second","evidence":[]}"#.to_string(),
+                events: vec![],
+            },
+            ScriptedAgentResponse {
+                role: AgentRole::Evaluator,
+                session_id: "evaluator-2".to_string(),
+                content: r#"{"verdict":"accepted","summary":"Good","evidence":[]}"#.to_string(),
+                events: vec![],
+            },
+        ]));
+        let db = Arc::new(Mutex::new(conn));
+
+        execute_manual_loop(
+            Arc::clone(&db),
+            runtime,
+            &run.id,
+            std::path::PathBuf::from("/tmp/repo"),
+        )
+        .await
+        .expect("execute evaluator revision");
+
+        let snapshot = loop_snapshot(&db.lock().unwrap(), "ws-1").expect("load snapshot");
+        assert_eq!(snapshot.tasks[0].revision_count, 1);
+        assert_eq!(snapshot.approvals[0].attempt, 2);
+    }
+
     #[test]
-    fn loop_requires_verification_or_an_evaluator() {
+    fn pending_human_approval_survives_restart_reconciliation() {
+        let conn = test_db();
+        let mut input = spec_input();
+        input.human_approval_prompt = Some("Review the evidence".to_string());
+        let spec = save_loop_spec(&conn, "ws-1", input).expect("save approval loop");
+        set_loop_enabled(&conn, &spec.id, true).expect("enable loop");
+        let run = create_loop_run(&conn, &spec.id, 600).expect("create run");
+        let task = enqueue_task(
+            &conn,
+            &run.id,
+            &spec.id,
+            &DiscoveredTask {
+                key: "task".to_string(),
+                title: "Task".to_string(),
+                objective: "Work".to_string(),
+            },
+        )
+        .expect("enqueue")
+        .expect("task");
+        update_run_current_task(&conn, &run.id, Some(&task.id)).expect("set active task");
+        enter_human_approval(&conn, &spec, &run.id, &task).expect("request approval");
+
+        let reconciled = reconcile_interrupted_runs(&conn).expect("reconcile");
+
+        assert_eq!(reconciled, 0);
+        assert_eq!(
+            get_loop_run(&conn, &run.id).unwrap().unwrap().state,
+            LoopRunState::AwaitingApproval
+        );
+        assert_eq!(
+            list_loop_tasks(&conn, &run.id).unwrap()[0].state,
+            LoopTaskState::AwaitingApproval
+        );
+    }
+
+    #[test]
+    fn reject_and_controls_close_pending_human_approvals() {
+        let conn = test_db();
+        let (_spec, rejected_run, _rejected_task) = pending_approval_run(&conn, "reject");
+
+        decide_human_approval(
+            &conn,
+            &rejected_run.id,
+            HumanApprovalDecision::Reject,
+            Some("The result is unsafe"),
+        )
+        .expect("reject approval");
+        let rejected = loop_snapshot(&conn, "ws-1").expect("load rejected snapshot");
+        assert_eq!(
+            rejected.latest_run.as_ref().unwrap().state,
+            LoopRunState::Attention
+        );
+        assert_eq!(rejected.tasks[0].state, LoopTaskState::Blocked);
+        assert_eq!(rejected.approvals[0].status, "rejected");
+        assert_eq!(
+            rejected.approvals[0].feedback.as_deref(),
+            Some("The result is unsafe")
+        );
+
+        let (_spec, stopped_run, _task) = pending_approval_run(&conn, "stop");
+        apply_control_request(&conn, &stopped_run, "stop").expect("stop approval");
+        let stopped_approval: String = conn
+            .query_row(
+                "SELECT status FROM loop_approvals
+                 WHERE loop_task_id IN (
+                     SELECT id FROM loop_tasks WHERE loop_run_id = ?1
+                 )",
+                [&stopped_run.id],
+                |row| row.get(0),
+            )
+            .expect("stopped approval");
+        assert_eq!(stopped_approval, "cancelled");
+
+        let (_spec, killed_run, _task) = pending_approval_run(&conn, "kill");
+        apply_control_request(&conn, &killed_run, "kill").expect("kill approval");
+        let killed_approval: String = conn
+            .query_row(
+                "SELECT status FROM loop_approvals
+                 WHERE loop_task_id IN (
+                     SELECT id FROM loop_tasks WHERE loop_run_id = ?1
+                 )",
+                [&killed_run.id],
+                |row| row.get(0),
+            )
+            .expect("killed approval");
+        assert_eq!(killed_approval, "cancelled");
+        assert_eq!(
+            get_loop_run(&conn, &killed_run.id).unwrap().unwrap().state,
+            LoopRunState::Killed
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn kill_during_human_revision_preserves_killed_state() {
+        use crate::loop_agent::{AgentRole, ScriptedAgentResponse, ScriptedAgentRuntime};
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::{Arc, Mutex};
+
+        let conn = test_db();
+        let mut input = spec_input();
+        input.evaluator_prompt = None;
+        input.human_approval_prompt = Some("Review the evidence".to_string());
+        input.verifier_program = Some("/bin/sh".to_string());
+        input.verifier_args = vec!["-c".to_string(), "sleep 30".to_string()];
+        input.verifier_cwd = None;
+        let spec = save_loop_spec(&conn, "ws-1", input).expect("save approval loop");
+        let (_spec, run, task) = pending_approval_run(&conn, "kill-revision");
+        decide_human_approval(
+            &conn,
+            &run.id,
+            HumanApprovalDecision::Revise,
+            Some("Revise it"),
+        )
+        .expect("request revision");
+        let db = Arc::new(Mutex::new(conn));
+        let runtime = Arc::new(ScriptedAgentRuntime::new(vec![ScriptedAgentResponse {
+            role: AgentRole::Worker,
+            session_id: "worker-2".to_string(),
+            content: r#"{"status":"completed","summary":"Revised","evidence":[]}"#.to_string(),
+            events: vec![],
+        }])) as Arc<dyn LoopAgentRuntime>;
+        let cancelled = Arc::new(AtomicBool::new(false));
+
+        let executor = execute_human_revision_with_cancel(
+            Arc::clone(&db),
+            runtime,
+            &run.id,
+            std::env::current_dir().expect("current directory"),
+            "Revise it".to_string(),
+            Some(Arc::clone(&cancelled)),
+        );
+        let killer = async {
+            loop {
+                let current_task = list_loop_tasks(&db.lock().unwrap(), &run.id)
+                    .expect("list tasks")
+                    .into_iter()
+                    .next()
+                    .expect("task");
+                if current_task.state == LoopTaskState::Verifying {
+                    let current_run = get_loop_run(&db.lock().unwrap(), &run.id)
+                        .expect("load run")
+                        .expect("run");
+                    apply_control_request(&db.lock().unwrap(), &current_run, "kill")
+                        .expect("kill revision");
+                    cancelled.store(true, Ordering::Release);
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        };
+
+        let (result, ()) = tokio::join!(executor, killer);
+        assert!(result.is_err());
+        assert_eq!(
+            get_loop_run(&db.lock().unwrap(), &run.id)
+                .unwrap()
+                .unwrap()
+                .state,
+            LoopRunState::Killed
+        );
+        assert_eq!(
+            list_loop_tasks(&db.lock().unwrap(), &run.id).unwrap()[0].state,
+            LoopTaskState::Interrupted
+        );
+        assert_eq!(task.loop_spec_id, spec.id);
+    }
+
+    #[tokio::test]
+    async fn paused_human_revision_resumes_from_persisted_feedback() {
+        use crate::loop_agent::{AgentRole, ScriptedAgentResponse, ScriptedAgentRuntime};
+        use std::sync::{Arc, Mutex};
+
+        let conn = test_db();
+        let mut input = spec_input();
+        input.evaluator_prompt = None;
+        input.verifier_program = None;
+        input.verifier_args.clear();
+        input.human_approval_prompt = Some("Review the evidence".to_string());
+        save_loop_spec(&conn, "ws-1", input).expect("save approval loop");
+        let (_spec, run, _task) = pending_approval_run(&conn, "pause-revision");
+        decide_human_approval(
+            &conn,
+            &run.id,
+            HumanApprovalDecision::Revise,
+            Some("Persist this feedback"),
+        )
+        .expect("request revision");
+        set_run_control(&conn, &run.id, "pause").expect("pause revision");
+        let db = Arc::new(Mutex::new(conn));
+
+        execute_human_revision(
+            Arc::clone(&db),
+            Arc::new(ScriptedAgentRuntime::new(vec![])),
+            &run.id,
+            std::path::PathBuf::from("/tmp/repo"),
+            "Persist this feedback".to_string(),
+        )
+        .await
+        .expect("pause before worker");
+        assert_eq!(
+            get_loop_run(&db.lock().unwrap(), &run.id)
+                .unwrap()
+                .unwrap()
+                .state,
+            LoopRunState::Paused
+        );
+        let feedback = human_revision_feedback(&db.lock().unwrap(), &run.id)
+            .expect("load feedback")
+            .expect("revision feedback");
+        claim_paused_run(&db.lock().unwrap(), &run.id).expect("claim paused revision");
+        let runtime = Arc::new(ScriptedAgentRuntime::new(vec![ScriptedAgentResponse {
+            role: AgentRole::Worker,
+            session_id: "worker-resumed".to_string(),
+            content: r#"{"status":"completed","summary":"Resumed","evidence":[]}"#.to_string(),
+            events: vec![],
+        }]));
+
+        execute_human_revision(
+            Arc::clone(&db),
+            runtime,
+            &run.id,
+            std::path::PathBuf::from("/tmp/repo"),
+            feedback,
+        )
+        .await
+        .expect("resume revision");
+
+        let snapshot = loop_snapshot(&db.lock().unwrap(), "ws-1").expect("load snapshot");
+        assert_eq!(
+            snapshot.latest_run.as_ref().unwrap().state,
+            LoopRunState::AwaitingApproval
+        );
+        assert_eq!(snapshot.approvals.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn approval_continues_queued_tasks_and_honors_pre_boundary_stop() {
+        use crate::loop_agent::{AgentRole, ScriptedAgentResponse, ScriptedAgentRuntime};
+        use std::sync::{Arc, Mutex};
+
+        let conn = test_db();
+        let mut input = spec_input();
+        input.evaluator_prompt = None;
+        input.verifier_program = None;
+        input.verifier_args.clear();
+        input.human_approval_prompt = Some("Review the evidence".to_string());
+        let spec = save_loop_spec(&conn, "ws-1", input).expect("save approval loop");
+        set_loop_enabled(&conn, &spec.id, true).expect("enable loop");
+        let run = create_loop_run(&conn, &spec.id, 600).expect("create run");
+        let first = enqueue_task(
+            &conn,
+            &run.id,
+            &spec.id,
+            &DiscoveredTask {
+                key: "first".to_string(),
+                title: "First".to_string(),
+                objective: "First task".to_string(),
+            },
+        )
+        .unwrap()
+        .unwrap();
+        enqueue_task(
+            &conn,
+            &run.id,
+            &spec.id,
+            &DiscoveredTask {
+                key: "second".to_string(),
+                title: "Second".to_string(),
+                objective: "Second task".to_string(),
+            },
+        )
+        .unwrap()
+        .unwrap();
+        update_run_current_task(&conn, &run.id, Some(&first.id)).unwrap();
+        enter_human_approval(&conn, &spec, &run.id, &first).unwrap();
+        conn.execute(
+            "UPDATE loop_runs SET deadline_at = '1' WHERE id = ?1",
+            [&run.id],
+        )
+        .unwrap();
+
+        let continued = decide_human_approval(&conn, &run.id, HumanApprovalDecision::Approve, None)
+            .expect("approve first task");
+        assert_eq!(continued.state, LoopRunState::Resuming);
+        assert_ne!(continued.deadline_at, "1");
+        let db = Arc::new(Mutex::new(conn));
+        let runtime = Arc::new(ScriptedAgentRuntime::new(vec![ScriptedAgentResponse {
+            role: AgentRole::Worker,
+            session_id: "worker-second".to_string(),
+            content: r#"{"status":"completed","summary":"Second done","evidence":[]}"#.to_string(),
+            events: vec![],
+        }]));
+        execute_manual_loop(
+            Arc::clone(&db),
+            runtime,
+            &run.id,
+            std::path::PathBuf::from("/tmp/repo"),
+        )
+        .await
+        .expect("continue queued task");
+        let awaiting = loop_snapshot(&db.lock().unwrap(), "ws-1").unwrap();
+        assert_eq!(
+            awaiting.latest_run.as_ref().unwrap().state,
+            LoopRunState::AwaitingApproval
+        );
+        decide_human_approval(
+            &db.lock().unwrap(),
+            &run.id,
+            HumanApprovalDecision::Approve,
+            None,
+        )
+        .expect("approve second task");
+        assert_eq!(
+            get_loop_run(&db.lock().unwrap(), &run.id)
+                .unwrap()
+                .unwrap()
+                .state,
+            LoopRunState::Completed
+        );
+
+        let conn = test_db();
+        let mut input = spec_input();
+        input.evaluator_prompt = None;
+        input.verifier_program = None;
+        input.verifier_args.clear();
+        input.human_approval_prompt = Some("Review the evidence".to_string());
+        let stop_spec = save_loop_spec(&conn, "ws-1", input).expect("save stop loop");
+        set_loop_enabled(&conn, &stop_spec.id, true).unwrap();
+        let stopped_run = create_loop_run(&conn, &stop_spec.id, 600).unwrap();
+        let task = enqueue_task(
+            &conn,
+            &stopped_run.id,
+            &stop_spec.id,
+            &DiscoveredTask {
+                key: "stop-before-approval".to_string(),
+                title: "Stop".to_string(),
+                objective: "Stop task".to_string(),
+            },
+        )
+        .unwrap()
+        .unwrap();
+        update_run_current_task(&conn, &stopped_run.id, Some(&task.id)).unwrap();
+        set_task_state(&conn, &task.id, LoopTaskState::Working, None).unwrap();
+        set_run_state(&conn, &stopped_run.id, LoopRunState::Working, None).unwrap();
+        set_run_control(&conn, &stopped_run.id, "stop").unwrap();
+        assert!(!apply_pre_approval_control_boundary(&conn, &stopped_run.id).unwrap());
+        assert_eq!(
+            get_loop_run(&conn, &stopped_run.id).unwrap().unwrap().state,
+            LoopRunState::Attention
+        );
+    }
+
+    #[test]
+    fn final_human_approval_preserves_earlier_task_failures() {
+        let conn = test_db();
+        let mut input = spec_input();
+        input.evaluator_prompt = None;
+        input.verifier_program = None;
+        input.verifier_args.clear();
+        input.human_approval_prompt = Some("Review the evidence".to_string());
+        let spec = save_loop_spec(&conn, "ws-1", input).expect("save approval loop");
+        set_loop_enabled(&conn, &spec.id, true).unwrap();
+        let run = create_loop_run(&conn, &spec.id, 600).unwrap();
+        let failed = enqueue_task(
+            &conn,
+            &run.id,
+            &spec.id,
+            &DiscoveredTask {
+                key: "failed".to_string(),
+                title: "Failed".to_string(),
+                objective: "Fail".to_string(),
+            },
+        )
+        .unwrap()
+        .unwrap();
+        set_task_state(&conn, &failed.id, LoopTaskState::Blocked, None).unwrap();
+        let approved = enqueue_task(
+            &conn,
+            &run.id,
+            &spec.id,
+            &DiscoveredTask {
+                key: "approved".to_string(),
+                title: "Approved".to_string(),
+                objective: "Approve".to_string(),
+            },
+        )
+        .unwrap()
+        .unwrap();
+        update_run_current_task(&conn, &run.id, Some(&approved.id)).unwrap();
+        enter_human_approval(&conn, &spec, &run.id, &approved).unwrap();
+
+        let decided = decide_human_approval(&conn, &run.id, HumanApprovalDecision::Approve, None)
+            .expect("approve final task");
+
+        assert_eq!(decided.state, LoopRunState::Attention);
+        assert!(decided
+            .error
+            .as_deref()
+            .is_some_and(|error| error.contains("require human attention")));
+    }
+
+    #[test]
+    fn loop_requires_at_least_one_sensor() {
         let conn = test_db();
         let mut input = spec_input();
         input.evaluator_prompt = None;
@@ -3409,7 +4861,7 @@ mod tests {
         let error =
             save_loop_spec(&conn, "ws-1", input).expect_err("unverified loop must be rejected");
 
-        assert!(error.contains("verification or evaluator"));
+        assert!(error.contains("verification, evaluator, or human approval"));
     }
 
     #[test]

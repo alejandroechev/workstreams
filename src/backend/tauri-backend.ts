@@ -218,6 +218,7 @@ export class TauriBackend implements Backend {
         objective: string;
         hasVerification: boolean;
         hasEvaluator: boolean;
+        hasHumanApproval: boolean;
       }>;
       invalid: Array<{ path: string; error: string }>;
     }>("list_loop_definitions", { rootDir });
@@ -233,6 +234,7 @@ export class TauriBackend implements Backend {
         objective: definition.objective,
         hasVerification: definition.hasVerification,
         hasEvaluator: definition.hasEvaluator,
+        hasHumanApproval: definition.hasHumanApproval,
       })),
       invalid: catalog.invalid,
     };
@@ -277,6 +279,19 @@ export class TauriBackend implements Backend {
     const run = await invoke<LoopRunWire>("run_loop_definition_now", {
       workstreamId,
       definitionPath,
+    });
+    return decodeLoopRun(run);
+  }
+
+  async decideLoopHumanApproval(
+    runId: string,
+    decision: "approve" | "revise" | "reject",
+    feedback?: string,
+  ): Promise<LoopRun> {
+    const run = await invoke<LoopRunWire>("decide_loop_human_approval", {
+      runId,
+      decision,
+      feedback: feedback?.trim() || null,
     });
     return decodeLoopRun(run);
   }

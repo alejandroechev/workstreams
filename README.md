@@ -36,13 +36,15 @@ project-aware workspace:
   `.workstreams/loops/*.loop.yaml` files (or ask the `create-loop` skill to
   generate one), then select and run them from the **Goal Loop** catalog.
   Every loop uses a bounded orchestrator → worker pipeline and must include
-  deterministic verification, an independent evaluator, or both. Verifiers
-  can be repository scripts outside the definition folder; each run pins the
-  exact YAML and SHA-256 hash for durable evidence. The tile exposes live
-  stage, task, output, verifier evidence, verdicts, and distinct Pause /
-  Resume / Stop / Kill controls. MVP1 is manual and local while Workstreams is
-  open. See [ADR 021](docs/adrs/021-manual-coding-goal-loop.md) and
-  [ADR 022](docs/adrs/022-versioned-loop-definitions.md).
+  deterministic verification, an independent evaluator, human approval, or a
+  layered combination. Human-gated runs persist an **Awaiting approval** stage
+  with Approve / Request revision / Reject actions in the tile and an approval
+  indicator in the sidebar. Verifiers can be repository scripts outside the
+  definition folder; each run pins the exact YAML and SHA-256 hash for durable
+  evidence. MVP1 is manual and local while Workstreams is open. See
+  [ADR 021](docs/adrs/021-manual-coding-goal-loop.md),
+  [ADR 022](docs/adrs/022-versioned-loop-definitions.md), and
+  [ADR 023](docs/adrs/023-human-loop-approval.md).
 - 🔀 **Switch a workstream to another repo** — the same **Change worktree…**
   action. Pick a directory in a different repo and the workstream moves repo
   with it (colour, grouping and tile cwds follow). A directory in no known repo

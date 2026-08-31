@@ -16,6 +16,7 @@ import {
   ClipboardDocumentListIcon,
   ArrowPathRoundedSquareIcon,
   ExclamationTriangleIcon,
+  HandRaisedIcon,
 } from "@heroicons/react/20/solid";
 import { reorderById } from "../domain/reorder";
 import { getAppSettings } from "../domain/app-settings";
@@ -344,6 +345,9 @@ export default function WorkstreamSidebar({
   const runningLoopCount = loopSummaries.filter((summary) =>
     runningLoopStates.has(summary.runState ?? ""),
   ).length;
+  const pendingApprovalCount = loopSummaries.filter(
+    (summary) => summary.runState === "awaiting_approval",
+  ).length;
   const loopByWorkstream = new Map(
     loopSummaries.map((summary) => [summary.workstreamId, summary]),
   );
@@ -362,6 +366,7 @@ export default function WorkstreamSidebar({
           const loop = loopByWorkstream.get(ws.id);
           const loopRunning = runningLoopStates.has(loop?.runState ?? "");
           const loopNeedsAttention = loop?.runState === "attention";
+          const loopNeedsApproval = loop?.runState === "awaiting_approval";
           return (
             <div
               key={ws.id}
@@ -465,6 +470,13 @@ export default function WorkstreamSidebar({
                       data-testid={`ws-loop-attention-${ws.id}`}
                       title="Goal loop needs attention"
                       style={{ width: 13, height: 13, color: "#f9e2af", flexShrink: 0 }}
+                    />
+                  )}
+                  {loopNeedsApproval && (
+                    <HandRaisedIcon
+                      data-testid={`ws-loop-approval-${ws.id}`}
+                      title="Goal loop is awaiting human approval"
+                      style={{ width: 13, height: 13, color: "#cba6f7", flexShrink: 0 }}
                     />
                   )}
                 </div>
@@ -681,6 +693,15 @@ export default function WorkstreamSidebar({
             style={{ color: "#cba6f7", fontSize: 9, marginLeft: "auto", marginRight: 6 }}
           >
             {runningLoopCount} running
+          </span>
+        )}
+        {pendingApprovalCount > 0 && (
+          <span
+            data-testid="pending-loop-approval-count"
+            title={`${pendingApprovalCount} goal ${pendingApprovalCount === 1 ? "loop is" : "loops are"} awaiting approval`}
+            style={{ color: "#cba6f7", fontSize: 9, marginLeft: runningLoopCount > 0 ? 4 : "auto", marginRight: 6 }}
+          >
+            {pendingApprovalCount} {pendingApprovalCount === 1 ? "approval" : "approvals"}
           </span>
         )}
         <button

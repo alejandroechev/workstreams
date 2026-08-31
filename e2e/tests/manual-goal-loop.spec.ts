@@ -53,11 +53,13 @@ async function seedLoopDefinition(page: Page) {
         objective: "Deliver a verified frontend change",
         hasVerification: true,
         hasEvaluator: true,
+        hasHumanApproval: true,
       },
       {
         orchestrator: { prompt: "Discover one coding task", model: "" },
         worker: { prompt: "Implement the coding task", model: "" },
         evaluator: { prompt: "Independently evaluate the result", model: "" },
+        humanApproval: { prompt: "Review the completed task and its evidence" },
         verifier: { program: "npm", args: ["test"], cwd: workstream.directory },
         runTimeoutMs: 5 * 60_000,
         maxTaskIterations: 2,
@@ -85,7 +87,7 @@ test("selects, pauses, resumes, verifies, and evaluates a YAML loop", async ({
   page,
 }) => {
   await expect(page.locator('[data-testid="loop-definition-frontend-loop"]')).toContainText(
-    "Verification + Evaluator",
+    "Verification + Evaluator + Human approval",
   );
   await expect(page.locator('[data-testid="loop-definition-selected"]')).toContainText(
     "Frontend verification loop",
@@ -103,9 +105,20 @@ test("selects, pauses, resumes, verifies, and evaluates a YAML loop", async ({
   await page.locator('[data-testid="loop-resume"]').click();
 
   await expect(page.locator('[data-testid="loop-run-state"]')).toContainText(
-    "Completed",
+    "Awaiting approval",
     { timeout: 5_000 },
   );
+  await expect(page.locator('[data-testid="pending-loop-approval-count"]')).toContainText(
+    "1 approval",
+  );
+  await page.getByLabel("Human review feedback").fill("Add one final edge case");
+  await page.locator('[data-testid="loop-approval-revise"]').click();
+  await expect(page.locator('[data-testid="loop-run-state"]')).toContainText(
+    "Awaiting approval",
+    { timeout: 5_000 },
+  );
+  await page.locator('[data-testid="loop-approval-approve"]').click();
+  await expect(page.locator('[data-testid="loop-run-state"]')).toContainText("Completed");
   await expect(page.locator('article[data-testid^="loop-task-"]').first()).toContainText(
     "accepted",
   );
@@ -116,6 +129,7 @@ test("selects, pauses, resumes, verifies, and evaluates a YAML loop", async ({
     page.locator('[data-testid^="loop-evaluation-"]').first(),
   ).toContainText("accepted");
   await expect(page.locator('[data-testid="running-loop-count"]')).toHaveCount(0);
+  await expect(page.locator('[data-testid="pending-loop-approval-count"]')).toHaveCount(0);
 });
 
 test("kills an active loop and preserves an interrupted task", async ({ page }) => {

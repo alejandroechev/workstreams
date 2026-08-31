@@ -151,6 +151,7 @@ describe("MemoryBackend manual coding loops", () => {
         objective: "Create output",
         hasVerification: true,
         hasEvaluator: false,
+        hasHumanApproval: false,
       },
       {
         orchestrator: { prompt: "Plan", model: "" },
@@ -175,5 +176,141 @@ describe("MemoryBackend manual coding loops", () => {
       definitionHash: "hash-1",
     });
     expect(snapshot.spec?.evaluator).toBeUndefined();
+  });
+
+  it("waits for human approval and supports one reviewed revision", async () => {
+    const spec = await backend.saveWorkstreamLoop(workstreamId, {
+      orchestrator: { prompt: "Discover work", model: "" },
+      worker: { prompt: "Do the work", model: "" },
+      humanApproval: { prompt: "Review all evidence" },
+      runTimeoutMs: 60_000,
+      maxTaskIterations: 2,
+    });
+    await backend.setWorkstreamLoopEnabled(spec.id, true);
+    const run = await backend.runWorkstreamLoopNow(workstreamId);
+
+    await vi.advanceTimersByTimeAsync(700);
+    let snapshot = await backend.getWorkstreamLoopSnapshot(workstreamId);
+    expect(snapshot.latestRun?.state).toBe("awaiting_approval");
+    expect(snapshot.approvals[0]).toMatchObject({
+      status: "pending",
+      prompt: "Review all evidence",
+    });
+
+    await backend.decideLoopHumanApproval(
+      run.id,
+      "revise",
+      "Handle the edge case",
+    );
+    await vi.advanceTimersByTimeAsync(700);
+    snapshot = await backend.getWorkstreamLoopSnapshot(workstreamId);
+    expect(snapshot.latestRun?.state).toBe("awaiting_approval");
+    expect(snapshot.tasks[0].revisionCount).toBe(1);
+    expect(snapshot.approvals).toHaveLength(2);
+
+    await backend.decideLoopHumanApproval(run.id, "approve");
+    snapshot = await backend.getWorkstreamLoopSnapshot(workstreamId);
+    expect(snapshot.latestRun?.state).toBe("completed");
+    expect(snapshot.tasks[0].state).toBe("accepted");
+  });
+
+  it("cancels a pending approval when the loop is killed", async () => {
+    const spec = await backend.saveWorkstreamLoop(workstreamId, {
+      orchestrator: { prompt: "Discover work", model: "" },
+      worker: { prompt: "Do the work", model: "" },
+      humanApproval: { prompt: "Review all evidence" },
+      runTimeoutMs: 60_000,
+      maxTaskIterations: 2,
+    });
+    await backend.setWorkstreamLoopEnabled(spec.id, true);
+    const run = await backend.runWorkstreamLoopNow(workstreamId);
+    await vi.advanceTimersByTimeAsync(700);
+
+    await backend.controlWorkstreamLoop(run.id, "kill");
+
+    const snapshot = await backend.getWorkstreamLoopSnapshot(workstreamId);
+    expect(snapshot.latestRun?.state).toBe("killed");
+    expect(snapshot.approvals[0]).toMatchObject({
+      status: "cancelled",
+      feedback: "Loop killed",
+    });
+  });
+
+  it("rejects stale run decisions and preserves both automated evidence attempts", async () => {
+    const spec = await backend.saveWorkstreamLoop(workstreamId, {
+      orchestrator: { prompt: "Discover work", model: "" },
+      worker: { prompt: "Do the work", model: "" },
+      evaluator: { prompt: "Judge the work", model: "" },
+      verifier: { program: "npm", args: ["test"], cwd: "/repo" },
+      humanApproval: { prompt: "Review all evidence" },
+      runTimeoutMs: 60_000,
+      maxTaskIterations: 2,
+    });
+    await backend.setWorkstreamLoopEnabled(spec.id, true);
+    const firstRun = await backend.runWorkstreamLoopNow(workstreamId);
+    await vi.advanceTimersByTimeAsync(1_500);
+    await backend.decideLoopHumanApproval(firstRun.id, "reject");
+
+    const secondRun = await backend.runWorkstreamLoopNow(workstreamId);
+    await vi.advanceTimersByTimeAsync(1_500);
+    await expect(
+      backend.decideLoopHumanApproval(firstRun.id, "approve"),
+    ).rejects.toThrow("not awaiting");
+
+    await backend.decideLoopHumanApproval(
+      secondRun.id,
+      "revise",
+      "Add the edge case",
+    );
+    await vi.advanceTimersByTimeAsync(1_500);
+    const snapshot = await backend.getWorkstreamLoopSnapshot(workstreamId);
+    expect(snapshot.verifications.map((record) => record.attempt)).toEqual([1, 2]);
+    expect(snapshot.evaluations.map((record) => record.attempt)).toEqual([1, 2]);
+  });
+
+  it("serializes concurrent human approval decisions", async () => {
+    const spec = await backend.saveWorkstreamLoop(workstreamId, {
+      orchestrator: { prompt: "Discover work", model: "" },
+      worker: { prompt: "Do the work", model: "" },
+      humanApproval: { prompt: "Review all evidence" },
+      runTimeoutMs: 60_000,
+      maxTaskIterations: 2,
+    });
+    await backend.setWorkstreamLoopEnabled(spec.id, true);
+    const run = await backend.runWorkstreamLoopNow(workstreamId);
+    await vi.advanceTimersByTimeAsync(700);
+
+    const decisions = await Promise.allSettled([
+      backend.decideLoopHumanApproval(run.id, "approve"),
+      backend.decideLoopHumanApproval(run.id, "reject"),
+    ]);
+
+    expect(decisions.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(decisions.filter((result) => result.status === "rejected")).toHaveLength(1);
+  });
+
+  it("restores a pending approval when paused at the human boundary", async () => {
+    const spec = await backend.saveWorkstreamLoop(workstreamId, {
+      orchestrator: { prompt: "Discover work", model: "" },
+      worker: { prompt: "Do the work", model: "" },
+      humanApproval: { prompt: "Review all evidence" },
+      runTimeoutMs: 60_000,
+      maxTaskIterations: 2,
+    });
+    await backend.setWorkstreamLoopEnabled(spec.id, true);
+    const run = await backend.runWorkstreamLoopNow(workstreamId);
+    await vi.advanceTimersByTimeAsync(320);
+    await backend.controlWorkstreamLoop(run.id, "pause");
+    await vi.advanceTimersByTimeAsync(400);
+    expect(
+      (await backend.getWorkstreamLoopSnapshot(workstreamId)).latestRun?.state,
+    ).toBe("paused");
+
+    await backend.resumeWorkstreamLoop(run.id);
+
+    const snapshot = await backend.getWorkstreamLoopSnapshot(workstreamId);
+    expect(snapshot.latestRun?.state).toBe("awaiting_approval");
+    expect(snapshot.approvals).toHaveLength(1);
+    expect(snapshot.approvals[0].status).toBe("pending");
   });
 });

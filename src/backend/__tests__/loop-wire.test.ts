@@ -17,6 +17,7 @@ function specWire(overrides: Partial<LoopSpecWire> = {}): LoopSpecWire {
     orchestrator_model: null,
     worker_model: null,
     evaluator_model: null,
+    human_approval_prompt: null,
     verifier_program: null,
     verifier_args: [],
     verifier_cwd: null,
@@ -36,6 +37,7 @@ describe("loop wire mapping", () => {
         orchestrator: { prompt: "discover", model: "" },
         worker: { prompt: "work", model: "worker-model" },
         evaluator: { prompt: "judge", model: "judge-model" },
+        humanApproval: { prompt: "Human review" },
         verifier: { program: "npm", args: ["test"], cwd: "/repo" },
         runTimeoutMs: 90_000,
         maxTaskIterations: 2,
@@ -47,6 +49,7 @@ describe("loop wire mapping", () => {
       orchestrator_model: null,
       worker_model: "worker-model",
       evaluator_model: "judge-model",
+      human_approval_prompt: "Human review",
       verifier_program: "npm",
       verifier_args: ["test"],
       verifier_cwd: "/repo",
@@ -67,6 +70,7 @@ describe("loop wire mapping", () => {
         orchestrator_model: null,
         worker_model: "worker-model",
         evaluator_model: null,
+        human_approval_prompt: "Human review",
         verifier_program: "npm",
         verifier_args: ["test"],
         verifier_cwd: "/repo",
@@ -129,6 +133,16 @@ describe("loop wire mapping", () => {
         evidence: ["tests"],
         created_at: "created",
       }],
+      approvals: [{
+        id: "approval-1",
+        loop_task_id: "task-1",
+        attempt: 1,
+        status: "pending",
+        prompt: "Human review",
+        feedback: null,
+        created_at: "created",
+        decided_at: null,
+      }],
       events: [{
         id: 1,
         loop_spec_id: "spec-1",
@@ -155,6 +169,11 @@ describe("loop wire mapping", () => {
       exitCode: 0,
     });
     expect(decoded.evaluations[0].sessionId).toBe("evaluator-1");
+    expect(decoded.spec?.humanApproval?.prompt).toBe("Human review");
+    expect(decoded.approvals[0]).toMatchObject({
+      status: "pending",
+      prompt: "Human review",
+    });
     expect(decoded.events[0].eventType).toBe("assistant.message");
   });
 
@@ -222,6 +241,7 @@ describe("loop wire mapping", () => {
         tasks: [],
         verifications: [],
         evaluations: [],
+        approvals: [],
         events: [],
       }),
     ).toEqual({
@@ -230,6 +250,7 @@ describe("loop wire mapping", () => {
       tasks: [],
       verifications: [],
       evaluations: [],
+      approvals: [],
       events: [],
     });
 

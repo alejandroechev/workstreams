@@ -95,7 +95,7 @@ metadata:
   description: Catalog fixture for real-Tauri visual validation.
   tags: [showcase]
 spec:
-  objective: Demonstrate a valid evaluator-only loop in the catalog.
+  objective: Demonstrate a valid evaluator and human-approval loop in the catalog.
   trigger:
     type: manual
   orchestrator:
@@ -111,6 +111,8 @@ spec:
     onReject:
       action: revise
       maxRevisions: 1
+  humanApproval:
+    prompt: Review the task result and evidence before accepting it.
   limits:
     runTimeout: 5m
     taskAttempts: 2

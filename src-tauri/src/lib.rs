@@ -5181,6 +5181,7 @@ pub fn run() {
             loops::list_workstream_loop_summaries,
             loops::run_workstream_loop_now,
             loops::run_loop_definition_now,
+            loops::decide_loop_human_approval,
             loops::resume_workstream_loop,
             loops::control_workstream_loop,
             // Scrollback

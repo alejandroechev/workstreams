@@ -114,4 +114,25 @@ describe("WorkstreamSidebar activity indicator", () => {
     expect(queryByTestId("ws-loop-running-b")).toBeNull();
     cleanup();
   });
+
+  it("surfaces a pending human approval without counting it as running", () => {
+    const { getByTestId, queryByTestId } = renderWith(
+      new Set(["a", "b"]),
+      "a",
+      [{
+        workstreamId: "b",
+        loopSpecId: "spec-b",
+        enabled: true,
+        runId: "run-b",
+        runState: "awaiting_approval",
+      }],
+    );
+
+    expect(getByTestId("ws-loop-approval-b")).toBeTruthy();
+    expect(getByTestId("pending-loop-approval-count").textContent).toContain(
+      "1 approval",
+    );
+    expect(queryByTestId("running-loop-count")).toBeNull();
+    cleanup();
+  });
 });

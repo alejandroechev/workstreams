@@ -2,19 +2,25 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import {
   ArrowPathIcon,
+  ArrowUturnLeftIcon,
+  CheckIcon,
   CheckBadgeIcon,
   DocumentTextIcon,
   ExclamationTriangleIcon,
   PauseIcon,
   PlayIcon,
+  HandRaisedIcon,
   StopIcon,
   TagIcon,
   XCircleIcon,
 } from "@heroicons/react/24/outline";
 
 import { useBackend } from "../backend/context";
+import { MAX_TASK_ITERATIONS } from "../domain/loop";
 import type {
   LoopAction,
+  LoopApprovalDecision,
+  LoopApprovalRecord,
   LoopDefinition,
   LoopDefinitionCatalog,
   LoopEvaluationRecord,
@@ -40,6 +46,7 @@ const EMPTY_SNAPSHOT: PersistedLoopSnapshot = {
   tasks: [],
   verifications: [],
   evaluations: [],
+  approvals: [],
   events: [],
 };
 
@@ -107,7 +114,8 @@ function message(error: unknown): string {
 }
 
 function stateLabel(state: LoopRunState): string {
-  return state.charAt(0).toUpperCase() + state.slice(1);
+  const words = state.replace(/_/g, " ");
+  return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
 function formatDuration(milliseconds: number): string {
@@ -131,6 +139,8 @@ function nextEvidence(run: LoopRun, spec: LoopSpec): string {
       return "Verifier evidence in progress";
     case "evaluating":
       return "Evaluator verdict in progress";
+    case "awaiting_approval":
+      return "Human approval is required";
     case "paused":
       return "Paused at a safe boundary";
     case "stopping":
@@ -144,12 +154,11 @@ function nextEvidence(run: LoopRun, spec: LoopSpec): string {
 }
 
 function feedbackMode(definition: LoopDefinition): string {
-  if (definition.hasVerification && definition.hasEvaluator) {
-    return "Verification + Evaluator";
-  }
-  if (definition.hasVerification) return "Verification";
-  if (definition.hasEvaluator) return "Evaluator";
-  return "Completion only";
+  const sensors = [];
+  if (definition.hasVerification) sensors.push("Verification");
+  if (definition.hasEvaluator) sensors.push("Evaluator");
+  if (definition.hasHumanApproval) sensors.push("Human approval");
+  return sensors.join(" + ") || "Completion only";
 }
 
 function formatPayload(payload: unknown): string {
@@ -416,14 +425,31 @@ function EvaluationEvidence({ record }: { record: LoopEvaluationRecord }) {
   );
 }
 
+function ApprovalEvidence({ record }: { record: LoopApprovalRecord }) {
+  return (
+    <div
+      data-testid={`loop-approval-${record.id}`}
+      style={{ borderLeft: "2px solid #cba6f7", paddingLeft: 8, marginTop: 7 }}
+    >
+      <div>
+        Human approval: <strong>{record.status.replace("_", " ")}</strong>
+      </div>
+      <div>{record.prompt}</div>
+      {record.feedback && <div style={{ color: "#f9e2af" }}>{record.feedback}</div>}
+    </div>
+  );
+}
+
 function TaskList({
   tasks,
   verifications,
   evaluations,
+  approvals,
 }: {
   tasks: LoopTask[];
   verifications: LoopVerificationRecord[];
   evaluations: LoopEvaluationRecord[];
+  approvals: LoopApprovalRecord[];
 }) {
   return (
     <section data-testid="loop-task-list" style={sectionStyle}>
@@ -470,6 +496,11 @@ function TaskList({
               .filter((record) => record.loopTaskId === task.id)
               .map((record) => (
                 <EvaluationEvidence key={record.id} record={record} />
+              ))}
+            {approvals
+              .filter((record) => record.loopTaskId === task.id)
+              .map((record) => (
+                <ApprovalEvidence key={record.id} record={record} />
               ))}
           </article>
         ))
@@ -541,18 +572,93 @@ function RunDefinition({ run, spec }: { run: LoopRun; spec: LoopSpec }) {
   );
 }
 
+function HumanApprovalPanel({
+  approval,
+  task,
+  busy,
+  onDecision,
+}: {
+  approval: LoopApprovalRecord;
+  task: LoopTask;
+  busy: boolean;
+  onDecision: (decision: LoopApprovalDecision, feedback?: string) => void;
+}) {
+  const [feedback, setFeedback] = useState("");
+  const trimmed = feedback.trim();
+  const revisionAvailable = task.revisionCount + 1 < MAX_TASK_ITERATIONS;
+
+  return (
+    <section data-testid="loop-human-approval" style={sectionStyle}>
+      <h2 style={{ ...headingStyle, color: "#cba6f7" }}>Awaiting human approval</h2>
+      <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+        <HandRaisedIcon aria-hidden="true" style={iconStyle} />
+        <strong>{approval.prompt}</strong>
+      </div>
+      <textarea
+        aria-label="Human review feedback"
+        value={feedback}
+        onChange={(event) => setFeedback(event.target.value)}
+        placeholder="Feedback (required when requesting a revision)"
+        rows={3}
+        style={{
+          width: "100%",
+          boxSizing: "border-box",
+          marginTop: 9,
+          resize: "vertical",
+          border: "1px solid #45475a",
+          borderRadius: 4,
+          padding: 7,
+          background: "#11111b",
+          color: "#cdd6f4",
+          font: "inherit",
+        }}
+      />
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8 }}>
+        <ActionButton
+          testId="loop-approval-approve"
+          label="Approve"
+          icon={CheckIcon}
+          disabled={busy}
+          onClick={() => onDecision("approve")}
+        />
+        <ActionButton
+          testId="loop-approval-revise"
+          label="Request revision"
+          icon={ArrowUturnLeftIcon}
+          disabled={busy || !revisionAvailable || !trimmed}
+          onClick={() => onDecision("revise", trimmed)}
+        />
+        <ActionButton
+          testId="loop-approval-reject"
+          label="Reject / stop"
+          icon={XCircleIcon}
+          disabled={busy}
+          onClick={() => onDecision("reject", trimmed || undefined)}
+        />
+      </div>
+      {!revisionAvailable && (
+        <div style={{ color: "#f9e2af", marginTop: 6 }}>
+          The single revision has already been used.
+        </div>
+      )}
+    </section>
+  );
+}
+
 function RunPanel({
   snapshot,
   now,
   busy,
   onControl,
   onResume,
+  onApproval,
 }: {
   snapshot: PersistedLoopSnapshot;
   now: number;
   busy: boolean;
   onControl: (action: "pause" | "stop" | "kill") => void;
   onResume: () => void;
+  onApproval: (decision: LoopApprovalDecision, feedback?: string) => void;
 }) {
   const run = snapshot.latestRun;
   const spec = snapshot.spec;
@@ -573,6 +679,11 @@ function RunPanel({
       )
     : "Not available";
   const canControl = !TERMINAL_RUN_STATES.has(run.state);
+  const pendingApproval =
+    snapshot.approvals.find(
+      (approval) =>
+        approval.loopTaskId === run.activeTaskId && approval.status === "pending",
+    ) ?? null;
 
   return (
     <>
@@ -608,7 +719,8 @@ function RunPanel({
                 onClick={onResume}
               />
             ) : (
-              run.state !== "stopping" && (
+              run.state !== "stopping" &&
+              run.state !== "awaiting_approval" && (
                 <ActionButton
                   testId="loop-pause"
                   label="Pause"
@@ -637,10 +749,19 @@ function RunPanel({
           </div>
         )}
       </section>
+      {run.state === "awaiting_approval" && currentTask && pendingApproval && (
+        <HumanApprovalPanel
+          approval={pendingApproval}
+          task={currentTask}
+          busy={busy}
+          onDecision={onApproval}
+        />
+      )}
       <TaskList
         tasks={snapshot.tasks}
         verifications={snapshot.verifications}
         evaluations={snapshot.evaluations}
+        approvals={snapshot.approvals}
       />
       <EventTimeline events={snapshot.events} />
     </>
@@ -816,6 +937,17 @@ export default function LoopControlTile({
     });
   };
 
+  const decideApproval = (
+    decision: LoopApprovalDecision,
+    feedback?: string,
+  ) => {
+    const currentRun = snapshot.latestRun;
+    if (!currentRun) return;
+    void perform(async () => {
+      await backend.decideLoopHumanApproval(currentRun.id, decision, feedback);
+    });
+  };
+
   const stateAction: LoopAction | null = snapshot.latestRun?.pendingAction ?? null;
   const statusHint = useMemo(
     () => (stateAction ? `Pending action: ${stateAction.type}` : null),
@@ -887,6 +1019,7 @@ export default function LoopControlTile({
                 busy={busy}
                 onControl={control}
                 onResume={resume}
+                onApproval={decideApproval}
               />
             )}
             <CatalogPanel
@@ -907,6 +1040,7 @@ export default function LoopControlTile({
                 busy={busy}
                 onControl={control}
                 onResume={resume}
+                onApproval={decideApproval}
               />
             )}
           </>

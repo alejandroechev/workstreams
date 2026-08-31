@@ -2,6 +2,7 @@ import {
   MAX_TASK_ITERATIONS,
   type EvaluatorVerdict,
   type LoopEvaluationRecord,
+  type LoopApprovalRecord,
   type LoopEventRecord,
   type LoopRun,
   type LoopRunState,
@@ -23,6 +24,7 @@ export interface LoopSpecWire {
   orchestrator_model: string | null;
   worker_model: string | null;
   evaluator_model: string | null;
+  human_approval_prompt: string | null;
   verifier_program: string | null;
   verifier_args: string[];
   verifier_cwd: string | null;
@@ -47,6 +49,7 @@ export interface LoopSpecInputWire {
   orchestrator_model: string | null;
   worker_model: string | null;
   evaluator_model: string | null;
+  human_approval_prompt: string | null;
   verifier_program: string | null;
   verifier_args: string[];
   verifier_cwd: string | null;
@@ -113,6 +116,17 @@ export interface LoopEvaluationWire {
   created_at: string;
 }
 
+export interface LoopApprovalWire {
+  id: string;
+  loop_task_id: string;
+  attempt: number;
+  status: LoopApprovalRecord["status"];
+  prompt: string;
+  feedback: string | null;
+  created_at: string;
+  decided_at: string | null;
+}
+
 export interface LoopEventWire {
   id: number;
   loop_spec_id: string;
@@ -129,6 +143,7 @@ export interface LoopSnapshotWire {
   tasks: LoopTaskWire[];
   verifications: LoopVerificationWire[];
   evaluations: LoopEvaluationWire[];
+  approvals: LoopApprovalWire[];
   events: LoopEventWire[];
 }
 
@@ -184,6 +199,9 @@ function decodeSpec(spec: LoopSpecWire): LoopSpec {
           prompt: spec.evaluator_prompt,
           model: spec.evaluator_model ?? "",
         }
+      : undefined,
+    humanApproval: spec.human_approval_prompt
+      ? { prompt: spec.human_approval_prompt }
       : undefined,
     verifier: spec.verifier_program
       ? {
@@ -277,6 +295,19 @@ function decodeEvaluation(evaluation: LoopEvaluationWire): LoopEvaluationRecord 
   };
 }
 
+function decodeApproval(approval: LoopApprovalWire): LoopApprovalRecord {
+  return {
+    id: approval.id,
+    loopTaskId: approval.loop_task_id,
+    attempt: approval.attempt,
+    status: approval.status,
+    prompt: approval.prompt,
+    feedback: optional(approval.feedback),
+    createdAt: timestamp(approval.created_at),
+    decidedAt: optionalTimestamp(approval.decided_at),
+  };
+}
+
 function decodeEvent(event: LoopEventWire): LoopEventRecord {
   return {
     id: event.id,
@@ -297,6 +328,7 @@ export function encodeLoopSpecDraft(input: LoopSpecDraft): LoopSpecInputWire {
     orchestrator_model: model(input.orchestrator.model),
     worker_model: model(input.worker.model),
     evaluator_model: input.evaluator ? model(input.evaluator.model) : null,
+    human_approval_prompt: input.humanApproval?.prompt.trim() || null,
     verifier_program: input.verifier?.program.trim() || null,
     verifier_args: input.verifier ? [...input.verifier.args] : [],
     verifier_cwd: input.verifier?.cwd?.trim() || null,
@@ -315,6 +347,7 @@ export function decodeLoopSnapshot(
     tasks: snapshot.tasks.map(decodeTask),
     verifications: snapshot.verifications.map(decodeVerification),
     evaluations: snapshot.evaluations.map(decodeEvaluation),
+    approvals: snapshot.approvals.map(decodeApproval),
     events: snapshot.events.map(decodeEvent),
   };
 }

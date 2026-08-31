@@ -70,6 +70,7 @@ describe("loop contracts", () => {
       "working",
       "verifying",
       "evaluating",
+      "awaiting_approval",
       "paused",
       "stopping",
       "completed",
@@ -81,6 +82,7 @@ describe("loop contracts", () => {
       "working",
       "verifying",
       "evaluating",
+      "awaiting_approval",
       "accepted",
       "blocked",
       "attention",
@@ -363,6 +365,63 @@ describe("transitionLoop", () => {
       activeTaskId: null,
     });
     expect(result.action).toEqual({ type: "none" });
+  });
+
+  it("waits for human approval after automated sensors accept the task", () => {
+    const current = snapshot("evaluating", [task({ state: "evaluating" })], {
+      spec: spec({
+        humanApproval: {
+          prompt: "Review the evidence before accepting this task.",
+        },
+      } as Partial<LoopSpec> & {
+        humanApproval: { prompt: string };
+      }),
+    });
+    current.run.activeTaskId = "task-1";
+
+    const result = transitionLoop(current, {
+      type: "evaluation_completed",
+      verdict: "accepted",
+    });
+
+    expect(result.snapshot.run.state).toBe("awaiting_approval");
+    expect(result.snapshot.tasks[0].state).toBe("awaiting_approval");
+  });
+
+  it("applies approve, revise, and reject human decisions", () => {
+    const approvalSpec = spec({
+      humanApproval: { prompt: "Review the evidence." },
+    });
+    const awaiting = snapshot(
+      "awaiting_approval",
+      [task({ state: "awaiting_approval" })],
+      { spec: approvalSpec },
+    );
+    awaiting.run.activeTaskId = "task-1";
+
+    const approved = transitionLoop(awaiting, {
+      type: "approval_decided",
+      decision: "approve",
+    });
+    expect(approved.snapshot.run.state).toBe("completed");
+    expect(approved.snapshot.tasks[0].state).toBe("accepted");
+
+    const revised = transitionLoop(awaiting, {
+      type: "approval_decided",
+      decision: "revise",
+    });
+    expect(revised.snapshot.run.state).toBe("working");
+    expect(revised.snapshot.tasks[0]).toMatchObject({
+      state: "working",
+      revisionCount: 1,
+    });
+
+    const rejected = transitionLoop(awaiting, {
+      type: "approval_decided",
+      decision: "reject",
+    });
+    expect(rejected.snapshot.run.state).toBe("attention");
+    expect(rejected.snapshot.tasks[0].state).toBe("blocked");
   });
 
   it("allows exactly one evaluator-driven revision", () => {

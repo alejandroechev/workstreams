@@ -103,6 +103,7 @@ pub struct LoopSpec {
     pub worker: WorkerSpec,
     pub verification: Option<VerificationSpec>,
     pub evaluator: Option<EvaluatorSpec>,
+    pub human_approval: Option<HumanApprovalSpec>,
     pub limits: LoopLimits,
     pub permissions: LoopPermissions,
     pub flow_control: LoopFlowControl,
@@ -179,6 +180,12 @@ pub struct EvaluatorRejectPolicy {
     pub max_revisions: u32,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HumanApprovalSpec {
+    pub prompt: String,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum EvaluatorRejectAction {
     #[serde(rename = "revise")]
@@ -250,6 +257,7 @@ pub struct LoopSpecSummary {
     pub golden_patterns: Vec<String>,
     pub verification: Option<VerificationSummary>,
     pub evaluator: Option<EvaluatorSummary>,
+    pub human_approval: Option<HumanApprovalSummary>,
     pub run_timeout_seconds: u64,
     pub task_attempts: u32,
     pub max_active_runs: u32,
@@ -271,6 +279,12 @@ pub struct VerificationSummary {
 pub struct EvaluatorSummary {
     pub model: String,
     pub max_revisions: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HumanApprovalSummary {
+    pub prompt: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -313,6 +327,7 @@ pub struct LoopSpecInputFields {
     pub evaluator_prompt: Option<String>,
     pub evaluator_model: Option<String>,
     pub evaluator_max_revisions: Option<u32>,
+    pub human_approval_prompt: Option<String>,
     pub run_timeout_seconds: u64,
     pub task_attempts: u32,
 }
@@ -354,6 +369,12 @@ impl ValidatedLoopDefinition {
             evaluator_prompt: evaluator.map(|value| value.prompt.clone()),
             evaluator_model: evaluator.map(|value| value.model.clone()),
             evaluator_max_revisions: evaluator.map(|value| value.on_reject.max_revisions),
+            human_approval_prompt: self
+                .document
+                .spec
+                .human_approval
+                .as_ref()
+                .map(|value| value.prompt.clone()),
             run_timeout_seconds: self.document.spec.limits.run_timeout.seconds(),
             task_attempts: self.document.spec.limits.task_attempts,
         }
@@ -426,6 +447,7 @@ pub struct LoopCatalogDefinition {
     pub objective: String,
     pub has_verification: bool,
     pub has_evaluator: bool,
+    pub has_human_approval: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -614,6 +636,7 @@ pub fn catalog_for_root(workstream_root: &Path) -> Result<LoopCatalog, String> {
                 objective: definition.document.spec.objective,
                 has_verification: definition.document.spec.verification.is_some(),
                 has_evaluator: definition.document.spec.evaluator.is_some(),
+                has_human_approval: definition.document.spec.human_approval.is_some(),
             })
         })
         .collect();
@@ -785,11 +808,14 @@ fn validate_document(workstream_root: &Path, document: &LoopDefinition) -> Valid
         }
     }
 
-    if document.spec.verification.is_none() && document.spec.evaluator.is_none() {
+    if document.spec.verification.is_none()
+        && document.spec.evaluator.is_none()
+        && document.spec.human_approval.is_none()
+    {
         state.error(
             "missing_sensor",
             "spec",
-            "at least one of spec.verification or spec.evaluator must be present",
+            "at least one of spec.verification, spec.evaluator, or spec.humanApproval must be present",
         );
     }
 
@@ -807,6 +833,9 @@ fn validate_document(workstream_root: &Path, document: &LoopDefinition) -> Valid
                 "maxRevisions must be exactly 1 in v1",
             );
         }
+    }
+    if let Some(approval) = document.spec.human_approval.as_ref() {
+        validate_nonblank(&mut state, "spec.humanApproval.prompt", &approval.prompt);
     }
 
     if document.spec.limits.task_attempts != 2 {
@@ -1107,6 +1136,13 @@ fn build_summary(document: &LoopDefinition, validation: &ValidationState) -> Loo
             model: value.model.clone(),
             max_revisions: value.on_reject.max_revisions,
         });
+    let human_approval = document
+        .spec
+        .human_approval
+        .as_ref()
+        .map(|value| HumanApprovalSummary {
+            prompt: value.prompt.clone(),
+        });
     let context = document.spec.worker.context.as_ref();
 
     LoopSpecSummary {
@@ -1123,6 +1159,7 @@ fn build_summary(document: &LoopDefinition, validation: &ValidationState) -> Loo
             .unwrap_or_default(),
         verification,
         evaluator,
+        human_approval,
         run_timeout_seconds: document.spec.limits.run_timeout.seconds(),
         task_attempts: document.spec.limits.task_attempts,
         max_active_runs: document.spec.flow_control.max_active_runs,
@@ -1351,6 +1388,20 @@ spec:
         let fields = result.definition.unwrap().to_loop_spec_input_fields();
         assert_eq!(fields.verifier_program.as_deref(), Some("cargo"));
         assert_eq!(fields.evaluator_model, None);
+
+        let approval_only =
+            yaml_with_sensors("", "  humanApproval:\n    prompt: Review the evidence\n");
+        let result = parse_loop_definition_bytes(
+            &root.path,
+            &root.path.join("approval.loop.yaml"),
+            approval_only.as_bytes(),
+        );
+        assert!(result.valid, "{:?}", result.validation_errors);
+        let fields = result.definition.unwrap().to_loop_spec_input_fields();
+        assert_eq!(
+            fields.human_approval_prompt.as_deref(),
+            Some("Review the evidence")
+        );
     }
 
     #[test]
@@ -1549,5 +1600,49 @@ spec:
         assert_eq!(json["valid"], true);
         assert!(json["spec"]["runTimeoutSeconds"].is_number());
         assert!(json["validationErrors"].is_array());
+    }
+
+    #[test]
+    fn create_loop_skill_example_is_accepted_by_the_authoritative_parser() {
+        let skill = fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("..")
+                .join(".github/skills/create-loop/SKILL.md"),
+        )
+        .expect("read create-loop skill");
+        let yaml = skill
+            .split("<!-- loop-example:start -->")
+            .nth(1)
+            .and_then(|tail| tail.split("<!-- loop-example:end -->").next())
+            .and_then(|block| block.split("```yaml").nth(1))
+            .and_then(|block| block.split("```").next())
+            .map(str::trim)
+            .expect("skill must contain one marked YAML example");
+        let root = prepared_root();
+
+        let result = parse_loop_definition_bytes(
+            &root.path,
+            &root.path.join("skill-example.loop.yaml"),
+            yaml.as_bytes(),
+        );
+
+        assert!(result.valid, "{:?}", result.validation_errors);
+    }
+
+    #[test]
+    fn human_approval_is_valid_as_the_only_sensor() {
+        let root = prepared_root();
+        let yaml = yaml_with_sensors(
+            "",
+            "  humanApproval:\n    prompt: Review the task evidence before accepting it.\n",
+        );
+
+        let result = parse_loop_definition_bytes(
+            &root.path,
+            &root.path.join("human.loop.yaml"),
+            yaml.as_bytes(),
+        );
+
+        assert!(result.valid, "{:?}", result.validation_errors);
     }
 }

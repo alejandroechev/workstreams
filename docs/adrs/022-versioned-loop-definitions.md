@@ -48,12 +48,13 @@ an arbitrary DAG. In v1:
 - a task has at most two worker attempts;
 - a workstream has at most one active run;
 - Copilot tools are fully available, while public effects remain denied;
-- at least one of deterministic verification or independent evaluation is
-  required.
+- at least one of deterministic verification, independent evaluation, or
+  human approval is required.
 
-Valid feedback modes are verifier-only, evaluator-only, and verifier followed
-by evaluator. A verifier failure is authoritative and cannot be overridden by
-an evaluator.
+Sensors run in a fixed order: verifier, evaluator, then human approval.
+Any non-empty combination is valid. A verifier failure is authoritative and
+cannot be overridden by a later sensor. Human approval semantics are defined
+by ADR 023.
 
 ### Paths resolve from the workstream root
 
@@ -103,8 +104,8 @@ out of scope.
 ## Validation
 
 Rust tests cover strict parsing, discovery, path confinement, portability,
-optional evaluators, materialization, immutable snapshots, and
-definition-scoped deduplication. Vitest covers backend parity and catalog
-behavior. Playwright exercises catalog selection and loop controls. The CLI is
-validated with both deterministic scenarios and an authenticated
-verification-only YAML loop using an external repository script.
+optional sensors, the create-loop skill example, materialization, immutable
+snapshots, and definition-scoped deduplication. Vitest covers backend parity
+and catalog behavior. Playwright exercises catalog selection, loop controls,
+and human approval. The CLI is validated with deterministic controller and
+approval scenarios plus authenticated YAML loops.

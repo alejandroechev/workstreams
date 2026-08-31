@@ -26,6 +26,7 @@ describe("TauriBackend", () => {
         orchestrator_model: null,
         worker_model: null,
         evaluator_model: null,
+        human_approval_prompt: null,
         verifier_program: null,
         verifier_args: [],
         verifier_cwd: null,
@@ -71,6 +72,7 @@ describe("TauriBackend", () => {
         orchestrator_model: null,
         worker_model: null,
         evaluator_model: null,
+        human_approval_prompt: null,
         verifier_program: null,
         verifier_args: [],
         verifier_cwd: null,
@@ -122,6 +124,7 @@ describe("TauriBackend", () => {
           objective: "Create a file",
           hasVerification: true,
           hasEvaluator: false,
+          hasHumanApproval: false,
         }],
         invalid: [],
       })
@@ -142,6 +145,7 @@ describe("TauriBackend", () => {
         id: "simple-loop",
         hasVerification: true,
         hasEvaluator: false,
+        hasHumanApproval: false,
       }],
     });
     await backend.runLoopDefinitionNow(
@@ -155,6 +159,32 @@ describe("TauriBackend", () => {
     expect(invoke).toHaveBeenNthCalledWith(2, "run_loop_definition_now", {
       workstreamId: "ws-1",
       definitionPath: "/repo/.workstreams/loops/simple.loop.yaml",
+    });
+  });
+
+  it("forwards human approval decisions", async () => {
+    invoke.mockResolvedValueOnce({
+      id: "run-1",
+      loop_spec_id: "spec-1",
+      state: "resuming",
+      current_task_id: "task-1",
+      control_requested: "none",
+      error: null,
+      started_at: "started",
+      finished_at: null,
+      deadline_at: "deadline",
+    });
+
+    await backend.decideLoopHumanApproval(
+      "run-1",
+      "revise",
+      "Add the missing test",
+    );
+
+    expect(invoke).toHaveBeenCalledWith("decide_loop_human_approval", {
+      runId: "run-1",
+      decision: "revise",
+      feedback: "Add the missing test",
     });
   });
 
