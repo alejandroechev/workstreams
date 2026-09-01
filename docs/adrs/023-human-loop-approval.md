@@ -53,7 +53,8 @@ definitions until the reviewer decides or stops it.
 
 The reviewer has three decisions:
 
-- **Approve** — accept the task and complete the run.
+- **Approve** — accept the task and continue with queued work or another
+  orchestration cycle.
 - **Request revision** — require non-empty feedback and start one fresh worker
   episode, then rerun every configured automated sensor before asking again.
 - **Reject / stop** — block the task and end the run in attention.
@@ -86,10 +87,10 @@ Human judgment becomes explicit, durable evidence instead of an ambiguous
 attention state. Long waits consume no Copilot process. Revisions remain
 bounded and repeat all sensors.
 
-YAML v1 still emits at most one task, but the shared controller also preserves
-legacy multi-task correctness: approving one task refreshes the execution
-deadline and continues queued work, while final run disposition still reflects
-any earlier failed task.
+Approving one task refreshes the execution deadline and continues queued work
+or starts another orchestration cycle. Final run disposition still reflects
+any earlier failed task, and completion still requires a later empty
+orchestration pass.
 
 ## Validation
 

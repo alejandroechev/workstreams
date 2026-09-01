@@ -298,9 +298,9 @@ describe("transitionLoop", () => {
       result: { kind: "passed" },
     });
 
-    expect(result.snapshot.run.state).toBe("completed");
+    expect(result.snapshot.run.state).toBe("orchestrating");
     expect(result.snapshot.tasks[0].state).toBe("accepted");
-    expect(result.action).toEqual({ type: "none" });
+    expect(result.action).toEqual({ type: "orchestrate" });
   });
 
   it.each<VerificationResult>([
@@ -349,7 +349,7 @@ describe("transitionLoop", () => {
     expect(result.action).toEqual({ type: "start_worker", taskId: "task-2" });
   });
 
-  it("completes the run after its last task is accepted", () => {
+  it("re-orchestrates after its last queued task is accepted", () => {
     const current = snapshot("evaluating", [task({ state: "evaluating" })]);
     current.run.activeTaskId = "task-1";
 
@@ -359,10 +359,10 @@ describe("transitionLoop", () => {
     });
     expect(result.snapshot.tasks[0].state).toBe("accepted");
     expect(result.snapshot.run).toMatchObject({
-      state: "completed",
+      state: "orchestrating",
       activeTaskId: null,
     });
-    expect(result.action).toEqual({ type: "none" });
+    expect(result.action).toEqual({ type: "orchestrate" });
   });
 
   it("waits for human approval after automated sensors accept the task", () => {
@@ -401,7 +401,7 @@ describe("transitionLoop", () => {
       type: "approval_decided",
       decision: "approve",
     });
-    expect(approved.snapshot.run.state).toBe("completed");
+    expect(approved.snapshot.run.state).toBe("orchestrating");
     expect(approved.snapshot.tasks[0].state).toBe("accepted");
 
     const revised = transitionLoop(awaiting, {

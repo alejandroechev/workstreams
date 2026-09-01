@@ -36,12 +36,14 @@ MVP1 is a manually triggered coding goal loop:
 ```text
 Run now
   -> orchestrator agent
-  -> zero or more structured tasks
+  -> zero or more structured tasks in a batch
   -> one worker episode per task
   -> optional deterministic verifier
   -> optional fresh evaluator agent
   -> optional human approval
   -> bounded worker revisions
+  -> orchestrate the next batch
+  -> repeat until orchestration returns no work
   -> completed or attention
 ```
 
@@ -103,6 +105,11 @@ An accepted or in-flight `(loop_spec_id, task_key)` is not enqueued again.
 Accepted keys are also included in the next orchestrator prompt, so an
 integration agent can deliberately skip completed source identities while
 still retrying an artifact left by a failed worker/evaluator episode.
+After every accepted batch the controller invokes a fresh orchestrator again.
+The run reaches `completed` only when that pass returns `tasks: []`; accepting
+the current batch is progress, not goal completion. Returning only occupied
+keys is an error rather than an empty-success shortcut, preventing accidental
+completion and tight deduplication loops.
 Restart reconciliation marks nonterminal work interrupted/attention rather than
 silently rerunning it.
 
@@ -133,8 +140,8 @@ fail visibly; the parser never chooses among competing objects.
 
 Workers and evaluators likewise return bounded JSON result/verdict contracts.
 The evaluator is a fresh Copilot session. `revise` returns actionable feedback
-to the retained worker session once; a second rejection requires human
-attention.
+to the retained worker session until the configured total task-attempt budget
+is exhausted; another rejection then requires human attention.
 
 Nested `task` delegation from an SDK-created evaluator may be unavailable even
 when the interactive parent CLI supports it. If the evaluator's sub-agent tool
@@ -204,8 +211,9 @@ The generic run-level "tasks require attention" message is suppressed when a
 task card can show the concrete request.
 
 The workstream sidebar shows per-workstream running/attention state and the
-number of running loops. MVP1 intentionally has one active episode per
-workstream and no global concurrency cap.
+number of running loops. One active run per workstream remains a workspace
+mutation safety invariant; there is no global concurrency cap across separate
+workstreams.
 
 The existing `workstreams` executable exposes legacy `configure`, `enable`,
 `run`, `status`, and `control` subcommands plus the YAML-first `validate`,

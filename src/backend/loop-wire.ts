@@ -30,6 +30,7 @@ export interface LoopSpecWire {
   verifier_timeout_seconds?: number | null;
   run_timeout_seconds: number;
   max_task_iterations: number;
+  max_tasks_per_cycle?: number;
   enabled: boolean;
   created_at: string;
   updated_at: string;
@@ -55,6 +56,7 @@ export interface LoopSpecInputWire {
   verifier_timeout_seconds: number | null;
   run_timeout_seconds: number;
   max_task_iterations: number;
+  max_tasks_per_cycle?: number;
 }
 
 export interface LoopRunWire {
@@ -209,6 +211,7 @@ function decodeSpec(spec: LoopSpecWire): LoopSpec {
       : undefined,
     runTimeoutMs: spec.run_timeout_seconds * 1000,
     maxTaskIterations: spec.max_task_iterations,
+    maxTasksPerCycle: spec.max_tasks_per_cycle ?? 1,
     enabled: spec.enabled,
     createdAt: timestamp(spec.created_at),
     updatedAt: timestamp(spec.updated_at),
@@ -332,6 +335,7 @@ export function encodeLoopSpecDraft(input: LoopSpecDraft): LoopSpecInputWire {
     verifier_timeout_seconds: null,
     run_timeout_seconds: Math.max(1, Math.ceil(input.runTimeoutMs / 1000)),
     max_task_iterations: input.maxTaskIterations,
+    max_tasks_per_cycle: input.maxTasksPerCycle ?? 1,
   };
 }
 

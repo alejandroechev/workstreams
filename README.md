@@ -40,7 +40,9 @@ project-aware workspace:
   Every loop uses a bounded orchestrator → worker pipeline and must include
   deterministic verification, an independent evaluator, human approval, or a
   layered combination. `limits.taskAttempts` configures the total worker
-  attempt budget, including the initial attempt. Human-gated runs persist an
+  attempt budget, including the initial attempt. Accepted batches feed back
+  into orchestration until a cycle reports that the overall goal has no work
+  remaining. Human-gated runs persist an
   **Awaiting approval** stage
   with Approve / Request revision / Reject actions in the tile and an approval
   indicator in the sidebar. Verifiers can be repository scripts outside the

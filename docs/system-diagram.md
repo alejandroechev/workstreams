@@ -29,7 +29,7 @@ graph TB
         subgraph Backend["Rust Backend"]
             LibRS["lib.rs<br/>22 Tauri commands"]
             PtyRS["pty.rs<br/>PtyManager: spawn, write, resize, close"]
-            LoopRS["loops.rs<br/>durable manual-loop controller<br/>task ledger + dedupe + controls"]
+            LoopRS["loops.rs<br/>durable goal-loop controller<br/>repeated orchestration + task ledger<br/>dedupe + controls"]
             LoopAgentRS["loop_agent.rs<br/>Rust Copilot SDK runtime<br/>SDK + scripted implementations"]
             LoopVerifierRS["loop_verifier.rs<br/>bounded external verification<br/>process-group timeout + output cap"]
             LoopDefinitionRS["loop_definition.rs<br/>strict YAML parser + catalog<br/>path resolution + SHA-256 snapshot"]

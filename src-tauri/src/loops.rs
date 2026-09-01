@@ -28,6 +28,12 @@ pub struct LoopSpecInput {
     pub verifier_timeout_seconds: Option<u64>,
     pub run_timeout_seconds: u64,
     pub max_task_iterations: u32,
+    #[serde(default = "default_one")]
+    pub max_tasks_per_cycle: u32,
+}
+
+const fn default_one() -> u32 {
+    1
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -47,6 +53,7 @@ pub struct LoopSpec {
     pub verifier_timeout_seconds: Option<u64>,
     pub run_timeout_seconds: u64,
     pub max_task_iterations: u32,
+    pub max_tasks_per_cycle: u32,
     pub enabled: bool,
     pub created_at: String,
     pub updated_at: String,
@@ -382,6 +389,7 @@ pub fn init_loop_schema(conn: &Connection) -> rusqlite::Result<()> {
             ,objective TEXT
             ,portable INTEGER
             ,definition_yaml TEXT
+            ,max_tasks_per_cycle INTEGER NOT NULL DEFAULT 1
         );
 
         CREATE TABLE IF NOT EXISTS loop_runs (
@@ -490,6 +498,7 @@ pub fn init_loop_schema(conn: &Connection) -> rusqlite::Result<()> {
         "ALTER TABLE loop_runs ADD COLUMN definition_yaml TEXT",
         "ALTER TABLE loop_tasks ADD COLUMN definition_id TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE loop_specs ADD COLUMN human_approval_prompt TEXT",
+        "ALTER TABLE loop_specs ADD COLUMN max_tasks_per_cycle INTEGER NOT NULL DEFAULT 1",
     ] {
         let _ = conn.execute_batch(migration);
     }
@@ -538,6 +547,9 @@ fn validate_spec(input: &LoopSpecInput) -> Result<(), String> {
     if input.max_task_iterations == 0 {
         return Err("Task attempts must be greater than zero".to_string());
     }
+    if input.max_tasks_per_cycle == 0 {
+        return Err("Tasks per orchestration cycle must be greater than zero".to_string());
+    }
     if input
         .verifier_program
         .as_deref()
@@ -582,6 +594,7 @@ fn decode_spec_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<LoopSpec> {
         objective: row.get(22)?,
         portable: row.get::<_, Option<i64>>(23)?.map(|value| value != 0),
         definition_yaml: row.get(24)?,
+        max_tasks_per_cycle: row.get(25)?,
     })
 }
 
@@ -590,7 +603,7 @@ const SPEC_COLUMNS: &str = "id, workstream_id, orchestrator_prompt, worker_promp
     human_approval_prompt, verifier_program, verifier_args_json, verifier_cwd, verifier_timeout_seconds,
     run_timeout_seconds, max_task_iterations, enabled, created_at, updated_at, definition_id,
     definition_path, definition_hash, definition_name, objective, portable,
-    definition_yaml";
+    definition_yaml, max_tasks_per_cycle";
 
 pub fn get_loop_spec(conn: &Connection, workstream_id: &str) -> Result<Option<LoopSpec>, String> {
     conn.query_row(
@@ -643,9 +656,11 @@ pub fn save_loop_spec(
             id, workstream_id, orchestrator_prompt, worker_prompt, evaluator_prompt,
             orchestrator_model, worker_model, evaluator_model, human_approval_prompt, verifier_program,
             verifier_args_json, verifier_cwd, run_timeout_seconds,
-            verifier_timeout_seconds, max_task_iterations, enabled, created_at, updated_at
+            verifier_timeout_seconds, max_task_iterations, enabled, created_at, updated_at,
+            max_tasks_per_cycle
          ) VALUES (
-            ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, 0, ?16, ?17
+            ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, 0, ?16, ?17,
+            ?18
          )
          ON CONFLICT(workstream_id) DO UPDATE SET
             orchestrator_prompt = excluded.orchestrator_prompt,
@@ -661,6 +676,7 @@ pub fn save_loop_spec(
             verifier_timeout_seconds = excluded.verifier_timeout_seconds,
             run_timeout_seconds = excluded.run_timeout_seconds,
             max_task_iterations = excluded.max_task_iterations,
+            max_tasks_per_cycle = excluded.max_tasks_per_cycle,
             updated_at = excluded.updated_at",
         params![
             id,
@@ -684,6 +700,7 @@ pub fn save_loop_spec(
             input.max_task_iterations,
             created_at,
             updated_at,
+            input.max_tasks_per_cycle,
         ],
     )
     .map_err(|error| format!("Failed to save loop specification: {error}"))?;
@@ -749,6 +766,7 @@ pub(crate) fn definition_to_materialized(
     yaml: String,
 ) -> MaterializedLoopDefinition {
     let fields = definition.to_loop_spec_input_fields();
+    let worker_prompt = worker_prompt_from_definition(&fields);
     MaterializedLoopDefinition {
         definition_id: fields.definition_id.clone(),
         definition_path: definition.path.to_string_lossy().into_owned(),
@@ -758,11 +776,8 @@ pub(crate) fn definition_to_materialized(
         portable: definition.portable,
         yaml,
         spec: LoopSpecInput {
-            orchestrator_prompt: format!(
-                "{}\n\nReturn at most {} task.",
-                fields.orchestrator_prompt, fields.max_tasks_per_run
-            ),
-            worker_prompt: worker_prompt_from_definition(&fields),
+            orchestrator_prompt: fields.orchestrator_prompt,
+            worker_prompt,
             evaluator_prompt: fields.evaluator_prompt,
             orchestrator_model: inherited_model(&fields.orchestrator_model),
             worker_model: inherited_model(&fields.worker_model),
@@ -774,6 +789,7 @@ pub(crate) fn definition_to_materialized(
             verifier_timeout_seconds: fields.verifier_timeout_seconds,
             run_timeout_seconds: fields.run_timeout_seconds,
             max_task_iterations: fields.task_attempts,
+            max_tasks_per_cycle: fields.max_tasks_per_run,
         },
     }
 }
@@ -784,6 +800,7 @@ pub fn materialize_loop_definition(
     definition: MaterializedLoopDefinition,
 ) -> Result<LoopSpec, String> {
     validate_spec(&definition.spec)?;
+    let existing = get_loop_spec(conn, workstream_id)?;
     let active: i64 = conn
         .query_row(
             "SELECT COUNT(*) FROM loop_runs r
@@ -794,11 +811,17 @@ pub fn materialize_loop_definition(
             |row| row.get(0),
         )
         .map_err(|error| format!("Failed to check active definition run: {error}"))?;
+    if active > 0
+        && existing.as_ref().is_some_and(|spec| {
+            spec.definition_hash.as_deref() == Some(&definition.definition_hash)
+        })
+    {
+        return existing.ok_or_else(|| "Active loop specification disappeared".to_string());
+    }
     if active > 0 {
         return Err("Stop the active loop run before selecting another definition".to_string());
     }
 
-    let existing = get_loop_spec(conn, workstream_id)?;
     let id = existing
         .as_ref()
         .map(|spec| spec.id.clone())
@@ -817,10 +840,10 @@ pub fn materialize_loop_definition(
             verifier_args_json, verifier_cwd, run_timeout_seconds,
             verifier_timeout_seconds, max_task_iterations, enabled, created_at, updated_at, definition_id,
             definition_path, definition_hash, definition_name, objective, portable,
-            definition_yaml
+            definition_yaml, max_tasks_per_cycle
          ) VALUES (
             ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, 1,
-            ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24
+            ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25
          )
          ON CONFLICT(workstream_id) DO UPDATE SET
             orchestrator_prompt = excluded.orchestrator_prompt,
@@ -836,6 +859,7 @@ pub fn materialize_loop_definition(
             verifier_timeout_seconds = excluded.verifier_timeout_seconds,
             run_timeout_seconds = excluded.run_timeout_seconds,
             max_task_iterations = excluded.max_task_iterations,
+            max_tasks_per_cycle = excluded.max_tasks_per_cycle,
             enabled = 1,
             definition_id = excluded.definition_id,
             definition_path = excluded.definition_path,
@@ -875,6 +899,7 @@ pub fn materialize_loop_definition(
             definition.objective,
             i64::from(definition.portable),
             definition.yaml,
+            definition.spec.max_tasks_per_cycle,
         ],
     )
     .map_err(|error| format!("Failed to bind loop definition: {error}"))?;
@@ -1797,10 +1822,11 @@ fn orchestrator_prompt(spec: &LoopSpec, accepted_keys: &[String]) -> String {
         "{}\n\nReturn only JSON with this shape:\n\
          {{\"tasks\":[{{\"key\":\"stable-id\",\"title\":\"short title\",\
          \"objective\":\"complete coding objective\"}}]}}\n\
-         Return {{\"tasks\":[]}} when no work is available.\n\
+         Return no more than {} tasks in one cycle. Return {{\"tasks\":[]}} only when the overall objective is complete and no work remains.\n\
          These task keys were already accepted and must not be returned again: {}\n\
          Do not include Markdown code fences or explanatory prose.",
         spec.orchestrator_prompt,
+        spec.max_tasks_per_cycle,
         serde_json::to_string(accepted_keys).expect("string arrays always serialize")
     )
 }
@@ -2161,40 +2187,16 @@ pub fn decide_human_approval(
                     params![decided_at, task_id],
                 )
                 .map_err(|error| format!("Failed to accept approved task: {error}"))?;
-            let queued_tasks: i64 = transaction
+            let attention_tasks: i64 = transaction
                 .query_row(
                     "SELECT COUNT(*) FROM loop_tasks
-                     WHERE loop_run_id = ?1 AND state = 'queued'",
+                     WHERE loop_run_id = ?1
+                       AND state IN ('blocked', 'attention', 'interrupted')",
                     [run_id],
                     |row| row.get(0),
                 )
-                .map_err(|error| format!("Failed to count queued approval tasks: {error}"))?;
-            if queued_tasks > 0 {
-                let timeout_seconds: u64 = transaction
-                    .query_row(
-                        "SELECT s.run_timeout_seconds
-                         FROM loop_specs s JOIN loop_runs r ON r.loop_spec_id = s.id
-                         WHERE r.id = ?1",
-                        [run_id],
-                        |row| row.get(0),
-                    )
-                    .map_err(|error| format!("Failed to load continuation timeout: {error}"))?;
-                let deadline_at = std::time::SystemTime::now()
-                    .checked_add(Duration::from_secs(timeout_seconds))
-                    .and_then(|deadline| deadline.duration_since(std::time::UNIX_EPOCH).ok())
-                    .map(|duration| duration.as_secs().to_string())
-                    .ok_or_else(|| "Failed to calculate the continuation deadline".to_string())?;
-                transaction
-                    .execute(
-                        "UPDATE loop_runs
-                         SET state = 'resuming', current_task_id = NULL,
-                             control_requested = 'none', error = NULL, finished_at = NULL,
-                             deadline_at = ?1
-                         WHERE id = ?2",
-                        params![deadline_at, run_id],
-                    )
-                    .map_err(|error| format!("Failed to continue approved run: {error}"))?;
-            } else {
+                .map_err(|error| format!("Failed to count failed approval tasks: {error}"))?;
+            if attention_tasks > 0 {
                 transaction
                     .execute(
                         "UPDATE loop_runs
@@ -2204,7 +2206,36 @@ pub fn decide_human_approval(
                     )
                     .map_err(|error| format!("Failed to finalize approved run: {error}"))?;
                 finish_run_from_persisted_tasks(&transaction, run_id)?;
+                transaction
+                    .commit()
+                    .map_err(|error| format!("Failed to commit approval decision: {error}"))?;
+                return get_loop_run(conn, run_id)?
+                    .ok_or_else(|| format!("Loop run not found after approval: {run_id}"));
             }
+            let timeout_seconds: u64 = transaction
+                .query_row(
+                    "SELECT s.run_timeout_seconds
+                     FROM loop_specs s JOIN loop_runs r ON r.loop_spec_id = s.id
+                     WHERE r.id = ?1",
+                    [run_id],
+                    |row| row.get(0),
+                )
+                .map_err(|error| format!("Failed to load continuation timeout: {error}"))?;
+            let deadline_at = std::time::SystemTime::now()
+                .checked_add(Duration::from_secs(timeout_seconds))
+                .and_then(|deadline| deadline.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|duration| duration.as_secs().to_string())
+                .ok_or_else(|| "Failed to calculate the continuation deadline".to_string())?;
+            transaction
+                .execute(
+                    "UPDATE loop_runs
+                     SET state = 'resuming', current_task_id = NULL,
+                         control_requested = 'none', error = NULL, finished_at = NULL,
+                         deadline_at = ?1
+                     WHERE id = ?2",
+                    params![deadline_at, run_id],
+                )
+                .map_err(|error| format!("Failed to continue approved run: {error}"))?;
         }
         HumanApprovalDecision::Reject => {
             transaction
@@ -2536,7 +2567,7 @@ async fn execute_manual_loop_inner(
         .ok_or_else(|| format!("Loop run not found: {run_id}"))?;
     let spec = get_loop_spec_by_id(&db.lock().unwrap(), &run.loop_spec_id)?
         .ok_or_else(|| format!("Loop specification not found: {}", run.loop_spec_id))?;
-    let tasks = if run.state == LoopRunState::Paused || run.state == LoopRunState::Resuming {
+    let mut tasks = if run.state == LoopRunState::Paused || run.state == LoopRunState::Resuming {
         let conn = db.lock().unwrap();
         list_loop_tasks(&conn, run_id)?
             .into_iter()
@@ -2545,7 +2576,6 @@ async fn execute_manual_loop_inner(
     } else {
         {
             let conn = db.lock().unwrap();
-            set_run_state(&conn, run_id, LoopRunState::Orchestrating, None)?;
             append_loop_event(
                 &conn,
                 &spec.id,
@@ -2555,175 +2585,114 @@ async fn execute_manual_loop_inner(
                 &serde_json::json!({}),
             )?;
         }
-
-        let accepted_keys = accepted_task_keys(&db.lock().unwrap(), &spec)?;
-        let orchestrator = start_agent_stage(
-            &db,
-            &runtime,
-            AgentRequest {
-                role: AgentRole::Orchestrator,
-                prompt: orchestrator_prompt(&spec, &accepted_keys),
-                working_directory: working_directory.clone(),
-                model: spec.orchestrator_model.clone(),
-                timeout: remaining_run_timeout(&db, run_id)?,
-                keep_session: false,
-                excluded_tools: Vec::new(),
-            },
-            &spec.id,
-            run_id,
-            None,
-        )
-        .await?;
-        let discovered = parse_discovered_tasks(&orchestrator.content)?;
-        if spec.definition_id.is_some() && discovered.len() > 1 {
-            return Err("YAML v1 loops may emit at most one task per run".to_string());
-        }
-        let mut tasks = Vec::new();
-        {
-            let conn = db.lock().unwrap();
-            for candidate in discovered {
-                if let Some(task) = enqueue_task(&conn, run_id, &spec.id, &candidate)? {
-                    tasks.push(task);
-                }
-            }
-        }
-        tasks
+        Vec::new()
     };
 
-    'task_loop: for task in tasks {
-        {
-            let conn = db.lock().unwrap();
-            if !apply_control_boundary(&conn, run_id)? {
-                return Ok(());
-            }
-            update_run_current_task(&conn, run_id, Some(&task.id))?;
-            set_run_state(&conn, run_id, LoopRunState::Working, None)?;
-            set_task_state(&conn, &task.id, LoopTaskState::Working, None)?;
-        }
-        let worker_response = start_agent_stage(
-            &db,
-            &runtime,
-            AgentRequest {
-                role: AgentRole::Worker,
-                prompt: worker_prompt(&spec, &task),
-                working_directory: working_directory.clone(),
-                model: spec.worker_model.clone(),
-                timeout: remaining_run_timeout(&db, run_id)?,
-                keep_session: true,
-                excluded_tools: Vec::new(),
-            },
-            &spec.id,
-            run_id,
-            Some(&task.id),
-        )
-        .await?;
-        let mut worker_output = parse_worker_output(&worker_response.content)?;
-        store_worker_result(
-            &db.lock().unwrap(),
-            &task.id,
-            &worker_response.session_id,
-            &worker_output,
-            0,
-        )?;
-
-        if worker_output.status != WorkerStatus::Completed {
-            let state = if worker_output.status == WorkerStatus::Blocked {
-                LoopTaskState::Blocked
-            } else {
-                LoopTaskState::Attention
-            };
-            set_task_state(&db.lock().unwrap(), &task.id, state, None)?;
-            runtime.disconnect(&worker_response.session_id).await?;
-            continue;
-        }
-        let mut attempt = 1;
-        let final_verdict = loop {
-            let verification = verify_task(
-                &db,
-                &spec,
-                run_id,
-                &task.id,
-                &working_directory,
-                attempt,
-                cancelled.clone(),
-            )
-            .await?;
-            if verification
-                .as_ref()
-                .is_some_and(|result| result.status != VerificationStatus::Passed)
-            {
-                set_task_state(
-                    &db.lock().unwrap(),
-                    &task.id,
-                    LoopTaskState::Attention,
-                    None,
-                )?;
-                runtime.disconnect(&worker_response.session_id).await?;
-                continue 'task_loop;
-            }
-            if spec.evaluator_prompt.is_none() {
-                if spec.human_approval_prompt.is_some() {
-                    runtime.disconnect(&worker_response.session_id).await?;
-                    if !apply_pre_approval_control_boundary(&db.lock().unwrap(), run_id)? {
-                        return Ok(());
-                    }
-                    enter_human_approval(&db.lock().unwrap(), &spec, run_id, &task)?;
-                    return Ok(());
-                }
-                set_task_state(&db.lock().unwrap(), &task.id, LoopTaskState::Accepted, None)?;
-                runtime.disconnect(&worker_response.session_id).await?;
-                continue 'task_loop;
-            }
-
-            let verdict = evaluate_task(
-                EvaluationContext {
-                    db: &db,
-                    runtime: &runtime,
-                    spec: &spec,
-                    run_id,
-                    task: &task,
-                    working_directory: &working_directory,
-                },
-                &worker_output,
-                verification.as_ref(),
-                attempt,
-            )
-            .await?;
-            if verdict.verdict != EvaluatorVerdict::Revise || attempt >= spec.max_task_iterations {
-                break verdict;
-            }
-
-            let feedback = verdict
-                .feedback
-                .as_deref()
-                .ok_or_else(|| "Evaluator revision feedback was missing".to_string())?;
+    'run_loop: loop {
+        if tasks.is_empty() {
             {
                 let conn = db.lock().unwrap();
+                if !apply_control_boundary(&conn, run_id)? {
+                    return Ok(());
+                }
+                update_run_current_task(&conn, run_id, None)?;
+                set_run_state(&conn, run_id, LoopRunState::Orchestrating, None)?;
+            }
+            let accepted_keys = accepted_task_keys(&db.lock().unwrap(), &spec)?;
+            let orchestrator = start_agent_stage(
+                &db,
+                &runtime,
+                AgentRequest {
+                    role: AgentRole::Orchestrator,
+                    prompt: orchestrator_prompt(&spec, &accepted_keys),
+                    working_directory: working_directory.clone(),
+                    model: spec.orchestrator_model.clone(),
+                    timeout: remaining_run_timeout(&db, run_id)?,
+                    keep_session: false,
+                    excluded_tools: Vec::new(),
+                },
+                &spec.id,
+                run_id,
+                None,
+            )
+            .await?;
+            let discovered = parse_discovered_tasks(&orchestrator.content)?;
+            append_loop_event(
+                &db.lock().unwrap(),
+                &spec.id,
+                run_id,
+                None,
+                "orchestration.completed",
+                &serde_json::json!({
+                    "taskCount": discovered.len(),
+                    "acceptedTaskCount": accepted_keys.len(),
+                }),
+            )?;
+            if spec.definition_id.is_some() && discovered.len() > spec.max_tasks_per_cycle as usize
+            {
+                return Err(format!(
+                    "Orchestrator returned {} tasks, exceeding maxTasksPerRun {}",
+                    discovered.len(),
+                    spec.max_tasks_per_cycle
+                ));
+            }
+            if discovered.is_empty() {
+                let conn = db.lock().unwrap();
+                finish_run_from_persisted_tasks(&conn, run_id)?;
+                return Ok(());
+            }
+            {
+                let conn = db.lock().unwrap();
+                for candidate in discovered {
+                    if let Some(task) = enqueue_task(&conn, run_id, &spec.id, &candidate)? {
+                        tasks.push(task);
+                    }
+                }
+            }
+            if tasks.is_empty() {
+                return Err(
+                    "Orchestrator returned only task keys that are already accepted or in flight"
+                        .to_string(),
+                );
+            }
+        }
+
+        'task_loop: for task in std::mem::take(&mut tasks) {
+            {
+                let conn = db.lock().unwrap();
+                if !apply_control_boundary(&conn, run_id)? {
+                    return Ok(());
+                }
+                update_run_current_task(&conn, run_id, Some(&task.id))?;
                 set_run_state(&conn, run_id, LoopRunState::Working, None)?;
                 set_task_state(&conn, &task.id, LoopTaskState::Working, None)?;
             }
-            let revised_response = revise_worker_stage(
+            let worker_response = start_agent_stage(
                 &db,
                 &runtime,
-                &worker_response.session_id,
-                &revision_prompt(feedback),
-                remaining_run_timeout(&db, run_id)?,
-                StageIdentity {
-                    loop_spec_id: &spec.id,
-                    run_id,
-                    task_id: &task.id,
+                AgentRequest {
+                    role: AgentRole::Worker,
+                    prompt: worker_prompt(&spec, &task),
+                    working_directory: working_directory.clone(),
+                    model: spec.worker_model.clone(),
+                    timeout: remaining_run_timeout(&db, run_id)?,
+                    keep_session: true,
+                    excluded_tools: Vec::new(),
                 },
+                &spec.id,
+                run_id,
+                Some(&task.id),
             )
             .await?;
-            worker_output = parse_worker_output(&revised_response.content)?;
-            attempt += 1;
+            let mut worker_output = parse_worker_output(&worker_response.content)?;
             store_worker_result(
                 &db.lock().unwrap(),
                 &task.id,
                 &worker_response.session_id,
                 &worker_output,
-                attempt - 1,
+                0,
             )?;
+
             if worker_output.status != WorkerStatus::Completed {
                 let state = if worker_output.status == WorkerStatus::Blocked {
                     LoopTaskState::Blocked
@@ -2734,33 +2703,144 @@ async fn execute_manual_loop_inner(
                 runtime.disconnect(&worker_response.session_id).await?;
                 continue 'task_loop;
             }
-        };
+            let mut attempt = 1;
+            let final_verdict = loop {
+                let verification = verify_task(
+                    &db,
+                    &spec,
+                    run_id,
+                    &task.id,
+                    &working_directory,
+                    attempt,
+                    cancelled.clone(),
+                )
+                .await?;
+                if verification
+                    .as_ref()
+                    .is_some_and(|result| result.status != VerificationStatus::Passed)
+                {
+                    set_task_state(
+                        &db.lock().unwrap(),
+                        &task.id,
+                        LoopTaskState::Attention,
+                        None,
+                    )?;
+                    runtime.disconnect(&worker_response.session_id).await?;
+                    continue 'task_loop;
+                }
+                if spec.evaluator_prompt.is_none() {
+                    if spec.human_approval_prompt.is_some() {
+                        runtime.disconnect(&worker_response.session_id).await?;
+                        if !apply_pre_approval_control_boundary(&db.lock().unwrap(), run_id)? {
+                            return Ok(());
+                        }
+                        enter_human_approval(&db.lock().unwrap(), &spec, run_id, &task)?;
+                        return Ok(());
+                    }
+                    set_task_state(&db.lock().unwrap(), &task.id, LoopTaskState::Accepted, None)?;
+                    runtime.disconnect(&worker_response.session_id).await?;
+                    continue 'task_loop;
+                }
 
-        if final_verdict.verdict == EvaluatorVerdict::Accepted
-            && spec.human_approval_prompt.is_some()
-        {
-            runtime.disconnect(&worker_response.session_id).await?;
-            if !apply_pre_approval_control_boundary(&db.lock().unwrap(), run_id)? {
+                let verdict = evaluate_task(
+                    EvaluationContext {
+                        db: &db,
+                        runtime: &runtime,
+                        spec: &spec,
+                        run_id,
+                        task: &task,
+                        working_directory: &working_directory,
+                    },
+                    &worker_output,
+                    verification.as_ref(),
+                    attempt,
+                )
+                .await?;
+                if verdict.verdict != EvaluatorVerdict::Revise
+                    || attempt >= spec.max_task_iterations
+                {
+                    break verdict;
+                }
+
+                let feedback = verdict
+                    .feedback
+                    .as_deref()
+                    .ok_or_else(|| "Evaluator revision feedback was missing".to_string())?;
+                {
+                    let conn = db.lock().unwrap();
+                    set_run_state(&conn, run_id, LoopRunState::Working, None)?;
+                    set_task_state(&conn, &task.id, LoopTaskState::Working, None)?;
+                }
+                let revised_response = revise_worker_stage(
+                    &db,
+                    &runtime,
+                    &worker_response.session_id,
+                    &revision_prompt(feedback),
+                    remaining_run_timeout(&db, run_id)?,
+                    StageIdentity {
+                        loop_spec_id: &spec.id,
+                        run_id,
+                        task_id: &task.id,
+                    },
+                )
+                .await?;
+                worker_output = parse_worker_output(&revised_response.content)?;
+                attempt += 1;
+                store_worker_result(
+                    &db.lock().unwrap(),
+                    &task.id,
+                    &worker_response.session_id,
+                    &worker_output,
+                    attempt - 1,
+                )?;
+                if worker_output.status != WorkerStatus::Completed {
+                    let state = if worker_output.status == WorkerStatus::Blocked {
+                        LoopTaskState::Blocked
+                    } else {
+                        LoopTaskState::Attention
+                    };
+                    set_task_state(&db.lock().unwrap(), &task.id, state, None)?;
+                    runtime.disconnect(&worker_response.session_id).await?;
+                    continue 'task_loop;
+                }
+            };
+
+            if final_verdict.verdict == EvaluatorVerdict::Accepted
+                && spec.human_approval_prompt.is_some()
+            {
+                runtime.disconnect(&worker_response.session_id).await?;
+                if !apply_pre_approval_control_boundary(&db.lock().unwrap(), run_id)? {
+                    return Ok(());
+                }
+                enter_human_approval(&db.lock().unwrap(), &spec, run_id, &task)?;
                 return Ok(());
             }
-            enter_human_approval(&db.lock().unwrap(), &spec, run_id, &task)?;
+            let task_state = match final_verdict.verdict {
+                EvaluatorVerdict::Accepted => LoopTaskState::Accepted,
+                EvaluatorVerdict::Blocked => LoopTaskState::Blocked,
+                EvaluatorVerdict::Revise | EvaluatorVerdict::Invalid => LoopTaskState::Attention,
+            };
+            set_task_state(&db.lock().unwrap(), &task.id, task_state, None)?;
+            runtime.disconnect(&worker_response.session_id).await?;
+        }
+
+        let conn = db.lock().unwrap();
+        let attention_tasks: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM loop_tasks
+                 WHERE loop_run_id = ?1
+                   AND state IN ('blocked', 'attention', 'interrupted')",
+                [run_id],
+                |row| row.get(0),
+            )
+            .map_err(|error| format!("Failed to derive loop cycle disposition: {error}"))?;
+        if attention_tasks > 0 {
+            finish_run_from_persisted_tasks(&conn, run_id)?;
             return Ok(());
         }
-        let task_state = match final_verdict.verdict {
-            EvaluatorVerdict::Accepted => LoopTaskState::Accepted,
-            EvaluatorVerdict::Blocked => LoopTaskState::Blocked,
-            EvaluatorVerdict::Revise | EvaluatorVerdict::Invalid => LoopTaskState::Attention,
-        };
-        set_task_state(&db.lock().unwrap(), &task.id, task_state, None)?;
-        runtime.disconnect(&worker_response.session_id).await?;
+        drop(conn);
+        continue 'run_loop;
     }
-
-    let conn = db.lock().unwrap();
-    if !apply_control_boundary(&conn, run_id)? {
-        return Ok(());
-    }
-    update_run_current_task(&conn, run_id, None)?;
-    finish_run_from_persisted_tasks(&conn, run_id)
 }
 
 pub async fn execute_manual_loop(
@@ -3759,6 +3839,7 @@ mod tests {
 
     struct EvaluatorFallbackRuntime {
         evaluator_calls: std::sync::atomic::AtomicUsize,
+        orchestrator_calls: std::sync::atomic::AtomicUsize,
     }
 
     #[async_trait::async_trait]
@@ -3769,11 +3850,20 @@ mod tests {
             events: tokio::sync::mpsc::UnboundedSender<AgentRuntimeEvent>,
         ) -> Result<AgentResponse, String> {
             match request.role {
-                AgentRole::Orchestrator => Ok(AgentResponse {
-                    session_id: "orchestrator".to_string(),
-                    content: r#"{"tasks":[{"key":"task","title":"Task","objective":"Work"}]}"#
-                        .to_string(),
-                }),
+                AgentRole::Orchestrator => {
+                    let call = self
+                        .orchestrator_calls
+                        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    Ok(AgentResponse {
+                        session_id: format!("orchestrator-{call}"),
+                        content: if call == 0 {
+                            r#"{"tasks":[{"key":"task","title":"Task","objective":"Work"}]}"#
+                                .to_string()
+                        } else {
+                            r#"{"tasks":[]}"#.to_string()
+                        },
+                    })
+                }
                 AgentRole::Worker => Ok(AgentResponse {
                     session_id: "worker".to_string(),
                     content: r#"{"status":"completed","summary":"Done","evidence":[]}"#.to_string(),
@@ -3863,6 +3953,16 @@ mod tests {
             verifier_timeout_seconds: Some(300),
             run_timeout_seconds: 600,
             max_task_iterations: 2,
+            max_tasks_per_cycle: 1,
+        }
+    }
+
+    fn no_work_response(session_id: &str) -> crate::loop_agent::ScriptedAgentResponse {
+        crate::loop_agent::ScriptedAgentResponse {
+            role: AgentRole::Orchestrator,
+            session_id: session_id.to_string(),
+            content: r#"{"tasks":[]}"#.to_string(),
+            events: vec![],
         }
     }
 
@@ -4170,6 +4270,7 @@ mod tests {
                 content: r#"{"verdict":"accepted","summary":"The fix satisfies the task"}"#.to_string(),
                 events: vec![],
             },
+            no_work_response("orchestrator-2"),
         ]));
         let db = Arc::new(Mutex::new(conn));
 
@@ -4207,6 +4308,7 @@ mod tests {
         let run = create_loop_run(&conn, &spec.id, 600).expect("create run");
         let runtime = Arc::new(EvaluatorFallbackRuntime {
             evaluator_calls: std::sync::atomic::AtomicUsize::new(0),
+            orchestrator_calls: std::sync::atomic::AtomicUsize::new(0),
         });
         let db = Arc::new(Mutex::new(conn));
 
@@ -4310,6 +4412,7 @@ mod tests {
                 content: r#"{"verdict":"accepted","summary":"The regression is covered","evidence":["test passes"]}"#.to_string(),
                 events: vec![],
             },
+            no_work_response("orchestrator-2"),
         ]));
         let db = Arc::new(Mutex::new(conn));
 
@@ -4387,6 +4490,280 @@ mod tests {
         assert_eq!(snapshot.tasks[0].state, LoopTaskState::Attention);
         assert_eq!(snapshot.tasks[0].revision_count, 0);
         assert_eq!(snapshot.evaluations.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn accepted_tasks_reorchestrate_until_no_work_remains() {
+        use crate::loop_agent::{AgentRole, ScriptedAgentResponse, ScriptedAgentRuntime};
+        use std::sync::{Arc, Mutex};
+
+        let conn = test_db();
+        let mut input = spec_input();
+        input.verifier_program = None;
+        input.verifier_args.clear();
+        let spec = save_loop_spec(&conn, "ws-1", input).expect("save loop spec");
+        set_loop_enabled(&conn, &spec.id, true).expect("enable loop");
+        let run = create_loop_run(&conn, &spec.id, 600).expect("create run");
+        let runtime = Arc::new(ScriptedAgentRuntime::new(vec![
+            ScriptedAgentResponse {
+                role: AgentRole::Orchestrator,
+                session_id: "orchestrator-1".to_string(),
+                content: r#"{"tasks":[{"key":"task-1","title":"First","objective":"First task"}]}"#
+                    .to_string(),
+                events: vec![],
+            },
+            ScriptedAgentResponse {
+                role: AgentRole::Worker,
+                session_id: "worker-1".to_string(),
+                content: r#"{"status":"completed","summary":"First done","evidence":[]}"#
+                    .to_string(),
+                events: vec![],
+            },
+            ScriptedAgentResponse {
+                role: AgentRole::Evaluator,
+                session_id: "evaluator-1".to_string(),
+                content: r#"{"verdict":"accepted","summary":"First accepted","evidence":[]}"#
+                    .to_string(),
+                events: vec![],
+            },
+            ScriptedAgentResponse {
+                role: AgentRole::Orchestrator,
+                session_id: "orchestrator-2".to_string(),
+                content:
+                    r#"{"tasks":[{"key":"task-2","title":"Second","objective":"Second task"}]}"#
+                        .to_string(),
+                events: vec![],
+            },
+            ScriptedAgentResponse {
+                role: AgentRole::Worker,
+                session_id: "worker-2".to_string(),
+                content: r#"{"status":"completed","summary":"Second done","evidence":[]}"#
+                    .to_string(),
+                events: vec![],
+            },
+            ScriptedAgentResponse {
+                role: AgentRole::Evaluator,
+                session_id: "evaluator-2".to_string(),
+                content: r#"{"verdict":"accepted","summary":"Second accepted","evidence":[]}"#
+                    .to_string(),
+                events: vec![],
+            },
+            ScriptedAgentResponse {
+                role: AgentRole::Orchestrator,
+                session_id: "orchestrator-3".to_string(),
+                content: r#"{"tasks":[]}"#.to_string(),
+                events: vec![],
+            },
+        ]));
+        let db = Arc::new(Mutex::new(conn));
+
+        execute_manual_loop(
+            Arc::clone(&db),
+            runtime,
+            &run.id,
+            std::path::PathBuf::from("/tmp/repo"),
+        )
+        .await
+        .expect("execute full goal loop");
+
+        let snapshot = loop_snapshot(&db.lock().unwrap(), "ws-1").expect("load snapshot");
+        assert_eq!(snapshot.latest_run.unwrap().state, LoopRunState::Completed);
+        assert_eq!(snapshot.tasks.len(), 2);
+        assert!(snapshot
+            .tasks
+            .iter()
+            .all(|task| task.state == LoopTaskState::Accepted));
+    }
+
+    #[tokio::test]
+    async fn one_orchestration_cycle_can_enqueue_multiple_tasks() {
+        use crate::loop_agent::{AgentRole, ScriptedAgentResponse, ScriptedAgentRuntime};
+        use std::sync::{Arc, Mutex};
+
+        let conn = test_db();
+        let mut input = spec_input();
+        input.verifier_program = None;
+        input.verifier_args.clear();
+        input.max_tasks_per_cycle = 2;
+        let spec = save_loop_spec(&conn, "ws-1", input).expect("save loop spec");
+        set_loop_enabled(&conn, &spec.id, true).expect("enable loop");
+        let run = create_loop_run(&conn, &spec.id, 600).expect("create run");
+        let runtime = Arc::new(ScriptedAgentRuntime::new(vec![
+            ScriptedAgentResponse {
+                role: AgentRole::Orchestrator,
+                session_id: "orchestrator-1".to_string(),
+                content: r#"{"tasks":[
+                    {"key":"task-1","title":"First","objective":"First task"},
+                    {"key":"task-2","title":"Second","objective":"Second task"}
+                ]}"#
+                .to_string(),
+                events: vec![],
+            },
+            ScriptedAgentResponse {
+                role: AgentRole::Worker,
+                session_id: "worker-1".to_string(),
+                content: r#"{"status":"completed","summary":"First done","evidence":[]}"#
+                    .to_string(),
+                events: vec![],
+            },
+            ScriptedAgentResponse {
+                role: AgentRole::Evaluator,
+                session_id: "evaluator-1".to_string(),
+                content: r#"{"verdict":"accepted","summary":"First accepted","evidence":[]}"#
+                    .to_string(),
+                events: vec![],
+            },
+            ScriptedAgentResponse {
+                role: AgentRole::Worker,
+                session_id: "worker-2".to_string(),
+                content: r#"{"status":"completed","summary":"Second done","evidence":[]}"#
+                    .to_string(),
+                events: vec![],
+            },
+            ScriptedAgentResponse {
+                role: AgentRole::Evaluator,
+                session_id: "evaluator-2".to_string(),
+                content: r#"{"verdict":"accepted","summary":"Second accepted","evidence":[]}"#
+                    .to_string(),
+                events: vec![],
+            },
+            no_work_response("orchestrator-2"),
+        ]));
+        let db = Arc::new(Mutex::new(conn));
+
+        execute_manual_loop(
+            Arc::clone(&db),
+            runtime,
+            &run.id,
+            std::path::PathBuf::from("/tmp/repo"),
+        )
+        .await
+        .expect("execute multi-task cycle");
+
+        let snapshot = loop_snapshot(&db.lock().unwrap(), "ws-1").expect("load snapshot");
+        assert_eq!(snapshot.latest_run.unwrap().state, LoopRunState::Completed);
+        assert_eq!(
+            snapshot
+                .tasks
+                .iter()
+                .map(|task| task.key.as_str())
+                .collect::<Vec<_>>(),
+            vec!["task-1", "task-2"]
+        );
+        assert!(snapshot
+            .tasks
+            .iter()
+            .all(|task| task.state == LoopTaskState::Accepted));
+    }
+
+    #[tokio::test]
+    async fn yaml_batch_limit_is_enforced() {
+        use crate::loop_agent::{AgentRole, ScriptedAgentResponse, ScriptedAgentRuntime};
+        use std::sync::{Arc, Mutex};
+
+        let conn = test_db();
+        let mut input = spec_input();
+        input.verifier_program = None;
+        input.verifier_args.clear();
+        let spec = save_loop_spec(&conn, "ws-1", input).expect("save loop spec");
+        conn.execute(
+            "UPDATE loop_specs SET definition_id = 'yaml-loop' WHERE id = ?1",
+            [&spec.id],
+        )
+        .expect("mark YAML definition");
+        set_loop_enabled(&conn, &spec.id, true).expect("enable loop");
+        let run = create_loop_run(&conn, &spec.id, 600).expect("create run");
+        let runtime = Arc::new(ScriptedAgentRuntime::new(vec![ScriptedAgentResponse {
+            role: AgentRole::Orchestrator,
+            session_id: "orchestrator-1".to_string(),
+            content: r#"{"tasks":[
+                {"key":"task-1","title":"First","objective":"First task"},
+                {"key":"task-2","title":"Second","objective":"Second task"}
+            ]}"#
+            .to_string(),
+            events: vec![],
+        }]));
+        let db = Arc::new(Mutex::new(conn));
+
+        let error = execute_manual_loop(
+            Arc::clone(&db),
+            runtime,
+            &run.id,
+            std::path::PathBuf::from("/tmp/repo"),
+        )
+        .await
+        .expect_err("oversized YAML batch must fail");
+
+        assert!(error.contains("exceeding maxTasksPerRun 1"));
+        assert_eq!(
+            loop_snapshot(&db.lock().unwrap(), "ws-1")
+                .expect("load snapshot")
+                .latest_run
+                .unwrap()
+                .state,
+            LoopRunState::Attention
+        );
+    }
+
+    #[tokio::test]
+    async fn repeated_occupied_keys_fail_instead_of_completing_or_spinning() {
+        use crate::loop_agent::{AgentRole, ScriptedAgentResponse, ScriptedAgentRuntime};
+        use std::sync::{Arc, Mutex};
+
+        let conn = test_db();
+        let mut input = spec_input();
+        input.verifier_program = None;
+        input.verifier_args.clear();
+        let spec = save_loop_spec(&conn, "ws-1", input).expect("save loop spec");
+        set_loop_enabled(&conn, &spec.id, true).expect("enable loop");
+        let run = create_loop_run(&conn, &spec.id, 600).expect("create run");
+        let repeated = r#"{"tasks":[{"key":"task-1","title":"Task","objective":"Do work"}]}"#;
+        let runtime = Arc::new(ScriptedAgentRuntime::new(vec![
+            ScriptedAgentResponse {
+                role: AgentRole::Orchestrator,
+                session_id: "orchestrator-1".to_string(),
+                content: repeated.to_string(),
+                events: vec![],
+            },
+            ScriptedAgentResponse {
+                role: AgentRole::Worker,
+                session_id: "worker-1".to_string(),
+                content: r#"{"status":"completed","summary":"Done","evidence":[]}"#.to_string(),
+                events: vec![],
+            },
+            ScriptedAgentResponse {
+                role: AgentRole::Evaluator,
+                session_id: "evaluator-1".to_string(),
+                content: r#"{"verdict":"accepted","summary":"Accepted","evidence":[]}"#.to_string(),
+                events: vec![],
+            },
+            ScriptedAgentResponse {
+                role: AgentRole::Orchestrator,
+                session_id: "orchestrator-2".to_string(),
+                content: repeated.to_string(),
+                events: vec![],
+            },
+        ]));
+        let db = Arc::new(Mutex::new(conn));
+
+        let error = execute_manual_loop(
+            Arc::clone(&db),
+            runtime,
+            &run.id,
+            std::path::PathBuf::from("/tmp/repo"),
+        )
+        .await
+        .expect_err("occupied-only batch must fail");
+
+        assert!(error.contains("only task keys that are already accepted or in flight"));
+        assert_eq!(
+            loop_snapshot(&db.lock().unwrap(), "ws-1")
+                .expect("load snapshot")
+                .latest_run
+                .unwrap()
+                .state,
+            LoopRunState::Attention
+        );
     }
 
     #[tokio::test]
@@ -4489,6 +4866,7 @@ mod tests {
                 content: r#"{"status":"completed","summary":"Done","evidence":[]}"#.to_string(),
                 events: vec![],
             },
+            no_work_response("orchestrator-2"),
         ])) as Arc<dyn LoopAgentRuntime>;
         let db = Arc::new(Mutex::new(conn));
         let cancelled = Arc::new(AtomicBool::new(false));
@@ -4647,6 +5025,7 @@ mod tests {
                 content: r#"{"status":"completed","summary":"Done","evidence":[]}"#.to_string(),
                 events: vec![],
             },
+            no_work_response("orchestrator-2"),
         ]));
         let db = Arc::new(Mutex::new(conn));
 
@@ -4839,13 +5218,24 @@ mod tests {
         .expect_err("configured attempt budget must be enforced");
         assert!(exhausted.contains("exhausted the task attempt budget"));
 
-        decide_human_approval(
+        let continued = decide_human_approval(
             &db.lock().unwrap(),
             &run.id,
             HumanApprovalDecision::Approve,
             None,
         )
         .expect("approve revision");
+        assert_eq!(continued.state, LoopRunState::Resuming);
+        execute_manual_loop(
+            Arc::clone(&db),
+            Arc::new(ScriptedAgentRuntime::new(vec![no_work_response(
+                "orchestrator-after-approval",
+            )])),
+            &run.id,
+            std::path::PathBuf::from("/tmp/repo"),
+        )
+        .await
+        .expect("confirm no further work");
         let approved = loop_snapshot(&db.lock().unwrap(), "ws-1").expect("load approved snapshot");
         assert_eq!(
             approved.latest_run.as_ref().unwrap().state,
@@ -5227,13 +5617,24 @@ mod tests {
             awaiting.latest_run.as_ref().unwrap().state,
             LoopRunState::AwaitingApproval
         );
-        decide_human_approval(
+        let continued = decide_human_approval(
             &db.lock().unwrap(),
             &run.id,
             HumanApprovalDecision::Approve,
             None,
         )
         .expect("approve second task");
+        assert_eq!(continued.state, LoopRunState::Resuming);
+        execute_manual_loop(
+            Arc::clone(&db),
+            Arc::new(ScriptedAgentRuntime::new(vec![no_work_response(
+                "orchestrator-after-approval",
+            )])),
+            &run.id,
+            std::path::PathBuf::from("/tmp/repo"),
+        )
+        .await
+        .expect("confirm no further work");
         assert_eq!(
             get_loop_run(&db.lock().unwrap(), &run.id)
                 .unwrap()
@@ -5541,6 +5942,7 @@ mod tests {
                 content: r#"{"verdict":"accepted","summary":"Accepted","evidence":[]}"#.to_string(),
                 events: vec![],
             },
+            no_work_response("orchestrator-after-resume"),
         ]));
         let db = Arc::new(Mutex::new(conn));
 
@@ -5688,6 +6090,7 @@ mod tests {
         let conn = test_db();
         let mut input = spec_input();
         input.verifier_program = None;
+        input.max_tasks_per_cycle = 2;
         let spec = save_loop_spec(&conn, "ws-1", input).expect("save loop spec");
         set_loop_enabled(&conn, &spec.id, true).expect("enable loop");
         let run = create_loop_run(&conn, &spec.id, 600).expect("create run");

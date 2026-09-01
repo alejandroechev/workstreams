@@ -79,6 +79,7 @@ describe("TauriBackend", () => {
         verifier_timeout_seconds: null,
         run_timeout_seconds: 60,
         max_task_iterations: 2,
+        max_tasks_per_cycle: 1,
       },
     });
     expect(invoke).toHaveBeenNthCalledWith(

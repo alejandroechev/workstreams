@@ -77,9 +77,9 @@ spec:
   orchestrator:
     model: inherit
     prompt: |
-      Inspect the current repository and choose the smallest useful task.
-      Return zero or one task with a stable key.
-    maxTasksPerRun: 1
+      Inspect the current repository and choose the next useful tasks.
+      Return an empty task list only when the overall objective is complete.
+    maxTasksPerRun: 3
 
   worker:
     model: inherit
@@ -173,7 +173,7 @@ Create a wrapper verifier script when several deterministic commands must run.
 - `apiVersion`: `workstreams.dev/v1alpha1`
 - `kind`: `Loop`
 - `trigger.type`: `manual`
-- `orchestrator.maxTasksPerRun`: `1`
+- `orchestrator.maxTasksPerRun`: a positive orchestration batch size
 - `evaluator.onReject.action`: `revise`
 - `limits.taskAttempts`: a positive integer total attempt budget
 - `permissions.tools`: `full`
@@ -183,6 +183,10 @@ Create a wrapper verifier script when several deterministic commands must run.
 `limits.taskAttempts` counts total worker attempts. Use `1` for no revisions,
 `2` for one revision, or `N` for up to `N - 1` revisions. Run timeout remains
 the outer safety bound.
+
+After every accepted batch, Workstreams invokes the orchestrator again with
+the accumulated accepted task keys. The run completes only when a later cycle
+returns `{"tasks":[]}`. `maxTasksPerRun` limits one batch, not the whole run.
 
 Durations are positive integers followed by `s`, `m`, or `h`, for example
 `90s`, `10m`, or `2h`.

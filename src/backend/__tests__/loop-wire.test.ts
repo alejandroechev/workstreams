@@ -56,6 +56,7 @@ describe("loop wire mapping", () => {
       verifier_timeout_seconds: null,
       run_timeout_seconds: 90,
       max_task_iterations: 2,
+      max_tasks_per_cycle: 1,
     });
   });
 
@@ -234,6 +235,13 @@ describe("loop wire mapping", () => {
     expect(() =>
       decodeLoopSpec(specWire({ max_task_iterations: 0 })),
     ).toThrow("Invalid max task iterations: 0");
+  });
+
+  it("decodes configurable orchestration batch size", () => {
+    const decoded = decodeLoopSpec(specWire({
+      max_tasks_per_cycle: 6,
+    }));
+    expect(decoded.maxTasksPerCycle).toBe(6);
   });
 
   it("decodes an unconfigured workstream and nullable sidebar run fields", () => {

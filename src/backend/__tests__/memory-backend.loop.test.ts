@@ -62,7 +62,7 @@ describe("MemoryBackend manual coding loops", () => {
     expect((await backend.getWorkstreamLoopSnapshot(workstreamId)).latestRun)
       .toMatchObject({ state: "working" });
 
-    await vi.advanceTimersByTimeAsync(1_200);
+    await vi.advanceTimersByTimeAsync(1_500);
     const snapshot = await backend.getWorkstreamLoopSnapshot(workstreamId);
     expect(snapshot.latestRun?.state).toBe("completed");
     expect(snapshot.tasks[0].state).toBe("accepted");
@@ -209,6 +209,10 @@ describe("MemoryBackend manual coding loops", () => {
     expect(snapshot.approvals).toHaveLength(2);
 
     await backend.decideLoopHumanApproval(run.id, "approve");
+    snapshot = await backend.getWorkstreamLoopSnapshot(workstreamId);
+    expect(snapshot.latestRun).toMatchObject({ state: "orchestrating" });
+    expect(snapshot.latestRun?.finishedAt).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(350);
     snapshot = await backend.getWorkstreamLoopSnapshot(workstreamId);
     expect(snapshot.latestRun?.state).toBe("completed");
     expect(snapshot.tasks[0].state).toBe("accepted");

@@ -68,7 +68,10 @@
       "properties": {
         "model": { "$ref": "#/$defs/model" },
         "prompt": { "$ref": "#/$defs/nonblank" },
-        "maxTasksPerRun": { "const": 1 }
+        "maxTasksPerRun": {
+          "type": "integer",
+          "minimum": 1
+        }
       }
     },
     "worker": {

@@ -372,6 +372,7 @@ fn run_approval_scenario(
             verifier_timeout_seconds: None,
             run_timeout_seconds: 30,
             max_task_iterations: 2,
+            max_tasks_per_cycle: 1,
         },
     )?;
     set_loop_enabled(&conn, &spec.id, true)?;
@@ -426,6 +427,18 @@ fn run_approval_scenario(
         HumanApprovalDecision::Approve,
         None,
     )?;
+    let completion_runtime = Arc::new(ScriptedAgentRuntime::new(vec![ScriptedAgentResponse {
+        role: AgentRole::Orchestrator,
+        session_id: "approval-orchestrator-complete".to_string(),
+        content: r#"{"tasks":[]}"#.to_string(),
+        events: vec![],
+    }])) as Arc<dyn LoopAgentRuntime>;
+    runtime()?.block_on(execute_manual_loop(
+        Arc::clone(&db),
+        completion_runtime,
+        &run.id,
+        workspace.to_path_buf(),
+    ))?;
     let snapshot = loop_snapshot(&db.lock().unwrap(), "cli-loop-approval")?;
     let task = snapshot
         .tasks
@@ -491,6 +504,7 @@ fn run_scenario(db_path: &Path, workspace: &Path) -> Result<ScenarioResult, Stri
             verifier_timeout_seconds: Some(30),
             run_timeout_seconds: 30,
             max_task_iterations: 2,
+            max_tasks_per_cycle: 1,
         },
     )?;
     set_loop_enabled(&conn, &spec.id, true)?;
@@ -516,6 +530,12 @@ fn run_scenario(db_path: &Path, workspace: &Path) -> Result<ScenarioResult, Stri
             content: r#"{"verdict":"accepted","summary":"Verifier passed","evidence":["CLI_VERIFIED"]}"#.to_string(),
             events: vec![],
         },
+        ScriptedAgentResponse {
+            role: AgentRole::Orchestrator,
+            session_id: "scenario-orchestrator-complete".to_string(),
+            content: r#"{"tasks":[]}"#.to_string(),
+            events: vec![],
+        },
     ])) as Arc<dyn LoopAgentRuntime>;
     let db = Arc::new(Mutex::new(open(db_path)?));
     runtime()?.block_on(execute_manual_loop(
@@ -533,7 +553,7 @@ fn run_scenario(db_path: &Path, workspace: &Path) -> Result<ScenarioResult, Stri
     let second_runtime = Arc::new(ScriptedAgentRuntime::new(vec![ScriptedAgentResponse {
         role: AgentRole::Orchestrator,
         session_id: "scenario-orchestrator-2".to_string(),
-        content: r#"{"tasks":[{"key":"fixture-task","title":"Fixture task","objective":"Complete the fixture coding task"}]}"#.to_string(),
+        content: r#"{"tasks":[]}"#.to_string(),
         events: vec![],
     }])) as Arc<dyn LoopAgentRuntime>;
     runtime()?.block_on(execute_manual_loop(

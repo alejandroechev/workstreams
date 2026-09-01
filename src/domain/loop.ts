@@ -54,6 +54,7 @@ export interface LoopSpec {
   humanApproval?: LoopHumanApprovalSpec;
   runTimeoutMs: number;
   maxTaskIterations: number;
+  maxTasksPerCycle?: number;
   enabled: boolean;
   createdAt?: string;
   updatedAt?: string;
@@ -470,10 +471,10 @@ function startNextQueued(snapshot: LoopSnapshot): LoopTransition {
   const next = copySnapshot(snapshot);
   const queued = next.tasks.find((candidate) => candidate.state === "queued");
   if (!queued) {
-    next.run.state = "completed";
+    next.run.state = "orchestrating";
     next.run.activeTaskId = null;
     next.run.pendingAction = null;
-    return { snapshot: next, action: noAction() };
+    return { snapshot: next, action: { type: "orchestrate" } };
   }
 
   queued.state = "working";
@@ -666,6 +667,12 @@ export function transitionLoop(
 
     const malformed = malformedBatchReason(current, outcome.tasks);
     if (malformed) return atSafeBoundary(attention(current, malformed));
+    if (outcome.tasks.length === 0) {
+      const next = copySnapshot(current);
+      next.run.state = "completed";
+      next.run.activeTaskId = null;
+      return atSafeBoundary({ snapshot: next, action: noAction() });
+    }
 
     const next = copySnapshot(current);
     next.tasks.push(...outcome.tasks.map((candidate) => ({ ...candidate })));

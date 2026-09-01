@@ -626,10 +626,7 @@ export class MemoryBackend implements Backend {
         latestRun: next.latestRun
           ? {
               ...next.latestRun,
-              finishedAt:
-                decision === "approve" || decision === "reject"
-                  ? decidedAt
-                  : undefined,
+              finishedAt: decision === "reject" ? decidedAt : undefined,
             }
           : null,
         approvals: snapshot.approvals.map((approval) =>
@@ -812,6 +809,11 @@ export class MemoryBackend implements Backend {
     const timers = [
       transition(300, (snapshot) => {
         if (snapshot.latestRun?.state !== "orchestrating") return snapshot;
+        if (snapshot.tasks.length > 0) {
+          return this.applyMemoryOutcome(snapshot, {
+            type: "orchestration_completed",
+          });
+        }
         const task: LoopTask = snapshot.tasks[0] ?? {
           id: generateId(),
           loopRunId: runId,
@@ -912,6 +914,18 @@ export class MemoryBackend implements Backend {
                   },
                 ]
               : snapshot.evaluations,
+        };
+      }),
+      transition(1_800, (snapshot) => {
+        if (snapshot.latestRun?.state !== "orchestrating") return snapshot;
+        const transitioned = this.applyMemoryOutcome(snapshot, {
+          type: "orchestration_completed",
+        });
+        return {
+          ...transitioned,
+          latestRun: transitioned.latestRun
+            ? { ...transitioned.latestRun, finishedAt: now() }
+            : transitioned.latestRun,
         };
       }),
     ];

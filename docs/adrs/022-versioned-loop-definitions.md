@@ -59,7 +59,8 @@ YAML configures the existing orchestrator → worker pipeline; it does not defin
 an arbitrary DAG. In v1:
 
 - the trigger is manual;
-- the orchestrator emits at most one task per run;
+- `orchestrator.maxTasksPerRun` is a positive batch-size limit; the controller
+  invokes further orchestration cycles after accepted batches;
 - `limits.taskAttempts` is a positive integer counting the initial worker
   attempt plus any evaluator- or human-requested revisions;
 - a workstream has at most one active run;
@@ -114,9 +115,9 @@ Runtime history remains queryable in SQLite while retaining immutable source
 provenance. External scripts can provide precise sensors without requiring
 integration-specific scaffolding.
 
-The v1 contract is intentionally narrow. Scheduling, cloud execution, arbitrary
-graphs, multiple tasks per orchestration, and automatic public effects remain
-out of scope.
+The v1 contract remains a goal loop rather than an arbitrary graph. Scheduling,
+cloud execution, arbitrary DAGs, and automatic public effects remain out of
+scope; multiple tasks and repeated orchestration are supported.
 
 ## Validation
 

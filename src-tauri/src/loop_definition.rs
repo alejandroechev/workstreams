@@ -251,6 +251,7 @@ pub struct LoopSpecSummary {
     pub objective: String,
     pub trigger_type: String,
     pub orchestrator_model: String,
+    pub max_tasks_per_run: u32,
     pub worker_model: String,
     pub worker_skills: Vec<String>,
     pub context_files: Vec<String>,
@@ -803,11 +804,11 @@ fn validate_document(workstream_root: &Path, document: &LoopDefinition) -> Valid
         "spec.orchestrator.model",
         &document.spec.orchestrator.model,
     );
-    if document.spec.orchestrator.max_tasks_per_run != 1 {
+    if document.spec.orchestrator.max_tasks_per_run == 0 {
         state.error(
             "unsupported_value",
             "spec.orchestrator.maxTasksPerRun",
-            "maxTasksPerRun must be exactly 1 in v1",
+            "maxTasksPerRun must be greater than zero",
         );
     }
 
@@ -877,7 +878,7 @@ fn validate_document(workstream_root: &Path, document: &LoopDefinition) -> Valid
         state.error(
             "unsupported_value",
             "spec.flowControl.maxActiveRuns",
-            "maxActiveRuns must be exactly 1 in v1",
+            "maxActiveRuns must be exactly 1 to prevent conflicting workspace mutations",
         );
     }
 
@@ -1177,6 +1178,7 @@ fn build_summary(document: &LoopDefinition, validation: &ValidationState) -> Loo
         objective: document.spec.objective.clone(),
         trigger_type: "manual".to_string(),
         orchestrator_model: document.spec.orchestrator.model.clone(),
+        max_tasks_per_run: document.spec.orchestrator.max_tasks_per_run,
         worker_model: document.spec.worker.model.clone(),
         worker_skills: document.spec.worker.skills.clone().unwrap_or_default(),
         context_files: context
@@ -1440,8 +1442,8 @@ spec:
             .replace("name: Test loop", "name: '   '")
             .replace("prompt: Select one task", "prompt: ''")
             .replace("model: concrete-model", "model: ' '")
-            .replace("maxTasksPerRun: 1", "maxTasksPerRun: 2")
-            .replace("maxActiveRuns: 1", "maxActiveRuns: 2");
+            .replace("maxTasksPerRun: 1", "maxTasksPerRun: 0")
+            .replace("maxActiveRuns: 1", "maxActiveRuns: 0");
 
         let result = parse_loop_definition_bytes(
             &root.path,
@@ -1491,6 +1493,41 @@ spec:
             .validation_errors
             .iter()
             .any(|issue| issue.field == "spec.limits.taskAttempts"));
+    }
+
+    #[test]
+    fn orchestrator_batch_size_accepts_positive_values_and_rejects_zero() {
+        let root = prepared_root();
+        let configured = yaml_with_sensors("", evaluator_yaml())
+            .replace("maxTasksPerRun: 1", "maxTasksPerRun: 5");
+        let result = parse_loop_definition_bytes(
+            &root.path,
+            &root.path.join("batch.loop.yaml"),
+            configured.as_bytes(),
+        );
+        assert!(result.valid, "{:?}", result.validation_errors);
+        assert_eq!(
+            result
+                .definition
+                .expect("validated definition")
+                .document
+                .spec
+                .orchestrator
+                .max_tasks_per_run,
+            5
+        );
+
+        let invalid = configured.replace("maxTasksPerRun: 5", "maxTasksPerRun: 0");
+        let result = parse_loop_definition_bytes(
+            &root.path,
+            &root.path.join("zero-batch.loop.yaml"),
+            invalid.as_bytes(),
+        );
+        assert!(!result.valid);
+        assert!(result
+            .validation_errors
+            .iter()
+            .any(|issue| issue.field == "spec.orchestrator.maxTasksPerRun"));
     }
 
     #[test]

@@ -214,6 +214,9 @@ test("selects, pauses, resumes, verifies, and evaluates a YAML loop", async ({
     { timeout: 5_000 },
   );
   await page.locator('[data-testid="loop-approval-approve"]').click();
+  await expect(page.locator('[data-testid="loop-run-state"]')).toContainText(
+    "Orchestrating",
+  );
   await expect(page.locator('[data-testid="loop-run-state"]')).toContainText("Completed");
   await expect(page.locator('article[data-testid^="loop-task-"]').first()).toContainText(
     "accepted",
