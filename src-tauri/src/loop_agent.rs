@@ -38,6 +38,7 @@ pub struct AgentRequest {
     pub model: Option<String>,
     pub timeout: Duration,
     pub keep_session: bool,
+    pub excluded_tools: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -189,6 +190,9 @@ impl LoopAgentRuntime for SdkAgentRuntime {
         config.model = request.model;
         config.working_directory = Some(request.working_directory);
         config.streaming = Some(true);
+        if !request.excluded_tools.is_empty() {
+            config.excluded_tools = Some(request.excluded_tools);
+        }
         config = config.with_permission_handler(Arc::new(ApproveAllHandler));
         let session = Arc::new(
             self.client
@@ -459,6 +463,7 @@ mod tests {
                     model: None,
                     timeout: std::time::Duration::from_secs(30),
                     keep_session: false,
+                    excluded_tools: Vec::new(),
                 },
                 event_tx,
             )
@@ -496,6 +501,7 @@ mod tests {
                     model: None,
                     timeout: std::time::Duration::from_secs(30),
                     keep_session: false,
+                    excluded_tools: Vec::new(),
                 },
                 event_tx,
             )
@@ -540,6 +546,7 @@ mod tests {
                     model: None,
                     timeout: std::time::Duration::from_secs(120),
                     keep_session: true,
+                    excluded_tools: Vec::new(),
                 },
                 event_tx.clone(),
             )

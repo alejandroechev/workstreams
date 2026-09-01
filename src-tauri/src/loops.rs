@@ -1775,14 +1775,33 @@ async fn verify_task(
     Ok(Some(result))
 }
 
-fn orchestrator_prompt(spec: &LoopSpec) -> String {
+fn accepted_task_keys(conn: &Connection, spec: &LoopSpec) -> Result<Vec<String>, String> {
+    let definition_id = spec.definition_id.as_deref().unwrap_or("");
+    let mut statement = conn
+        .prepare(
+            "SELECT task_key FROM loop_tasks
+             WHERE loop_spec_id = ?1 AND definition_id = ?2 AND state = 'accepted'
+             ORDER BY created_at, task_key",
+        )
+        .map_err(|error| format!("Failed to prepare accepted task query: {error}"))?;
+    let keys = statement
+        .query_map(params![spec.id, definition_id], |row| row.get(0))
+        .map_err(|error| format!("Failed to query accepted task keys: {error}"))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("Failed to decode accepted task keys: {error}"))?;
+    Ok(keys)
+}
+
+fn orchestrator_prompt(spec: &LoopSpec, accepted_keys: &[String]) -> String {
     format!(
         "{}\n\nReturn only JSON with this shape:\n\
          {{\"tasks\":[{{\"key\":\"stable-id\",\"title\":\"short title\",\
          \"objective\":\"complete coding objective\"}}]}}\n\
          Return {{\"tasks\":[]}} when no work is available.\n\
+         These task keys were already accepted and must not be returned again: {}\n\
          Do not include Markdown code fences or explanatory prose.",
-        spec.orchestrator_prompt
+        spec.orchestrator_prompt,
+        serde_json::to_string(accepted_keys).expect("string arrays always serialize")
     )
 }
 
@@ -1826,6 +1845,78 @@ fn evaluator_prompt(
     )
 }
 
+fn evaluator_without_subagents_prompt(prompt: &str) -> String {
+    format!(
+        "Sub-agent delegation is unavailable in this loop runtime. Do not use the task tool or \
+         spawn any sub-agents. Perform every requested review perspective yourself, sequentially, \
+         using the available read-only tools.\n\n{prompt}"
+    )
+}
+
+fn is_nested_task_resource_not_found(
+    conn: &Connection,
+    run_id: &str,
+    task_id: &str,
+    after_event_id: i64,
+    error: &str,
+) -> Result<bool, String> {
+    if !error.contains("CAPIError: 400")
+        || !error.contains("The resource you requested was not found")
+    {
+        return Ok(false);
+    }
+    let error_payload: Option<String> = conn
+        .query_row(
+            "SELECT payload_json FROM loop_events
+             WHERE loop_run_id = ?1 AND loop_task_id = ?2
+               AND event_type = 'agent.session.error'
+               AND id > ?3
+             ORDER BY id DESC LIMIT 1",
+            params![run_id, task_id, after_event_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|db_error| format!("Failed to inspect evaluator error event: {db_error}"))?;
+    let Some(error_payload) = error_payload else {
+        return Ok(false);
+    };
+    let error_json: serde_json::Value = serde_json::from_str(&error_payload)
+        .map_err(|parse_error| format!("Failed to decode evaluator error event: {parse_error}"))?;
+    let Some(agent_id) = error_json
+        .get("agentId")
+        .and_then(serde_json::Value::as_str)
+    else {
+        return Ok(false);
+    };
+    let mut statement = conn
+        .prepare(
+            "SELECT payload_json FROM loop_events
+             WHERE loop_run_id = ?1 AND loop_task_id = ?2
+               AND event_type = 'agent.tool.execution_start'
+               AND id > ?3
+             ORDER BY id DESC",
+        )
+        .map_err(|db_error| format!("Failed to inspect evaluator tool events: {db_error}"))?;
+    let payloads = statement
+        .query_map(params![run_id, task_id, after_event_id], |row| {
+            row.get::<_, String>(0)
+        })
+        .map_err(|db_error| format!("Failed to query evaluator tool events: {db_error}"))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|db_error| format!("Failed to decode evaluator tool events: {db_error}"))?;
+    for payload in payloads {
+        let value: serde_json::Value = serde_json::from_str(&payload).map_err(|parse_error| {
+            format!("Failed to decode evaluator tool event: {parse_error}")
+        })?;
+        if value.get("toolCallId").and_then(serde_json::Value::as_str) == Some(agent_id)
+            && value.get("toolName").and_then(serde_json::Value::as_str) == Some("task")
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 fn revision_prompt(feedback: &str) -> String {
     format!(
         "The independent evaluator requested one revision:\n{feedback}\n\n\
@@ -1866,22 +1957,74 @@ async fn evaluate_task(
         set_run_state(&conn, context.run_id, LoopRunState::Evaluating, None)?;
         set_task_state(&conn, &context.task.id, LoopTaskState::Evaluating, None)?;
     }
-    let response = start_agent_stage(
+    let prompt = evaluator_prompt(context.spec, context.task, worker, verification);
+    let event_boundary: i64 = context
+        .db
+        .lock()
+        .unwrap()
+        .query_row(
+            "SELECT COALESCE(MAX(id), 0) FROM loop_events
+             WHERE loop_run_id = ?1 AND loop_task_id = ?2",
+            params![context.run_id, context.task.id],
+            |row| row.get(0),
+        )
+        .map_err(|error| format!("Failed to establish evaluator event boundary: {error}"))?;
+    let first = start_agent_stage(
         context.db,
         context.runtime,
         AgentRequest {
             role: AgentRole::Evaluator,
-            prompt: evaluator_prompt(context.spec, context.task, worker, verification),
+            prompt: prompt.clone(),
             working_directory: context.working_directory.to_path_buf(),
             model: context.spec.evaluator_model.clone(),
             timeout: remaining_run_timeout(context.db, context.run_id)?,
             keep_session: false,
+            excluded_tools: Vec::new(),
         },
         &context.spec.id,
         context.run_id,
         Some(&context.task.id),
     )
-    .await?;
+    .await;
+    let response = match first {
+        Ok(response) => response,
+        Err(error)
+            if is_nested_task_resource_not_found(
+                &context.db.lock().unwrap(),
+                context.run_id,
+                &context.task.id,
+                event_boundary,
+                &error,
+            )? =>
+        {
+            append_loop_event(
+                &context.db.lock().unwrap(),
+                &context.spec.id,
+                context.run_id,
+                Some(&context.task.id),
+                "evaluator.subagent_fallback",
+                &serde_json::json!({ "reason": error }),
+            )?;
+            start_agent_stage(
+                context.db,
+                context.runtime,
+                AgentRequest {
+                    role: AgentRole::Evaluator,
+                    prompt: evaluator_without_subagents_prompt(&prompt),
+                    working_directory: context.working_directory.to_path_buf(),
+                    model: context.spec.evaluator_model.clone(),
+                    timeout: remaining_run_timeout(context.db, context.run_id)?,
+                    keep_session: false,
+                    excluded_tools: vec!["task".to_string()],
+                },
+                &context.spec.id,
+                context.run_id,
+                Some(&context.task.id),
+            )
+            .await?
+        }
+        Err(error) => return Err(error),
+    };
     let output = parse_evaluator_output(&response.content)?;
     record_evaluation(
         &context.db.lock().unwrap(),
@@ -2174,6 +2317,7 @@ async fn execute_human_revision_inner(
             model: spec.worker_model.clone(),
             timeout: remaining_run_timeout(&db, run_id)?,
             keep_session: false,
+            excluded_tools: Vec::new(),
         },
         &spec.id,
         run_id,
@@ -2408,16 +2552,18 @@ async fn execute_manual_loop_inner(
             )?;
         }
 
+        let accepted_keys = accepted_task_keys(&db.lock().unwrap(), &spec)?;
         let orchestrator = start_agent_stage(
             &db,
             &runtime,
             AgentRequest {
                 role: AgentRole::Orchestrator,
-                prompt: orchestrator_prompt(&spec),
+                prompt: orchestrator_prompt(&spec, &accepted_keys),
                 working_directory: working_directory.clone(),
                 model: spec.orchestrator_model.clone(),
                 timeout: remaining_run_timeout(&db, run_id)?,
                 keep_session: false,
+                excluded_tools: Vec::new(),
             },
             &spec.id,
             run_id,
@@ -2460,6 +2606,7 @@ async fn execute_manual_loop_inner(
                 model: spec.worker_model.clone(),
                 timeout: remaining_run_timeout(&db, run_id)?,
                 keep_session: true,
+                excluded_tools: Vec::new(),
             },
             &spec.id,
             run_id,
@@ -3639,6 +3786,83 @@ pub async fn control_workstream_loop(
 mod tests {
     use super::*;
 
+    struct EvaluatorFallbackRuntime {
+        evaluator_calls: std::sync::atomic::AtomicUsize,
+    }
+
+    #[async_trait::async_trait]
+    impl LoopAgentRuntime for EvaluatorFallbackRuntime {
+        async fn start(
+            &self,
+            request: AgentRequest,
+            events: tokio::sync::mpsc::UnboundedSender<AgentRuntimeEvent>,
+        ) -> Result<AgentResponse, String> {
+            match request.role {
+                AgentRole::Orchestrator => Ok(AgentResponse {
+                    session_id: "orchestrator".to_string(),
+                    content: r#"{"tasks":[{"key":"task","title":"Task","objective":"Work"}]}"#
+                        .to_string(),
+                }),
+                AgentRole::Worker => Ok(AgentResponse {
+                    session_id: "worker".to_string(),
+                    content: r#"{"status":"completed","summary":"Done","evidence":[]}"#.to_string(),
+                }),
+                AgentRole::Evaluator => {
+                    let call = self
+                        .evaluator_calls
+                        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    if call == 0 {
+                        let _ = events.send(AgentRuntimeEvent {
+                            event_type: "tool.execution_start".to_string(),
+                            data: serde_json::json!({
+                                "toolCallId": "task-call-1",
+                                "toolName": "task",
+                            }),
+                        });
+                        let _ = events.send(AgentRuntimeEvent {
+                            event_type: "session.error".to_string(),
+                            data: serde_json::json!({
+                                "agentId": "task-call-1",
+                                "statusCode": 400,
+                                "message": "The resource you requested was not found.",
+                            }),
+                        });
+                        Err("Copilot session failed: Execution failed: CAPIError: 400 The resource you requested was not found. (Request ID: test)".to_string())
+                    } else {
+                        assert!(request.prompt.contains("Do not use the task tool"));
+                        assert_eq!(request.excluded_tools, vec!["task"]);
+                        Ok(AgentResponse {
+                            session_id: "evaluator-fallback".to_string(),
+                            content: r#"{"verdict":"accepted","summary":"Direct review passed","feedback":null,"evidence":[]}"#.to_string(),
+                        })
+                    }
+                }
+            }
+        }
+
+        async fn revise(
+            &self,
+            _session_id: &str,
+            _prompt: &str,
+            _timeout: Duration,
+            _events: tokio::sync::mpsc::UnboundedSender<AgentRuntimeEvent>,
+        ) -> Result<AgentResponse, String> {
+            Err("revision not expected".to_string())
+        }
+
+        async fn abort_all(&self) -> Result<(), String> {
+            Ok(())
+        }
+
+        async fn disconnect(&self, _session_id: &str) -> Result<(), String> {
+            Ok(())
+        }
+
+        async fn shutdown(&self) -> Result<(), String> {
+            Ok(())
+        }
+    }
+
     fn test_db() -> Connection {
         let conn = Connection::open_in_memory().expect("open in-memory database");
         crate::db::init_db(&conn).expect("initialize base schema");
@@ -3999,6 +4223,41 @@ mod tests {
         assert_eq!(tasks.len(), 1);
         assert_eq!(tasks[0].state, LoopTaskState::Accepted);
         assert_eq!(tasks[0].worker_session_id.as_deref(), Some("worker-1"));
+    }
+
+    #[tokio::test]
+    async fn evaluator_retries_without_subagents_after_resource_not_found() {
+        let conn = test_db();
+        let mut input = spec_input();
+        input.verifier_program = None;
+        input.verifier_args.clear();
+        let spec = save_loop_spec(&conn, "ws-1", input).expect("save loop spec");
+        set_loop_enabled(&conn, &spec.id, true).expect("enable loop");
+        let run = create_loop_run(&conn, &spec.id, 600).expect("create run");
+        let runtime = Arc::new(EvaluatorFallbackRuntime {
+            evaluator_calls: std::sync::atomic::AtomicUsize::new(0),
+        });
+        let db = Arc::new(Mutex::new(conn));
+
+        execute_manual_loop(
+            Arc::clone(&db),
+            runtime,
+            &run.id,
+            std::path::PathBuf::from("/tmp/repo"),
+        )
+        .await
+        .expect("fallback evaluator completes");
+
+        let snapshot = loop_snapshot(&db.lock().unwrap(), "ws-1").expect("load snapshot");
+        assert_eq!(
+            snapshot.latest_run.as_ref().unwrap().state,
+            LoopRunState::Completed
+        );
+        assert_eq!(snapshot.tasks[0].state, LoopTaskState::Accepted);
+        assert!(snapshot
+            .events
+            .iter()
+            .any(|event| event.event_type == "evaluator.subagent_fallback"));
     }
 
     #[tokio::test]
@@ -5422,6 +5681,34 @@ mod tests {
     }
 
     #[test]
+    fn orchestrator_receives_accepted_keys_to_advance_after_retries() {
+        let conn = test_db();
+        let spec = save_loop_spec(&conn, "ws-1", spec_input()).expect("save loop spec");
+        set_loop_enabled(&conn, &spec.id, true).expect("enable loop");
+        let run = create_loop_run(&conn, &spec.id, 600).expect("create run");
+        let task = enqueue_task(
+            &conn,
+            &run.id,
+            &spec.id,
+            &DiscoveredTask {
+                key: "chapter-1".to_string(),
+                title: "Chapter 1".to_string(),
+                objective: "Translate chapter 1".to_string(),
+            },
+        )
+        .unwrap()
+        .unwrap();
+        set_task_state(&conn, &task.id, LoopTaskState::Accepted, None).unwrap();
+
+        let keys = accepted_task_keys(&conn, &spec).expect("accepted keys");
+        let prompt = orchestrator_prompt(&spec, &keys);
+
+        assert_eq!(keys, vec!["chapter-1"]);
+        assert!(prompt.contains("[\"chapter-1\"]"));
+        assert!(prompt.contains("must not be returned again"));
+    }
+
+    #[test]
     fn structured_agent_outputs_accept_one_markdown_json_block() {
         let tasks = parse_discovered_tasks(
             "Smallest useful task:\n\n```json\n\
@@ -5477,6 +5764,71 @@ mod tests {
             .expect_err("malformed outer JSON must not expose its nested object");
 
         assert!(error.contains("malformed embedded JSON"));
+    }
+
+    #[test]
+    fn evaluator_fallback_prompt_requires_direct_review() {
+        let fallback = evaluator_without_subagents_prompt("Review the result");
+        assert!(fallback.contains("Do not use the task tool"));
+        assert!(fallback.contains("Perform every requested review perspective yourself"));
+        assert!(fallback.ends_with("Review the result"));
+    }
+
+    #[test]
+    fn evaluator_fallback_does_not_reuse_events_from_an_earlier_attempt() {
+        let conn = test_db();
+        let spec = save_loop_spec(&conn, "ws-1", spec_input()).expect("save spec");
+        set_loop_enabled(&conn, &spec.id, true).unwrap();
+        let run = create_loop_run(&conn, &spec.id, 600).unwrap();
+        let task = enqueue_task(
+            &conn,
+            &run.id,
+            &spec.id,
+            &DiscoveredTask {
+                key: "task".to_string(),
+                title: "Task".to_string(),
+                objective: "Work".to_string(),
+            },
+        )
+        .unwrap()
+        .unwrap();
+        append_loop_event(
+            &conn,
+            &spec.id,
+            &run.id,
+            Some(&task.id),
+            "agent.tool.execution_start",
+            &serde_json::json!({
+                "toolCallId": "old-task-call",
+                "toolName": "task",
+            }),
+        )
+        .unwrap();
+        append_loop_event(
+            &conn,
+            &spec.id,
+            &run.id,
+            Some(&task.id),
+            "agent.session.error",
+            &serde_json::json!({
+                "agentId": "old-task-call",
+            }),
+        )
+        .unwrap();
+        let boundary: i64 = conn
+            .query_row("SELECT MAX(id) FROM loop_events", [], |row| row.get(0))
+            .unwrap();
+
+        let matched = is_nested_task_resource_not_found(
+            &conn,
+            &run.id,
+            &task.id,
+            boundary,
+            "CAPIError: 400 The resource you requested was not found",
+        )
+        .unwrap();
+
+        assert!(!matched);
     }
 
     #[test]

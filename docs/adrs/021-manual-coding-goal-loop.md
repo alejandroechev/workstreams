@@ -97,6 +97,9 @@ latest retained event id. It reloads the full bounded snapshot only when that
 version changes.
 
 An accepted or in-flight `(loop_spec_id, task_key)` is not enqueued again.
+Accepted keys are also included in the next orchestrator prompt, so an
+integration agent can deliberately skip completed source identities while
+still retrying an artifact left by a failed worker/evaluator episode.
 Restart reconciliation marks nonterminal work interrupted/attention rather than
 silently rerunning it.
 
@@ -129,6 +132,13 @@ Workers and evaluators likewise return bounded JSON result/verdict contracts.
 The evaluator is a fresh Copilot session. `revise` returns actionable feedback
 to the retained worker session once; a second rejection requires human
 attention.
+
+Nested `task` delegation from an SDK-created evaluator may be unavailable even
+when the interactive parent CLI supports it. If the evaluator's sub-agent tool
+returns CAPI 400 "resource not found", Workstreams records
+`evaluator.subagent_fallback` and retries once in a fresh evaluator session
+with delegation disabled. The evaluator performs the requested review
+perspectives sequentially itself; unrelated CAPI failures are not retried.
 
 ADR 023 adds a final human approval sensor. Human-requested revision starts a
 fresh worker episode from persisted task context and feedback, so approval

@@ -636,6 +636,7 @@ mod tests {
                         model: None,
                         timeout: Duration::from_secs(120),
                         keep_session: false,
+                        excluded_tools: Vec::new(),
                     },
                     event_tx,
                 )
