@@ -191,6 +191,15 @@ feedback, and errors. It exposes separate Pause, Resume, Stop, and Kill
 actions. Closing the tile does not own or erase the run. ADR 022 replaces the
 original setup form with a catalog of versioned YAML definitions.
 
+Task presentation is state-first rather than ledger-first. Each card parses the
+structured worker result and foregrounds only the current state or latest
+actionable evaluator feedback. When automatic revisions are exhausted, that is
+stated beside the request. Objective, session id, parsed worker evidence,
+verifier output, every evaluator/approval record, and errors live behind a
+closed **Details** disclosure. The event timeline is also closed by default.
+The generic run-level "tasks require attention" message is suppressed when a
+task card can show the concrete request.
+
 The workstream sidebar shows per-workstream running/attention state and the
 number of running loops. MVP1 intentionally has one active episode per
 workstream and no global concurrency cap.

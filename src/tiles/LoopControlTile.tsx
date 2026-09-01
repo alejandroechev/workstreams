@@ -605,6 +605,218 @@ function ApprovalEvidence({ record }: { record: LoopApprovalRecord }) {
   );
 }
 
+type ParsedWorkerResult = {
+  status?: string;
+  summary?: string;
+  evidence?: string[];
+};
+
+function parseWorkerResult(value: string | undefined): ParsedWorkerResult | null {
+  if (!value) return null;
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (typeof parsed !== "object" || parsed === null) return null;
+    const record = parsed as Record<string, unknown>;
+    return {
+      status: typeof record.status === "string" ? record.status : undefined,
+      summary: typeof record.summary === "string" ? record.summary : undefined,
+      evidence: Array.isArray(record.evidence)
+        ? record.evidence.filter((item): item is string => typeof item === "string")
+        : undefined,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function concisePreview(value: string, maxLength = 320): string {
+  const line = value
+    .split(/\r?\n/)
+    .map((part) => part.trim())
+    .find(Boolean) ?? "";
+  return line.length > maxLength ? `${line.slice(0, maxLength)}…` : line;
+}
+
+function taskStatusSummary(
+  task: LoopTask,
+  verifications: LoopVerificationRecord[],
+  evaluations: LoopEvaluationRecord[],
+  approvals: LoopApprovalRecord[],
+): { label: string; message: string; warning?: string } {
+  const worker = parseWorkerResult(task.workerResult);
+  const latestVerification = verifications[verifications.length - 1];
+  const latestEvaluation = evaluations[evaluations.length - 1];
+  const pendingApproval = approvals.find((approval) => approval.status === "pending");
+  if (pendingApproval) {
+    return {
+      label: "Approval required",
+      message: pendingApproval.prompt,
+    };
+  }
+  if (task.state === "attention" || task.state === "blocked") {
+    const workerFailed = worker?.status && worker.status !== "completed";
+    const verifierFailed =
+      latestVerification && latestVerification.status !== "passed";
+    const verifierIsNewest =
+      verifierFailed &&
+      (!latestEvaluation || latestVerification.attempt >= latestEvaluation.attempt);
+    const verifierMessage =
+      concisePreview(latestVerification?.stderr ?? "") ||
+      concisePreview(latestVerification?.stdout ?? "") ||
+      (latestVerification
+        ? `Verifier finished with status ${latestVerification.status}.`
+        : undefined);
+    return {
+      label: "Action required",
+      message:
+        (workerFailed ? worker?.summary : undefined) ??
+        (verifierIsNewest ? verifierMessage : undefined) ??
+        task.error ??
+        latestEvaluation?.feedback ??
+        latestEvaluation?.summary ??
+        worker?.summary ??
+        "Inspect the details and decide how to continue.",
+      warning:
+        task.revisionCount + 1 >= MAX_TASK_ITERATIONS
+          ? "Automatic revisions exhausted. Correct the issue manually, then start a new run."
+          : undefined,
+    };
+  }
+  switch (task.state) {
+    case "queued":
+      return { label: "Queued", message: "Waiting for the worker." };
+    case "working":
+      return { label: "Working", message: worker?.summary ?? "Worker is implementing the task." };
+    case "verifying":
+      return { label: "Verifying", message: "Deterministic verification is running." };
+    case "evaluating":
+      return { label: "Evaluating", message: "Independent evaluation is running." };
+    case "awaiting_approval":
+      return { label: "Approval required", message: "Review the task evidence." };
+    case "accepted":
+      return { label: "Accepted", message: latestEvaluation?.summary ?? worker?.summary ?? "Task accepted." };
+    case "interrupted":
+      return { label: "Interrupted", message: task.error ?? "The task was interrupted." };
+  }
+}
+
+function TaskCard({
+  task,
+  verifications,
+  evaluations,
+  approvals,
+}: {
+  task: LoopTask;
+  verifications: LoopVerificationRecord[];
+  evaluations: LoopEvaluationRecord[];
+  approvals: LoopApprovalRecord[];
+}) {
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const worker = parseWorkerResult(task.workerResult);
+  const status = taskStatusSummary(task, verifications, evaluations, approvals);
+  const needsAction =
+    task.state === "attention" ||
+    task.state === "blocked" ||
+    approvals.some((approval) => approval.status === "pending");
+
+  return (
+    <article
+      data-testid={`loop-task-${task.id}`}
+      style={{
+        background: "#11111b",
+        border: `1px solid ${needsAction ? "#f9e2af" : "#313244"}`,
+        borderRadius: 4,
+        padding: 8,
+        marginBottom: 8,
+      }}
+    >
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
+        <strong>{task.title}</strong>
+        <span style={{ color: needsAction ? "#f9e2af" : "#89b4fa" }}>
+          {task.state.replace(/_/g, " ")}
+        </span>
+      </div>
+      <div
+        data-testid={`loop-task-status-${task.id}`}
+        style={{
+          marginTop: 7,
+          padding: 8,
+          borderLeft: `3px solid ${needsAction ? "#f9e2af" : "#89b4fa"}`,
+          background: needsAction ? "#2a2518" : "#181825",
+          whiteSpace: "pre-wrap",
+        }}
+      >
+        <strong>{status.label}</strong>
+        <div style={{ marginTop: 3 }}>{status.message}</div>
+        {status.warning && (
+          <div style={{ color: "#f9e2af", marginTop: 5 }}>{status.warning}</div>
+        )}
+      </div>
+      <details
+        data-testid={`loop-task-details-${task.id}`}
+        open={detailsOpen}
+        style={{ marginTop: 8 }}
+      >
+        <summary
+          onClick={(event) => {
+            event.preventDefault();
+            setDetailsOpen((open) => !open);
+          }}
+          style={{ color: "#89b4fa", cursor: "pointer", userSelect: "none" }}
+        >
+          Details
+        </summary>
+        {detailsOpen && (
+          <div style={{ marginTop: 7 }}>
+            <div style={{ color: "#a6adc8" }}>{task.objective}</div>
+            <div style={{ color: "#6c7086", marginTop: 3 }}>
+              Revisions: {task.revisionCount}
+              {task.workerSessionId ? ` / Worker session: ${task.workerSessionId}` : ""}
+            </div>
+            {task.workerResult && (
+              <div
+                data-testid={`loop-worker-result-${task.id}`}
+                style={{ marginTop: 7, whiteSpace: "pre-wrap" }}
+              >
+                <strong>Worker result</strong>
+                {worker?.summary ? (
+                  <div data-testid={`loop-worker-summary-${task.id}`}>
+                    {worker.summary}
+                  </div>
+                ) : (
+                  <div>{task.workerResult}</div>
+                )}
+                {worker?.evidence && worker.evidence.length > 0 && (
+                  <ul
+                    data-testid={`loop-worker-evidence-${task.id}`}
+                    style={{ margin: "4px 0", paddingLeft: 18 }}
+                  >
+                    {worker.evidence.map((item) => (
+                      <li key={item}>{item}</li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
+            {task.error && (
+              <div style={{ color: "#f38ba8", marginTop: 6 }}>{task.error}</div>
+            )}
+            {verifications.map((record) => (
+              <VerificationEvidence key={record.id} record={record} />
+            ))}
+            {evaluations.map((record) => (
+              <EvaluationEvidence key={record.id} record={record} />
+            ))}
+            {approvals.map((record) => (
+              <ApprovalEvidence key={record.id} record={record} />
+            ))}
+          </div>
+        )}
+      </details>
+    </article>
+  );
+}
+
 function TaskList({
   tasks,
   verifications,
@@ -622,64 +834,50 @@ function TaskList({
       {tasks.length === 0 ? (
         <div style={{ color: "#6c7086" }}>No tasks have been proposed.</div>
       ) : (
-        tasks.map((task) => (
-          <article
-            key={task.id}
-            data-testid={`loop-task-${task.id}`}
-            style={{
-              background: "#11111b",
-              borderRadius: 4,
-              padding: 8,
-              marginBottom: 8,
-            }}
-          >
-            <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
-              <strong>{task.title}</strong>
-              <span style={{ color: "#89b4fa" }}>{task.state}</span>
-            </div>
-            <div style={{ color: "#a6adc8", marginTop: 3 }}>{task.objective}</div>
-            <div style={{ color: "#6c7086", marginTop: 3 }}>
-              Revisions: {task.revisionCount}
-              {task.workerSessionId ? ` / Worker session: ${task.workerSessionId}` : ""}
-            </div>
-            {task.workerResult && (
-              <div
-                data-testid={`loop-worker-result-${task.id}`}
-                style={{ marginTop: 7, whiteSpace: "pre-wrap" }}
-              >
-                <strong>Worker result</strong>
-                <div>{task.workerResult}</div>
-              </div>
-            )}
-            {task.error && <div style={{ color: "#f38ba8", marginTop: 6 }}>{task.error}</div>}
-            {verifications
-              .filter((record) => record.loopTaskId === task.id)
-              .map((record) => (
-                <VerificationEvidence key={record.id} record={record} />
-              ))}
-            {evaluations
-              .filter((record) => record.loopTaskId === task.id)
-              .map((record) => (
-                <EvaluationEvidence key={record.id} record={record} />
-              ))}
-            {approvals
-              .filter((record) => record.loopTaskId === task.id)
-              .map((record) => (
-                <ApprovalEvidence key={record.id} record={record} />
-              ))}
-          </article>
-        ))
+        tasks.map((task) => {
+          const taskVerifications = verifications.filter(
+            (record) => record.loopTaskId === task.id,
+          );
+          const taskEvaluations = evaluations
+            .filter((record) => record.loopTaskId === task.id)
+            .sort((left, right) => left.attempt - right.attempt);
+          const taskApprovals = approvals
+            .filter((record) => record.loopTaskId === task.id)
+            .sort((left, right) => left.attempt - right.attempt);
+          return (
+            <TaskCard
+              key={task.id}
+              task={task}
+              verifications={taskVerifications}
+              evaluations={taskEvaluations}
+              approvals={taskApprovals}
+            />
+          );
+        })
       )}
     </section>
   );
 }
 
 function EventTimeline({ events }: { events: LoopEventRecord[] }) {
+  const [open, setOpen] = useState(false);
   return (
-    <section data-testid="loop-event-timeline" style={sectionStyle}>
-      <h2 style={headingStyle}>Event timeline</h2>
-      {events.length === 0 ? (
-        <div style={{ color: "#6c7086" }}>No loop events yet.</div>
+    <details
+      data-testid="loop-event-timeline"
+      open={open}
+      style={sectionStyle}
+    >
+      <summary
+        onClick={(event) => {
+          event.preventDefault();
+          setOpen((current) => !current);
+        }}
+        style={{ ...headingStyle, margin: 0, cursor: "pointer", userSelect: "none" }}
+      >
+        Event timeline ({events.length})
+      </summary>
+      {open && (events.length === 0 ? (
+        <div style={{ color: "#6c7086", marginTop: 8 }}>No loop events yet.</div>
       ) : (
         <ol style={{ listStyle: "none", padding: 0, margin: 0 }}>
           {events.map((event) => {
@@ -705,8 +903,8 @@ function EventTimeline({ events }: { events: LoopEventRecord[] }) {
             );
           })}
         </ol>
-      )}
-    </section>
+      ))}
+    </details>
   );
 }
 
@@ -844,6 +1042,9 @@ function RunPanel({
       )
     : "Not available";
   const canControl = !TERMINAL_RUN_STATES.has(run.state);
+  const hasActionableTask = snapshot.tasks.some(
+    (task) => task.state === "attention" || task.state === "blocked",
+  );
   const pendingApproval =
     snapshot.approvals.find(
       (approval) =>
@@ -862,16 +1063,20 @@ function RunPanel({
         <div data-testid="loop-elapsed">Elapsed: {elapsed}</div>
         <div data-testid="loop-next-evidence">Next evidence: {nextEvidence(run, spec)}</div>
         {run.deadlineAt && <div style={{ color: "#6c7086" }}>Deadline: {run.deadlineAt}</div>}
-        {run.error && <div style={{ color: "#f38ba8" }}>{run.error}</div>}
+        {run.error && !hasActionableTask && (
+          <div style={{ color: "#f38ba8" }}>{run.error}</div>
+        )}
         <RunDefinition run={run} spec={spec} />
-        <div
-          data-testid="loop-current-task"
-          style={{ marginTop: 8, padding: 7, background: "#11111b", borderRadius: 4 }}
-        >
-          <strong>Current task</strong>
-          <div>{currentTask ? currentTask.title : "No active task"}</div>
-          {currentTask && <div style={{ color: "#a6adc8" }}>{currentTask.objective}</div>}
-        </div>
+        {(currentTask || run.state !== "attention") && (
+          <div
+            data-testid="loop-current-task"
+            style={{ marginTop: 8, padding: 7, background: "#11111b", borderRadius: 4 }}
+          >
+            <strong>Current task</strong>
+            <div>{currentTask ? currentTask.title : "No active task"}</div>
+            {currentTask && <div style={{ color: "#a6adc8" }}>{currentTask.objective}</div>}
+          </div>
+        )}
 
         {canControl && (
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8 }}>

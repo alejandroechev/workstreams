@@ -43,7 +43,10 @@ project-aware workspace:
   with Approve / Request revision / Reject actions in the tile and an approval
   indicator in the sidebar. Verifiers can be repository scripts outside the
   definition folder; each run pins the exact YAML and SHA-256 hash for durable
-  evidence. MVP1 is manual and local while Workstreams is open. See
+  evidence. Task cards foreground only the latest current state or actionable
+  evaluator request; worker JSON, all evidence, historical evaluations, and
+  the event timeline are collapsed until requested. MVP1 is manual and local
+  while Workstreams is open. See
   [ADR 021](docs/adrs/021-manual-coding-goal-loop.md),
   [ADR 022](docs/adrs/022-versioned-loop-definitions.md), and
   [ADR 023](docs/adrs/023-human-loop-approval.md).

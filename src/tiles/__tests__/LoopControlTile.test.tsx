@@ -553,18 +553,26 @@ describe("LoopControlTile run monitoring", () => {
     expect(screen.getByTestId("loop-current-task").textContent).toContain(
       "Implement the domain",
     );
+    const details = screen.getByTestId("loop-task-details-task-1") as HTMLDetailsElement;
+    expect(details.open).toBe(false);
+    expect(screen.getByTestId("loop-task-status-task-1").textContent).toContain(
+      "Worker is implementing the task",
+    );
+    expect(screen.queryByTestId("loop-worker-result-task-1")).toBeNull();
+    fireEvent.click(screen.getByText("Details"));
     expect(screen.getByTestId("loop-worker-result-task-1").textContent).toContain(
       "Implemented the state machine",
     );
     expect(screen.getByTestId("loop-verification-verify-1").textContent).toContain(
       "12 tests passed",
     );
-    expect(screen.getByTestId("loop-verification-verify-1").textContent).toContain(
-      "1 test failed",
-    );
     expect(screen.getByTestId("loop-evaluation-evaluation-1").textContent).toContain(
       "Needs another pass",
     );
+    const timeline = screen.getByTestId("loop-event-timeline") as HTMLDetailsElement;
+    expect(timeline.open).toBe(false);
+    expect(screen.queryByTestId("loop-event-7")).toBeNull();
+    fireEvent.click(screen.getByTestId("loop-event-timeline").querySelector("summary")!);
     expect(screen.getByTestId("loop-event-7").textContent).toContain(
       "verification.finished",
     );
@@ -575,6 +583,182 @@ describe("LoopControlTile run monitoring", () => {
     await waitFor(() => expect(control).toHaveBeenCalledWith("run-1", "stop"));
     fireEvent.click(screen.getByTestId("loop-kill"));
     await waitFor(() => expect(control).toHaveBeenCalledWith("run-1", "kill"));
+  });
+
+  it("parses worker JSON and foregrounds only the latest evaluator request", async () => {
+    setup(
+      snapshot({
+        spec: loopSpec(),
+        latestRun: run({
+          state: "attention",
+          activeTaskId: null,
+          error: "One or more tasks require human attention",
+        }),
+        tasks: [
+          task({
+            state: "attention",
+            revisionCount: 1,
+            workerResult: JSON.stringify({
+              status: "completed",
+              summary: "Applied the requested spelling corrections",
+              evidence: ["British spelling scan is clean"],
+            }),
+          }),
+        ],
+        evaluations: [
+          {
+            id: "evaluation-1",
+            loopTaskId: "task-1",
+            attempt: 1,
+            verdict: "revise",
+            summary: "Several corrections are needed",
+            feedback: "Fix many earlier issues",
+            evidence: [],
+            createdAt: "2026-08-28T18:06:00.000Z",
+          },
+          {
+            id: "evaluation-2",
+            loopTaskId: "task-1",
+            attempt: 2,
+            verdict: "revise",
+            summary: "One spelling remains",
+            feedback: "Change analysing to analyzing at line 145.",
+            evidence: [],
+            createdAt: "2026-08-28T18:09:00.000Z",
+          },
+        ],
+      }),
+      { definitions: [definition()], invalid: [] },
+    );
+
+    const status = await screen.findByTestId("loop-task-status-task-1");
+    expect(status.textContent).toContain("Action required");
+    expect(status.textContent).toContain("Change analysing to analyzing at line 145.");
+    expect(status.textContent).toContain("Automatic revisions exhausted");
+    expect(status.textContent).not.toContain("Fix many earlier issues");
+    expect(
+      screen.queryByText("One or more tasks require human attention"),
+    ).toBeNull();
+    expect(screen.queryByText("No active task")).toBeNull();
+
+    fireEvent.click(screen.getByText("Details"));
+    expect(screen.getByTestId("loop-worker-summary-task-1").textContent).toContain(
+      "Applied the requested spelling corrections",
+    );
+    expect(screen.getByTestId("loop-worker-evidence-task-1").textContent).toContain(
+      "British spelling scan is clean",
+    );
+    expect(screen.getByTestId("loop-evaluation-evaluation-1")).toBeTruthy();
+    expect(screen.getByTestId("loop-evaluation-evaluation-2")).toBeTruthy();
+  });
+
+  it("foregrounds a newer verifier failure instead of stale evaluator feedback", async () => {
+    setup(
+      snapshot({
+        spec: loopSpec(),
+        latestRun: run({
+          state: "attention",
+          activeTaskId: null,
+          error: "One or more tasks require human attention",
+        }),
+        tasks: [task({ state: "attention", revisionCount: 1 })],
+        verifications: [
+          {
+            id: "verification-2",
+            loopTaskId: "task-1",
+            attempt: 2,
+            status: "nonzero",
+            program: "npm",
+            args: ["test"],
+            exitCode: 1,
+            durationMs: 10,
+            stdout: "",
+            stderr: "Translation validation still fails",
+            truncated: false,
+            createdAt: "2026-08-28T18:10:00.000Z",
+          },
+        ],
+        evaluations: [
+          {
+            id: "evaluation-1",
+            loopTaskId: "task-1",
+            attempt: 1,
+            verdict: "revise",
+            summary: "Old evaluator summary",
+            feedback: "Old evaluator feedback",
+            evidence: [],
+            createdAt: "2026-08-28T18:06:00.000Z",
+          },
+        ],
+      }),
+      { definitions: [definition()], invalid: [] },
+    );
+
+    const status = await screen.findByTestId("loop-task-status-task-1");
+    expect(status.textContent).toContain("Translation validation still fails");
+    expect(status.textContent).not.toContain("Old evaluator feedback");
+  });
+
+  it("bounds verifier previews and prioritizes a current task error", async () => {
+    const noisy = `First failure line\n${"x".repeat(2_000)}`;
+    const { setSnapshot } = setup(
+      snapshot({
+        spec: loopSpec(),
+        latestRun: run({ state: "attention", activeTaskId: null }),
+        tasks: [task({ state: "attention", error: "Human reviewer rejected the task" })],
+        evaluations: [
+          {
+            id: "evaluation-1",
+            loopTaskId: "task-1",
+            attempt: 1,
+            verdict: "accepted",
+            summary: "Earlier evaluation",
+            feedback: "Older evaluator note",
+            evidence: [],
+            createdAt: "2026-08-28T18:06:00.000Z",
+          },
+        ],
+      }),
+      { definitions: [definition()], invalid: [] },
+    );
+
+    let status = await screen.findByTestId("loop-task-status-task-1");
+    expect(status.textContent).toContain("Human reviewer rejected the task");
+    expect(status.textContent).not.toContain("Older evaluator note");
+
+    setSnapshot(
+      snapshot({
+        spec: loopSpec(),
+        latestRun: run({ state: "attention", activeTaskId: null }),
+        tasks: [task({ state: "attention", revisionCount: 1, error: undefined })],
+        verifications: [
+          {
+            id: "verification-2",
+            loopTaskId: "task-1",
+            attempt: 2,
+            status: "nonzero",
+            program: "npm",
+            args: ["test"],
+            exitCode: 1,
+            durationMs: 10,
+            stdout: "",
+            stderr: noisy,
+            truncated: true,
+            createdAt: "2026-08-28T18:10:00.000Z",
+          },
+        ],
+      }),
+    );
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent("memory-loop-updated", {
+          detail: { workstreamId: "ws-1" },
+        }),
+      );
+    });
+    status = await screen.findByTestId("loop-task-status-task-1");
+    await waitFor(() => expect(status.textContent).toContain("First failure line"));
+    expect(status.textContent?.length).toBeLessThan(600);
   });
 
   it("resumes a paused run through the dedicated backend method", async () => {

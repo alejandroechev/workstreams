@@ -218,6 +218,11 @@ test("selects, pauses, resumes, verifies, and evaluates a YAML loop", async ({
   await expect(page.locator('article[data-testid^="loop-task-"]').first()).toContainText(
     "accepted",
   );
+  await expect(page.locator('[data-testid="loop-event-timeline"]')).not.toHaveAttribute(
+    "open",
+    "",
+  );
+  await page.locator('summary', { hasText: "Details" }).first().click();
   await expect(
     page.locator('[data-testid^="loop-verification-"]').first(),
   ).toContainText("passed");
