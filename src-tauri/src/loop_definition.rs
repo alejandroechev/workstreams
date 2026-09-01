@@ -177,7 +177,7 @@ pub struct EvaluatorSpec {
 #[serde(rename_all = "camelCase")]
 pub struct EvaluatorRejectPolicy {
     pub action: EvaluatorRejectAction,
-    pub max_revisions: u32,
+    pub max_revisions: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -368,7 +368,8 @@ impl ValidatedLoopDefinition {
             verifier_timeout_seconds: verification.map(|value| value.timeout_seconds),
             evaluator_prompt: evaluator.map(|value| value.prompt.clone()),
             evaluator_model: evaluator.map(|value| value.model.clone()),
-            evaluator_max_revisions: evaluator.map(|value| value.on_reject.max_revisions),
+            evaluator_max_revisions: evaluator
+                .map(|_| self.document.spec.limits.task_attempts.saturating_sub(1)),
             human_approval_prompt: self
                 .document
                 .spec
@@ -853,11 +854,11 @@ fn validate_document(workstream_root: &Path, document: &LoopDefinition) -> Valid
     if let Some(evaluator) = document.spec.evaluator.as_ref() {
         validate_nonblank(&mut state, "spec.evaluator.model", &evaluator.model);
         validate_nonblank(&mut state, "spec.evaluator.prompt", &evaluator.prompt);
-        if evaluator.on_reject.max_revisions != 1 {
+        if evaluator.on_reject.max_revisions == Some(0) {
             state.error(
                 "unsupported_value",
                 "spec.evaluator.onReject.maxRevisions",
-                "maxRevisions must be exactly 1 in v1",
+                "maxRevisions must be greater than zero when present",
             );
         }
     }
@@ -865,11 +866,11 @@ fn validate_document(workstream_root: &Path, document: &LoopDefinition) -> Valid
         validate_nonblank(&mut state, "spec.humanApproval.prompt", &approval.prompt);
     }
 
-    if document.spec.limits.task_attempts != 2 {
+    if document.spec.limits.task_attempts == 0 {
         state.error(
             "unsupported_value",
             "spec.limits.taskAttempts",
-            "taskAttempts must be exactly 2 in v1",
+            "taskAttempts must be greater than zero",
         );
     }
     if document.spec.flow_control.max_active_runs != 1 {
@@ -1161,7 +1162,7 @@ fn build_summary(document: &LoopDefinition, validation: &ValidationState) -> Loo
         .as_ref()
         .map(|value| EvaluatorSummary {
             model: value.model.clone(),
-            max_revisions: value.on_reject.max_revisions,
+            max_revisions: document.spec.limits.task_attempts.saturating_sub(1),
         });
     let human_approval = document
         .spec
@@ -1440,8 +1441,6 @@ spec:
             .replace("prompt: Select one task", "prompt: ''")
             .replace("model: concrete-model", "model: ' '")
             .replace("maxTasksPerRun: 1", "maxTasksPerRun: 2")
-            .replace("maxRevisions: 1", "maxRevisions: 2")
-            .replace("taskAttempts: 2", "taskAttempts: 3")
             .replace("maxActiveRuns: 1", "maxActiveRuns: 2");
 
         let result = parse_loop_definition_bytes(
@@ -1456,9 +1455,42 @@ spec:
         assert!(fields.contains(&"spec.orchestrator.prompt"));
         assert!(fields.contains(&"spec.worker.model"));
         assert!(fields.contains(&"spec.orchestrator.maxTasksPerRun"));
-        assert!(fields.contains(&"spec.evaluator.onReject.maxRevisions"));
-        assert!(fields.contains(&"spec.limits.taskAttempts"));
         assert!(fields.contains(&"spec.flowControl.maxActiveRuns"));
+    }
+
+    #[test]
+    fn task_attempts_accepts_configured_positive_values_and_rejects_zero() {
+        let root = prepared_root();
+        let configured =
+            yaml_with_sensors("", evaluator_yaml()).replace("taskAttempts: 2", "taskAttempts: 4");
+        let result = parse_loop_definition_bytes(
+            &root.path,
+            &root.path.join("configurable.loop.yaml"),
+            configured.as_bytes(),
+        );
+        assert!(result.valid, "{:?}", result.validation_errors);
+        assert_eq!(
+            result
+                .definition
+                .expect("validated definition")
+                .document
+                .spec
+                .limits
+                .task_attempts,
+            4
+        );
+
+        let invalid = configured.replace("taskAttempts: 4", "taskAttempts: 0");
+        let result = parse_loop_definition_bytes(
+            &root.path,
+            &root.path.join("zero.loop.yaml"),
+            invalid.as_bytes(),
+        );
+        assert!(!result.valid);
+        assert!(result
+            .validation_errors
+            .iter()
+            .any(|issue| issue.field == "spec.limits.taskAttempts"));
     }
 
     #[test]

@@ -41,13 +41,16 @@ Run now
   -> optional deterministic verifier
   -> optional fresh evaluator agent
   -> optional human approval
-  -> at most one worker revision
+  -> bounded worker revisions
   -> completed or attention
 ```
 
 The pipeline shape is fixed, while its three role prompts, models, verifier,
-wall-time budget, and concrete tool use are configured per loop. There is no
-provider adapter or provider-specific database column.
+wall-time budget, total worker-attempt budget, and concrete tool use are
+configured per loop. `taskAttempts` counts the initial worker episode, so `1`
+disables revisions and `N` permits at most `N - 1` evaluator- or
+human-requested revisions. There is no provider adapter or provider-specific
+database column.
 
 ### The Tauri backend owns execution
 
@@ -62,8 +65,8 @@ depend on Node or on an arbitrary CLI version found on `PATH`.
 - `ScriptedAgentRuntime` provides deterministic offline tests and the CLI
   scenario;
 - sessions stream typed events rather than terminal text;
-- worker sessions are retained only when one evaluator-requested revision may
-  need to resume them;
+- worker sessions are retained while evaluator-requested revisions may need to
+  resume them;
 - abort, disconnect, and SDK shutdown are explicit.
 
 The app remains the process owner. Loops run only while Workstreams is open in

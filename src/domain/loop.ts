@@ -1,5 +1,3 @@
-export const MAX_TASK_ITERATIONS = 2 as const;
-
 export const LOOP_RUN_STATES = [
   "starting",
   "resuming",
@@ -55,7 +53,7 @@ export interface LoopSpec {
   verifier?: LoopVerifierSpec;
   humanApproval?: LoopHumanApprovalSpec;
   runTimeoutMs: number;
-  maxTaskIterations: typeof MAX_TASK_ITERATIONS;
+  maxTaskIterations: number;
   enabled: boolean;
   createdAt?: string;
   updatedAt?: string;
@@ -609,7 +607,7 @@ export function transitionLoop(
       return attention(current, "Human reviewer rejected the task", "blocked");
     }
     if (task.revisionCount + 1 >= current.spec.maxTaskIterations) {
-      return attention(current, "Human reviewer requested more than one revision", "attention");
+      return attention(current, "Human reviewer exhausted the task attempt budget", "attention");
     }
     const next = copySnapshot(current);
     const nextTask = activeTask(next, "awaiting_approval");
@@ -752,7 +750,7 @@ export function transitionLoop(
   if (outcome.verdict === "revise") {
     if (task.revisionCount + 1 >= current.spec.maxTaskIterations) {
       return atSafeBoundary(
-        attention(current, "Evaluator requested more than one revision", "attention"),
+        attention(current, "Evaluator exhausted the task attempt budget", "attention"),
       );
     }
     const next = copySnapshot(current);

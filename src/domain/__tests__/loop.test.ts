@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
   LOOP_RUN_STATES,
   LOOP_TASK_STATES,
-  MAX_TASK_ITERATIONS,
   addLoopSpec,
   dedupeTaskKeys,
   makeLoopRun,
@@ -28,7 +27,7 @@ function spec(overrides: Partial<LoopSpec> = {}): LoopSpec {
       cwd: "/repo",
     },
     runTimeoutMs: 60_000,
-    maxTaskIterations: MAX_TASK_ITERATIONS,
+    maxTaskIterations: 2,
     enabled: true,
     ...overrides,
   };
@@ -88,7 +87,6 @@ describe("loop contracts", () => {
       "attention",
       "interrupted",
     ]);
-    expect(MAX_TASK_ITERATIONS).toBe(2);
   });
 
   it("registers at most one manual loop spec per workstream", () => {
@@ -431,6 +429,7 @@ describe("transitionLoop", () => {
       type: "evaluation_completed",
       verdict: "revise",
     });
+
     expect(revised.snapshot.tasks[0]).toMatchObject({
       state: "working",
       revisionCount: 1,
@@ -447,6 +446,39 @@ describe("transitionLoop", () => {
     });
     expect(exhausted.snapshot.run.state).toBe("attention");
     expect(exhausted.snapshot.tasks[0].state).toBe("attention");
+  });
+
+  it("uses the configured task attempt budget", () => {
+    let current = snapshot("evaluating", [task({ state: "evaluating" })], {
+      spec: spec({ maxTaskIterations: 4 }),
+    });
+    current.run.activeTaskId = "task-1";
+
+    for (let revision = 1; revision <= 3; revision += 1) {
+      const revised = transitionLoop(current, {
+        type: "evaluation_completed",
+        verdict: "revise",
+      });
+      expect(revised.snapshot.tasks[0].revisionCount).toBe(revision);
+      current = {
+        ...revised.snapshot,
+        run: { ...revised.snapshot.run, state: "evaluating" },
+        tasks: revised.snapshot.tasks.map((candidate) => ({
+          ...candidate,
+          state: "evaluating",
+        })),
+      };
+    }
+
+    const exhausted = transitionLoop(current, {
+      type: "evaluation_completed",
+      verdict: "revise",
+    });
+    expect(exhausted.snapshot.run.state).toBe("attention");
+    expect(exhausted.action).toMatchObject({
+      type: "attention",
+      reason: "Evaluator exhausted the task attempt budget",
+    });
   });
 
   it.each(["blocked", "invalid"] as const)(

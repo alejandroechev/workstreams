@@ -132,10 +132,15 @@
         "onReject": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["action", "maxRevisions"],
+          "required": ["action"],
           "properties": {
             "action": { "const": "revise" },
-            "maxRevisions": { "const": 1 }
+            "maxRevisions": {
+              "type": "integer",
+              "minimum": 1,
+              "deprecated": true,
+              "description": "Compatibility-only field. limits.taskAttempts is the authoritative total attempt budget."
+            }
           }
         }
       }
@@ -174,7 +179,10 @@
           "required": ["runTimeout", "taskAttempts"],
           "properties": {
             "runTimeout": { "$ref": "#/$defs/duration" },
-            "taskAttempts": { "const": 2 }
+            "taskAttempts": {
+              "type": "integer",
+              "minimum": 1
+            }
           }
         },
         "permissions": {

@@ -814,6 +814,7 @@ describe("LoopControlTile run monitoring", () => {
     fireEvent.change(screen.getByLabelText("Human review feedback"), {
       target: { value: "Add the missing timeout case" },
     });
+
     fireEvent.click(screen.getByTestId("loop-approval-revise"));
     await waitFor(() =>
       expect(decide).toHaveBeenCalledWith(
@@ -830,6 +831,26 @@ describe("LoopControlTile run monitoring", () => {
         "Add the missing timeout case",
       ),
     );
+  });
+
+  it("uses the configured attempt budget for human revision availability", async () => {
+    setup(
+      snapshot({
+        spec: loopSpec({
+          maxTaskIterations: 4,
+          humanApproval: { prompt: "Review the evidence." },
+        }),
+        latestRun: run({ state: "awaiting_approval" }),
+        tasks: [task({ state: "awaiting_approval", revisionCount: 2 })],
+        approvals: [approval({ attempt: 3 })],
+      }),
+      {
+        definitions: [definition({ hasHumanApproval: true })],
+        invalid: [],
+      },
+    );
+
+    expect(await screen.findByTestId("loop-approval-revise")).toBeTruthy();
   });
 
   it.each([

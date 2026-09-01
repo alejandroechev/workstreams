@@ -16,7 +16,6 @@ import {
 } from "@heroicons/react/24/outline";
 
 import { useBackend } from "../backend/context";
-import { MAX_TASK_ITERATIONS } from "../domain/loop";
 import { FileEditorView } from "../files/FileEditorView";
 import {
   fileBufferRegistry,
@@ -642,6 +641,7 @@ function taskStatusSummary(
   verifications: LoopVerificationRecord[],
   evaluations: LoopEvaluationRecord[],
   approvals: LoopApprovalRecord[],
+  maxTaskIterations: number,
 ): { label: string; message: string; warning?: string } {
   const worker = parseWorkerResult(task.workerResult);
   const latestVerification = verifications[verifications.length - 1];
@@ -677,7 +677,7 @@ function taskStatusSummary(
         worker?.summary ??
         "Inspect the details and decide how to continue.",
       warning:
-        task.revisionCount + 1 >= MAX_TASK_ITERATIONS
+        task.revisionCount + 1 >= maxTaskIterations
           ? "Automatic revisions exhausted. Correct the issue manually, then start a new run."
           : undefined,
     };
@@ -705,15 +705,23 @@ function TaskCard({
   verifications,
   evaluations,
   approvals,
+  maxTaskIterations,
 }: {
   task: LoopTask;
   verifications: LoopVerificationRecord[];
   evaluations: LoopEvaluationRecord[];
   approvals: LoopApprovalRecord[];
+  maxTaskIterations: number;
 }) {
   const [detailsOpen, setDetailsOpen] = useState(false);
   const worker = parseWorkerResult(task.workerResult);
-  const status = taskStatusSummary(task, verifications, evaluations, approvals);
+  const status = taskStatusSummary(
+    task,
+    verifications,
+    evaluations,
+    approvals,
+    maxTaskIterations,
+  );
   const needsAction =
     task.state === "attention" ||
     task.state === "blocked" ||
@@ -822,11 +830,13 @@ function TaskList({
   verifications,
   evaluations,
   approvals,
+  maxTaskIterations,
 }: {
   tasks: LoopTask[];
   verifications: LoopVerificationRecord[];
   evaluations: LoopEvaluationRecord[];
   approvals: LoopApprovalRecord[];
+  maxTaskIterations: number;
 }) {
   return (
     <section data-testid="loop-task-list" style={sectionStyle}>
@@ -851,6 +861,7 @@ function TaskList({
               verifications={taskVerifications}
               evaluations={taskEvaluations}
               approvals={taskApprovals}
+              maxTaskIterations={maxTaskIterations}
             />
           );
         })
@@ -938,17 +949,19 @@ function RunDefinition({ run, spec }: { run: LoopRun; spec: LoopSpec }) {
 function HumanApprovalPanel({
   approval,
   task,
+  maxTaskIterations,
   busy,
   onDecision,
 }: {
   approval: LoopApprovalRecord;
   task: LoopTask;
+  maxTaskIterations: number;
   busy: boolean;
   onDecision: (decision: LoopApprovalDecision, feedback?: string) => void;
 }) {
   const [feedback, setFeedback] = useState("");
   const trimmed = feedback.trim();
-  const revisionAvailable = task.revisionCount + 1 < MAX_TASK_ITERATIONS;
+  const revisionAvailable = task.revisionCount + 1 < maxTaskIterations;
 
   return (
     <section data-testid="loop-human-approval" style={sectionStyle}>
@@ -1001,7 +1014,7 @@ function HumanApprovalPanel({
       </div>
       {!revisionAvailable && (
         <div style={{ color: "#f9e2af", marginTop: 6 }}>
-          The single revision has already been used.
+          The configured task attempt budget is exhausted.
         </div>
       )}
     </section>
@@ -1123,6 +1136,7 @@ function RunPanel({
         <HumanApprovalPanel
           approval={pendingApproval}
           task={currentTask}
+          maxTaskIterations={spec.maxTaskIterations}
           busy={busy}
           onDecision={onApproval}
         />
@@ -1132,6 +1146,7 @@ function RunPanel({
         verifications={snapshot.verifications}
         evaluations={snapshot.evaluations}
         approvals={snapshot.approvals}
+        maxTaskIterations={spec.maxTaskIterations}
       />
       <EventTimeline events={snapshot.events} />
     </>

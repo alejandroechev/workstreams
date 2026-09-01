@@ -227,10 +227,13 @@ describe("loop wire mapping", () => {
     expect(decoded.verifier?.program).toBe("scripts/verify.sh");
   });
 
-  it("rejects unsupported iteration contracts", () => {
+  it("decodes configurable task attempts and rejects non-positive values", () => {
+    expect(
+      decodeLoopSpec(specWire({ max_task_iterations: 4 })).maxTaskIterations,
+    ).toBe(4);
     expect(() =>
-      decodeLoopSpec(specWire({ max_task_iterations: 3 })),
-    ).toThrow("Unsupported max task iterations");
+      decodeLoopSpec(specWire({ max_task_iterations: 0 })),
+    ).toThrow("Invalid max task iterations: 0");
   });
 
   it("decodes an unconfigured workstream and nullable sidebar run fields", () => {

@@ -535,8 +535,8 @@ fn validate_spec(input: &LoopSpecInput) -> Result<(), String> {
     if input.run_timeout_seconds == 0 {
         return Err("Run timeout must be greater than zero".to_string());
     }
-    if input.max_task_iterations != 2 {
-        return Err("MVP1 supports exactly two task attempts".to_string());
+    if input.max_task_iterations == 0 {
+        return Err("Task attempts must be greater than zero".to_string());
     }
     if input
         .verifier_program
@@ -1919,7 +1919,7 @@ fn is_nested_task_resource_not_found(
 
 fn revision_prompt(feedback: &str) -> String {
     format!(
-        "The independent evaluator requested one revision:\n{feedback}\n\n\
+        "The independent evaluator requested a revision:\n{feedback}\n\n\
          Address the feedback, re-run relevant checks, and return only JSON:\n\
          {{\"status\":\"completed|blocked|failed\",\"summary\":\"what changed\",\
          \"evidence\":[\"observable evidence\"]}}"
@@ -1929,7 +1929,7 @@ fn revision_prompt(feedback: &str) -> String {
 fn human_revision_prompt(spec: &LoopSpec, task: &LoopTask, feedback: &str) -> String {
     format!(
         "{}\n\nTask: {}\nObjective: {}\n\n\
-         The human reviewer requested one revision:\n{}\n\n\
+         The human reviewer requested a revision:\n{}\n\n\
          Address the feedback, re-run relevant checks, and return only JSON:\n\
          {{\"status\":\"completed|blocked|failed\",\"summary\":\"what changed\",\
          \"evidence\":[\"observable evidence\"]}}",
@@ -2123,8 +2123,12 @@ pub fn decide_human_approval(
     if task.state != LoopTaskState::AwaitingApproval {
         return Err("The active task is not awaiting human approval".to_string());
     }
-    if decision == HumanApprovalDecision::Revise && task.revision_count + 1 >= 2 {
-        return Err("Human approval supports at most one revision".to_string());
+    let spec = get_loop_spec_by_id(&transaction, &run.loop_spec_id)?
+        .ok_or_else(|| format!("Loop spec not found: {}", run.loop_spec_id))?;
+    if decision == HumanApprovalDecision::Revise
+        && task.revision_count + 1 >= spec.max_task_iterations
+    {
+        return Err("Human approval exhausted the task attempt budget".to_string());
     }
     let approval_id: String = transaction
         .query_row(
@@ -2586,7 +2590,7 @@ async fn execute_manual_loop_inner(
         tasks
     };
 
-    for task in tasks {
+    'task_loop: for task in tasks {
         {
             let conn = db.lock().unwrap();
             if !apply_control_boundary(&conn, run_id)? {
@@ -2632,59 +2636,64 @@ async fn execute_manual_loop_inner(
             runtime.disconnect(&worker_response.session_id).await?;
             continue;
         }
-        let first_verification = verify_task(
-            &db,
-            &spec,
-            run_id,
-            &task.id,
-            &working_directory,
-            1,
-            cancelled.clone(),
-        )
-        .await?;
-        if first_verification
-            .as_ref()
-            .is_some_and(|result| result.status != VerificationStatus::Passed)
-        {
-            set_task_state(
-                &db.lock().unwrap(),
+        let mut attempt = 1;
+        let final_verdict = loop {
+            let verification = verify_task(
+                &db,
+                &spec,
+                run_id,
                 &task.id,
-                LoopTaskState::Attention,
-                None,
-            )?;
-            runtime.disconnect(&worker_response.session_id).await?;
-            continue;
-        }
-        if spec.evaluator_prompt.is_none() {
-            if spec.human_approval_prompt.is_some() {
+                &working_directory,
+                attempt,
+                cancelled.clone(),
+            )
+            .await?;
+            if verification
+                .as_ref()
+                .is_some_and(|result| result.status != VerificationStatus::Passed)
+            {
+                set_task_state(
+                    &db.lock().unwrap(),
+                    &task.id,
+                    LoopTaskState::Attention,
+                    None,
+                )?;
                 runtime.disconnect(&worker_response.session_id).await?;
-                if !apply_pre_approval_control_boundary(&db.lock().unwrap(), run_id)? {
+                continue 'task_loop;
+            }
+            if spec.evaluator_prompt.is_none() {
+                if spec.human_approval_prompt.is_some() {
+                    runtime.disconnect(&worker_response.session_id).await?;
+                    if !apply_pre_approval_control_boundary(&db.lock().unwrap(), run_id)? {
+                        return Ok(());
+                    }
+                    enter_human_approval(&db.lock().unwrap(), &spec, run_id, &task)?;
                     return Ok(());
                 }
-                enter_human_approval(&db.lock().unwrap(), &spec, run_id, &task)?;
-                return Ok(());
+                set_task_state(&db.lock().unwrap(), &task.id, LoopTaskState::Accepted, None)?;
+                runtime.disconnect(&worker_response.session_id).await?;
+                continue 'task_loop;
             }
-            set_task_state(&db.lock().unwrap(), &task.id, LoopTaskState::Accepted, None)?;
-            runtime.disconnect(&worker_response.session_id).await?;
-            continue;
-        }
 
-        let first_verdict = evaluate_task(
-            EvaluationContext {
-                db: &db,
-                runtime: &runtime,
-                spec: &spec,
-                run_id,
-                task: &task,
-                working_directory: &working_directory,
-            },
-            &worker_output,
-            first_verification.as_ref(),
-            1,
-        )
-        .await?;
-        let final_verdict = if first_verdict.verdict == EvaluatorVerdict::Revise {
-            let feedback = first_verdict
+            let verdict = evaluate_task(
+                EvaluationContext {
+                    db: &db,
+                    runtime: &runtime,
+                    spec: &spec,
+                    run_id,
+                    task: &task,
+                    working_directory: &working_directory,
+                },
+                &worker_output,
+                verification.as_ref(),
+                attempt,
+            )
+            .await?;
+            if verdict.verdict != EvaluatorVerdict::Revise || attempt >= spec.max_task_iterations {
+                break verdict;
+            }
+
+            let feedback = verdict
                 .feedback
                 .as_deref()
                 .ok_or_else(|| "Evaluator revision feedback was missing".to_string())?;
@@ -2707,12 +2716,13 @@ async fn execute_manual_loop_inner(
             )
             .await?;
             worker_output = parse_worker_output(&revised_response.content)?;
+            attempt += 1;
             store_worker_result(
                 &db.lock().unwrap(),
                 &task.id,
                 &worker_response.session_id,
                 &worker_output,
-                1,
+                attempt - 1,
             )?;
             if worker_output.status != WorkerStatus::Completed {
                 let state = if worker_output.status == WorkerStatus::Blocked {
@@ -2722,47 +2732,8 @@ async fn execute_manual_loop_inner(
                 };
                 set_task_state(&db.lock().unwrap(), &task.id, state, None)?;
                 runtime.disconnect(&worker_response.session_id).await?;
-                continue;
+                continue 'task_loop;
             }
-            let revised_verification = verify_task(
-                &db,
-                &spec,
-                run_id,
-                &task.id,
-                &working_directory,
-                2,
-                cancelled.clone(),
-            )
-            .await?;
-            if revised_verification
-                .as_ref()
-                .is_some_and(|result| result.status != VerificationStatus::Passed)
-            {
-                set_task_state(
-                    &db.lock().unwrap(),
-                    &task.id,
-                    LoopTaskState::Attention,
-                    None,
-                )?;
-                runtime.disconnect(&worker_response.session_id).await?;
-                continue;
-            }
-            evaluate_task(
-                EvaluationContext {
-                    db: &db,
-                    runtime: &runtime,
-                    spec: &spec,
-                    run_id,
-                    task: &task,
-                    working_directory: &working_directory,
-                },
-                &worker_output,
-                revised_verification.as_ref(),
-                2,
-            )
-            .await?
-        } else {
-            first_verdict
         };
 
         if final_verdict.verdict == EvaluatorVerdict::Accepted
@@ -4284,7 +4255,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn evaluator_can_request_exactly_one_worker_revision() {
+    async fn evaluator_uses_the_configured_task_attempt_budget() {
         use crate::loop_agent::{AgentRole, ScriptedAgentResponse, ScriptedAgentRuntime};
         use std::sync::{Arc, Mutex};
 
@@ -4292,6 +4263,7 @@ mod tests {
         let mut input = spec_input();
         input.verifier_program = None;
         input.verifier_args.clear();
+        input.max_task_iterations = 3;
         let spec = save_loop_spec(&conn, "ws-1", input).expect("save loop spec");
         set_loop_enabled(&conn, &spec.id, true).expect("enable loop");
         let run = create_loop_run(&conn, &spec.id, 600).expect("create run");
@@ -4323,6 +4295,18 @@ mod tests {
             ScriptedAgentResponse {
                 role: AgentRole::Evaluator,
                 session_id: "evaluator-2".to_string(),
+                content: r#"{"verdict":"revise","summary":"One assertion is missing","feedback":"Add the assertion","evidence":[]}"#.to_string(),
+                events: vec![],
+            },
+            ScriptedAgentResponse {
+                role: AgentRole::Worker,
+                session_id: "worker-1".to_string(),
+                content: r#"{"status":"completed","summary":"Added assertion","evidence":["all tests pass"]}"#.to_string(),
+                events: vec![],
+            },
+            ScriptedAgentResponse {
+                role: AgentRole::Evaluator,
+                session_id: "evaluator-3".to_string(),
                 content: r#"{"verdict":"accepted","summary":"The regression is covered","evidence":["test passes"]}"#.to_string(),
                 events: vec![],
             },
@@ -4341,7 +4325,7 @@ mod tests {
         let conn = db.lock().unwrap();
         let tasks = list_loop_tasks(&conn, &run.id).expect("list tasks");
         assert_eq!(tasks[0].state, LoopTaskState::Accepted);
-        assert_eq!(tasks[0].revision_count, 1);
+        assert_eq!(tasks[0].revision_count, 2);
         let evaluations: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM loop_evaluations WHERE loop_task_id = ?1",
@@ -4349,7 +4333,60 @@ mod tests {
                 |row| row.get(0),
             )
             .expect("count evaluations");
-        assert_eq!(evaluations, 2);
+        assert_eq!(evaluations, 3);
+    }
+
+    #[tokio::test]
+    async fn evaluator_revision_stops_at_the_configured_attempt_budget() {
+        use crate::loop_agent::{AgentRole, ScriptedAgentResponse, ScriptedAgentRuntime};
+        use std::sync::{Arc, Mutex};
+
+        let conn = test_db();
+        let mut input = spec_input();
+        input.verifier_program = None;
+        input.verifier_args.clear();
+        input.max_task_iterations = 1;
+        let spec = save_loop_spec(&conn, "ws-1", input).expect("save loop spec");
+        set_loop_enabled(&conn, &spec.id, true).expect("enable loop");
+        let run = create_loop_run(&conn, &spec.id, 600).expect("create run");
+        let runtime = Arc::new(ScriptedAgentRuntime::new(vec![
+            ScriptedAgentResponse {
+                role: AgentRole::Orchestrator,
+                session_id: "orchestrator-1".to_string(),
+                content:
+                    r#"{"tasks":[{"key":"task-1","title":"Fix bug","objective":"Fix the bug"}]}"#
+                        .to_string(),
+                events: vec![],
+            },
+            ScriptedAgentResponse {
+                role: AgentRole::Worker,
+                session_id: "worker-1".to_string(),
+                content: r#"{"status":"completed","summary":"Attempt","evidence":[]}"#.to_string(),
+                events: vec![],
+            },
+            ScriptedAgentResponse {
+                role: AgentRole::Evaluator,
+                session_id: "evaluator-1".to_string(),
+                content: r#"{"verdict":"revise","summary":"Still incomplete","feedback":"Try again","evidence":[]}"#.to_string(),
+                events: vec![],
+            },
+        ]));
+        let db = Arc::new(Mutex::new(conn));
+
+        execute_manual_loop(
+            Arc::clone(&db),
+            runtime,
+            &run.id,
+            std::path::PathBuf::from("/tmp/repo"),
+        )
+        .await
+        .expect("execute exhausted loop");
+
+        let snapshot = loop_snapshot(&db.lock().unwrap(), "ws-1").expect("load snapshot");
+        assert_eq!(snapshot.latest_run.unwrap().state, LoopRunState::Attention);
+        assert_eq!(snapshot.tasks[0].state, LoopTaskState::Attention);
+        assert_eq!(snapshot.tasks[0].revision_count, 0);
+        assert_eq!(snapshot.evaluations.len(), 1);
     }
 
     #[tokio::test]
@@ -4705,6 +4742,7 @@ mod tests {
         input.verifier_program = None;
         input.verifier_args.clear();
         input.human_approval_prompt = Some("Review the evidence".to_string());
+        input.max_task_iterations = 3;
         let spec = save_loop_spec(&conn, "ws-1", input).expect("save approval loop");
         set_loop_enabled(&conn, &spec.id, true).expect("enable loop");
         let run = create_loop_run(&conn, &spec.id, 600).expect("create run");
@@ -4767,14 +4805,39 @@ mod tests {
         assert_eq!(awaiting.approvals.len(), 2);
         assert_eq!(awaiting.approvals[0].status, "revision_requested");
         assert_eq!(awaiting.approvals[0].feedback.as_deref(), Some(feedback));
-        let second_revision = decide_human_approval(
+        decide_human_approval(
             &db.lock().unwrap(),
             &run.id,
             HumanApprovalDecision::Revise,
             Some("Revise again"),
         )
-        .expect_err("a task can only be revised once");
-        assert!(second_revision.contains("at most one revision"));
+        .expect("request second revision");
+        let second_revision_runtime =
+            Arc::new(ScriptedAgentRuntime::new(vec![ScriptedAgentResponse {
+                role: AgentRole::Worker,
+                session_id: "worker-3".to_string(),
+                content:
+                    r#"{"status":"completed","summary":"Revised again","evidence":["all cases"]}"#
+                        .to_string(),
+                events: vec![],
+            }]));
+        execute_human_revision(
+            Arc::clone(&db),
+            second_revision_runtime,
+            &run.id,
+            std::path::PathBuf::from("/tmp/repo"),
+            "Revise again".to_string(),
+        )
+        .await
+        .expect("execute second human revision");
+        let exhausted = decide_human_approval(
+            &db.lock().unwrap(),
+            &run.id,
+            HumanApprovalDecision::Revise,
+            Some("Revise a third time"),
+        )
+        .expect_err("configured attempt budget must be enforced");
+        assert!(exhausted.contains("exhausted the task attempt budget"));
 
         decide_human_approval(
             &db.lock().unwrap(),
@@ -4789,7 +4852,8 @@ mod tests {
             LoopRunState::Completed
         );
         assert_eq!(approved.tasks[0].state, LoopTaskState::Accepted);
-        assert_eq!(approved.approvals[1].status, "approved");
+        assert_eq!(approved.tasks[0].revision_count, 2);
+        assert_eq!(approved.approvals[2].status, "approved");
     }
 
     #[tokio::test]

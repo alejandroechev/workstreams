@@ -39,7 +39,9 @@ project-aware workspace:
   execute them from **Run**. Open the tile with `Alt+L` (`Option+L` on macOS).
   Every loop uses a bounded orchestrator → worker pipeline and must include
   deterministic verification, an independent evaluator, human approval, or a
-  layered combination. Human-gated runs persist an **Awaiting approval** stage
+  layered combination. `limits.taskAttempts` configures the total worker
+  attempt budget, including the initial attempt. Human-gated runs persist an
+  **Awaiting approval** stage
   with Approve / Request revision / Reject actions in the tile and an approval
   indicator in the sidebar. Verifiers can be repository scripts outside the
   definition folder; each run pins the exact YAML and SHA-256 hash for durable

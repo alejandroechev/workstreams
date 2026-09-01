@@ -690,7 +690,7 @@ spec:
       timeout: 1m
   limits:
     runTimeout: 5m
-    taskAttempts: 2
+    taskAttempts: 4
   permissions:
     tools: full
     publicEffects: deny

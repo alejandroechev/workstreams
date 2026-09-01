@@ -1,5 +1,4 @@
 import {
-  MAX_TASK_ITERATIONS,
   type EvaluatorVerdict,
   type LoopEvaluationRecord,
   type LoopApprovalRecord,
@@ -178,10 +177,8 @@ function model(value: string): string | null {
 }
 
 function decodeSpec(spec: LoopSpecWire): LoopSpec {
-  if (spec.max_task_iterations !== MAX_TASK_ITERATIONS) {
-    throw new Error(
-      `Unsupported max task iterations: ${spec.max_task_iterations}`,
-    );
+  if (!Number.isInteger(spec.max_task_iterations) || spec.max_task_iterations < 1) {
+    throw new Error(`Invalid max task iterations: ${spec.max_task_iterations}`);
   }
   return {
     id: spec.id,
@@ -211,7 +208,7 @@ function decodeSpec(spec: LoopSpecWire): LoopSpec {
         }
       : undefined,
     runTimeoutMs: spec.run_timeout_seconds * 1000,
-    maxTaskIterations: MAX_TASK_ITERATIONS,
+    maxTaskIterations: spec.max_task_iterations,
     enabled: spec.enabled,
     createdAt: timestamp(spec.created_at),
     updatedAt: timestamp(spec.updated_at),

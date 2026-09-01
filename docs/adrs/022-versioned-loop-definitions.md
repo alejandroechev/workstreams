@@ -60,7 +60,8 @@ an arbitrary DAG. In v1:
 
 - the trigger is manual;
 - the orchestrator emits at most one task per run;
-- a task has at most two worker attempts;
+- `limits.taskAttempts` is a positive integer counting the initial worker
+  attempt plus any evaluator- or human-requested revisions;
 - a workstream has at most one active run;
 - Copilot tools are fully available, while public effects remain denied;
 - at least one of deterministic verification, independent evaluation, or

@@ -100,7 +100,6 @@ spec:
       Judge whether the assigned task is correct and supported by evidence.
     onReject:
       action: revise
-      maxRevisions: 1
 
   humanApproval:
     prompt: |
@@ -169,18 +168,21 @@ program: "npm run test:coverage && npm run lint"
 
 Create a wrapper verifier script when several deterministic commands must run.
 
-## Fixed v1 values
+## v1 constraints
 
 - `apiVersion`: `workstreams.dev/v1alpha1`
 - `kind`: `Loop`
 - `trigger.type`: `manual`
 - `orchestrator.maxTasksPerRun`: `1`
 - `evaluator.onReject.action`: `revise`
-- `evaluator.onReject.maxRevisions`: `1`
-- `limits.taskAttempts`: `2`
+- `limits.taskAttempts`: a positive integer total attempt budget
 - `permissions.tools`: `full`
 - `permissions.publicEffects`: `deny`
 - `flowControl.maxActiveRuns`: `1`
+
+`limits.taskAttempts` counts total worker attempts. Use `1` for no revisions,
+`2` for one revision, or `N` for up to `N - 1` revisions. Run timeout remains
+the outer safety bound.
 
 Durations are positive integers followed by `s`, `m`, or `h`, for example
 `90s`, `10m`, or `2h`.
