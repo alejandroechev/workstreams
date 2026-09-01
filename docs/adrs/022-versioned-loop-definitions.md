@@ -34,9 +34,12 @@ editors and tooling.
 
 The `create-loop` skill is the primary natural-language authoring workflow. It
 may create and validate a definition, but it never runs or enables one
-implicitly. The Goal Loop tile is a catalog and runtime monitor, not a form
-editor: it lists valid definitions, exact validation failures, feedback mode,
-tags, and portability, then runs the selected file.
+implicitly. The Goal Loop tile has **Definitions** and **Run** tabs.
+Definitions opens valid and invalid YAML files in the shared `FileEditorView`,
+inheriting autosave, explicit save, conflict detection, and canonical shared
+buffers. Run lists valid definitions, exact validation failures, feedback mode,
+tags, and portability, then executes the selected file. Refresh reparses files
+after editing.
 
 ### The controller shape remains fixed
 

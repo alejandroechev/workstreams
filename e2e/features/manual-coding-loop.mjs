@@ -46,6 +46,15 @@ export async function run({ page, screenshot }) {
     .filter({ hasText: "Showcase loop" })
     .waitFor({ timeout: 10000 });
 
+  await page.locator('[data-testid="loop-tab-definitions"]').click();
+  await page
+    .locator('[data-testid="loop-definition-editor-header"]')
+    .filter({ hasText: "showcase.loop.yaml" })
+    .waitFor({ timeout: 10000 });
+  await page
+    .locator('[data-testid="file-editor-view"]')
+    .waitFor({ timeout: 30000 });
+
   await screenshot();
   await verifyNoConsoleErrors(page);
 }

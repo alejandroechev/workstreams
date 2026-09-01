@@ -79,6 +79,7 @@ type InternalEntry = {
   autoSaveEnabled: boolean;
   watcherUnsub?: () => void;
   contentChangeDisposable?: Disposable;
+  contentVersion: number;
   conflictingDiskContent?: string;
   conflictingDiskHash?: string;
   lastError?: string;
@@ -173,6 +174,7 @@ const parseMaybeJson = (value: string): unknown => {
 
 class FileBufferRegistryImpl implements FileBufferRegistry {
   private readonly entries = new Map<string, InternalEntry>();
+  private readonly inFlightLoads = new Map<string, Promise<InternalEntry>>();
   private readonly suppressedTyping = new Set<string>();
   private readonly autoSaveDebounceMs: number;
 
@@ -193,8 +195,17 @@ class FileBufferRegistryImpl implements FileBufferRegistry {
       return snapshotFor(existing);
     }
 
-    const entry = await this.loadEntry(canonicalPath);
-    this.entries.set(canonicalPath, entry);
+    let load = this.inFlightLoads.get(canonicalPath);
+    if (load === undefined) {
+      load = this.loadEntry(canonicalPath).then((entry) => {
+        this.entries.set(canonicalPath, entry);
+        this.inFlightLoads.delete(canonicalPath);
+        return entry;
+      });
+      this.inFlightLoads.set(canonicalPath, load);
+    }
+    const entry = await load;
+    entry.refcount += 1;
     return snapshotFor(entry);
   }
 
@@ -239,6 +250,7 @@ class FileBufferRegistryImpl implements FileBufferRegistry {
     this.dispatch(entry, { type: "save_started" });
 
     try {
+      const savedVersion = entry.contentVersion;
       const result = await this.deps.invokeTauri<WriteTextFileResult>("write_text_file", {
         args: {
           path: entry.path,
@@ -253,7 +265,14 @@ class FileBufferRegistryImpl implements FileBufferRegistry {
       entry.conflictingDiskContent = undefined;
       entry.conflictingDiskHash = undefined;
       entry.lastError = undefined;
-      this.dispatch(entry, { type: "save_succeeded", newDiskHash: result.hash_hex });
+      this.dispatch(entry, {
+        type: "save_succeeded",
+        newDiskHash: result.hash_hex,
+        changedDuringSave: entry.contentVersion !== savedVersion,
+      });
+      if (entry.stateContext.state === "dirty" && entry.autoSaveEnabled) {
+        this.scheduleAutoSave(entry);
+      }
     } catch (error) {
       this.handleSaveError(entry, parseWriteError(error));
     }
@@ -308,6 +327,7 @@ class FileBufferRegistryImpl implements FileBufferRegistry {
   _disposeAllForTests(): void {
     for (const entry of this.entries.values()) this.disposeEntry(entry);
     this.entries.clear();
+    this.inFlightLoads.clear();
     this.suppressedTyping.clear();
   }
 
@@ -323,7 +343,7 @@ class FileBufferRegistryImpl implements FileBufferRegistry {
         model: null,
         stateContext: { ...INITIAL_CONTEXT },
         listeners: new Set(),
-        refcount: 1,
+        refcount: 0,
         lastDiskHash: read.hash_hex,
         lastDiskMtime: read.mtime_unix_ms,
         lineEnding: read.normalized_line_ending,
@@ -332,6 +352,7 @@ class FileBufferRegistryImpl implements FileBufferRegistry {
         sizeBytes: read.size_bytes,
         debounceTimer: null,
         autoSaveEnabled: true,
+        contentVersion: 0,
         lastError: read.sniffed_binary ? BINARY_ERROR : undefined,
       };
 
@@ -347,13 +368,14 @@ class FileBufferRegistryImpl implements FileBufferRegistry {
         model: null,
         stateContext: { ...INITIAL_CONTEXT },
         listeners: new Set(),
-        refcount: 1,
+        refcount: 0,
         lineEnding: "lf",
         hasTrailingNewline: false,
         sniffedBinary: true,
         sizeBytes: 0,
         debounceTimer: null,
         autoSaveEnabled: true,
+        contentVersion: 0,
         lastError,
       };
     }
@@ -367,6 +389,7 @@ class FileBufferRegistryImpl implements FileBufferRegistry {
     );
     entry.contentChangeDisposable = entry.model.onDidChangeContent(() => {
       if (this.suppressedTyping.has(entry.path)) return;
+      entry.contentVersion += 1;
       this.dispatch(entry, { type: "user_typed" });
       if (entry.autoSaveEnabled && entry.stateContext.autoSaveAllowed) this.scheduleAutoSave(entry);
     });

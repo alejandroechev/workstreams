@@ -3,7 +3,7 @@ export type BufferState = "clean" | "dirty" | "saving" | "conflicted" | "deleted
 export type BufferEvent =
   | { type: "user_typed" }
   | { type: "save_started" }
-  | { type: "save_succeeded"; newDiskHash: string }
+  | { type: "save_succeeded"; newDiskHash: string; changedDuringSave?: boolean }
   | { type: "save_failed_external_modified"; currentDiskHash: string }
   | { type: "save_failed_not_found" }
   | { type: "save_failed_permission" }
@@ -78,7 +78,7 @@ export function reduce(ctx: BufferStateContext, event: BufferEvent): BufferState
     case "saving":
       switch (event.type) {
         case "save_succeeded":
-          return contextFor("clean");
+          return contextFor(event.changedDuringSave ? "dirty" : "clean");
         case "save_failed_external_modified":
           return contextFor("conflicted", {
             conflictingDiskHash: event.currentDiskHash,

@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { BackendProvider } from "../../backend/context";
 import { MemoryBackend } from "../../backend/memory-backend";
+import { fileBufferRegistry } from "../../files/FileBufferRegistry";
 import type {
   LoopDefinition,
   LoopDefinitionCatalog,
@@ -19,6 +20,35 @@ import LoopControlTile from "../LoopControlTile";
 
 const listenMock = vi.hoisted(() => vi.fn());
 vi.mock("@tauri-apps/api/event", () => ({ listen: listenMock }));
+vi.mock("../../files/FileEditorView", () => ({
+  FileEditorView: ({
+    path,
+    onSnapshotChange,
+  }: {
+    path: string;
+    onSnapshotChange?: (snapshot: any) => void;
+  }) => (
+    <>
+      <div data-testid="loop-definition-editor-path">{path}</div>
+      <button
+        data-testid="loop-definition-mark-dirty"
+        onClick={() =>
+          onSnapshotChange?.({
+            path,
+            state: "dirty",
+            dirty: true,
+            lineEnding: "lf",
+            hasTrailingNewline: true,
+            sniffedBinary: false,
+            sizeBytes: 10,
+          })
+        }
+      >
+        Mark dirty
+      </button>
+    </>
+  ),
+}));
 
 function definition(overrides: Partial<LoopDefinition> = {}): LoopDefinition {
   return {
@@ -159,6 +189,92 @@ afterEach(() => {
 });
 
 describe("LoopControlTile catalog", () => {
+  it("switches between Run and Definitions and edits the selected YAML file", async () => {
+    const first = definition();
+    const second = definition({
+      id: "backend-loop",
+      name: "Backend loop",
+      path: "/repo/.workstreams/loops/backend-loop.loop.yaml",
+    });
+
+    setup(snapshot(), { definitions: [first, second], invalid: [] });
+
+    expect(
+      (await screen.findByTestId("loop-tab-run")).getAttribute("aria-selected"),
+    ).toBe("true");
+    fireEvent.click(screen.getByTestId("loop-tab-definitions"));
+    expect(screen.getByTestId("loop-definition-editor-path").textContent).toBe(
+      first.path,
+    );
+
+    fireEvent.click(screen.getByTestId("loop-edit-definition-backend-loop"));
+    expect(screen.getByTestId("loop-definition-editor-path").textContent).toBe(
+      second.path,
+    );
+
+    fireEvent.click(screen.getByTestId("loop-tab-run"));
+    await waitFor(() =>
+      expect(screen.getByTestId("loop-definition-selected").textContent).toContain(
+        "Backend loop",
+      ),
+    );
+  });
+
+  it("saves and reparses dirty YAML before returning to Run", async () => {
+    const second = definition({
+      id: "second-loop",
+      name: "Second loop",
+      path: "/repo/.workstreams/loops/second.loop.yaml",
+    });
+    const { listDefinitions } = setup(snapshot(), {
+      definitions: [definition(), second],
+      invalid: [],
+    });
+    const save = vi.spyOn(fileBufferRegistry, "save").mockResolvedValue();
+    vi.spyOn(fileBufferRegistry, "listAll").mockReturnValue([
+      {
+        path: definition().path,
+        state: "dirty",
+        dirty: true,
+        lineEnding: "lf",
+        hasTrailingNewline: true,
+        sniffedBinary: false,
+        sizeBytes: 10,
+      },
+    ]);
+    vi.spyOn(fileBufferRegistry, "getSnapshot")
+      .mockReturnValueOnce({
+        path: definition().path,
+        state: "dirty",
+        dirty: true,
+        lineEnding: "lf",
+        hasTrailingNewline: true,
+        sniffedBinary: false,
+        sizeBytes: 10,
+      })
+      .mockReturnValue({
+        path: definition().path,
+        state: "clean",
+        dirty: false,
+        lineEnding: "lf",
+        hasTrailingNewline: true,
+        sniffedBinary: false,
+        sizeBytes: 10,
+      });
+
+    await screen.findByTestId("loop-definition-frontend-loop");
+    fireEvent.click(screen.getByTestId("loop-tab-definitions"));
+    fireEvent.click(screen.getByTestId("loop-definition-mark-dirty"));
+    fireEvent.click(screen.getByTestId("loop-edit-definition-second-loop"));
+    fireEvent.click(screen.getByTestId("loop-tab-run"));
+
+    await waitFor(() => expect(save).toHaveBeenCalledWith(definition().path));
+    await waitFor(() => expect(listDefinitions).toHaveBeenCalledTimes(2));
+    expect(screen.getByTestId("loop-tab-run").getAttribute("aria-selected")).toBe(
+      "true",
+    );
+  });
+
   it("loads definitions, selects the first, and retains selection on refresh", async () => {
     const evaluator = definition({
       id: "evaluated-loop",
@@ -185,10 +301,10 @@ describe("LoopControlTile catalog", () => {
     );
 
     expect((await screen.findByTestId("loop-catalog")).textContent).toContain(
-      "Loop catalog",
+      "Goal Loop",
     );
     expect(listDefinitions).toHaveBeenCalledWith("/repo");
-    expect(screen.getByTestId("loop-definition-evaluated-loop").textContent).toContain(
+    expect((await screen.findByTestId("loop-definition-evaluated-loop")).textContent).toContain(
       "Evaluator",
     );
     expect(screen.getByTestId("loop-definition-full-loop").textContent).toContain(
@@ -225,6 +341,52 @@ describe("LoopControlTile catalog", () => {
     await waitFor(() => expect(listDefinitions).toHaveBeenCalledTimes(2));
     expect(screen.getByTestId("loop-definition-selected").textContent).toContain(
       "Full loop",
+    );
+  });
+
+  it("keeps Run selection aligned when the selected file changes definition id", async () => {
+    const selectedPath = "/repo/.workstreams/loops/selected.loop.yaml";
+    const selected = definition({
+      id: "old-id",
+      name: "Selected loop",
+      path: selectedPath,
+    });
+    const first = definition({
+      id: "first-loop",
+      name: "First loop",
+      path: "/repo/.workstreams/loops/first.loop.yaml",
+    });
+    const { setCatalog, listDefinitions } = setup(snapshot(), {
+      definitions: [first, selected],
+      invalid: [],
+    });
+
+    await screen.findByTestId("loop-definition-old-id");
+    fireEvent.click(screen.getByTestId("loop-definition-old-id"));
+    fireEvent.click(screen.getByTestId("loop-tab-definitions"));
+    expect(screen.getByTestId("loop-definition-editor-path").textContent).toBe(
+      selectedPath,
+    );
+
+    setCatalog({
+      definitions: [
+        first,
+        definition({
+          id: "new-id",
+          name: "Renamed selected loop",
+          path: selectedPath,
+        }),
+      ],
+      invalid: [],
+    });
+    fireEvent.click(screen.getByTestId("loop-refresh"));
+    await waitFor(() => expect(listDefinitions).toHaveBeenCalledTimes(2));
+    fireEvent.click(screen.getByTestId("loop-tab-run"));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("loop-definition-selected").textContent).toContain(
+        "Renamed selected loop",
+      ),
     );
   });
 
@@ -292,6 +454,15 @@ describe("LoopControlTile catalog", () => {
       "/repo/.workstreams/loops/broken.loop.yaml",
     );
     expect(invalid.textContent).toContain("missing required field objective");
+
+    fireEvent.click(screen.getByTestId("loop-tab-definitions"));
+    fireEvent.click(screen.getByTestId("loop-edit-invalid-0"));
+    expect(screen.getByTestId("loop-definition-editor-path").textContent).toBe(
+      "/repo/.workstreams/loops/broken.loop.yaml",
+    );
+    expect(screen.getByTestId("loop-definition-editor-header").textContent).toContain(
+      "missing required field objective",
+    );
   });
 
   it("disables running a definition while a nonterminal run exists", async () => {

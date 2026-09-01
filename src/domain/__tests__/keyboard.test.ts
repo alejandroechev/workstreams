@@ -69,6 +69,7 @@ describe("parseKeyAction", () => {
     expect(parseKeyAction({ key: "r", ...alt })).toEqual({ type: "addTile", tileType: "file_explorer" });
     expect(parseKeyAction({ key: "p", ...alt })).toEqual({ type: "addTile", tileType: "plan" });
     expect(parseKeyAction({ key: "a", ...alt })).toEqual({ type: "addTile", tileType: "code_review" });
+    expect(parseKeyAction({ key: "l", ...alt })).toEqual({ type: "addTile", tileType: "loop_control" });
   });
 
   it("returns addTile for Alt+M (session_meta) and Alt+B (workbench)", () => {
@@ -89,7 +90,7 @@ describe("parseKeyAction", () => {
       editor: { getEditors: () => [{ hasTextFocus: () => true }] },
     } as never);
 
-    for (const key of ["c", "t", "w", "r", "m", "b", "p", "a"]) {
+    for (const key of ["c", "t", "w", "r", "m", "b", "p", "a", "l"]) {
       expect(parseKeyAction({ key, ...alt })).toBeNull();
     }
   });
@@ -225,6 +226,10 @@ describe("parseKeyAction", () => {
       expect(parseKeyAction({ key: "å", code: "KeyA", ...alt })).toEqual({
         type: "addTile",
         tileType: "code_review",
+      });
+      expect(parseKeyAction({ key: "¬", code: "KeyL", ...alt })).toEqual({
+        type: "addTile",
+        tileType: "loop_control",
       });
     });
 

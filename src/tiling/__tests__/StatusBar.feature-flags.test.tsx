@@ -24,6 +24,7 @@ function commonProps() {
     onAddPlan: vi.fn(),
     onAddCodeReview: vi.fn(),
     onAddWalkthrough: vi.fn(),
+    onAddLoop: vi.fn(),
     onToggleFullscreen: vi.fn(),
     onToggleSideBySide: vi.fn(),
     onOpenSettings: vi.fn(),
@@ -61,6 +62,13 @@ describe("StatusBar feature-flag gating", () => {
     render(<StatusBar {...commonProps()} />);
     openAddTileMenu();
     expect(screen.getByTestId("add-tile-item-plan")).toBeTruthy();
+  });
+
+  it("shows the platform shortcut for the Goal Loop entry", () => {
+    render(<StatusBar {...commonProps()} />);
+    openAddTileMenu();
+
+    expect(screen.getByTestId("add-tile-item-loop").textContent).toContain("L");
   });
 });
 

@@ -155,6 +155,21 @@ describe("FileBufferRegistry", () => {
     expect(h.registry.getSnapshot(canonical)).not.toBeNull();
   });
 
+  it("coalesces concurrent acquires so one StrictMode cleanup cannot dispose the live model", async () => {
+    const h = createHarness();
+
+    const [first, second] = await Promise.all([
+      h.registry.acquire("file.txt"),
+      h.registry.acquire("file.txt"),
+    ]);
+
+    expect(first.path).toBe(canonical);
+    expect(second.path).toBe(canonical);
+    expect(h.monaco.editor.createModel).toHaveBeenCalledTimes(1);
+    h.registry.release(canonical);
+    expect(h.registry.getModel(canonical)).not.toBeNull();
+  });
+
   it("revalidates a clean cached entry on re-acquire and reloads external edits", async () => {
     const h = createHarness();
 
@@ -242,6 +257,27 @@ describe("FileBufferRegistry", () => {
     await vi.advanceTimersByTimeAsync(25);
 
     expect(h.invokeTauri.mock.calls.filter(([cmd]) => cmd === "write_text_file")).toHaveLength(1);
+  });
+
+  it("remains dirty when the model changes during an in-flight save", async () => {
+    const h = createHarness();
+    let finishWrite!: (result: { mtime_unix_ms: number; hash_hex: string }) => void;
+    h.writeQueue[0] = new Promise((resolve) => {
+      finishWrite = resolve;
+    }) as never;
+    await h.registry.acquire("file.txt");
+    h.models[0].setValue("first edit");
+
+    const saving = h.registry.save(canonical);
+    h.models[0].setValue("newer edit");
+    finishWrite({ mtime_unix_ms: 20, hash_hex: "hash-first" });
+    await saving;
+
+    expect(h.registry.getSnapshot(canonical)?.state).toBe("dirty");
+    await h.registry.save(canonical);
+    expect(h.registry.getSnapshot(canonical)?.state).toBe("clean");
+    const writes = h.invokeTauri.mock.calls.filter(([cmd]) => cmd === "write_text_file");
+    expect((writes[1][1]?.args as { content: string }).content).toBe("newer edit");
   });
 
   it("can disable auto-save for a loaded path", async () => {

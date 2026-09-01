@@ -34,7 +34,8 @@ project-aware workspace:
   the public CLI).
 - 🔁 **Versioned coding loops** — author reusable definitions as strict
   `.workstreams/loops/*.loop.yaml` files (or ask the `create-loop` skill to
-  generate one), then select and run them from the **Goal Loop** catalog.
+  generate one), then read/edit them in the Goal Loop **Definitions** tab and
+  execute them from **Run**. Open the tile with `Alt+L` (`Option+L` on macOS).
   Every loop uses a bounded orchestrator → worker pipeline and must include
   deterministic verification, an independent evaluator, human approval, or a
   layered combination. Human-gated runs persist an **Awaiting approval** stage
@@ -209,7 +210,7 @@ shell profile**. See [ADR 017](docs/adrs/017-macos-gui-launch-path.md).
    - `Alt+M` Session Meta
    - `Alt+B` Workbench
    - `Alt+A` Code Review
-   - **Goal Loop** from the Add tile menu
+   - `Alt+L` Goal Loop
 3. Navigate between tiles with `Alt+Arrows`. Fullscreen the focused one
    with `Alt+F`.
 4. Open the settings dialog (gear icon) to tune font sizes, terminal scroll
@@ -240,6 +241,7 @@ All app-level commands use **Alt** to avoid conflicts with terminal
 | `Alt+M` | New Session Meta tile |
 | `Alt+B` | New Workbench tile |
 | `Alt+A` | New Code Review tile |
+| `Alt+L` | New Goal Loop tile |
 | `Alt+Q` | Close focused tile |
 | `Alt+F` | Toggle fullscreen for focused tile |
 | `Alt+S` | Toggle side-by-side (when exactly 2 tiles are selected) |

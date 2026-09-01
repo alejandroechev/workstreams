@@ -21,15 +21,16 @@ file is actually edited.
 
 ## Decision
 
-1. **Use Monaco for editable text files** in Repo Explorer, Meta, and Workbench
-   file-detail panes. Markdown remains preview-first with an explicit Edit path;
-   other UTF-8 text files open directly in the editor.
+1. **Use Monaco for editable text files** in Repo Explorer, Meta, Workbench,
+   Plan, and Goal Loop file-detail panes. Markdown remains preview-first with an
+   explicit Edit path; other UTF-8 text files open directly in the editor.
 
 2. **Share one model per canonical file path** through
    `FileBufferRegistry`. Rust canonicalizes paths before they become registry
    keys, and each open view ref-counts the shared buffer. Multiple tiles showing
    the same file therefore see the same text, dirty state, save state, and undo
-   history.
+   history. Concurrent acquisitions are coalesced so React StrictMode cannot
+   create competing models or let one cleanup dispose another view's buffer.
 
 3. **Track edits with an explicit buffer state machine**:
    `clean`, `dirty`, `saving`, `conflicted`, `deleted`, and `save_blocked`.
@@ -44,7 +45,9 @@ file is actually edited.
 5. **Use conditional writes and atomic replacement**. Saves include the
    last-known disk hash; Rust rejects the write if the file changed externally.
    Accepted writes go through a temporary file followed by rename, avoiding
-   partially-written target files.
+   partially-written target files. The registry tracks a content generation
+   for each write, so typing while a save is in flight leaves the buffer dirty
+   and schedules the newer content rather than incorrectly marking it clean.
 
 6. **Lazy-load Monaco** on first editor use. The app pays the Monaco bundle cost
    only when the user opens or switches a file into edit mode.

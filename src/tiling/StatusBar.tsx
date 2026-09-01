@@ -91,7 +91,7 @@ export default function StatusBar({
     { key: "plan", label: "Plan", icon: "plan", shortcut: shortcutLabel("P"), onSelect: onAddPlan, gated: !isFeatureEnabled("plan-tile") },
     { key: "code-review", label: "Code Review", icon: "code", shortcut: shortcutLabel("A"), onSelect: onAddCodeReview },
     { key: "walkthrough", label: "Code Walkthrough", icon: "code", shortcut: shortcutLabel("D"), onSelect: onAddWalkthrough, gated: !isFeatureEnabled("debug-walkthrough") },
-    { key: "loop", label: "Goal Loop", icon: "loop", onSelect: onAddLoop },
+    { key: "loop", label: "Goal Loop", icon: "loop", shortcut: shortcutLabel("L"), onSelect: onAddLoop },
   ];
   const menuItems = rawItems
     .filter((it) => typeof it.onSelect === "function" && !it.gated)

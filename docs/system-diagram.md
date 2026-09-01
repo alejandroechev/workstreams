@@ -14,7 +14,7 @@ graph TB
             SessionMeta["SessionMetaTile<br/>Session + file detail"]
             Workbench["WorkbenchTile<br/>Workbench file detail"]
             CodeReview["CodeReviewTile<br/>diff-first PR-style review (ADR 014)<br/>inline comments + in-place edit<br/>reviewer↔agent via session.db, no MCP<br/>manual Sync (no poll)"]
-            LoopControl["LoopControlTile (ADR 021/022/023)<br/>YAML loop catalog<br/>Run/Pause/Resume/Stop/Kill<br/>human Approve/Revise/Reject<br/>all sensor evidence"]
+            LoopControl["LoopControlTile (ADR 021/022/023)<br/>Definitions: shared YAML editor<br/>Run: catalog + controls/evidence<br/>human Approve/Revise/Reject"]
             InlineComments["Inline File Comments (ADR 009)<br/>view zones in FileEditorView + comments-toggle<br/>reviewer↔agent via session.db, no MCP<br/>requires a linked session"]
             TaskBoard["TaskBoard (ADR 020)<br/>global board, not a tile<br/>7 columns + label swimlanes<br/>subtasks / labels / event feed"]
             QuickNote["WorkstreamQuickNote<br/>log a note to this workstream's task"]
@@ -98,6 +98,7 @@ graph TB
     RepoExplorer --> InlineComments
     SessionMeta --> FileBuffers
     Workbench --> FileBuffers
+    LoopControl -- "edit selected .loop.yaml" --> FileBuffers
     FileBuffers --> Monaco
     FileBuffers -- "invoke: read/write/watch/canonicalize" --> LibRS
 

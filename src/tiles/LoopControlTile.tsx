@@ -17,6 +17,11 @@ import {
 
 import { useBackend } from "../backend/context";
 import { MAX_TASK_ITERATIONS } from "../domain/loop";
+import { FileEditorView } from "../files/FileEditorView";
+import {
+  fileBufferRegistry,
+  type BufferSnapshot,
+} from "../files/FileBufferRegistry";
 import type {
   LoopAction,
   LoopApprovalDecision,
@@ -108,6 +113,15 @@ const buttonStyle: React.CSSProperties = {
 };
 
 const iconStyle: React.CSSProperties = { width: 14, height: 14, flexShrink: 0 };
+const tabStyle: React.CSSProperties = {
+  border: "none",
+  borderBottom: "2px solid transparent",
+  padding: "8px 10px 6px",
+  background: "transparent",
+  color: "#a6adc8",
+  cursor: "pointer",
+  font: "inherit",
+};
 
 function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -375,6 +389,155 @@ function CatalogPanel({
         </section>
       )}
     </>
+  );
+}
+
+function DefinitionsEditorPanel({
+  catalog,
+  selectedPath,
+  editorSnapshot,
+  editorRevision,
+  onSelect,
+  onSnapshotChange,
+}: {
+  catalog: LoopDefinitionCatalog;
+  selectedPath: string | null;
+  editorSnapshot: BufferSnapshot | null;
+  editorRevision: number;
+  onSelect: (path: string) => void;
+  onSnapshotChange: (snapshot: BufferSnapshot | null) => void;
+}) {
+  const selectedDefinition = catalog.definitions.find(
+    (definition) => definition.path === selectedPath,
+  );
+  const selectedInvalid = catalog.invalid.find(
+    (definition) => definition.path === selectedPath,
+  );
+  const selectedName =
+    selectedDefinition?.name ??
+    selectedPath?.split(/[\\/]/).pop() ??
+    "Loop definition";
+
+  return (
+    <div
+      data-testid="loop-definitions-tab"
+      style={{
+        height: "100%",
+        minHeight: 0,
+        display: "grid",
+        gridTemplateRows: "auto minmax(0, 1fr)",
+      }}
+    >
+      <div
+        style={{
+          padding: 8,
+          borderBottom: "1px solid #313244",
+          display: "flex",
+          gap: 6,
+          overflowX: "auto",
+        }}
+      >
+        {catalog.definitions.map((definition) => (
+          <button
+            key={definition.path}
+            type="button"
+            data-testid={`loop-edit-definition-${definition.id}`}
+            aria-pressed={definition.path === selectedPath}
+            onClick={() => onSelect(definition.path)}
+            style={{
+              ...buttonStyle,
+              flexShrink: 0,
+              borderColor:
+                definition.path === selectedPath ? "#89b4fa" : "#45475a",
+            }}
+          >
+            <DocumentTextIcon aria-hidden="true" style={iconStyle} />
+            {definition.name}
+          </button>
+        ))}
+        {catalog.invalid.map((definition, index) => (
+          <button
+            key={definition.path}
+            type="button"
+            data-testid={`loop-edit-invalid-${index}`}
+            aria-pressed={definition.path === selectedPath}
+            onClick={() => onSelect(definition.path)}
+            style={{
+              ...buttonStyle,
+              flexShrink: 0,
+              color: "#f5c2e7",
+              borderColor:
+                definition.path === selectedPath ? "#f38ba8" : "#45475a",
+            }}
+          >
+            <ExclamationTriangleIcon aria-hidden="true" style={iconStyle} />
+            {definition.path.split(/[\\/]/).pop()}
+          </button>
+        ))}
+        {catalog.definitions.length === 0 && catalog.invalid.length === 0 && (
+          <span style={{ color: "#a6adc8", padding: "5px 2px" }}>
+            No loop definitions found in <code>.workstreams/loops</code>.
+          </span>
+        )}
+      </div>
+
+      {selectedPath ? (
+        <div
+          style={{
+            minHeight: 0,
+            display: "grid",
+            gridTemplateRows: "auto minmax(0, 1fr)",
+          }}
+        >
+          <div
+            data-testid="loop-definition-editor-header"
+            style={{
+              padding: "6px 10px",
+              borderBottom: "1px solid #313244",
+              background: "#181825",
+            }}
+          >
+            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+              <strong>
+                {selectedName}
+                {editorSnapshot?.dirty ? "*" : ""}
+              </strong>
+              {editorSnapshot?.dirty && (
+                <span style={{ color: "#f9e2af" }}>Unsaved</span>
+              )}
+            </div>
+            <div
+              style={{
+                color: "#6c7086",
+                fontFamily: "monospace",
+                overflowWrap: "anywhere",
+              }}
+            >
+              {selectedPath}
+            </div>
+            {selectedInvalid && (
+              <div style={{ color: "#f38ba8", marginTop: 3 }}>
+                {selectedInvalid.error}
+              </div>
+            )}
+          </div>
+          <div style={{ minHeight: 0 }}>
+            <FileEditorView
+              key={`${selectedPath}:${editorRevision}`}
+              path={selectedPath}
+              onBack={() => {}}
+              showHeader={false}
+              onSnapshotChange={onSnapshotChange}
+            />
+          </div>
+        </div>
+      ) : (
+        <div style={{ padding: 12, color: "#6c7086" }}>
+          Create a YAML definition with the <code>create-loop</code> skill,
+          then refresh the catalog.
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -777,7 +940,15 @@ export default function LoopControlTile({
   const backend = useBackend();
   const [snapshot, setSnapshot] = useState<PersistedLoopSnapshot>(EMPTY_SNAPSHOT);
   const [catalog, setCatalog] = useState<LoopDefinitionCatalog>(EMPTY_CATALOG);
+  const catalogRef = useRef<LoopDefinitionCatalog>(EMPTY_CATALOG);
+  const [activeTab, setActiveTab] = useState<"run" | "definitions">("run");
   const [selectedDefinitionId, setSelectedDefinitionId] = useState<string | null>(
+    null,
+  );
+  const [editorPath, setEditorPath] = useState<string | null>(null);
+  const editorPathRef = useRef<string | null>(null);
+  const [editorRevision, setEditorRevision] = useState(0);
+  const [editorSnapshot, setEditorSnapshot] = useState<BufferSnapshot | null>(
     null,
   );
   const [loading, setLoading] = useState(true);
@@ -788,8 +959,23 @@ export default function LoopControlTile({
   const progressVersionRef = useRef("");
 
   const applyCatalog = useCallback((loaded: LoopDefinitionCatalog) => {
+    catalogRef.current = loaded;
     setCatalog(loaded);
+    const paths = [
+      ...loaded.definitions.map((definition) => definition.path),
+      ...loaded.invalid.map((definition) => definition.path),
+    ];
+    const retainedPath =
+      editorPathRef.current && paths.includes(editorPathRef.current)
+        ? editorPathRef.current
+        : paths[0] ?? null;
+    editorPathRef.current = retainedPath;
+    setEditorPath(retainedPath);
     setSelectedDefinitionId((current) => {
+      const selectedByPath = loaded.definitions.find(
+        (definition) => definition.path === retainedPath,
+      );
+      if (selectedByPath) return selectedByPath.id;
       if (current && loaded.definitions.some((definition) => definition.id === current)) {
         return current;
       }
@@ -808,9 +994,30 @@ export default function LoopControlTile({
     }
   }, [backend, workstreamId]);
 
-  const refreshAll = useCallback(async () => {
+  const refreshAll = useCallback(async (saveEditor = false): Promise<boolean> => {
     setRefreshing(true);
     try {
+      if (saveEditor) {
+        const loopPaths = new Set([
+          ...catalogRef.current.definitions.map((definition) => definition.path),
+          ...catalogRef.current.invalid.map((definition) => definition.path),
+        ]);
+        const dirtyDefinitions = fileBufferRegistry
+          .listAll()
+          .filter((buffer) => buffer.dirty && loopPaths.has(buffer.path));
+        for (const buffer of dirtyDefinitions) {
+          let current = fileBufferRegistry.getSnapshot(buffer.path);
+          while (current?.dirty) {
+            if (current.state !== "dirty" && current.state !== "deleted") {
+              throw new Error(
+                current.lastError ?? `Save ${buffer.path} before continuing`,
+              );
+            }
+            await fileBufferRegistry.save(buffer.path);
+            current = fileBufferRegistry.getSnapshot(buffer.path);
+          }
+        }
+      }
       const [loadedSnapshot, loadedCatalog] = await Promise.all([
         backend.getWorkstreamLoopSnapshot(workstreamId),
         backend.listLoopDefinitions(workstreamDir),
@@ -819,8 +1026,10 @@ export default function LoopControlTile({
       applyCatalog(loadedCatalog);
       setNow(Date.now());
       setError(null);
+      return true;
     } catch (cause) {
       setError(message(cause));
+      return false;
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -916,12 +1125,61 @@ export default function LoopControlTile({
     [catalog.definitions, selectedDefinitionId],
   );
 
-  const runSelected = () => {
+  const runSelected = async () => {
     if (!selectedDefinition) return;
+    if (!(await refreshAll(true))) return;
+    const refreshedDefinition = catalogRef.current.definitions.find(
+      (definition) => definition.path === selectedDefinition.path,
+    );
+    if (!refreshedDefinition) {
+      setError("The selected loop definition is no longer valid");
+      return;
+    }
     void perform(async () => {
-      await backend.runLoopDefinitionNow(workstreamId, selectedDefinition.path);
+      await backend.runLoopDefinitionNow(workstreamId, refreshedDefinition.path);
     });
   };
+
+  const selectRunDefinition = (definitionId: string) => {
+    setSelectedDefinitionId(definitionId);
+    const definition = catalog.definitions.find(
+      (candidate) => candidate.id === definitionId,
+    );
+    if (definition) {
+      editorPathRef.current = definition.path;
+      setEditorPath(definition.path);
+    }
+  };
+
+  const selectEditorPath = (path: string) => {
+    editorPathRef.current = path;
+    setEditorPath(path);
+    const definition = catalog.definitions.find(
+      (candidate) => candidate.path === path,
+    );
+    if (definition) setSelectedDefinitionId(definition.id);
+  };
+
+  const refreshCatalogAndEditor = async () => {
+    const refreshed = await refreshAll(true);
+    if (refreshed && activeTab === "definitions") {
+      setEditorRevision((revision) => revision + 1);
+    }
+  };
+
+  const showRunTab = async () => {
+    if (activeTab === "run") return;
+    if (await refreshAll(true)) {
+      setActiveTab("run");
+    }
+  };
+
+  const handleEditorSnapshotChange = useCallback(
+    (snapshot: BufferSnapshot | null) => {
+      setEditorSnapshot(snapshot);
+    },
+    [],
+  );
 
   const control = (action: "pause" | "stop" | "kill") => {
     const currentRun = snapshot.latestRun;
@@ -966,21 +1224,50 @@ export default function LoopControlTile({
         style={{
           display: "flex",
           alignItems: "center",
-          justifyContent: "space-between",
-          padding: "7px 10px",
+          padding: "0 10px",
           borderBottom: "1px solid #313244",
           flexShrink: 0,
         }}
       >
-        <strong>Loop catalog</strong>
+        <strong style={{ marginRight: 10 }}>Goal Loop</strong>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === "run"}
+          data-testid="loop-tab-run"
+          onClick={() => void showRunTab()}
+          style={{
+            ...tabStyle,
+            color: activeTab === "run" ? "#cdd6f4" : "#a6adc8",
+            borderBottomColor: activeTab === "run" ? "#89b4fa" : "transparent",
+          }}
+        >
+          Run
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === "definitions"}
+          data-testid="loop-tab-definitions"
+          onClick={() => setActiveTab("definitions")}
+          style={{
+            ...tabStyle,
+            color: activeTab === "definitions" ? "#cdd6f4" : "#a6adc8",
+            borderBottomColor:
+              activeTab === "definitions" ? "#89b4fa" : "transparent",
+          }}
+        >
+          Definitions
+        </button>
         <button
           type="button"
           aria-label="Refresh"
           data-testid="loop-refresh"
           disabled={busy || refreshing}
-          onClick={() => void refreshAll()}
+          onClick={() => void refreshCatalogAndEditor()}
           style={{
             ...buttonStyle,
+            marginLeft: "auto",
             cursor: busy || refreshing ? "not-allowed" : "pointer",
             opacity: busy || refreshing ? 0.55 : 1,
           }}
@@ -990,7 +1277,13 @@ export default function LoopControlTile({
         </button>
       </header>
 
-      <div style={scrollStyle}>
+      <div
+        style={
+          activeTab === "run"
+            ? scrollStyle
+            : { flex: 1, minHeight: 0, overflow: "hidden" }
+        }
+      >
         {error && (
           <div
             role="alert"
@@ -1010,6 +1303,15 @@ export default function LoopControlTile({
 
         {loading ? (
           <div data-testid="loop-loading">Loading loop catalog...</div>
+        ) : activeTab === "definitions" ? (
+          <DefinitionsEditorPanel
+            catalog={catalog}
+            selectedPath={editorPath}
+            editorSnapshot={editorSnapshot}
+            editorRevision={editorRevision}
+            onSelect={selectEditorPath}
+            onSnapshotChange={handleEditorSnapshotChange}
+          />
         ) : (
           <>
             {snapshot.latestRun && (
@@ -1027,8 +1329,8 @@ export default function LoopControlTile({
               selected={selectedDefinition}
               busy={busy}
               runIsActive={runIsActive}
-              onSelect={setSelectedDefinitionId}
-              onRun={runSelected}
+              onSelect={selectRunDefinition}
+              onRun={() => void runSelected()}
             />
             {statusHint && (
               <div style={{ color: "#6c7086", marginBottom: 8 }}>{statusHint}</div>

@@ -33,6 +33,7 @@ async function seedLoopDefinition(page: Page) {
           definition: Record<string, unknown>,
           spec: Record<string, unknown>,
         ) => void;
+        seedFile: (path: string, content: string) => void;
       };
     }).__WS_BACKEND__;
     if (!backend) throw new Error("Memory backend is unavailable");
@@ -41,6 +42,17 @@ async function seedLoopDefinition(page: Page) {
     );
     if (!workstream) throw new Error("Goal Loop Demo workstream was not created");
     const path = `${workstream.directory}/.workstreams/loops/frontend.loop.yaml`;
+    backend.seedFile(
+      path,
+      `apiVersion: workstreams.dev/v1alpha1
+kind: Loop
+metadata:
+  id: frontend-loop
+  name: Frontend verification loop
+spec:
+  objective: Deliver a verified frontend change
+`,
+    );
     backend.seedLoopDefinition(
       {
         id: "frontend-loop",
@@ -65,12 +77,37 @@ async function seedLoopDefinition(page: Page) {
         maxTaskIterations: 2,
       },
     );
+    const handlers = (window as unknown as {
+      __WS_INVOKE_HANDLERS__?: Record<string, (args?: any) => unknown>;
+    }).__WS_INVOKE_HANDLERS__;
+    if (!handlers) throw new Error("Invoke handlers are unavailable");
+    handlers.canonicalize_path = ({ path: requestedPath }) => requestedPath;
+    handlers.read_text_file = async ({ path: requestedPath }) => {
+      const content = await (backend as any).readFile(requestedPath);
+      return {
+        content,
+        mtime_unix_ms: 1,
+        hash_hex: `hash-${content.length}`,
+        line_ending: "lf",
+        has_trailing_newline: content.endsWith("\n"),
+        sniffed_binary: false,
+        size_bytes: content.length,
+      };
+    };
+    handlers.write_text_file = ({ args }) => {
+      backend.seedFile(args.path, args.content);
+      return {
+        mtime_unix_ms: 2,
+        hash_hex: `hash-${args.content.length}`,
+      };
+    };
+    handlers.watch_file_changes = () => null;
+    handlers.unwatch_file_changes = () => null;
   });
 }
 
 async function addLoopTile(page: Page) {
-  await page.locator('[data-testid="add-tile-button"]').click();
-  await page.locator('[data-testid="add-tile-item-loop"]').click();
+  await page.keyboard.press("Alt+l");
   await expect(page.locator('[data-testid="loop-control-tile"]')).toBeVisible();
 }
 
@@ -86,6 +123,63 @@ test.beforeEach(async ({ page }) => {
 test("selects, pauses, resumes, verifies, and evaluates a YAML loop", async ({
   page,
 }) => {
+  await page.locator('[data-testid="loop-tab-definitions"]').click();
+  await expect(page.locator('[data-testid="loop-definitions-tab"]')).toBeVisible();
+  await expect(page.locator('[data-testid="loop-definition-editor-header"]')).toContainText(
+    "frontend.loop.yaml",
+  );
+  await page.waitForFunction(
+    () => {
+      const registry = (window as unknown as {
+        __wsFileBufferRegistry?: {
+          listAll: () => Array<{ path: string }>;
+          getModel: (path: string) => unknown;
+        };
+      }).__wsFileBufferRegistry;
+      const target = registry
+        ?.listAll()
+        .find((snapshot) => snapshot.path.endsWith("frontend.loop.yaml"));
+      return target ? registry?.getModel(target.path) !== null : false;
+    },
+    null,
+    { timeout: 30_000 },
+  );
+  await page.evaluate(async () => {
+    const registry = (window as unknown as {
+      __wsFileBufferRegistry?: {
+        listAll: () => Array<{ path: string }>;
+        getModel: (path: string) => { getValue: () => string; setValue: (value: string) => void };
+        save: (path: string) => Promise<void>;
+      };
+    }).__wsFileBufferRegistry;
+    if (!registry) throw new Error("File buffer registry is unavailable");
+    const target = registry
+      .listAll()
+      .find((snapshot) => snapshot.path.endsWith("frontend.loop.yaml"));
+    if (!target) throw new Error("Loop YAML buffer is unavailable");
+    const model = registry.getModel(target.path);
+    model.setValue(`${model.getValue()}\n# edited from Goal Loop\n`);
+    await registry.save(target.path);
+  });
+  const edited = await page.evaluate(async () => {
+    const backend = (window as unknown as {
+      __WS_BACKEND__?: {
+        listWorkstreams: () => Promise<Array<{ name: string; directory: string }>>;
+        readFile: (path: string) => Promise<string>;
+      };
+    }).__WS_BACKEND__;
+    if (!backend) throw new Error("Memory backend is unavailable");
+    const workstream = (await backend.listWorkstreams()).find(
+      (candidate) => candidate.name === "Goal Loop Demo",
+    );
+    if (!workstream) throw new Error("Goal Loop Demo workstream is unavailable");
+    return backend.readFile(
+      `${workstream.directory}/.workstreams/loops/frontend.loop.yaml`,
+    );
+  });
+  expect(edited).toContain("# edited from Goal Loop");
+  await page.locator('[data-testid="loop-tab-run"]').click();
+
   await expect(page.locator('[data-testid="loop-definition-frontend-loop"]')).toContainText(
     "Verification + Evaluator + Human approval",
   );
