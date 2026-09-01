@@ -3,7 +3,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { BackendProvider } from "../../backend/context";
 import { MemoryBackend } from "../../backend/memory-backend";
-import { fileBufferRegistry } from "../../files/FileBufferRegistry";
+import {
+  fileBufferRegistry,
+  type BufferSnapshot,
+} from "../../files/FileBufferRegistry";
 import type {
   LoopDefinition,
   LoopDefinitionCatalog,
@@ -26,7 +29,7 @@ vi.mock("../../files/FileEditorView", () => ({
     onSnapshotChange,
   }: {
     path: string;
-    onSnapshotChange?: (snapshot: any) => void;
+    onSnapshotChange?: (snapshot: BufferSnapshot | null) => void;
   }) => (
     <>
       <div data-testid="loop-definition-editor-path">{path}</div>
