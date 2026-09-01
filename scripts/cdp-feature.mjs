@@ -25,12 +25,12 @@ import {
   makeApi,
   CDP_PORT,
 } from "./cdp-utils.mjs";
-import { ensureShowcaseFiles, seedDb } from "./dev-seed.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "..");
 const DEV_DIR = path.join(REPO_ROOT, ".dev");
 const DEV_DB = path.join(DEV_DIR, "workstreams-dev.db");
+const DEV_SESSION_STATE = path.join(DEV_DIR, "session-state");
 const SCREENSHOTS_DIR = path.join(REPO_ROOT, "screenshots");
 
 function parseArgs(argv) {
@@ -66,9 +66,11 @@ async function ensureDevTauri({ cold }) {
   // a browser process.
   const wv2DataDir = path.join(DEV_DIR, "webview2-userdata");
   fs.mkdirSync(wv2DataDir, { recursive: true });
+  fs.mkdirSync(DEV_SESSION_STATE, { recursive: true });
   const env = {
     ...process.env,
     WORKSTREAMS_DB_PATH: DEV_DB,
+    WORKSTREAMS_SESSION_STATE_ROOT: DEV_SESSION_STATE,
     WEBVIEW2_USER_DATA_FOLDER: wv2DataDir,
   };
   // Pass the dev overlay so additionalBrowserArgs points at the dev port.
@@ -99,6 +101,8 @@ async function ensureDevTauri({ cold }) {
 async function runSeeder() {
   console.log("[cdp] seeding dev DB + showcase folder...");
   try {
+    process.env.WORKSTREAMS_SESSION_STATE_ROOT = DEV_SESSION_STATE;
+    const { ensureShowcaseFiles, seedDb } = await import("./dev-seed.mjs");
     ensureShowcaseFiles();
     await seedDb();
   } catch (err) {

@@ -12,6 +12,11 @@ import {
 import Database from "better-sqlite3";
 
 const DB_PATH = process.env.WORKSTREAMS_DB_PATH || path.join(DEV_DIR, "workstreams-dev.db");
+const SHOWCASE_SESSION_ID = "workstreams-showcase-loop";
+const SESSION_STATE_ROOT =
+  process.env.WORKSTREAMS_SESSION_STATE_ROOT ||
+  path.join(DEV_DIR, "session-state");
+const SHOWCASE_SESSION_DIR = path.join(SESSION_STATE_ROOT, SHOWCASE_SESSION_ID);
 
 
 
@@ -44,7 +49,8 @@ function seedDb() {
   }
   const db = new Database(DB_PATH);
   try {
-    ensureWorkstream(db, "Showcase", SHOWCASE_DIR, "Markdown + mermaid fixture for CDP validation");
+    const showcaseId = ensureWorkstream(db, "Showcase", SHOWCASE_DIR, "Markdown + mermaid fixture for CDP validation");
+    ensureLoopSession(db, showcaseId);
     ensureWorkstream(db, "Sandbox", DEV_DIR, "Second workstream for focus/scroll repro");
   } finally {
     db.close();
@@ -81,6 +87,33 @@ function ensureLayout(db, workstreamId) {
     `INSERT OR IGNORE INTO workstream_layouts (workstream_id, layout_mode, tile_order_json, updated_at)
      VALUES (?, 'adaptive', '[]', ?)`,
   ).run(workstreamId, now);
+}
+
+function ensureLoopSession(db, workstreamId) {
+  fs.mkdirSync(path.join(SHOWCASE_SESSION_DIR, "files", "loops"), {
+    recursive: true,
+  });
+  const workspace = path.join(SHOWCASE_SESSION_DIR, "workspace.yaml");
+  if (!fs.existsSync(workspace)) {
+    fs.writeFileSync(workspace, `id: ${SHOWCASE_SESSION_ID}\n`, "utf8");
+  }
+  ensureShowcaseFiles(
+    SHOWCASE_DIR,
+    path.join(SHOWCASE_SESSION_DIR, "files", "loops"),
+  );
+  const tileId = `showcase-loop-session-${workstreamId}`;
+  const now = new Date().toISOString();
+  db.prepare(
+    `INSERT OR REPLACE INTO tiles
+       (id, workstream_id, tile_type, title, config_json, created_at, updated_at)
+     VALUES (?, ?, 'copilot_session', 'Showcase loop session', ?, ?, ?)`,
+  ).run(
+    tileId,
+    workstreamId,
+    JSON.stringify({ copilot_session_id: SHOWCASE_SESSION_ID, pinned: true }),
+    now,
+    now,
+  );
 }
 
 function main() {

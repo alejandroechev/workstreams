@@ -32,6 +32,7 @@ async function seedLoopDefinition(page: Page) {
         seedLoopDefinition: (
           definition: Record<string, unknown>,
           spec: Record<string, unknown>,
+          workstreamId?: string,
         ) => void;
         seedFile: (path: string, content: string) => void;
       };
@@ -41,7 +42,7 @@ async function seedLoopDefinition(page: Page) {
       (candidate) => candidate.id,
     );
     if (!workstream) throw new Error("Goal Loop Demo workstream was not created");
-    const path = `${workstream.directory}/.workstreams/loops/frontend.loop.yaml`;
+    const path = `/sessions/e2e-loop-session/files/loops/frontend.loop.yaml`;
     backend.seedFile(
       path,
       `apiVersion: workstreams.dev/v1alpha1
@@ -76,6 +77,7 @@ spec:
         runTimeoutMs: 5 * 60_000,
         maxTaskIterations: 2,
       },
+      workstream.id,
     );
     const handlers = (window as unknown as {
       __WS_INVOKE_HANDLERS__?: Record<string, (args?: any) => unknown>;
@@ -174,7 +176,7 @@ test("selects, pauses, resumes, verifies, and evaluates a YAML loop", async ({
     );
     if (!workstream) throw new Error("Goal Loop Demo workstream is unavailable");
     return backend.readFile(
-      `${workstream.directory}/.workstreams/loops/frontend.loop.yaml`,
+      "/sessions/e2e-loop-session/files/loops/frontend.loop.yaml",
     );
   });
   expect(edited).toContain("# edited from Goal Loop");

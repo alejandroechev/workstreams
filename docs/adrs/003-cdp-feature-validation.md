@@ -23,6 +23,11 @@ required the user to close their working session.
    - Otherwise, in debug builds → `./.dev/workstreams-dev.db` (gitignored).
    - Otherwise, release builds → `<data_local_dir>/workstreams/workstreams.db`.
 
+   Session-owned fixtures use the same pattern:
+   `WORKSTREAMS_SESSION_STATE_ROOT` overrides `~/.copilot/session-state`.
+   The CDP runner points it at `.dev/session-state`, so loop definitions and
+   fake bound-session metadata never touch the user's real Copilot sessions.
+
 2. **CDP is dev-only.** `src-tauri/tauri.conf.json` does **not** include
    `additionalBrowserArgs`, so the production-shipped binary has no remote
    debugging port. CDP gets enabled by passing

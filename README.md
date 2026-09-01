@@ -32,8 +32,9 @@ project-aware workspace:
   workstream, with live activity indicator + bell on idle. Configurable CLI
   command (default `agency copilot --yolo`; switch to `copilot --yolo` for
   the public CLI).
-- 🔁 **Versioned coding loops** — author reusable definitions as strict
-  `.workstreams/loops/*.loop.yaml` files (or ask the `create-loop` skill to
+- 🔁 **Session coding loops** — author reusable definitions as strict
+  `files/loops/*.loop.yaml` files in the workstream's bound Copilot session
+  (or ask the `create-loop` skill to
   generate one), then read/edit them in the Goal Loop **Definitions** tab and
   execute them from **Run**. Open the tile with `Alt+L` (`Option+L` on macOS).
   Every loop uses a bounded orchestrator → worker pipeline and must include

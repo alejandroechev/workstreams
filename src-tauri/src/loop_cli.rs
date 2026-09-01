@@ -4,9 +4,9 @@ use crate::loop_agent::{
 use crate::loops::{
     apply_control_request, create_loop_run, decide_human_approval, definition_to_materialized,
     execute_human_revision, execute_manual_loop, get_loop_run, get_loop_spec, loop_snapshot,
-    materialize_loop_definition, save_loop_spec, set_loop_enabled, set_run_state,
-    transition_unfinished_tasks, HumanApprovalDecision, LoopRunState, LoopSnapshot, LoopSpecInput,
-    LoopTaskState,
+    materialize_loop_definition, save_loop_spec, session_loop_directory, set_loop_enabled,
+    set_run_state, transition_unfinished_tasks, HumanApprovalDecision, LoopRunState, LoopSnapshot,
+    LoopSpecInput, LoopTaskState,
 };
 use rusqlite::{params, Connection};
 use serde::Serialize;
@@ -20,8 +20,8 @@ const USAGE: &str = "Usage:
   workstreams loop status <db-path> <workstream-id>
   workstreams loop control <db-path> <run-id> <pause|stop|kill>
   workstreams loop validate <workspace> <definition-file>
-  workstreams loop list <workspace>
-  workstreams loop run-file <db-path> <workspace> <definition-file>
+  workstreams loop list <workspace> <session-state-dir>
+  workstreams loop run-file <db-path> <workspace> <session-state-dir> <definition-file>
   workstreams loop approval <db-path> <run-id> <approve|revise|reject> [feedback]
   workstreams loop scenario <db-path> <workspace>
   workstreams loop approval-scenario <db-path> <workspace>";
@@ -84,10 +84,11 @@ fn run_real_loop(db_path: &Path, workstream_id: &str) -> Result<LoopSnapshot, St
 fn run_definition_file(
     db_path: &Path,
     workspace: &Path,
+    session_state_dir: &Path,
     definition_path: &Path,
 ) -> Result<LoopSnapshot, String> {
     let workspace = canonical_loop_workspace(workspace)?;
-    let definition_path = canonical_loop_definition_path(definition_path)?;
+    let loops_dir = session_loop_directory(session_state_dir)?;
     let conn = open(db_path)?;
     conn.execute(
         "INSERT INTO workstreams (
@@ -98,7 +99,7 @@ fn run_definition_file(
     )
     .map_err(|error| format!("Failed to bind CLI loop workspace: {error}"))?;
     let (definition, yaml) =
-        crate::loop_definition::load_validated_definition(&workspace, &definition_path)?;
+        crate::loop_definition::load_validated_definition(&workspace, &loops_dir, definition_path)?;
     let spec = materialize_loop_definition(
         &conn,
         "cli-loop-file",
@@ -128,12 +129,6 @@ fn canonical_loop_workspace(workspace: &Path) -> Result<PathBuf, String> {
     workspace
         .canonicalize()
         .map_err(|error| format!("Failed to resolve loop workspace: {error}"))
-}
-
-fn canonical_loop_definition_path(definition_path: &Path) -> Result<PathBuf, String> {
-    definition_path
-        .canonicalize()
-        .map_err(|error| format!("Failed to resolve loop definition: {error}"))
 }
 
 fn configure(args: &[String]) -> Result<(), String> {
@@ -287,20 +282,22 @@ pub fn run(args: Vec<String>) -> Result<(), String> {
             }
         }
         "list" => {
-            let [workspace] = rest else {
+            let [workspace, session_state_dir] = rest else {
                 return Err(USAGE.to_string());
             };
-            print_json(&crate::loop_definition::catalog_for_root(Path::new(
-                workspace,
-            ))?)
+            print_json(&crate::loop_definition::catalog_for_directory(
+                Path::new(workspace),
+                &session_loop_directory(Path::new(session_state_dir))?,
+            )?)
         }
         "run-file" => {
-            let [db_path, workspace, definition_path] = rest else {
+            let [db_path, workspace, session_state_dir, definition_path] = rest else {
                 return Err(USAGE.to_string());
             };
             print_json(&run_definition_file(
                 Path::new(db_path),
                 Path::new(workspace),
+                Path::new(session_state_dir),
                 Path::new(definition_path),
             )?)
         }
@@ -657,9 +654,12 @@ mod tests {
             "workstreams-loop-yaml-cli-{}",
             uuid::Uuid::new_v4()
         ));
-        let loops = root.join(".workstreams").join("loops");
+        let session_state = root.join("session-state");
+        let loops = session_state.join("files").join("loops");
         let scripts = root.join("scripts");
         std::fs::create_dir_all(&loops).expect("create loop directory");
+        std::fs::write(session_state.join("workspace.yaml"), "id: test-session\n")
+            .expect("write session metadata");
         std::fs::create_dir_all(&scripts).expect("create scripts directory");
         std::fs::write(scripts.join("verify.sh"), "#!/bin/sh\nexit 0\n").expect("write verifier");
         let definition = loops.join("simple.loop.yaml");
@@ -708,6 +708,7 @@ spec:
         run(vec![
             "list".to_string(),
             root.to_string_lossy().into_owned(),
+            session_state.to_string_lossy().into_owned(),
         ])
         .expect("list definitions");
 
@@ -724,24 +725,6 @@ spec:
                 .expect("current directory")
                 .canonicalize()
                 .expect("canonical current directory")
-        );
-    }
-
-    #[test]
-    fn canonicalizes_definition_paths_independently_from_the_workspace() {
-        let absolute = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("src")
-            .join("loop_cli.rs");
-        let current = std::env::current_dir().expect("current directory");
-        let definition = absolute
-            .strip_prefix(&current)
-            .expect("definition is below the test working directory");
-        let resolved = canonical_loop_definition_path(definition).expect("canonicalize definition");
-
-        assert!(resolved.is_absolute());
-        assert_eq!(
-            resolved,
-            absolute.canonicalize().expect("canonical definition")
         );
     }
 }

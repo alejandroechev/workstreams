@@ -101,7 +101,7 @@ export class MemoryBackend implements Backend {
   private loopApprovalDecisions = new Set<string>();
   private loopDefinitions = new Map<
     string,
-    { definition: LoopDefinition; spec: LoopSpecDraft }
+    { definition: LoopDefinition; spec: LoopSpecDraft; workstreamId?: string }
   >();
 
   seedFile(path: string, content: string): void {
@@ -123,8 +123,9 @@ export class MemoryBackend implements Backend {
   seedLoopDefinition(
     definition: LoopDefinition,
     spec: LoopSpecDraft,
+    workstreamId?: string,
   ): void {
-    this.loopDefinitions.set(definition.path, { definition, spec });
+    this.loopDefinitions.set(definition.path, { definition, spec, workstreamId });
   }
 
   async listProjects(): Promise<Project[]> {
@@ -434,15 +435,11 @@ export class MemoryBackend implements Backend {
     });
   }
 
-  async listLoopDefinitions(rootDir: string): Promise<LoopDefinitionCatalog> {
-    const prefix = `${rootDir.replace(/[\\/]$/, "")}/.workstreams/loops/`
-      .replace(/\\/g, "/");
+  async listLoopDefinitions(workstreamId: string): Promise<LoopDefinitionCatalog> {
     return {
       definitions: [...this.loopDefinitions.values()]
+        .filter((entry) => !entry.workstreamId || entry.workstreamId === workstreamId)
         .map(({ definition }) => definition)
-        .filter((definition) =>
-          definition.path.replace(/\\/g, "/").startsWith(prefix),
-        )
         .sort((left, right) => left.path.localeCompare(right.path)),
       invalid: [],
     };

@@ -118,7 +118,7 @@ describe("TauriBackend", () => {
           name: "Simple loop",
           description: null,
           tags: ["demo"],
-          path: "/repo/.workstreams/loops/simple.loop.yaml",
+          path: "/sessions/session-1/files/loops/simple.loop.yaml",
           hash: "abc",
           portable: true,
           objective: "Create a file",
@@ -140,7 +140,7 @@ describe("TauriBackend", () => {
         deadline_at: "deadline",
       });
 
-    await expect(backend.listLoopDefinitions("/repo")).resolves.toMatchObject({
+    await expect(backend.listLoopDefinitions("ws-1")).resolves.toMatchObject({
       definitions: [{
         id: "simple-loop",
         hasVerification: true,
@@ -150,15 +150,15 @@ describe("TauriBackend", () => {
     });
     await backend.runLoopDefinitionNow(
       "ws-1",
-      "/repo/.workstreams/loops/simple.loop.yaml",
+      "/sessions/session-1/files/loops/simple.loop.yaml",
     );
 
     expect(invoke).toHaveBeenNthCalledWith(1, "list_loop_definitions", {
-      rootDir: "/repo",
+      workstreamId: "ws-1",
     });
     expect(invoke).toHaveBeenNthCalledWith(2, "run_loop_definition_now", {
       workstreamId: "ws-1",
-      definitionPath: "/repo/.workstreams/loops/simple.loop.yaml",
+      definitionPath: "/sessions/session-1/files/loops/simple.loop.yaml",
     });
   });
 

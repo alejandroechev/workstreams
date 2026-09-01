@@ -205,7 +205,7 @@ export class TauriBackend implements Backend {
     });
   }
 
-  async listLoopDefinitions(rootDir: string): Promise<LoopDefinitionCatalog> {
+  async listLoopDefinitions(workstreamId: string): Promise<LoopDefinitionCatalog> {
     const catalog = await invoke<{
       definitions: Array<{
         id: string;
@@ -221,7 +221,7 @@ export class TauriBackend implements Backend {
         hasHumanApproval: boolean;
       }>;
       invalid: Array<{ path: string; error: string }>;
-    }>("list_loop_definitions", { rootDir });
+    }>("list_loop_definitions", { workstreamId });
     return {
       definitions: catalog.definitions.map((definition) => ({
         id: definition.id,

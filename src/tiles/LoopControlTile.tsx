@@ -314,9 +314,10 @@ function CatalogPanel({
             data-testid="loop-definition-empty"
             style={{ color: "#a6adc8", lineHeight: 1.5 }}
           >
-            Create <code>.workstreams/loops/&lt;id&gt;.loop.yaml</code> in this
-            workstream, or use the <code>create-loop</code> skill to author one.
-            YAML files are the only loop authoring surface.
+            Create <code>files/loops/&lt;id&gt;.loop.yaml</code> in this
+            workstream&apos;s bound Copilot session, or use the{" "}
+            <code>create-loop</code> skill to author one. Session files are the
+            only loop authoring surface.
           </div>
         ) : (
           catalog.definitions.map((definition) => (
@@ -476,7 +477,8 @@ function DefinitionsEditorPanel({
         ))}
         {catalog.definitions.length === 0 && catalog.invalid.length === 0 && (
           <span style={{ color: "#a6adc8", padding: "5px 2px" }}>
-            No loop definitions found in <code>.workstreams/loops</code>.
+            No loop definitions found in this session&apos;s{" "}
+            <code>files/loops</code> folder.
           </span>
         )}
       </div>
@@ -934,7 +936,7 @@ function RunPanel({
 export default function LoopControlTile({
   tileId,
   workstreamId,
-  workstreamDir,
+  workstreamDir: _workstreamDir,
   isFocused = false,
 }: LoopControlTileProps) {
   const backend = useBackend();
@@ -1020,7 +1022,7 @@ export default function LoopControlTile({
       }
       const [loadedSnapshot, loadedCatalog] = await Promise.all([
         backend.getWorkstreamLoopSnapshot(workstreamId),
-        backend.listLoopDefinitions(workstreamDir),
+        backend.listLoopDefinitions(workstreamId),
       ]);
       setSnapshot(loadedSnapshot);
       applyCatalog(loadedCatalog);
@@ -1034,7 +1036,7 @@ export default function LoopControlTile({
       setLoading(false);
       setRefreshing(false);
     }
-  }, [applyCatalog, backend, workstreamDir, workstreamId]);
+  }, [applyCatalog, backend, workstreamId]);
 
   useEffect(() => {
     const initialLoad = window.setTimeout(() => void refreshAll(), 0);

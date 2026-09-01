@@ -96,7 +96,7 @@ export interface Backend {
   // Manual coding goal loop
   getWorkstreamLoopSnapshot(workstreamId: string): Promise<PersistedLoopSnapshot>;
   getWorkstreamLoopProgressVersion(workstreamId: string): Promise<string>;
-  listLoopDefinitions(rootDir: string): Promise<LoopDefinitionCatalog>;
+  listLoopDefinitions(workstreamId: string): Promise<LoopDefinitionCatalog>;
   saveWorkstreamLoop(workstreamId: string, input: LoopSpecDraft): Promise<LoopSpec>;
   setWorkstreamLoopEnabled(loopSpecId: string, enabled: boolean): Promise<void>;
   listWorkstreamLoopSummaries(): Promise<LoopSummary[]>;

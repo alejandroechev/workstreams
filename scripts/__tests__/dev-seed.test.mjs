@@ -14,7 +14,8 @@ const TEST_DIR = path.join(os.tmpdir(), `ws-seed-test-${process.pid}`);
 const README = path.join(TEST_DIR, "README.md");
 const LOOP_DEFINITION = path.join(
   TEST_DIR,
-  ".workstreams",
+  "session-state",
+  "files",
   "loops",
   "showcase.loop.yaml",
 );
@@ -29,7 +30,7 @@ describe("dev-seed", () => {
   });
 
   it("creates the showcase files when missing", () => {
-    ensureShowcaseFiles(TEST_DIR);
+    ensureShowcaseFiles(TEST_DIR, path.dirname(LOOP_DEFINITION));
     expect(fs.existsSync(README)).toBe(true);
     expect(fs.readFileSync(README, "utf8")).toContain("Mermaid diagram");
     expect(fs.readFileSync(LOOP_DEFINITION, "utf8")).toBe(SAMPLE_LOOP_YAML);
@@ -40,7 +41,7 @@ describe("dev-seed", () => {
     fs.writeFileSync(README, "user content");
     fs.mkdirSync(path.dirname(LOOP_DEFINITION), { recursive: true });
     fs.writeFileSync(LOOP_DEFINITION, "user loop");
-    ensureShowcaseFiles(TEST_DIR);
+    ensureShowcaseFiles(TEST_DIR, path.dirname(LOOP_DEFINITION));
     expect(fs.readFileSync(README, "utf8")).toBe("user content");
     expect(fs.readFileSync(LOOP_DEFINITION, "utf8")).toBe("user loop");
   });

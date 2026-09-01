@@ -1,4 +1,4 @@
-# ADR 022: Versioned YAML loop definitions
+# ADR 022: Session-stored YAML loop definitions
 
 ## Status
 
@@ -20,10 +20,10 @@ in a repository script rather than beside the definition.
 
 ### YAML is the authoring authority
 
-Repository-owned loop definitions live at:
+Loop definitions live in the bound Copilot session:
 
 ```text
-.workstreams/loops/*.loop.yaml
+~/.copilot/session-state/<session-id>/files/loops/*.loop.yaml
 ```
 
 They use `apiVersion: workstreams.dev/v1alpha1` and `kind: Loop`. The parser
@@ -31,6 +31,18 @@ rejects duplicate keys, unknown fields, invalid identifiers, unsupported
 limits, and paths that escape the workstream. The JSON Schema at
 `schemas/loop-definition-v1alpha1.schema.json` documents the same contract for
 editors and tooling.
+
+This avoids adding personal automation definitions to the repository while
+keeping them durable with the session that owns the workstream workflow. A
+linked Copilot session is therefore a prerequisite for listing or running
+loops.
+
+The session directory is resolved beneath the canonical session-state root and
+must contain normal Copilot session metadata (`workspace.yaml` or
+`session.db`). Session IDs must be one path component, the derived
+`files/loops` directory may not escape through symlinks, and definition files
+themselves may not be symlinks. Development/CDP uses
+`WORKSTREAMS_SESSION_STATE_ROOT=.dev/session-state` for isolation.
 
 The `create-loop` skill is the primary natural-language authoring workflow. It
 may create and validate a definition, but it never runs or enables one
@@ -86,8 +98,8 @@ The CLI uses the same parser and runtime:
 
 ```text
 workstreams loop validate <workspace> <definition-file>
-workstreams loop list <workspace>
-workstreams loop run-file <db-path> <workspace> <definition-file>
+workstreams loop list <workspace> <session-state-dir>
+workstreams loop run-file <db-path> <workspace> <session-state-dir> <definition-file>
 ```
 
 CLI workspaces are canonicalized before SDK sessions start so relative paths
@@ -95,10 +107,11 @@ cannot make an agent operate in the Workstreams application's own directory.
 
 ## Consequences
 
-Definitions are reviewable, reusable, versioned with their repository, and
-straightforward for agents to generate. Runtime history remains queryable in
-SQLite while retaining immutable source provenance. External scripts can
-provide precise sensors without requiring integration-specific scaffolding.
+Definitions are durable, reusable within the owning session, and
+straightforward for agents to generate without polluting the repository.
+Runtime history remains queryable in SQLite while retaining immutable source
+provenance. External scripts can provide precise sensors without requiring
+integration-specific scaffolding.
 
 The v1 contract is intentionally narrow. Scheduling, cloud execution, arbitrary
 graphs, multiple tasks per orchestration, and automatic public effects remain

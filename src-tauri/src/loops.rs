@@ -1322,38 +1322,56 @@ fn parse_structured_agent_json<T: DeserializeOwned>(
     match serde_json::from_str(trimmed) {
         Ok(output) => Ok(output),
         Err(raw_error) => {
-            let mut blocks = Vec::new();
-            let mut current: Option<String> = None;
-            for line in trimmed.lines() {
-                let marker = line.trim();
-                if current.is_none() {
-                    if let Some(language) = marker.strip_prefix("```") {
-                        let language = language.trim();
-                        if language.is_empty() || language.eq_ignore_ascii_case("json") {
-                            current = Some(String::new());
-                        }
+            let mut spans = Vec::new();
+            let mut start = None;
+            let mut depth = 0_u32;
+            let mut in_string = false;
+            let mut escaped = false;
+            for (index, character) in trimmed.char_indices() {
+                if in_string {
+                    if escaped {
+                        escaped = false;
+                    } else if character == '\\' {
+                        escaped = true;
+                    } else if character == '"' {
+                        in_string = false;
                     }
                     continue;
                 }
-                if marker == "```" {
-                    blocks.push(current.take().unwrap_or_default());
-                } else if let Some(block) = current.as_mut() {
-                    if !block.is_empty() {
-                        block.push('\n');
+                match character {
+                    '"' if depth > 0 => in_string = true,
+                    '{' => {
+                        if depth == 0 {
+                            start = Some(index);
+                        }
+                        depth += 1;
                     }
-                    block.push_str(line);
+                    '}' if depth > 0 => {
+                        depth -= 1;
+                        if depth == 0 {
+                            spans.push((start.take().expect("object start"), index + 1));
+                        }
+                    }
+                    _ => {}
                 }
             }
-            if current.is_some() {
-                return Err(format!("{role} returned an unterminated JSON code block"));
-            }
-            if blocks.len() != 1 {
+            if depth != 0 || in_string {
                 return Err(format!(
-                    "{role} returned invalid JSON ({raw_error}); expected raw JSON or exactly one JSON code block"
+                    "{role} returned malformed embedded JSON ({raw_error})"
                 ));
             }
-            serde_json::from_str(blocks[0].trim())
-                .map_err(|error| format!("{role} returned invalid JSON code block: {error}"))
+            let mut candidates = Vec::new();
+            for (start, end) in spans {
+                if let Ok(value) = serde_json::from_str::<T>(&trimmed[start..end]) {
+                    candidates.push(value);
+                }
+            }
+            if candidates.len() != 1 {
+                return Err(format!(
+                    "{role} returned invalid JSON ({raw_error}); expected raw JSON or exactly one matching JSON object"
+                ));
+            }
+            Ok(candidates.remove(0))
         }
     }
 }
@@ -2964,11 +2982,63 @@ pub fn get_workstream_loop_snapshot(
     loop_snapshot(&state.db.lock().unwrap(), &workstream_id)
 }
 
+fn workstream_loop_paths(
+    conn: &Connection,
+    workstream_id: &str,
+) -> Result<(PathBuf, PathBuf), String> {
+    let workstream_root = workstream_directory(conn, workstream_id)?;
+    let session_id = crate::code_review::resolve_bound_session(conn, workstream_id)
+        .map_err(|error| format!("Failed to resolve loop session: {error}"))?
+        .ok_or_else(|| {
+            "Open or link a Copilot session in this workstream before using loops".to_string()
+        })?;
+    let session_dir = crate::code_review::session_state_dir_path(&session_id)
+        .map_err(|error| format!("Failed to resolve loop session directory: {error}"))?;
+    let loops_dir = session_loop_directory(&session_dir)?;
+    Ok((workstream_root, loops_dir))
+}
+
+pub(crate) fn session_loop_directory(session_dir: &Path) -> Result<PathBuf, String> {
+    let session_dir = session_dir
+        .canonicalize()
+        .map_err(|error| format!("Failed to resolve session-state directory: {error}"))?;
+    if !session_dir.join("workspace.yaml").is_file() && !session_dir.join("session.db").is_file() {
+        return Err("Session-state directory has no session metadata".to_string());
+    }
+    let configured_loops_dir = session_dir.join("files").join("loops");
+    let loops_dir = if configured_loops_dir.exists() {
+        let canonical = configured_loops_dir
+            .canonicalize()
+            .map_err(|error| format!("Failed to resolve loop definitions directory: {error}"))?;
+        if !canonical.starts_with(&session_dir) {
+            return Err("Loop definitions directory escapes the bound session".to_string());
+        }
+        canonical
+    } else {
+        configured_loops_dir
+    };
+    Ok(loops_dir)
+}
+
 #[tauri::command]
 pub fn list_loop_definitions(
-    root_dir: String,
+    state: tauri::State<'_, crate::AppState>,
+    workstream_id: String,
 ) -> Result<crate::loop_definition::LoopCatalog, String> {
-    crate::loop_definition::catalog_for_root(Path::new(&root_dir))
+    let (workstream_root, loops_dir) =
+        match workstream_loop_paths(&state.db.lock().unwrap(), &workstream_id) {
+            Ok(paths) => paths,
+            Err(error) => {
+                return Ok(crate::loop_definition::LoopCatalog {
+                    definitions: Vec::new(),
+                    invalid: vec![crate::loop_definition::InvalidLoopCatalogDefinition {
+                        path: "files/loops".to_string(),
+                        error,
+                    }],
+                });
+            }
+        };
+    crate::loop_definition::catalog_for_directory(&workstream_root, &loops_dir)
 }
 
 #[tauri::command]
@@ -3341,9 +3411,10 @@ pub fn run_loop_definition_now(
 ) -> Result<LoopRun, String> {
     let (run, directory) = {
         let conn = state.db.lock().unwrap();
-        let directory = workstream_directory(&conn, &workstream_id)?;
+        let (directory, loops_dir) = workstream_loop_paths(&conn, &workstream_id)?;
         let (definition, yaml) = crate::loop_definition::load_validated_definition(
             &directory,
+            &loops_dir,
             Path::new(&definition_path),
         )?;
         let materialized = materialize_loop_definition(
@@ -3649,6 +3720,37 @@ mod tests {
     }
 
     #[test]
+    fn loop_catalog_requires_a_bound_copilot_session() {
+        let conn = test_db();
+
+        let error = workstream_loop_paths(&conn, "ws-1").expect_err("unbound workstream must fail");
+
+        assert!(error.contains("Open or link a Copilot session"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn session_loop_directory_rejects_an_escaping_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let root =
+            std::env::temp_dir().join(format!("workstreams-loop-session-{}", Uuid::new_v4()));
+        let session = root.join("session");
+        let outside = root.join("outside");
+        std::fs::create_dir_all(&session).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(session.join("workspace.yaml"), "id: session\n").unwrap();
+        std::fs::create_dir_all(session.join("files")).unwrap();
+        symlink(&outside, session.join("files/loops")).unwrap();
+
+        let error =
+            session_loop_directory(&session).expect_err("escaping loop directory must fail");
+
+        assert!(error.contains("escapes the bound session"));
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
     fn enabled_loop_configuration_is_frozen_until_disabled() {
         let conn = test_db();
         let created = save_loop_spec(&conn, "ws-1", spec_input()).expect("save loop spec");
@@ -3751,7 +3853,7 @@ mod tests {
             "ws-1",
             MaterializedLoopDefinition {
                 definition_id: "first-loop".to_string(),
-                definition_path: "/repo/.workstreams/loops/first.loop.yaml".to_string(),
+                definition_path: "/session/files/loops/first.loop.yaml".to_string(),
                 definition_hash: "hash-1".to_string(),
                 definition_name: "First loop".to_string(),
                 objective: "First objective".to_string(),
@@ -3785,7 +3887,7 @@ mod tests {
             "ws-1",
             MaterializedLoopDefinition {
                 definition_id: "second-loop".to_string(),
-                definition_path: "/repo/.workstreams/loops/second.loop.yaml".to_string(),
+                definition_path: "/session/files/loops/second.loop.yaml".to_string(),
                 definition_hash: "hash-2".to_string(),
                 definition_name: "Second loop".to_string(),
                 objective: "Second objective".to_string(),
@@ -5347,14 +5449,34 @@ mod tests {
     }
 
     #[test]
-    fn structured_agent_outputs_reject_ambiguous_json_blocks() {
+    fn structured_agent_outputs_accept_one_json_object_after_prose() {
+        let tasks = parse_discovered_tasks(
+            "No English counterparts exist, so translate chapter one.\n\n\
+             {\"tasks\":[{\"key\":\"chapter-1\",\"title\":\"Translate\",\
+             \"objective\":\"Create the English chapter\"}]}",
+        )
+        .expect("parse JSON after prose");
+
+        assert_eq!(tasks[0].key, "chapter-1");
+    }
+
+    #[test]
+    fn structured_agent_outputs_reject_ambiguous_json_objects() {
         let error = parse_discovered_tasks(
             "```json\n{\"tasks\":[]}\n```\n\
              ```json\n{\"tasks\":[]}\n```",
         )
-        .expect_err("multiple JSON blocks must be rejected");
+        .expect_err("multiple JSON objects must be rejected");
 
-        assert!(error.contains("exactly one JSON"));
+        assert!(error.contains("exactly one matching JSON object"));
+    }
+
+    #[test]
+    fn structured_agent_outputs_reject_valid_nested_json_inside_malformed_outer_json() {
+        let error = parse_discovered_tasks("Result: {\"wrapper\":{\"tasks\":[]}")
+            .expect_err("malformed outer JSON must not expose its nested object");
+
+        assert!(error.contains("malformed embedded JSON"));
     }
 
     #[test]

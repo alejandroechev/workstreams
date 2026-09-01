@@ -20,7 +20,7 @@ pub mod git;
 
 use crate::AppState;
 use rusqlite::Connection;
-use std::path::PathBuf;
+use std::path::{Component, PathBuf};
 use std::time::Duration;
 use tauri::State;
 
@@ -28,22 +28,53 @@ use tauri::State;
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Absolute path to a Copilot session's `session.db`.
+pub fn session_state_root() -> Option<PathBuf> {
+    std::env::var_os("WORKSTREAMS_SESSION_STATE_ROOT")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| dirs::home_dir().map(|home| home.join(".copilot").join("session-state")))
+}
+
+pub fn session_state_dir_path(session_id: &str) -> Result<PathBuf, String> {
+    let root = session_state_root().ok_or_else(|| "no session-state root".to_string())?;
+    session_state_dir_path_in(&root, session_id)
+}
+
+fn session_state_dir_path_in(root: &std::path::Path, session_id: &str) -> Result<PathBuf, String> {
+    let session_path = PathBuf::from(session_id);
+    let mut components = session_path.components();
+    if !matches!(components.next(), Some(Component::Normal(_))) || components.next().is_some() {
+        return Err("session id must be one path component".to_string());
+    }
+    let canonical_root = root
+        .canonicalize()
+        .map_err(|error| format!("resolve session-state root: {error}"))?;
+    let candidate = root.join(session_id);
+    let canonical = candidate
+        .canonicalize()
+        .map_err(|error| format!("session-state dir not found for {session_id}: {error}"))?;
+    let has_session_metadata =
+        canonical.join("workspace.yaml").is_file() || canonical.join("session.db").is_file();
+    if !canonical.starts_with(&canonical_root) || !has_session_metadata {
+        return Err(format!("invalid session-state dir for {session_id}"));
+    }
+    Ok(canonical)
+}
+
 pub fn session_db_path(session_id: &str) -> Option<PathBuf> {
-    let home = dirs::home_dir()?;
-    Some(
-        home.join(".copilot")
-            .join("session-state")
-            .join(session_id)
-            .join("session.db"),
-    )
+    session_state_dir_path(session_id)
+        .ok()
+        .map(|directory| directory.join("session.db"))
 }
 
 /// Open a session's `session.db` **read-write** with a busy timeout, and ensure
 /// our review tables exist. Errors clearly if the session (hence its DB) does
 /// not exist yet — a linked session is a prerequisite for a code review.
 pub fn open_session_db_rw(session_id: &str) -> Result<Connection, String> {
-    let path = session_db_path(session_id).ok_or("no home directory")?;
-    if !path.exists() {
+    let path = session_state_dir_path(session_id)
+        .map_err(|error| format!("session.db not found for session {session_id}: {error}"))?
+        .join("session.db");
+    if !path.is_file() {
         return Err(format!(
             "session.db not found for session {session_id} — open a Copilot session in this workstream first"
         ));
@@ -538,6 +569,23 @@ pub fn complete_code_review(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn session_state_paths_reject_traversal_and_nested_ids() {
+        let root =
+            std::env::temp_dir().join(format!("workstreams-session-root-{}", uuid::Uuid::new_v4()));
+        let session = root.join("session-1");
+        std::fs::create_dir_all(&session).expect("create session directory");
+        std::fs::write(session.join("workspace.yaml"), "id: session-1\n")
+            .expect("create session metadata");
+
+        let resolved = session_state_dir_path_in(&root, "session-1").expect("resolve safe session");
+        assert_eq!(resolved, session.canonicalize().expect("canonical session"));
+        assert!(session_state_dir_path_in(&root, "../outside").is_err());
+        assert!(session_state_dir_path_in(&root, "nested/session").is_err());
+
+        std::fs::remove_dir_all(root).ok();
+    }
 
     #[test]
     fn format_epoch_iso8601_matches_the_agent_timestamp_format() {

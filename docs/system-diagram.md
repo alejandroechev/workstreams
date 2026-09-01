@@ -45,7 +45,7 @@ graph TB
     subgraph Storage["Persistence"]
         AppDB["workstreams.db<br/>(SQLite — workstreams, tiles, layouts, scrollback)"]
         LoopDB["workstreams.db loop ledger<br/>specs / runs / tasks / verifications<br/>evaluations / human approvals / events"]
-        LoopYAML[".workstreams/loops/*.loop.yaml<br/>versioned loop authority"]
+        LoopYAML["bound session-state/files/loops/*.loop.yaml<br/>loop definition authority"]
         CopilotDB["~/.copilot/session-store.db<br/>(read-only enrichment)"]
         CopilotSessionDB["~/.copilot/session-state/&lt;id&gt;/session.db<br/>(bound session — reviews + review_comments<br/>+ file_comments, RW)"]
     end

@@ -123,7 +123,10 @@ spec:
     maxActiveRuns: 1
 `;
 
-function ensureShowcaseFiles(dir = SHOWCASE_DIR) {
+function ensureShowcaseFiles(
+  dir = SHOWCASE_DIR,
+  loopDir,
+) {
   fs.mkdirSync(dir, { recursive: true });
   const readme = path.join(dir, "README.md");
   if (!fs.existsSync(readme)) {
@@ -132,14 +135,15 @@ function ensureShowcaseFiles(dir = SHOWCASE_DIR) {
   } else {
     console.log(`[seed] showcase already present: ${readme}`);
   }
-  const loopsDir = path.join(dir, ".workstreams", "loops");
-  const loopDefinition = path.join(loopsDir, "showcase.loop.yaml");
-  fs.mkdirSync(loopsDir, { recursive: true });
-  if (!fs.existsSync(loopDefinition)) {
-    fs.writeFileSync(loopDefinition, SAMPLE_LOOP_YAML, "utf8");
-    console.log(`[seed] wrote ${loopDefinition}`);
-  } else {
-    console.log(`[seed] showcase loop already present: ${loopDefinition}`);
+  if (loopDir) {
+    const loopDefinition = path.join(loopDir, "showcase.loop.yaml");
+    fs.mkdirSync(loopDir, { recursive: true });
+    if (!fs.existsSync(loopDefinition)) {
+      fs.writeFileSync(loopDefinition, SAMPLE_LOOP_YAML, "utf8");
+      console.log(`[seed] wrote ${loopDefinition}`);
+    } else {
+      console.log(`[seed] showcase loop already present: ${loopDefinition}`);
+    }
   }
 }
 

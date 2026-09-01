@@ -541,8 +541,10 @@ pub fn parse_loop_definition_bytes(
     }
 }
 
-pub fn discover_loop_definitions(workstream_root: &Path) -> Result<LoopDefinitionCatalog, String> {
-    let loops_dir = workstream_root.join(".workstreams").join("loops");
+pub fn discover_loop_definitions(
+    workstream_root: &Path,
+    loops_dir: &Path,
+) -> Result<LoopDefinitionCatalog, String> {
     if !loops_dir.exists() {
         return Ok(LoopDefinitionCatalog {
             valid: Vec::new(),
@@ -553,18 +555,19 @@ pub fn discover_loop_definitions(workstream_root: &Path) -> Result<LoopDefinitio
     if !loops_dir.is_dir() {
         return Err(format!(
             "loop definition path is not a directory: {}",
-            path_to_string(&loops_dir)
+            path_to_string(loops_dir)
         ));
     }
 
     let mut paths = Vec::new();
-    for entry in fs::read_dir(&loops_dir)
-        .map_err(|error| format!("failed to scan {}: {error}", path_to_string(&loops_dir)))?
+    let mut rejected = Vec::new();
+    for entry in fs::read_dir(loops_dir)
+        .map_err(|error| format!("failed to scan {}: {error}", path_to_string(loops_dir)))?
     {
         let entry = entry.map_err(|error| {
             format!(
                 "failed to read an entry in {}: {error}",
-                path_to_string(&loops_dir)
+                path_to_string(loops_dir)
             )
         })?;
         let path = entry.path();
@@ -572,8 +575,17 @@ pub fn discover_loop_definitions(workstream_root: &Path) -> Result<LoopDefinitio
             .file_name()
             .and_then(|value| value.to_str())
             .is_some_and(|value| value.ends_with(".loop.yaml"));
-        if is_loop_yaml && path.is_file() {
-            paths.push(path);
+        if is_loop_yaml {
+            let metadata = fs::symlink_metadata(&path)
+                .map_err(|error| format!("failed to inspect {}: {error}", path_to_string(&path)))?;
+            if metadata.file_type().is_symlink() {
+                rejected.push(LoopDefinitionResult::unreadable(
+                    &path,
+                    "loop definitions may not be symbolic links",
+                ));
+            } else if metadata.is_file() {
+                paths.push(path);
+            }
         }
     }
     paths.sort_by(|left, right| left.file_name().cmp(&right.file_name()));
@@ -582,6 +594,8 @@ pub fn discover_loop_definitions(workstream_root: &Path) -> Result<LoopDefinitio
         .iter()
         .map(|path| load_loop_definition(workstream_root, path))
         .collect();
+    results.extend(rejected);
+    results.sort_by(|left, right| left.path.cmp(&right.path));
 
     let mut ids: BTreeMap<String, Vec<usize>> = BTreeMap::new();
     for (index, result) in results.iter().enumerate() {
@@ -618,8 +632,11 @@ pub fn discover_loop_definitions(workstream_root: &Path) -> Result<LoopDefinitio
     Ok(LoopDefinitionCatalog { valid, invalid })
 }
 
-pub fn catalog_for_root(workstream_root: &Path) -> Result<LoopCatalog, String> {
-    let catalog = discover_loop_definitions(workstream_root)?;
+pub fn catalog_for_directory(
+    workstream_root: &Path,
+    loops_dir: &Path,
+) -> Result<LoopCatalog, String> {
+    let catalog = discover_loop_definitions(workstream_root, loops_dir)?;
     let definitions = catalog
         .valid
         .into_iter()
@@ -661,17 +678,25 @@ pub fn catalog_for_root(workstream_root: &Path) -> Result<LoopCatalog, String> {
 
 pub fn load_validated_definition(
     workstream_root: &Path,
+    loops_dir: &Path,
     configured_path: &Path,
 ) -> Result<(ValidatedLoopDefinition, String), String> {
     let root = workstream_root
         .canonicalize()
         .map_err(|error| format!("failed to resolve workstream root: {error}"))?;
-    let loops_dir = root.join(".workstreams").join("loops");
+    let loops_dir = loops_dir
+        .canonicalize()
+        .map_err(|error| format!("failed to resolve loop definitions directory: {error}"))?;
     let candidate = if configured_path.is_absolute() {
         configured_path.to_path_buf()
     } else {
-        root.join(configured_path)
+        loops_dir.join(configured_path)
     };
+    let metadata = fs::symlink_metadata(&candidate)
+        .map_err(|error| format!("failed to inspect loop definition: {error}"))?;
+    if metadata.file_type().is_symlink() {
+        return Err("loop definitions may not be symbolic links".to_string());
+    }
     let canonical = candidate
         .canonicalize()
         .map_err(|error| format!("failed to resolve loop definition: {error}"))?;
@@ -681,7 +706,9 @@ pub fn load_validated_definition(
             .and_then(|name| name.to_str())
             .is_some_and(|name| name.ends_with(".loop.yaml"))
     {
-        return Err("loop definition must be a .workstreams/loops/*.loop.yaml file".to_string());
+        return Err(
+            "loop definition must be a session-state files/loops/*.loop.yaml file".to_string(),
+        );
     }
     let yaml = fs::read_to_string(&canonical)
         .map_err(|error| format!("failed to read loop definition: {error}"))?;
@@ -1441,7 +1468,7 @@ spec:
             &verification_yaml("./scripts/verify.sh", "."),
             evaluator_yaml(),
         );
-        let path = root.path.join(".workstreams/loops/nested/test.loop.yaml");
+        let path = root.path.join("session/files/loops/nested/test.loop.yaml");
 
         let result = parse_loop_definition_bytes(&root.path, &path, yaml.as_bytes());
 
@@ -1554,7 +1581,7 @@ spec:
     #[test]
     fn discovery_is_shallow_sorted_and_invalidates_every_duplicate_id() {
         let root = prepared_root();
-        let loops = root.path.join(".workstreams/loops");
+        let loops = root.path.join("session/files/loops");
         fs::create_dir_all(loops.join("nested")).unwrap();
         let evaluator = evaluator_yaml();
         let first = yaml_with_sensors("", evaluator);
@@ -1562,16 +1589,16 @@ spec:
         let unique = first
             .replace("id: test-loop", "id: unique-loop")
             .replace("name: Test loop", "name: Unique loop");
-        root.write(".workstreams/loops/b.loop.yaml", second.as_bytes());
-        root.write(".workstreams/loops/a.loop.yaml", first.as_bytes());
-        root.write(".workstreams/loops/c.loop.yaml", unique.as_bytes());
-        root.write(".workstreams/loops/ignored.yaml", unique.as_bytes());
+        root.write("session/files/loops/b.loop.yaml", second.as_bytes());
+        root.write("session/files/loops/a.loop.yaml", first.as_bytes());
+        root.write("session/files/loops/c.loop.yaml", unique.as_bytes());
+        root.write("session/files/loops/ignored.yaml", unique.as_bytes());
         root.write(
-            ".workstreams/loops/nested/nested.loop.yaml",
+            "session/files/loops/nested/nested.loop.yaml",
             unique.as_bytes(),
         );
 
-        let catalog = discover_loop_definitions(&root.path).unwrap();
+        let catalog = discover_loop_definitions(&root.path, &loops).unwrap();
 
         assert_eq!(catalog.valid.len(), 1);
         assert_eq!(catalog.valid[0].id.as_deref(), Some("unique-loop"));
@@ -1582,6 +1609,32 @@ spec:
             .validation_errors
             .iter()
             .any(|error| error.code == "duplicate_id")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn discovery_rejects_symlinked_loop_definitions() {
+        use std::os::unix::fs::symlink;
+
+        let root = prepared_root();
+        let loops = root.path.join("session/files/loops");
+        fs::create_dir_all(&loops).unwrap();
+        let outside = root.write(
+            "outside.loop.yaml",
+            yaml_with_sensors("", evaluator_yaml()).as_bytes(),
+        );
+        symlink(outside, loops.join("linked.loop.yaml")).unwrap();
+
+        let catalog = discover_loop_definitions(&root.path, &loops).unwrap();
+
+        assert!(catalog.valid.is_empty());
+        assert_eq!(catalog.invalid.len(), 1);
+        assert!(catalog.invalid[0].validation_errors[0]
+            .message
+            .contains("symbolic links"));
+        let direct = load_validated_definition(&root.path, &loops, &loops.join("linked.loop.yaml"))
+            .expect_err("direct execution must reject symlinked definitions");
+        assert!(direct.contains("symbolic links"));
     }
 
     #[test]

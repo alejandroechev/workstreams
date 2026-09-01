@@ -2,20 +2,21 @@
 name: create-loop
 description: >-
   Create or revise a strict Workstreams loop definition in
-  .workstreams/loops/*.loop.yaml from a natural-language request. Use when the
+  the current Copilot session's files/loops/*.loop.yaml from a natural-language request. Use when the
   user says "create this loop", "make a loop", "define an autonomous loop",
   or asks for a reusable Workstreams loop YAML file.
 ---
 
 # Create Loop
 
-Create a reviewable, repository-versioned loop definition. The YAML file is
-the authoritative configuration; Workstreams SQLite stores only bindings and
-runtime history.
+Create a reviewable loop definition in the current Copilot session-state
+folder. The YAML file is the authoritative configuration; Workstreams SQLite
+stores only bindings and runtime history.
 
 ## Non-negotiable behavior
 
-- Write only `.workstreams/loops/<id>.loop.yaml` and explicitly requested
+- Write only `<current-session-folder>/files/loops/<id>.loop.yaml` and
+  explicitly requested
   supporting files such as verifier scripts, feedback, or golden patterns.
 - Never enable or run the loop unless the user separately asks.
 - Always validate the final file:
@@ -37,7 +38,7 @@ runtime history.
 ## Authoring workflow
 
 1. Inspect the repository's build/test/lint commands and existing
-   `.workstreams/loops/*.loop.yaml` definitions.
+   `<current-session-folder>/files/loops/*.loop.yaml` definitions.
 2. Identify:
    - desired end state (`spec.objective`);
    - how the orchestrator selects the smallest next correction;

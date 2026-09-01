@@ -119,12 +119,11 @@ The orchestrator must return:
 `tasks: []` is successful "no work." Missing/blank required fields or malformed
 JSON fail visibly; Workstreams never guesses tasks from prose.
 
-Copilot may occasionally add a short explanation and wrap an otherwise valid
-response in a Markdown `json` fence despite the prompt. The boundary accepts
-either raw JSON or exactly one JSON code block for orchestrator, worker, and
-evaluator responses. Multiple blocks, unterminated fences, malformed JSON, or
-invalid fields still fail visibly; the parser never chooses among competing
-objects.
+Copilot may occasionally add a short explanation around an otherwise valid
+response or wrap it in a Markdown `json` fence despite the prompt. The boundary
+accepts raw JSON or exactly one matching typed JSON object embedded in the
+response. Multiple matching objects, malformed JSON, or invalid fields still
+fail visibly; the parser never chooses among competing objects.
 
 Workers and evaluators likewise return bounded JSON result/verdict contracts.
 The evaluator is a fresh Copilot session. `revise` returns actionable feedback

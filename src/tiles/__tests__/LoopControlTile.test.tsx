@@ -59,7 +59,7 @@ function definition(overrides: Partial<LoopDefinition> = {}): LoopDefinition {
     name: "Frontend loop",
     description: "Implements and verifies frontend changes.",
     tags: ["frontend", "fast"],
-    path: "/repo/.workstreams/loops/frontend-loop.loop.yaml",
+    path: "/sessions/session-1/files/loops/frontend-loop.loop.yaml",
     hash: "sha256:frontend",
     portable: true,
     objective: "Deliver the selected frontend behavior",
@@ -197,7 +197,7 @@ describe("LoopControlTile catalog", () => {
     const second = definition({
       id: "backend-loop",
       name: "Backend loop",
-      path: "/repo/.workstreams/loops/backend-loop.loop.yaml",
+      path: "/sessions/session-1/files/loops/backend-loop.loop.yaml",
     });
 
     setup(snapshot(), { definitions: [first, second], invalid: [] });
@@ -227,7 +227,7 @@ describe("LoopControlTile catalog", () => {
     const second = definition({
       id: "second-loop",
       name: "Second loop",
-      path: "/repo/.workstreams/loops/second.loop.yaml",
+      path: "/sessions/session-1/files/loops/second.loop.yaml",
     });
     const { listDefinitions } = setup(snapshot(), {
       definitions: [definition(), second],
@@ -282,7 +282,7 @@ describe("LoopControlTile catalog", () => {
     const evaluator = definition({
       id: "evaluated-loop",
       name: "Evaluated loop",
-      path: "/repo/.workstreams/loops/evaluated-loop.loop.yaml",
+      path: "/sessions/session-1/files/loops/evaluated-loop.loop.yaml",
       hash: "sha256:evaluated",
       tags: ["quality"],
       objective: "Evaluate semantic correctness",
@@ -292,7 +292,7 @@ describe("LoopControlTile catalog", () => {
     const both = definition({
       id: "full-loop",
       name: "Full loop",
-      path: "/repo/.workstreams/loops/full-loop.loop.yaml",
+      path: "/sessions/session-1/files/loops/full-loop.loop.yaml",
       hash: "sha256:full",
       tags: ["frontend", "quality"],
       objective: "Verify and evaluate the result",
@@ -306,7 +306,7 @@ describe("LoopControlTile catalog", () => {
     expect((await screen.findByTestId("loop-catalog")).textContent).toContain(
       "Goal Loop",
     );
-    expect(listDefinitions).toHaveBeenCalledWith("/repo");
+    expect(listDefinitions).toHaveBeenCalledWith("ws-1");
     expect((await screen.findByTestId("loop-definition-evaluated-loop")).textContent).toContain(
       "Evaluator",
     );
@@ -322,7 +322,7 @@ describe("LoopControlTile catalog", () => {
       "Full loop",
     );
     expect(screen.getByTestId("loop-definition-selected").textContent).toContain(
-      "/repo/.workstreams/loops/full-loop.loop.yaml",
+      "/sessions/session-1/files/loops/full-loop.loop.yaml",
     );
     expect(screen.getByTestId("loop-definition-selected").textContent).toContain(
       "sha256:full",
@@ -333,7 +333,7 @@ describe("LoopControlTile catalog", () => {
         definition({
           id: "new-first",
           name: "New first",
-          path: "/repo/.workstreams/loops/new-first.loop.yaml",
+          path: "/sessions/session-1/files/loops/new-first.loop.yaml",
         }),
         both,
       ],
@@ -348,7 +348,7 @@ describe("LoopControlTile catalog", () => {
   });
 
   it("keeps Run selection aligned when the selected file changes definition id", async () => {
-    const selectedPath = "/repo/.workstreams/loops/selected.loop.yaml";
+    const selectedPath = "/sessions/session-1/files/loops/selected.loop.yaml";
     const selected = definition({
       id: "old-id",
       name: "Selected loop",
@@ -357,7 +357,7 @@ describe("LoopControlTile catalog", () => {
     const first = definition({
       id: "first-loop",
       name: "First loop",
-      path: "/repo/.workstreams/loops/first.loop.yaml",
+      path: "/sessions/session-1/files/loops/first.loop.yaml",
     });
     const { setCatalog, listDefinitions } = setup(snapshot(), {
       definitions: [first, selected],
@@ -398,7 +398,7 @@ describe("LoopControlTile catalog", () => {
     const second = definition({
       id: "backend-loop",
       name: "Backend loop",
-      path: "/repo/.workstreams/loops/backend-loop.loop.yaml",
+      path: "/sessions/session-1/files/loops/backend-loop.loop.yaml",
       hash: "sha256:backend",
     });
     const { backend } = setup(
@@ -417,7 +417,7 @@ describe("LoopControlTile catalog", () => {
     await waitFor(() =>
       expect(runSelected).toHaveBeenCalledWith(
         "ws-1",
-        "/repo/.workstreams/loops/backend-loop.loop.yaml",
+        "/sessions/session-1/files/loops/backend-loop.loop.yaml",
       ),
     );
     expect(legacyRun).not.toHaveBeenCalled();
@@ -427,7 +427,7 @@ describe("LoopControlTile catalog", () => {
     setup(snapshot());
 
     const empty = await screen.findByTestId("loop-definition-empty");
-    expect(empty.textContent).toContain(".workstreams/loops/<id>.loop.yaml");
+    expect(empty.textContent).toContain("files/loops/<id>.loop.yaml");
     expect(empty.textContent).toContain("create-loop");
     expect(screen.queryByTestId("loop-setup-form")).toBeNull();
     expect(screen.queryByRole("textbox")).toBeNull();
@@ -443,7 +443,7 @@ describe("LoopControlTile catalog", () => {
       ],
       invalid: [
         {
-          path: "/repo/.workstreams/loops/broken.loop.yaml",
+          path: "/sessions/session-1/files/loops/broken.loop.yaml",
           error: "missing required field objective",
         },
       ],
@@ -454,14 +454,14 @@ describe("LoopControlTile catalog", () => {
     ).toContain("Not portable");
     const invalid = screen.getByTestId("loop-invalid-definitions");
     expect(invalid.textContent).toContain(
-      "/repo/.workstreams/loops/broken.loop.yaml",
+      "/sessions/session-1/files/loops/broken.loop.yaml",
     );
     expect(invalid.textContent).toContain("missing required field objective");
 
     fireEvent.click(screen.getByTestId("loop-tab-definitions"));
     fireEvent.click(screen.getByTestId("loop-edit-invalid-0"));
     expect(screen.getByTestId("loop-definition-editor-path").textContent).toBe(
-      "/repo/.workstreams/loops/broken.loop.yaml",
+      "/sessions/session-1/files/loops/broken.loop.yaml",
     );
     expect(screen.getByTestId("loop-definition-editor-header").textContent).toContain(
       "missing required field objective",
@@ -522,7 +522,7 @@ describe("LoopControlTile run monitoring", () => {
     };
     const pinnedSpec = loopSpec({
       definitionId: "frontend-loop",
-      definitionPath: "/repo/.workstreams/loops/frontend-loop.loop.yaml",
+      definitionPath: "/sessions/session-1/files/loops/frontend-loop.loop.yaml",
       definitionHash: "sha256:pinned",
       definitionName: "Frontend loop",
       objective: "Deliver the pinned objective",
