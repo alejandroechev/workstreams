@@ -1,4 +1,5 @@
 use rusqlite::{params, Connection, OptionalExtension};
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -1313,9 +1314,53 @@ pub fn reconcile_interrupted_runs(conn: &Connection) -> Result<usize, String> {
     Ok(count as usize)
 }
 
+fn parse_structured_agent_json<T: DeserializeOwned>(
+    content: &str,
+    role: &str,
+) -> Result<T, String> {
+    let trimmed = content.trim();
+    match serde_json::from_str(trimmed) {
+        Ok(output) => Ok(output),
+        Err(raw_error) => {
+            let mut blocks = Vec::new();
+            let mut current: Option<String> = None;
+            for line in trimmed.lines() {
+                let marker = line.trim();
+                if current.is_none() {
+                    if let Some(language) = marker.strip_prefix("```") {
+                        let language = language.trim();
+                        if language.is_empty() || language.eq_ignore_ascii_case("json") {
+                            current = Some(String::new());
+                        }
+                    }
+                    continue;
+                }
+                if marker == "```" {
+                    blocks.push(current.take().unwrap_or_default());
+                } else if let Some(block) = current.as_mut() {
+                    if !block.is_empty() {
+                        block.push('\n');
+                    }
+                    block.push_str(line);
+                }
+            }
+            if current.is_some() {
+                return Err(format!("{role} returned an unterminated JSON code block"));
+            }
+            if blocks.len() != 1 {
+                return Err(format!(
+                    "{role} returned invalid JSON ({raw_error}); expected raw JSON or exactly one JSON code block"
+                ));
+            }
+            serde_json::from_str(blocks[0].trim())
+                .map_err(|error| format!("{role} returned invalid JSON code block: {error}"))
+        }
+    }
+}
+
 pub fn parse_discovered_tasks(content: &str) -> Result<Vec<DiscoveredTask>, String> {
-    let output: OrchestratorOutput = serde_json::from_str(content.trim())
-        .map_err(|error| format!("Orchestrator returned invalid task JSON: {error}"))?;
+    let output: OrchestratorOutput = parse_structured_agent_json(content, "Orchestrator")
+        .map_err(|error| error.replace("invalid JSON", "invalid task JSON"))?;
     for task in &output.tasks {
         if task.key.trim().is_empty()
             || task.title.trim().is_empty()
@@ -1331,8 +1376,8 @@ pub fn parse_discovered_tasks(content: &str) -> Result<Vec<DiscoveredTask>, Stri
 }
 
 fn parse_worker_output(content: &str) -> Result<WorkerOutput, String> {
-    let output: WorkerOutput = serde_json::from_str(content.trim())
-        .map_err(|error| format!("Worker returned invalid result JSON: {error}"))?;
+    let output: WorkerOutput = parse_structured_agent_json(content, "Worker")
+        .map_err(|error| error.replace("invalid JSON", "invalid result JSON"))?;
     if output.summary.trim().is_empty() {
         return Err("Worker result requires a non-empty summary".to_string());
     }
@@ -1340,8 +1385,8 @@ fn parse_worker_output(content: &str) -> Result<WorkerOutput, String> {
 }
 
 fn parse_evaluator_output(content: &str) -> Result<EvaluatorOutput, String> {
-    let output: EvaluatorOutput = serde_json::from_str(content.trim())
-        .map_err(|error| format!("Evaluator returned invalid verdict JSON: {error}"))?;
+    let output: EvaluatorOutput = parse_structured_agent_json(content, "Evaluator")
+        .map_err(|error| error.replace("invalid JSON", "invalid verdict JSON"))?;
     if output.summary.trim().is_empty() {
         return Err("Evaluator verdict requires a non-empty summary".to_string());
     }
@@ -1717,7 +1762,8 @@ fn orchestrator_prompt(spec: &LoopSpec) -> String {
         "{}\n\nReturn only JSON with this shape:\n\
          {{\"tasks\":[{{\"key\":\"stable-id\",\"title\":\"short title\",\
          \"objective\":\"complete coding objective\"}}]}}\n\
-         Return {{\"tasks\":[]}} when no work is available.",
+         Return {{\"tasks\":[]}} when no work is available.\n\
+         Do not include Markdown code fences or explanatory prose.",
         spec.orchestrator_prompt
     )
 }
@@ -1727,7 +1773,8 @@ fn worker_prompt(spec: &LoopSpec, task: &LoopTask) -> String {
         "{}\n\nTask: {}\nObjective: {}\n\n\
          Complete the coding task in the current worktree. Return only JSON:\n\
          {{\"status\":\"completed|blocked|failed\",\"summary\":\"what happened\",\
-         \"evidence\":[\"observable evidence\"]}}",
+         \"evidence\":[\"observable evidence\"]}}\n\
+         Do not include Markdown code fences or explanatory prose.",
         spec.worker_prompt, task.title, task.objective
     )
 }
@@ -1748,7 +1795,8 @@ fn evaluator_prompt(
          Independently inspect the work with read-only actions. Return only JSON:\n\
          {{\"verdict\":\"accepted|revise|blocked|invalid\",\
          \"summary\":\"judgment\",\"feedback\":null,\"evidence\":[]}}.\n\
-         A revise verdict must include actionable feedback.",
+         A revise verdict must include actionable feedback.\n\
+         Do not include Markdown code fences or explanatory prose.",
         evaluator_instructions,
         task.title,
         task.objective,
@@ -5269,6 +5317,44 @@ mod tests {
                 .expect_err("missing key must fail");
 
         assert!(error.contains("key"));
+    }
+
+    #[test]
+    fn structured_agent_outputs_accept_one_markdown_json_block() {
+        let tasks = parse_discovered_tasks(
+            "Smallest useful task:\n\n```json\n\
+             {\"tasks\":[{\"key\":\"chapter-1\",\"title\":\"Translate\",\
+             \"objective\":\"Create the English chapter\"}]}\n```",
+        )
+        .expect("parse fenced orchestrator JSON");
+        assert_eq!(tasks[0].key, "chapter-1");
+
+        let worker = parse_worker_output(
+            "Done.\n```json\n\
+             {\"status\":\"completed\",\"summary\":\"Translated\",\
+             \"evidence\":[\"output file\"]}\n```",
+        )
+        .expect("parse fenced worker JSON");
+        assert_eq!(worker.status, WorkerStatus::Completed);
+
+        let evaluator = parse_evaluator_output(
+            "Verdict:\n```json\n\
+             {\"verdict\":\"accepted\",\"summary\":\"Correct\",\
+             \"feedback\":null,\"evidence\":[]}\n```",
+        )
+        .expect("parse fenced evaluator JSON");
+        assert_eq!(evaluator.verdict, EvaluatorVerdict::Accepted);
+    }
+
+    #[test]
+    fn structured_agent_outputs_reject_ambiguous_json_blocks() {
+        let error = parse_discovered_tasks(
+            "```json\n{\"tasks\":[]}\n```\n\
+             ```json\n{\"tasks\":[]}\n```",
+        )
+        .expect_err("multiple JSON blocks must be rejected");
+
+        assert!(error.contains("exactly one JSON"));
     }
 
     #[test]
