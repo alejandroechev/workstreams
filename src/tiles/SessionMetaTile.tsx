@@ -15,6 +15,7 @@ import { parseViewState } from "../domain/tile-view-state";
 import { useTileViewStatePersist } from "../domain/useTileViewStatePersist";
 import { debounce } from "../domain/debounce";
 import type { CopilotConfigItem } from "../domain/types";
+import { groupConfigItems } from "../domain/config-grouping";
 import { SqliteTableView, sessionSqliteOps, type SqliteTable } from "../ui/components/SqliteTableView";
 import { FileContextMenu } from "../ui/components/FileContextMenu";
 import { ZoomableImage } from "../ui/components/ZoomableImage";
@@ -468,10 +469,7 @@ export default function SessionMetaTile({ tileId: _tileId, isFocused, workstream
     });
   };
 
-  const grouped = CATEGORY_ORDER.map((cat) => ({
-    category: cat,
-    items: items.filter((i) => i.category === cat),
-  })).filter((g) => g.items.length > 0);
+  const grouped = groupConfigItems(items, CATEGORY_ORDER);
 
   const tabs: { id: TabId; label: string; icon: React.ComponentType<React.SVGProps<SVGSVGElement>>; count: number }[] = [
     { id: "config", label: "Config", icon: SparklesIcon, count: items.length },
