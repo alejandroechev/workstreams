@@ -71,6 +71,12 @@ depend on Node or on an arbitrary CLI version found on `PATH`.
   resume them;
 - abort, disconnect, and SDK shutdown are explicit.
 
+Starting the bundled CLI includes a narrow recovery policy. The SDK classifies
+`request cancelled` and I/O failures as broken transports that require a fresh
+client, so Workstreams makes up to three startup attempts with
+short backoff. Authentication, configuration, binary resolution, and protocol
+version errors are not retried.
+
 The app remains the process owner. Loops run only while Workstreams is open in
 MVP1. A background daemon or cloud runner is not implied.
 

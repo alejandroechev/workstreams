@@ -82,16 +82,38 @@ pub struct SdkAgentRuntime {
     cancelled: AtomicBool,
 }
 
+const SDK_START_MAX_ATTEMPTS: u32 = 3;
+
+fn should_retry_sdk_start(error: &github_copilot_sdk::Error, attempt: u32) -> bool {
+    error.is_transport_failure() && attempt < SDK_START_MAX_ATTEMPTS
+}
+
 impl SdkAgentRuntime {
     pub async fn connect() -> Result<Self, String> {
-        let client = Client::start(ClientOptions::default())
-            .await
-            .map_err(|error| format!("Failed to start Copilot SDK runtime: {error}"))?;
-        Ok(Self {
-            client,
-            sessions: Mutex::new(HashMap::new()),
-            cancelled: AtomicBool::new(false),
-        })
+        for attempt in 1..=SDK_START_MAX_ATTEMPTS {
+            match Client::start(ClientOptions::default()).await {
+                Ok(client) => {
+                    return Ok(Self {
+                        client,
+                        sessions: Mutex::new(HashMap::new()),
+                        cancelled: AtomicBool::new(false),
+                    });
+                }
+                Err(error) if should_retry_sdk_start(&error, attempt) => {
+                    eprintln!(
+                        "[loop] Copilot SDK startup transport failure on attempt \
+                         {attempt}/{SDK_START_MAX_ATTEMPTS}: {error}; retrying"
+                    );
+                    tokio::time::sleep(Duration::from_millis(250 * u64::from(attempt))).await;
+                }
+                Err(error) => {
+                    return Err(format!(
+                        "Failed to start Copilot SDK runtime after {attempt} attempt(s): {error}"
+                    ));
+                }
+            }
+        }
+        unreachable!("bounded Copilot SDK startup loop always returns")
     }
 
     async fn send(
@@ -579,5 +601,20 @@ mod tests {
             .await
             .expect("disconnect retained session");
         runtime.shutdown().await.expect("stop SDK runtime");
+    }
+
+    #[test]
+    fn sdk_start_retries_only_transport_failures_before_the_final_attempt() {
+        use github_copilot_sdk::{Error, ErrorKind, ProtocolErrorKind};
+
+        let cancelled = Error::from(ErrorKind::Protocol(ProtocolErrorKind::RequestCancelled));
+        let io = Error::from(ErrorKind::Io);
+        let invalid = Error::from(ErrorKind::InvalidConfig);
+
+        assert!(should_retry_sdk_start(&cancelled, 1));
+        assert!(should_retry_sdk_start(&cancelled, 2));
+        assert!(should_retry_sdk_start(&io, 1));
+        assert!(!should_retry_sdk_start(&cancelled, SDK_START_MAX_ATTEMPTS));
+        assert!(!should_retry_sdk_start(&invalid, 1));
     }
 }
