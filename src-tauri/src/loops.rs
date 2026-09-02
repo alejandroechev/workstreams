@@ -1086,13 +1086,33 @@ pub(crate) fn set_run_control(
     Ok(())
 }
 
+/// Atomically moves a paused run into `resuming` so only one resume can win.
+///
+/// The wall-clock budget is refreshed at the same time: a run can stay paused
+/// across an app restart for arbitrarily long, and that idle time is not
+/// compute time. Without this, resuming a run paused overnight would fail
+/// immediately with "exceeded its wall-time limit".
 fn claim_paused_run(conn: &Connection, run_id: &str) -> Result<LoopRun, String> {
+    let timeout_seconds: u64 = conn
+        .query_row(
+            "SELECT s.run_timeout_seconds
+             FROM loop_specs s JOIN loop_runs r ON r.loop_spec_id = s.id
+             WHERE r.id = ?1",
+            [run_id],
+            |row| row.get(0),
+        )
+        .map_err(|error| format!("Failed to load resume timeout: {error}"))?;
+    let deadline_at = std::time::SystemTime::now()
+        .checked_add(Duration::from_secs(timeout_seconds))
+        .and_then(|deadline| deadline.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|duration| duration.as_secs().to_string())
+        .ok_or_else(|| "Failed to calculate the resumed deadline".to_string())?;
     let claimed = conn
         .execute(
             "UPDATE loop_runs
-             SET state = 'resuming', control_requested = 'none'
+             SET state = 'resuming', control_requested = 'none', deadline_at = ?2
              WHERE id = ?1 AND state = 'paused'",
-            [run_id],
+            params![run_id, deadline_at],
         )
         .map_err(|error| format!("Failed to claim paused loop run: {error}"))?;
     if claimed != 1 {
@@ -1320,11 +1340,17 @@ pub fn set_task_state(
     Ok(())
 }
 
+/// Marks work that a previous process was executing as interrupted.
+///
+/// `awaiting_approval` and `paused` are deliberately exempt: both are durable
+/// waits that belong to the user, not in-flight execution. A run waiting for a
+/// person, or one the user paused before closing the app, must still be
+/// resumable after a restart.
 pub fn reconcile_interrupted_runs(conn: &Connection) -> Result<usize, String> {
     let count: i64 = conn
         .query_row(
             "SELECT COUNT(*) FROM loop_runs
-             WHERE state NOT IN ('completed', 'attention', 'killed', 'awaiting_approval')",
+             WHERE state NOT IN ('completed', 'attention', 'killed', 'awaiting_approval', 'paused')",
             [],
             |row| row.get(0),
         )
@@ -1335,7 +1361,7 @@ pub fn reconcile_interrupted_runs(conn: &Connection) -> Result<usize, String> {
              updated_at = ?1
          WHERE loop_run_id IN (
              SELECT id FROM loop_runs
-             WHERE state NOT IN ('completed', 'attention', 'killed', 'awaiting_approval')
+             WHERE state NOT IN ('completed', 'attention', 'killed', 'awaiting_approval', 'paused')
          )
          AND state IN ('queued', 'working', 'verifying', 'evaluating')",
         [crate::now()],
@@ -1346,7 +1372,7 @@ pub fn reconcile_interrupted_runs(conn: &Connection) -> Result<usize, String> {
          SET state = 'attention',
              error = 'Workstreams exited before this run completed',
              finished_at = ?1
-         WHERE state NOT IN ('completed', 'attention', 'killed', 'awaiting_approval')",
+         WHERE state NOT IN ('completed', 'attention', 'killed', 'awaiting_approval', 'paused')",
         [crate::now()],
     )
     .map_err(|error| format!("Failed to reconcile loop runs: {error}"))?;
@@ -6006,6 +6032,75 @@ mod tests {
         assert_eq!(claimed.state, LoopRunState::Resuming);
         assert_eq!(claimed.control_requested, "none");
         assert!(claim_paused_run(&conn, &run.id).is_err());
+    }
+
+    #[test]
+    fn a_paused_run_and_its_queued_tasks_survive_a_restart() {
+        let conn = test_db();
+        let spec = save_loop_spec(&conn, "ws-1", spec_input()).expect("save loop spec");
+        set_loop_enabled(&conn, &spec.id, true).expect("enable loop");
+        let run = create_loop_run(&conn, &spec.id, 600).expect("create run");
+        let queued = enqueue_task(
+            &conn,
+            &run.id,
+            &spec.id,
+            &DiscoveredTask {
+                key: "queued-task".to_string(),
+                title: "Queued".to_string(),
+                objective: "Finish after resume".to_string(),
+            },
+        )
+        .expect("enqueue task")
+        .expect("task inserted");
+        set_run_state(&conn, &run.id, LoopRunState::Paused, None).expect("pause run");
+
+        let reconciled = reconcile_interrupted_runs(&conn).expect("reconcile restart");
+
+        assert_eq!(reconciled, 0, "a paused run is not an interrupted run");
+        assert_eq!(
+            get_loop_run(&conn, &run.id)
+                .expect("load run")
+                .expect("run exists")
+                .state,
+            LoopRunState::Paused
+        );
+        assert_eq!(
+            list_loop_tasks(&conn, &run.id).expect("list tasks")[0].state,
+            LoopTaskState::Queued
+        );
+        assert_eq!(queued.state, LoopTaskState::Queued);
+
+        let claimed = claim_paused_run(&conn, &run.id).expect("resume after restart");
+        assert_eq!(claimed.state, LoopRunState::Resuming);
+    }
+
+    #[test]
+    fn resuming_refreshes_the_deadline_so_paused_time_is_not_compute_time() {
+        let conn = test_db();
+        let spec = save_loop_spec(&conn, "ws-1", spec_input()).expect("save loop spec");
+        set_loop_enabled(&conn, &spec.id, true).expect("enable loop");
+        let run = create_loop_run(&conn, &spec.id, 600).expect("create run");
+        set_run_state(&conn, &run.id, LoopRunState::Paused, None).expect("pause run");
+        conn.execute(
+            "UPDATE loop_runs SET deadline_at = '1' WHERE id = ?1",
+            [&run.id],
+        )
+        .expect("expire the deadline while paused");
+
+        let claimed = claim_paused_run(&conn, &run.id).expect("claim paused run");
+
+        let deadline: u64 = claimed
+            .deadline_at
+            .parse()
+            .expect("resumed deadline is an epoch timestamp");
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system clock")
+            .as_secs();
+        assert!(
+            deadline > now,
+            "resume must restore the configured budget, got {deadline} at {now}"
+        );
     }
 
     #[test]

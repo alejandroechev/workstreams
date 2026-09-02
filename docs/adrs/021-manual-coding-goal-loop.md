@@ -196,6 +196,13 @@ starting a new SDK runtime. This state is separate from the user-controlled
 pause/stop/kill request, so a control during SDK startup cannot turn a resume
 into a fresh orchestration pass.
 
+A paused run is a durable user-owned wait, not in-flight execution, so restart
+reconciliation exempts `paused` exactly as it exempts `awaiting_approval`: the
+run and its queued tasks survive closing the app and remain resumable. Resume
+also refreshes the wall-clock deadline, because time spent paused — possibly
+overnight, with the app closed — is not compute time and must not exhaust the
+run budget.
+
 The pre-existing PTY lifecycle was fixed as a prerequisite: every
 `portable_pty::Child` is transferred to a dedicated waiter, natural exits are
 collected, and explicit close kills then joins the waiter. A generation token
