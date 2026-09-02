@@ -25,6 +25,7 @@ import type { Backend } from "../backend/types";
 import type { Project, Workstream } from "../domain/types";
 import type { Task } from "../domain/tasks";
 import type { BoardColumnId } from "../domain/task-status";
+import { isPlainEnterCommit } from "../domain/keyboard";
 import {
   toLocalDate,
   previousWorkDay,
@@ -273,6 +274,27 @@ export function TaskBoard({
     notesSourceRef.current = notesKey;
     if (notesDraft !== (selected?.notes ?? "")) setNotesDraft(selected?.notes ?? "");
   }
+
+  /**
+   * The one commit path for the label box, shared by the Add button and by
+   * Enter. Keeping it in a single function is the point: two copies would
+   * drift on the next change to how labels are resolved.
+   */
+  const submitLabel = (task: Task): void => {
+    const names = task.labelIds
+      .map((id) => board.labels.find((l) => l.id === id)?.name)
+      .filter((n): n is string => Boolean(n));
+    void board
+      .setLabels(task.id, [...names, labelText])
+      .then((ok) => clearIfUnchanged(ok, setLabelText, labelText));
+  };
+
+  /** The one commit path for the subtask box; see `submitLabel`. */
+  const submitSubtask = (task: Task): void => {
+    void board
+      .addSubtask(task.id, subtaskTitle)
+      .then((ok) => clearIfUnchanged(ok, setSubtaskTitle, subtaskTitle));
+  };
 
   /**
    * Commit the free-form note.
@@ -760,6 +782,19 @@ export function TaskBoard({
                   value={labelText}
                   placeholder="Add label"
                   onChange={(e) => setLabelText(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (isPlainEnterCommit({
+                        key: e.key,
+                        shiftKey: e.shiftKey,
+                        metaKey: e.metaKey,
+                        ctrlKey: e.ctrlKey,
+                        altKey: e.altKey,
+                        isComposing: e.nativeEvent.isComposing,
+                      })) {
+                      e.preventDefault();
+                      submitLabel(selected);
+                    }
+                  }}
                   style={{ ...controlStyle, flex: 1 }}
                 />
                 <datalist id="task-label-options">
@@ -770,12 +805,7 @@ export function TaskBoard({
                 <button
                   data-testid="label-submit"
                   onClick={() => {
-                    const names = selected.labelIds
-                      .map((id) => board.labels.find((l) => l.id === id)?.name)
-                      .filter((n): n is string => Boolean(n));
-                    void board
-                      .setLabels(selected.id, [...names, labelText])
-                      .then((ok) => clearIfUnchanged(ok, setLabelText, labelText));
+                    submitLabel(selected);
                   }}
                   style={controlStyle}
                 >
@@ -816,13 +846,26 @@ export function TaskBoard({
                   value={subtaskTitle}
                   placeholder="Add subtask"
                   onChange={(e) => setSubtaskTitle(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (isPlainEnterCommit({
+                        key: e.key,
+                        shiftKey: e.shiftKey,
+                        metaKey: e.metaKey,
+                        ctrlKey: e.ctrlKey,
+                        altKey: e.altKey,
+                        isComposing: e.nativeEvent.isComposing,
+                      })) {
+                      e.preventDefault();
+                      submitSubtask(selected);
+                    }
+                  }}
                   style={{ ...controlStyle, flex: 1 }}
                 />
                 <button
                   data-testid="new-subtask-submit"
-                  onClick={() =>
-                    void board.addSubtask(selected.id, subtaskTitle).then((ok) => clearIfUnchanged(ok, setSubtaskTitle, subtaskTitle))
-                  }
+                  onClick={() => {
+                    submitSubtask(selected);
+                  }}
                   style={controlStyle}
                 >
                   Add

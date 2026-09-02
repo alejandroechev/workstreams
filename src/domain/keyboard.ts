@@ -190,3 +190,27 @@ export function parseKeyAction(opts: ParseKeyActionOpts): KeyAction | null {
 
   return null;
 }
+
+export interface PlainEnterCommitOpts {
+  key: string;
+  shiftKey?: boolean;
+  metaKey?: boolean;
+  ctrlKey?: boolean;
+  altKey?: boolean;
+  /** True while an IME candidate window is open; Enter then picks a candidate. */
+  isComposing?: boolean;
+}
+
+/**
+ * True when Enter on a single-line input should commit its value.
+ *
+ * Any modifier disqualifies it: Shift+Enter is a deliberate "don't submit"
+ * gesture, and Cmd/Ctrl/Alt+Enter belong to other commands. IME composition
+ * disqualifies it too, because that Enter is choosing a candidate, not
+ * finishing the entry.
+ */
+export function isPlainEnterCommit(opts: PlainEnterCommitOpts): boolean {
+  if (opts.key !== "Enter") return false;
+  if (opts.isComposing) return false;
+  return !opts.shiftKey && !opts.metaKey && !opts.ctrlKey && !opts.altKey;
+}

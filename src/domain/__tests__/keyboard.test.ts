@@ -1,7 +1,7 @@
 import { beforeEach, describe, it, expect, vi } from "vitest";
 
 import { getMonacoIfLoaded } from "../../files/loadMonaco";
-import { shouldSwallowKeyEvent, parseKeyAction } from "../keyboard";
+import { shouldSwallowKeyEvent, parseKeyAction, isPlainEnterCommit } from "../keyboard";
 
 vi.mock("../../files/loadMonaco", () => ({
   getMonacoIfLoaded: vi.fn(() => null),
@@ -264,5 +264,27 @@ describe("parseKeyAction", () => {
     it("does not map an unrelated code", () => {
       expect(parseKeyAction({ key: "Ω", code: "KeyZ", ...alt })).toBeNull();
     });
+  });
+});
+
+describe("isPlainEnterCommit", () => {
+  it("commits on an unmodified Enter", () => {
+    expect(isPlainEnterCommit({ key: "Enter" })).toBe(true);
+  });
+
+  it("ignores any other key", () => {
+    expect(isPlainEnterCommit({ key: "a" })).toBe(false);
+    expect(isPlainEnterCommit({ key: "Escape" })).toBe(false);
+  });
+
+  it("ignores Enter with a modifier held", () => {
+    expect(isPlainEnterCommit({ key: "Enter", shiftKey: true })).toBe(false);
+    expect(isPlainEnterCommit({ key: "Enter", metaKey: true })).toBe(false);
+    expect(isPlainEnterCommit({ key: "Enter", ctrlKey: true })).toBe(false);
+    expect(isPlainEnterCommit({ key: "Enter", altKey: true })).toBe(false);
+  });
+
+  it("ignores Enter that is closing an IME composition", () => {
+    expect(isPlainEnterCommit({ key: "Enter", isComposing: true })).toBe(false);
   });
 });
