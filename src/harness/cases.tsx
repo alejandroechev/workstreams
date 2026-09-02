@@ -246,6 +246,12 @@ const TerminalRevealCase: FC = () => {
       <div style={{ position: "absolute", zIndex: 10, top: 8, right: 8, display: "flex", gap: 6 }}>
         <button data-testid="terminal-hide" onClick={() => switchVisibility(false)}>Hide</button>
         <button data-testid="terminal-show" onClick={() => switchVisibility(true)}>Show</button>
+        <button
+          data-testid="terminal-refocus"
+          onClick={() => setFocusToken((token) => token + 1)}
+        >
+          Refocus
+        </button>
       </div>
       <div
         data-testid="terminal-workstream"

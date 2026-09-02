@@ -30,7 +30,6 @@ interface Props {
 export default function TerminalTile({ tileId, isFocused, focusToken, visible = true, isFullscreen = false, onStatusChange }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
-  const fitRef = useRef<FitAddon | null>(null);
   const ptyFitRef = useRef<ReturnType<typeof createPtyFitController> | null>(null);
   const serializeRef = useRef<SerializeAddon | null>(null);
   const webglRef = useRef<ReturnType<typeof createWebglController> | null>(null);
@@ -86,11 +85,16 @@ export default function TerminalTile({ tileId, isFocused, focusToken, visible = 
     term.loadAddon(serializeAddon);
 
     termRef.current = term;
-    fitRef.current = fitAddon;
     serializeRef.current = serializeAddon;
 
     term.open(containerRef.current);
-    fitAddon.fit();
+    const ptyFit = createPtyFitController({
+      tileId,
+      fitAddon,
+      getContainer: () => containerRef.current,
+    });
+    ptyFitRef.current = ptyFit;
+    ptyFit.requestNow();
 
     // GPU-accelerated rendering via the WebGL addon. Loaded through a
     // controller that only initialises when the container is visible+sized
@@ -218,12 +222,6 @@ export default function TerminalTile({ tileId, isFocused, focusToken, visible = 
     // Handle resize. Coalesced + dedup'd via the shared PTY-fit controller:
     // skips invoke when cols/rows haven't changed (a same-size SIGWINCH on
     // visibility flips causes Copilot CLI to misplace its TUI spinner output).
-    const ptyFit = createPtyFitController({
-      tileId,
-      fitAddon,
-      getContainer: () => containerRef.current,
-    });
-    ptyFitRef.current = ptyFit;
     const resizeObserver = new ResizeObserver(() => {
       ptyFit.request();
     });
@@ -321,7 +319,8 @@ export default function TerminalTile({ tileId, isFocused, focusToken, visible = 
   useEffect(() => {
     if (!isFocused || !visible) return;
     const focusNow = () => {
-      fitRef.current?.fit();
+      ptyFitRef.current?.invalidate();
+      ptyFitRef.current?.requestNow();
       const term = termRef.current;
       if (term) {
         term.focus();

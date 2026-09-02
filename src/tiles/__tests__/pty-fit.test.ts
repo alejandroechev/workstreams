@@ -44,6 +44,7 @@ describe("createPtyFitController", () => {
       getContainer: () => makeEl(800),
       debounceMs: 50,
     });
+
     ctl.request();
     ctl.request();
     ctl.request();
@@ -51,6 +52,23 @@ describe("createPtyFitController", () => {
     vi.advanceTimersByTime(60);
     expect(invoke).toHaveBeenCalledTimes(1);
     expect(invoke).toHaveBeenCalledWith("resize_pty", { tileId: "t1", rows: 24, cols: 80 });
+  });
+
+  it("requestNow() bypasses the debounce delay for focus synchronization", () => {
+    const fit = makeFit({ cols: 80, rows: 24 });
+    const ctl = createPtyFitController({
+      tileId: "t1",
+      fitAddon: fit,
+      getContainer: () => makeEl(800),
+      debounceMs: 500,
+    });
+    ctl.requestNow();
+    vi.advanceTimersByTime(1);
+    expect(invoke).toHaveBeenCalledWith("resize_pty", {
+      tileId: "t1",
+      rows: 24,
+      cols: 80,
+    });
   });
 
   it("skips invoke when dimensions are unchanged from previous flush", () => {

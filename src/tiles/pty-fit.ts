@@ -4,6 +4,8 @@ import { invoke } from "@tauri-apps/api/core";
 export interface PtyFitController {
   /** Request a fit + resize_pty. Coalesces rapid calls and skips when dims are unchanged. */
   request(): void;
+  /** Request the fit on the next animation frame without the debounce delay. */
+  requestNow(): void;
   /** Last cols/rows sent to the PTY, or null if nothing sent yet. */
   lastDims(): { cols: number; rows: number } | null;
   /** Force-send next dims regardless of cache (e.g. after font-size change). */
@@ -105,6 +107,11 @@ export function createPtyFitController(opts: {
       if (disposed) return;
       if (timer !== null) clearTimeout(timer);
       timer = setTimeout(flush, debounceMs);
+    },
+    requestNow() {
+      if (disposed) return;
+      if (timer !== null) clearTimeout(timer);
+      timer = setTimeout(flush, 0);
     },
     lastDims() {
       return last;

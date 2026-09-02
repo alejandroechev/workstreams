@@ -56,3 +56,49 @@ test("persisted terminal repaints on workstream reveal without hidden focus work
     ),
   ).toBeGreaterThanOrEqual(refreshBefore + 2);
 });
+
+test("refocus resynchronizes xterm dimensions with the PTY", async ({ page }) => {
+  await page.goto("/?harness=terminal-reveal", { waitUntil: "networkidle" });
+  await page.waitForFunction(() => document.querySelector(".xterm") !== null);
+  // Let mount + reveal recovery settle so only the explicit refocus below can
+  // produce the resize call under test.
+  await page.waitForTimeout(600);
+
+  const expectedCols = await page.evaluate(() => {
+    const root = document.querySelector('[data-testid="terminal-workstream"]');
+    const host = [...(root?.querySelectorAll("div") ?? [])].find(
+      (element) => "__wsTerm" in element,
+    ) as (HTMLElement & {
+      __wsTerm?: { cols: number; rows: number; resize(cols: number, rows: number): void };
+    }) | undefined;
+    if (!host?.__wsTerm) throw new Error("terminal instance not exposed");
+    const term = host.__wsTerm;
+    const fittedCols = term.cols;
+    term.resize(Math.max(2, fittedCols - 7), term.rows);
+    (window as unknown as { __WS_INVOKE_LOG__?: unknown[] }).__WS_INVOKE_LOG__ = [];
+    return fittedCols;
+  });
+
+  await page.waitForTimeout(150);
+  expect(await page.evaluate(() =>
+    ((window as unknown as {
+      __WS_INVOKE_LOG__?: Array<{ cmd: string }>;
+    }).__WS_INVOKE_LOG__ ?? []).filter((call) => call.cmd === "resize_pty").length,
+  )).toBe(0);
+
+  await page.locator('[data-testid="terminal-refocus"]').click();
+
+  await expect.poll(() =>
+    page.evaluate(() => {
+      const calls = (window as unknown as {
+        __WS_INVOKE_LOG__?: Array<{
+          cmd: string;
+          args: { cols?: number };
+        }>;
+      }).__WS_INVOKE_LOG__ ?? [];
+      return calls
+        .filter((call) => call.cmd === "resize_pty")
+        .at(-1)?.args.cols ?? null;
+    }),
+  ).toBe(expectedCols);
+});

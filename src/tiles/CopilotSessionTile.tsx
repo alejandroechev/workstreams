@@ -63,7 +63,6 @@ export default function CopilotSessionTile({
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
-  const fitRef = useRef<FitAddon | null>(null);
   const ptyFitRef = useRef<ReturnType<typeof createPtyFitController> | null>(null);
   const serializeRef = useRef<SerializeAddon | null>(null);
   const webglRef = useRef<ReturnType<typeof createWebglController> | null>(null);
@@ -119,11 +118,16 @@ export default function CopilotSessionTile({
     term.loadAddon(serializeAddon);
 
     termRef.current = term;
-    fitRef.current = fitAddon;
     serializeRef.current = serializeAddon;
 
     term.open(containerRef.current);
-    fitAddon.fit();
+    const ptyFit = createPtyFitController({
+      tileId,
+      fitAddon,
+      getContainer: () => containerRef.current,
+    });
+    ptyFitRef.current = ptyFit;
+    ptyFit.requestNow();
 
     // GPU-accelerated rendering via the WebGL addon. Loaded through a
     // controller that only initialises when the container is visible+sized
@@ -285,13 +289,6 @@ export default function CopilotSessionTile({
       }
     });
 
-    const ptyFit = createPtyFitController({
-      tileId,
-      fitAddon,
-      getContainer: () => containerRef.current,
-    });
-    ptyFitRef.current = ptyFit;
-
     const resizeObserver = new ResizeObserver(() => {
       ptyFit.request();
     });
@@ -405,7 +402,8 @@ export default function CopilotSessionTile({
   useEffect(() => {
     if (!isFocused || !visible) return;
     const focusNow = () => {
-      fitRef.current?.fit();
+      ptyFitRef.current?.invalidate();
+      ptyFitRef.current?.requestNow();
       const term = termRef.current;
       if (term) {
         term.focus();

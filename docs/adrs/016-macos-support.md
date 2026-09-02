@@ -118,6 +118,21 @@ The terminal GPU setting is independent of this path. It controls xterm's
 WebGL addon inside the webview; the visibility recovery runs for both WebGL and
 DOM rendering.
 
+### Xterm and PTY dimensions must change atomically
+
+Shell line editors wrap and position their cursor using the PTY's reported
+column count, while xterm renders using its own grid. Calling `FitAddon.fit()`
+directly during focus recovery changed only xterm. If the two widths diverged,
+the first wrapped row could disappear and left/right/backspace edits across a
+wrapped command displayed the cursor over the wrong character.
+
+Initial mount and focus recovery now go exclusively through
+`PtyFitController`, which fits xterm and sends the resulting rows/columns to
+`resize_pty` as one operation. Focus uses the immediate request path rather
+than the ordinary resize debounce, minimizing the interval before input can
+resume. The real-browser terminal harness deliberately desynchronizes xterm,
+refocuses the tile, and requires a matching `resize_pty` call.
+
 ## Consequences
 
 - macOS runners are **free** for this public repo, so the extra job costs
