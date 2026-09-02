@@ -176,19 +176,25 @@ test("dragging to Done records the completion and keeps the card today", async (
   await expect(page.locator('[data-testid^="touched-"]').first()).toBeVisible();
 });
 
-test("subtasks and their state render on the card", async ({ page }) => {
+test("the card lists open subtasks and hides finished ones", async ({ page }) => {
   await openBoard(page);
   await addTask(page, "offline sdk write path impl");
   await page.locator('[data-testid^="task-card-"]').first().click();
 
   await page.locator('[data-testid="new-subtask-input"]').fill("Address first round of reviews");
   await page.locator('[data-testid="new-subtask-submit"]').click();
+  await page.locator('[data-testid="new-subtask-input"]').fill("Addressing second round");
+  await page.locator('[data-testid="new-subtask-submit"]').click();
   await page.locator('[data-testid^="subtask-status-"]').first().selectOption("done");
 
   const card = page.locator('[data-testid^="task-card-"]').first();
-  await expect(card).toContainText("Address first round of reviews");
-  await expect(card).toContainText("1/1 subtasks");
-  await expect(card).toContainText("✅");
+  await expect(card).toContainText("Addressing second round");
+  await expect(card).not.toContainText("Address first round of reviews");
+  // The chip still reports the full picture even though the row is gone.
+  await expect(card).toContainText("1/2 subtasks");
+
+  // The detail panel keeps every subtask, finished ones included.
+  await expect(page.locator('[data-testid^="subtask-status-"]')).toHaveCount(2);
 });
 
 test("creating a task from the workstream menu opens it ready to rename", async ({ page }) => {

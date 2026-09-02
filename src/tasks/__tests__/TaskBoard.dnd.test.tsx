@@ -218,18 +218,16 @@ describe("workstream link", () => {
 });
 
 describe("subtasks on the card", () => {
-  it("lists each subtask with its own status glyph", async () => {
+  it("lists each open subtask with its own status glyph", async () => {
     const task = await backend.createTask("offline sdk", { status: "in_progress" });
-    const done = await backend.createSubtask(task.id, "Address first round of reviews");
-    await backend.updateSubtask(done.id, { status: "done" });
-    await backend.createSubtask(task.id, "Addressing second round");
+    const open = await backend.createSubtask(task.id, "Addressing second round");
+    await backend.updateSubtask(open.id, { status: "in_progress" });
 
     renderBoard();
     const card = await screen.findByTestId(`task-card-${task.id}`);
 
-    expect(within(card).getByText("Address first round of reviews")).toBeInTheDocument();
     expect(within(card).getByText("Addressing second round")).toBeInTheDocument();
-    expect(within(card).getByTestId(`card-subtask-${done.id}`)).toHaveTextContent("✅");
+    expect(within(card).getByTestId(`card-subtask-${open.id}`)).toHaveTextContent("⚒️");
   });
 
   it("summarises progress, counting cancelled as finished", async () => {

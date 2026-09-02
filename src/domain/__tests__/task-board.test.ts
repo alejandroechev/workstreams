@@ -7,6 +7,7 @@ import {
   UNLABELLED_LANE_ID,
   statusForDrop,
   subtaskProgress,
+  cardSubtasks,
   inProgressTasks,
 } from "../task-board";
 import { makeTask, makeEvent } from "../tasks";
@@ -256,6 +257,39 @@ describe("subtaskProgress", () => {
 
   it("reports zeroes for a task with no subtasks", () => {
     expect(subtaskProgress(makeTask({ id: "a", title: "x" }))).toEqual({ done: 0, total: 0 });
+  });
+});
+
+describe("cardSubtasks", () => {
+  const withSubs = (statuses: string[]) =>
+    makeTask({
+      id: "a",
+      title: "x",
+      subtasks: statuses.map((status, i) => ({
+        id: `s${i + 1}`,
+        title: `sub ${i + 1}`,
+        status: status as Task["status"],
+      })),
+    });
+
+  it("drops finished subtasks from the card list", () => {
+    const result = cardSubtasks(withSubs(["done", "in_progress", "cancelled"]), 5);
+    expect(result.shown.map((s) => s.id)).toEqual(["s2"]);
+    expect(result.hidden).toBe(0);
+  });
+
+  it("returns nothing when every subtask is finished", () => {
+    expect(cardSubtasks(withSubs(["done", "cancelled"]), 5)).toEqual({ shown: [], hidden: 0 });
+  });
+
+  it("returns nothing for a task with no subtasks", () => {
+    expect(cardSubtasks(makeTask({ id: "a", title: "x" }), 5)).toEqual({ shown: [], hidden: 0 });
+  });
+
+  it("counts overflow from open subtasks only", () => {
+    const result = cardSubtasks(withSubs(["done", "todo", "todo", "todo", "done", "todo"]), 2);
+    expect(result.shown.map((s) => s.id)).toEqual(["s2", "s3"]);
+    expect(result.hidden).toBe(2);
   });
 });
 

@@ -197,9 +197,13 @@ renders in Done, writing the column's own status on such a drop would silently
 flatten `🕵️` into `⚒️` and `❌` into `✅` — destroying a distinction the export
 depends on, purely because a card was picked up and put down again.
 
-Cards show their subtasks inline with each subtask's own glyph, capped at five
-with a `+n more` summary. The cap exists because 45 tasks share one column;
-rendering every subtask of every card unbounded makes that column unusable.
+Cards show their **open** subtasks inline with each subtask's own glyph, capped
+at five with a `+n more` summary counted from the open ones. The cap exists
+because 45 tasks share one column; rendering every subtask of every card
+unbounded makes that column unusable. Finished subtasks are filtered out before
+the cap so the few rows go to live work — the `n/m subtasks` chip still reports
+the full done-vs-total count, so completed work is still visible on the card,
+and the detail panel keeps every subtask so it can be re-opened or deleted.
 
 The sidebar's `⋯` menu offers **Create task…**, which opens the board with a
 task created, named after the workstream, attached to it and selected. The

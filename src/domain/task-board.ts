@@ -15,7 +15,7 @@
  * Everything here is pure, so the skew can be reproduced in tests with
  * real-shaped seed data rather than five toy cards that would hide it.
  */
-import type { Task, TaskEvent, Label } from "./tasks";
+import type { Task, TaskEvent, Label, Subtask } from "./tasks";
 import { completionDate, derivedRepoIds, toLocalDate } from "./tasks";
 import type { Workstream } from "./types";
 import type { BoardColumnId, TaskStatus } from "./task-status";
@@ -180,6 +180,23 @@ export function subtaskProgress(task: Task): SubtaskProgress {
     done: task.subtasks.filter((s) => isTerminalStatus(s.status)).length,
     total: task.subtasks.length,
   };
+}
+
+export interface CardSubtasks {
+  shown: Subtask[];
+  hidden: number;
+}
+
+/**
+ * The subtasks a board card lists, and how many it had to drop.
+ *
+ * Finished subtasks are removed *before* the limit is applied, so the card
+ * spends its few rows on work that is still open. The progress chip keeps
+ * reporting the full done/total counts, so nothing is lost.
+ */
+export function cardSubtasks(task: Task, limit: number): CardSubtasks {
+  const open = task.subtasks.filter((s) => !isTerminalStatus(s.status));
+  return { shown: open.slice(0, limit), hidden: Math.max(0, open.length - limit) };
 }
 
 /**

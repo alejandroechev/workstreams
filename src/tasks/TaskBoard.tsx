@@ -45,6 +45,7 @@ import {
   filterByRepo,
   statusForDrop,
   subtaskProgress,
+  cardSubtasks,
 } from "../domain/task-board";
 import { renderDevlogDay } from "../domain/devlog-render";
 import { useTaskBoard } from "./useTaskBoard";
@@ -542,8 +543,7 @@ export function TaskBoard({
                     >
                       {lane.columns[column.id].map((task) => {
                         const progress = subtaskProgress(task);
-                        const shown = task.subtasks.slice(0, CARD_SUBTASK_LIMIT);
-                        const hidden = task.subtasks.length - shown.length;
+                        const { shown, hidden } = cardSubtasks(task, CARD_SUBTASK_LIMIT);
                         const linkedWs = task.workstreamId
                           ? workstreams.find((w) => w.id === task.workstreamId)
                           : undefined;
