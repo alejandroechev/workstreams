@@ -67,7 +67,9 @@ project-aware workspace:
   **Tasks**), not a tile, because a task may have no workstream and often
   outlives the one it had. Five columns matching the active status vocabulary
   used in a hand-written devlog (⚒️ 👁️ 🧊 🚗 🙋 ✅), **label swimlanes** so a
-  long in-progress column stays scannable, an **append-only activity log** per task (entries can be multi-line; `⌘⏎` logs), and one **free-form Notes**
+  long in-progress column stays scannable, **per-column tinting with lane
+  separators** (In progress is the most salient column and labels itself
+  `In progress (active)` so the cue never rests on colour alone), an **append-only activity log** per task (entries can be multi-line; `⌘⏎` logs), and one **free-form Notes**
   field per task — editable multi-line context that lands in the exported page. **URLs in log entries are clickable**, and links found in the notes are
   surfaced as a clickable row under the box (both open in the system browser).
   Cards are **drag-and-drop** between columns (dropping a card back on

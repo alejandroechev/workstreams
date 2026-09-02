@@ -27,6 +27,11 @@ import type { Task } from "../domain/tasks";
 import type { BoardColumnId } from "../domain/task-status";
 import { isPlainEnterCommit } from "../domain/keyboard";
 import {
+  BOARD_SEPARATOR,
+  boardColumnHeaderLabel,
+  boardColumnStyle,
+} from "../domain/board-column-style";
+import {
   toLocalDate,
   previousWorkDay,
   eventsForTask,
@@ -551,11 +556,26 @@ export function TaskBoard({
         <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
           <div style={{ flex: 1, overflow: "auto", padding: 8 }}>
             <div style={columnHeaderRowStyle}>
-              {BOARD_COLUMNS.map((column) => (
-                <div key={column.id} data-testid={`board-column-${column.id}`} style={columnHeadStyle}>
-                  {column.label}
-                </div>
-              ))}
+              {BOARD_COLUMNS.map((column) => {
+                const tint = boardColumnStyle(column.id);
+                return (
+                  <div
+                    key={column.id}
+                    data-testid={`board-column-${column.id}`}
+                    data-active={tint.active ? "true" : "false"}
+                    title={tint.active ? `${column.label} — active column` : column.label}
+                    style={{
+                      ...columnHeadStyle,
+                      backgroundColor: tint.headerBackground,
+                      border: `1px solid ${tint.active ? tint.separator : "transparent"}`,
+                      color: tint.active ? "#cdd6f4" : columnHeadStyle.color,
+                      fontWeight: tint.active ? 700 : 500,
+                    }}
+                  >
+                    {boardColumnHeaderLabel(column.id, column.label)}
+                  </div>
+                );
+              })}
             </div>
 
             {lanes.length === 0 && (
@@ -570,6 +590,7 @@ export function TaskBoard({
                 <div style={laneRowStyle}>
                   {BOARD_COLUMNS.map((column) => {
                     const isDropTarget = dropColumn === column.id && draggingId !== null;
+                    const tint = boardColumnStyle(column.id);
                     return (
                     <div
                       key={column.id}
@@ -588,7 +609,9 @@ export function TaskBoard({
                       }}
                       style={{
                         ...laneCellStyle,
-                        background: isDropTarget ? "#1e1e2e" : "transparent",
+                        backgroundColor: isDropTarget ? "#1e1e2e" : tint.cellBackground,
+                        borderLeft: `1px solid ${tint.separator}`,
+                        borderRight: `1px solid ${tint.separator}`,
                         outline: isDropTarget ? "1px dashed #89b4fa" : "1px solid transparent",
                         borderRadius: 4,
                       }}
@@ -1088,6 +1111,8 @@ const columnHeadStyle: React.CSSProperties = {
   textTransform: "uppercase",
   letterSpacing: 0.5,
   color: "#6c7086",
+  padding: "3px 6px",
+  borderRadius: 4,
 };
 
 const laneHeadStyle: React.CSSProperties = { fontSize: 11, margin: "0 0 4px" };
@@ -1096,6 +1121,8 @@ const laneRowStyle: React.CSSProperties = {
   display: "grid",
   gridTemplateColumns: `repeat(${BOARD_COLUMNS.length}, minmax(120px, 1fr))`,
   gap: 6,
+  borderBottom: BOARD_SEPARATOR,
+  paddingBottom: 6,
 };
 
 const laneCellStyle: React.CSSProperties = {

@@ -16,7 +16,7 @@ graph TB
             CodeReview["CodeReviewTile<br/>diff-first PR-style review (ADR 014)<br/>inline comments + in-place edit<br/>reviewer↔agent via session.db, no MCP<br/>manual Sync (no poll)"]
             LoopControl["LoopControlTile (ADR 021/022/023)<br/>Definitions: shared YAML editor<br/>Run: catalog + controls/evidence<br/>human Approve/Revise/Reject"]
             InlineComments["Inline File Comments (ADR 009)<br/>view zones in FileEditorView + comments-toggle<br/>reviewer↔agent via session.db, no MCP<br/>requires a linked session"]
-            TaskBoard["TaskBoard (ADR 020)<br/>global board, not a tile<br/>7 columns + label swimlanes<br/>subtasks / labels / event feed"]
+            TaskBoard["TaskBoard (ADR 020)<br/>global board, not a tile<br/>7 columns + label swimlanes<br/>per-column tint + lane separators<br/>subtasks / labels / event feed"]
             QuickNote["WorkstreamQuickNote<br/>log a note to this workstream's task"]
             DevlogRender["devlog-render.ts<br/>renders the daily page (pure)"]
             StatusBar["StatusBar<br/>Shortcuts + metadata"]
