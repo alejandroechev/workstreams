@@ -18,6 +18,7 @@ import {
   TrashIcon,
   ArrowTopRightOnSquareIcon,
   Bars3BottomLeftIcon,
+  LinkIcon,
 } from "@heroicons/react/24/outline";
 
 import type { Backend } from "../backend/types";
@@ -48,6 +49,8 @@ import {
   cardSubtasks,
 } from "../domain/task-board";
 import { renderDevlogDay } from "../domain/devlog-render";
+import { splitLinks } from "../domain/linkify";
+import { LinkifiedText } from "./LinkifiedText";
 import { useTaskBoard } from "./useTaskBoard";
 import { dispatchTasksChanged } from "../domain/task-events-bus";
 
@@ -286,6 +289,17 @@ export function TaskBoard({
     if (notesDraft === selected.notes) return;
     void board.updateTask(selected.id, { notes: notesDraft });
   };
+
+  /**
+   * Links found in the notes draft. The notes box stays an editable textarea
+   * (which cannot host anchors), so URLs are surfaced as a companion row of
+   * clickable links right below it. Driven off the draft, not the saved value,
+   * so a link is actionable as soon as it is typed.
+   */
+  const notesLinks = useMemo(
+    () => splitLinks(notesDraft).filter((s) => s.kind === "link").map((s) => s.value),
+    [notesDraft],
+  );
 
   /**
    * Commit a rename. A blank title is refused rather than saved: the title is
@@ -838,6 +852,28 @@ export function TaskBoard({
                 }}
               />
 
+              {notesLinks.length > 0 && (
+                <div
+                  data-testid="notes-links"
+                  style={{
+                    display: "flex",
+                    flexWrap: "wrap",
+                    alignItems: "center",
+                    gap: 6,
+                    marginTop: 3,
+                  }}
+                >
+                  <LinkIcon
+                    aria-hidden
+                    style={{ width: 10, height: 10, color: "#6c7086" }}
+                  />
+                  <span style={{ color: "#6c7086", fontSize: 10 }}>Links in notes:</span>
+                  {notesLinks.map((url, i) => (
+                    <LinkifiedText key={`${url}:${i}`} text={url} style={{ fontSize: 10 }} />
+                  ))}
+                </div>
+              )}
+
               <label style={fieldLabelStyle}>Activity</label>
               {earlierEventCount > 0 && (
                 <button
@@ -877,7 +913,7 @@ export function TaskBoard({
                         wordBreak: "break-word",
                       }}
                     >
-                      {event.text}
+                      <LinkifiedText text={event.text} />
                     </span>
                     {/* Delete only. Event text is immutable by design, so no
                         edit control exists anywhere in this panel. */}
