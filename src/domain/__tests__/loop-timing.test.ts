@@ -2,10 +2,13 @@ import { describe, expect, it } from "vitest";
 
 import type { LoopRun, LoopStageRecord, LoopTask } from "../loop";
 import {
+  matchesTaskFilter,
+  orderTasks,
   stagesForTask,
   summarizeRunTiming,
   summarizeTaskTiming,
   taskHeadline,
+  type LoopTaskFilter,
 } from "../loop-timing";
 
 function stage(overrides: Partial<LoopStageRecord> = {}): LoopStageRecord {
@@ -135,5 +138,107 @@ describe("loop timing summaries", () => {
       expect(taskHeadline(task(state)).length).toBeGreaterThan(0);
     }
     expect(taskHeadline(task("awaiting_approval"))).toContain("approval");
+  });
+
+  it("orders tasks newest first by default and can reverse", () => {
+    const make = (id: string, createdAt?: string): LoopTask => ({
+      id,
+      loopRunId: "run-1",
+      loopSpecId: "spec-1",
+      key: id,
+      title: id,
+      objective: "Objective",
+      state: "accepted",
+      revisionCount: 0,
+      createdAt,
+    });
+    const tasks = [
+      make("first", "2026-09-02T10:00:00.000Z"),
+      make("second", "2026-09-02T11:00:00.000Z"),
+      make("third", "2026-09-02T12:00:00.000Z"),
+    ];
+
+    expect(orderTasks(tasks, "newest").map((task) => task.id)).toEqual([
+      "third",
+      "second",
+      "first",
+    ]);
+    expect(orderTasks(tasks, "oldest").map((task) => task.id)).toEqual([
+      "first",
+      "second",
+      "third",
+    ]);
+    expect(tasks.map((task) => task.id)).toEqual(["first", "second", "third"]);
+  });
+
+  it("keeps a stable order when timestamps are missing or identical", () => {
+    const make = (id: string, createdAt?: string): LoopTask => ({
+      id,
+      loopRunId: "run-1",
+      loopSpecId: "spec-1",
+      key: id,
+      title: id,
+      objective: "Objective",
+      state: "accepted",
+      revisionCount: 0,
+      createdAt,
+    });
+    const sameSecond = [
+      make("a", "2026-09-02T10:00:00.000Z"),
+      make("b", "2026-09-02T10:00:00.000Z"),
+      make("c"),
+    ];
+
+    expect(orderTasks(sameSecond, "newest").map((task) => task.id)).toEqual([
+      "c",
+      "b",
+      "a",
+    ]);
+    expect(orderTasks(sameSecond, "oldest").map((task) => task.id)).toEqual([
+      "a",
+      "b",
+      "c",
+    ]);
+  });
+
+  it("filters tasks by lifecycle group", () => {
+    const make = (state: LoopTask["state"]): LoopTask => ({
+      id: state,
+      loopRunId: "run-1",
+      loopSpecId: "spec-1",
+      key: state,
+      title: state,
+      objective: "Objective",
+      state,
+      revisionCount: 0,
+    });
+    const matching = (filter: LoopTaskFilter) =>
+      (
+        [
+          "queued",
+          "working",
+          "verifying",
+          "evaluating",
+          "awaiting_approval",
+          "accepted",
+          "blocked",
+          "attention",
+          "interrupted",
+        ] as LoopTask["state"][]
+      )
+        .map(make)
+        .filter((task) => matchesTaskFilter(task, filter))
+        .map((task) => task.state);
+
+    expect(matching("all")).toHaveLength(9);
+    expect(matching("active")).toEqual([
+      "queued",
+      "working",
+      "verifying",
+      "evaluating",
+      "awaiting_approval",
+    ]);
+    expect(matching("accepted")).toEqual(["accepted"]);
+    expect(matching("attention")).toEqual(["blocked", "attention", "interrupted"]);
   });
 });

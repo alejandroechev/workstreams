@@ -16,9 +16,14 @@ import {
 } from "@heroicons/react/24/outline";
 
 import {
+  LOOP_TASK_FILTERS,
+  matchesTaskFilter,
+  orderTasks,
   summarizeRunTiming,
   summarizeTaskTiming,
   taskHeadline,
+  type LoopTaskFilter,
+  type LoopTaskSort,
   type LoopTaskTiming,
 } from "../domain/loop-timing";
 import { useBackend } from "../backend/context";
@@ -120,6 +125,15 @@ const buttonStyle: React.CSSProperties = {
 };
 
 const iconStyle: React.CSSProperties = { width: 14, height: 14, flexShrink: 0 };
+
+const selectStyle: React.CSSProperties = {
+  border: "1px solid #45475a",
+  borderRadius: 4,
+  padding: "4px 6px",
+  background: "#313244",
+  color: "#cdd6f4",
+  font: "inherit",
+};
 const tabStyle: React.CSSProperties = {
   border: "none",
   borderBottom: "2px solid transparent",
@@ -745,6 +759,35 @@ function CurrentTaskDetail({
   );
 }
 
+const STATUS_PREVIEW_LIMIT = 220;
+
+function TaskStatusMessage({
+  message,
+  testId,
+}: {
+  message: string;
+  testId: string;
+}) {
+  const [open, setOpen] = useState(false);
+  if (message.length <= STATUS_PREVIEW_LIMIT) {
+    return <div style={{ marginTop: 3 }}>{message}</div>;
+  }
+  return (
+    <details data-testid={testId} open={open} style={{ marginTop: 3 }}>
+      <summary
+        onClick={(event) => {
+          event.preventDefault();
+          setOpen((current) => !current);
+        }}
+        style={{ cursor: "pointer", userSelect: "none" }}
+      >
+        {open ? "Show less" : `${message.slice(0, STATUS_PREVIEW_LIMIT).trimEnd()}…`}
+      </summary>
+      {open && <div style={{ marginTop: 4 }}>{message}</div>}
+    </details>
+  );
+}
+
 function StageTimings({
   timing,
   testId,
@@ -839,7 +882,10 @@ function TaskCard({
         }}
       >
         <strong>{status.label}</strong>
-        <div style={{ marginTop: 3 }}>{status.message}</div>
+        <TaskStatusMessage
+          message={status.message}
+          testId={`loop-task-message-${task.id}`}
+        />
         {status.warning && (
           <div style={{ color: "#f9e2af", marginTop: 5 }}>{status.warning}</div>
         )}
@@ -913,6 +959,13 @@ function TaskCard({
   );
 }
 
+const TASK_FILTER_LABELS: Record<LoopTaskFilter, string> = {
+  all: "All",
+  active: "Active",
+  accepted: "Accepted",
+  attention: "Needs attention",
+};
+
 function TaskList({
   tasks,
   verifications,
@@ -932,6 +985,12 @@ function TaskList({
     (task) => task.state === "attention" || task.state === "blocked",
   ).length;
   const [open, setOpen] = useState(actionable > 0);
+  const [sort, setSort] = useState<LoopTaskSort>("newest");
+  const [filter, setFilter] = useState<LoopTaskFilter>("all");
+  const visible = orderTasks(
+    tasks.filter((task) => matchesTaskFilter(task, filter)),
+    sort,
+  );
   return (
     <details data-testid="loop-task-list" open={open} style={sectionStyle}>
       <summary
@@ -944,37 +1003,80 @@ function TaskList({
         Tasks ({tasks.length}
         {actionable > 0 ? `, ${actionable} need attention` : ""})
       </summary>
-      {open &&
-        (tasks.length === 0 ? (
-          <div style={{ color: "#6c7086", marginTop: 8 }}>
-            No tasks have been proposed.
+      {open && (
+        <>
+          <div
+            style={{
+              display: "flex",
+              flexWrap: "wrap",
+              gap: 6,
+              alignItems: "center",
+              marginTop: 8,
+            }}
+          >
+            <label style={{ color: "#a6adc8" }}>
+              Show{" "}
+              <select
+                data-testid="loop-task-filter"
+                aria-label="Filter tasks by state"
+                value={filter}
+                onChange={(event) =>
+                  setFilter(event.target.value as LoopTaskFilter)
+                }
+                style={selectStyle}
+              >
+                {LOOP_TASK_FILTERS.map((option) => (
+                  <option key={option} value={option}>
+                    {TASK_FILTER_LABELS[option]}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button
+              data-testid="loop-task-sort"
+              type="button"
+              onClick={() =>
+                setSort((current) => (current === "newest" ? "oldest" : "newest"))
+              }
+              style={buttonStyle}
+            >
+              {sort === "newest" ? "Newest first" : "Oldest first"}
+            </button>
           </div>
-        ) : (
-          <div style={{ marginTop: 8 }}>
-            {tasks.map((task) => {
-              const taskVerifications = verifications.filter(
-                (record) => record.loopTaskId === task.id,
-              );
-              const taskEvaluations = evaluations
-                .filter((record) => record.loopTaskId === task.id)
-                .sort((left, right) => left.attempt - right.attempt);
-              const taskApprovals = approvals
-                .filter((record) => record.loopTaskId === task.id)
-                .sort((left, right) => left.attempt - right.attempt);
-              return (
-                <TaskCard
-                  key={task.id}
-                  task={task}
-                  verifications={taskVerifications}
-                  evaluations={taskEvaluations}
-                  approvals={taskApprovals}
-                  maxTaskIterations={maxTaskIterations}
-                  timing={summarizeTaskTiming(stages, task.id)}
-                />
-              );
-            })}
-          </div>
-        ))}
+          {visible.length === 0 ? (
+            <div data-testid="loop-task-empty" style={{ color: "#6c7086", marginTop: 8 }}>
+              {tasks.length === 0
+                ? "No tasks have been proposed."
+                : "No tasks match this filter."}
+            </div>
+          ) : (
+            <div style={{ marginTop: 8 }}>
+              {visible.map((task) => {
+                const taskVerifications = verifications.filter(
+                  (record) => record.loopTaskId === task.id,
+                );
+                const taskEvaluations = evaluations
+                  .filter((record) => record.loopTaskId === task.id)
+                  .sort((left, right) => left.attempt - right.attempt);
+                const taskApprovals = approvals
+                  .filter((record) => record.loopTaskId === task.id)
+                  .sort((left, right) => left.attempt - right.attempt);
+                return (
+                  <TaskCard
+                    key={task.id}
+                    task={task}
+                    verifications={taskVerifications}
+                    evaluations={taskEvaluations}
+                    approvals={taskApprovals}
+                    maxTaskIterations={maxTaskIterations}
+                    timing={summarizeTaskTiming(stages, task.id)}
+                  />
+                );
+              })}
+            </div>
+          )}
+        </>
+      )}
     </details>
   );
 }

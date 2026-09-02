@@ -106,6 +106,65 @@ export function summarizeRunTiming(input: {
   };
 }
 
+export const LOOP_TASK_FILTERS = ["all", "active", "accepted", "attention"] as const;
+
+export type LoopTaskFilter = (typeof LOOP_TASK_FILTERS)[number];
+
+export type LoopTaskSort = "newest" | "oldest";
+
+const ACTIVE_STATES: ReadonlySet<LoopTask["state"]> = new Set([
+  "queued",
+  "working",
+  "verifying",
+  "evaluating",
+  "awaiting_approval",
+]);
+
+const ATTENTION_STATES: ReadonlySet<LoopTask["state"]> = new Set([
+  "attention",
+  "blocked",
+  "interrupted",
+]);
+
+export function matchesTaskFilter(task: LoopTask, filter: LoopTaskFilter): boolean {
+  switch (filter) {
+    case "all":
+      return true;
+    case "active":
+      return ACTIVE_STATES.has(task.state);
+    case "accepted":
+      return task.state === "accepted";
+    case "attention":
+      return ATTENTION_STATES.has(task.state);
+  }
+}
+
+/**
+ * Orders tasks for display. The backend returns creation order; the UI defaults
+ * to newest-first so the task the loop is working on right now is at the top,
+ * without losing the ability to read the run as a chronological story.
+ *
+ * Sorting is stable and falls back to the original index when timestamps are
+ * missing or equal, so tasks created within the same second keep a predictable
+ * order instead of shuffling between refreshes.
+ */
+export function orderTasks(
+  tasks: readonly LoopTask[],
+  sort: LoopTaskSort,
+): LoopTask[] {
+  return tasks
+    .map((task, index) => ({ task, index }))
+    .sort((left, right) => {
+      const leftTime = parseTime(left.task.createdAt);
+      const rightTime = parseTime(right.task.createdAt);
+      if (leftTime !== null && rightTime !== null && leftTime !== rightTime) {
+        return sort === "newest" ? rightTime - leftTime : leftTime - rightTime;
+      }
+      return sort === "newest" ? right.index - left.index : left.index - right.index;
+    })
+    .map((entry) => entry.task);
+}
+
 /**
  * One-line description of where a task currently stands, used as the collapsed
  * summary so the overview never requires opening details to be useful.

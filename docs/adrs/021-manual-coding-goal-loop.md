@@ -233,6 +233,13 @@ objective, task list, and event timeline are all closed disclosures. The task
 list opens automatically only when a task is blocked or needs attention, so
 work that requires a human is never hidden behind a click.
 
+Task results are frequently long evaluator prose, so a status message beyond a
+preview length collapses to its first line with an explicit expander. The task
+list is ordered newest-first by default — the task the loop is working on now
+is the one being watched — with a sort toggle and a state filter (all, active,
+accepted, needs attention). Ordering is stable, falling back to insertion order
+when timestamps tie, so refreshes never reshuffle equal-second tasks.
+
 `loop_stages` records one durable row per orchestrator, worker, evaluator, and
 verifier episode with its role, attempt, status, and measured duration. Timing
 is therefore reported from evidence rather than inferred from gaps between

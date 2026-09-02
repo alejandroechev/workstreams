@@ -882,6 +882,74 @@ describe("LoopControlTile run monitoring", () => {
     );
   });
 
+  it("collapses long task results and supports sorting and filtering", async () => {
+    const longSummary = `Accepted after independent verification. ${"Detail sentence. ".repeat(
+      30,
+    )}`;
+    setup(
+      snapshot({
+        spec: loopSpec(),
+        latestRun: run({ state: "working", activeTaskId: "task-new" }),
+        tasks: [
+          task({
+            id: "task-old",
+            key: "spec:core",
+            title: "Older accepted task",
+            state: "accepted",
+            createdAt: "2026-09-02T10:00:00.000Z",
+            workerResult: JSON.stringify({
+              status: "completed",
+              summary: longSummary,
+              evidence: [],
+            }),
+          }),
+          task({
+            id: "task-new",
+            key: "domain:alu",
+            title: "Newer working task",
+            state: "working",
+            createdAt: "2026-09-02T12:00:00.000Z",
+          }),
+        ],
+      }),
+      { definitions: [definition()], invalid: [] },
+    );
+
+    const list = (await screen.findByTestId("loop-task-list")) as HTMLDetailsElement;
+    fireEvent.click(list.querySelector("summary")!);
+
+    const order = () =>
+      Array.from(document.querySelectorAll('article[data-testid^="loop-task-"]')).map(
+        (card) => card.getAttribute("data-testid"),
+      );
+    expect(order()).toEqual(["loop-task-task-new", "loop-task-task-old"]);
+
+    const message = screen.getByTestId("loop-task-message-task-old") as HTMLDetailsElement;
+    expect(message.open).toBe(false);
+    expect(message.textContent).toContain("…");
+    expect(message.textContent!.length).toBeLessThan(longSummary.length);
+    fireEvent.click(message.querySelector("summary")!);
+    expect(screen.getByTestId("loop-task-message-task-old").textContent).toContain(
+      "Detail sentence.",
+    );
+
+    fireEvent.click(screen.getByTestId("loop-task-sort"));
+    expect(order()).toEqual(["loop-task-task-old", "loop-task-task-new"]);
+
+    fireEvent.change(screen.getByTestId("loop-task-filter"), {
+      target: { value: "accepted" },
+    });
+    expect(order()).toEqual(["loop-task-task-old"]);
+
+    fireEvent.change(screen.getByTestId("loop-task-filter"), {
+      target: { value: "attention" },
+    });
+    expect(order()).toEqual([]);
+    expect(screen.getByTestId("loop-task-empty").textContent).toContain(
+      "No tasks match this filter",
+    );
+  });
+
   it("uses the configured attempt budget for human revision availability", async () => {
     setup(
       snapshot({
