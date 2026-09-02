@@ -408,6 +408,7 @@ export class MemoryBackend implements Backend {
       verifications: [],
       evaluations: [],
       approvals: [],
+      stages: [],
       events: [],
     };
   }
@@ -470,6 +471,7 @@ export class MemoryBackend implements Backend {
       verifications: this.loopSnapshots.get(workstreamId)?.verifications ?? [],
       evaluations: this.loopSnapshots.get(workstreamId)?.evaluations ?? [],
       approvals: this.loopSnapshots.get(workstreamId)?.approvals ?? [],
+      stages: this.loopSnapshots.get(workstreamId)?.stages ?? [],
       events: this.loopSnapshots.get(workstreamId)?.events ?? [],
     });
     this.emitLoopUpdate(workstreamId);
@@ -539,6 +541,7 @@ export class MemoryBackend implements Backend {
       verifications: [],
       evaluations: [],
       approvals: [],
+      stages: [],
       events: [{
         id: 1,
         loopSpecId: spec.id,

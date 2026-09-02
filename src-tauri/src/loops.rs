@@ -464,6 +464,18 @@ pub fn init_loop_schema(conn: &Connection) -> rusqlite::Result<()> {
             decided_at TEXT
         );
 
+        CREATE TABLE IF NOT EXISTS loop_stages (
+            id TEXT PRIMARY KEY,
+            loop_run_id TEXT NOT NULL REFERENCES loop_runs(id) ON DELETE CASCADE,
+            loop_task_id TEXT REFERENCES loop_tasks(id) ON DELETE CASCADE,
+            role TEXT NOT NULL,
+            attempt INTEGER NOT NULL,
+            status TEXT NOT NULL,
+            started_at TEXT NOT NULL,
+            finished_at TEXT NOT NULL,
+            duration_ms INTEGER NOT NULL
+        );
+
         CREATE TABLE IF NOT EXISTS loop_events (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             loop_spec_id TEXT NOT NULL REFERENCES loop_specs(id) ON DELETE CASCADE,
@@ -480,6 +492,8 @@ pub fn init_loop_schema(conn: &Connection) -> rusqlite::Result<()> {
             ON loop_tasks(loop_run_id, ordinal);
         CREATE INDEX IF NOT EXISTS loop_events_run_idx
             ON loop_events(loop_run_id, id);
+        CREATE INDEX IF NOT EXISTS loop_stages_run_idx
+            ON loop_stages(loop_run_id, started_at);
         CREATE UNIQUE INDEX IF NOT EXISTS loop_approvals_task_attempt_idx
             ON loop_approvals(loop_task_id, attempt);
         ",
@@ -1528,7 +1542,91 @@ fn should_persist_agent_event(event_type: &str) -> bool {
     )
 }
 
+struct StageTiming<'a> {
+    run_id: &'a str,
+    task_id: Option<&'a str>,
+    role: &'a str,
+    attempt: u32,
+    status: &'a str,
+    started_at_epoch: u64,
+    duration: Duration,
+}
+
+fn record_stage_timing(conn: &Connection, timing: StageTiming<'_>) -> Result<(), String> {
+    let duration_ms = timing.duration.as_millis().min(u128::from(u64::MAX)) as u64;
+    conn.execute(
+        "INSERT INTO loop_stages (
+            id, loop_run_id, loop_task_id, role, attempt, status,
+            started_at, finished_at, duration_ms
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        params![
+            Uuid::new_v4().to_string(),
+            timing.run_id,
+            timing.task_id,
+            timing.role,
+            timing.attempt,
+            timing.status,
+            timing.started_at_epoch.to_string(),
+            crate::now(),
+            duration_ms,
+        ],
+    )
+    .map_err(|error| format!("Failed to record loop stage timing: {error}"))?;
+    Ok(())
+}
+
+fn epoch_seconds_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|value| value.as_secs())
+        .unwrap_or_default()
+}
+
 async fn start_agent_stage(
+    db: &Arc<Mutex<Connection>>,
+    runtime: &Arc<dyn LoopAgentRuntime>,
+    request: AgentRequest,
+    loop_spec_id: &str,
+    run_id: &str,
+    task_id: Option<&str>,
+) -> Result<AgentResponse, String> {
+    start_agent_stage_with_attempt(db, runtime, request, loop_spec_id, run_id, task_id, 1).await
+}
+
+async fn start_agent_stage_with_attempt(
+    db: &Arc<Mutex<Connection>>,
+    runtime: &Arc<dyn LoopAgentRuntime>,
+    request: AgentRequest,
+    loop_spec_id: &str,
+    run_id: &str,
+    task_id: Option<&str>,
+    attempt: u32,
+) -> Result<AgentResponse, String> {
+    let role = request.role.to_string();
+    let started_at = epoch_seconds_now();
+    let clock = std::time::Instant::now();
+    let result = run_agent_stage(db, runtime, request, loop_spec_id, run_id, task_id).await;
+    let status = if result.is_ok() {
+        "completed"
+    } else {
+        "failed"
+    };
+    let _ = record_stage_timing(
+        &db.lock().unwrap(),
+        StageTiming {
+            run_id,
+            task_id,
+            role: &role,
+            attempt,
+            status,
+            started_at_epoch: started_at,
+            duration: clock.elapsed(),
+        },
+    );
+    result
+}
+
+async fn run_agent_stage(
     db: &Arc<Mutex<Connection>>,
     runtime: &Arc<dyn LoopAgentRuntime>,
     request: AgentRequest,
@@ -1587,6 +1685,38 @@ async fn revise_worker_stage(
     timeout: Duration,
     identity: StageIdentity<'_>,
 ) -> Result<AgentResponse, String> {
+    let started_at = epoch_seconds_now();
+    let clock = std::time::Instant::now();
+    let result =
+        run_worker_revision_stage(db, runtime, session_id, prompt, timeout, identity).await;
+    let status = if result.is_ok() {
+        "completed"
+    } else {
+        "failed"
+    };
+    let _ = record_stage_timing(
+        &db.lock().unwrap(),
+        StageTiming {
+            run_id: identity.run_id,
+            task_id: Some(identity.task_id),
+            role: "worker",
+            attempt: identity.attempt,
+            status,
+            started_at_epoch: started_at,
+            duration: clock.elapsed(),
+        },
+    );
+    result
+}
+
+async fn run_worker_revision_stage(
+    db: &Arc<Mutex<Connection>>,
+    runtime: &Arc<dyn LoopAgentRuntime>,
+    session_id: &str,
+    prompt: &str,
+    timeout: Duration,
+    identity: StageIdentity<'_>,
+) -> Result<AgentResponse, String> {
     let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
     let operation = runtime.revise(session_id, prompt, timeout, event_tx);
     let deadline = tokio::time::sleep(timeout);
@@ -1631,6 +1761,7 @@ struct StageIdentity<'a> {
     loop_spec_id: &'a str,
     run_id: &'a str,
     task_id: &'a str,
+    attempt: u32,
 }
 
 fn update_run_current_task(
@@ -1765,6 +1896,7 @@ async fn verify_task(
         set_run_state(&conn, run_id, LoopRunState::Verifying, None)?;
         set_task_state(&conn, task_id, LoopTaskState::Verifying, None)?;
     }
+    let verifier_started_at = epoch_seconds_now();
     let result = run_verifier(VerifierConfig {
         program: program.clone(),
         args: spec.verifier_args.clone(),
@@ -1785,6 +1917,18 @@ async fn verify_task(
     .await;
     let conn = db.lock().unwrap();
     let verification_id = record_verification(&conn, task_id, attempt, spec, &result)?;
+    let _ = record_stage_timing(
+        &conn,
+        StageTiming {
+            run_id,
+            task_id: Some(task_id),
+            role: "verifier",
+            attempt,
+            status: result.status.as_str(),
+            started_at_epoch: verifier_started_at,
+            duration: Duration::from_millis(result.duration_ms),
+        },
+    );
     append_loop_event(
         &conn,
         &spec.id,
@@ -1995,7 +2139,7 @@ async fn evaluate_task(
             |row| row.get(0),
         )
         .map_err(|error| format!("Failed to establish evaluator event boundary: {error}"))?;
-    let first = start_agent_stage(
+    let first = start_agent_stage_with_attempt(
         context.db,
         context.runtime,
         AgentRequest {
@@ -2010,6 +2154,7 @@ async fn evaluate_task(
         &context.spec.id,
         context.run_id,
         Some(&context.task.id),
+        attempt,
     )
     .await;
     let response = match first {
@@ -2031,7 +2176,7 @@ async fn evaluate_task(
                 "evaluator.subagent_fallback",
                 &serde_json::json!({ "reason": error }),
             )?;
-            start_agent_stage(
+            start_agent_stage_with_attempt(
                 context.db,
                 context.runtime,
                 AgentRequest {
@@ -2046,6 +2191,7 @@ async fn evaluate_task(
                 &context.spec.id,
                 context.run_id,
                 Some(&context.task.id),
+                attempt,
             )
             .await?
         }
@@ -2781,6 +2927,7 @@ async fn execute_manual_loop_inner(
                         loop_spec_id: &spec.id,
                         run_id,
                         task_id: &task.id,
+                        attempt: attempt + 1,
                     },
                 )
                 .await?;
@@ -2942,6 +3089,19 @@ pub struct LoopEventRecord {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LoopStageRecord {
+    pub id: String,
+    pub loop_run_id: String,
+    pub loop_task_id: Option<String>,
+    pub role: String,
+    pub attempt: u32,
+    pub status: String,
+    pub started_at: String,
+    pub finished_at: String,
+    pub duration_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LoopSnapshot {
     pub spec: Option<LoopSpec>,
     pub latest_run: Option<LoopRun>,
@@ -2949,6 +3109,7 @@ pub struct LoopSnapshot {
     pub verifications: Vec<LoopVerificationRecord>,
     pub evaluations: Vec<LoopEvaluationRecord>,
     pub approvals: Vec<LoopApprovalRecord>,
+    pub stages: Vec<LoopStageRecord>,
     pub events: Vec<LoopEventRecord>,
 }
 
@@ -3091,6 +3252,35 @@ fn list_approvals(conn: &Connection, run_id: &str) -> Result<Vec<LoopApprovalRec
         .map_err(|error| format!("Failed to decode approvals: {error}"))
 }
 
+fn list_stages(conn: &Connection, run_id: &str) -> Result<Vec<LoopStageRecord>, String> {
+    let mut statement = conn
+        .prepare(
+            "SELECT id, loop_run_id, loop_task_id, role, attempt, status,
+                    started_at, finished_at, duration_ms
+             FROM loop_stages
+             WHERE loop_run_id = ?1
+             ORDER BY started_at, rowid",
+        )
+        .map_err(|error| format!("Failed to prepare stage query: {error}"))?;
+    let rows = statement
+        .query_map([run_id], |row| {
+            Ok(LoopStageRecord {
+                id: row.get(0)?,
+                loop_run_id: row.get(1)?,
+                loop_task_id: row.get(2)?,
+                role: row.get(3)?,
+                attempt: row.get(4)?,
+                status: row.get(5)?,
+                started_at: row.get(6)?,
+                finished_at: row.get(7)?,
+                duration_ms: row.get(8)?,
+            })
+        })
+        .map_err(|error| format!("Failed to query stages: {error}"))?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("Failed to decode stages: {error}"))
+}
+
 fn list_loop_events(conn: &Connection, run_id: &str) -> Result<Vec<LoopEventRecord>, String> {
     let mut statement = conn
         .prepare(
@@ -3145,6 +3335,7 @@ pub(crate) fn loop_snapshot(
             verifications: Vec::new(),
             evaluations: Vec::new(),
             approvals: Vec::new(),
+            stages: Vec::new(),
             events: Vec::new(),
         });
     };
@@ -3157,6 +3348,7 @@ pub(crate) fn loop_snapshot(
             verifications: Vec::new(),
             evaluations: Vec::new(),
             approvals: Vec::new(),
+            stages: Vec::new(),
             events: Vec::new(),
         });
     };
@@ -3168,6 +3360,7 @@ pub(crate) fn loop_snapshot(
         verifications: list_verifications(conn, &run_id)?,
         evaluations: list_evaluations(conn, &run_id)?,
         approvals: list_approvals(conn, &run_id)?,
+        stages: list_stages(conn, &run_id)?,
         events: list_loop_events(conn, &run_id)?,
     })
 }
@@ -4295,6 +4488,19 @@ mod tests {
         assert_eq!(tasks.len(), 1);
         assert_eq!(tasks[0].state, LoopTaskState::Accepted);
         assert_eq!(tasks[0].worker_session_id.as_deref(), Some("worker-1"));
+
+        let stages = list_stages(&conn, &run.id).expect("list stages");
+        let roles: Vec<&str> = stages.iter().map(|stage| stage.role.as_str()).collect();
+        assert!(roles.contains(&"orchestrator"));
+        assert!(roles.contains(&"worker"));
+        assert!(roles.contains(&"evaluator"));
+        assert!(stages
+            .iter()
+            .all(|stage| stage.status == "completed" && stage.attempt >= 1));
+        assert!(stages
+            .iter()
+            .filter(|stage| stage.role != "orchestrator")
+            .all(|stage| stage.loop_task_id.as_deref() == Some(tasks[0].id.as_str())));
     }
 
     #[tokio::test]

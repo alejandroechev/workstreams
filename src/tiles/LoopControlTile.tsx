@@ -15,6 +15,12 @@ import {
   XCircleIcon,
 } from "@heroicons/react/24/outline";
 
+import {
+  summarizeRunTiming,
+  summarizeTaskTiming,
+  taskHeadline,
+  type LoopTaskTiming,
+} from "../domain/loop-timing";
 import { useBackend } from "../backend/context";
 import { FileEditorView } from "../files/FileEditorView";
 import {
@@ -32,6 +38,7 @@ import type {
   LoopRun,
   LoopRunState,
   LoopSpec,
+  LoopStageRecord,
   LoopTask,
   LoopVerificationRecord,
   PersistedLoopSnapshot,
@@ -51,6 +58,7 @@ const EMPTY_SNAPSHOT: PersistedLoopSnapshot = {
   verifications: [],
   evaluations: [],
   approvals: [],
+  stages: [],
   events: [],
 };
 
@@ -700,18 +708,84 @@ function taskStatusSummary(
   }
 }
 
+function CurrentTaskDetail({
+  task,
+  timing,
+}: {
+  task: LoopTask;
+  timing: LoopTaskTiming;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <div style={{ color: "#a6adc8" }}>{taskHeadline(task)}</div>
+      {timing.totalMs > 0 && (
+        <div data-testid="loop-current-task-duration" style={{ color: "#a6adc8" }}>
+          Stage time: {formatDuration(timing.totalMs)}
+        </div>
+      )}
+      <details data-testid="loop-current-task-details" open={open}>
+        <summary
+          onClick={(event) => {
+            event.preventDefault();
+            setOpen((current) => !current);
+          }}
+          style={{ color: "#89b4fa", cursor: "pointer", userSelect: "none" }}
+        >
+          Objective
+        </summary>
+        {open && (
+          <div style={{ marginTop: 4, color: "#a6adc8" }}>
+            {task.objective}
+            <StageTimings timing={timing} testId="loop-current-task-stage-timings" />
+          </div>
+        )}
+      </details>
+    </>
+  );
+}
+
+function StageTimings({
+  timing,
+  testId,
+}: {
+  timing: LoopTaskTiming;
+  testId: string;
+}) {
+  if (timing.stages.length === 0) return null;
+  return (
+    <div data-testid={testId} style={{ marginTop: 6 }}>
+      <div style={{ color: "#a6adc8" }}>
+        Stage time: {formatDuration(timing.totalMs)}
+      </div>
+      <ul style={{ margin: "4px 0 0", paddingLeft: 16, color: "#bac2de" }}>
+        {timing.stages.map((stage) => (
+          <li key={stage.id} data-testid={`loop-stage-${stage.id}`}>
+            {stage.role} #{stage.attempt}: {formatDuration(stage.durationMs)}
+            {stage.status !== "completed" && stage.status !== "passed"
+              ? ` (${stage.status})`
+              : ""}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 function TaskCard({
   task,
   verifications,
   evaluations,
   approvals,
   maxTaskIterations,
+  timing,
 }: {
   task: LoopTask;
   verifications: LoopVerificationRecord[];
   evaluations: LoopEvaluationRecord[];
   approvals: LoopApprovalRecord[];
   maxTaskIterations: number;
+  timing: LoopTaskTiming;
 }) {
   const [detailsOpen, setDetailsOpen] = useState(false);
   const worker = parseWorkerResult(task.workerResult);
@@ -740,8 +814,18 @@ function TaskCard({
     >
       <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
         <strong>{task.title}</strong>
-        <span style={{ color: needsAction ? "#f9e2af" : "#89b4fa" }}>
-          {task.state.replace(/_/g, " ")}
+        <span style={{ display: "flex", gap: 8, flexShrink: 0 }}>
+          {timing.totalMs > 0 && (
+            <span
+              data-testid={`loop-task-duration-${task.id}`}
+              style={{ color: "#a6adc8" }}
+            >
+              {formatDuration(timing.totalMs)}
+            </span>
+          )}
+          <span style={{ color: needsAction ? "#f9e2af" : "#89b4fa" }}>
+            {task.state.replace(/_/g, " ")}
+          </span>
         </span>
       </div>
       <div
@@ -777,6 +861,10 @@ function TaskCard({
         {detailsOpen && (
           <div style={{ marginTop: 7 }}>
             <div style={{ color: "#a6adc8" }}>{task.objective}</div>
+            <StageTimings
+              timing={timing}
+              testId={`loop-task-stage-timings-${task.id}`}
+            />
             <div style={{ color: "#6c7086", marginTop: 3 }}>
               Revisions: {task.revisionCount}
               {task.workerSessionId ? ` / Worker session: ${task.workerSessionId}` : ""}
@@ -831,42 +919,63 @@ function TaskList({
   evaluations,
   approvals,
   maxTaskIterations,
+  stages,
 }: {
   tasks: LoopTask[];
   verifications: LoopVerificationRecord[];
   evaluations: LoopEvaluationRecord[];
   approvals: LoopApprovalRecord[];
   maxTaskIterations: number;
+  stages: LoopStageRecord[];
 }) {
+  const actionable = tasks.filter(
+    (task) => task.state === "attention" || task.state === "blocked",
+  ).length;
+  const [open, setOpen] = useState(actionable > 0);
   return (
-    <section data-testid="loop-task-list" style={sectionStyle}>
-      <h2 style={headingStyle}>Tasks</h2>
-      {tasks.length === 0 ? (
-        <div style={{ color: "#6c7086" }}>No tasks have been proposed.</div>
-      ) : (
-        tasks.map((task) => {
-          const taskVerifications = verifications.filter(
-            (record) => record.loopTaskId === task.id,
-          );
-          const taskEvaluations = evaluations
-            .filter((record) => record.loopTaskId === task.id)
-            .sort((left, right) => left.attempt - right.attempt);
-          const taskApprovals = approvals
-            .filter((record) => record.loopTaskId === task.id)
-            .sort((left, right) => left.attempt - right.attempt);
-          return (
-            <TaskCard
-              key={task.id}
-              task={task}
-              verifications={taskVerifications}
-              evaluations={taskEvaluations}
-              approvals={taskApprovals}
-              maxTaskIterations={maxTaskIterations}
-            />
-          );
-        })
-      )}
-    </section>
+    <details data-testid="loop-task-list" open={open} style={sectionStyle}>
+      <summary
+        onClick={(event) => {
+          event.preventDefault();
+          setOpen((current) => !current);
+        }}
+        style={{ ...headingStyle, margin: 0, cursor: "pointer", userSelect: "none" }}
+      >
+        Tasks ({tasks.length}
+        {actionable > 0 ? `, ${actionable} need attention` : ""})
+      </summary>
+      {open &&
+        (tasks.length === 0 ? (
+          <div style={{ color: "#6c7086", marginTop: 8 }}>
+            No tasks have been proposed.
+          </div>
+        ) : (
+          <div style={{ marginTop: 8 }}>
+            {tasks.map((task) => {
+              const taskVerifications = verifications.filter(
+                (record) => record.loopTaskId === task.id,
+              );
+              const taskEvaluations = evaluations
+                .filter((record) => record.loopTaskId === task.id)
+                .sort((left, right) => left.attempt - right.attempt);
+              const taskApprovals = approvals
+                .filter((record) => record.loopTaskId === task.id)
+                .sort((left, right) => left.attempt - right.attempt);
+              return (
+                <TaskCard
+                  key={task.id}
+                  task={task}
+                  verifications={taskVerifications}
+                  evaluations={taskEvaluations}
+                  approvals={taskApprovals}
+                  maxTaskIterations={maxTaskIterations}
+                  timing={summarizeTaskTiming(stages, task.id)}
+                />
+              );
+            })}
+          </div>
+        ))}
+    </details>
   );
 }
 
@@ -920,29 +1029,46 @@ function EventTimeline({ events }: { events: LoopEventRecord[] }) {
 }
 
 function RunDefinition({ run, spec }: { run: LoopRun; spec: LoopSpec }) {
+  const [open, setOpen] = useState(false);
   const name = spec.definitionName ?? spec.definitionId;
   const hash = run.definitionHash ?? spec.definitionHash;
   if (!name && !spec.definitionPath && !spec.objective && !hash) return null;
 
   return (
-    <div
+    <details
       data-testid="loop-run-definition"
+      open={open}
       style={{ marginTop: 8, padding: 7, background: "#11111b", borderRadius: 4 }}
     >
-      <strong>Latest run definition</strong>
-      {name && <div>{name}</div>}
-      {spec.objective && <div style={{ color: "#bac2de" }}>{spec.objective}</div>}
-      {spec.definitionPath && (
-        <div style={{ color: "#a6adc8", fontFamily: "monospace", overflowWrap: "anywhere" }}>
-          {spec.definitionPath}
+      <summary
+        onClick={(event) => {
+          event.preventDefault();
+          setOpen((current) => !current);
+        }}
+        style={{ color: "#89b4fa", cursor: "pointer", userSelect: "none" }}
+      >
+        Definition{name ? `: ${name}` : ""}
+      </summary>
+      {open && (
+        <div style={{ marginTop: 6 }}>
+          {spec.objective && <div style={{ color: "#bac2de" }}>{spec.objective}</div>}
+          {spec.definitionPath && (
+            <div
+              style={{ color: "#a6adc8", fontFamily: "monospace", overflowWrap: "anywhere" }}
+            >
+              {spec.definitionPath}
+            </div>
+          )}
+          {hash && (
+            <div
+              style={{ color: "#6c7086", fontFamily: "monospace", overflowWrap: "anywhere" }}
+            >
+              Pinned hash: {hash}
+            </div>
+          )}
         </div>
       )}
-      {hash && (
-        <div style={{ color: "#6c7086", fontFamily: "monospace", overflowWrap: "anywhere" }}>
-          Pinned hash: {hash}
-        </div>
-      )}
-    </div>
+    </details>
   );
 }
 
@@ -1049,11 +1175,12 @@ function RunPanel({
 
   const currentTask =
     snapshot.tasks.find((candidate) => candidate.id === run.activeTaskId) ?? null;
-  const elapsed = run.startedAt
-    ? formatDuration(
-        (run.finishedAt ? Date.parse(run.finishedAt) : now) - Date.parse(run.startedAt),
-      )
-    : "Not available";
+  const timing = summarizeRunTiming({
+    run,
+    stages: snapshot.stages,
+    now,
+  });
+  const elapsed = run.startedAt ? formatDuration(timing.elapsedMs) : "Not available";
   const canControl = !TERMINAL_RUN_STATES.has(run.state);
   const hasActionableTask = snapshot.tasks.some(
     (task) => task.state === "attention" || task.state === "blocked",
@@ -1075,7 +1202,27 @@ function RunPanel({
         </div>
         <div data-testid="loop-elapsed">Elapsed: {elapsed}</div>
         <div data-testid="loop-next-evidence">Next evidence: {nextEvidence(run, spec)}</div>
-        {run.deadlineAt && <div style={{ color: "#6c7086" }}>Deadline: {run.deadlineAt}</div>}
+        {timing.roles.length > 0 && (
+          <div data-testid="loop-time-breakdown" style={{ marginTop: 6 }}>
+            <div style={{ color: "#a6adc8" }}>
+              Agent time: {formatDuration(timing.measuredMs)}
+            </div>
+            <div style={{ color: "#bac2de" }}>
+              {timing.roles
+                .map(
+                  (role) =>
+                    `${role.role} ${formatDuration(role.totalMs)} (${role.count})`,
+                )
+                .join(" · ")}
+            </div>
+            {timing.slowest && (
+              <div data-testid="loop-slowest-stage" style={{ color: "#6c7086" }}>
+                Slowest: {timing.slowest.role} #{timing.slowest.attempt} —{" "}
+                {formatDuration(timing.slowest.durationMs)}
+              </div>
+            )}
+          </div>
+        )}
         {run.error && !hasActionableTask && (
           <div style={{ color: "#f38ba8" }}>{run.error}</div>
         )}
@@ -1087,8 +1234,16 @@ function RunPanel({
           >
             <strong>Current task</strong>
             <div>{currentTask ? currentTask.title : "No active task"}</div>
-            {currentTask && <div style={{ color: "#a6adc8" }}>{currentTask.objective}</div>}
+            {currentTask && (
+              <CurrentTaskDetail
+                task={currentTask}
+                timing={summarizeTaskTiming(snapshot.stages, currentTask.id)}
+              />
+            )}
           </div>
+        )}
+        {run.deadlineAt && (
+          <div style={{ color: "#6c7086", marginTop: 6 }}>Deadline: {run.deadlineAt}</div>
         )}
 
         {canControl && (
@@ -1147,6 +1302,7 @@ function RunPanel({
         evaluations={snapshot.evaluations}
         approvals={snapshot.approvals}
         maxTaskIterations={spec.maxTaskIterations}
+        stages={snapshot.stages}
       />
       <EventTimeline events={snapshot.events} />
     </>

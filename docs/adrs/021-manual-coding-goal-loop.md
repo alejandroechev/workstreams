@@ -91,6 +91,7 @@ The agent conversation is an execution artifact, not workflow truth.
 - `loop_tasks` — immutable orchestrator task keys and stage/revision state;
 - `loop_verifications` — command, hash, bounded output, exit/timeout result;
 - `loop_evaluations` — fresh-agent verdict and feedback;
+- `loop_stages` — measured duration of every agent and verifier episode;
 - `loop_approvals` — pending and decided human approval requests;
 - `loop_events` — append-only SDK and controller evidence.
 
@@ -218,6 +219,19 @@ verifier output, every evaluator/approval record, and errors live behind a
 closed **Details** disclosure. The event timeline is also closed by default.
 The generic run-level "tasks require attention" message is suppressed when a
 task card can show the concrete request.
+
+The run view is overview-first: the header shows state, elapsed time, what
+evidence comes next, and a measured time breakdown, while the definition,
+objective, task list, and event timeline are all closed disclosures. The task
+list opens automatically only when a task is blocked or needs attention, so
+work that requires a human is never hidden behind a click.
+
+`loop_stages` records one durable row per orchestrator, worker, evaluator, and
+verifier episode with its role, attempt, status, and measured duration. Timing
+is therefore reported from evidence rather than inferred from gaps between
+record timestamps, which is what makes "which stage is slow" answerable. The
+header aggregates per-role totals and names the single slowest stage; each task
+card shows its own stage total and per-stage breakdown.
 
 The workstream sidebar shows per-workstream running/attention state and the
 number of running loops. One active run per workstream remains a workspace

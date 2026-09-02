@@ -7,6 +7,7 @@ import {
   type LoopRunState,
   type LoopSpec,
   type LoopSpecDraft,
+  type LoopStageRecord,
   type LoopSummary,
   type LoopTask,
   type LoopTaskState,
@@ -128,6 +129,18 @@ export interface LoopApprovalWire {
   decided_at: string | null;
 }
 
+export interface LoopStageWire {
+  id: string;
+  loop_run_id: string;
+  loop_task_id: string | null;
+  role: string;
+  attempt: number;
+  status: string;
+  started_at: string;
+  finished_at: string;
+  duration_ms: number;
+}
+
 export interface LoopEventWire {
   id: number;
   loop_spec_id: string;
@@ -145,6 +158,7 @@ export interface LoopSnapshotWire {
   verifications: LoopVerificationWire[];
   evaluations: LoopEvaluationWire[];
   approvals: LoopApprovalWire[];
+  stages?: LoopStageWire[];
   events: LoopEventWire[];
 }
 
@@ -339,6 +353,20 @@ export function encodeLoopSpecDraft(input: LoopSpecDraft): LoopSpecInputWire {
   };
 }
 
+function decodeStage(stage: LoopStageWire): LoopStageRecord {
+  return {
+    id: stage.id,
+    loopRunId: stage.loop_run_id,
+    loopTaskId: optional(stage.loop_task_id),
+    role: stage.role,
+    attempt: stage.attempt,
+    status: stage.status,
+    startedAt: timestamp(stage.started_at),
+    finishedAt: timestamp(stage.finished_at),
+    durationMs: stage.duration_ms,
+  };
+}
+
 export function decodeLoopSnapshot(
   snapshot: LoopSnapshotWire,
 ): PersistedLoopSnapshot {
@@ -349,6 +377,7 @@ export function decodeLoopSnapshot(
     verifications: snapshot.verifications.map(decodeVerification),
     evaluations: snapshot.evaluations.map(decodeEvaluation),
     approvals: snapshot.approvals.map(decodeApproval),
+    stages: (snapshot.stages ?? []).map(decodeStage),
     events: snapshot.events.map(decodeEvent),
   };
 }

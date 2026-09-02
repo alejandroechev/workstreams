@@ -192,6 +192,13 @@ test("selects, pauses, resumes, verifies, and evaluates a YAML loop", async ({
   await expect(page.locator('[data-testid="running-loop-count"]')).toContainText(
     "1 running",
   );
+  await expect(page.locator('[data-testid="loop-task-list"]')).not.toHaveAttribute(
+    "open",
+    "",
+  );
+  await page
+    .locator('[data-testid="loop-task-list"] > summary')
+    .click();
   await expect(page.locator('article[data-testid^="loop-task-"]').first()).toBeVisible();
 
   await page.locator('[data-testid="loop-pause"]').click();
@@ -238,6 +245,7 @@ test("selects, pauses, resumes, verifies, and evaluates a YAML loop", async ({
 
 test("kills an active loop and preserves an interrupted task", async ({ page }) => {
   await page.locator('[data-testid="loop-run-selected"]').click();
+  await page.locator('[data-testid="loop-task-list"] > summary').click();
   await expect(page.locator('article[data-testid^="loop-task-"]').first()).toBeVisible();
 
   await page.locator('[data-testid="loop-kill"]').click();

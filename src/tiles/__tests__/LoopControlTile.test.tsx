@@ -125,6 +125,7 @@ function snapshot(overrides: Partial<PersistedLoopSnapshot> = {}): PersistedLoop
     verifications: [],
     evaluations: [],
     approvals: [],
+    stages: [],
     events: [],
     ...overrides,
   };
@@ -534,6 +535,29 @@ describe("LoopControlTile run monitoring", () => {
         tasks: [task()],
         verifications: [verification],
         evaluations: [evaluation],
+        stages: [
+          {
+            id: "stage-orch",
+            loopRunId: "run-1",
+            role: "orchestrator",
+            attempt: 1,
+            status: "completed",
+            startedAt: "2026-08-28T18:00:00.000Z",
+            finishedAt: "2026-08-28T18:00:30.000Z",
+            durationMs: 30_000,
+          },
+          {
+            id: "stage-worker",
+            loopRunId: "run-1",
+            loopTaskId: "task-1",
+            role: "worker",
+            attempt: 1,
+            status: "completed",
+            startedAt: "2026-08-28T18:00:30.000Z",
+            finishedAt: "2026-08-28T18:04:30.000Z",
+            durationMs: 240_000,
+          },
+        ],
         events: [event],
       }),
       { definitions: [definition()], invalid: [] },
@@ -541,17 +565,39 @@ describe("LoopControlTile run monitoring", () => {
     const control = vi.spyOn(backend, "controlWorkstreamLoop").mockResolvedValue();
 
     expect((await screen.findByTestId("loop-run-state")).textContent).toContain("Working");
-    expect(screen.getByTestId("loop-run-definition").textContent).toContain(
-      "Frontend loop",
-    );
+    const breakdown = screen.getByTestId("loop-time-breakdown");
+    expect(breakdown.textContent).toContain("Agent time: 4m 30s");
+    expect(breakdown.textContent).toContain("worker 4m 0s");
+    expect(breakdown.textContent).toContain("orchestrator 30s");
+    expect(screen.getByTestId("loop-slowest-stage").textContent).toContain("worker #1");
+
+    const definitionDisclosure = screen.getByTestId(
+      "loop-run-definition",
+    ) as HTMLDetailsElement;
+    expect(definitionDisclosure.open).toBe(false);
+    expect(definitionDisclosure.textContent).toContain("Frontend loop");
+    expect(definitionDisclosure.textContent).not.toContain("Deliver the pinned objective");
+    fireEvent.click(definitionDisclosure.querySelector("summary")!);
     expect(screen.getByTestId("loop-run-definition").textContent).toContain(
       "sha256:pinned",
     );
     expect(screen.getByTestId("loop-run-definition").textContent).toContain(
       "Deliver the pinned objective",
     );
-    expect(screen.getByTestId("loop-current-task").textContent).toContain(
-      "Implement the domain",
+
+    const currentTask = screen.getByTestId("loop-current-task");
+    expect(currentTask.textContent).toContain("Implement the domain");
+    expect(currentTask.textContent).toContain("Worker running");
+    expect(screen.getByTestId("loop-current-task-duration").textContent).toContain(
+      "4m 0s",
+    );
+    expect(currentTask.textContent).not.toContain("Build the requested behavior");
+
+    const taskList = screen.getByTestId("loop-task-list") as HTMLDetailsElement;
+    expect(taskList.open).toBe(false);
+    fireEvent.click(taskList.querySelector("summary")!);
+    expect(screen.getByTestId("loop-task-duration-task-1").textContent).toContain(
+      "4m 0s",
     );
     const details = screen.getByTestId("loop-task-details-task-1") as HTMLDetailsElement;
     expect(details.open).toBe(false);
@@ -560,6 +606,9 @@ describe("LoopControlTile run monitoring", () => {
     );
     expect(screen.queryByTestId("loop-worker-result-task-1")).toBeNull();
     fireEvent.click(screen.getByText("Details"));
+    expect(
+      screen.getByTestId("loop-task-stage-timings-task-1").textContent,
+    ).toContain("worker #1: 4m 0s");
     expect(screen.getByTestId("loop-worker-result-task-1").textContent).toContain(
       "Implemented the state machine",
     );

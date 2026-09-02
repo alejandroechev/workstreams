@@ -171,6 +171,7 @@ function createBackend(): Backend {
       verifications: [],
       evaluations: [],
       approvals: [],
+      stages: [],
       events: [],
     })),
     getWorkstreamLoopProgressVersion: vi.fn(async () => "unconfigured"),

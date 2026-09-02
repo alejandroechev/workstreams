@@ -176,6 +176,18 @@ export interface LoopApprovalRecord {
   decidedAt?: string;
 }
 
+export interface LoopStageRecord {
+  id: string;
+  loopRunId: string;
+  loopTaskId?: string;
+  role: "orchestrator" | "worker" | "evaluator" | "verifier" | string;
+  attempt: number;
+  status: string;
+  startedAt: string;
+  finishedAt: string;
+  durationMs: number;
+}
+
 export interface LoopEventRecord {
   id: number;
   loopSpecId: string;
@@ -193,6 +205,7 @@ export interface PersistedLoopSnapshot {
   verifications: LoopVerificationRecord[];
   evaluations: LoopEvaluationRecord[];
   approvals: LoopApprovalRecord[];
+  stages: LoopStageRecord[];
   events: LoopEventRecord[];
 }
 

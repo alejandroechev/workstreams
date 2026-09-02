@@ -262,8 +262,46 @@ describe("loop wire mapping", () => {
       verifications: [],
       evaluations: [],
       approvals: [],
+      stages: [],
       events: [],
     });
+
+    expect(
+      decodeLoopSnapshot({
+        spec: null,
+        latest_run: null,
+        tasks: [],
+        verifications: [],
+        evaluations: [],
+        approvals: [],
+        stages: [
+          {
+            id: "stage-1",
+            loop_run_id: "run-1",
+            loop_task_id: "task-1",
+            role: "worker",
+            attempt: 2,
+            status: "completed",
+            started_at: "100",
+            finished_at: "160",
+            duration_ms: 60_000,
+          },
+        ],
+        events: [],
+      }).stages,
+    ).toEqual([
+      {
+        id: "stage-1",
+        loopRunId: "run-1",
+        loopTaskId: "task-1",
+        role: "worker",
+        attempt: 2,
+        status: "completed",
+        startedAt: "1970-01-01T00:01:40.000Z",
+        finishedAt: "1970-01-01T00:02:40.000Z",
+        durationMs: 60_000,
+      },
+    ]);
 
     expect(
       decodeLoopSummaries([{
