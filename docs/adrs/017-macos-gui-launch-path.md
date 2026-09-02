@@ -84,8 +84,18 @@ Key choices:
   on top of the repaired `PATH`, so an explicit `PATH` from a caller is never
   clobbered.
 
-Injection happens in `PtyManager::spawn`, so terminal tiles and Copilot session
-tiles are fixed by the same three lines and no call site can forget it.
+Injection happens at every process boundary that resolves user-installed
+commands:
+
+- `PtyManager::spawn` for terminal and Copilot session tiles;
+- loop deterministic verifiers;
+- code-trace test discovery and recording.
+
+The loop-verifier path matters because a definition commonly uses a bare
+program such as `npm` or `cargo`. Without the repaired environment, a worker
+could complete successfully and then receive a misleading verifier
+`spawn_error: No such file or directory` solely because Workstreams was
+launched from the Dock.
 
 Windows keeps a `#[cfg(windows)]` `resolved_path` that always returns `None`,
 making the change a literal no-op there.

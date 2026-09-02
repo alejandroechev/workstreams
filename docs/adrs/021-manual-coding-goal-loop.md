@@ -165,6 +165,9 @@ with the remaining run deadline as timeout. It drains but caps stdout/stderr,
 records exit status/duration/truncation, hashes a directly referenced program
 file, kills the process group on timeout, and waits for termination. A spawn
 error, timeout, or non-zero exit cannot be overridden by the evaluator.
+On Unix GUI launches, bare verifier programs inherit the login-shell PATH
+repair from ADR 017, so `npm`, `node`, `cargo`, and other user-installed tools
+resolve the same way they do in terminal tiles.
 
 The verifier is optional because not every semantic task has a meaningful
 executable predicate. A workstream's ordinary Copilot session may help author

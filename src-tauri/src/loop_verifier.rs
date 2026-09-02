@@ -156,6 +156,14 @@ fn kill_process_tree(child: &mut std::process::Child) {
 }
 
 fn run_verifier_blocking(config: VerifierConfig) -> VerificationResult {
+    let repaired_path = crate::shell_env::resolved_path(&crate::pty::default_shell());
+    run_verifier_blocking_with_path(config, repaired_path)
+}
+
+fn run_verifier_blocking_with_path(
+    config: VerifierConfig,
+    repaired_path: Option<String>,
+) -> VerificationResult {
     let started = Instant::now();
     let program_hash = hash_file(Path::new(&config.program));
     let mut command = Command::new(&config.program);
@@ -164,6 +172,9 @@ fn run_verifier_blocking(config: VerifierConfig) -> VerificationResult {
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    if let Some(path) = repaired_path {
+        command.env("PATH", path);
+    }
     if let Some(cwd) = &config.cwd {
         command.current_dir(cwd);
     }
@@ -171,12 +182,20 @@ fn run_verifier_blocking(config: VerifierConfig) -> VerificationResult {
     let mut child = match command.spawn() {
         Ok(child) => child,
         Err(error) => {
+            let cwd = config
+                .cwd
+                .as_deref()
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|| "<inherited>".to_string());
             return VerificationResult {
                 status: VerificationStatus::SpawnError,
                 exit_code: None,
                 duration_ms: started.elapsed().as_millis() as u64,
                 stdout: String::new(),
-                stderr: error.to_string(),
+                stderr: format!(
+                    "Failed to spawn verifier '{}' in '{}': {error}",
+                    config.program, cwd
+                ),
                 truncated: false,
                 program_hash,
             };
@@ -307,6 +326,62 @@ mod tests {
         assert_eq!(result.stderr, "warning");
         assert!(result.program_hash.is_some());
         assert!(!result.truncated);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn verifier_uses_a_repaired_path_for_bare_commands() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = std::env::temp_dir().join(format!(
+            "workstreams-loop-verifier-path-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).expect("create verifier path");
+        let program = root.join("verifier-path-probe");
+        std::fs::write(&program, "#!/bin/sh\nprintf repaired-path\n")
+            .expect("write verifier probe");
+        let mut permissions = std::fs::metadata(&program)
+            .expect("probe metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&program, permissions).expect("make probe executable");
+
+        let result = run_verifier_blocking_with_path(
+            VerifierConfig {
+                program: "verifier-path-probe".to_string(),
+                args: Vec::new(),
+                cwd: None,
+                timeout: Duration::from_secs(5),
+                output_limit_bytes: 1024,
+                cancelled: None,
+            },
+            Some(root.to_string_lossy().into_owned()),
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+        assert_eq!(result.status, VerificationStatus::Passed);
+        assert_eq!(result.stdout, "repaired-path");
+    }
+
+    #[test]
+    fn verifier_spawn_errors_name_the_program_and_working_directory() {
+        let cwd = std::env::temp_dir();
+        let result = run_verifier_blocking_with_path(
+            VerifierConfig {
+                program: "workstreams-missing-verifier".to_string(),
+                args: Vec::new(),
+                cwd: Some(cwd.clone()),
+                timeout: Duration::from_secs(1),
+                output_limit_bytes: 1024,
+                cancelled: None,
+            },
+            None,
+        );
+
+        assert_eq!(result.status, VerificationStatus::SpawnError);
+        assert!(result.stderr.contains("workstreams-missing-verifier"));
+        assert!(result.stderr.contains(&cwd.display().to_string()));
     }
 
     #[cfg(unix)]
