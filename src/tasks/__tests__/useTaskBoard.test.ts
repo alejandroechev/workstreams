@@ -87,10 +87,45 @@ describe("useTaskBoard", () => {
 
   it("ignores a blank task title rather than creating an empty card", async () => {
     const { result } = await mounted();
+    let created: string | null = "unset";
     await act(async () => {
-      await result.current.createTask("   ");
+      created = await result.current.createTask("   ");
     });
     expect(await backend.listTasks()).toHaveLength(0);
+    expect(created).toBeNull();
+  });
+
+  it("resolves with the id of the new task and shows it in the reloaded board", async () => {
+    // The caller needs the identity, not just success: creating a task is what
+    // opens its detail pane.
+    const { result } = await mounted();
+    let created: string | null = null;
+    await act(async () => {
+      created = await result.current.createTask("media_store read API");
+    });
+
+    const stored = await backend.listTasks();
+    expect(created).toBe(stored[0].id);
+    expect(result.current.tasks.map((t) => t.id)).toContain(created);
+  });
+
+  it("resolves with null when the write fails, so nothing gets selected", async () => {
+    const failing = {
+      listTasks: vi.fn().mockResolvedValue([]),
+      listLabels: vi.fn().mockResolvedValue([]),
+      listTaskEvents: vi.fn().mockResolvedValue([]),
+      createTask: vi.fn().mockRejectedValue(new Error("disk full")),
+    } as unknown as Backend;
+
+    const hook = renderHook(() => useTaskBoard(failing));
+    await waitFor(() => expect(hook.result.current.loading).toBe(false));
+
+    let created: string | null = "unset";
+    await act(async () => {
+      created = await hook.result.current.createTask("x");
+    });
+    expect(created).toBeNull();
+    expect(hook.result.current.error).toBe("disk full");
   });
 
   it("ignores a blank note", async () => {

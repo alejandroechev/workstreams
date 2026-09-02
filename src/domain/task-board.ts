@@ -209,3 +209,19 @@ export function cardSubtasks(task: Task, limit: number): CardSubtasks {
 export function inProgressTasks(tasks: Task[]): Task[] {
   return tasks.filter((task) => columnForStatus(task.status) === "in_progress");
 }
+
+/**
+ * Which task the detail pane should show once a create attempt settles.
+ *
+ * Creating a task is an act of intent: the user wants to fill it in, so the
+ * new row wins over whatever was selected before. An attempt that produced
+ * nothing -- a blank title, or a write that failed -- must leave the previous
+ * selection exactly as it was, because silently deselecting would look like
+ * the board had thrown the user's current task away.
+ */
+export function selectionAfterCreate(
+  currentId: string | null,
+  createdId: string | null | undefined,
+): string | null {
+  return createdId ?? currentId;
+}

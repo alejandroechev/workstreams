@@ -48,6 +48,7 @@ import {
   statusForDrop,
   subtaskProgress,
   cardSubtasks,
+  selectionAfterCreate,
 } from "../domain/task-board";
 import { renderDevlogDay } from "../domain/devlog-render";
 import { splitLinks } from "../domain/linkify";
@@ -339,6 +340,21 @@ export function TaskBoard({
     void board.updateTask(selected.id, { title: next });
   };
 
+  /**
+   * Create the task in the header composer and open it.
+   *
+   * Selecting the new task is the point: creating one is a statement of intent
+   * to fill it in, so leaving the previously selected task in the detail pane
+   * would send the next edit to the wrong card.
+   */
+  const submitNewTask = () => {
+    const submitted = newTitle;
+    void board.createTask(submitted).then((createdId) => {
+      clearIfUnchanged(createdId !== null, setNewTitle, submitted);
+      setSelectedId((current) => selectionAfterCreate(current, createdId));
+    });
+  };
+
   // Select a requested task once its row has loaded. Guarded like the create
   // request so a re-render cannot keep re-selecting and fighting the user's
   // own clicks.
@@ -444,14 +460,14 @@ export function TaskBoard({
             onChange={(e) => setNewTitle(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Enter") {
-                void board.createTask(newTitle).then((ok) => clearIfUnchanged(ok, setNewTitle, newTitle));
+                submitNewTask();
               }
             }}
             style={{ ...controlStyle, width: 220 }}
           />
           <button
             data-testid="new-task-submit"
-            onClick={() => void board.createTask(newTitle).then((ok) => clearIfUnchanged(ok, setNewTitle, newTitle))}
+            onClick={submitNewTask}
             style={controlStyle}
           >
             <PlusIcon style={{ width: 12, height: 12 }} />

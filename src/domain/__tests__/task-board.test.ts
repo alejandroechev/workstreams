@@ -9,6 +9,7 @@ import {
   subtaskProgress,
   cardSubtasks,
   inProgressTasks,
+  selectionAfterCreate,
 } from "../task-board";
 import { makeTask, makeEvent } from "../tasks";
 import type { Task, Label, TaskEvent } from "../tasks";
@@ -330,5 +331,24 @@ describe("inProgressTasks", () => {
 
   it("returns an empty list rather than everything when nothing is in progress", () => {
     expect(inProgressTasks([makeTask({ id: "a", title: "x", status: "todo" })])).toEqual([]);
+  });
+});
+
+describe("selectionAfterCreate", () => {
+  it("moves the selection to the task that was just created", () => {
+    expect(selectionAfterCreate("a", "b")).toBe("b");
+  });
+
+  it("selects the new task when nothing was selected before", () => {
+    expect(selectionAfterCreate(null, "b")).toBe("b");
+  });
+
+  it("keeps the current selection when nothing was created", () => {
+    expect(selectionAfterCreate("a", null)).toBe("a");
+    expect(selectionAfterCreate("a", undefined)).toBe("a");
+  });
+
+  it("stays empty when nothing was selected and nothing was created", () => {
+    expect(selectionAfterCreate(null, null)).toBeNull();
   });
 });

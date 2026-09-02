@@ -23,7 +23,7 @@ export interface TaskBoardData {
   loading: boolean;
   error: string | null;
   reload: () => Promise<void>;
-  createTask: (title: string) => Promise<boolean>;
+  createTask: (title: string) => Promise<string | null>;
   updateTask: (id: string, updates: TaskUpdate) => Promise<boolean>;
   setStatus: (id: string, status: TaskStatus) => Promise<boolean>;
   setLabels: (id: string, names: string[]) => Promise<boolean>;
@@ -89,14 +89,23 @@ export function useTaskBoard(backend: Backend): TaskBoardData {
     }
   }, []);
 
+  /**
+   * Resolves with the id of the task just created, or null when nothing was
+   * created (blank title, or a failed write). Callers need the identity, not
+   * just success: creating a task is what opens its detail pane.
+   */
   const createTask = useCallback(
-    (title: string) =>
-      guard(async () => {
+    async (title: string): Promise<string | null> => {
+      const created: { id: string | null } = { id: null };
+      const ok = await guard(async () => {
         const trimmed = title.trim();
         if (!trimmed) return;
-        await backend.createTask(trimmed);
+        const task = await backend.createTask(trimmed);
+        created.id = task.id;
         await reload();
-      }),
+      });
+      return ok ? created.id : null;
+    },
     [backend, reload, guard],
   );
 
