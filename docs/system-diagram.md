@@ -1,4 +1,4 @@
-# System Architecture — Agent Manager
+# System Architecture — Workstreams
 
 ```mermaid
 graph TB

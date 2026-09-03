@@ -1,4 +1,4 @@
-# 004 — Repo Explorer Tile (multi-tab, search, font-resize)
+# ADR 024 — Repo Explorer Tile (multi-tab, search, font-resize)
 
 ## Status
 

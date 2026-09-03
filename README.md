@@ -1,6 +1,6 @@
 # Workstreams
 
-> An Integrated Agentic Coding Envionment for **Copilot CLI** — manage projects, persist
+> An Integrated Agentic Coding Environment for **Copilot CLI** — manage projects, persist
 > sessions, embed terminals, browse/edit code, and review diffs side-by-side.
 
 **[workstreams website →](https://alejandroechev.github.io/workstreams/)**
@@ -331,6 +331,8 @@ presented as a slide deck:
 - [**Contributor guide**](docs/contributor-guide.md) — setup, commands,
   tests, hooks, CI.
 - [**Architecture diagram**](docs/system-diagram.md) — system-level mermaid.
+- [**Database model**](docs/db-model.md) — ER diagram and column reference,
+  generated from `src-tauri/src/db.rs`.
 - [**Architecture Decision Records**](docs/adrs/) — design decisions.
 
 ## License

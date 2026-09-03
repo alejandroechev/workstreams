@@ -121,6 +121,6 @@ printing `path:line: text`, with its skip-dir list kept in sync with
 
 ## Related
 
-- ADR 004 — Repo Explorer tile.
+- ADR 024 — Repo Explorer tile.
 - ADR 011 — Non-blocking worktree provisioning (same off-the-main-thread
   principle for long-running work).
