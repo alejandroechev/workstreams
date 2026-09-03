@@ -1,3 +1,9 @@
+---
+id: "006"
+status: Accepted
+date: 2026-05-25
+---
+
 # ADR 006: Editable text files in tile file-detail panes
 
 ## Status
