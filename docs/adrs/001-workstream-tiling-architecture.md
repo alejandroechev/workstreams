@@ -1,3 +1,9 @@
+---
+id: "001"
+status: Accepted
+date: 2026-05-06
+---
+
 # ADR-001: Workstream + Tiling Architecture
 
 ## Status
