@@ -1,3 +1,9 @@
+---
+id: "020"
+status: Accepted
+date: 2026-08-19
+---
+
 # ADR 020: Task board, labels, event log, and devlog export
 
 ## Status
