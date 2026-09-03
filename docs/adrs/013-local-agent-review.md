@@ -1,3 +1,10 @@
+---
+id: "013"
+status: Superseded
+date: 2026-07-01
+superseded_by: "014"
+---
+
 # ADR 013: Local Agent Review (reviewer↔agent loop)
 
 ## Status
