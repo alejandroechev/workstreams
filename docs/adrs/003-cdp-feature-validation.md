@@ -1,3 +1,9 @@
+---
+id: "003"
+status: Accepted
+date: 2026-05-15
+---
+
 # ADR-003: Per-Feature CDP Visual Validation
 
 ## Status
