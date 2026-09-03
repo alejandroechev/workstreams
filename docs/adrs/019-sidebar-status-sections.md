@@ -1,3 +1,9 @@
+---
+id: "019"
+status: Accepted
+date: 2026-08-19
+---
+
 # ADR 019: Sidebar status sections + Repo Manager
 
 ## Status
