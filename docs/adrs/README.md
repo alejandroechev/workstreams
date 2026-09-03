@@ -44,6 +44,30 @@ Write one for a decision that is expensive to reverse, constrains later work, or
 that a future reader would otherwise have to reconstruct from the diff. Routine
 implementation choices do not need one.
 
+Every record starts with machine-readable front matter as the very first bytes
+of the file, followed by a blank line before the `# ` heading:
+
+```yaml
+---
+id: "025"
+status: Accepted
+date: 2026-09-03
+---
+```
+
+| Field | Required | Format |
+| --- | --- | --- |
+| `id` | Yes | Quoted, zero-padded three-digit ADR number matching the filename prefix, such as `"025"`. |
+| `status` | Yes | Exactly one of `Accepted`, `Retired`, `Rewritten`, or `Superseded`. |
+| `date` | Yes | A real ISO calendar date in `YYYY-MM-DD` format that reflects the date recorded by the ADR. |
+| `superseded_by` | No | Quoted, zero-padded three-digit number of an existing replacement ADR, such as `"026"`. |
+
+The front matter mirrors machine-readable facts; it does not replace or shorten
+the record's prose `## Status` section, which preserves dates, links, and
+explanation. The repo-managed pre-commit hook runs the ADR validator (also
+available as `npm run check-adrs`) and rejects records that do not follow this
+convention.
+
 1. Copy the shape of a recent record: **Title**, **Status**, **Context**,
    **Decision**, **Consequences**. Record what you *rejected* and why — that is
    usually the part worth keeping.
@@ -55,6 +79,6 @@ implementation choices do not need one.
 4. If it replaces an existing decision, set the old record's status to
    *Superseded by ADR NNN* and link forward to the new one.
 
-Statuses currently in use: **Accepted**, **Retired**, **Rewritten**, and
-**Superseded by ADR NNN**. Their formatting is not yet consistent across the
-older records; normalising them is tracked separately.
+The prose status may include detail such as **Superseded by ADR NNN** even
+though the corresponding front-matter status is the normalized `Superseded`
+value and the replacement number lives in `superseded_by`.
