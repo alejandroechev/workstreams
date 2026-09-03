@@ -109,21 +109,25 @@ startup. See [macOS environment](docs/features-detailed.md#macos-environment).
 App commands use **Alt** so they never collide with terminal (`Ctrl+C/V`) or
 Monaco (`Ctrl+F/P`) shortcuts.
 
+A deliberately short summary — the handful worth memorising:
+
 | Key | Action |
 | --- | --- |
-| `Alt+C` / `Alt+R` / `Alt+T` | New Copilot session / Repo Explorer / Terminal tile |
-| `Alt+A` / `Alt+L` | New Code Review / Goal Loop tile |
-| `Alt+Arrows` | Move focus between tiles |
-| `Alt+F` | Fullscreen the focused tile |
-| `Alt+S` | Side-by-side compare (exactly 2 tiles selected) |
+| `Alt+C` | Add a Copilot session tile to chat with the agent |
+| `Alt+R` | Add a Repo Explorer tile to browse and open project files |
+| `Alt+T` | Add a terminal tile running your default shell |
+| `Alt+F` | Expand the focused tile to fill the workspace, or restore it |
+| `Alt+S` | Show the two selected tiles side by side, or restore the layout |
 | `Alt+Q` | Close the focused tile |
-| `Ctrl+Shift+F` | Search all files (Repo Explorer) |
+| `Ctrl+Shift+F` | Search the whole repository for a string, with optional case-sensitive or regular expression matching |
 
 **If you forget one, open the `+ Add tile` menu** — every tile type lists its
 own shortcut next to it, so the menu doubles as the cheat sheet.
 
-Every shortcut, plus mouse gestures and present mode:
-[keyboard and mouse reference](docs/features-detailed.md#keyboard-and-mouse-reference).
+**[Full keyboard reference →](docs/keymaps.md)** — the authoritative list of
+every shortcut, generated from the binding registries in the source, so it can
+never drift from the app. Mouse gestures and present mode are covered in the
+[features deep dive](docs/features-detailed.md#keyboard-and-mouse-reference).
 
 ## Tech stack
 
@@ -146,9 +150,9 @@ matches what you need:
 - [**Features deep dive**](docs/features-detailed.md) tells you **what the app
   does and how to use it**, feature by feature, with screenshots. Start here if
   you want to know whether something is possible.
-- [**Keyboard shortcuts**](#keyboard-essentials) above covers the handful worth
-  memorising; the [full reference](docs/features-detailed.md#keyboard-and-mouse-reference)
-  lists every one.
+- [**Keyboard shortcuts**](docs/keymaps.md) is the auto-generated reference for
+  every shortcut in the app; the [essentials table](#keyboard-essentials) above
+  covers the handful worth memorising.
 - [**Contributor guide**](docs/contributor-guide.md) tells you **how to build,
   test and release** it — setup, commands, the test pyramid, hooks, and CI.
   Read this before changing code.

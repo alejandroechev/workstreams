@@ -137,3 +137,51 @@ describe("--check", () => {
     }
   });
 });
+
+describe("docs link to the generated reference instead of restating it", () => {
+  const readme = read("README.md");
+  const detailed = read("docs", "features-detailed.md");
+
+  /** Map every `Keys` -> `Description` pair out of the generated tables. */
+  function generatedRows() {
+    const rows = new Map();
+    for (const line of fresh.split("\n")) {
+      const m = /^\| `([^`]+)` \| (?:(?:`[^`]*`|—) \| )?(.+?) \| /.exec(line);
+      if (m) rows.set(m[1], m[2]);
+    }
+    return rows;
+  }
+
+  it("keeps the README essentials rows byte-identical to the generated ones", () => {
+    const generated = generatedRows();
+    const section = readme.split("## Keyboard essentials")[1].split("\n## ")[0];
+    const rows = [...section.matchAll(/^\| `([^`]+)` \| (.+?) \|$/gm)];
+    expect(rows.length).toBeGreaterThan(3);
+    for (const [, combo, description] of rows) {
+      expect(generated.has(combo), `README advertises unknown key ${combo}`).toBe(true);
+      expect(description, `README description for ${combo} drifted`).toBe(generated.get(combo));
+    }
+  });
+
+  it("points the README and the deep dive at docs/keymaps.md", () => {
+    expect(readme).toContain("docs/keymaps.md");
+    expect(detailed).toContain("(keymaps.md)");
+  });
+
+  it("no longer hand-maintains an exhaustive table in the deep dive", () => {
+    const section = detailed.split("## Keyboard and mouse reference")[1].split("\n## ")[0];
+    for (const combo of ["Alt+W", "Alt+M", "Alt+B", "Ctrl+Shift+V"]) {
+      expect(section, `deep dive still restates ${combo}`).not.toContain(combo);
+    }
+  });
+
+  it("still explains the feature-flagged behaviour the table cannot show", () => {
+    const section = detailed.split("## Keyboard and mouse reference")[1].split("\n## ")[0];
+    expect(section).toContain("Alt+P");
+    expect(section).toContain("Alt+D");
+    expect(section).toContain("plan-tile");
+    expect(section).toContain("debug-walkthrough");
+    expect(section).toContain("ADR 010");
+    expect(section).toMatch(/Monaco/);
+  });
+});

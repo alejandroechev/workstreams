@@ -466,32 +466,25 @@ Present reflects changes immediately.
 
 All app-level commands use **Alt** to avoid conflicts with terminal
 (`Ctrl+C/V/...`) and Monaco (`Ctrl+F/P/...`) shortcuts. On macOS the same
-combinations are typed with **Option**.
+combinations are typed with **Option**, and matching uses the physical key
+position, so an Option combo that rewrites the typed character still works.
 
-If you forget a shortcut, open the `+ Add tile` menu in the status bar: each
-tile type displays its own shortcut beside it, so the menu is also the cheat
-sheet for everything that creates a tile.
+**Every shortcut is listed in the [keyboard reference](keymaps.md)**, generated
+directly from the binding registries in `src/domain/`, so it cannot drift from
+what the app actually does. Do not restate those tables here.
 
-| Key | Action |
-|-----|--------|
-| `Alt+C` | New Copilot session tile |
-| `Alt+T` | New terminal tile (PowerShell) |
-| `Alt+W` | New terminal tile (WSL) |
-| `Alt+R` | New Repo Explorer tile |
-| `Alt+M` | New Session Meta tile |
-| `Alt+B` | New Workbench tile |
-| `Alt+A` | New Code Review tile |
-| `Alt+L` | New Goal Loop tile |
-| `Alt+D` | New Code Walkthrough tile (disabled by default) |
-| `Alt+Q` | Close focused tile |
-| `Alt+F` | Toggle fullscreen for focused tile |
-| `Alt+S` | Toggle side-by-side (when exactly 2 tiles are selected) |
-| `Alt+Arrows` | Navigate between tiles |
-| `Ctrl+S` | Save focused file editor |
-| `Ctrl+P` | Filename search (Repo Explorer) |
-| `Ctrl+Shift+F` | Content search — "search all files" (Repo Explorer) |
-| `Ctrl+Shift+V` | Toggle markdown preview / edit (VS Code parity) |
-| `Esc` | Unfocus terminal / close modal |
+Behaviour the generated table does not capture:
+
+- **Feature-flagged tiles.** `Alt+P` (plan tile) and `Alt+D` (code walkthrough
+  tile) sit behind the `plan-tile` and `debug-walkthrough` flags. The key
+  handler stays registered either way — the flag gates whether the tile can be
+  created, not whether the key is parsed — per
+  [ADR 010](adrs/010-feature-flags.md). The generated reference marks both rows
+  with their flag name rather than hiding them.
+- **Editor guard.** Tile-creation shortcuts are suppressed while a Monaco
+  editor has text focus, so typing `w` in a file never spawns a terminal tile.
+- **The `+ Add tile` menu is the in-app cheat sheet.** Each tile type displays
+  its own shortcut beside it, read from the same registry.
 
 Mouse:
 
