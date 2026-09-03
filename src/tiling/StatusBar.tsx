@@ -4,6 +4,7 @@ import { ViewColumnsIcon } from "@heroicons/react/24/outline";
 import AddTileMenu from "./AddTileMenu";
 import { isFeatureEnabled } from "../domain/feature-flags";
 import { supportsWsl, terminalTileLabel, shortcutLabel } from "../domain/platform";
+import { shortcutForMenuKey } from "../domain/keyboard";
 import type { TileIconKey } from "./tile-icons";
 
 interface Props {
@@ -81,17 +82,17 @@ export default function StatusBar({
   quickNote,
 }: Props) {
   const rawItems: Array<{ key: string; label: string; icon: TileIconKey; shortcut?: string; onSelect?: () => void; gated?: boolean }> = [
-    { key: "session", label: "Copilot Session", icon: "session", shortcut: shortcutLabel("C"), onSelect: onAddSession },
-    { key: "terminal", label: terminalTileLabel(), icon: "terminal", shortcut: shortcutLabel("T"), onSelect: onAddTerminal },
+    { key: "session", label: "Copilot Session", icon: "session", shortcut: shortcutForMenuKey("session"), onSelect: onAddSession },
+    { key: "terminal", label: terminalTileLabel(), icon: "terminal", shortcut: shortcutForMenuKey("terminal"), onSelect: onAddTerminal },
     // WSL is Windows-only — hide the entry entirely on macOS/Linux.
-    { key: "wsl", label: "WSL Terminal", icon: "terminal", shortcut: shortcutLabel("W"), onSelect: onAddWslTerminal, gated: !supportsWsl() },
-    { key: "explorer", label: "Repo Explorer", icon: "folder", shortcut: shortcutLabel("R"), onSelect: onAddExplorer },
-    { key: "meta", label: "Session Meta", icon: "info", shortcut: shortcutLabel("M"), onSelect: onAddSessionMeta },
-    { key: "workbench", label: "Workbench", icon: "beaker", shortcut: shortcutLabel("B"), onSelect: onAddWorkbench },
-    { key: "plan", label: "Plan", icon: "plan", shortcut: shortcutLabel("P"), onSelect: onAddPlan, gated: !isFeatureEnabled("plan-tile") },
-    { key: "code-review", label: "Code Review", icon: "code", shortcut: shortcutLabel("A"), onSelect: onAddCodeReview },
-    { key: "walkthrough", label: "Code Walkthrough", icon: "code", shortcut: shortcutLabel("D"), onSelect: onAddWalkthrough, gated: !isFeatureEnabled("debug-walkthrough") },
-    { key: "loop", label: "Goal Loop", icon: "loop", shortcut: shortcutLabel("L"), onSelect: onAddLoop },
+    { key: "wsl", label: "WSL Terminal", icon: "terminal", shortcut: shortcutForMenuKey("wsl"), onSelect: onAddWslTerminal, gated: !supportsWsl() },
+    { key: "explorer", label: "Repo Explorer", icon: "folder", shortcut: shortcutForMenuKey("explorer"), onSelect: onAddExplorer },
+    { key: "meta", label: "Session Meta", icon: "info", shortcut: shortcutForMenuKey("meta"), onSelect: onAddSessionMeta },
+    { key: "workbench", label: "Workbench", icon: "beaker", shortcut: shortcutForMenuKey("workbench"), onSelect: onAddWorkbench },
+    { key: "plan", label: "Plan", icon: "plan", shortcut: shortcutForMenuKey("plan"), onSelect: onAddPlan, gated: !isFeatureEnabled("plan-tile") },
+    { key: "code-review", label: "Code Review", icon: "code", shortcut: shortcutForMenuKey("code-review"), onSelect: onAddCodeReview },
+    { key: "walkthrough", label: "Code Walkthrough", icon: "code", shortcut: shortcutForMenuKey("walkthrough"), onSelect: onAddWalkthrough, gated: !isFeatureEnabled("debug-walkthrough") },
+    { key: "loop", label: "Goal Loop", icon: "loop", shortcut: shortcutForMenuKey("loop"), onSelect: onAddLoop },
   ];
   const menuItems = rawItems
     .filter((it) => typeof it.onSelect === "function" && !it.gated)

@@ -1,5 +1,24 @@
 import { getMonacoIfLoaded } from "../files/loadMonaco";
+import { shortcutLabel } from "./platform";
 import type { TileType, Direction } from "./types";
+
+/**
+ * Identifier of an entry in the status bar's "+ Add tile" menu.
+ *
+ * Binding these to the shortcut registry keeps the in-app cheat sheet from
+ * drifting away from the generated shortcut reference.
+ */
+export type StatusBarMenuKey =
+  | "session"
+  | "terminal"
+  | "wsl"
+  | "explorer"
+  | "meta"
+  | "workbench"
+  | "plan"
+  | "code-review"
+  | "walkthrough"
+  | "loop";
 
 export type KeyAction =
   | { type: "escape" }
@@ -86,6 +105,11 @@ export interface KeyBinding {
   /** True for shortcuts that create a tile; these are suppressed while Monaco has text focus. */
   tileCreation?: boolean;
   /**
+   * The "+ Add tile" menu entry this shortcut belongs to. Set on every
+   * tile-creation binding so the menu can read its label from here.
+   */
+  menuKey?: StatusBarMenuKey;
+  /**
    * Feature flag gating the equivalent menu entry. Per ADR 010 the keyboard
    * handler stays active even when the menu item is hidden, so this is
    * documentation metadata only — it never suppresses the binding.
@@ -141,6 +165,7 @@ export const APP_KEY_BINDINGS: readonly KeyBinding[] = [
     description: "Add a terminal tile running your default shell",
     action: { type: "addTile", tileType: "terminal" },
     tileCreation: true,
+    menuKey: "terminal",
   },
   {
     key: "w",
@@ -149,6 +174,7 @@ export const APP_KEY_BINDINGS: readonly KeyBinding[] = [
     description: "Add a terminal tile running WSL (Windows only)",
     action: { type: "addTile", tileType: "terminal", extraConfig: { shell: "wsl" } },
     tileCreation: true,
+    menuKey: "wsl",
   },
   {
     key: "c",
@@ -157,6 +183,7 @@ export const APP_KEY_BINDINGS: readonly KeyBinding[] = [
     description: "Add a Copilot session tile to chat with the agent",
     action: { type: "addTile", tileType: "copilot_session" },
     tileCreation: true,
+    menuKey: "session",
   },
   {
     key: "r",
@@ -165,6 +192,7 @@ export const APP_KEY_BINDINGS: readonly KeyBinding[] = [
     description: "Add a Repo Explorer tile to browse and open project files",
     action: { type: "addTile", tileType: "file_explorer" },
     tileCreation: true,
+    menuKey: "explorer",
   },
   {
     key: "m",
@@ -173,6 +201,7 @@ export const APP_KEY_BINDINGS: readonly KeyBinding[] = [
     description: "Add a session metadata tile showing details of the active session",
     action: { type: "addTile", tileType: "session_meta" },
     tileCreation: true,
+    menuKey: "meta",
   },
   {
     key: "b",
@@ -181,6 +210,7 @@ export const APP_KEY_BINDINGS: readonly KeyBinding[] = [
     description: "Add a workbench tile for scratch notes and quick actions",
     action: { type: "addTile", tileType: "workbench" },
     tileCreation: true,
+    menuKey: "workbench",
   },
   {
     key: "p",
@@ -189,6 +219,7 @@ export const APP_KEY_BINDINGS: readonly KeyBinding[] = [
     description: "Add a plan tile to track the steps of the current piece of work",
     action: { type: "addTile", tileType: "plan" },
     tileCreation: true,
+    menuKey: "plan",
     featureFlag: "plan-tile",
   },
   {
@@ -198,6 +229,7 @@ export const APP_KEY_BINDINGS: readonly KeyBinding[] = [
     description: "Add a code review tile to inspect pending changes",
     action: { type: "addTile", tileType: "code_review" },
     tileCreation: true,
+    menuKey: "code-review",
   },
   {
     key: "d",
@@ -206,6 +238,7 @@ export const APP_KEY_BINDINGS: readonly KeyBinding[] = [
     description: "Add a debug walkthrough tile to step through a recorded trace",
     action: { type: "addTile", tileType: "debug_walkthrough" },
     tileCreation: true,
+    menuKey: "walkthrough",
     featureFlag: "debug-walkthrough",
   },
   {
@@ -215,6 +248,7 @@ export const APP_KEY_BINDINGS: readonly KeyBinding[] = [
     description: "Add a loop control tile to drive an automated agent loop",
     action: { type: "addTile", tileType: "loop_control" },
     tileCreation: true,
+    menuKey: "loop",
   },
   {
     key: "q",
@@ -242,6 +276,40 @@ export const APP_KEY_BINDINGS: readonly KeyBinding[] = [
 const tileCreationShortcutKeys = new Set(
   APP_KEY_BINDINGS.filter((binding) => binding.tileCreation).map((binding) => binding.key),
 );
+
+/** Every "+ Add tile" menu entry, in the order the menu renders them. */
+export const STATUS_BAR_MENU_KEYS: readonly StatusBarMenuKey[] = [
+  "session",
+  "terminal",
+  "wsl",
+  "explorer",
+  "meta",
+  "workbench",
+  "plan",
+  "code-review",
+  "walkthrough",
+  "loop",
+];
+
+const bindingsByMenuKey = new Map<StatusBarMenuKey, KeyBinding>(
+  APP_KEY_BINDINGS.filter((binding) => binding.menuKey).map((binding) => [
+    binding.menuKey as StatusBarMenuKey,
+    binding,
+  ]),
+);
+
+/**
+ * The platform-formatted shortcut label for a "+ Add tile" menu entry, e.g.
+ * `"Alt+C"` on Windows and `"⌥C"` on macOS.
+ *
+ * The menu reads its labels from here so the in-app cheat sheet cannot drift
+ * from the generated shortcut reference.
+ */
+export function shortcutForMenuKey(menuKey: StatusBarMenuKey): string | undefined {
+  const binding = bindingsByMenuKey.get(menuKey);
+  if (!binding) return undefined;
+  return shortcutLabel(binding.key.toUpperCase());
+}
 
 function isAltTileCreationShortcut(altKey: boolean, key: string): boolean {
   return altKey && tileCreationShortcutKeys.has(key.toLowerCase());
