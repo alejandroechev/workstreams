@@ -1,3 +1,9 @@
+---
+id: "007"
+status: Retired
+date: 2026-05-26
+---
+
 # ADR 007: diff-grok review skill + Diff Review tile
 
 ## Status
