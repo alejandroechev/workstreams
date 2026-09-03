@@ -1,0 +1,477 @@
+/*
+ * Workstreams landing page.
+ *
+ * Hand-written CSS with no build step: the page is served straight from
+ * `site/` by GitHub Pages, so adding a bundler would buy nothing and cost a
+ * toolchain. Colours are the app's own Catppuccin Mocha palette
+ * (src/styles/theme.css) so the site and the product read as one thing.
+ */
+
+:root {
+  --base: #1e1e2e;
+  --mantle: #181825;
+  --crust: #11111b;
+  --surface: #313244;
+  --overlay: #45475a;
+  --muted: #a6adc8;
+  --text: #cdd6f4;
+  --blue: #89b4fa;
+  --green: #a6e3a1;
+  --yellow: #f9e2af;
+  --mauve: #cba6f7;
+  --peach: #fab387;
+
+  --max-width: 1080px;
+  --radius: 10px;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+}
+
+body {
+  margin: 0;
+  background: var(--base);
+  color: var(--text);
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", sans-serif;
+  font-size: 17px;
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1,
+h2,
+h3 {
+  line-height: 1.2;
+  margin: 0 0 0.5em;
+  letter-spacing: -0.02em;
+}
+
+h1 {
+  font-size: clamp(2.1rem, 5.5vw, 3.6rem);
+}
+
+h2 {
+  font-size: clamp(1.5rem, 3.5vw, 2.1rem);
+}
+
+h3 {
+  font-size: 1.1rem;
+}
+
+p {
+  margin: 0 0 1rem;
+}
+
+a {
+  color: var(--blue);
+}
+
+code,
+kbd,
+pre {
+  font-family: "Cascadia Code", ui-monospace, SFMono-Regular, Menlo, Consolas,
+    monospace;
+}
+
+code {
+  font-size: 0.9em;
+  background: var(--crust);
+  border: 1px solid var(--surface);
+  border-radius: 4px;
+  padding: 0.1em 0.35em;
+}
+
+kbd {
+  font-size: 0.82em;
+  background: var(--surface);
+  border: 1px solid var(--overlay);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  padding: 0.1em 0.4em;
+  color: var(--text);
+}
+
+pre {
+  background: var(--crust);
+  border: 1px solid var(--surface);
+  border-radius: var(--radius);
+  padding: 16px;
+  overflow-x: auto;
+  font-size: 0.86rem;
+  line-height: 1.6;
+  margin: 0 0 1rem;
+}
+
+pre code {
+  background: none;
+  border: 0;
+  padding: 0;
+  font-size: inherit;
+}
+
+/* Skip link — keyboard users should not have to tab the whole nav. */
+.skip-link {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  background: var(--blue);
+  color: var(--crust);
+  padding: 10px 16px;
+  border-radius: 0 0 var(--radius) 0;
+  font-weight: 600;
+  z-index: 10;
+}
+
+.skip-link:focus {
+  left: 0;
+}
+
+:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: 3px;
+}
+
+/* ── Header ─────────────────────────────────────────────────────────── */
+
+.site-header {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  background: rgba(24, 24, 37, 0.85);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--surface);
+}
+
+.nav {
+  max-width: var(--max-width);
+  margin: 0 auto;
+  padding: 12px 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 700;
+  color: var(--text);
+  text-decoration: none;
+  letter-spacing: -0.01em;
+}
+
+.brand-mark {
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  background: linear-gradient(135deg, var(--blue), var(--mauve));
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.15);
+}
+
+.nav-links {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 0.95rem;
+}
+
+.nav-links a {
+  color: var(--muted);
+  text-decoration: none;
+}
+
+.nav-links a:hover {
+  color: var(--text);
+}
+
+.nav-cta {
+  border: 1px solid var(--overlay);
+  border-radius: 6px;
+  padding: 5px 12px;
+  color: var(--text) !important;
+}
+
+.nav-cta:hover {
+  background: var(--surface);
+}
+
+/* ── Sections ───────────────────────────────────────────────────────── */
+
+main > section {
+  max-width: var(--max-width);
+  margin: 0 auto;
+  padding: 72px 24px;
+  border-bottom: 1px solid var(--surface);
+}
+
+main > section:last-child {
+  border-bottom: 0;
+}
+
+.section-lede {
+  color: var(--muted);
+  max-width: 62ch;
+  margin-bottom: 2rem;
+}
+
+/* ── Hero ───────────────────────────────────────────────────────────── */
+
+.hero {
+  text-align: center;
+  padding-top: 84px;
+}
+
+.eyebrow {
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  font-size: 0.75rem;
+  color: var(--mauve);
+  margin-bottom: 1rem;
+}
+
+.lede {
+  font-size: clamp(1.05rem, 2.2vw, 1.25rem);
+  color: var(--muted);
+  max-width: 60ch;
+  margin: 0 auto 2rem;
+}
+
+.lede strong {
+  color: var(--text);
+}
+
+.cta-row {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.button {
+  display: inline-block;
+  padding: 11px 22px;
+  border-radius: 8px;
+  font-weight: 600;
+  font-size: 0.95rem;
+  text-decoration: none;
+  border: 1px solid transparent;
+  transition: transform 0.12s ease, background 0.12s ease;
+}
+
+.button:hover {
+  transform: translateY(-1px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .button {
+    transition: none;
+  }
+  .button:hover {
+    transform: none;
+  }
+}
+
+.button.primary {
+  background: var(--blue);
+  color: var(--crust);
+}
+
+.button.primary:hover {
+  background: #a3c5fb;
+}
+
+.button.ghost {
+  border-color: var(--overlay);
+  color: var(--text);
+}
+
+.button.ghost:hover {
+  background: var(--surface);
+}
+
+.hero-note {
+  margin-top: 1.2rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.hero-media {
+  margin: 3rem 0 0;
+}
+
+figure {
+  margin: 0 0 2.5rem;
+}
+
+figure img {
+  width: 100%;
+  height: auto;
+  display: block;
+  border-radius: var(--radius);
+  border: 1px solid var(--surface);
+  background: var(--crust);
+  box-shadow: 0 18px 45px rgba(0, 0, 0, 0.45);
+}
+
+figcaption {
+  margin-top: 0.7rem;
+  font-size: 0.87rem;
+  color: var(--muted);
+  text-align: center;
+}
+
+/* ── Problem ────────────────────────────────────────────────────────── */
+
+.problem p {
+  color: var(--muted);
+  max-width: 68ch;
+  font-size: 1.05rem;
+}
+
+/* ── Feature grid ───────────────────────────────────────────────────── */
+
+.feature-grid,
+.install-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 18px;
+}
+
+.card {
+  background: var(--mantle);
+  border: 1px solid var(--surface);
+  border-radius: var(--radius);
+  padding: 22px;
+}
+
+.card h3 {
+  color: var(--blue);
+}
+
+.card p {
+  color: var(--muted);
+  margin-bottom: 0;
+  font-size: 0.96rem;
+}
+
+.card .button {
+  margin-top: 0.5rem;
+}
+
+/* ── Loops ──────────────────────────────────────────────────────────── */
+
+.loop-grid {
+  display: grid;
+  grid-template-columns: 1.15fr 0.85fr;
+  gap: 28px;
+  align-items: start;
+}
+
+@media (max-width: 820px) {
+  .loop-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.checklist {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 14px;
+}
+
+.checklist li {
+  color: var(--muted);
+  padding-left: 28px;
+  position: relative;
+  font-size: 0.98rem;
+}
+
+/* Decorative marker; the text carries the meaning, so it is hidden from AT. */
+.checklist li::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0.55em;
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  background: var(--green);
+}
+
+.checklist strong {
+  color: var(--text);
+}
+
+.loop-code pre {
+  margin: 0;
+}
+
+.loop-code .k {
+  color: var(--blue);
+}
+
+.loop-code .c {
+  color: #6c7086;
+  font-style: italic;
+}
+
+/* ── Install ────────────────────────────────────────────────────────── */
+
+.install-grid .card pre {
+  margin-top: 0.75rem;
+}
+
+.fineprint {
+  font-size: 0.83rem;
+  color: var(--muted);
+  margin-top: 0.9rem;
+  margin-bottom: 0;
+}
+
+/* ── Closing + footer ───────────────────────────────────────────────── */
+
+.closing {
+  text-align: center;
+}
+
+.closing p {
+  color: var(--muted);
+  max-width: 60ch;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.site-footer {
+  max-width: var(--max-width);
+  margin: 0 auto;
+  padding: 36px 24px 56px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.site-footer p {
+  margin: 0 0 0.4rem;
+}

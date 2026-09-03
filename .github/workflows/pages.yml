@@ -1,0 +1,73 @@
+name: Pages
+
+# Publishes the static landing page in `site/` to GitHub Pages.
+#
+# Screenshots and demo clips are deliberately NOT duplicated into `site/`:
+# they live once in `docs/assets/` (already referenced by the README and the
+# feature deep dive) and are copied in here at publish time. One copy in git,
+# one source of truth.
+#
+# Requires a one-time setup: Settings → Pages → Source: "GitHub Actions".
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "site/**"
+      - "docs/assets/**"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Let an in-flight deploy finish rather than cancelling it midway, but never
+# queue more than one pending run.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Stage media alongside the page
+        run: |
+          mkdir -p site/assets
+          cp -R docs/assets/. site/assets/
+
+      - name: Fail on references to missing local media
+        # A broken <img> is invisible in review and obvious to visitors, so
+        # check every local src before publishing rather than after.
+        run: |
+          status=0
+          for ref in $(grep -o 'src="[^"]*"' site/index.html | cut -d'"' -f2); do
+            case "$ref" in
+              http*) continue ;;
+            esac
+            if [ ! -f "site/$ref" ]; then
+              echo "::error file=site/index.html::missing media referenced as '$ref'"
+              status=1
+            fi
+          done
+          exit $status
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

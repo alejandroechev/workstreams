@@ -3,6 +3,8 @@
 > An Integrated Agentic Coding Envionment for **Copilot CLI** — manage projects, persist
 > sessions, embed terminals, browse/edit code, and review diffs side-by-side.
 
+**[workstreams website →](https://alejandroechev.github.io/workstreams/)**
+
 ![Workstreams demo](docs/assets/workstreams-demo.gif)
 
 ## Why?

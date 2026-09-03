@@ -45,3 +45,7 @@ playwright-report/
 
 # Legacy location for walkthrough traces (now stored under the Copilot session).
 .workstreams/
+
+# Landing-page media is copied from docs/assets/ at publish time (and for local
+# preview). Committing it would duplicate multi-megabyte binaries in git.
+site/assets/

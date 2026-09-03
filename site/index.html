@@ -1,0 +1,328 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Workstreams — an integrated agentic coding environment for Copilot CLI</title>
+    <meta
+      name="description"
+      content="Workstreams turns a fistful of Copilot CLI terminal tabs into a persistent, project-aware workspace: tiling layouts, durable sessions, an in-app repo browser, local code review, and autonomous goal loops."
+    />
+    <link rel="canonical" href="https://alejandroechev.github.io/workstreams/" />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Workstreams" />
+    <meta
+      property="og:description"
+      content="An integrated agentic coding environment for Copilot CLI — persistent sessions, adaptive tiling, local code review, and autonomous goal loops."
+    />
+    <meta property="og:image" content="assets/feature-tiling-grid.png" />
+    <meta name="twitter:card" content="summary_large_image" />
+
+    <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+
+    <header class="site-header">
+      <nav class="nav" aria-label="Primary">
+        <a class="brand" href="#main">
+          <span class="brand-mark" aria-hidden="true"></span>
+          Workstreams
+        </a>
+        <ul class="nav-links">
+          <li><a href="#features">Features</a></li>
+          <li><a href="#loops">Goal loops</a></li>
+          <li><a href="#install">Install</a></li>
+          <li>
+            <a class="nav-cta" href="https://github.com/alejandroechev/workstreams">
+              GitHub
+            </a>
+          </li>
+        </ul>
+      </nav>
+    </header>
+
+    <main id="main">
+      <section class="hero">
+        <p class="eyebrow">Desktop app · Tauri + React + Rust</p>
+        <h1>Stop juggling Copilot CLI terminal tabs.</h1>
+        <p class="lede">
+          Workstreams is an integrated agentic coding environment for
+          <strong>Copilot&nbsp;CLI</strong>. One persistent, project-aware
+          workspace per piece of work — sessions, terminals, code, diffs and
+          autonomous loops, all side by side.
+        </p>
+        <div class="cta-row">
+          <a class="button primary" href="#install">Install</a>
+          <a
+            class="button ghost"
+            href="https://github.com/alejandroechev/workstreams"
+            >View source</a
+          >
+        </div>
+        <p class="hero-note">
+          macOS (Apple Silicon) and Windows · MIT licensed · free and open source
+        </p>
+
+        <figure class="hero-media">
+          <img
+            src="assets/workstreams-demo.gif"
+            alt="Workstreams in use: a workstream sidebar beside a tiled canvas of Copilot session, repo browser and terminal tiles."
+            loading="eager"
+            decoding="async"
+          />
+          <figcaption>Adaptive tiling across a single workstream.</figcaption>
+        </figure>
+      </section>
+
+      <section class="problem" aria-labelledby="problem-title">
+        <h2 id="problem-title">The problem</h2>
+        <p>
+          When you live in Copilot CLI, every project becomes a fistful of
+          terminal tabs: one for the agent, one for <code>git</code>, one for
+          logs, one for a quick markdown preview. Close the window and it is all
+          gone. Workstreams keeps the shape of your work.
+        </p>
+      </section>
+
+      <section id="features" aria-labelledby="features-title">
+        <h2 id="features-title">What you get</h2>
+
+        <div class="feature-grid">
+          <article class="card">
+            <h3>Tiling that adapts to count</h3>
+            <p>
+              One tile fullscreens, two split, three focus and stack, four grid.
+              No manual window management — the layout follows what you opened.
+            </p>
+          </article>
+
+          <article class="card">
+            <h3>Sessions that persist</h3>
+            <p>
+              One linked Copilot session per workstream, with a live activity
+              indicator and a bell on idle. Layouts, scrollback, open files and
+              view state all survive a restart.
+            </p>
+          </article>
+
+          <article class="card">
+            <h3>Repo browser built in</h3>
+            <p>
+              Files, Diff, Log, Hooks and cross-file Search. The unstaged diff is
+              editable in place — fix it where you spotted it and save straight
+              to the working file.
+            </p>
+          </article>
+
+          <article class="card">
+            <h3>Local code review</h3>
+            <p>
+              Comment inline on a real diff, hand the thread to the agent, and
+              read its reply in place. No PR round-trip, no chatter polluting
+              the real review.
+            </p>
+          </article>
+
+          <article class="card">
+            <h3>Task board with devlog export</h3>
+            <p>
+              Track work across workstreams, then export the day into your wiki
+              as markdown — one section per task, committed and pushed.
+            </p>
+          </article>
+
+          <article class="card">
+            <h3>Keyboard driven</h3>
+            <p>
+              <kbd>Alt</kbd> plus a letter opens any tile type,
+              <kbd>Alt</kbd>+arrows moves focus, and
+              <kbd>Alt</kbd>+<kbd>S</kbd> compares two tiles side by side.
+            </p>
+          </article>
+        </div>
+      </section>
+
+      <section class="showcase" aria-labelledby="showcase-title">
+        <h2 id="showcase-title">A look inside</h2>
+
+        <figure>
+          <img
+            src="assets/feature-tiling-grid.png"
+            alt="A four-tile adaptive grid showing a Copilot session, the repo explorer, session metadata and a terminal."
+            loading="lazy"
+            decoding="async"
+          />
+          <figcaption>
+            Four tiles, arranged automatically — Copilot session, repo browser,
+            session meta and a terminal.
+          </figcaption>
+        </figure>
+
+        <figure>
+          <img
+            src="assets/feature-diff.png"
+            alt="The Diff tab showing unstaged changes in split mode with syntax highlighting."
+            loading="lazy"
+            decoding="async"
+          />
+          <figcaption>
+            Split-mode diffs. The unstaged view is editable in place.
+          </figcaption>
+        </figure>
+
+        <figure>
+          <img
+            src="assets/feature-code-editor.png"
+            alt="A TypeScript file open in the embedded Monaco editor with syntax highlighting."
+            loading="lazy"
+            decoding="async"
+          />
+          <figcaption>Full Monaco editing, without leaving the workspace.</figcaption>
+        </figure>
+
+        <figure>
+          <img
+            src="assets/feature-side-by-side.png"
+            alt="Side-by-side comparison of the repo explorer and session metadata tiles."
+            loading="lazy"
+            decoding="async"
+          />
+          <figcaption>
+            <kbd>Alt</kbd>+<kbd>S</kbd> pins any two tiles side by side.
+          </figcaption>
+        </figure>
+      </section>
+
+      <section id="loops" class="loops" aria-labelledby="loops-title">
+        <h2 id="loops-title">Autonomous goal loops</h2>
+        <p class="section-lede">
+          Describe an outcome in YAML. Workstreams runs an
+          orchestrator&nbsp;→&nbsp;worker pipeline against your repository until
+          the goal is met — and refuses to call it done without evidence.
+        </p>
+
+        <div class="loop-grid">
+          <div class="loop-copy">
+            <ul class="checklist">
+              <li>
+                <strong>Evidence, not vibes.</strong> Every task must clear a
+                deterministic verifier, an independent evaluator agent, a human
+                approval gate, or a combination of the three.
+              </li>
+              <li>
+                <strong>A verifier failure is final.</strong> No agent can
+                override a failing test suite.
+              </li>
+              <li>
+                <strong>Durable by design.</strong> Runs are recorded in SQLite,
+                pinned to the exact YAML and its hash. Pause, quit the app,
+                reopen and resume.
+              </li>
+              <li>
+                <strong>Measured.</strong> Each stage records its own duration,
+                so "which step is slow" is answered from data.
+              </li>
+              <li>
+                <strong>Interruptible.</strong> Pause, stop and kill are distinct
+                guarantees, at safe boundaries.
+              </li>
+            </ul>
+          </div>
+
+          <div class="loop-code">
+            <pre><code><span class="c">// a loop is just a reviewable file</span>
+<span class="k">apiVersion</span>: workstreams.dev/v1alpha1
+<span class="k">kind</span>: Loop
+
+<span class="k">spec</span>:
+  <span class="k">objective</span>: &gt;
+    Every module has tests and
+    the suite passes.
+
+  <span class="k">verification</span>:
+    <span class="k">command</span>:
+      <span class="k">program</span>: npm
+      <span class="k">args</span>: [test]
+
+  <span class="k">limits</span>:
+    <span class="k">runTimeout</span>: 30m
+    <span class="k">taskAttempts</span>: 2</code></pre>
+          </div>
+        </div>
+      </section>
+
+      <section id="install" class="install" aria-labelledby="install-title">
+        <h2 id="install-title">Install</h2>
+        <p class="section-lede">
+          Grab a build from the releases page, or build from source.
+        </p>
+
+        <div class="install-grid">
+          <article class="card">
+            <h3>Download</h3>
+            <p>
+              Windows installers and a macOS Apple&nbsp;Silicon
+              <code>.dmg</code> are published on the releases page.
+            </p>
+            <a
+              class="button primary"
+              href="https://github.com/alejandroechev/workstreams/releases"
+              >Latest release</a
+            >
+            <p class="fineprint">
+              The macOS build is unsigned, so Gatekeeper blocks first launch —
+              right-click&nbsp;→&nbsp;<strong>Open</strong>, or run
+              <code>xattr -dr com.apple.quarantine /Applications/Workstreams.app</code>.
+            </p>
+          </article>
+
+          <article class="card">
+            <h3>Build from source</h3>
+            <pre><code>git clone https://github.com/alejandroechev/workstreams
+cd workstreams
+npm install
+npm run tauri build</code></pre>
+            <p class="fineprint">
+              Needs Node 20+ and a Rust toolchain. Copilot CLI must be installed
+              and on your <code>PATH</code>.
+            </p>
+          </article>
+        </div>
+      </section>
+
+      <section class="closing" aria-labelledby="closing-title">
+        <h2 id="closing-title">Read the design decisions</h2>
+        <p>
+          Workstreams is documented the way it was built: every significant
+          choice has an architecture decision record explaining the constraint
+          behind it.
+        </p>
+        <div class="cta-row">
+          <a
+            class="button ghost"
+            href="https://github.com/alejandroechev/workstreams/tree/master/docs/adrs"
+            >Architecture decision records</a
+          >
+          <a
+            class="button ghost"
+            href="https://github.com/alejandroechev/workstreams/blob/master/docs/features-detailed.md"
+            >Feature deep dive</a
+          >
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <p>
+        MIT licensed ·
+        <a href="https://github.com/alejandroechev/workstreams">Source on GitHub</a>
+      </p>
+      <p class="fineprint">
+        Not affiliated with GitHub. Copilot CLI is a product of GitHub, Inc.
+      </p>
+    </footer>
+  </body>
+</html>
