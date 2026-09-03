@@ -1,3 +1,9 @@
+---
+id: "017"
+status: Accepted
+date: 2026-08-03
+---
+
 # ADR 017 — Repair the GUI-launch environment on macOS (`PATH`, `TERM`)
 
 ## Status
