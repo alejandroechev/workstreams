@@ -5,6 +5,7 @@ import { useState, type ComponentProps } from "react";
 
 import { BackendProvider } from "../../backend/context";
 import type { Backend } from "../../backend/types";
+import { __setPlatformOverrideForTests } from "../../domain/platform";
 import RepoExplorerTile from "../RepoExplorerTile";
 
 const invokeMock = vi.hoisted(() => vi.fn());
@@ -147,6 +148,11 @@ async function openFile(name: string) {
 
 describe("RepoExplorerTile editor wiring", () => {
   beforeEach(() => {
+    // The tile joins paths with the platform separator, and jsdom's user agent
+    // varies with the host OS (darwin locally, linux in CI), which flips that
+    // separator. Pin Windows so the backslash expectations below hold
+    // everywhere instead of only on the maintainer's machine.
+    __setPlatformOverrideForTests("windows");
     editorMountCounter = 0;
     fileEditorMock.mockClear();
     invokeMock.mockImplementation((cmd: string) => {
@@ -158,6 +164,7 @@ describe("RepoExplorerTile editor wiring", () => {
   });
 
   afterEach(() => {
+    __setPlatformOverrideForTests(null);
     cleanup();
     vi.unstubAllGlobals();
   });
