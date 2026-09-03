@@ -1,3 +1,9 @@
+---
+id: "002"
+status: Accepted
+date: 2026-05-12
+---
+
 # ADR-002: Discipline Enforcement via 5-Layer Defense
 
 **Date**: 2026-05-12
