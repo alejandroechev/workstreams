@@ -47,10 +47,24 @@ project-aware workspace:
   with Approve / Request revision / Reject actions in the tile and an approval
   indicator in the sidebar. Verifiers can be repository scripts outside the
   definition folder; each run pins the exact YAML and SHA-256 hash for durable
-  evidence. Task cards foreground only the latest current state or actionable
-  evaluator request; worker JSON, all evidence, historical evaluations, and
-  the event timeline are collapsed until requested. MVP1 is manual and local
-  while Workstreams is open. See
+  evidence. **Pause survives a restart** — pause a run, quit the app, reopen and
+  Resume; queued tasks are preserved and the wall-clock budget is refreshed,
+  since time spent paused is not compute time. The run view is overview-first:
+  state, elapsed, next expected evidence and a **measured time breakdown**
+  (per-role totals plus the single slowest stage) sit at the top, while the
+  definition, objective, task list and event timeline stay collapsed. Every
+  agent and verifier episode records its own duration, so "which step is slow"
+  is answered from evidence rather than guesswork. Tasks are listed
+  **newest-first** with a sort toggle and a state filter, long results collapse
+  to a preview, and the list auto-opens only when something needs attention.
+  Each card foregrounds only the current state or the latest actionable
+  evaluator request, keeping worker JSON, evidence and historical evaluations
+  behind **Details**.
+  The same controller is scriptable — `npm run loop:cli -- validate <repo>
+  <file>` checks a definition against the authoritative parser, and `list` /
+  `run-file` discover and execute one — so definitions can be authored and
+  verified without opening the app.
+  MVP1 is manual and local while Workstreams is open. See
   [ADR 021](docs/adrs/021-manual-coding-goal-loop.md),
   [ADR 022](docs/adrs/022-versioned-loop-definitions.md), and
   [ADR 023](docs/adrs/023-human-loop-approval.md).
@@ -74,11 +88,15 @@ project-aware workspace:
   surfaced as a clickable row under the box (both open in the system browser).
   Cards are **drag-and-drop** between columns (dropping a card back on
   its own column is a no-op, so `🕵️` and `❌` keep their glyph), show their
-  **subtasks with individual state** plus a done/total count, and link straight
-  to the **workstream** they are attached to. A workstream's `⋯` menu has
+  **open subtasks with individual state** plus a done/total count (completed
+  ones drop off the card and stay visible in the detail panel), and link straight
+  to the **workstream** they are attached to. The single-line **label and subtask
+  boxes commit with `Enter`**; the log entry box keeps `⌘⏎` so a multi-line entry
+  is still possible. A workstream's `⋯` menu has
   **Create task…**, which opens the board with a task already created, named
   after the workstream, attached to it and selected for renaming — and **Go to
-  task** once it is bound, since the relation is 1:1. Notes can be
+  task** once it is bound, since the relation is 1:1. Creating a task always
+  opens **that** task's detail pane, even if another was already selected. Notes can be
   deleted but never rewritten. The sidebar keeps an always-on list of **in-progress tasks** that navigates
   straight to the bound workstream — or, when you are already in it, opens the
   task on the board. **Export** renders the **last work day or
@@ -204,7 +222,9 @@ Apps launched from the Dock, Finder, or Spotlight inherit launchd's minimal
 `PATH` (`/usr/bin:/bin:/usr/sbin:/sbin`) and never read `~/.zshrc`, which would
 hide `copilot`, `agency`, `node` and Homebrew binaries from every tile. On a
 GUI launch Workstreams detects this and asks your login shell for its `PATH`
-once, then uses it for spawned tiles — so no `PATH` setup is needed. Because
+once, then uses it for spawned tiles, loop verifiers and trace recording — so
+no `PATH` setup is needed and a verifier calling `npm` or `cargo` resolves the
+same way it does in a terminal. Because
 that value is snapshotted at startup, **restart the app after editing your
 shell profile**. See [ADR 017](docs/adrs/017-macos-gui-launch-path.md).
 
@@ -232,7 +252,9 @@ shell profile**. See [ADR 017](docs/adrs/017-macos-gui-launch-path.md).
    terminal ever goes **black** and won't recover, re-enable the setting to fall
    back to the DOM renderer (which never blanks). Terminals also self-recover
    from GPU context loss and permanently drop to the DOM renderer after repeated
-   losses.
+   losses. Terminal and Copilot tiles resize xterm and the underlying PTY as one
+   operation, so a wrapped command line keeps its first row visible and the
+   cursor stays over the character it is actually on while you edit.
 5. The Copilot command is global by default, but each **repo** can override it:
    open **Repos** from the sidebar footer, pick a repo and set a **Copilot
    command** (blank = inherit the global). Every workstream in that repo then
