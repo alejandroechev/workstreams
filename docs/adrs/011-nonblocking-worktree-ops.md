@@ -1,3 +1,9 @@
+---
+id: "011"
+status: Accepted
+date: 2026-06-19
+---
+
 # ADR 011 — Non-blocking worktree provisioning with the sidebar row as progress UI
 
 ## Status
