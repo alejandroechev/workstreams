@@ -1,3 +1,9 @@
+---
+id: "024"
+status: Accepted
+date: 2026-05-18
+---
+
 # ADR 024 — Repo Explorer Tile (multi-tab, search, font-resize)
 
 ## Status
