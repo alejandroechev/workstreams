@@ -1,3 +1,9 @@
+---
+id: "016"
+status: Accepted
+date: 2026-07-31
+---
+
 # ADR 016 — macOS support (Apple Silicon, unsigned)
 
 ## Status
