@@ -1,3 +1,9 @@
+---
+id: "010"
+status: Accepted
+date: 2026-06-08
+---
+
 # ADR 010 — Feature flags for optional tiles
 
 ## Status
