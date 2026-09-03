@@ -119,6 +119,9 @@ Monaco (`Ctrl+F/P`) shortcuts.
 | `Alt+Q` | Close the focused tile |
 | `Ctrl+Shift+F` | Search all files (Repo Explorer) |
 
+**If you forget one, open the `+ Add tile` menu** — every tile type lists its
+own shortcut next to it, so the menu doubles as the cheat sheet.
+
 Every shortcut, plus mouse gestures and present mode:
 [keyboard and mouse reference](docs/features-detailed.md#keyboard-and-mouse-reference).
 
@@ -137,15 +140,27 @@ Every shortcut, plus mouse gestures and present mode:
 
 ## Documentation
 
-- [**Features deep dive**](docs/features-detailed.md) — long-form reference for
-  every feature, with screenshots.
-- [**Contributor guide**](docs/contributor-guide.md) — setup, commands, tests,
-  hooks, CI.
-- [**Architecture diagram**](docs/system-diagram.md) — system-level mermaid.
-- [**Database model**](docs/db-model.md) — ER diagram and column reference,
-  generated from `src-tauri/src/db.rs`.
-- [**Architecture Decision Records**](docs/adrs/) — the design decisions behind
-  the app, and what they replaced.
+Each document answers a different kind of question, so start with the one that
+matches what you need:
+
+- [**Features deep dive**](docs/features-detailed.md) tells you **what the app
+  does and how to use it**, feature by feature, with screenshots. Start here if
+  you want to know whether something is possible.
+- [**Keyboard shortcuts**](#keyboard-essentials) above covers the handful worth
+  memorising; the [full reference](docs/features-detailed.md#keyboard-and-mouse-reference)
+  lists every one.
+- [**Contributor guide**](docs/contributor-guide.md) tells you **how to build,
+  test and release** it — setup, commands, the test pyramid, hooks, and CI.
+  Read this before changing code.
+- [**Contributing**](CONTRIBUTING.md) tells you **how to get a change
+  accepted**, and what to expect from a project maintained by one person.
+- [**Architecture diagram**](docs/system-diagram.md) and
+  [**database model**](docs/db-model.md) describe **how the app is put
+  together**. The database reference is generated from `src-tauri/src/db.rs`.
+- [**Architecture Decision Records**](docs/adrs/) explain **why it is built
+  this way** — the decisions, what they replaced, and what was rejected. Read
+  these before proposing a structural change.
+- [**Changelog**](CHANGELOG.md) records **what changed in each release**.
 
 ## License
 

@@ -129,6 +129,52 @@ Two workflows, with strictly separated responsibilities:
   a GitHub Release with the NSIS installer, MSI installer, and raw
   `workstreams-vX.Y.Z.exe` attached.
 
+## Releases
+
+### Bump rules (when auto-computing)
+
+The bump is derived from [Conventional Commits](https://www.conventionalcommits.org/)
+across the range since the previous tag.
+
+| Commit prefix | Bump kind | Example |
+|---|---|---|
+| `feat:` / `feat(scope):` | **minor** | `feat(repo): add Diff tab filter` |
+| `fix:` / `perf:` / `refactor:` / `chore:` / `test:` / `style:` / `build:` / `ci:` / `revert:` | **patch** | `fix(window): grant allow-destroy permission` |
+| `docs:` only | **none** — auto-compute refuses to release (set `version` explicitly to override) | `docs: update tutorial` |
+| `<any-type>!:` or body contains `BREAKING CHANGE:` | **major** | `feat!: rewrite tile persistence schema` |
+| Anything else (no recognised prefix) | **patch** (safe default) | — |
+
+The **strongest** bump across the range wins. If several commits are batched
+(`fix:` + `feat:` + `docs:`), the result is a **minor** bump.
+
+```
+v0.1.0 → fix: …                      → v0.1.1
+v0.1.1 → feat: …                     → v0.2.0
+v0.2.0 → docs: …                     → auto-compute refuses (use explicit version)
+v0.2.0 → docs: …    + fix: …         → v0.2.1
+v0.2.0 → feat: …    + fix: …         → v0.3.0
+v0.2.0 → feat!: …                    → v1.0.0
+```
+
+### Release notes
+
+The published release body leads with a **Highlights** section lifted from
+`CHANGELOG.md` by `scripts/changelog-section.mjs`: it looks for a section
+matching the tag, then falls back to `[Unreleased]`. The raw commit log is kept
+but collapsed beneath it.
+
+So before cutting a release, move the `[Unreleased]` entries in `CHANGELOG.md`
+under a new version heading. If no entry is found the release still publishes,
+with a note saying curated notes were missing — it degrades rather than
+blocking.
+
+### Source-of-truth files
+
+- `package.json` `"version"` and `src-tauri/tauri.conf.json` `"version"` are
+  **decorative** — they are stamped at release time from the resolved tag.
+  Their committed value is what the dev binary reports between releases.
+- Git tags `v<major>.<minor>.<patch>` are the actual source of truth.
+
 ## Process safety — never kill by name
 
 The dev build (`cargo tauri dev`) and the production build both ship as

@@ -312,10 +312,19 @@ jobs:
         run: |
           set -euo pipefail
           notes_file=$(mktemp)
+          highlights=$(node scripts/changelog-section.mjs "$TAG" --optional || true)
+          if [ -z "$highlights" ]; then
+            highlights=$(node scripts/changelog-section.mjs --unreleased --optional || true)
+          fi
           {
-            echo "Manual release for commit ${{ github.sha }}"
-            echo
-            echo "**Bump kind:** \`${BUMP}\`"
+            if [ -n "$highlights" ]; then
+              echo "## Highlights"
+              echo
+              echo "$highlights"
+            else
+              echo "No curated notes were recorded for this release. See the commit"
+              echo "log below, and add a CHANGELOG.md entry before the next one."
+            fi
             echo
             echo "## Downloads"
             echo "| Platform | Artifact |"
@@ -329,13 +338,18 @@ jobs:
             echo ">"
             echo "> Apple Silicon only — Intel Macs are not currently built."
             echo
-            echo "## Commit log since previous tag"
+            echo "<details>"
+            echo "<summary>Commit log since previous tag (<code>${BUMP}</code> bump)</summary>"
+            echo
             prev_tag=$(git tag --list 'v*' --sort=-v:refname | grep -v "^${TAG}$" | head -n 1 || true)
             if [ -n "$prev_tag" ]; then
               git log "${prev_tag}..${{ github.sha }}" --pretty=format:"- %s (%h)"
             else
               git log --pretty=format:"- %s (%h)" -20
             fi
+            echo
+            echo
+            echo "</details>"
           } > "$notes_file"
 
           gh release create "$TAG" \

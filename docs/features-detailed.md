@@ -465,7 +465,12 @@ Present reflects changes immediately.
 ## Keyboard and mouse reference
 
 All app-level commands use **Alt** to avoid conflicts with terminal
-(`Ctrl+C/V/...`) and Monaco (`Ctrl+F/P/...`) shortcuts.
+(`Ctrl+C/V/...`) and Monaco (`Ctrl+F/P/...`) shortcuts. On macOS the same
+combinations are typed with **Option**.
+
+If you forget a shortcut, open the `+ Add tile` menu in the status bar: each
+tile type displays its own shortcut beside it, so the menu is also the cheat
+sheet for everything that creates a tile.
 
 | Key | Action |
 |-----|--------|

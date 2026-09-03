@@ -1,0 +1,106 @@
+name: Bug report
+description: Something in the app behaves incorrectly.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a report.
+
+        Please read the
+        [expectations in CONTRIBUTING.md](https://github.com/alejandroechev/workstreams/blob/master/CONTRIBUTING.md#expectations-first)
+        first: this is a personal tool maintained by one person, so issues may
+        not be reviewed.
+
+        The three fields that make a report actionable are the **app version**,
+        your **OS**, and the **log output**. Without them a bug usually cannot
+        be acted on.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you expect to happen, and what happened instead?
+      placeholder: |
+        I opened a Goal Loop tile and pressed Run. I expected the run to start;
+        instead the tile stayed on "Idle" and nothing appeared in the timeline.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: The smallest sequence that reliably triggers it.
+      placeholder: |
+        1. Open a workstream bound to a repo
+        2. Add a Goal Loop tile with Alt+L
+        3. Select a definition and press Run
+        4. Observe the tile state
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: App version
+      description: Shown in the app's status bar, or the release you installed.
+      placeholder: v0.7.0
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Windows 11
+        - Windows 10
+        - macOS (Apple Silicon)
+        - macOS (Intel)
+        - Other (please describe below)
+    validations:
+      required: true
+
+  - type: input
+    id: os-detail
+    attributes:
+      label: OS version
+      description: For example "macOS 15.2" or "Windows 11 23H2".
+    validations:
+      required: false
+
+  - type: dropdown
+    id: launched-from
+    attributes:
+      label: How did you launch the app?
+      description: >
+        This matters more than it sounds. A GUI launch inherits a minimal PATH,
+        which has caused a whole class of "command not found" bugs.
+      options:
+        - Dock / Finder / Start Menu / Spotlight
+        - From a terminal
+        - Development build (cargo tauri dev)
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs and error output
+      description: >
+        Any error text, a console message, or a screenshot. This is
+        automatically formatted as code, so no backticks are needed.
+      render: shell
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues for a duplicate.
+          required: true
+        - label: I am running the latest release, or have explained why not.
+          required: false

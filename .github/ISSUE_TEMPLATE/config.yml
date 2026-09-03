@@ -1,0 +1,11 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Documentation
+    url: https://github.com/alejandroechev/workstreams#documentation
+    about: The README, the feature deep dive, and the decision records.
+  - name: Contributing and expectations
+    url: https://github.com/alejandroechev/workstreams/blob/master/CONTRIBUTING.md
+    about: Read this before opening a pull request.
+  - name: Report a security issue privately
+    url: https://github.com/alejandroechev/workstreams/security/advisories/new
+    about: Please do not file security problems as public issues.

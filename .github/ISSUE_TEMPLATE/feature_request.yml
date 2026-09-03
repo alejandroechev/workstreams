@@ -1,0 +1,57 @@
+name: Feature request
+description: Suggest a change to how the app works.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please read
+        [what is unlikely to be merged](https://github.com/alejandroechev/workstreams/blob/master/CONTRIBUTING.md#what-is-unlikely-to-be-merged)
+        before filing. Workstreams is a personal tool, and features are weighed
+        against the complexity they add for one maintainer.
+
+        **Lead with the problem, not the solution.** The problem is the part
+        that cannot be worked out from the other end.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you hitting?
+      description: >
+        Describe the situation where the app gets in your way. Concrete beats
+        general — what were you doing, and what did it cost you?
+      placeholder: |
+        When I have five workstreams open I cannot tell which agents are still
+        working without clicking into each one, so I keep switching back and
+        forth to check.
+    validations:
+      required: true
+
+  - type: textarea
+    id: workaround
+    attributes:
+      label: How do you work around it today?
+      description: >
+        If there is no workaround, say so — that itself is useful signal.
+    validations:
+      required: false
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like to happen?
+      description: Optional. A rough idea is fine; it does not need a design.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues for a duplicate.
+          required: true
+        - label: >
+            I have read that this may not be reviewed, and that forking is a
+            reasonable answer if I need it sooner.
+          required: true
