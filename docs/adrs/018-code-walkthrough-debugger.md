@@ -1,3 +1,9 @@
+---
+id: "018"
+status: Accepted
+date: 2026-08-10
+---
+
 # ADR 018 — Code walkthrough: recorded execution traces for reading code
 
 ## Status
