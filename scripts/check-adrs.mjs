@@ -2,7 +2,7 @@
 /**
  * check-adrs.mjs
  *
- * Validates the ADR corpus in docs/adrs/. Each ADR may carry a machine-readable
+ * Validates the ADR corpus in docs/adrs/. Each ADR must carry a machine-readable
  * YAML-ish front-matter block at the very top of the file:
  *
  *   ---
@@ -22,14 +22,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
 
-/**
- * Migration tolerance switch.
- *
- * While the corpus is being migrated, ADR files that carry no front-matter
- * block at all are skipped rather than reported. Flip this to `true` once every
- * ADR has a block, and missing front matter becomes an error.
- */
-export const REQUIRE_FRONT_MATTER = false;
+export const REQUIRE_FRONT_MATTER = true;
 
 export const ALLOWED_STATUSES = ["Accepted", "Retired", "Rewritten", "Superseded"];
 
@@ -170,10 +163,7 @@ function main() {
     process.exit(1);
   }
 
-  const checked = files.filter((f) => parseFrontMatter(f.text)).length;
-  console.log(
-    `✅ ADRs OK — ${checked} of ${files.length} validated, ${files.length - checked} skipped (no front matter yet).`,
-  );
+  console.log(`✅ ADRs OK — ${files.length} validated.`);
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

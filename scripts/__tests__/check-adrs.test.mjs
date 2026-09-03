@@ -93,10 +93,9 @@ describe("validateAdrs", () => {
     expect(errors[0]).toMatch(/index/i);
   });
 
-  it("skips files with no front matter while the tolerance flag is off", () => {
-    expect(REQUIRE_FRONT_MATTER).toBe(false);
-    // 004-delta.md is not in the index either — still no error, because it is skipped entirely.
-    const files = [adr("001-alpha.md", null), adr("004-delta.md", null)];
-    expect(validateAdrs({ files, indexText: INDEX })).toEqual([]);
+  it("reports an ADR with no front matter", () => {
+    expect(REQUIRE_FRONT_MATTER).toBe(true);
+    const errors = validateAdrs({ files: [adr("001-alpha.md", null)], indexText: INDEX });
+    expect(errors).toEqual(["docs/adrs/001-alpha.md: missing front-matter block"]);
   });
 });
