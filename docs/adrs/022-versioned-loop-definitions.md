@@ -1,3 +1,9 @@
+---
+id: "022"
+status: Accepted
+date: 2026-08-28
+---
+
 # ADR 022: Session-stored YAML loop definitions
 
 ## Status
