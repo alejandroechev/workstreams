@@ -1,3 +1,9 @@
+---
+id: "015"
+status: Accepted
+date: 2026-07-07
+---
+
 # ADR 015: Interactive Monaco view zones + a UI-bug reproduction harness
 
 ## Status
