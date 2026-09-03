@@ -30,6 +30,8 @@
     "harness": "node scripts/harness.mjs",
     "db-model": "node scripts/gen-db-model.mjs",
     "db-model:check": "node scripts/gen-db-model.mjs --check",
+    "keymaps": "node scripts/gen-keymaps.mjs",
+    "keymaps:check": "node scripts/gen-keymaps.mjs --check",
     "check-adrs": "node scripts/check-adrs.mjs",
     "hooks:install": "node scripts/install-hooks.mjs",
     "postinstall": "node scripts/install-hooks.mjs",
