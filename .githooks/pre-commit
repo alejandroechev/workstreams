@@ -50,6 +50,15 @@ else
   echo "   (db.rs not staged, skipping)"
 fi
 
+echo "🔍 Pre-commit: Keymap reference..."
+if git diff --cached --name-only --diff-filter=ACMR -- 'src/domain/keyboard.ts' 'src/domain/walkthrough-keys.ts' 'src/domain/external-keys.ts' | grep -q .; then
+  node scripts/gen-keymaps.mjs || fail "gen-keymaps.mjs failed to regenerate docs/keymaps.md"
+  git add docs/keymaps.md
+  echo "   (keybinding source changed → regenerated + staged docs/keymaps.md)"
+else
+  echo "   (no keybinding sources staged, skipping)"
+fi
+
 echo "🔍 Pre-commit: ADR front matter..."
 node scripts/check-adrs.mjs || fail "ADR validation failed — see the problems above in docs/adrs/"
 
