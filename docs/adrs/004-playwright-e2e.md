@@ -1,3 +1,9 @@
+---
+id: "004"
+status: Accepted
+date: 2026-05-18
+---
+
 # ADR 004 — Playwright E2E via Vite dev server with Tauri host shim
 
 ## Status
