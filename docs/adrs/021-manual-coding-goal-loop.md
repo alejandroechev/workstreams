@@ -1,3 +1,9 @@
+---
+id: "021"
+status: Accepted
+date: 2026-08-28
+---
+
 # ADR 021: Manual coding goal loop
 
 ## Status
