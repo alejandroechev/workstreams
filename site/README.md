@@ -38,4 +38,5 @@ Pushing to `master` triggers `.github/workflows/pages.yml`, which uploads this
 folder plus the copied assets to GitHub Pages. The workflow can also be run
 manually from the Actions tab.
 
-Pages must be enabled once in **Settings → Pages → Source: GitHub Actions**.
+The workflow enables Pages itself on first run (`configure-pages` with
+`enablement: true`), so no manual setup is needed.

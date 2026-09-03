@@ -8,6 +8,7 @@ name: Pages
 # one source of truth.
 #
 # Requires a one-time setup: Settings → Pages → Source: "GitHub Actions".
+# The `configure-pages` step below sets that up automatically on first run.
 
 on:
   push:
@@ -57,6 +58,11 @@ jobs:
           exit $status
 
       - uses: actions/configure-pages@v5
+        # Enable Pages on first run rather than requiring a manual visit to
+        # Settings → Pages. Without this the workflow fails with a bare
+        # "Get Pages site failed / Not Found" until someone flips it by hand.
+        with:
+          enablement: true
 
       - uses: actions/upload-pages-artifact@v3
         with:
