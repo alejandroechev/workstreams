@@ -1,3 +1,9 @@
+---
+id: "012"
+status: Accepted
+date: 2026-06-25
+---
+
 # ADR 012 — Repo Explorer content search ("search all files")
 
 ## Status
