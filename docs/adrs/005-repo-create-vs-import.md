@@ -1,3 +1,9 @@
+---
+id: "005"
+status: Accepted
+date: 2026-05-25
+---
+
 # ADR 005 — Repo Create vs. Import Flows
 
 ## Status
