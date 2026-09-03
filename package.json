@@ -30,6 +30,7 @@
     "harness": "node scripts/harness.mjs",
     "db-model": "node scripts/gen-db-model.mjs",
     "db-model:check": "node scripts/gen-db-model.mjs --check",
+    "check-adrs": "node scripts/check-adrs.mjs",
     "hooks:install": "node scripts/install-hooks.mjs",
     "postinstall": "node scripts/install-hooks.mjs",
     "tasks:smoke": "npx vite-node scripts/tasks-smoke.mjs",

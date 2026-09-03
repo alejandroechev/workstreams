@@ -50,4 +50,7 @@ else
   echo "   (db.rs not staged, skipping)"
 fi
 
+echo "🔍 Pre-commit: ADR front matter..."
+node scripts/check-adrs.mjs || fail "ADR validation failed — see the problems above in docs/adrs/"
+
 echo "✅ Pre-commit checks passed"
