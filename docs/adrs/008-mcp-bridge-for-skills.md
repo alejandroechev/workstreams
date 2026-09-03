@@ -1,3 +1,9 @@
+---
+id: "008"
+status: Retired
+date: 2026-07-08
+---
+
 # ADR 008: MCP bridge for Copilot CLI skills
 
 ## Status
