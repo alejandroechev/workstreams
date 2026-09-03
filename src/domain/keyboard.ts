@@ -65,18 +65,183 @@ type MonacoEditorRegistry = {
   getEditors?: () => MonacoTextFocusEditor[];
 };
 
-const tileCreationShortcutKeys = new Set([
-  "a",
-  "b",
-  "c",
-  "d",
-  "l",
-  "m",
-  "p",
-  "r",
-  "t",
-  "w",
-]);
+/**
+ * One app-level keyboard shortcut.
+ *
+ * `key` is matched against the value produced by {@link shortcutKey}, which on
+ * macOS resolves Option+<letter> back to the physical letter. Keying the
+ * registry on the produced character instead would break every shortcut there.
+ */
+export interface KeyBinding {
+  /** Key to match, as normalised by {@link shortcutKey} (e.g. `"t"`, `"ArrowLeft"`, `"Escape"`). */
+  key: string;
+  /** True when Alt (Option on macOS) must be held. */
+  altKey: boolean;
+  /** Human-readable combo label, e.g. `"Alt+T"`. */
+  combo: string;
+  /** User-facing description of what the shortcut does. */
+  description: string;
+  /** The action dispatched when the combo fires. */
+  action: KeyAction;
+  /** True for shortcuts that create a tile; these are suppressed while Monaco has text focus. */
+  tileCreation?: boolean;
+  /**
+   * Feature flag gating the equivalent menu entry. Per ADR 010 the keyboard
+   * handler stays active even when the menu item is hidden, so this is
+   * documentation metadata only — it never suppresses the binding.
+   */
+  featureFlag?: string;
+}
+
+/**
+ * The single source of truth for the app's keyboard shortcuts. User-facing
+ * shortcut documentation is generated from this list, so every entry must
+ * carry a description written for a reader, not a restatement of the action.
+ */
+export const APP_KEY_BINDINGS: readonly KeyBinding[] = [
+  {
+    key: "Escape",
+    altKey: false,
+    combo: "Escape",
+    description: "Dismiss the open overlay or clear the current selection",
+    action: { type: "escape" },
+  },
+  {
+    key: "ArrowLeft",
+    altKey: true,
+    combo: "Alt+ArrowLeft",
+    description: "Move focus to the tile on the left",
+    action: { type: "navigate", direction: "left" },
+  },
+  {
+    key: "ArrowRight",
+    altKey: true,
+    combo: "Alt+ArrowRight",
+    description: "Move focus to the tile on the right",
+    action: { type: "navigate", direction: "right" },
+  },
+  {
+    key: "ArrowUp",
+    altKey: true,
+    combo: "Alt+ArrowUp",
+    description: "Move focus to the tile above",
+    action: { type: "navigate", direction: "up" },
+  },
+  {
+    key: "ArrowDown",
+    altKey: true,
+    combo: "Alt+ArrowDown",
+    description: "Move focus to the tile below",
+    action: { type: "navigate", direction: "down" },
+  },
+  {
+    key: "t",
+    altKey: true,
+    combo: "Alt+T",
+    description: "Add a terminal tile running your default shell",
+    action: { type: "addTile", tileType: "terminal" },
+    tileCreation: true,
+  },
+  {
+    key: "w",
+    altKey: true,
+    combo: "Alt+W",
+    description: "Add a terminal tile running WSL (Windows only)",
+    action: { type: "addTile", tileType: "terminal", extraConfig: { shell: "wsl" } },
+    tileCreation: true,
+  },
+  {
+    key: "c",
+    altKey: true,
+    combo: "Alt+C",
+    description: "Add a Copilot session tile to chat with the agent",
+    action: { type: "addTile", tileType: "copilot_session" },
+    tileCreation: true,
+  },
+  {
+    key: "r",
+    altKey: true,
+    combo: "Alt+R",
+    description: "Add a Repo Explorer tile to browse and open project files",
+    action: { type: "addTile", tileType: "file_explorer" },
+    tileCreation: true,
+  },
+  {
+    key: "m",
+    altKey: true,
+    combo: "Alt+M",
+    description: "Add a session metadata tile showing details of the active session",
+    action: { type: "addTile", tileType: "session_meta" },
+    tileCreation: true,
+  },
+  {
+    key: "b",
+    altKey: true,
+    combo: "Alt+B",
+    description: "Add a workbench tile for scratch notes and quick actions",
+    action: { type: "addTile", tileType: "workbench" },
+    tileCreation: true,
+  },
+  {
+    key: "p",
+    altKey: true,
+    combo: "Alt+P",
+    description: "Add a plan tile to track the steps of the current piece of work",
+    action: { type: "addTile", tileType: "plan" },
+    tileCreation: true,
+    featureFlag: "plan-tile",
+  },
+  {
+    key: "a",
+    altKey: true,
+    combo: "Alt+A",
+    description: "Add a code review tile to inspect pending changes",
+    action: { type: "addTile", tileType: "code_review" },
+    tileCreation: true,
+  },
+  {
+    key: "d",
+    altKey: true,
+    combo: "Alt+D",
+    description: "Add a debug walkthrough tile to step through a recorded trace",
+    action: { type: "addTile", tileType: "debug_walkthrough" },
+    tileCreation: true,
+    featureFlag: "debug-walkthrough",
+  },
+  {
+    key: "l",
+    altKey: true,
+    combo: "Alt+L",
+    description: "Add a loop control tile to drive an automated agent loop",
+    action: { type: "addTile", tileType: "loop_control" },
+    tileCreation: true,
+  },
+  {
+    key: "q",
+    altKey: true,
+    combo: "Alt+Q",
+    description: "Close the focused tile",
+    action: { type: "closeTile" },
+  },
+  {
+    key: "f",
+    altKey: true,
+    combo: "Alt+F",
+    description: "Expand the focused tile to fill the workspace, or restore it",
+    action: { type: "toggleFullscreen" },
+  },
+  {
+    key: "s",
+    altKey: true,
+    combo: "Alt+S",
+    description: "Show the two selected tiles side by side, or restore the layout",
+    action: { type: "toggleSideBySide" },
+  },
+];
+
+const tileCreationShortcutKeys = new Set(
+  APP_KEY_BINDINGS.filter((binding) => binding.tileCreation).map((binding) => binding.key),
+);
 
 function isAltTileCreationShortcut(altKey: boolean, key: string): boolean {
   return altKey && tileCreationShortcutKeys.has(key.toLowerCase());
@@ -114,23 +279,12 @@ function isMonacoFocused(activeElement: Element | null): boolean {
  * goes through `shortcutKey`, which prefers the layout-independent
  * `event.code`.
  *
- * Tile-creation shortcuts:
- *   Alt+C  copilot_session
- *   Alt+T  terminal (login shell / PowerShell on Windows)
- *   Alt+W  terminal with shell=wsl (Windows only)
- *   Alt+R  file_explorer (Repo Explorer)
- *   Alt+M  session_meta
- *   Alt+B  workbench
- *   Alt+P  plan
- *   Alt+A  code_review
- *   Alt+D  debug_walkthrough
- *   Alt+L  loop_control
+ * Tile-creation shortcuts are suppressed while a Monaco editor has text focus,
+ * so typing in a file editor never spawns a tile.
  *
- * Tile management:
- *   Alt+Q  close focused tile
- *   Alt+F  toggle fullscreen
- *   Alt+S  toggle side-by-side (when exactly 2 tiles are selected)
- *   Alt+ArrowKeys  navigate between tiles
+ * The combos themselves are not listed here: {@link APP_KEY_BINDINGS} is the
+ * single source of truth, and user-facing shortcut documentation is generated
+ * from it.
  */
 export function parseKeyAction(opts: ParseKeyActionOpts): KeyAction | null {
   const { altKey } = opts;
@@ -140,55 +294,11 @@ export function parseKeyAction(opts: ParseKeyActionOpts): KeyAction | null {
     return null;
   }
 
-  // Escape always works
-  if (key === "Escape") {
-    return { type: "escape" };
-  }
-
-  // All app commands use Alt+ — works even when terminal/input is focused
-  if (altKey) {
-    switch (key) {
-      // Navigation
-      case "ArrowLeft":
-        return { type: "navigate", direction: "left" };
-      case "ArrowRight":
-        return { type: "navigate", direction: "right" };
-      case "ArrowUp":
-        return { type: "navigate", direction: "up" };
-      case "ArrowDown":
-        return { type: "navigate", direction: "down" };
-      // Tile creation
-      case "t":
-        return { type: "addTile", tileType: "terminal" };
-      case "w":
-        return { type: "addTile", tileType: "terminal", extraConfig: { shell: "wsl" } };
-      case "c":
-        return { type: "addTile", tileType: "copilot_session" };
-      case "r":
-        return { type: "addTile", tileType: "file_explorer" };
-      case "m":
-        return { type: "addTile", tileType: "session_meta" };
-      case "b":
-        return { type: "addTile", tileType: "workbench" };
-      case "p":
-        return { type: "addTile", tileType: "plan" };
-      case "a":
-        return { type: "addTile", tileType: "code_review" };
-      case "d":
-        return { type: "addTile", tileType: "debug_walkthrough" };
-      case "l":
-        return { type: "addTile", tileType: "loop_control" };
-      // Tile management
-      case "q":
-        return { type: "closeTile" };
-      case "f":
-        return { type: "toggleFullscreen" };
-      case "s":
-        return { type: "toggleSideBySide" };
-    }
-  }
-
-  return null;
+  const binding = APP_KEY_BINDINGS.find(
+    // Alt-free bindings (Escape) fire whatever the Alt state, as before.
+    (candidate) => candidate.key === key && (!candidate.altKey || altKey),
+  );
+  return binding ? binding.action : null;
 }
 
 export interface PlainEnterCommitOpts {

@@ -1,7 +1,12 @@
 import { beforeEach, describe, it, expect, vi } from "vitest";
 
 import { getMonacoIfLoaded } from "../../files/loadMonaco";
-import { shouldSwallowKeyEvent, parseKeyAction, isPlainEnterCommit } from "../keyboard";
+import {
+  shouldSwallowKeyEvent,
+  parseKeyAction,
+  isPlainEnterCommit,
+  APP_KEY_BINDINGS,
+} from "../keyboard";
 
 vi.mock("../../files/loadMonaco", () => ({
   getMonacoIfLoaded: vi.fn(() => null),
@@ -263,6 +268,109 @@ describe("parseKeyAction", () => {
 
     it("does not map an unrelated code", () => {
       expect(parseKeyAction({ key: "Ω", code: "KeyZ", ...alt })).toBeNull();
+    });
+  });
+});
+
+describe("APP_KEY_BINDINGS registry", () => {
+  const getMonacoIfLoadedMock = vi.mocked(getMonacoIfLoaded);
+
+  beforeEach(() => {
+    getMonacoIfLoadedMock.mockReset();
+    getMonacoIfLoadedMock.mockReturnValue(null);
+  });
+
+  it("covers every combo the app handles, exactly once", () => {
+    const combos = APP_KEY_BINDINGS.map((b) => b.combo);
+    expect(new Set(combos).size).toBe(combos.length);
+    expect(combos.sort()).toEqual(
+      [
+        "Escape",
+        "Alt+ArrowLeft",
+        "Alt+ArrowRight",
+        "Alt+ArrowUp",
+        "Alt+ArrowDown",
+        "Alt+T",
+        "Alt+W",
+        "Alt+C",
+        "Alt+R",
+        "Alt+M",
+        "Alt+B",
+        "Alt+P",
+        "Alt+A",
+        "Alt+D",
+        "Alt+L",
+        "Alt+Q",
+        "Alt+F",
+        "Alt+S",
+      ].sort(),
+    );
+  });
+
+  it("gives every entry a human-readable description distinct from the action name", () => {
+    for (const binding of APP_KEY_BINDINGS) {
+      expect(binding.description.length).toBeGreaterThan(5);
+      expect(binding.description).not.toBe(binding.action.type);
+      expect(binding.description[0]).toBe(binding.description[0].toUpperCase());
+    }
+  });
+
+  it("round-trips every entry through parseKeyAction", () => {
+    for (const binding of APP_KEY_BINDINGS) {
+      expect(
+        parseKeyAction({
+          key: binding.key,
+          altKey: binding.altKey,
+          ctrlKey: false,
+          activeElement: null,
+        }),
+      ).toEqual(binding.action);
+    }
+  });
+
+  it("derives the Monaco guard from the tile-creation entries", () => {
+    getMonacoIfLoadedMock.mockReturnValue({
+      editor: { getEditors: () => [{ hasTextFocus: () => true }] },
+    } as never);
+
+    for (const binding of APP_KEY_BINDINGS) {
+      const result = parseKeyAction({
+        key: binding.key,
+        altKey: binding.altKey,
+        ctrlKey: false,
+        activeElement: null,
+      });
+      if (binding.tileCreation) {
+        expect(result).toBeNull();
+      } else {
+        expect(result).toEqual(binding.action);
+      }
+    }
+  });
+
+  it("marks exactly the addTile entries as tile creation", () => {
+    for (const binding of APP_KEY_BINDINGS) {
+      expect(Boolean(binding.tileCreation)).toBe(binding.action.type === "addTile");
+    }
+  });
+
+  it("records the feature flags gating the Alt+P and Alt+D menu entries", () => {
+    const byCombo = new Map(APP_KEY_BINDINGS.map((b) => [b.combo, b]));
+    expect(byCombo.get("Alt+P")?.featureFlag).toBe("plan-tile");
+    expect(byCombo.get("Alt+D")?.featureFlag).toBe("debug-walkthrough");
+    for (const binding of APP_KEY_BINDINGS) {
+      if (binding.combo !== "Alt+P" && binding.combo !== "Alt+D") {
+        expect(binding.featureFlag).toBeUndefined();
+      }
+    }
+  });
+
+  it("carries Alt+W's wsl shell config", () => {
+    const wsl = APP_KEY_BINDINGS.find((b) => b.combo === "Alt+W");
+    expect(wsl?.action).toEqual({
+      type: "addTile",
+      tileType: "terminal",
+      extraConfig: { shell: "wsl" },
     });
   });
 });
