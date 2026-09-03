@@ -1,3 +1,9 @@
+---
+id: "023"
+status: Accepted
+date: 2026-08-31
+---
+
 # ADR 023: Human approval as a loop sensor
 
 ## Status
