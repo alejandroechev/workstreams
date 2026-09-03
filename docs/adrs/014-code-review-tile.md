@@ -1,3 +1,9 @@
+---
+id: "014"
+status: Accepted
+date: 2026-07-03
+---
+
 # ADR 014: Code Review Tile (diff-first, session-DB backed, MCP-free)
 
 ## Status
