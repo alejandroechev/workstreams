@@ -13,15 +13,20 @@ for any release is attached to its
 
 ### Added
 
-- `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, issue forms and a pull request
-  template, so the project states how to contribute and what to expect.
+- `CODE_OF_CONDUCT.md`, issue forms and a pull request template, so the project
+  states how to contribute and what to expect.
 - An index for the Architecture Decision Records at `docs/adrs/`, listing every
   record with a one-line summary and its status, including the ones that have
   been retired or superseded.
 - A database model reference at `docs/db-model.md`, linked from the README for
   the first time.
+- This changelog.
 
 ### Changed
+
+- `CONTRIBUTING.md` is now about how to get a change accepted, including an
+  explicit policy on AI-assisted contributions. Its previous release and
+  versioning content moved to the contributor guide.
 
 - The README is restructured around what the app does for you. It is now a
   third of its previous length, install instructions sit near the top instead
