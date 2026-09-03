@@ -1,3 +1,9 @@
+---
+id: "009"
+status: Rewritten
+date: 2026-07-08
+---
+
 # ADR 009: Inline file comments (session.db, reviewer↔agent)
 
 ## Hiding resolved comments
