@@ -26,6 +26,8 @@ for any release is attached to its
   retirement.
 - A deterministic Playwright screencast harness records isolated demo scenarios
   against synthetic in-memory data without launching the desktop app.
+- The published overview now demonstrates workstream context and adaptive
+  Copilot, Repo Explorer, and terminal tiling in WebM, MP4, PNG, and GIF formats.
 
 ### Changed
 

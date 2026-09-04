@@ -23,5 +23,101 @@
       ]
     }
   ],
-  "clips": []
+  "clips": [
+    {
+      "id": "overview",
+      "scenario": "e2e/demos/overview.spec.ts",
+      "sources": [
+        "e2e/demos/overview.spec.ts"
+      ],
+      "viewport": {
+        "width": 1280,
+        "height": 800
+      },
+      "theme": "dark",
+      "sourceHash": "82acf9ad48d1635c459a169dc121ef363d1025117fb0de2cda55411a7a44afd8",
+      "artifacts": [
+        {
+          "type": "video",
+          "path": "docs/assets/demos/overview.webm",
+          "container": "webm",
+          "codec": "vp9",
+          "width": 1280,
+          "height": 800,
+          "maxBytes": 6000000,
+          "maxDurationSeconds": 30,
+          "references": [
+            {
+              "file": "README.md",
+              "target": "docs/assets/demos/overview.webm"
+            },
+            {
+              "file": "site/index.html",
+              "target": "assets/demos/overview.webm"
+            }
+          ]
+        },
+        {
+          "type": "video",
+          "path": "docs/assets/demos/overview.mp4",
+          "container": "mp4",
+          "codec": "h264",
+          "pixelFormat": "yuv420p",
+          "fastStart": true,
+          "width": 1280,
+          "height": 800,
+          "maxBytes": 8000000,
+          "maxDurationSeconds": 30,
+          "references": [
+            {
+              "file": "README.md",
+              "target": "docs/assets/demos/overview.mp4"
+            },
+            {
+              "file": "site/index.html",
+              "target": "assets/demos/overview.mp4"
+            }
+          ]
+        },
+        {
+          "type": "poster",
+          "path": "docs/assets/demos/overview.png",
+          "codec": "png",
+          "width": 1280,
+          "height": 800,
+          "maxBytes": 2000000,
+          "references": [
+            {
+              "file": "README.md",
+              "target": "docs/assets/demos/overview.png"
+            },
+            {
+              "file": "site/index.html",
+              "target": "assets/demos/overview.png"
+            }
+          ]
+        },
+        {
+          "type": "fallback",
+          "path": "docs/assets/demos/overview.gif",
+          "codec": "gif",
+          "encoder": "gifski",
+          "width": 1280,
+          "height": 800,
+          "maxBytes": 12000000,
+          "maxDurationSeconds": 30,
+          "references": [
+            {
+              "file": "README.md",
+              "target": "docs/assets/demos/overview.gif"
+            },
+            {
+              "file": "site/index.html",
+              "target": "assets/demos/overview.gif"
+            }
+          ]
+        }
+      ]
+    }
+  ]
 }

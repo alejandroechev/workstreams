@@ -7,8 +7,10 @@ import {
   calculateSourceHash,
   checkDemoMedia,
   assertRecordingTools,
+  posterEncoderArgs,
   recordingWorkspace,
   runRecordingScenario,
+  scenarioTestFilter,
   validateManifest,
 } from "../demo-media.mjs";
 
@@ -238,6 +240,27 @@ describe("demo media manifest", () => {
     expect(recordingWorkspace("/repo", "task-board")).toBe(
       path.join("/repo", ".dev", "demo-media", "task-board"),
     );
+    expect(
+      scenarioTestFilter("/repo", "e2e/demos/overview.spec.ts"),
+    ).toBe("overview.spec.ts");
+    expect(() =>
+      scenarioTestFilter("/repo", "e2e/tests/overview.spec.ts"),
+    ).toThrow(/inside e2e\/demos/);
+  });
+
+  it("extracts the poster from the final settled recording frame", () => {
+    expect(posterEncoderArgs("raw.webm", "poster.png")).toEqual([
+      "-y",
+      "-sseof",
+      "-0.1",
+      "-i",
+      "raw.webm",
+      "-frames:v",
+      "1",
+      "-update",
+      "1",
+      "poster.png",
+    ]);
   });
 
   it("runs scenarios through the dedicated demo config and cleans failed output", () => {
@@ -263,11 +286,12 @@ describe("demo media manifest", () => {
 
     expect(calls[0].args).toEqual([
       "exec",
+      "--",
       "playwright",
       "test",
       "--config",
       "playwright.demo.config.ts",
-      "e2e/demos/overview.spec.ts",
+      "overview.spec.ts",
     ]);
     expect(calls[0].options.env.WORKSTREAMS_DEMO_OUTPUT_DIR).toBe(workspace);
     expect(fs.existsSync(workspace)).toBe(false);

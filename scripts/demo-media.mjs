@@ -359,6 +359,15 @@ export function recordingWorkspace(root, clipId) {
   return path.join(root, ".dev", "demo-media", clipId);
 }
 
+export function scenarioTestFilter(root, scenario) {
+  const testDir = path.join(root, "e2e", "demos");
+  const filter = path.relative(testDir, path.resolve(root, scenario));
+  if (!filter || filter === ".." || filter.startsWith(`..${path.sep}`)) {
+    throw new Error(`demo scenario must be inside e2e/demos: ${scenario}`);
+  }
+  return filter;
+}
+
 export function assertRecordingTools(clip, probe = spawnSync) {
   const tools = ["ffmpeg", "ffprobe"];
   if (clip.artifacts.some((artifact) => artifact.type === "fallback")) {
@@ -398,6 +407,21 @@ function runEncoder(command, args, artifactPath) {
   }
 }
 
+export function posterEncoderArgs(raw, destination) {
+  return [
+    "-y",
+    "-sseof",
+    "-0.1",
+    "-i",
+    raw,
+    "-frames:v",
+    "1",
+    "-update",
+    "1",
+    destination,
+  ];
+}
+
 function publishRecording(root, clip, workspace) {
   const raw = path.join(workspace, `${clip.id}.raw.webm`);
   if (!fs.existsSync(raw)) {
@@ -432,7 +456,7 @@ function publishRecording(root, clip, workspace) {
       } else if (artifact.type === "poster") {
         runEncoder(
           "ffmpeg",
-          ["-y", "-i", raw, "-frames:v", "1", temporary],
+          posterEncoderArgs(raw, temporary),
           artifact.path,
         );
       } else if (artifact.type === "fallback") {
@@ -492,11 +516,12 @@ export function runRecordingScenario({
   const command = process.platform === "win32" ? "npm.cmd" : "npm";
   const args = [
     "exec",
+    "--",
     "playwright",
     "test",
     "--config",
     "playwright.demo.config.ts",
-    clip.scenario,
+    scenarioTestFilter(root, clip.scenario),
   ];
   const result = spawn(command, args, {
     cwd: root,

@@ -323,7 +323,8 @@ figure {
   margin: 0 0 2.5rem;
 }
 
-figure img {
+figure img,
+figure video {
   width: 100%;
   height: auto;
   display: block;

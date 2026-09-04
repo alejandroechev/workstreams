@@ -11,7 +11,10 @@
 **[Feature reference](docs/features-detailed.md)** ·
 **[Design decisions](docs/adrs/)**
 
-![Workstreams in use: a workstream sidebar beside a tiled canvas of Copilot session, repo browser and terminal tiles.](docs/assets/workstreams-demo.gif)
+[![Workstreams in use: a workstream sidebar beside a tiled canvas of Copilot session, repo browser and terminal tiles.](docs/assets/demos/overview.gif)](docs/assets/demos/overview.mp4)
+
+[Watch the WebM recording](docs/assets/demos/overview.webm) ·
+[View the poster](docs/assets/demos/overview.png)
 
 ## Why Workstreams?
 
