@@ -7,6 +7,7 @@ import {
   calculateSourceHash,
   checkDemoMedia,
   assertRecordingTools,
+  gifEncoderArgs,
   posterEncoderArgs,
   recordingWorkspace,
   runRecordingScenario,
@@ -260,6 +261,30 @@ describe("demo media manifest", () => {
       "-update",
       "1",
       "poster.png",
+    ]);
+  });
+
+  it("encodes GIF frames in order at full motion quality", () => {
+    expect(
+      gifEncoderArgs(["frame-00001.png", "frame-00002.png"], "overview.gif"),
+    ).toEqual([
+      "--fps",
+      "12",
+      "--quality",
+      "100",
+      "--motion-quality",
+      "100",
+      "--lossy-quality",
+      "100",
+      "--no-sort",
+      "--repeat",
+      "0",
+      "--width",
+      "1280",
+      "--output",
+      "overview.gif",
+      "frame-00001.png",
+      "frame-00002.png",
     ]);
   });
 

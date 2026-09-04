@@ -422,6 +422,27 @@ export function posterEncoderArgs(raw, destination) {
   ];
 }
 
+export function gifEncoderArgs(frames, destination) {
+  return [
+    "--fps",
+    "12",
+    "--quality",
+    "100",
+    "--motion-quality",
+    "100",
+    "--lossy-quality",
+    "100",
+    "--no-sort",
+    "--repeat",
+    "0",
+    "--width",
+    "1280",
+    "--output",
+    destination,
+    ...frames,
+  ];
+}
+
 function publishRecording(root, clip, workspace) {
   const raw = path.join(workspace, `${clip.id}.raw.webm`);
   if (!fs.existsSync(raw)) {
@@ -477,10 +498,7 @@ function publishRecording(root, clip, workspace) {
           .map((file) => path.join(framesDirectory, file));
         runEncoder(
           "gifski",
-          [
-            "--fps", "12", "--quality", "80", "--width", "1280",
-            "--output", temporary, ...frames,
-          ],
+          gifEncoderArgs(frames, temporary),
           artifact.path,
         );
       }

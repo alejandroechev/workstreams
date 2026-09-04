@@ -91,6 +91,7 @@ test("records the workstreams overview", async ({ demo }) => {
   });
 
   await demo.settled(targetWorkstream);
+  await page.waitForTimeout(500);
   await demo.showChapter("Replace the terminal-tab pile", {
     description: "Keep each task, agent, repo, and shell together",
     duration: 900,
