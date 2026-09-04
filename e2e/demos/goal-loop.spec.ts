@@ -1,39 +1,67 @@
-import { expect, test } from "./fixtures";
+import { expect, test, type Page } from "@playwright/test";
+import fs from "node:fs";
+import path from "node:path";
 
+import type { DemoMemorySeed } from "../../src/backend/demo-seed";
+
+const VIEWPORT = { width: 1280, height: 800 } as const;
 const WORKSTREAM_ROOT = "/demo/atlas/worktrees/retry-reliability";
 const DEFINITION_PATH =
   "/sessions/demo-goal-loop-001/files/loops/retry-reliability.loop.yaml";
+const DEMO_SEED: DemoMemorySeed = {
+  projects: [{ name: "Atlas", directory: "/demo/atlas", color: "#89b4fa" }],
+  workstreams: [
+    {
+      name: "Retry reliability",
+      directory: WORKSTREAM_ROOT,
+      project: "Atlas",
+      workstreamType: "worktree",
+      worktreeBranch: "demo/retry-reliability",
+      tiles: [{ type: "loop_control", title: "Goal Loop" }],
+    },
+  ],
+};
 
-test.use({
-  demoSeed: {
-    projects: [
-      { name: "Atlas", directory: "/demo/atlas", color: "#89b4fa" },
-    ],
-    workstreams: [
-      {
-        name: "Retry reliability",
-        directory: WORKSTREAM_ROOT,
-        project: "Atlas",
-        workstreamType: "worktree",
-        worktreeBranch: "demo/retry-reliability",
-        tiles: [
-          {
-            type: "copilot_session",
-            title: "Reliability session",
-            config: {
-              session_name: "Reliability session",
-              cwd: WORKSTREAM_ROOT,
-              copilot_session_id: "demo-goal-loop-001",
-              is_resumed: true,
-            },
-          },
-        ],
-      },
-    ],
-  },
-});
+async function waitForStableFrame(page: Page): Promise<void> {
+  await page.evaluate(async () => {
+    await document.fonts.ready;
+    await new Promise<void>((resolve) =>
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+    );
+  });
+}
 
-async function seedGoalLoop(page: import("@playwright/test").Page) {
+async function installSyntheticHost(page: Page): Promise<void> {
+  await page.addInitScript(({ seed }) => {
+    const handlers: Record<
+      string,
+      (args: Record<string, unknown>) => unknown | Promise<unknown>
+    > = {
+      get_setting: () => null,
+      set_setting: () => null,
+      spawn_terminal: () => null,
+      write_to_pty: () => null,
+      resize_pty: () => null,
+      close_terminal: () => null,
+      load_scrollback: () => null,
+      save_scrollback: () => null,
+      watch_session: () => null,
+      unwatch_session: () => null,
+      watch_directory: () => null,
+      unwatch_directory: () => null,
+    };
+    const target = window as unknown as {
+      __WS_DEMO_SEED__: DemoMemorySeed;
+      __WS_INVOKE_HANDLERS__: typeof handlers;
+      __WS_INVOKE_LOG__: unknown[];
+    };
+    target.__WS_DEMO_SEED__ = seed;
+    target.__WS_INVOKE_HANDLERS__ = handlers;
+    target.__WS_INVOKE_LOG__ = [];
+  }, { seed: DEMO_SEED });
+}
+
+async function seedGoalLoop(page: Page): Promise<void> {
   await page.evaluate(
     async ({ definitionPath, workstreamRoot }) => {
       const backend = (window as unknown as {
@@ -61,20 +89,19 @@ kind: Loop
 metadata:
   id: retry-reliability
   name: Retry reliability goal
-  description: Prove bounded retries with deterministic evidence.
   tags: [reliability, demo]
 spec:
-  objective: Keep checkout retries bounded and fully verified.
+  objective: Keep checkout retries bounded and verified.
   orchestrator:
-    prompt: Select the next unverified retry behavior.
+    prompt: Select one unverified retry behavior.
   worker:
-    prompt: Implement one bounded retry behavior with tests.
+    prompt: Implement bounded retry behavior with tests.
   verification:
     command:
       program: npm
       args: [test, --, retry-policy]
   evaluator:
-    prompt: Confirm the evidence satisfies the retry objective.
+    prompt: Confirm the evidence satisfies the objective.
   limits:
     runTimeout: 5m
     taskAttempts: 2
@@ -89,22 +116,22 @@ spec:
           path: definitionPath,
           hash: "sha256:7b3d8c2f0a61",
           portable: true,
-          objective: "Keep checkout retries bounded and fully verified.",
+          objective: "Keep checkout retries bounded and verified.",
           hasVerification: true,
           hasEvaluator: true,
           hasHumanApproval: false,
         },
         {
           orchestrator: {
-            prompt: "Select the next unverified retry behavior.",
+            prompt: "Select one unverified retry behavior.",
             model: "",
           },
           worker: {
-            prompt: "Implement one bounded retry behavior with tests.",
+            prompt: "Implement bounded retry behavior with tests.",
             model: "",
           },
           evaluator: {
-            prompt: "Confirm the evidence satisfies the retry objective.",
+            prompt: "Confirm the evidence satisfies the objective.",
             model: "",
           },
           verifier: {
@@ -145,80 +172,115 @@ spec:
   );
 }
 
-test("records a deterministic Goal Loop run", async ({ demo }) => {
-  const { page } = demo;
-  const workstream = page.getByText("Retry reliability", { exact: true });
-  await demo.settled(workstream);
-  await seedGoalLoop(page);
+test("records a deterministic Goal Loop run", async ({ page }) => {
+  const clipId = process.env.WORKSTREAMS_DEMO_CLIP;
+  const outputDir = process.env.WORKSTREAMS_DEMO_OUTPUT_DIR;
+  if (!clipId || !outputDir) {
+    throw new Error("Run this scenario through the demo media recorder");
+  }
 
+  await installSyntheticHost(page);
+  await page.setViewportSize(VIEWPORT);
+  await page.goto("/");
+  const workstream = page.getByText("Retry reliability", { exact: true });
+  await expect(workstream).toBeVisible();
+  await seedGoalLoop(page);
   await workstream.click();
-  await page.locator('[data-testid="add-tile-button"]').click();
-  await page.locator('[data-testid="add-tile-item-loop"]').click();
+
   const loopTile = page.locator('[data-testid="loop-control-tile"]');
-  await demo.settled(loopTile);
+  await expect(loopTile).toBeVisible();
+  await page.locator('[data-testid="loop-refresh"]').click();
+  await expect(page.locator('[data-testid="loop-definition-selected"]')).toContainText(
+    "Retry reliability goal",
+  );
+  await loopTile.click();
+  await page.locator('[data-testid="toggle-fullscreen"]').click();
+  await expect(page.getByText("⛶ Full", { exact: true })).toBeVisible();
 
   await page.locator('[data-testid="loop-tab-definitions"]').click();
   await expect(
     page.locator('[data-testid="loop-definition-editor-header"]'),
   ).toContainText("retry-reliability.loop.yaml");
-  await expect(loopTile.locator(".monaco-editor")).toBeVisible();
-  await demo.showChapter("Define the evidence contract", {
-    description: "Reviewable YAML pins the objective, verifier, and evaluator",
-    duration: 900,
+  const editor = loopTile.locator(".monaco-editor");
+  await expect(editor).toBeVisible();
+  await expect(editor.locator(".view-lines")).toContainText("taskAttempts: 2");
+  await waitForStableFrame(page);
+
+  fs.mkdirSync(outputDir, { recursive: true });
+  const recordingPath = path.join(outputDir, `${clipId}.raw.webm`);
+  await page.screencast.start({
+    path: recordingPath,
+    size: VIEWPORT,
+    quality: 90,
+    annotate: { duration: 700, position: "bottom-right", fontSize: 20 },
   });
-  await page.waitForTimeout(700);
+  const actions = await page.screencast.showActions({
+    duration: 700,
+    position: "bottom-right",
+    fontSize: 20,
+  });
 
-  await page.locator('[data-testid="loop-tab-run"]').click();
-  const selected = page.locator('[data-testid="loop-definition-selected"]');
-  await expect(selected).toContainText("Retry reliability goal");
-  await expect(selected).toContainText("sha256:7b3d8c2f0a61");
-  await page.locator('[data-testid="loop-run-selected"]').click();
-  await page.waitForFunction(
-    () =>
-      document
-        .querySelector('[data-testid="loop-run-state"]')
-        ?.textContent?.includes("Working") === true,
-    null,
-    { polling: "raf" },
-  );
-  await expect(page.locator('[data-testid="loop-run-state"]')).toContainText(
-    "Working",
-  );
-  await page.waitForTimeout(150);
-  await page.locator('[data-testid="loop-pause"]').click();
-  await expect(page.locator('[data-testid="loop-run-state"]')).toContainText(
-    "Paused",
-  );
-  await page.locator('[data-testid="loop-resume"]').click();
+  let succeeded = false;
+  try {
+    await page.waitForTimeout(1_000);
+    await page.locator('[data-testid="loop-tab-run"]').click();
+    const selected = page.locator('[data-testid="loop-definition-selected"]');
+    await expect(selected).toContainText("Retry reliability goal");
+    await expect(selected).toContainText("sha256:7b3d8c2f0a61");
+    await page.waitForTimeout(500);
 
-  await expect(page.locator('[data-testid="loop-run-state"]')).toContainText(
-    "Completed",
-    { timeout: 5_000 },
-  );
-  await expect(page.locator('[data-testid="loop-time-breakdown"]')).toContainText(
-    "orchestrator 1s (1)",
-  );
-  await expect(page.locator('[data-testid="loop-slowest-stage"]')).toContainText(
-    "worker #1 — 3s",
-  );
+    await page.locator('[data-testid="loop-run-selected"]').click();
+    await page.waitForFunction(
+      () =>
+        document
+          .querySelector('[data-testid="loop-run-state"]')
+          ?.textContent?.includes("Working") === true,
+      null,
+      { polling: "raf" },
+    );
+    await page.waitForTimeout(200);
+    await page.locator('[data-testid="loop-pause"]').click();
+    await expect(page.locator('[data-testid="loop-run-state"]')).toContainText(
+      "Paused",
+    );
+    await page.locator('[data-testid="loop-resume"]').click();
 
-  const taskList = page.locator('[data-testid="loop-task-list"]');
-  await taskList.locator(":scope > summary").click();
-  const task = page.locator('article[data-testid^="loop-task-"]').first();
-  await expect(task).toContainText("accepted");
-  await task.locator('summary', { hasText: "Details" }).click();
-  await expect(task.locator('[data-testid^="loop-task-stage-timings-"]')).toContainText(
-    "worker #1: 3s",
-  );
-  await expect(task.locator('[data-testid^="loop-worker-evidence-"]')).toContainText(
-    "src/retry-policy.test.ts: 8 assertions passed",
-  );
-  await expect(task.locator('[data-testid^="loop-verification-"]')).toContainText(
-    "8 deterministic assertions passed",
-  );
-  await expect(task.locator('[data-testid^="loop-evaluation-"]')).toContainText(
-    "Bounded retry behavior matches the objective",
-  );
-  await task.locator('[data-testid^="loop-evaluation-"]').scrollIntoViewIfNeeded();
-  await demo.settled(task.locator('[data-testid^="loop-evaluation-"]'));
+    await expect(page.locator('[data-testid="loop-run-state"]')).toContainText(
+      "Completed",
+      { timeout: 5_000 },
+    );
+    await expect(page.locator('[data-testid="loop-time-breakdown"]')).toContainText(
+      "orchestrator 1s (1)",
+    );
+    await expect(page.locator('[data-testid="loop-slowest-stage"]')).toContainText(
+      "worker #1 — 3s",
+    );
+
+    const taskList = page.locator('[data-testid="loop-task-list"]');
+    await taskList.locator(":scope > summary").click();
+    const task = page.locator('article[data-testid^="loop-task-"]').first();
+    await expect(task).toContainText("accepted");
+    await task.locator("summary", { hasText: "Details" }).click();
+    await expect(
+      task.locator('[data-testid^="loop-task-stage-timings-"]'),
+    ).toContainText("worker #1: 3s");
+    await expect(
+      task.locator('[data-testid^="loop-worker-evidence-"]'),
+    ).toContainText("src/retry-policy.test.ts: 8 assertions passed");
+    await expect(task.locator('[data-testid^="loop-verification-"]')).toContainText(
+      "8 deterministic assertions passed",
+    );
+    await expect(task.locator('[data-testid^="loop-evaluation-"]')).toContainText(
+      "Bounded retry behavior matches the objective",
+    );
+    await task.locator('[data-testid^="loop-evaluation-"]').scrollIntoViewIfNeeded();
+    await waitForStableFrame(page);
+    await page.waitForTimeout(1_000);
+    succeeded = true;
+  } finally {
+    await actions.dispose();
+    if (succeeded) await page.screencast.stop();
+    else await page.screencast.stop().catch(() => {});
+    if (!succeeded) fs.rmSync(outputDir, { recursive: true, force: true });
+  }
 });
