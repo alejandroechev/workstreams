@@ -1,4 +1,7 @@
-import { expect, test } from "./fixtures";
+import fs from "node:fs";
+import path from "node:path";
+
+import { DEMO_VIEWPORT, expect, test } from "./fixtures";
 
 const WORKSTREAM_ROOT = "/demo/orbit/worktrees/input-validation";
 const REVIEW_FILE = "src/validation.ts";
@@ -74,16 +77,48 @@ async function seedWorkingTreeDiff(
   );
 }
 
+async function waitForStableScreenshot(
+  page: import("@playwright/test").Page,
+): Promise<void> {
+  let previous: Buffer | undefined;
+  await expect
+    .poll(
+      async () => {
+        const current = await page.screenshot();
+        const stable = previous?.equals(current) ?? false;
+        previous = current;
+        return stable;
+      },
+      { timeout: 2_000, intervals: [50] },
+    )
+    .toBe(true);
+}
+
 test("records a local working-tree code review", async ({ demo }) => {
   const { page } = demo;
   const workstream = page.getByText("Input validation", { exact: true });
+  const clipId = process.env.WORKSTREAMS_DEMO_CLIP;
+  const outputDir = process.env.WORKSTREAMS_DEMO_OUTPUT_DIR;
+  if (!clipId || !outputDir) {
+    throw new Error("Run this scenario through the demo media recorder");
+  }
 
   await seedWorkingTreeDiff(page);
   await demo.settled(workstream);
-  await page.screencast.showChapter("Review changes without a PR", {
+  await page.screencast.stop();
+  const chapter = page.screencast.showChapter("Review changes without a PR", {
     description: "Open a working-tree diff and leave feedback inline",
-    duration: 800,
+    duration: 1_800,
   });
+  await waitForStableScreenshot(page);
+  fs.mkdirSync(outputDir, { recursive: true });
+  await page.screencast.start({
+    path: path.join(outputDir, `${clipId}.raw.webm`),
+    size: DEMO_VIEWPORT,
+    quality: 90,
+    annotate: { duration: 700, position: "bottom-right", fontSize: 20 },
+  });
+  await chapter;
   await workstream.click();
   const tile = page.locator('[data-tile-id]').filter({
     has: page.locator('[data-testid="code-review-tile"]'),
