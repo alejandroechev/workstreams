@@ -30,6 +30,11 @@ Recording scenarios use Playwright 1.60's `page.screencast` API against the
 Vite E2E host and synthetic `MemoryBackend` data. The checker never launches
 the app or rewrites media, and `--check` is safe for CI.
 
+The dedicated `playwright.demo.config.ts` keeps recording scenarios out of the
+normal E2E suite. Scenarios import `e2e/demos/fixtures.ts`, declare synthetic
+projects, workstreams, tiles, and files through `demoSeed`, then drive visible
+controls through the fixture's fixed 1280×800 dark-theme page.
+
 ## Local preview
 
 Because the assets are copied at publish time, mirror that locally before

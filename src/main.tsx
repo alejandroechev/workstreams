@@ -4,6 +4,7 @@ import App from "./App";
 import { BackendProvider } from "./backend/context";
 import { TauriBackend } from "./backend/tauri-backend";
 import { MemoryBackend } from "./backend/memory-backend";
+import { applyDemoSeed, type DemoMemorySeed } from "./backend/demo-seed";
 import type { Backend } from "./backend/types";
 import { _setFeatureFlagOverrideForTests } from "./domain/feature-flags";
 import { ensureLocalMonacoLoader } from "./files/monacoLoaderConfig";
@@ -17,7 +18,13 @@ const isE2E = import.meta.env.VITE_E2E === "1";
 async function makeBackend(): Promise<Backend> {
   if (!isE2E) return new TauriBackend();
   const memory = new MemoryBackend();
-  await memory.createProject("Demo", "C:\\repos\\demo", "#89b4fa");
+  const seed =
+    typeof window === "undefined"
+      ? undefined
+      : (window as unknown as { __WS_DEMO_SEED__?: DemoMemorySeed })
+          .__WS_DEMO_SEED__;
+  if (seed) await applyDemoSeed(memory, seed);
+  else await memory.createProject("Demo", "C:\\repos\\demo", "#89b4fa");
   return memory;
 }
 

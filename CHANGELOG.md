@@ -24,6 +24,8 @@ for any release is attached to its
 - A machine-checked demo-media manifest and recording command now guard clip
   provenance, encoding, size budgets, publication references, and legacy GIF
   retirement.
+- A deterministic Playwright screencast harness records isolated demo scenarios
+  against synthetic in-memory data without launching the desktop app.
 
 ### Changed
 

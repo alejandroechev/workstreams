@@ -273,10 +273,18 @@ export function checkDemoMedia({ root = DEFAULT_ROOT, manifest, probeMedia = def
 
   for (const clip of manifest.clips) {
     const scenario = path.resolve(root, clip.scenario);
-    if (
-      !fs.existsSync(scenario) ||
-      !/\bpage\s*\.\s*screencast\b/.test(fs.readFileSync(scenario, "utf8"))
-    ) {
+    const screencastSources = [
+      ...(manifest.sharedSources ?? []),
+      ...(clip.sources ?? []),
+    ];
+    if (!fs.existsSync(scenario) || !screencastSources.some((source) => {
+      const file = path.resolve(root, source);
+      return (
+        /\.(?:ts|tsx)$/.test(source) &&
+        fs.existsSync(file) &&
+        /\bpage\s*\.\s*screencast\b/.test(fs.readFileSync(file, "utf8"))
+      );
+    })) {
       errors.push(`clip '${clip.id}' scenario must use Playwright page.screencast`);
     }
     try {
@@ -347,6 +355,179 @@ function readManifest(root, relative) {
   return { file, data: JSON.parse(fs.readFileSync(file, "utf8")) };
 }
 
+export function recordingWorkspace(root, clipId) {
+  return path.join(root, ".dev", "demo-media", clipId);
+}
+
+export function assertRecordingTools(clip, probe = spawnSync) {
+  const tools = ["ffmpeg", "ffprobe"];
+  if (clip.artifacts.some((artifact) => artifact.type === "fallback")) {
+    tools.push("gifski");
+  }
+  for (const tool of tools) {
+    const versionArgs = tool === "gifski" ? ["--version"] : ["-version"];
+    const result = probe(tool, versionArgs, {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    if (result.error?.code === "ENOENT") {
+      const hint =
+        tool === "gifski"
+          ? "install gifski and ensure it is on PATH"
+          : `install ${tool} and ensure it is on PATH`;
+      throw new Error(`${tool} is required to record demo media; ${hint}`);
+    }
+    if (result.error || result.status !== 0) {
+      const detail = String(
+        result.error?.message ?? result.stderr ?? `exit ${result.status}`,
+      ).trim();
+      throw new Error(`${tool} is not usable for demo recording: ${detail}`);
+    }
+  }
+}
+
+function runEncoder(command, args, artifactPath) {
+  const result = spawnSync(command, args, { stdio: "inherit" });
+  if (result.error?.code === "ENOENT") {
+    throw new Error(
+      `${command} is required to encode ${artifactPath}; install ${command} and ensure it is on PATH`,
+    );
+  }
+  if (result.error || result.status !== 0) {
+    throw new Error(`${command} failed while encoding ${artifactPath}`);
+  }
+}
+
+function publishRecording(root, clip, workspace) {
+  const raw = path.join(workspace, `${clip.id}.raw.webm`);
+  if (!fs.existsSync(raw)) {
+    throw new Error(`recording scenario '${clip.id}' did not produce ${path.basename(raw)}`);
+  }
+  const pending = [];
+  let framesDirectory;
+  try {
+    for (const [index, artifact] of clip.artifacts.entries()) {
+      const extension = path.extname(artifact.path);
+      const temporary = path.join(workspace, `artifact-${index}${extension}`);
+      if (artifact.type === "video" && artifact.container === "webm") {
+        runEncoder(
+          "ffmpeg",
+          [
+            "-y", "-i", raw, "-an", "-c:v", "libvpx-vp9", "-crf", "34",
+            "-b:v", "0", "-deadline", "good", "-cpu-used", "2",
+            "-pix_fmt", "yuv420p", temporary,
+          ],
+          artifact.path,
+        );
+      } else if (artifact.type === "video" && artifact.container === "mp4") {
+        runEncoder(
+          "ffmpeg",
+          [
+            "-y", "-i", raw, "-an", "-c:v", "libx264", "-crf", "23",
+            "-preset", "medium", "-pix_fmt", "yuv420p", "-movflags",
+            "+faststart", temporary,
+          ],
+          artifact.path,
+        );
+      } else if (artifact.type === "poster") {
+        runEncoder(
+          "ffmpeg",
+          ["-y", "-i", raw, "-frames:v", "1", temporary],
+          artifact.path,
+        );
+      } else if (artifact.type === "fallback") {
+        framesDirectory = path.join(workspace, "gif-frames");
+        fs.mkdirSync(framesDirectory, { recursive: true });
+        runEncoder(
+          "ffmpeg",
+          [
+            "-y", "-i", raw, "-vf", "fps=12",
+            path.join(framesDirectory, "frame-%05d.png"),
+          ],
+          artifact.path,
+        );
+        const frames = fs
+          .readdirSync(framesDirectory)
+          .filter((file) => file.endsWith(".png"))
+          .sort()
+          .map((file) => path.join(framesDirectory, file));
+        runEncoder(
+          "gifski",
+          [
+            "--fps", "12", "--quality", "80", "--width", "1280",
+            "--output", temporary, ...frames,
+          ],
+          artifact.path,
+        );
+      }
+      pending.push({ temporary, destination: path.resolve(root, artifact.path) });
+    }
+    for (const item of pending) {
+      fs.mkdirSync(path.dirname(item.destination), { recursive: true });
+      fs.copyFileSync(item.temporary, item.destination);
+    }
+  } finally {
+    if (framesDirectory) {
+      fs.rmSync(framesDirectory, { recursive: true, force: true });
+    }
+  }
+}
+
+export function runRecordingScenario({
+  root,
+  manifestFile,
+  clip,
+  spawn = spawnSync,
+  checkTools = assertRecordingTools,
+}) {
+  const workspace = recordingWorkspace(root, clip.id);
+  fs.rmSync(workspace, { recursive: true, force: true });
+  fs.mkdirSync(workspace, { recursive: true });
+  try {
+    checkTools(clip);
+  } catch (error) {
+    fs.rmSync(workspace, { recursive: true, force: true });
+    throw error;
+  }
+  const command = process.platform === "win32" ? "npm.cmd" : "npm";
+  const args = [
+    "exec",
+    "playwright",
+    "test",
+    "--config",
+    "playwright.demo.config.ts",
+    clip.scenario,
+  ];
+  const result = spawn(command, args, {
+    cwd: root,
+    stdio: "inherit",
+    env: {
+      ...process.env,
+      WORKSTREAMS_DEMO_CLIP: clip.id,
+      WORKSTREAMS_DEMO_MANIFEST: path.relative(root, manifestFile),
+      WORKSTREAMS_DEMO_OUTPUT_DIR: workspace,
+    },
+  });
+  if (result.error) {
+    fs.rmSync(workspace, { recursive: true, force: true });
+    if (result.error.code === "ENOENT" || /ffmpeg.*ENOENT/i.test(result.error.message)) {
+      throw new Error(
+        "Playwright recording tools are unavailable; run 'npx playwright install chromium ffmpeg'",
+      );
+    }
+    throw result.error;
+  }
+  if (result.status !== 0) {
+    fs.rmSync(workspace, { recursive: true, force: true });
+    throw new Error(`recording scenario '${clip.id}' failed`);
+  }
+  try {
+    publishRecording(root, clip, workspace);
+  } finally {
+    fs.rmSync(workspace, { recursive: true, force: true });
+  }
+}
+
 function record(root, manifestFile, manifest) {
   const shapeErrors = validateManifest(manifest, { allowMissingSourceHash: true });
   if (shapeErrors.length > 0) throw new Error(shapeErrors.join("\n"));
@@ -356,21 +537,7 @@ function record(root, manifestFile, manifest) {
     return;
   }
   for (const clip of clips) {
-    const result = spawnSync(
-      process.platform === "win32" ? "npm.cmd" : "npm",
-      ["run", "test:e2e", "--", clip.scenario, "--workers=1"],
-      {
-        cwd: root,
-        stdio: "inherit",
-        env: {
-          ...process.env,
-          WORKSTREAMS_DEMO_CLIP: clip.id,
-          WORKSTREAMS_DEMO_MANIFEST: path.relative(root, manifestFile),
-        },
-      },
-    );
-    if (result.error) throw result.error;
-    if (result.status !== 0) throw new Error(`recording scenario '${clip.id}' failed`);
+    runRecordingScenario({ root, manifestFile, clip });
     clip.sourceHash = calculateSourceHash(root, manifest, clip);
   }
   const errors = checkDemoMedia({ root, manifest });

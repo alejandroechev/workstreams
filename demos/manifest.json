@@ -2,7 +2,10 @@
   "version": 1,
   "sharedSources": [
     "scripts/demo-media.mjs",
-    "playwright.config.ts"
+    "playwright.demo.config.ts",
+    "e2e/demos/fixtures.ts",
+    "src/backend/demo-seed.ts",
+    "src/main.tsx"
   ],
   "retiredGifs": [
     {

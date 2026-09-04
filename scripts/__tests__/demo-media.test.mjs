@@ -6,6 +6,9 @@ import path from "node:path";
 import {
   calculateSourceHash,
   checkDemoMedia,
+  assertRecordingTools,
+  recordingWorkspace,
+  runRecordingScenario,
   validateManifest,
 } from "../demo-media.mjs";
 
@@ -96,6 +99,16 @@ describe("demo media manifest", () => {
     write(root, "e2e/demos/overview.spec.ts", "// changed framing\npage.screencast;\n");
     expect(checkDemoMedia({ root, manifest: data, probeMedia: probe })).toEqual([
       expect.stringMatching(/source hash is stale/),
+    ]);
+  });
+
+  it("does not mistake recorder diagnostics for scenario screencast use", () => {
+    const root = fixture();
+    const data = manifest();
+    write(root, "e2e/demos/overview.spec.ts", "test('overview', async () => {});\n");
+    data.clips[0].sourceHash = calculateSourceHash(root, data, data.clips[0]);
+    expect(checkDemoMedia({ root, manifest: data, probeMedia: probe })).toEqual([
+      expect.stringMatching(/must use Playwright page\.screencast/),
     ]);
   });
 
@@ -219,6 +232,76 @@ describe("demo media manifest", () => {
     const before = snapshot(root);
     expect(checkDemoMedia({ root, manifest: data, probeMedia: probe })).toEqual([]);
     expect(snapshot(root)).toEqual(before);
+  });
+
+  it("isolates each clip in a deterministic recording workspace", () => {
+    expect(recordingWorkspace("/repo", "task-board")).toBe(
+      path.join("/repo", ".dev", "demo-media", "task-board"),
+    );
+  });
+
+  it("runs scenarios through the dedicated demo config and cleans failed output", () => {
+    const root = fixture();
+    const data = manifest();
+    const workspace = recordingWorkspace(root, "overview");
+    write(root, ".dev/demo-media/overview/partial.webm", "partial");
+    const calls = [];
+
+    expect(() =>
+      runRecordingScenario({
+        root,
+        manifestFile: path.join(root, "demos/manifest.json"),
+        clip: data.clips[0],
+        checkTools: () => {},
+        spawn(command, args, options) {
+          calls.push({ command, args, options });
+          write(root, ".dev/demo-media/overview/failed.webm", "failed");
+          return { status: 1 };
+        },
+      }),
+    ).toThrow(/recording scenario 'overview' failed/);
+
+    expect(calls[0].args).toEqual([
+      "exec",
+      "playwright",
+      "test",
+      "--config",
+      "playwright.demo.config.ts",
+      "e2e/demos/overview.spec.ts",
+    ]);
+    expect(calls[0].options.env.WORKSTREAMS_DEMO_OUTPUT_DIR).toBe(workspace);
+    expect(fs.existsSync(workspace)).toBe(false);
+  });
+
+  it("reports a clear missing Playwright ffmpeg diagnostic", () => {
+    expect(() =>
+      assertRecordingTools(manifest().clips[0], () => ({
+        error: Object.assign(new Error("spawn ffmpeg ENOENT"), {
+          code: "ENOENT",
+        }),
+      })),
+    ).toThrow(/ffmpeg is required.*install ffmpeg/i);
+  });
+
+  it("requires gifski only for an overview fallback", () => {
+    const data = manifest();
+    data.clips[0].artifacts.push({
+      type: "fallback",
+      path: "docs/assets/demos/overview.gif",
+      codec: "gif",
+      encoder: "gifski",
+      width: 1280,
+      height: 800,
+      maxBytes: 1000,
+      maxDurationSeconds: 30,
+      references: [{ file: "README.md", target: "overview.gif" }],
+    });
+    const tools = [];
+    assertRecordingTools(data.clips[0], (tool) => {
+      tools.push(tool);
+      return { status: 0 };
+    });
+    expect(tools).toEqual(["ffmpeg", "ffprobe", "gifski"]);
   });
 });
 
