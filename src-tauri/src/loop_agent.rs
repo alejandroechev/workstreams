@@ -88,10 +88,21 @@ fn should_retry_sdk_start(error: &github_copilot_sdk::Error, attempt: u32) -> bo
     error.is_transport_failure() && attempt < SDK_START_MAX_ATTEMPTS
 }
 
+fn sdk_client_options(repaired_path: Option<String>) -> ClientOptions {
+    let mut options = ClientOptions::default();
+    if let Some(path) = repaired_path {
+        options
+            .env
+            .push((std::ffi::OsString::from("PATH"), path.into()));
+    }
+    options
+}
+
 impl SdkAgentRuntime {
     pub async fn connect() -> Result<Self, String> {
+        let repaired_path = crate::shell_env::resolved_path(&crate::pty::default_shell());
         for attempt in 1..=SDK_START_MAX_ATTEMPTS {
-            match Client::start(ClientOptions::default()).await {
+            match Client::start(sdk_client_options(repaired_path.clone())).await {
                 Ok(client) => {
                     return Ok(Self {
                         client,
@@ -616,5 +627,32 @@ mod tests {
         assert!(should_retry_sdk_start(&io, 1));
         assert!(!should_retry_sdk_start(&cancelled, SDK_START_MAX_ATTEMPTS));
         assert!(!should_retry_sdk_start(&invalid, 1));
+    }
+
+    #[test]
+    fn sdk_client_options_forward_the_repaired_gui_path() {
+        let options = sdk_client_options(Some(
+            "/Users/test/.nodenv/shims:/opt/homebrew/bin:/usr/bin:/bin".to_string(),
+        ));
+
+        assert_eq!(
+            options.env,
+            vec![(
+                std::ffi::OsString::from("PATH"),
+                std::ffi::OsString::from(
+                    "/Users/test/.nodenv/shims:/opt/homebrew/bin:/usr/bin:/bin"
+                ),
+            )]
+        );
+    }
+
+    #[test]
+    fn sdk_client_options_leave_a_working_inherited_path_untouched() {
+        let options = sdk_client_options(None);
+
+        assert!(
+            options.env.is_empty(),
+            "a terminal-launched app should preserve its inherited environment"
+        );
     }
 }

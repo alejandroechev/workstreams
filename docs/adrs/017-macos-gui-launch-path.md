@@ -94,14 +94,18 @@ Injection happens at every process boundary that resolves user-installed
 commands:
 
 - `PtyManager::spawn` for terminal and Copilot session tiles;
+- the Copilot SDK child runtime used by loop orchestrators, workers, and
+  evaluators, so agent shell tools see the same commands as the deterministic
+  verifier;
 - loop deterministic verifiers;
 - code-trace test discovery and recording.
 
-The loop-verifier path matters because a definition commonly uses a bare
-program such as `npm` or `cargo`. Without the repaired environment, a worker
-could complete successfully and then receive a misleading verifier
-`spawn_error: No such file or directory` solely because Workstreams was
-launched from the Dock.
+Both loop process boundaries matter. A definition commonly uses a bare program
+such as `npm` or `cargo`, so the deterministic verifier needs the repaired
+environment. The evaluator may independently rerun that same command through
+its shell tool, so the SDK child needs it too. Without both, the official
+verifier can pass while the evaluator reports `npm: command not found` from
+launchd's `/usr/bin:/bin:/usr/sbin:/sbin`, producing a false blocked verdict.
 
 Windows keeps a `#[cfg(windows)]` `resolved_path` that always returns `None`,
 making the change a literal no-op there.
@@ -138,6 +142,8 @@ reports a capable terminal, so the repair is `cfg(unix)`-only.
 - Copilot session tiles work when the app is launched from the Dock, Finder,
   Spotlight, or as a login item — the normal way a desktop app is started.
   Backspace and other line editing work in terminal tiles for the same reason.
+- Loop orchestrators, workers, and evaluators see the same user-installed
+  commands as terminal tiles and deterministic verifiers.
 - One extra process spawn (~100 ms) on GUI launches only, paid once per app
   process and cached in a `OnceLock`.
 - The repaired `PATH` is a *snapshot*. Editing `~/.zshrc` requires restarting
