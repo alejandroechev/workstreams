@@ -15,10 +15,20 @@ them — and `.github/workflows/pages.yml` copies that folder to `site/assets/`
 when it publishes. Keeping a single copy avoids multi-megabyte binaries
 drifting out of sync in two places.
 
-To add a new clip:
+Demo media is declared in `demos/manifest.json`. The manifest records every
+scenario and shared source that affects the pixels or encoding, the expected
+codec and dimensions, size and duration budgets, and every publication
+reference.
 
-1. Put the file in `docs/assets/`.
-2. Reference it from `index.html` as `assets/<name>`.
+1. Add the Playwright scenario and manifest entry.
+2. Run `npm run demos:record` to generate the declared artifacts and source hash.
+3. Reference each artifact from the files declared in its `references` list.
+4. Run `npm run demos:check` to reject stale, malformed, missing, oversized, or
+   incorrectly encoded media.
+
+Recording scenarios use Playwright 1.60's `page.screencast` API against the
+Vite E2E host and synthetic `MemoryBackend` data. The checker never launches
+the app or rewrites media, and `--check` is safe for CI.
 
 ## Local preview
 

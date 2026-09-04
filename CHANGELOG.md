@@ -21,6 +21,9 @@ for any release is attached to its
 - A database model reference at `docs/db-model.md`, linked from the README for
   the first time.
 - This changelog.
+- A machine-checked demo-media manifest and recording command now guard clip
+  provenance, encoding, size budgets, publication references, and legacy GIF
+  retirement.
 
 ### Changed
 

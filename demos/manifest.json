@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "sharedSources": [
+    "scripts/demo-media.mjs",
+    "playwright.config.ts"
+  ],
+  "retiredGifs": [
+    {
+      "path": "docs/assets/workstreams-demo.gif",
+      "replacementClipId": "overview",
+      "references": [
+        {
+          "file": "README.md",
+          "target": "docs/assets/workstreams-demo.gif"
+        },
+        {
+          "file": "site/index.html",
+          "target": "assets/workstreams-demo.gif"
+        }
+      ]
+    }
+  ],
+  "clips": []
+}
