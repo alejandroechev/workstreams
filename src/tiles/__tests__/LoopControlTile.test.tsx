@@ -411,6 +411,40 @@ describe("LoopControlTile definitions tab", () => {
     );
   });
 
+  it("collapses a long objective but keeps a short one visible", async () => {
+    const long = "Deliver the pipeline. ".repeat(30);
+    setup(snapshot(), {
+      definitions: [
+        definition({ objective: long }),
+        definition({
+          id: "short-loop",
+          name: "Short loop",
+          path: "/sessions/session-1/files/loops/short.loop.yaml",
+          objective: "Keep checkout retries bounded.",
+        }),
+      ],
+      invalid: [],
+    });
+
+    // A multi-paragraph objective would otherwise push the YAML off screen.
+    const preview = await screen.findByTestId("loop-definition-objective");
+    expect((preview as HTMLDetailsElement).open).toBe(false);
+    expect(preview.textContent).not.toContain(long);
+    expect(preview.textContent).toContain("Deliver the pipeline.");
+
+    fireEvent.click(preview.querySelector("summary")!);
+    expect(screen.getByTestId("loop-definition-objective").textContent).toContain(
+      long.trimEnd(),
+    );
+
+    // A one-line objective is more useful shown than hidden behind a click.
+    fireEvent.click(screen.getByTestId("loop-definition-short-loop"));
+    expect(screen.queryByTestId("loop-definition-objective")).toBeNull();
+    expect(screen.getByTestId("loop-definition-editor-header").textContent).toContain(
+      "Keep checkout retries bounded.",
+    );
+  });
+
   it("shows the YAML authoring empty state without form fields", async () => {
     setup(snapshot());
 

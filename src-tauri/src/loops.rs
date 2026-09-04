@@ -3200,6 +3200,29 @@ pub struct LoopRunSummary {
     pub task_attention: u32,
 }
 
+/// Recovers `(definition_id, definition_name)` from a run's pinned YAML.
+///
+/// Runs created before the definition columns existed have NULL identity but
+/// still pin the YAML they ran, so the accurate historical label is
+/// recoverable. Reads only `metadata`, so a definition that no longer validates
+/// against the current schema still yields a name. Returns `None` for anything
+/// unreadable rather than guessing.
+fn definition_identity_from_yaml(yaml: &str) -> (Option<String>, Option<String>) {
+    let Ok(document) = serde_yaml::from_str::<serde_yaml::Value>(yaml) else {
+        return (None, None);
+    };
+    let field = |key: &str| {
+        document
+            .get("metadata")
+            .and_then(|metadata| metadata.get(key))
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+    };
+    (field("id"), field("name"))
+}
+
 /// Every run for a workstream, newest first.
 ///
 /// The run's own `definition_id`/`definition_name` are recorded at creation
@@ -3220,7 +3243,8 @@ pub(crate) fn list_loop_runs(
                     (SELECT COUNT(*) FROM loop_tasks t WHERE t.loop_run_id = r.id),
                     (SELECT COUNT(*) FROM loop_tasks t
                       WHERE t.loop_run_id = r.id
-                        AND t.state IN ('attention', 'blocked'))
+                        AND t.state IN ('attention', 'blocked')),
+                    r.definition_yaml
              FROM loop_runs r
              WHERE r.loop_spec_id = ?1
              ORDER BY r.rowid DESC",
@@ -3229,14 +3253,24 @@ pub(crate) fn list_loop_runs(
     let rows = statement
         .query_map([&spec.id], |row| {
             let state: String = row.get(2)?;
+            let mut definition_id: Option<String> = row.get(5)?;
+            let mut definition_name: Option<String> = row.get(6)?;
+            if definition_name.is_none() {
+                let pinned: Option<String> = row.get(9)?;
+                if let Some(yaml) = pinned.as_deref() {
+                    let (id, name) = definition_identity_from_yaml(yaml);
+                    definition_id = definition_id.or(id);
+                    definition_name = name;
+                }
+            }
             Ok(LoopRunSummary {
                 id: row.get(0)?,
                 loop_spec_id: row.get(1)?,
                 state: LoopRunState::parse(&state)?,
                 started_at: row.get(3)?,
                 finished_at: row.get(4)?,
-                definition_id: row.get(5)?,
-                definition_name: row.get(6)?,
+                definition_id,
+                definition_name,
                 task_total: row.get::<_, i64>(7)? as u32,
                 task_attention: row.get::<_, i64>(8)? as u32,
             })
@@ -6618,6 +6652,54 @@ mod tests {
     fn listing_loop_runs_without_a_spec_is_empty_rather_than_an_error() {
         let conn = test_db();
         assert!(list_loop_runs(&conn, "ws-1").expect("list runs").is_empty());
+    }
+
+    #[test]
+    fn a_legacy_run_recovers_its_name_from_its_own_pinned_yaml() {
+        // Runs created before the definition columns existed have NULL identity
+        // but still pin their YAML. The name must come from that copy, not from
+        // the current spec, which may since point at a different definition.
+        let conn = test_db();
+        let spec = save_loop_spec(&conn, "ws-1", spec_input()).expect("save spec");
+        set_loop_enabled(&conn, &spec.id, true).expect("enable loop");
+        let run = create_loop_run(&conn, &spec.id, 600).expect("run");
+        set_run_state(&conn, &run.id, LoopRunState::Completed, None).expect("finish");
+        conn.execute(
+            "UPDATE loop_runs
+                SET definition_id = NULL, definition_name = NULL,
+                    definition_yaml = ?2
+              WHERE id = ?1",
+            params![
+                run.id,
+                "apiVersion: workstreams.dev/v1alpha1\nkind: Loop\nmetadata:\n  \
+                 id: archived-loop\n  name: Archived loop\n"
+            ],
+        )
+        .expect("simulate a pre-migration run");
+        conn.execute(
+            "UPDATE loop_specs SET definition_name = 'Something else today' WHERE id = ?1",
+            [&spec.id],
+        )
+        .expect("reselect a different definition");
+
+        let runs = list_loop_runs(&conn, "ws-1").expect("list runs");
+
+        assert_eq!(runs[0].definition_name.as_deref(), Some("Archived loop"));
+        assert_eq!(runs[0].definition_id.as_deref(), Some("archived-loop"));
+    }
+
+    #[test]
+    fn an_unreadable_pinned_definition_leaves_the_name_absent() {
+        assert_eq!(definition_identity_from_yaml("not: [valid").0, None);
+        assert_eq!(definition_identity_from_yaml("metadata: {}").1, None);
+        assert_eq!(
+            definition_identity_from_yaml("metadata:\n  name: '  '").1,
+            None
+        );
+        assert_eq!(
+            definition_identity_from_yaml("metadata:\n  id: a\n  name: Alpha"),
+            (Some("a".to_string()), Some("Alpha".to_string())),
+        );
     }
 
     #[test]

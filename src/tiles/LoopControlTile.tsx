@@ -347,13 +347,46 @@ function DefinitionRow({
 }
 
 /**
+ * A long objective collapses to its first line.
+ *
+ * Objectives are frequently several paragraphs of contract, which would push
+ * the YAML the tab exists to show off the bottom of the pane. The preview is
+ * much shorter than the task-status one because this header sits in a narrow
+ * column, where 220 characters still wraps to five lines.
+ */
+const OBJECTIVE_PREVIEW_LIMIT = 110;
+
+function CollapsibleObjective({ objective }: { objective: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <details
+      data-testid="loop-definition-objective"
+      open={open}
+      style={{ color: "#bac2de", marginTop: 2 }}
+    >
+      <summary
+        onClick={(event) => {
+          event.preventDefault();
+          setOpen((current) => !current);
+        }}
+        style={{ cursor: "pointer", userSelect: "none" }}
+      >
+        {open
+          ? "Hide objective"
+          : concisePreview(objective, OBJECTIVE_PREVIEW_LIMIT)}
+      </summary>
+      {open && <div style={{ marginTop: 4 }}>{objective}</div>}
+    </details>
+  );
+}
+
+/**
  * Definitions tab: the catalog on the left, the YAML editor on the right.
  *
  * Mirrors the Repo Explorer diff layout so selecting a definition and reading
  * its source is the same gesture as selecting a file and reading its diff. Run
  * lives in the toolbar because it acts on the selection, not on the editor.
- */
-function DefinitionsPanel({
+ */function DefinitionsPanel({
   catalog,
   selectedPath,
   editorSnapshot,
@@ -478,11 +511,14 @@ function DefinitionsPanel({
                 >
                   {selectedPath}
                 </div>
-                {selectedDefinition && (
-                  <div style={{ color: "#bac2de", marginTop: 2 }}>
-                    {selectedDefinition.objective}
-                  </div>
-                )}
+                {selectedDefinition &&
+                  (selectedDefinition.objective.length > OBJECTIVE_PREVIEW_LIMIT ? (
+                    <CollapsibleObjective objective={selectedDefinition.objective} />
+                  ) : (
+                    <div style={{ color: "#bac2de", marginTop: 2 }}>
+                      {selectedDefinition.objective}
+                    </div>
+                  ))}
                 {selectedDefinition && !selectedDefinition.portable && (
                   <div
                     style={{
