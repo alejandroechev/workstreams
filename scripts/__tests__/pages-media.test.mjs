@@ -77,6 +77,16 @@ describe("extractLocalMediaReferences", () => {
       { tag: "img", attribute: "src", value: "assets/real.png" },
     ]);
   });
+
+  it("requires an exact raw-text closing tag name", () => {
+    const html =
+      '<script>const x="</scripture><img src=assets/ghost.png>";</script>' +
+      '<img src="assets/visible.png">';
+
+    expect(extractLocalMediaReferences(html)).toEqual([
+      { tag: "img", attribute: "src", value: "assets/visible.png" },
+    ]);
+  });
 });
 
 describe("checkPagesMedia", () => {

@@ -40,7 +40,7 @@ export function extractLocalMediaReferences(html) {
 
     const tag = tagMatch[1].toLowerCase();
     if (RAW_TEXT_TAGS.has(tag)) {
-      const closing = source.toLowerCase().indexOf(`</${tag}`, cursor);
+      const closing = findRawTextClosingTag(source, tag, cursor);
       cursor = closing === -1 ? source.length : closing;
       continue;
     }
@@ -58,6 +58,20 @@ export function extractLocalMediaReferences(html) {
     }
   }
   return references;
+}
+
+function findRawTextClosingTag(html, tag, start) {
+  const lower = html.toLowerCase();
+  const prefix = `</${tag}`;
+  let cursor = start;
+  while (cursor < html.length) {
+    const closing = lower.indexOf(prefix, cursor);
+    if (closing === -1) return -1;
+    const boundary = lower[closing + prefix.length];
+    if (boundary === undefined || /[\s/>]/.test(boundary)) return closing;
+    cursor = closing + prefix.length;
+  }
+  return -1;
 }
 
 function findTagEnd(html, start) {
