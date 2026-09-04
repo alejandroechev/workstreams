@@ -45,6 +45,9 @@ instead of buried behind tabs.
 - **Local code review, no round-trips** — a diff-first, PR-style tile for agent
   or human code. Comment inline, edit code in place, and the agent replies in
   the same threads. No Azure DevOps, no MCP.
+  [Watch a local working-tree review](docs/assets/demos/local-code-review.webm)
+  ([MP4](docs/assets/demos/local-code-review.mp4) ·
+  [poster](docs/assets/demos/local-code-review.png)).
 - **Repo browser that edits in place** — Files / Diff / Log / Hooks / Search.
   The unstaged diff is editable directly, audio, images, PDFs and SQLite files
   preview inline, and git hooks open in a real editor.

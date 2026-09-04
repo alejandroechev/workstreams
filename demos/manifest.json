@@ -195,9 +195,95 @@
                   "file": "site/index.html",
                   "target": "assets/demos/goal-loop.png"
                 }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "local-code-review",
+          "scenario": "e2e/demos/local-code-review.spec.ts",
+          "sources": [
+                "e2e/demos/local-code-review.spec.ts",
+                "src/App.tsx",
+                "src/backend/memory-backend.ts",
+                "src/domain/code-review-view.ts",
+                "src/domain/layout.ts",
+                "src/styles/theme.css",
+                "src/tiles/CodeReviewTile.tsx",
+                "src/tiling/Tile.tsx",
+                "src/tiling/TileGrid.tsx",
+                "src/ui/interactive-zones.ts",
+                "src/ui/monaco-diff-theme.ts",
+                "src/workstream/WorkstreamSidebar.tsx"
+          ],
+          "viewport": {
+                "width": 1280,
+                "height": 800
+          },
+          "theme": "dark",
+          "sourceHash": "7e51a9a10d59ed909a24fa66f5841ed3499411157d82a06db24eafa87b733658",
+          "artifacts": [
+                {
+                  "type": "video",
+                  "path": "docs/assets/demos/local-code-review.webm",
+                  "container": "webm",
+                  "codec": "vp9",
+                  "width": 1280,
+                  "height": 800,
+                  "maxBytes": 6000000,
+                  "maxDurationSeconds": 30,
+                  "references": [
+                    {
+                      "file": "README.md",
+                      "target": "docs/assets/demos/local-code-review.webm"
+                    },
+                    {
+                      "file": "site/index.html",
+                      "target": "assets/demos/local-code-review.webm"
+                    }
+                  ]
+                },
+                {
+                  "type": "video",
+                  "path": "docs/assets/demos/local-code-review.mp4",
+                  "container": "mp4",
+                  "codec": "h264",
+                  "pixelFormat": "yuv420p",
+                  "fastStart": true,
+                  "width": 1280,
+                  "height": 800,
+                  "maxBytes": 8000000,
+                  "maxDurationSeconds": 30,
+                  "references": [
+                    {
+                      "file": "README.md",
+                      "target": "docs/assets/demos/local-code-review.mp4"
+                    },
+                    {
+                      "file": "site/index.html",
+                      "target": "assets/demos/local-code-review.mp4"
+                    }
+                  ]
+                },
+                {
+                  "type": "poster",
+                  "path": "docs/assets/demos/local-code-review.png",
+                  "codec": "png",
+                  "width": 1280,
+                  "height": 800,
+                  "maxBytes": 2000000,
+                  "references": [
+                    {
+                      "file": "README.md",
+                      "target": "docs/assets/demos/local-code-review.png"
+                    },
+                    {
+                      "file": "site/index.html",
+                      "target": "assets/demos/local-code-review.png"
+                    }
+                  ]
+                }
           ]
         }
-      ]
-    }
   ]
 }

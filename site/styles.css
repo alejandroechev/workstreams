@@ -404,6 +404,14 @@ figcaption {
   font-size: 0.96rem;
 }
 
+.card-demo {
+  margin: 1rem 0 0;
+}
+
+.card-demo video {
+  box-shadow: none;
+}
+
 .card .button {
   margin-top: 0.5rem;
 }

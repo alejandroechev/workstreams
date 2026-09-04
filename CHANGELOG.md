@@ -33,6 +33,9 @@ for any release is attached to its
 - A deterministic Goal Loop recording now shows its reviewable definition,
   working state, measured stage timings, and accepted worker, verifier, and
   evaluator evidence in WebM, MP4, and poster formats.
+- A deterministic local code review recording now opens a synthetic working-tree
+  diff, anchors feedback through the inline Monaco controls, and displays the
+  resulting thread in WebM, MP4, and poster formats.
 - The landing page now resolves the latest release through GitHub and offers the
   matching Windows or Apple Silicon macOS installer, with a no-JavaScript
   fallback, release announcement, and repeated final call to action.
