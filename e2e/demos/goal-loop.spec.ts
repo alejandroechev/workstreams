@@ -190,14 +190,13 @@ test("records a deterministic Goal Loop run", async ({ page }) => {
   const loopTile = page.locator('[data-testid="loop-control-tile"]');
   await expect(loopTile).toBeVisible();
   await page.locator('[data-testid="loop-refresh"]').click();
-  await expect(page.locator('[data-testid="loop-definition-selected"]')).toContainText(
+  await expect(page.locator('[data-testid="loop-definition-title"]')).toContainText(
     "Retry reliability goal",
   );
   await loopTile.click();
   await page.locator('[data-testid="toggle-fullscreen"]').click();
   await expect(page.getByText("⛶ Full", { exact: true })).toBeVisible();
 
-  await page.locator('[data-testid="loop-tab-definitions"]').click();
   await expect(
     page.locator('[data-testid="loop-definition-editor-header"]'),
   ).toContainText("retry-reliability.loop.yaml");
@@ -223,12 +222,6 @@ test("records a deterministic Goal Loop run", async ({ page }) => {
   let succeeded = false;
   try {
     await page.waitForTimeout(1_000);
-    await page.locator('[data-testid="loop-tab-run"]').click();
-    const selected = page.locator('[data-testid="loop-definition-selected"]');
-    await expect(selected).toContainText("Retry reliability goal");
-    await expect(selected).toContainText("sha256:7b3d8c2f0a61");
-    await page.waitForTimeout(500);
-
     await page.locator('[data-testid="loop-run-selected"]').click();
     await page.waitForFunction(
       () =>

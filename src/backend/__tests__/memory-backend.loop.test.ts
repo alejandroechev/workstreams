@@ -385,4 +385,70 @@ describe("MemoryBackend manual coding loops", () => {
     expect(snapshot.approvals).toHaveLength(1);
     expect(snapshot.approvals[0].status).toBe("pending");
   });
+
+  describe("run history", () => {
+    beforeEach(async () => {
+      const spec = await backend.saveWorkstreamLoop(workstreamId, {
+        orchestrator: { prompt: "Discover work", model: "" },
+        worker: { prompt: "Do the work", model: "" },
+        runTimeoutMs: 60_000,
+        maxTaskIterations: 2,
+      });
+      await backend.setWorkstreamLoopEnabled(spec.id, true);
+    });
+
+    /** A run only starts once the previous one has reached a terminal state. */
+    const startRun = () => backend.runWorkstreamLoopNow(workstreamId);
+
+    it("reports no runs before anything has started", async () => {
+      expect(await backend.listWorkstreamLoopRuns(workstreamId)).toEqual([]);
+    });
+
+    it("keeps a finished run listed once the next one starts", async () => {
+      const first = await startRun();
+      await vi.advanceTimersByTimeAsync(5_000);
+      const second = await startRun();
+
+      const runs = await backend.listWorkstreamLoopRuns(workstreamId);
+
+      // Newest first, and the earlier run survives rather than being replaced.
+      expect(runs.map((run) => run.id)).toEqual([second.id, first.id]);
+      expect(runs[1].state).toBe("completed");
+    });
+
+    it("counts tasks and those needing attention for each row", async () => {
+      const run = await startRun();
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      const [summary] = await backend.listWorkstreamLoopRuns(workstreamId);
+      const snapshot = await backend.getLoopRunSnapshot(run.id);
+
+      expect(summary.taskTotal).toBe(snapshot.tasks.length);
+      expect(summary.taskAttention).toBe(
+        snapshot.tasks.filter(
+          (task) => task.state === "attention" || task.state === "blocked",
+        ).length,
+      );
+    });
+
+    it("returns evidence for an older run, not just the newest", async () => {
+      const first = await startRun();
+      await vi.advanceTimersByTimeAsync(5_000);
+      const second = await startRun();
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      const older = await backend.getLoopRunSnapshot(first.id);
+      const newer = await backend.getLoopRunSnapshot(second.id);
+
+      expect(older.latestRun?.id).toBe(first.id);
+      expect(newer.latestRun?.id).toBe(second.id);
+      expect(older.tasks.every((task) => task.loopRunId === first.id)).toBe(true);
+    });
+
+    it("rejects an unknown run id instead of returning an empty snapshot", async () => {
+      await expect(backend.getLoopRunSnapshot("missing")).rejects.toThrow(
+        "missing",
+      );
+    });
+  });
 });

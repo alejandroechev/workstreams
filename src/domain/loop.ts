@@ -121,6 +121,28 @@ export interface LoopRun {
   finishedAt?: string;
   deadlineAt?: string;
   definitionHash?: string;
+  definitionId?: string;
+  definitionName?: string;
+}
+
+/**
+ * A row in the Goal Loop "Loops" list.
+ *
+ * Carries the counts the list renders and the definition the run actually
+ * started with, so history stays correctly labelled after a different
+ * definition is selected. The pinned YAML and evidence are deliberately absent:
+ * they are loaded only when a run is opened.
+ */
+export interface LoopRunSummary {
+  id: string;
+  loopSpecId: string;
+  state: LoopRunState;
+  startedAt: string;
+  finishedAt?: string;
+  definitionId?: string;
+  definitionName?: string;
+  taskTotal: number;
+  taskAttention: number;
 }
 
 export interface LoopSnapshot {
@@ -198,8 +220,7 @@ export interface LoopEventRecord {
   createdAt: string;
 }
 
-export interface PersistedLoopSnapshot {
-  spec: LoopSpec | null;
+export interface PersistedLoopSnapshot {  spec: LoopSpec | null;
   latestRun: LoopRun | null;
   tasks: LoopTask[];
   verifications: LoopVerificationRecord[];

@@ -5174,6 +5174,8 @@ pub fn run() {
             close_terminal,
             // Manual coding goal loops
             loops::get_workstream_loop_snapshot,
+            loops::list_workstream_loop_runs,
+            loops::get_loop_run_snapshot,
             loops::list_loop_definitions,
             loops::get_workstream_loop_progress_version,
             loops::save_workstream_loop,

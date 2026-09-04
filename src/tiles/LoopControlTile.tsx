@@ -2,26 +2,31 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import {
   ArrowPathIcon,
+  ArrowPathRoundedSquareIcon,
   ArrowUturnLeftIcon,
   CheckIcon,
-  CheckBadgeIcon,
   DocumentTextIcon,
   ExclamationTriangleIcon,
   PauseIcon,
   PlayIcon,
   HandRaisedIcon,
   StopIcon,
-  TagIcon,
   XCircleIcon,
 } from "@heroicons/react/24/outline";
 
 import {
+  LOOP_RUN_FILTERS,
   LOOP_TASK_FILTERS,
+  countRunsByFilter,
+  describeRun,
+  matchesRunFilter,
   matchesTaskFilter,
+  orderRuns,
   orderTasks,
   summarizeRunTiming,
   summarizeTaskTiming,
   taskHeadline,
+  type LoopRunFilter,
   type LoopTaskFilter,
   type LoopTaskSort,
   type LoopTaskTiming,
@@ -33,7 +38,6 @@ import {
   type BufferSnapshot,
 } from "../files/FileBufferRegistry";
 import type {
-  LoopAction,
   LoopApprovalDecision,
   LoopApprovalRecord,
   LoopDefinition,
@@ -42,6 +46,7 @@ import type {
   LoopEventRecord,
   LoopRun,
   LoopRunState,
+  LoopRunSummary,
   LoopSpec,
   LoopStageRecord,
   LoopTask,
@@ -134,14 +139,52 @@ const selectStyle: React.CSSProperties = {
   color: "#cdd6f4",
   font: "inherit",
 };
-const tabStyle: React.CSSProperties = {
-  border: "none",
-  borderBottom: "2px solid transparent",
-  padding: "8px 10px 6px",
+
+/**
+ * Tab chrome copied from the Repo Explorer so every multi-tab tile reads as one
+ * control rather than each inventing its own header.
+ */
+const tabBarStyle: React.CSSProperties = {
+  display: "flex",
+  alignItems: "stretch",
+  gap: 0,
+  background: "#11111b",
+  borderBottom: "1px solid #313244",
+  flexShrink: 0,
+  padding: "0 4px",
+};
+
+const tabButtonStyle: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 4,
   background: "transparent",
-  color: "#a6adc8",
+  border: "none",
+  padding: "5px 10px",
   cursor: "pointer",
-  font: "inherit",
+  fontSize: 11,
+  fontFamily: "inherit",
+};
+
+const toolbarStyle: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 6,
+  padding: "4px 8px",
+  background: "#181825",
+  borderBottom: "1px solid #313244",
+  flexShrink: 0,
+};
+
+/** Left column shared by both tabs, matching the Repo Explorer diff file list. */
+const sidePanelStyle: React.CSSProperties = {
+  width: 210,
+  minWidth: 150,
+  borderRight: "1px solid #313244",
+  background: "#181825",
+  display: "flex",
+  flexDirection: "column",
+  flexShrink: 0,
 };
 
 function message(error: unknown): string {
@@ -238,196 +281,98 @@ function ActionButton({
 }
 
 function DefinitionRow({
-  definition,
+  label,
+  detail,
   selected,
+  invalid,
+  testId,
   onSelect,
 }: {
-  definition: LoopDefinition;
+  label: string;
+  detail: string;
   selected: boolean;
+  invalid?: boolean;
+  testId: string;
   onSelect: () => void;
 }) {
+  const Icon = invalid ? ExclamationTriangleIcon : DocumentTextIcon;
   return (
     <button
       type="button"
-      data-testid={`loop-definition-${definition.id}`}
+      data-testid={testId}
       aria-pressed={selected}
       onClick={onSelect}
       style={{
+        display: "block",
         width: "100%",
-        boxSizing: "border-box",
-        display: "grid",
-        gap: 5,
-        marginBottom: 7,
-        padding: 9,
-        border: `1px solid ${selected ? "#89b4fa" : "#313244"}`,
-        borderRadius: 5,
-        background: selected ? "#243047" : "#11111b",
-        color: "#cdd6f4",
+        textAlign: "left",
+        border: "none",
+        borderBottom: "1px solid #222",
+        borderLeft: `2px solid ${selected ? "#89b4fa" : "transparent"}`,
+        background: selected ? "#313244" : "transparent",
+        color: invalid ? "#f5c2e7" : "#cdd6f4",
+        padding: "6px 8px",
         cursor: "pointer",
         font: "inherit",
-        textAlign: "left",
       }}
     >
-      <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
-        <DocumentTextIcon aria-hidden="true" style={iconStyle} />
-        <strong>{definition.name}</strong>
-      </span>
-      <span style={{ color: "#bac2de" }}>{definition.objective}</span>
-      <span style={{ display: "flex", alignItems: "center", gap: 5, flexWrap: "wrap" }}>
-        <CheckBadgeIcon aria-hidden="true" style={iconStyle} />
-        <span>{feedbackMode(definition)}</span>
-        {definition.tags.map((tag) => (
-          <span
-            key={tag}
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 3,
-              border: "1px solid #45475a",
-              borderRadius: 999,
-              padding: "1px 6px",
-              color: "#a6adc8",
-            }}
-          >
-            <TagIcon aria-hidden="true" style={{ width: 11, height: 11 }} />
-            {tag}
-          </span>
-        ))}
-      </span>
-      {!definition.portable && (
+      <span style={{ display: "flex", alignItems: "center", gap: 5 }}>
+        <Icon aria-hidden="true" style={{ width: 12, height: 12, flexShrink: 0 }} />
         <span
           style={{
-            display: "inline-flex",
-            alignItems: "center",
-            gap: 5,
-            color: "#f9e2af",
+            flex: 1,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
           }}
         >
-          <ExclamationTriangleIcon aria-hidden="true" style={iconStyle} />
-          Not portable: this definition uses machine-specific configuration.
+          {label}
         </span>
-      )}
+      </span>
+      <span
+        style={{
+          display: "block",
+          marginTop: 2,
+          color: "#6c7086",
+          fontSize: 11,
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
+        }}
+      >
+        {detail}
+      </span>
     </button>
   );
 }
 
-function CatalogPanel({
-  catalog,
-  selected,
-  busy,
-  runIsActive,
-  onSelect,
-  onRun,
-}: {
-  catalog: LoopDefinitionCatalog;
-  selected: LoopDefinition | null;
-  busy: boolean;
-  runIsActive: boolean;
-  onSelect: (definitionId: string) => void;
-  onRun: () => void;
-}) {
-  return (
-    <>
-      <section style={sectionStyle}>
-        <h2 style={headingStyle}>Definitions</h2>
-        {catalog.definitions.length === 0 ? (
-          <div
-            data-testid="loop-definition-empty"
-            style={{ color: "#a6adc8", lineHeight: 1.5 }}
-          >
-            Create <code>files/loops/&lt;id&gt;.loop.yaml</code> in this
-            workstream&apos;s bound Copilot session, or use the{" "}
-            <code>create-loop</code> skill to author one. Session files are the
-            only loop authoring surface.
-          </div>
-        ) : (
-          catalog.definitions.map((definition) => (
-            <DefinitionRow
-              key={definition.id}
-              definition={definition}
-              selected={definition.id === selected?.id}
-              onSelect={() => onSelect(definition.id)}
-            />
-          ))
-        )}
-      </section>
-
-      {selected && (
-        <section data-testid="loop-definition-selected" style={sectionStyle}>
-          <h2 style={headingStyle}>Selected definition</h2>
-          <div style={{ fontSize: 15, fontWeight: 700 }}>{selected.name}</div>
-          <div style={{ color: "#bac2de", marginTop: 5 }}>{selected.objective}</div>
-          <div style={{ color: "#a6adc8", marginTop: 7, whiteSpace: "pre-wrap" }}>
-            {selected.description ?? "No description provided."}
-          </div>
-          <dl
-            style={{
-              display: "grid",
-              gridTemplateColumns: "55px minmax(0, 1fr)",
-              gap: "5px 8px",
-              margin: "9px 0 0",
-            }}
-          >
-            <dt style={{ color: "#6c7086" }}>Path</dt>
-            <dd style={{ margin: 0, fontFamily: "monospace", overflowWrap: "anywhere" }}>
-              {selected.path}
-            </dd>
-            <dt style={{ color: "#6c7086" }}>Hash</dt>
-            <dd style={{ margin: 0, fontFamily: "monospace", overflowWrap: "anywhere" }}>
-              {selected.hash}
-            </dd>
-          </dl>
-          <div style={{ marginTop: 10 }}>
-            <ActionButton
-              testId="loop-run-selected"
-              label="Run"
-              icon={PlayIcon}
-              disabled={busy || runIsActive}
-              onClick={onRun}
-            />
-          </div>
-        </section>
-      )}
-
-      {catalog.invalid.length > 0 && (
-        <section data-testid="loop-invalid-definitions" style={sectionStyle}>
-          <h2 style={{ ...headingStyle, color: "#f38ba8" }}>Invalid definitions</h2>
-          {catalog.invalid.map((invalid) => (
-            <div
-              key={`${invalid.path}:${invalid.error}`}
-              style={{
-                marginTop: 7,
-                padding: 8,
-                borderLeft: "2px solid #f38ba8",
-                background: "#24171d",
-              }}
-            >
-              <div style={{ fontFamily: "monospace", overflowWrap: "anywhere" }}>
-                {invalid.path}
-              </div>
-              <div style={{ color: "#f5c2e7", marginTop: 3 }}>{invalid.error}</div>
-            </div>
-          ))}
-        </section>
-      )}
-    </>
-  );
-}
-
-function DefinitionsEditorPanel({
+/**
+ * Definitions tab: the catalog on the left, the YAML editor on the right.
+ *
+ * Mirrors the Repo Explorer diff layout so selecting a definition and reading
+ * its source is the same gesture as selecting a file and reading its diff. Run
+ * lives in the toolbar because it acts on the selection, not on the editor.
+ */
+function DefinitionsPanel({
   catalog,
   selectedPath,
   editorSnapshot,
   editorRevision,
+  busy,
+  runIsActive,
   onSelect,
   onSnapshotChange,
+  onRun,
 }: {
   catalog: LoopDefinitionCatalog;
   selectedPath: string | null;
   editorSnapshot: BufferSnapshot | null;
   editorRevision: number;
+  busy: boolean;
+  runIsActive: boolean;
   onSelect: (path: string) => void;
   onSnapshotChange: (snapshot: BufferSnapshot | null) => void;
+  onRun: () => void;
 }) {
   const selectedDefinition = catalog.definitions.find(
     (definition) => definition.path === selectedPath,
@@ -439,127 +384,144 @@ function DefinitionsEditorPanel({
     selectedDefinition?.name ??
     selectedPath?.split(/[\\/]/).pop() ??
     "Loop definition";
+  const empty = catalog.definitions.length === 0 && catalog.invalid.length === 0;
 
   return (
     <div
       data-testid="loop-definitions-tab"
-      style={{
-        height: "100%",
-        minHeight: 0,
-        display: "grid",
-        gridTemplateRows: "auto minmax(0, 1fr)",
-      }}
+      style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}
     >
-      <div
-        style={{
-          padding: 8,
-          borderBottom: "1px solid #313244",
-          display: "flex",
-          gap: 6,
-          overflowX: "auto",
-        }}
-      >
-        {catalog.definitions.map((definition) => (
-          <button
-            key={definition.path}
-            type="button"
-            data-testid={`loop-edit-definition-${definition.id}`}
-            aria-pressed={definition.path === selectedPath}
-            onClick={() => onSelect(definition.path)}
-            style={{
-              ...buttonStyle,
-              flexShrink: 0,
-              borderColor:
-                definition.path === selectedPath ? "#89b4fa" : "#45475a",
-            }}
-          >
-            <DocumentTextIcon aria-hidden="true" style={iconStyle} />
-            {definition.name}
-          </button>
-        ))}
-        {catalog.invalid.map((definition, index) => (
-          <button
-            key={definition.path}
-            type="button"
-            data-testid={`loop-edit-invalid-${index}`}
-            aria-pressed={definition.path === selectedPath}
-            onClick={() => onSelect(definition.path)}
-            style={{
-              ...buttonStyle,
-              flexShrink: 0,
-              color: "#f5c2e7",
-              borderColor:
-                definition.path === selectedPath ? "#f38ba8" : "#45475a",
-            }}
-          >
-            <ExclamationTriangleIcon aria-hidden="true" style={iconStyle} />
-            {definition.path.split(/[\\/]/).pop()}
-          </button>
-        ))}
-        {catalog.definitions.length === 0 && catalog.invalid.length === 0 && (
-          <span style={{ color: "#a6adc8", padding: "5px 2px" }}>
-            No loop definitions found in this session&apos;s{" "}
-            <code>files/loops</code> folder.
-          </span>
-        )}
-      </div>
-
-      {selectedPath ? (
-        <div
+      <div style={toolbarStyle}>
+        <span
+          data-testid="loop-definition-title"
           style={{
-            minHeight: 0,
-            display: "grid",
-            gridTemplateRows: "auto minmax(0, 1fr)",
+            flex: 1,
+            minWidth: 0,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
           }}
         >
-          <div
-            data-testid="loop-definition-editor-header"
-            style={{
-              padding: "6px 10px",
-              borderBottom: "1px solid #313244",
-              background: "#181825",
-            }}
-          >
-            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-              <strong>
-                {selectedName}
-                {editorSnapshot?.dirty ? "*" : ""}
-              </strong>
-              {editorSnapshot?.dirty && (
-                <span style={{ color: "#f9e2af" }}>Unsaved</span>
-              )}
-            </div>
-            <div
-              style={{
-                color: "#6c7086",
-                fontFamily: "monospace",
-                overflowWrap: "anywhere",
-              }}
-            >
-              {selectedPath}
-            </div>
-            {selectedInvalid && (
-              <div style={{ color: "#f38ba8", marginTop: 3 }}>
-                {selectedInvalid.error}
+          <strong>
+            {selectedName}
+            {editorSnapshot?.dirty ? "*" : ""}
+          </strong>
+          {editorSnapshot?.dirty && (
+            <span style={{ color: "#f9e2af", marginLeft: 6 }}>Unsaved</span>
+          )}
+        </span>
+        <ActionButton
+          testId="loop-run-selected"
+          label="Run"
+          icon={PlayIcon}
+          disabled={busy || runIsActive || !selectedDefinition}
+          onClick={onRun}
+        />
+      </div>
+
+      <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
+        <div style={sidePanelStyle} data-testid="loop-definition-list">
+          <div style={{ flex: 1, overflowY: "auto" }}>
+            {empty && (
+              <div
+                data-testid="loop-definition-empty"
+                style={{ padding: 10, color: "#a6adc8", lineHeight: 1.5 }}
+              >
+                Create <code>files/loops/&lt;id&gt;.loop.yaml</code> in this
+                workstream&apos;s bound Copilot session, or use the{" "}
+                <code>create-loop</code> skill to author one.
               </div>
             )}
-          </div>
-          <div style={{ minHeight: 0 }}>
-            <FileEditorView
-              key={`${selectedPath}:${editorRevision}`}
-              path={selectedPath}
-              onBack={() => {}}
-              showHeader={false}
-              onSnapshotChange={onSnapshotChange}
-            />
+            {catalog.definitions.map((definition) => (
+              <DefinitionRow
+                key={definition.path}
+                testId={`loop-definition-${definition.id}`}
+                label={definition.name}
+                detail={feedbackMode(definition)}
+                selected={definition.path === selectedPath}
+                onSelect={() => onSelect(definition.path)}
+              />
+            ))}
+            {catalog.invalid.map((definition) => (
+              <DefinitionRow
+                key={definition.path}
+                testId={`loop-definition-invalid-${definition.path
+                  .split(/[\\/]/)
+                  .pop()}`}
+                label={definition.path.split(/[\\/]/).pop() ?? definition.path}
+                detail="Invalid definition"
+                invalid
+                selected={definition.path === selectedPath}
+                onSelect={() => onSelect(definition.path)}
+              />
+            ))}
           </div>
         </div>
-      ) : (
-        <div style={{ padding: 12, color: "#6c7086" }}>
-          Create a YAML definition with the <code>create-loop</code> skill,
-          then refresh the catalog.
+
+        <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
+          {selectedPath ? (
+            <>
+              <div
+                data-testid="loop-definition-editor-header"
+                style={{
+                  padding: "5px 10px",
+                  borderBottom: "1px solid #313244",
+                  background: "#181825",
+                }}
+              >
+                <div
+                  style={{
+                    color: "#6c7086",
+                    fontFamily: "monospace",
+                    overflowWrap: "anywhere",
+                  }}
+                >
+                  {selectedPath}
+                </div>
+                {selectedDefinition && (
+                  <div style={{ color: "#bac2de", marginTop: 2 }}>
+                    {selectedDefinition.objective}
+                  </div>
+                )}
+                {selectedDefinition && !selectedDefinition.portable && (
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 5,
+                      color: "#f9e2af",
+                      marginTop: 3,
+                    }}
+                  >
+                    <ExclamationTriangleIcon aria-hidden="true" style={iconStyle} />
+                    Not portable: this definition uses machine-specific
+                    configuration.
+                  </div>
+                )}
+                {selectedInvalid && (
+                  <div style={{ color: "#f38ba8", marginTop: 3 }}>
+                    {selectedInvalid.error}
+                  </div>
+                )}
+              </div>
+              <div style={{ flex: 1, minHeight: 0 }}>
+                <FileEditorView
+                  key={`${selectedPath}:${editorRevision}`}
+                  path={selectedPath}
+                  onBack={() => {}}
+                  showHeader={false}
+                  onSnapshotChange={onSnapshotChange}
+                />
+              </div>
+            </>
+          ) : (
+            <div style={{ padding: 12, color: "#6c7086" }}>
+              Create a YAML definition with the <code>create-loop</code> skill,
+              then refresh the catalog.
+            </div>
+          )}
         </div>
-      )}
+      </div>
     </div>
   );
 }
@@ -1411,6 +1373,220 @@ function RunPanel({
   );
 }
 
+const RUN_FILTER_LABELS: Record<LoopRunFilter, string> = {
+  all: "All",
+  running: "Running",
+  completed: "Completed",
+  attention: "Attention",
+};
+
+const RUN_STATE_COLORS: Partial<Record<LoopRunState, string>> = {
+  completed: "#a6e3a1",
+  attention: "#f9e2af",
+  killed: "#f38ba8",
+  paused: "#cba6f7",
+  awaiting_approval: "#cba6f7",
+};
+
+function runStateColor(state: LoopRunState): string {
+  return RUN_STATE_COLORS[state] ?? "#89b4fa";
+}
+
+function RunRow({
+  run,
+  selected,
+  onSelect,
+}: {
+  run: LoopRunSummary;
+  selected: boolean;
+  onSelect: () => void;
+}) {
+  const live = !TERMINAL_RUN_STATES.has(run.state);
+  return (
+    <button
+      type="button"
+      data-testid={`loop-run-row-${run.id}`}
+      aria-pressed={selected}
+      onClick={onSelect}
+      style={{
+        display: "block",
+        width: "100%",
+        textAlign: "left",
+        border: "none",
+        borderBottom: "1px solid #222",
+        borderLeft: `2px solid ${selected ? "#89b4fa" : "transparent"}`,
+        background: selected ? "#313244" : "transparent",
+        color: "#cdd6f4",
+        padding: "6px 8px",
+        cursor: "pointer",
+        font: "inherit",
+      }}
+    >
+      <span style={{ display: "flex", alignItems: "center", gap: 5 }}>
+        {live && (
+          <span
+            aria-hidden="true"
+            style={{
+              width: 6,
+              height: 6,
+              borderRadius: "50%",
+              background: runStateColor(run.state),
+              flexShrink: 0,
+            }}
+          />
+        )}
+        <span
+          style={{
+            flex: 1,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {run.definitionName ?? run.definitionId ?? "Loop run"}
+        </span>
+      </span>
+      <span
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          gap: 6,
+          marginTop: 2,
+          fontSize: 11,
+        }}
+      >
+        <span style={{ color: runStateColor(run.state) }}>
+          {stateLabel(run.state)}
+        </span>
+        <span style={{ color: "#6c7086" }}>{describeRun(run)}</span>
+      </span>
+    </button>
+  );
+}
+
+/**
+ * Loops tab: every run on the left, the selected run's evidence on the right.
+ *
+ * The list is filterable rather than showing only the newest run, so a finished
+ * run stays readable and several concurrent runs would each be reachable once
+ * the runtime allows them.
+ */
+function RunsPanel({
+  runs,
+  selectedRunId,
+  filter,
+  snapshot,
+  now,
+  busy,
+  loadingSnapshot,
+  onFilter,
+  onSelect,
+  onControl,
+  onResume,
+  onApproval,
+}: {
+  runs: LoopRunSummary[];
+  selectedRunId: string | null;
+  filter: LoopRunFilter;
+  snapshot: PersistedLoopSnapshot;
+  now: number;
+  busy: boolean;
+  loadingSnapshot: boolean;
+  onFilter: (filter: LoopRunFilter) => void;
+  onSelect: (runId: string) => void;
+  onControl: (action: "pause" | "stop" | "kill") => void;
+  onResume: () => void;
+  onApproval: (decision: LoopApprovalDecision, feedback?: string) => void;
+}) {
+  const counts = countRunsByFilter(runs);
+  const visible = orderRuns(runs.filter((run) => matchesRunFilter(run, filter)));
+
+  return (
+    <div
+      data-testid="loop-runs-tab"
+      style={{ flex: 1, minHeight: 0, display: "flex" }}
+    >
+      <div style={sidePanelStyle}>
+        <div
+          style={{
+            display: "flex",
+            flexWrap: "wrap",
+            gap: 3,
+            padding: "5px 6px",
+            borderBottom: "1px solid #313244",
+          }}
+        >
+          {LOOP_RUN_FILTERS.map((option) => (
+            <button
+              key={option}
+              type="button"
+              data-testid={`loop-run-filter-${option}`}
+              aria-pressed={filter === option}
+              onClick={() => onFilter(option)}
+              style={{
+                background: filter === option ? "#313244" : "transparent",
+                border: "none",
+                borderRadius: 3,
+                color: filter === option ? "#89b4fa" : "#a6adc8",
+                padding: "3px 7px",
+                fontSize: 11,
+                cursor: "pointer",
+                font: "inherit",
+              }}
+            >
+              {RUN_FILTER_LABELS[option]} ({counts[option]})
+            </button>
+          ))}
+        </div>
+        <div style={{ flex: 1, overflowY: "auto" }} data-testid="loop-run-list">
+          {visible.length === 0 ? (
+            <div
+              data-testid="loop-run-list-empty"
+              style={{ padding: 10, color: "#6c7086" }}
+            >
+              {runs.length === 0
+                ? "No loops have run yet. Start one from the Definitions tab."
+                : "No runs match this filter."}
+            </div>
+          ) : (
+            visible.map((run) => (
+              <RunRow
+                key={run.id}
+                run={run}
+                selected={run.id === selectedRunId}
+                onSelect={() => onSelect(run.id)}
+              />
+            ))
+          )}
+        </div>
+      </div>
+
+      <div style={{ ...scrollStyle, minWidth: 0 }} data-testid="loop-run-detail">
+        {selectedRunId === null ? (
+          <div style={{ color: "#6c7086" }}>Select a run on the left.</div>
+        ) : loadingSnapshot ? (
+          <div data-testid="loop-run-detail-loading">Loading run evidence...</div>
+        ) : (
+          <RunPanel
+            snapshot={snapshot}
+            now={now}
+            busy={busy}
+            onControl={onControl}
+            onResume={onResume}
+            onApproval={onApproval}
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+const TABS = [
+  { id: "definitions" as const, label: "Definitions", icon: DocumentTextIcon },
+  { id: "loops" as const, label: "Loops", icon: ArrowPathRoundedSquareIcon },
+];
+
+type LoopTabId = (typeof TABS)[number]["id"];
+
 export default function LoopControlTile({
   tileId,
   workstreamId,
@@ -1421,10 +1597,12 @@ export default function LoopControlTile({
   const [snapshot, setSnapshot] = useState<PersistedLoopSnapshot>(EMPTY_SNAPSHOT);
   const [catalog, setCatalog] = useState<LoopDefinitionCatalog>(EMPTY_CATALOG);
   const catalogRef = useRef<LoopDefinitionCatalog>(EMPTY_CATALOG);
-  const [activeTab, setActiveTab] = useState<"run" | "definitions">("run");
-  const [selectedDefinitionId, setSelectedDefinitionId] = useState<string | null>(
-    null,
-  );
+  const [activeTab, setActiveTab] = useState<LoopTabId>("definitions");
+  const [runs, setRuns] = useState<LoopRunSummary[]>([]);
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
+  const selectedRunIdRef = useRef<string | null>(null);
+  const [runFilter, setRunFilter] = useState<LoopRunFilter>("all");
+  const [loadingSnapshot, setLoadingSnapshot] = useState(false);
   const [editorPath, setEditorPath] = useState<string | null>(null);
   const editorPathRef = useRef<string | null>(null);
   const [editorRevision, setEditorRevision] = useState(0);
@@ -1437,6 +1615,11 @@ export default function LoopControlTile({
   const [error, setError] = useState<string | null>(null);
   const [now, setNow] = useState(0);
   const progressVersionRef = useRef("");
+
+  const selectRun = useCallback((runId: string | null) => {
+    selectedRunIdRef.current = runId;
+    setSelectedRunId(runId);
+  }, []);
 
   const applyCatalog = useCallback((loaded: LoopDefinitionCatalog) => {
     catalogRef.current = loaded;
@@ -1451,70 +1634,92 @@ export default function LoopControlTile({
         : paths[0] ?? null;
     editorPathRef.current = retainedPath;
     setEditorPath(retainedPath);
-    setSelectedDefinitionId((current) => {
-      const selectedByPath = loaded.definitions.find(
-        (definition) => definition.path === retainedPath,
-      );
-      if (selectedByPath) return selectedByPath.id;
-      if (current && loaded.definitions.some((definition) => definition.id === current)) {
-        return current;
-      }
-      return loaded.definitions[0]?.id ?? null;
-    });
   }, []);
 
-  const loadSnapshot = useCallback(async () => {
-    try {
-      const loaded = await backend.getWorkstreamLoopSnapshot(workstreamId);
+  /**
+   * Loads the run list and keeps a valid selection.
+   *
+   * Defaults to the newest run so opening the tab shows current work, but never
+   * moves a selection the operator made themselves.
+   */
+  const loadRuns = useCallback(async (): Promise<LoopRunSummary[]> => {
+    const loaded = await backend.listWorkstreamLoopRuns(workstreamId);
+    setRuns(loaded);
+    const ordered = orderRuns(loaded);
+    const current = selectedRunIdRef.current;
+    if (!current || !loaded.some((run) => run.id === current)) {
+      selectRun(ordered[0]?.id ?? null);
+    }
+    return loaded;
+  }, [backend, selectRun, workstreamId]);
+
+  const loadRunSnapshot = useCallback(
+    async (runId: string | null) => {
+      if (!runId) {
+        setSnapshot(EMPTY_SNAPSHOT);
+        return;
+      }
+      const loaded = await backend.getLoopRunSnapshot(runId);
       setSnapshot(loaded);
       setNow(Date.now());
+    },
+    [backend],
+  );
+
+  const loadProgress = useCallback(async () => {
+    try {
+      await loadRuns();
+      await loadRunSnapshot(selectedRunIdRef.current);
       setError(null);
     } catch (cause) {
       setError(message(cause));
     }
-  }, [backend, workstreamId]);
+  }, [loadRunSnapshot, loadRuns]);
 
-  const refreshAll = useCallback(async (saveEditor = false): Promise<boolean> => {
-    setRefreshing(true);
-    try {
-      if (saveEditor) {
-        const loopPaths = new Set([
-          ...catalogRef.current.definitions.map((definition) => definition.path),
-          ...catalogRef.current.invalid.map((definition) => definition.path),
-        ]);
-        const dirtyDefinitions = fileBufferRegistry
-          .listAll()
-          .filter((buffer) => buffer.dirty && loopPaths.has(buffer.path));
-        for (const buffer of dirtyDefinitions) {
-          let current = fileBufferRegistry.getSnapshot(buffer.path);
-          while (current?.dirty) {
-            if (current.state !== "dirty" && current.state !== "deleted") {
-              throw new Error(
-                current.lastError ?? `Save ${buffer.path} before continuing`,
-              );
+  const refreshAll = useCallback(
+    async (saveEditor = false): Promise<boolean> => {
+      setRefreshing(true);
+      try {
+        if (saveEditor) {
+          const loopPaths = new Set([
+            ...catalogRef.current.definitions.map((definition) => definition.path),
+            ...catalogRef.current.invalid.map((definition) => definition.path),
+          ]);
+          const dirtyDefinitions = fileBufferRegistry
+            .listAll()
+            .filter((buffer) => buffer.dirty && loopPaths.has(buffer.path));
+          for (const buffer of dirtyDefinitions) {
+            let current = fileBufferRegistry.getSnapshot(buffer.path);
+            while (current?.dirty) {
+              if (current.state !== "dirty" && current.state !== "deleted") {
+                throw new Error(
+                  current.lastError ?? `Save ${buffer.path} before continuing`,
+                );
+              }
+              await fileBufferRegistry.save(buffer.path);
+              current = fileBufferRegistry.getSnapshot(buffer.path);
             }
-            await fileBufferRegistry.save(buffer.path);
-            current = fileBufferRegistry.getSnapshot(buffer.path);
           }
         }
+        const [, loadedCatalog] = await Promise.all([
+          loadRuns(),
+          backend.listLoopDefinitions(workstreamId),
+        ]);
+        applyCatalog(loadedCatalog);
+        await loadRunSnapshot(selectedRunIdRef.current);
+        setNow(Date.now());
+        setError(null);
+        return true;
+      } catch (cause) {
+        setError(message(cause));
+        return false;
+      } finally {
+        setLoading(false);
+        setRefreshing(false);
       }
-      const [loadedSnapshot, loadedCatalog] = await Promise.all([
-        backend.getWorkstreamLoopSnapshot(workstreamId),
-        backend.listLoopDefinitions(workstreamId),
-      ]);
-      setSnapshot(loadedSnapshot);
-      applyCatalog(loadedCatalog);
-      setNow(Date.now());
-      setError(null);
-      return true;
-    } catch (cause) {
-      setError(message(cause));
-      return false;
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
-  }, [applyCatalog, backend, workstreamId]);
+    },
+    [applyCatalog, backend, loadRunSnapshot, loadRuns, workstreamId],
+  );
 
   useEffect(() => {
     const initialLoad = window.setTimeout(() => void refreshAll(), 0);
@@ -1524,7 +1729,7 @@ export default function LoopControlTile({
         event instanceof CustomEvent &&
         event.detail?.workstreamId === workstreamId
       ) {
-        void loadSnapshot();
+        void loadProgress();
       }
     };
     window.addEventListener("memory-loop-updated", onMemoryUpdate);
@@ -1533,7 +1738,7 @@ export default function LoopControlTile({
     let unlisten: (() => void) | undefined;
     void listen<{ workstreamId?: string }>("loop-updated", (event) => {
       if (!event.payload?.workstreamId || event.payload.workstreamId === workstreamId) {
-        void loadSnapshot();
+        void loadProgress();
       }
     })
       .then((dispose) => {
@@ -1550,19 +1755,20 @@ export default function LoopControlTile({
       window.removeEventListener("memory-loop-updated", onMemoryUpdate);
       unlisten?.();
     };
-  }, [loadSnapshot, refreshAll, workstreamId]);
+  }, [loadProgress, refreshAll, workstreamId]);
 
-  const runIsActive =
-    snapshot.latestRun !== null &&
-    !TERMINAL_RUN_STATES.has(snapshot.latestRun.state);
-  const activeRunId = runIsActive ? snapshot.latestRun?.id ?? null : null;
+  const selectedRun = runs.find((run) => run.id === selectedRunId) ?? null;
+  /** Any in-flight run blocks a new one: the runtime allows one at a time. */
+  const runIsActive = runs.some((run) => !TERMINAL_RUN_STATES.has(run.state));
+  const selectedRunIsActive =
+    selectedRun !== null && !TERMINAL_RUN_STATES.has(selectedRun.state);
 
   useEffect(() => {
     progressVersionRef.current = "";
-  }, [activeRunId]);
+  }, [selectedRunId]);
 
   useEffect(() => {
-    if (!runIsActive) return;
+    if (!selectedRunIsActive) return;
     const interval = window.setInterval(() => {
       setNow(Date.now());
       void backend
@@ -1570,13 +1776,13 @@ export default function LoopControlTile({
         .then((version) => {
           if (version !== progressVersionRef.current) {
             progressVersionRef.current = version;
-            void loadSnapshot();
+            void loadProgress();
           }
         })
         .catch((cause) => setError(message(cause)));
     }, 1000);
     return () => window.clearInterval(interval);
-  }, [backend, loadSnapshot, runIsActive, workstreamId]);
+  }, [backend, loadProgress, selectedRunIsActive, workstreamId]);
 
   const perform = useCallback(
     async (operation: () => Promise<void>) => {
@@ -1585,26 +1791,29 @@ export default function LoopControlTile({
       setError(null);
       try {
         await operation();
-        await loadSnapshot();
+        await loadProgress();
       } catch (cause) {
         setError(message(cause));
       } finally {
         setBusy(false);
       }
     },
-    [busy, loadSnapshot],
+    [busy, loadProgress],
   );
 
   const selectedDefinition = useMemo(
     () =>
       catalog.definitions.find(
-        (definition) => definition.id === selectedDefinitionId,
-      ) ??
-      catalog.definitions[0] ??
-      null,
-    [catalog.definitions, selectedDefinitionId],
+        (definition) => definition.path === editorPath,
+      ) ?? null,
+    [catalog.definitions, editorPath],
   );
 
+  /**
+   * Runs the definition currently open in the editor, then shows the run it
+   * created. Saving and reparsing first means the run pins the YAML on screen
+   * rather than the last-loaded copy.
+   */
   const runSelected = async () => {
     if (!selectedDefinition) return;
     if (!(await refreshAll(true))) return;
@@ -1615,42 +1824,32 @@ export default function LoopControlTile({
       setError("The selected loop definition is no longer valid");
       return;
     }
+    const before = new Set(runs.map((run) => run.id));
     void perform(async () => {
-      await backend.runLoopDefinitionNow(workstreamId, refreshedDefinition.path);
+      const started = await backend.runLoopDefinitionNow(
+        workstreamId,
+        refreshedDefinition.path,
+      );
+      const startedId = started?.id ?? null;
+      if (startedId) selectRun(startedId);
+      else {
+        const latest = orderRuns(await backend.listWorkstreamLoopRuns(workstreamId));
+        const fresh = latest.find((run) => !before.has(run.id)) ?? latest[0];
+        if (fresh) selectRun(fresh.id);
+      }
+      setActiveTab("loops");
     });
-  };
-
-  const selectRunDefinition = (definitionId: string) => {
-    setSelectedDefinitionId(definitionId);
-    const definition = catalog.definitions.find(
-      (candidate) => candidate.id === definitionId,
-    );
-    if (definition) {
-      editorPathRef.current = definition.path;
-      setEditorPath(definition.path);
-    }
   };
 
   const selectEditorPath = (path: string) => {
     editorPathRef.current = path;
     setEditorPath(path);
-    const definition = catalog.definitions.find(
-      (candidate) => candidate.path === path,
-    );
-    if (definition) setSelectedDefinitionId(definition.id);
   };
 
   const refreshCatalogAndEditor = async () => {
     const refreshed = await refreshAll(true);
     if (refreshed && activeTab === "definitions") {
       setEditorRevision((revision) => revision + 1);
-    }
-  };
-
-  const showRunTab = async () => {
-    if (activeTab === "run") return;
-    if (await refreshAll(true)) {
-      setActiveTab("run");
     }
   };
 
@@ -1661,17 +1860,26 @@ export default function LoopControlTile({
     [],
   );
 
+  const openRun = useCallback(
+    (runId: string) => {
+      selectRun(runId);
+      setLoadingSnapshot(true);
+      void loadRunSnapshot(runId)
+        .catch((cause) => setError(message(cause)))
+        .finally(() => setLoadingSnapshot(false));
+    },
+    [loadRunSnapshot, selectRun],
+  );
+
   const control = (action: "pause" | "stop" | "kill") => {
-    const currentRun = snapshot.latestRun;
-    if (!currentRun) return;
-    void perform(() => backend.controlWorkstreamLoop(currentRun.id, action));
+    if (!selectedRunId) return;
+    void perform(() => backend.controlWorkstreamLoop(selectedRunId, action));
   };
 
   const resume = () => {
-    const currentRun = snapshot.latestRun;
-    if (!currentRun) return;
+    if (!selectedRunId) return;
     void perform(async () => {
-      await backend.resumeWorkstreamLoop(currentRun.id);
+      await backend.resumeWorkstreamLoop(selectedRunId);
     });
   };
 
@@ -1679,18 +1887,11 @@ export default function LoopControlTile({
     decision: LoopApprovalDecision,
     feedback?: string,
   ) => {
-    const currentRun = snapshot.latestRun;
-    if (!currentRun) return;
+    if (!selectedRunId) return;
     void perform(async () => {
-      await backend.decideLoopHumanApproval(currentRun.id, decision, feedback);
+      await backend.decideLoopHumanApproval(selectedRunId, decision, feedback);
     });
   };
-
-  const stateAction: LoopAction | null = snapshot.latestRun?.pendingAction ?? null;
-  const statusHint = useMemo(
-    () => (stateAction ? `Pending action: ${stateAction.type}` : null),
-    [stateAction],
-  );
 
   return (
     <div
@@ -1699,46 +1900,33 @@ export default function LoopControlTile({
       tabIndex={isFocused ? 0 : -1}
       style={rootStyle}
     >
-      <header
-        data-testid="loop-catalog"
-        style={{
-          display: "flex",
-          alignItems: "center",
-          padding: "0 10px",
-          borderBottom: "1px solid #313244",
-          flexShrink: 0,
-        }}
-      >
-        <strong style={{ marginRight: 10 }}>Goal Loop</strong>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={activeTab === "run"}
-          data-testid="loop-tab-run"
-          onClick={() => void showRunTab()}
-          style={{
-            ...tabStyle,
-            color: activeTab === "run" ? "#cdd6f4" : "#a6adc8",
-            borderBottomColor: activeTab === "run" ? "#89b4fa" : "transparent",
-          }}
-        >
-          Run
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={activeTab === "definitions"}
-          data-testid="loop-tab-definitions"
-          onClick={() => setActiveTab("definitions")}
-          style={{
-            ...tabStyle,
-            color: activeTab === "definitions" ? "#cdd6f4" : "#a6adc8",
-            borderBottomColor:
-              activeTab === "definitions" ? "#89b4fa" : "transparent",
-          }}
-        >
-          Definitions
-        </button>
+      <div style={tabBarStyle} data-testid="loop-tabs">
+        {TABS.map(({ id, label, icon: Icon }) => {
+          const active = activeTab === id;
+          return (
+            <button
+              key={id}
+              type="button"
+              role="tab"
+              aria-selected={active}
+              data-testid={`loop-tab-${id}`}
+              data-active={active ? "true" : "false"}
+              onClick={() => setActiveTab(id)}
+              style={{
+                ...tabButtonStyle,
+                color: active ? "#cdd6f4" : "#6c7086",
+                borderBottom: active
+                  ? "2px solid #89b4fa"
+                  : "2px solid transparent",
+                background: active ? "#1e1e2e" : "transparent",
+              }}
+            >
+              <Icon style={{ width: 12, height: 12 }} />
+              {label}
+            </button>
+          );
+        })}
+        <div style={{ flex: 1 }} />
         <button
           type="button"
           aria-label="Refresh"
@@ -1746,88 +1934,65 @@ export default function LoopControlTile({
           disabled={busy || refreshing}
           onClick={() => void refreshCatalogAndEditor()}
           style={{
-            ...buttonStyle,
-            marginLeft: "auto",
+            ...tabButtonStyle,
+            color: "#a6adc8",
             cursor: busy || refreshing ? "not-allowed" : "pointer",
             opacity: busy || refreshing ? 0.55 : 1,
           }}
         >
-          <ArrowPathIcon aria-hidden="true" style={iconStyle} />
+          <ArrowPathIcon aria-hidden="true" style={{ width: 12, height: 12 }} />
           Refresh
         </button>
-      </header>
-
-      <div
-        style={
-          activeTab === "run"
-            ? scrollStyle
-            : { flex: 1, minHeight: 0, overflow: "hidden" }
-        }
-      >
-        {error && (
-          <div
-            role="alert"
-            data-testid="loop-error"
-            style={{
-              background: "#45242b",
-              border: "1px solid #f38ba8",
-              color: "#f5c2e7",
-              borderRadius: 4,
-              padding: 8,
-              marginBottom: 10,
-            }}
-          >
-            {error}
-          </div>
-        )}
-
-        {loading ? (
-          <div data-testid="loop-loading">Loading loop catalog...</div>
-        ) : activeTab === "definitions" ? (
-          <DefinitionsEditorPanel
-            catalog={catalog}
-            selectedPath={editorPath}
-            editorSnapshot={editorSnapshot}
-            editorRevision={editorRevision}
-            onSelect={selectEditorPath}
-            onSnapshotChange={handleEditorSnapshotChange}
-          />
-        ) : (
-          <>
-            {snapshot.latestRun && (
-              <RunPanel
-                snapshot={snapshot}
-                now={now}
-                busy={busy}
-                onControl={control}
-                onResume={resume}
-                onApproval={decideApproval}
-              />
-            )}
-            <CatalogPanel
-              catalog={catalog}
-              selected={selectedDefinition}
-              busy={busy}
-              runIsActive={runIsActive}
-              onSelect={selectRunDefinition}
-              onRun={() => void runSelected()}
-            />
-            {statusHint && (
-              <div style={{ color: "#6c7086", marginBottom: 8 }}>{statusHint}</div>
-            )}
-            {!snapshot.latestRun && (
-              <RunPanel
-                snapshot={snapshot}
-                now={now}
-                busy={busy}
-                onControl={control}
-                onResume={resume}
-                onApproval={decideApproval}
-              />
-            )}
-          </>
-        )}
       </div>
+
+      {error && (
+        <div
+          role="alert"
+          data-testid="loop-error"
+          style={{
+            background: "#45242b",
+            border: "1px solid #f38ba8",
+            color: "#f5c2e7",
+            padding: 8,
+            flexShrink: 0,
+          }}
+        >
+          {error}
+        </div>
+      )}
+
+      {loading ? (
+        <div data-testid="loop-loading" style={{ padding: 10 }}>
+          Loading loop catalog...
+        </div>
+      ) : activeTab === "definitions" ? (
+        <DefinitionsPanel
+          catalog={catalog}
+          selectedPath={editorPath}
+          editorSnapshot={editorSnapshot}
+          editorRevision={editorRevision}
+          busy={busy}
+          runIsActive={runIsActive}
+          onSelect={selectEditorPath}
+          onSnapshotChange={handleEditorSnapshotChange}
+          onRun={() => void runSelected()}
+        />
+      ) : (
+        <RunsPanel
+          runs={runs}
+          selectedRunId={selectedRunId}
+          filter={runFilter}
+          snapshot={snapshot}
+          now={now}
+          busy={busy}
+          loadingSnapshot={loadingSnapshot}
+          onFilter={setRunFilter}
+          onSelect={openRun}
+          onControl={control}
+          onResume={resume}
+          onApproval={decideApproval}
+        />
+      )}
     </div>
   );
 }

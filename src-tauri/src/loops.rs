@@ -141,6 +141,8 @@ pub struct LoopRun {
     pub deadline_at: String,
     pub definition_hash: Option<String>,
     pub definition_yaml: Option<String>,
+    pub definition_id: Option<String>,
+    pub definition_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -531,6 +533,8 @@ pub fn init_loop_schema(conn: &Connection) -> rusqlite::Result<()> {
         "ALTER TABLE loop_specs ADD COLUMN verifier_timeout_seconds INTEGER",
         "ALTER TABLE loop_runs ADD COLUMN definition_hash TEXT",
         "ALTER TABLE loop_runs ADD COLUMN definition_yaml TEXT",
+        "ALTER TABLE loop_runs ADD COLUMN definition_id TEXT",
+        "ALTER TABLE loop_runs ADD COLUMN definition_name TEXT",
         "ALTER TABLE loop_tasks ADD COLUMN definition_id TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE loop_specs ADD COLUMN human_approval_prompt TEXT",
         "ALTER TABLE loop_specs ADD COLUMN max_tasks_per_cycle INTEGER NOT NULL DEFAULT 1",
@@ -973,12 +977,14 @@ fn decode_run_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<LoopRun> {
         deadline_at: row.get(8)?,
         definition_hash: row.get(9)?,
         definition_yaml: row.get(10)?,
+        definition_id: row.get(11)?,
+        definition_name: row.get(12)?,
     })
 }
 
 const RUN_COLUMNS: &str = "id, loop_spec_id, state, current_task_id,
     control_requested, error, started_at, finished_at, deadline_at,
-    definition_hash, definition_yaml";
+    definition_hash, definition_yaml, definition_id, definition_name";
 
 pub fn create_loop_run(
     conn: &Connection,
@@ -1012,15 +1018,17 @@ pub fn create_loop_run(
     conn.execute(
         "INSERT INTO loop_runs (
             id, loop_spec_id, state, control_requested, started_at, deadline_at,
-            definition_hash, definition_yaml
-         ) VALUES (?1, ?2, 'starting', 'none', ?3, ?4, ?5, ?6)",
+            definition_hash, definition_yaml, definition_id, definition_name
+         ) VALUES (?1, ?2, 'starting', 'none', ?3, ?4, ?5, ?6, ?7, ?8)",
         params![
             id,
             loop_spec_id,
             started_at,
             deadline_at,
             spec.definition_hash,
-            spec.definition_yaml
+            spec.definition_yaml,
+            spec.definition_id,
+            spec.definition_name
         ],
     )
     .map_err(|error| format!("Failed to create loop run: {error}"))?;
@@ -3174,6 +3182,91 @@ pub struct LoopSummary {
     pub started_at: Option<String>,
 }
 
+/// One row in the Loops list.
+///
+/// Deliberately not a [`LoopRun`]: the list renders dozens of rows and needs
+/// counts rather than the pinned YAML, which is large and only wanted once a
+/// row is selected.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LoopRunSummary {
+    pub id: String,
+    pub loop_spec_id: String,
+    pub state: LoopRunState,
+    pub started_at: String,
+    pub finished_at: Option<String>,
+    pub definition_id: Option<String>,
+    pub definition_name: Option<String>,
+    pub task_total: u32,
+    pub task_attention: u32,
+}
+
+/// Every run for a workstream, newest first.
+///
+/// The run's own `definition_id`/`definition_name` are recorded at creation
+/// rather than read from the spec: selecting a different definition rewrites
+/// the single per-workstream spec row, so a historical run would otherwise be
+/// labelled with whatever definition happens to be selected today.
+pub(crate) fn list_loop_runs(
+    conn: &Connection,
+    workstream_id: &str,
+) -> Result<Vec<LoopRunSummary>, String> {
+    let Some(spec) = get_loop_spec(conn, workstream_id)? else {
+        return Ok(Vec::new());
+    };
+    let mut statement = conn
+        .prepare(
+            "SELECT r.id, r.loop_spec_id, r.state, r.started_at, r.finished_at,
+                    r.definition_id, r.definition_name,
+                    (SELECT COUNT(*) FROM loop_tasks t WHERE t.loop_run_id = r.id),
+                    (SELECT COUNT(*) FROM loop_tasks t
+                      WHERE t.loop_run_id = r.id
+                        AND t.state IN ('attention', 'blocked'))
+             FROM loop_runs r
+             WHERE r.loop_spec_id = ?1
+             ORDER BY r.rowid DESC",
+        )
+        .map_err(|error| format!("Failed to prepare loop run query: {error}"))?;
+    let rows = statement
+        .query_map([&spec.id], |row| {
+            let state: String = row.get(2)?;
+            Ok(LoopRunSummary {
+                id: row.get(0)?,
+                loop_spec_id: row.get(1)?,
+                state: LoopRunState::parse(&state)?,
+                started_at: row.get(3)?,
+                finished_at: row.get(4)?,
+                definition_id: row.get(5)?,
+                definition_name: row.get(6)?,
+                task_total: row.get::<_, i64>(7)? as u32,
+                task_attention: row.get::<_, i64>(8)? as u32,
+            })
+        })
+        .map_err(|error| format!("Failed to list loop runs: {error}"))?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|error| format!("Failed to decode loop runs: {error}"))
+}
+
+/// A snapshot scoped to one run rather than the workstream's latest.
+///
+/// The Loops list lets an operator open any past run, so evidence has to be
+/// addressable by run id.
+pub(crate) fn loop_run_snapshot(conn: &Connection, run_id: &str) -> Result<LoopSnapshot, String> {
+    let Some(run) = get_loop_run(conn, run_id)? else {
+        return Err(format!("Loop run not found: {run_id}"));
+    };
+    let spec = get_loop_spec_by_id(conn, &run.loop_spec_id)?;
+    Ok(LoopSnapshot {
+        spec,
+        tasks: list_loop_tasks(conn, run_id)?,
+        verifications: list_verifications(conn, run_id)?,
+        evaluations: list_evaluations(conn, run_id)?,
+        approvals: list_approvals(conn, run_id)?,
+        stages: list_stages(conn, run_id)?,
+        events: list_loop_events(conn, run_id)?,
+        latest_run: Some(run),
+    })
+}
+
 fn latest_loop_run(conn: &Connection, loop_spec_id: &str) -> Result<Option<LoopRun>, String> {
     conn.query_row(
         &format!(
@@ -3420,6 +3513,22 @@ pub fn get_workstream_loop_snapshot(
     workstream_id: String,
 ) -> Result<LoopSnapshot, String> {
     loop_snapshot(&state.db.lock().unwrap(), &workstream_id)
+}
+
+#[tauri::command]
+pub fn list_workstream_loop_runs(
+    state: tauri::State<'_, crate::AppState>,
+    workstream_id: String,
+) -> Result<Vec<LoopRunSummary>, String> {
+    list_loop_runs(&state.db.lock().unwrap(), &workstream_id)
+}
+
+#[tauri::command]
+pub fn get_loop_run_snapshot(
+    state: tauri::State<'_, crate::AppState>,
+    run_id: String,
+) -> Result<LoopSnapshot, String> {
+    loop_run_snapshot(&state.db.lock().unwrap(), &run_id)
 }
 
 fn workstream_loop_paths(
@@ -6469,6 +6578,116 @@ mod tests {
                 .expect_err("missing key must fail");
 
         assert!(error.contains("key"));
+    }
+
+    #[test]
+    fn loop_runs_are_listed_newest_first_with_task_counts() {
+        let conn = test_db();
+        let spec = save_loop_spec(&conn, "ws-1", spec_input()).expect("save spec");
+        set_loop_enabled(&conn, &spec.id, true).expect("enable loop");
+
+        let first = create_loop_run(&conn, &spec.id, 600).expect("first run");
+        set_run_state(&conn, &first.id, LoopRunState::Completed, None).expect("finish first");
+        let second = create_loop_run(&conn, &spec.id, 600).expect("second run");
+        let queued = enqueue_task(
+            &conn,
+            &second.id,
+            &spec.id,
+            &DiscoveredTask {
+                key: "needs-help".to_string(),
+                title: "Needs help".to_string(),
+                objective: "Fix the failure".to_string(),
+            },
+        )
+        .expect("enqueue")
+        .expect("task");
+        set_task_state(&conn, &queued.id, LoopTaskState::Attention, None).expect("attention");
+
+        let runs = list_loop_runs(&conn, "ws-1").expect("list runs");
+
+        assert_eq!(runs.len(), 2);
+        assert_eq!(runs[0].id, second.id, "newest run must sort first");
+        assert_eq!(runs[0].task_total, 1);
+        assert_eq!(runs[0].task_attention, 1);
+        assert_eq!(runs[1].id, first.id);
+        assert_eq!(runs[1].state, LoopRunState::Completed);
+        assert_eq!(runs[1].task_total, 0);
+    }
+
+    #[test]
+    fn listing_loop_runs_without_a_spec_is_empty_rather_than_an_error() {
+        let conn = test_db();
+        assert!(list_loop_runs(&conn, "ws-1").expect("list runs").is_empty());
+    }
+
+    #[test]
+    fn a_run_keeps_the_definition_it_started_with() {
+        // Selecting another definition rewrites the single per-workstream spec
+        // row, so the run must carry its own identity or the Loops list would
+        // relabel history.
+        let conn = test_db();
+        let spec = save_loop_spec(&conn, "ws-1", spec_input()).expect("save spec");
+        set_loop_enabled(&conn, &spec.id, true).expect("enable loop");
+        conn.execute(
+            "UPDATE loop_specs SET definition_id = 'first-loop', definition_name = 'First loop'
+             WHERE id = ?1",
+            [&spec.id],
+        )
+        .expect("label the first definition");
+
+        let run = create_loop_run(&conn, &spec.id, 600).expect("run");
+        set_run_state(&conn, &run.id, LoopRunState::Completed, None).expect("finish");
+
+        conn.execute(
+            "UPDATE loop_specs SET definition_id = 'second-loop', definition_name = 'Second loop'
+             WHERE id = ?1",
+            [&spec.id],
+        )
+        .expect("reselect a different definition");
+
+        let runs = list_loop_runs(&conn, "ws-1").expect("list runs");
+        assert_eq!(runs[0].definition_id.as_deref(), Some("first-loop"));
+        assert_eq!(runs[0].definition_name.as_deref(), Some("First loop"));
+    }
+
+    #[test]
+    fn a_run_snapshot_is_addressable_by_run_id() {
+        let conn = test_db();
+        let spec = save_loop_spec(&conn, "ws-1", spec_input()).expect("save spec");
+        set_loop_enabled(&conn, &spec.id, true).expect("enable loop");
+        let older = create_loop_run(&conn, &spec.id, 600).expect("older run");
+        let task = enqueue_task(
+            &conn,
+            &older.id,
+            &spec.id,
+            &DiscoveredTask {
+                key: "older-task".to_string(),
+                title: "Older task".to_string(),
+                objective: "Historical work".to_string(),
+            },
+        )
+        .expect("enqueue")
+        .expect("task");
+        set_task_state(&conn, &task.id, LoopTaskState::Accepted, None).expect("accept");
+        set_run_state(&conn, &older.id, LoopRunState::Completed, None).expect("finish older");
+        create_loop_run(&conn, &spec.id, 600).expect("newer run");
+
+        let snapshot = loop_run_snapshot(&conn, &older.id).expect("older snapshot");
+
+        assert_eq!(
+            snapshot.latest_run.as_ref().map(|run| run.id.clone()),
+            Some(older.id)
+        );
+        assert_eq!(snapshot.tasks.len(), 1);
+        assert_eq!(snapshot.tasks[0].key, "older-task");
+        assert!(snapshot.spec.is_some());
+    }
+
+    #[test]
+    fn an_unknown_run_snapshot_reports_the_missing_id() {
+        let conn = test_db();
+        let error = loop_run_snapshot(&conn, "missing-run").expect_err("must fail");
+        assert!(error.contains("missing-run"));
     }
 
     #[test]

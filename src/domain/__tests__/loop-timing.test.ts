@@ -1,13 +1,24 @@
 import { describe, expect, it } from "vitest";
 
-import type { LoopRun, LoopStageRecord, LoopTask } from "../loop";
 import {
+  LOOP_RUN_STATES,
+  type LoopRun,
+  type LoopRunSummary,
+  type LoopStageRecord,
+  type LoopTask,
+} from "../loop";
+import {
+  countRunsByFilter,
+  describeRun,
+  matchesRunFilter,
   matchesTaskFilter,
+  orderRuns,
   orderTasks,
   stagesForTask,
   summarizeRunTiming,
   summarizeTaskTiming,
   taskHeadline,
+  type LoopRunFilter,
   type LoopTaskFilter,
 } from "../loop-timing";
 
@@ -240,5 +251,100 @@ describe("loop timing summaries", () => {
     ]);
     expect(matching("accepted")).toEqual(["accepted"]);
     expect(matching("attention")).toEqual(["blocked", "attention", "interrupted"]);
+  });
+});
+
+describe("run filtering", () => {
+  const summary = (
+    state: LoopRunSummary["state"],
+    overrides: Partial<LoopRunSummary> = {},
+  ): LoopRunSummary => ({
+    id: `run-${state}`,
+    loopSpecId: "spec-1",
+    state,
+    startedAt: "2026-01-01T00:00:00Z",
+    taskTotal: 0,
+    taskAttention: 0,
+    ...overrides,
+  });
+
+  const matching = (filter: LoopRunFilter) =>
+    LOOP_RUN_STATES.map((state) => summary(state))
+      .filter((run) => matchesRunFilter(run, filter))
+      .map((run) => run.state);
+
+  it("treats every non-terminal state as running so concurrent runs group together", () => {
+    expect(matching("running")).toEqual([
+      "starting",
+      "resuming",
+      "orchestrating",
+      "working",
+      "verifying",
+      "evaluating",
+      "awaiting_approval",
+      "paused",
+      "stopping",
+    ]);
+  });
+
+  it("separates completed from states that stopped without finishing the goal", () => {
+    expect(matching("completed")).toEqual(["completed"]);
+    expect(matching("attention")).toEqual(["attention", "killed"]);
+  });
+
+  it("covers every run state across its filters so none is unreachable", () => {
+    expect(matching("all")).toHaveLength(LOOP_RUN_STATES.length);
+    const grouped = new Set([
+      ...matching("running"),
+      ...matching("completed"),
+      ...matching("attention"),
+    ]);
+    expect(grouped.size).toBe(LOOP_RUN_STATES.length);
+  });
+
+  it("counts runs per filter so the list can show what each tab holds", () => {
+    const runs = [
+      summary("working"),
+      summary("completed", { id: "done-1" }),
+      summary("completed", { id: "done-2" }),
+      summary("attention"),
+    ];
+
+    expect(countRunsByFilter(runs)).toEqual({
+      all: 4,
+      running: 1,
+      completed: 2,
+      attention: 1,
+    });
+  });
+
+  it("orders runs newest first and keeps insertion order when times tie", () => {
+    const runs = [
+      summary("completed", { id: "older", startedAt: "2026-01-01T00:00:00Z" }),
+      summary("working", { id: "newest", startedAt: "2026-01-03T00:00:00Z" }),
+      summary("attention", { id: "middle", startedAt: "2026-01-02T00:00:00Z" }),
+    ];
+
+    expect(orderRuns(runs).map((run) => run.id)).toEqual([
+      "newest",
+      "middle",
+      "older",
+    ]);
+
+    const tied = [
+      summary("working", { id: "first", startedAt: "2026-01-01T00:00:00Z" }),
+      summary("working", { id: "second", startedAt: "2026-01-01T00:00:00Z" }),
+    ];
+    expect(orderRuns(tied).map((run) => run.id)).toEqual(["first", "second"]);
+  });
+
+  it("describes a run for the list row without needing its evidence", () => {
+    expect(describeRun(summary("working", { taskTotal: 3, taskAttention: 0 }))).toBe(
+      "3 tasks",
+    );
+    expect(
+      describeRun(summary("attention", { taskTotal: 3, taskAttention: 2 })),
+    ).toBe("3 tasks · 2 need attention");
+    expect(describeRun(summary("starting"))).toBe("No tasks yet");
   });
 });

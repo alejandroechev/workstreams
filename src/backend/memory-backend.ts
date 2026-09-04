@@ -30,6 +30,7 @@ import {
   transitionLoop,
   type LoopObservedOutcome,
   type LoopRun,
+  type LoopRunSummary,
   type LoopDefinition,
   type LoopDefinitionCatalog,
   type LoopSnapshot,
@@ -96,6 +97,13 @@ export class MemoryBackend implements Backend {
   private sessionFeatures = new Map<string, import("./types").SessionFeaturesPayload>();
   private loopSpecs = new Map<string, LoopSpec>();
   private loopSnapshots = new Map<string, PersistedLoopSnapshot>();
+  /**
+   * Finished runs, oldest first, keyed by workstream.
+   *
+   * The live snapshot only holds the newest run, so without an archive the
+   * Loops list could never show more than one row.
+   */
+  private loopRunArchive = new Map<string, PersistedLoopSnapshot[]>();
   private loopRunWorkstreams = new Map<string, string>();
   private loopTimers = new Map<string, Array<ReturnType<typeof setTimeout>>>();
   private loopApprovalDecisions = new Set<string>();
@@ -134,6 +142,66 @@ export class MemoryBackend implements Backend {
       throw new Error("Loop delay scale must be a positive number");
     }
     this.loopDelayScale = scale;
+  }
+
+  /**
+   * Test/demo helper: append a finished run so the Loops list has history
+   * without having to execute a full loop for every row.
+   */
+  seedLoopRunHistory(
+    workstreamId: string,
+    snapshot: PersistedLoopSnapshot,
+  ): void {
+    const archive = this.loopRunArchive.get(workstreamId) ?? [];
+    archive.push(snapshot);
+    this.loopRunArchive.set(workstreamId, archive);
+    if (snapshot.latestRun) {
+      this.loopRunWorkstreams.set(snapshot.latestRun.id, workstreamId);
+    }
+  }
+
+  private allRunSnapshots(workstreamId: string): PersistedLoopSnapshot[] {
+    const archived = this.loopRunArchive.get(workstreamId) ?? [];
+    const live = this.loopSnapshots.get(workstreamId);
+    const liveRunId = live?.latestRun?.id;
+    return [
+      ...archived.filter((entry) => entry.latestRun?.id !== liveRunId),
+      ...(live?.latestRun ? [live] : []),
+    ];
+  }
+
+  async listWorkstreamLoopRuns(
+    workstreamId: string,
+  ): Promise<LoopRunSummary[]> {
+    return this.allRunSnapshots(workstreamId)
+      .map((entry) => {
+        const run = entry.latestRun!;
+        return {
+          id: run.id,
+          loopSpecId: run.loopSpecId,
+          state: run.state,
+          startedAt: run.startedAt ?? new Date(0).toISOString(),
+          finishedAt: run.finishedAt,
+          definitionId: run.definitionId ?? entry.spec?.definitionId,
+          definitionName: run.definitionName ?? entry.spec?.definitionName,
+          taskTotal: entry.tasks.length,
+          taskAttention: entry.tasks.filter(
+            (task) => task.state === "attention" || task.state === "blocked",
+          ).length,
+        };
+      })
+      .reverse();
+  }
+
+  async getLoopRunSnapshot(runId: string): Promise<PersistedLoopSnapshot> {
+    const workstreamId = this.loopRunWorkstreams.get(runId);
+    const found = workstreamId
+      ? this.allRunSnapshots(workstreamId).find(
+          (entry) => entry.latestRun?.id === runId,
+        )
+      : undefined;
+    if (!found) throw new Error(`Loop run not found: ${runId}`);
+    return found;
   }
 
   async listProjects(): Promise<Project[]> {
@@ -540,7 +608,13 @@ export class MemoryBackend implements Backend {
       controlRequested: "none",
       startedAt: timestamp,
       deadlineAt: new Date(Date.now() + spec.runTimeoutMs).toISOString(),
+      definitionId: spec.definitionId,
+      definitionName: spec.definitionName,
     };
+    // Retire the finished run into history before the live slot is reused, so
+    // the Loops list keeps every run rather than only the newest.
+    const previous = this.loopSnapshots.get(workstreamId);
+    if (previous?.latestRun) this.seedLoopRunHistory(workstreamId, previous);
     this.loopRunWorkstreams.set(run.id, workstreamId);
     const initial: PersistedLoopSnapshot = {
       spec,

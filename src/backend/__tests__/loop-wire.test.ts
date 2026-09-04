@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  decodeLoopRunSummaries,
   decodeLoopSnapshot,
   decodeLoopSpec,
   decodeLoopSummaries,
@@ -324,5 +325,57 @@ describe("loop wire mapping", () => {
       currentTaskId: undefined,
       startedAt: undefined,
     }]);
+  });
+});
+
+describe("decodeLoopRunSummaries", () => {
+  it("maps snake_case rows and normalises absent optionals to undefined", () => {
+    expect(
+      decodeLoopRunSummaries([
+        {
+          id: "run-1",
+          loop_spec_id: "spec-1",
+          state: "working",
+          started_at: "1788000000",
+          finished_at: null,
+          definition_id: "frontend-loop",
+          definition_name: "Frontend loop",
+          task_total: 4,
+          task_attention: 1,
+        },
+      ]),
+    ).toEqual([
+      {
+        id: "run-1",
+        loopSpecId: "spec-1",
+        state: "working",
+        startedAt: new Date(1788000000 * 1000).toISOString(),
+        finishedAt: undefined,
+        definitionId: "frontend-loop",
+        definitionName: "Frontend loop",
+        taskTotal: 4,
+        taskAttention: 1,
+      },
+    ]);
+  });
+
+  it("tolerates a run recorded before definition identity was captured", () => {
+    const [run] = decodeLoopRunSummaries([
+      {
+        id: "run-legacy",
+        loop_spec_id: "spec-1",
+        state: "completed",
+        started_at: "1788000000",
+        finished_at: "1788000600",
+        definition_id: null,
+        definition_name: null,
+        task_total: 0,
+        task_attention: 0,
+      },
+    ]);
+
+    expect(run.definitionId).toBeUndefined();
+    expect(run.definitionName).toBeUndefined();
+    expect(run.finishedAt).toBe(new Date(1788000600 * 1000).toISOString());
   });
 });

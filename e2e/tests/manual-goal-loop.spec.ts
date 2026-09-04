@@ -180,15 +180,16 @@ test("selects, pauses, resumes, verifies, and evaluates a YAML loop", async ({
     );
   });
   expect(edited).toContain("# edited from Goal Loop");
-  await page.locator('[data-testid="loop-tab-run"]').click();
 
   await expect(page.locator('[data-testid="loop-definition-frontend-loop"]')).toContainText(
     "Verification + Evaluator + Human approval",
   );
-  await expect(page.locator('[data-testid="loop-definition-selected"]')).toContainText(
+  await expect(page.locator('[data-testid="loop-definition-title"]')).toContainText(
     "Frontend verification loop",
   );
   await page.locator('[data-testid="loop-run-selected"]').click();
+  // Starting a run opens the Loops tab on the run it created.
+  await expect(page.locator('[data-testid="loop-runs-tab"]')).toBeVisible();
   await expect(page.locator('[data-testid="running-loop-count"]')).toContainText(
     "1 running",
   );

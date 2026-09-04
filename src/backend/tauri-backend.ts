@@ -21,6 +21,7 @@ import type {
 import type { TaskStatus } from "../domain/task-status";
 import type {
   LoopRun,
+  LoopRunSummary,
   LoopDefinitionCatalog,
   LoopSpec,
   LoopSpecDraft,
@@ -29,10 +30,12 @@ import type {
 } from "../domain/loop";
 import {
   decodeLoopRun,
+  decodeLoopRunSummaries,
   decodeLoopSnapshot,
   decodeLoopSpec,
   decodeLoopSummaries,
   encodeLoopSpecDraft,
+  type LoopRunSummaryWire,
   type LoopRunWire,
   type LoopSnapshotWire,
   type LoopSpecWire,
@@ -203,6 +206,23 @@ export class TauriBackend implements Backend {
     return invoke<string>("get_workstream_loop_progress_version", {
       workstreamId,
     });
+  }
+
+  async listWorkstreamLoopRuns(
+    workstreamId: string,
+  ): Promise<LoopRunSummary[]> {
+    const runs = await invoke<LoopRunSummaryWire[]>(
+      "list_workstream_loop_runs",
+      { workstreamId },
+    );
+    return decodeLoopRunSummaries(runs);
+  }
+
+  async getLoopRunSnapshot(runId: string): Promise<PersistedLoopSnapshot> {
+    const snapshot = await invoke<LoopSnapshotWire>("get_loop_run_snapshot", {
+      runId,
+    });
+    return decodeLoopSnapshot(snapshot);
   }
 
   async listLoopDefinitions(workstreamId: string): Promise<LoopDefinitionCatalog> {

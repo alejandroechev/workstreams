@@ -14,6 +14,7 @@ import type {
 import type { TaskStatus, TaskFlag } from "../domain/task-status";
 import type {
   LoopRun,
+  LoopRunSummary,
   LoopDefinitionCatalog,
   LoopSpec,
   LoopSpecDraft,
@@ -95,6 +96,10 @@ export interface Backend {
   closeTerminal(tileId: string): Promise<void>;
   // Manual coding goal loop
   getWorkstreamLoopSnapshot(workstreamId: string): Promise<PersistedLoopSnapshot>;
+  /** Every run for the workstream, newest first, for the Loops list. */
+  listWorkstreamLoopRuns(workstreamId: string): Promise<LoopRunSummary[]>;
+  /** Evidence for one run, so history stays readable after it finishes. */
+  getLoopRunSnapshot(runId: string): Promise<PersistedLoopSnapshot>;
   getWorkstreamLoopProgressVersion(workstreamId: string): Promise<string>;
   listLoopDefinitions(workstreamId: string): Promise<LoopDefinitionCatalog>;
   saveWorkstreamLoop(workstreamId: string, input: LoopSpecDraft): Promise<LoopSpec>;

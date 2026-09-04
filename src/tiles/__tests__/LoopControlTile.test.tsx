@@ -14,6 +14,7 @@ import type {
   LoopEvaluationRecord,
   LoopEventRecord,
   LoopRun,
+  LoopRunSummary,
   LoopSpec,
   LoopTask,
   LoopVerificationRecord,
@@ -143,6 +144,36 @@ function approval(overrides: Partial<LoopApprovalRecord> = {}): LoopApprovalReco
   };
 }
 
+/**
+ * Derives the Loops list from the snapshot under test, so a test that seeds a
+ * run gets a matching row without restating it.
+ */
+function runSummaries(current: PersistedLoopSnapshot): LoopRunSummary[] {
+  const active = current.latestRun;
+  if (!active) return [];
+  return [
+    {
+      id: active.id,
+      loopSpecId: active.loopSpecId,
+      state: active.state,
+      startedAt: active.startedAt ?? "2026-08-28T18:00:00.000Z",
+      finishedAt: active.finishedAt,
+      definitionId: current.spec?.definitionId,
+      definitionName: current.spec?.definitionName ?? "Loop run",
+      taskTotal: current.tasks.length,
+      taskAttention: current.tasks.filter(
+        (entry) => entry.state === "attention" || entry.state === "blocked",
+      ).length,
+    },
+  ];
+}
+
+/** The Loops tab is not the default, so run assertions open it first. */
+async function openLoops(): Promise<HTMLElement> {
+  fireEvent.click(await screen.findByTestId("loop-tab-loops"));
+  return screen.findByTestId("loop-run-detail");
+}
+
 function setup(
   initialSnapshot: PersistedLoopSnapshot,
   initialCatalog: LoopDefinitionCatalog = { definitions: [], invalid: [] },
@@ -151,8 +182,11 @@ function setup(
   let currentSnapshot = initialSnapshot;
   let currentCatalog = initialCatalog;
   const getSnapshot = vi
-    .spyOn(backend, "getWorkstreamLoopSnapshot")
+    .spyOn(backend, "getLoopRunSnapshot")
     .mockImplementation(async () => currentSnapshot);
+  const listRuns = vi
+    .spyOn(backend, "listWorkstreamLoopRuns")
+    .mockImplementation(async () => runSummaries(currentSnapshot));
   const listDefinitions = vi
     .spyOn(backend, "listLoopDefinitions")
     .mockImplementation(async () => currentCatalog);
@@ -171,6 +205,7 @@ function setup(
   return {
     backend,
     getSnapshot,
+    listRuns,
     listDefinitions,
     setSnapshot(next: PersistedLoopSnapshot) {
       currentSnapshot = next;
@@ -192,8 +227,8 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-describe("LoopControlTile catalog", () => {
-  it("switches between Run and Definitions and edits the selected YAML file", async () => {
+describe("LoopControlTile definitions tab", () => {
+  it("opens on Definitions and edits whichever definition is selected", async () => {
     const first = definition();
     const second = definition({
       id: "backend-loop",
@@ -204,36 +239,29 @@ describe("LoopControlTile catalog", () => {
     setup(snapshot(), { definitions: [first, second], invalid: [] });
 
     expect(
-      (await screen.findByTestId("loop-tab-run")).getAttribute("aria-selected"),
+      (await screen.findByTestId("loop-tab-definitions")).getAttribute(
+        "aria-selected",
+      ),
     ).toBe("true");
-    fireEvent.click(screen.getByTestId("loop-tab-definitions"));
     expect(screen.getByTestId("loop-definition-editor-path").textContent).toBe(
       first.path,
     );
 
-    fireEvent.click(screen.getByTestId("loop-edit-definition-backend-loop"));
+    fireEvent.click(screen.getByTestId("loop-definition-backend-loop"));
     expect(screen.getByTestId("loop-definition-editor-path").textContent).toBe(
       second.path,
     );
-
-    fireEvent.click(screen.getByTestId("loop-tab-run"));
-    await waitFor(() =>
-      expect(screen.getByTestId("loop-definition-selected").textContent).toContain(
-        "Backend loop",
-      ),
+    expect(screen.getByTestId("loop-definition-title").textContent).toContain(
+      "Backend loop",
     );
   });
 
-  it("saves and reparses dirty YAML before returning to Run", async () => {
-    const second = definition({
-      id: "second-loop",
-      name: "Second loop",
-      path: "/sessions/session-1/files/loops/second.loop.yaml",
-    });
-    const { listDefinitions } = setup(snapshot(), {
-      definitions: [definition(), second],
+  it("saves dirty YAML and reparses the catalog before running", async () => {
+    const { backend, listDefinitions } = setup(snapshot(), {
+      definitions: [definition()],
       invalid: [],
     });
+    vi.spyOn(backend, "runLoopDefinitionNow").mockResolvedValue(run());
     const save = vi.spyOn(fileBufferRegistry, "save").mockResolvedValue();
     vi.spyOn(fileBufferRegistry, "listAll").mockReturnValue([
       {
@@ -267,19 +295,14 @@ describe("LoopControlTile catalog", () => {
       });
 
     await screen.findByTestId("loop-definition-frontend-loop");
-    fireEvent.click(screen.getByTestId("loop-tab-definitions"));
     fireEvent.click(screen.getByTestId("loop-definition-mark-dirty"));
-    fireEvent.click(screen.getByTestId("loop-edit-definition-second-loop"));
-    fireEvent.click(screen.getByTestId("loop-tab-run"));
+    fireEvent.click(screen.getByTestId("loop-run-selected"));
 
     await waitFor(() => expect(save).toHaveBeenCalledWith(definition().path));
     await waitFor(() => expect(listDefinitions).toHaveBeenCalledTimes(2));
-    expect(screen.getByTestId("loop-tab-run").getAttribute("aria-selected")).toBe(
-      "true",
-    );
   });
 
-  it("loads definitions, selects the first, and retains selection on refresh", async () => {
+  it("lists every definition with its sensors and keeps the selection on refresh", async () => {
     const evaluator = definition({
       id: "evaluated-loop",
       name: "Evaluated loop",
@@ -299,34 +322,28 @@ describe("LoopControlTile catalog", () => {
       objective: "Verify and evaluate the result",
       hasEvaluator: true,
     });
-    const { listDefinitions, setCatalog } = setup(
-      snapshot(),
-      { definitions: [evaluator, both], invalid: [] },
-    );
+    const { listDefinitions, setCatalog } = setup(snapshot(), {
+      definitions: [evaluator, both],
+      invalid: [],
+    });
 
-    expect((await screen.findByTestId("loop-catalog")).textContent).toContain(
-      "Goal Loop",
-    );
+    expect(
+      (await screen.findByTestId("loop-definition-evaluated-loop")).textContent,
+    ).toContain("Evaluator");
     expect(listDefinitions).toHaveBeenCalledWith("ws-1");
-    expect((await screen.findByTestId("loop-definition-evaluated-loop")).textContent).toContain(
-      "Evaluator",
-    );
     expect(screen.getByTestId("loop-definition-full-loop").textContent).toContain(
       "Verification + Evaluator",
     );
-    expect(screen.getByTestId("loop-definition-selected").textContent).toContain(
-      "Evaluated loop",
+    expect(screen.getByTestId("loop-definition-editor-path").textContent).toBe(
+      evaluator.path,
     );
 
     fireEvent.click(screen.getByTestId("loop-definition-full-loop"));
-    expect(screen.getByTestId("loop-definition-selected").textContent).toContain(
-      "Full loop",
+    expect(screen.getByTestId("loop-definition-editor-path").textContent).toBe(
+      both.path,
     );
-    expect(screen.getByTestId("loop-definition-selected").textContent).toContain(
-      "/sessions/session-1/files/loops/full-loop.loop.yaml",
-    );
-    expect(screen.getByTestId("loop-definition-selected").textContent).toContain(
-      "sha256:full",
+    expect(screen.getByTestId("loop-definition-editor-header").textContent).toContain(
+      "Verify and evaluate the result",
     );
 
     setCatalog({
@@ -343,58 +360,14 @@ describe("LoopControlTile catalog", () => {
     fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
 
     await waitFor(() => expect(listDefinitions).toHaveBeenCalledTimes(2));
-    expect(screen.getByTestId("loop-definition-selected").textContent).toContain(
-      "Full loop",
-    );
-  });
-
-  it("keeps Run selection aligned when the selected file changes definition id", async () => {
-    const selectedPath = "/sessions/session-1/files/loops/selected.loop.yaml";
-    const selected = definition({
-      id: "old-id",
-      name: "Selected loop",
-      path: selectedPath,
-    });
-    const first = definition({
-      id: "first-loop",
-      name: "First loop",
-      path: "/sessions/session-1/files/loops/first.loop.yaml",
-    });
-    const { setCatalog, listDefinitions } = setup(snapshot(), {
-      definitions: [first, selected],
-      invalid: [],
-    });
-
-    await screen.findByTestId("loop-definition-old-id");
-    fireEvent.click(screen.getByTestId("loop-definition-old-id"));
-    fireEvent.click(screen.getByTestId("loop-tab-definitions"));
+    // Selection follows the file, not the list position, so a refresh that
+    // reorders the catalog does not silently retarget the Run button.
     expect(screen.getByTestId("loop-definition-editor-path").textContent).toBe(
-      selectedPath,
-    );
-
-    setCatalog({
-      definitions: [
-        first,
-        definition({
-          id: "new-id",
-          name: "Renamed selected loop",
-          path: selectedPath,
-        }),
-      ],
-      invalid: [],
-    });
-    fireEvent.click(screen.getByTestId("loop-refresh"));
-    await waitFor(() => expect(listDefinitions).toHaveBeenCalledTimes(2));
-    fireEvent.click(screen.getByTestId("loop-tab-run"));
-
-    await waitFor(() =>
-      expect(screen.getByTestId("loop-definition-selected").textContent).toContain(
-        "Renamed selected loop",
-      ),
+      both.path,
     );
   });
 
-  it("runs the selected definition by path instead of using the legacy run method", async () => {
+  it("runs the definition open in the editor and shows the run it created", async () => {
     const first = definition();
     const second = definition({
       id: "backend-loop",
@@ -402,16 +375,20 @@ describe("LoopControlTile catalog", () => {
       path: "/sessions/session-1/files/loops/backend-loop.loop.yaml",
       hash: "sha256:backend",
     });
-    const { backend } = setup(
-      snapshot(),
-      { definitions: [first, second], invalid: [] },
-    );
+    const { backend, setSnapshot } = setup(snapshot(), {
+      definitions: [first, second],
+      invalid: [],
+    });
+    const started = run({ id: "run-new", state: "orchestrating" });
     const runSelected = vi
       .spyOn(backend, "runLoopDefinitionNow")
-      .mockResolvedValue(run());
+      .mockImplementation(async () => {
+        setSnapshot(snapshot({ spec: loopSpec(), latestRun: started }));
+        return started;
+      });
     const legacyRun = vi.spyOn(backend, "runWorkstreamLoopNow");
 
-    await screen.findByTestId("loop-definition-selected");
+    await screen.findByTestId("loop-definition-backend-loop");
     fireEvent.click(screen.getByTestId("loop-definition-backend-loop"));
     fireEvent.click(screen.getByTestId("loop-run-selected"));
 
@@ -422,6 +399,16 @@ describe("LoopControlTile catalog", () => {
       ),
     );
     expect(legacyRun).not.toHaveBeenCalled();
+    // Starting a run moves to the run it created, so evidence is one click away
+    // rather than requiring the operator to find it.
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("loop-tab-loops").getAttribute("aria-selected"),
+      ).toBe("true"),
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("loop-run-row-run-new")).toBeTruthy(),
+    );
   });
 
   it("shows the YAML authoring empty state without form fields", async () => {
@@ -432,9 +419,12 @@ describe("LoopControlTile catalog", () => {
     expect(empty.textContent).toContain("create-loop");
     expect(screen.queryByTestId("loop-setup-form")).toBeNull();
     expect(screen.queryByRole("textbox")).toBeNull();
+    expect((screen.getByTestId("loop-run-selected") as HTMLButtonElement).disabled).toBe(
+      true,
+    );
   });
 
-  it("renders invalid files separately and warns when a definition is not portable", async () => {
+  it("lists invalid files alongside valid ones and warns when one is not portable", async () => {
     setup(snapshot(), {
       definitions: [
         definition({
@@ -450,22 +440,21 @@ describe("LoopControlTile catalog", () => {
       ],
     });
 
-    expect(
-      (await screen.findByTestId("loop-definition-frontend-loop")).textContent,
-    ).toContain("Not portable");
-    const invalid = screen.getByTestId("loop-invalid-definitions");
-    expect(invalid.textContent).toContain(
-      "/sessions/session-1/files/loops/broken.loop.yaml",
+    await screen.findByTestId("loop-definition-frontend-loop");
+    expect(screen.getByTestId("loop-definition-editor-header").textContent).toContain(
+      "Not portable",
     );
-    expect(invalid.textContent).toContain("missing required field objective");
 
-    fireEvent.click(screen.getByTestId("loop-tab-definitions"));
-    fireEvent.click(screen.getByTestId("loop-edit-invalid-0"));
+    fireEvent.click(screen.getByTestId("loop-definition-invalid-broken.loop.yaml"));
     expect(screen.getByTestId("loop-definition-editor-path").textContent).toBe(
       "/sessions/session-1/files/loops/broken.loop.yaml",
     );
     expect(screen.getByTestId("loop-definition-editor-header").textContent).toContain(
       "missing required field objective",
+    );
+    // An unparseable file can be repaired in the editor but never launched.
+    expect((screen.getByTestId("loop-run-selected") as HTMLButtonElement).disabled).toBe(
+      true,
     );
   });
 
@@ -479,12 +468,82 @@ describe("LoopControlTile catalog", () => {
       { definitions: [definition()], invalid: [] },
     );
 
-    expect(
-      (await screen.findByTestId("loop-run-selected") as HTMLButtonElement).disabled,
-    ).toBe(true);
+    await waitFor(() =>
+      expect(
+        (screen.getByTestId("loop-run-selected") as HTMLButtonElement).disabled,
+      ).toBe(true),
+    );
   });
 });
 
+describe("LoopControlTile loops tab", () => {
+  it("filters runs by state and opens the one that is selected", async () => {
+    const { backend } = setup(snapshot(), {
+      definitions: [definition()],
+      invalid: [],
+    });
+    const finished = run({ id: "run-done", state: "completed" });
+    const live = run({ id: "run-live", state: "working" });
+    vi.spyOn(backend, "listWorkstreamLoopRuns").mockResolvedValue([
+      {
+        id: finished.id,
+        loopSpecId: "loop-1",
+        state: "completed",
+        startedAt: "2026-08-28T17:00:00.000Z",
+        definitionName: "Yesterday loop",
+        taskTotal: 2,
+        taskAttention: 0,
+      },
+      {
+        id: live.id,
+        loopSpecId: "loop-1",
+        state: "working",
+        startedAt: "2026-08-28T18:00:00.000Z",
+        definitionName: "Today loop",
+        taskTotal: 1,
+        taskAttention: 0,
+      },
+    ]);
+    vi.spyOn(backend, "getLoopRunSnapshot").mockImplementation(async (runId) =>
+      snapshot({
+        spec: loopSpec(),
+        latestRun: runId === finished.id ? finished : live,
+        tasks: [task({ loopRunId: runId })],
+      }),
+    );
+
+    fireEvent.click(await screen.findByTestId("loop-tab-loops"));
+
+    // Newest first, and the newest run is opened by default.
+    await waitFor(() => expect(screen.getByTestId("loop-run-row-run-live")).toBeTruthy());
+    expect(screen.getByTestId("loop-run-row-run-done").textContent).toContain(
+      "Yesterday loop",
+    );
+    expect(screen.getByTestId("loop-run-row-run-done").textContent).toContain(
+      "2 tasks",
+    );
+    expect(screen.getByTestId("loop-run-filter-running").textContent).toContain("(1)");
+    expect(screen.getByTestId("loop-run-filter-completed").textContent).toContain("(1)");
+
+    fireEvent.click(screen.getByTestId("loop-run-filter-completed"));
+    expect(screen.queryByTestId("loop-run-row-run-live")).toBeNull();
+
+    fireEvent.click(screen.getByTestId("loop-run-row-run-done"));
+    await waitFor(() =>
+      expect(screen.getByTestId("loop-run-state").textContent).toContain("Completed"),
+    );
+  });
+
+  it("explains an empty list instead of showing a blank pane", async () => {
+    setup(snapshot(), { definitions: [definition()], invalid: [] });
+
+    fireEvent.click(await screen.findByTestId("loop-tab-loops"));
+
+    expect(
+      (await screen.findByTestId("loop-run-list-empty")).textContent,
+    ).toContain("No loops have run yet");
+  });
+});
 describe("LoopControlTile run monitoring", () => {
   it("renders pinned definition evidence, task output, controls, and the timeline", async () => {
     const verification: LoopVerificationRecord = {
@@ -564,6 +623,7 @@ describe("LoopControlTile run monitoring", () => {
     );
     const control = vi.spyOn(backend, "controlWorkstreamLoop").mockResolvedValue();
 
+    await openLoops();
     expect((await screen.findByTestId("loop-run-state")).textContent).toContain("Working");
     const breakdown = screen.getByTestId("loop-time-breakdown");
     expect(breakdown.textContent).toContain("Agent time: 4m 30s");
@@ -680,6 +740,7 @@ describe("LoopControlTile run monitoring", () => {
       { definitions: [definition()], invalid: [] },
     );
 
+    await openLoops();
     const status = await screen.findByTestId("loop-task-status-task-1");
     expect(status.textContent).toContain("Action required");
     expect(status.textContent).toContain("Change analysing to analyzing at line 145.");
@@ -743,6 +804,7 @@ describe("LoopControlTile run monitoring", () => {
       { definitions: [definition()], invalid: [] },
     );
 
+    await openLoops();
     const status = await screen.findByTestId("loop-task-status-task-1");
     expect(status.textContent).toContain("Translation validation still fails");
     expect(status.textContent).not.toContain("Old evaluator feedback");
@@ -771,6 +833,7 @@ describe("LoopControlTile run monitoring", () => {
       { definitions: [definition()], invalid: [] },
     );
 
+    await openLoops();
     let status = await screen.findByTestId("loop-task-status-task-1");
     expect(status.textContent).toContain("Human reviewer rejected the task");
     expect(status.textContent).not.toContain("Older evaluator note");
@@ -820,6 +883,7 @@ describe("LoopControlTile run monitoring", () => {
       .spyOn(backend, "resumeWorkstreamLoop")
       .mockResolvedValue(run({ state: "working" }));
 
+    await openLoops();
     fireEvent.click(await screen.findByTestId("loop-resume"));
     await waitFor(() => expect(resume).toHaveBeenCalledWith("run-1"));
     expect(screen.queryByTestId("loop-pause")).toBeNull();
@@ -849,6 +913,7 @@ describe("LoopControlTile run monitoring", () => {
       .spyOn(backend, "decideLoopHumanApproval")
       .mockResolvedValue(awaitingRun);
 
+    await openLoops();
     expect((await screen.findByTestId("loop-human-approval")).textContent).toContain(
       "Review the implementation and evidence.",
     );
@@ -915,6 +980,7 @@ describe("LoopControlTile run monitoring", () => {
       { definitions: [definition()], invalid: [] },
     );
 
+    await openLoops();
     const list = (await screen.findByTestId("loop-task-list")) as HTMLDetailsElement;
     fireEvent.click(list.querySelector("summary")!);
 
@@ -967,6 +1033,8 @@ describe("LoopControlTile run monitoring", () => {
       },
     );
 
+    expect(await screen.findByTestId("loop-tab-loops")).toBeTruthy();
+    await openLoops();
     expect(await screen.findByTestId("loop-approval-revise")).toBeTruthy();
   });
 
@@ -992,18 +1060,20 @@ describe("LoopControlTile run monitoring", () => {
       { definitions: [definition()], invalid: [] },
     );
 
+    await openLoops();
     expect((await screen.findByTestId("loop-next-evidence")).textContent).toContain(
       expected,
     );
   });
 
   it("refreshes the run projection for matching memory and Tauri events", async () => {
-    const { getSnapshot } = setup(
-      snapshot({ spec: loopSpec() }),
+    const { listRuns } = setup(
+      snapshot({ spec: loopSpec(), latestRun: run(), tasks: [task()] }),
       { definitions: [definition()], invalid: [] },
     );
-    await screen.findByTestId("loop-catalog");
-    const initialCalls = getSnapshot.mock.calls.length;
+    await screen.findByTestId("loop-tabs");
+    await waitFor(() => expect(listRuns.mock.calls.length).toBeGreaterThan(0));
+    const initialCalls = listRuns.mock.calls.length;
 
     act(() => {
       window.dispatchEvent(
@@ -1012,7 +1082,7 @@ describe("LoopControlTile run monitoring", () => {
         }),
       );
     });
-    expect(getSnapshot).toHaveBeenCalledTimes(initialCalls);
+    expect(listRuns).toHaveBeenCalledTimes(initialCalls);
 
     act(() => {
       window.dispatchEvent(
@@ -1021,16 +1091,16 @@ describe("LoopControlTile run monitoring", () => {
         }),
       );
     });
-    await waitFor(() => expect(getSnapshot.mock.calls.length).toBeGreaterThan(initialCalls));
+    await waitFor(() => expect(listRuns.mock.calls.length).toBeGreaterThan(initialCalls));
 
     const tauriCall = listenMock.mock.calls.find(([name]) => name === "loop-updated");
     expect(tauriCall).toBeTruthy();
     const listener = tauriCall?.[1] as (event: {
       payload: { workstreamId: string };
     }) => void;
-    const beforeTauri = getSnapshot.mock.calls.length;
+    const beforeTauri = listRuns.mock.calls.length;
     act(() => listener({ payload: { workstreamId: "ws-1" } }));
-    await waitFor(() => expect(getSnapshot.mock.calls.length).toBeGreaterThan(beforeTauri));
+    await waitFor(() => expect(listRuns.mock.calls.length).toBeGreaterThan(beforeTauri));
   });
 
   it("polls a lightweight version and reloads evidence only when it changes", async () => {

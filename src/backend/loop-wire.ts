@@ -5,6 +5,7 @@ import {
   type LoopEventRecord,
   type LoopRun,
   type LoopRunState,
+  type LoopRunSummary,
   type LoopSpec,
   type LoopSpecDraft,
   type LoopStageRecord,
@@ -71,6 +72,20 @@ export interface LoopRunWire {
   finished_at: string | null;
   deadline_at: string;
   definition_hash?: string | null;
+  definition_id?: string | null;
+  definition_name?: string | null;
+}
+
+export interface LoopRunSummaryWire {
+  id: string;
+  loop_spec_id: string;
+  state: LoopRunState;
+  started_at: string;
+  finished_at: string | null;
+  definition_id: string | null;
+  definition_name: string | null;
+  task_total: number;
+  task_attention: number;
 }
 
 export interface LoopTaskWire {
@@ -253,6 +268,8 @@ function decodeRun(run: LoopRunWire): LoopRun {
     finishedAt: optionalTimestamp(run.finished_at),
     deadlineAt: timestamp(run.deadline_at),
     definitionHash: optional(run.definition_hash ?? null),
+    definitionId: optional(run.definition_id ?? null),
+    definitionName: optional(run.definition_name ?? null),
   };
 }
 
@@ -384,6 +401,22 @@ export function decodeLoopSnapshot(
 
 export function decodeLoopRun(run: LoopRunWire): LoopRun {
   return decodeRun(run);
+}
+
+export function decodeLoopRunSummaries(
+  runs: LoopRunSummaryWire[],
+): LoopRunSummary[] {
+  return runs.map((run) => ({
+    id: run.id,
+    loopSpecId: run.loop_spec_id,
+    state: run.state,
+    startedAt: timestamp(run.started_at),
+    finishedAt: optionalTimestamp(run.finished_at),
+    definitionId: optional(run.definition_id),
+    definitionName: optional(run.definition_name),
+    taskTotal: run.task_total,
+    taskAttention: run.task_attention,
+  }));
 }
 
 export function decodeLoopSpec(spec: LoopSpecWire): LoopSpec {

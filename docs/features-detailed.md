@@ -237,8 +237,20 @@ evidence.
 
 Definitions are strict `files/loops/*.loop.yaml` files stored in the
 workstream's bound Copilot session (the `create-loop` skill can generate one).
-Read and edit them in the Goal Loop tile's **Definitions** tab and execute them
-from **Run**. `Alt+L` (`Option+L` on macOS) opens the tile.
+`Alt+L` (`Option+L` on macOS) opens the tile, which has two tabs:
+
+- **Definitions** lists every definition on the left and opens the selected
+  YAML in an editor on the right, the same shape as the Repo Explorer diff
+  view. **Run** in the toolbar saves any pending edit, reparses the catalog,
+  and starts the definition currently open — so a run always pins the YAML on
+  screen. Invalid files are listed too, and can be repaired in place, but
+  cannot be run.
+- **Loops** lists every run, newest first, filtered by All, Running, Completed
+  or Attention. Selecting a run shows its evidence on the right. Finished runs
+  stay readable, and each row keeps the definition it started with rather than
+  whatever is selected today.
+
+Starting a run switches to **Loops** with that run selected.
 
 Execution model:
 

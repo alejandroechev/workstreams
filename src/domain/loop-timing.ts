@@ -1,5 +1,7 @@
 import type {
   LoopRun,
+  LoopRunState,
+  LoopRunSummary,
   LoopStageRecord,
   LoopTask,
 } from "./loop";
@@ -111,6 +113,88 @@ export const LOOP_TASK_FILTERS = ["all", "active", "accepted", "attention"] as c
 export type LoopTaskFilter = (typeof LOOP_TASK_FILTERS)[number];
 
 export type LoopTaskSort = "newest" | "oldest";
+
+export const LOOP_RUN_FILTERS = [
+  "all",
+  "running",
+  "completed",
+  "attention",
+] as const;
+
+export type LoopRunFilter = (typeof LOOP_RUN_FILTERS)[number];
+
+/**
+ * Run states that are still in flight.
+ *
+ * Derived by exclusion rather than enumeration so a newly added state is
+ * treated as running — visible and controllable — instead of silently
+ * disappearing from every filter.
+ */
+const TERMINAL_RUN_STATES: ReadonlySet<LoopRunState> = new Set<LoopRunState>([
+  "completed",
+  "attention",
+  "killed",
+]);
+
+/**
+ * `killed` groups with `attention` because both mean the run stopped without
+ * reaching its goal, which is the distinction an operator scanning the list
+ * actually cares about.
+ */
+export function matchesRunFilter(
+  run: LoopRunSummary,
+  filter: LoopRunFilter,
+): boolean {
+  switch (filter) {
+    case "all":
+      return true;
+    case "running":
+      return !TERMINAL_RUN_STATES.has(run.state);
+    case "completed":
+      return run.state === "completed";
+    case "attention":
+      return run.state === "attention" || run.state === "killed";
+  }
+}
+
+export function countRunsByFilter(
+  runs: readonly LoopRunSummary[],
+): Record<LoopRunFilter, number> {
+  return LOOP_RUN_FILTERS.reduce(
+    (counts, filter) => {
+      counts[filter] = runs.filter((run) => matchesRunFilter(run, filter)).length;
+      return counts;
+    },
+    {} as Record<LoopRunFilter, number>,
+  );
+}
+
+/**
+ * Newest run first. Stable: runs started within the same second keep their
+ * backend order rather than shuffling between refreshes.
+ */
+export function orderRuns(runs: readonly LoopRunSummary[]): LoopRunSummary[] {
+  return runs
+    .map((run, index) => ({ run, index }))
+    .sort((left, right) => {
+      const leftTime = parseTime(left.run.startedAt);
+      const rightTime = parseTime(right.run.startedAt);
+      if (leftTime !== null && rightTime !== null && leftTime !== rightTime) {
+        return rightTime - leftTime;
+      }
+      return left.index - right.index;
+    })
+    .map((entry) => entry.run);
+}
+
+/** Secondary line for a run row, summarising progress without its evidence. */
+export function describeRun(run: LoopRunSummary): string {
+  if (run.taskTotal === 0) return "No tasks yet";
+  const tasks = `${run.taskTotal} task${run.taskTotal === 1 ? "" : "s"}`;
+  return run.taskAttention > 0
+    ? `${tasks} · ${run.taskAttention} need attention`
+    : tasks;
+}
 
 const ACTIVE_STATES: ReadonlySet<LoopTask["state"]> = new Set([
   "queued",

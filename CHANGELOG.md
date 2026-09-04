@@ -47,6 +47,12 @@ for any release is attached to its
 
 ### Changed
 
+- The Goal Loop tile is reorganised around two tabs with a Repo-Explorer-style
+  header. **Definitions** pairs the catalog with its YAML editor and a Run
+  button; **Loops** lists every run — filterable by Running, Completed or
+  Attention — so finished runs stay readable instead of only the newest one
+  being reachable.
+
 - `CONTRIBUTING.md` is now about how to get a change accepted, including an
   explicit policy on AI-assisted contributions. Its previous release and
   versioning content moved to the contributor guide.
