@@ -7,6 +7,25 @@ Plain HTML and CSS with no build step: GitHub Pages serves this folder as-is.
 A bundler would add a toolchain without buying anything for a single static
 page.
 
+## Downloads
+
+`downloads.js` asks GitHub's public latest-release API for the current tag and
+assets, then changes all three primary calls to action to the best installer
+for the visitor:
+
+- Windows → the x64 setup `.exe`;
+- macOS → the Apple Silicon `.dmg`;
+- anything else → the complete release page.
+
+The release eyebrow uses the same response for its tag and publication date.
+Every link starts as `releases/latest`, so the page remains usable when
+JavaScript is disabled, GitHub is unavailable, or the API rate limit is
+exhausted. **All downloads** is always visible as the platform escape hatch.
+
+Pure platform, asset-selection and release-formatting logic is covered by
+`scripts/__tests__/site-downloads.test.mjs`; that test also pins the required
+landing-page data attributes.
+
 ## Media
 
 Screenshots and demo clips are **not** stored here. They live once in

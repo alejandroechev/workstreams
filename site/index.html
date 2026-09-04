@@ -21,6 +21,7 @@
 
     <link rel="icon" href="favicon.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="styles.css" />
+    <script type="module" src="downloads.js"></script>
   </head>
   <body>
     <a class="skip-link" href="#main">Skip to content</a>
@@ -46,7 +47,17 @@
 
     <main id="main">
       <section class="hero">
-        <p class="eyebrow">Desktop app · Tauri + React + Rust</p>
+        <a
+          class="release-eyebrow"
+          data-release-link
+          href="https://github.com/alejandroechev/workstreams/releases/latest"
+        >
+          <span class="release-dot" aria-hidden="true"></span>
+          Latest release
+          <strong data-release-tag></strong>
+          <span data-release-date></span>
+          <span aria-hidden="true">→</span>
+        </a>
         <h1>Stop juggling Copilot CLI terminal tabs.</h1>
         <p class="lede">
           Workstreams is a desktop workspace for parallel
@@ -55,7 +66,12 @@
           diffs and verifier-gated loops, all side by side.
         </p>
         <div class="cta-row">
-          <a class="button primary" href="#install">Install</a>
+          <a
+            class="button primary"
+            data-download-primary
+            href="https://github.com/alejandroechev/workstreams/releases/latest"
+            >Download latest release</a
+          >
           <a
             class="button ghost"
             href="https://github.com/alejandroechev/workstreams"
@@ -295,11 +311,21 @@
               Windows installers and a macOS Apple&nbsp;Silicon
               <code>.dmg</code> are published on the releases page.
             </p>
-            <a
-              class="button primary"
-              href="https://github.com/alejandroechev/workstreams/releases"
-              >Latest release</a
-            >
+            <div class="card-actions">
+              <a
+                class="button primary"
+                data-download-primary
+                href="https://github.com/alejandroechev/workstreams/releases/latest"
+                >Download latest release</a
+              >
+              <a
+                class="button ghost"
+                href="https://github.com/alejandroechev/workstreams/releases"
+                >All downloads</a>
+            </div>
+            <p class="download-detail" data-download-detail>
+              Windows and Apple Silicon macOS builds are available.
+            </p>
             <p class="fineprint">
               The macOS build is unsigned, so Gatekeeper blocks first launch —
               right-click&nbsp;→&nbsp;<strong>Open</strong>, or run
@@ -322,24 +348,35 @@ npm run tauri build</code></pre>
       </section>
 
       <section class="closing" aria-labelledby="closing-title">
-        <h2 id="closing-title">Read the design decisions</h2>
+        <h2 id="closing-title">Keep every Copilot CLI agent in view.</h2>
         <p>
-          Workstreams is documented the way it was built: every significant
-          choice has an architecture decision record explaining the constraint
-          behind it.
+          Replace a pile of terminal tabs with one persistent workspace for
+          sessions, code, reviews, and loops that have to prove they are done.
         </p>
         <div class="cta-row">
           <a
-            class="button ghost"
-            href="https://github.com/alejandroechev/workstreams/tree/master/docs/adrs"
-            >Architecture decision records</a
+            class="button primary"
+            data-download-primary
+            href="https://github.com/alejandroechev/workstreams/releases/latest"
+            >Download latest release</a
           >
           <a
             class="button ghost"
-            href="https://github.com/alejandroechev/workstreams/blob/master/docs/features-detailed.md"
-            >Feature deep dive</a
+            href="https://github.com/alejandroechev/workstreams"
+            >View source</a
           >
         </div>
+        <p class="closing-links">
+          <a
+            href="https://github.com/alejandroechev/workstreams/tree/master/docs/adrs"
+            >Read the design decisions</a
+          >
+          ·
+          <a
+            href="https://github.com/alejandroechev/workstreams/blob/master/docs/features-detailed.md"
+            >Explore every feature</a
+          >
+        </p>
       </section>
     </main>
 

@@ -1,9 +1,14 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   detectDownloadPlatform,
   releasePresentation,
   selectDownloadAsset,
 } from "../../site/downloads.js";
+
+const REPO = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
 const RELEASE = {
   tag_name: "v0.7.0",
@@ -90,6 +95,29 @@ describe("releasePresentation", () => {
       downloadUrl: "https://example.test/windows.exe",
       downloadLabel: "Download for Windows",
       assetName: "Workstreams_0.7.0_x64-setup.exe",
+    });
+  });
+
+  describe("landing-page download contract", () => {
+    const html = readFileSync(join(REPO, "site", "index.html"), "utf8");
+
+    it("loads the release resolver once", () => {
+      expect(html.match(/src="downloads\.js"/g)).toHaveLength(1);
+    });
+
+    it("has one latest-release eyebrow with dynamic version and date slots", () => {
+      expect(html.match(/data-release-link/g)).toHaveLength(1);
+      expect(html.match(/data-release-tag/g)).toHaveLength(1);
+      expect(html.match(/data-release-date/g)).toHaveLength(1);
+    });
+
+    it("repeats the OS-aware primary CTA at the hero, install, and final call to action", () => {
+      expect(html.match(/data-download-primary/g)).toHaveLength(3);
+    });
+
+    it("keeps an always-visible escape hatch to every release artifact", () => {
+      expect(html).toContain('href="https://github.com/alejandroechev/workstreams/releases"');
+      expect(html).toContain(">All downloads</a>");
     });
   });
 

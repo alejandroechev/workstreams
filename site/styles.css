@@ -241,12 +241,41 @@ main > section:last-child {
   padding-top: 84px;
 }
 
-.eyebrow {
-  text-transform: uppercase;
-  letter-spacing: 0.14em;
-  font-size: 0.75rem;
+.release-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 34px;
+  margin-bottom: 1.25rem;
+  padding: 5px 12px;
+  border: 1px solid var(--overlay);
+  border-radius: 999px;
+  background: rgba(49, 50, 68, 0.55);
+  color: var(--muted);
+  font-size: 0.78rem;
+  text-decoration: none;
+}
+
+.release-eyebrow:hover {
+  border-color: var(--mauve);
+  color: var(--text);
+}
+
+.release-eyebrow strong {
   color: var(--mauve);
-  margin-bottom: 1rem;
+}
+
+.release-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--green);
+  box-shadow: 0 0 0 3px rgba(166, 227, 161, 0.12);
+}
+
+[data-release-date]:not(:empty)::before {
+  content: "·";
+  margin-right: 0.5rem;
 }
 
 .lede {
@@ -379,6 +408,24 @@ figcaption {
   margin-top: 0.5rem;
 }
 
+.card-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 0.5rem;
+}
+
+.card-actions .button {
+  margin-top: 0;
+}
+
+.download-detail {
+  margin-top: 0.85rem !important;
+  color: var(--text) !important;
+  font-size: 0.82rem !important;
+}
+
 /* ── Loops ──────────────────────────────────────────────────────────── */
 
 .loop-grid {
@@ -462,6 +509,15 @@ figcaption {
   max-width: 60ch;
   margin-left: auto;
   margin-right: auto;
+}
+
+.closing .cta-row {
+  margin-top: 1.75rem;
+}
+
+.closing-links {
+  margin-top: 1.25rem;
+  font-size: 0.88rem;
 }
 
 .site-footer {
