@@ -408,6 +408,10 @@ figcaption {
   margin: 1rem 0 0;
 }
 
+.card-wide-demo {
+  grid-column: 1 / -1;
+}
+
 .card-demo video {
   box-shadow: none;
 }
