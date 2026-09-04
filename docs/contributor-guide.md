@@ -56,6 +56,69 @@ configure per-test `invoke()` handlers through
 (workstream creation, session linking, etc.) without needing the real Tauri
 runtime. See `e2e/tests/ws-create.spec.ts` for the canonical example.
 
+## Demo recordings
+
+Published demos are declared in `demos/manifest.json` and recorded by dedicated
+Playwright scenarios in `e2e/demos/`. The recorder runs the Vite E2E app with
+the `MemoryBackend`; it does not start Tauri or read the production database.
+Scenarios must use synthetic names, paths, source, comments, task text, terminal
+output, and session IDs, and must reach the final visual through the same
+visible controls a user drives.
+
+### Prerequisites and commands
+
+Install project dependencies first, then install Playwright's Chromium and
+ffmpeg bundle. The host also needs `ffmpeg` and `ffprobe` on `PATH`; recording
+the overview GIF additionally requires `gifski`.
+
+```bash
+npm install
+npx playwright install chromium ffmpeg
+
+npm run demos:record  # Re-record every manifest clip and refresh source hashes
+npm run demos:check   # Read-only validation; never regenerates or mutates media
+```
+
+`demos:record` fixes the viewport at 1280×800 and uses the dark theme. It writes
+raw recordings and temporary GIF frames only under `.dev/demo-media/<clip-id>/`,
+publishes the encoded artifacts below, updates each manifest `sourceHash`, and
+removes the temporary workspace. Do not commit `.raw.webm` files or frame
+directories.
+
+| Clip | Deterministic fixture and visible flow | Generated outputs and limits |
+| --- | --- | --- |
+| `overview` | Synthetic Atlas/Beacon workstreams, files, session, and PTY output; opens a workstream and adds Repo Explorer and Terminal tiles | `overview.webm` (VP9, 6 MB), `overview.mp4` (H.264/yuv420p/faststart, 8 MB), `overview.png` (PNG, 2 MB), `overview.gif` (gifski, 12 MB); video/GIF ≤30 s |
+| `goal-loop` | Synthetic retry-reliability YAML, task, verifier, evaluator, timings, and session data; opens the definition, runs, pauses, resumes, and expands evidence | `goal-loop.webm` (VP9, 6 MB), `goal-loop.mp4` (H.264/yuv420p/faststart, 8 MB), `goal-loop.png` (PNG, 2 MB); videos ≤30 s |
+| `local-code-review` | Synthetic Orbit working-tree diff and bound session; creates a review, selects the added line, and submits an inline comment | `local-code-review.webm` (VP9, 6 MB), `local-code-review.mp4` (H.264/yuv420p/faststart, 8 MB), `local-code-review.png` (PNG, 2 MB); videos ≤30 s |
+
+All outputs live in `docs/assets/demos/`, are linked from `README.md`, and are
+published by `site/index.html` as `assets/demos/<name>`. The overview GIF is the
+only GIF fallback. Every artifact is 1280×800.
+
+### Determinism, provenance, and review
+
+The shared fixture starts recording only after the root, fonts, and two
+animation frames settle; scenarios wait on observable UI state and retain the
+final settled result for at least one second. Keep chapter overlays brief and
+show real UI underneath them. Prefer action annotations for interaction
+clarity.
+
+The source hash covers the clip declaration (including encoding and budget
+settings), shared recorder/configuration sources, the scenario, and every
+clip-specific visual source listed in the manifest. If any of those inputs
+change, `npm run demos:check` rejects the old media as stale. The check also
+probes codec, dimensions, duration, pixel format, MP4 faststart, byte budgets,
+and every declared README/site reference; it intentionally does not compare
+encoded bytes.
+
+Before committing, watch each WebM and MP4 from start to finish and inspect its
+poster (plus the overview GIF). Confirm the clip starts and ends on settled
+frames, actions and text are legible, overlays clear, the final state is real,
+and no personal path, live repository data, credentials, notifications, or real
+Copilot content appears. Then run `npm run demos:check` and stage only the
+scenario/source changes, `demos/manifest.json`, reviewed outputs, and their
+publication/documentation updates.
+
 ## Component harness (real-Monaco UI bugs)
 
 jsdom/Vitest mocks Monaco and has no layout/z-index/pointer-events, so a class

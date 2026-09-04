@@ -27,15 +27,20 @@ for any release is attached to its
 - A deterministic Playwright screencast harness records isolated demo scenarios
   against synthetic in-memory data without launching the desktop app.
 - The published overview now demonstrates workstream context and adaptive
-  Copilot, Repo Explorer, and terminal tiling in WebM, MP4, PNG, and GIF formats,
-  with playback controls and explicitly-cleared chapter overlays in the
-  high-motion-quality GIF fallback.
+  Copilot, Repo Explorer, and terminal tiling through
+  `docs/assets/demos/overview.webm`, `overview.mp4`, `overview.png`, and the
+  high-motion-quality `overview.gif` fallback. The README links all four
+  outputs, and the landing page publishes them from `assets/demos/`.
 - A deterministic Goal Loop recording now shows its reviewable definition,
   working state, measured stage timings, and accepted worker, verifier, and
-  evaluator evidence in WebM, MP4, and poster formats.
+  evaluator evidence through `docs/assets/demos/goal-loop.webm`,
+  `goal-loop.mp4`, and `goal-loop.png`. The README links all three outputs, and
+  the landing page publishes them from `assets/demos/`.
 - A deterministic local code review recording now opens a synthetic working-tree
   diff, anchors feedback through the inline Monaco controls, and displays the
-  resulting thread in WebM, MP4, and poster formats.
+  resulting thread through `docs/assets/demos/local-code-review.webm`,
+  `local-code-review.mp4`, and `local-code-review.png`. The README links all
+  three outputs, and the landing page publishes them from `assets/demos/`.
 - The landing page now resolves the latest release through GitHub and offers the
   matching Windows or Apple Silicon macOS installer, with a no-JavaScript
   fallback, release announcement, and repeated final call to action.
