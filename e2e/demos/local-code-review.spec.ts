@@ -80,11 +80,10 @@ test("records a local working-tree code review", async ({ demo }) => {
 
   await seedWorkingTreeDiff(page);
   await demo.settled(workstream);
-  await demo.showChapter("Review changes without a PR", {
+  await page.screencast.showChapter("Review changes without a PR", {
     description: "Open a working-tree diff and leave feedback inline",
     duration: 800,
   });
-
   await workstream.click();
   const tile = page.locator('[data-tile-id]').filter({
     has: page.locator('[data-testid="code-review-tile"]'),
