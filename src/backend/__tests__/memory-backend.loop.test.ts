@@ -68,6 +68,74 @@ describe("MemoryBackend manual coding loops", () => {
     expect(snapshot.tasks[0].state).toBe("accepted");
     expect(snapshot.verifications[0].status).toBe("passed");
     expect(snapshot.evaluations[0].verdict).toBe("accepted");
+    expect(snapshot.tasks[0].workerResult).toContain(
+      "src/retry-policy.test.ts: 8 assertions passed",
+    );
+    expect(snapshot.verifications[0].stdout).toBe(
+      "8 deterministic assertions passed",
+    );
+    expect(snapshot.evaluations[0].evidence).toEqual([
+      "Bounded retry behavior matches the objective",
+    ]);
+    expect(snapshot.stages).toEqual([
+      expect.objectContaining({
+        loopRunId: run.id,
+        role: "orchestrator",
+        attempt: 1,
+        status: "completed",
+        durationMs: 1_800,
+      }),
+      expect.objectContaining({
+        loopRunId: run.id,
+        loopTaskId: snapshot.tasks[0].id,
+        role: "worker",
+        attempt: 1,
+        status: "completed",
+        durationMs: 3_500,
+      }),
+      expect.objectContaining({
+        loopRunId: run.id,
+        loopTaskId: snapshot.tasks[0].id,
+        role: "verifier",
+        attempt: 1,
+        status: "passed",
+        durationMs: 1_200,
+      }),
+      expect.objectContaining({
+        loopRunId: run.id,
+        loopTaskId: snapshot.tasks[0].id,
+        role: "evaluator",
+        attempt: 1,
+        status: "completed",
+        durationMs: 2_400,
+      }),
+      expect.objectContaining({
+        loopRunId: run.id,
+        role: "orchestrator",
+        attempt: 2,
+        status: "completed",
+        durationMs: 900,
+      }),
+    ]);
+  });
+
+  it("can slow synthetic loop transitions for observable browser demos", async () => {
+    await configure();
+    backend.seedLoopDelayScale(2);
+    await backend.runWorkstreamLoopNow(workstreamId);
+
+    await vi.advanceTimersByTimeAsync(620);
+    expect(
+      (await backend.getWorkstreamLoopSnapshot(workstreamId)).latestRun?.state,
+    ).toBe("working");
+    await vi.advanceTimersByTimeAsync(600);
+    expect(
+      (await backend.getWorkstreamLoopSnapshot(workstreamId)).latestRun?.state,
+    ).toBe("working");
+    await vi.advanceTimersByTimeAsync(2_400);
+    expect(
+      (await backend.getWorkstreamLoopSnapshot(workstreamId)).latestRun?.state,
+    ).toBe("completed");
   });
 
   it("kills an active run and preserves interrupted task evidence", async () => {

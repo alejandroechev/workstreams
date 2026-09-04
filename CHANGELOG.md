@@ -30,6 +30,9 @@ for any release is attached to its
   Copilot, Repo Explorer, and terminal tiling in WebM, MP4, PNG, and GIF formats,
   with playback controls and explicitly-cleared chapter overlays in the
   high-motion-quality GIF fallback.
+- A deterministic Goal Loop recording now shows its reviewable definition,
+  working state, measured stage timings, and accepted worker, verifier, and
+  evaluator evidence in WebM, MP4, and poster formats.
 
 ### Changed
 

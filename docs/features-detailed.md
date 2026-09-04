@@ -231,6 +231,10 @@ until the goal is met, and it must prove progress: every definition has to
 include deterministic verification, an independent evaluator, human approval,
 or a layered combination of those.
 
+[Watch a deterministic seeded run](assets/demos/goal-loop.webm) move from its
+reviewable definition through working state to measured stages and accepted
+evidence.
+
 Definitions are strict `files/loops/*.loop.yaml` files stored in the
 workstream's bound Copilot session (the `create-loop` skill can generate one).
 Read and edit them in the Goal Loop tile's **Definitions** tab and execute them

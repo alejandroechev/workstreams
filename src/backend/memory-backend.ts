@@ -99,6 +99,7 @@ export class MemoryBackend implements Backend {
   private loopRunWorkstreams = new Map<string, string>();
   private loopTimers = new Map<string, Array<ReturnType<typeof setTimeout>>>();
   private loopApprovalDecisions = new Set<string>();
+  private loopDelayScale = 1;
   private loopDefinitions = new Map<
     string,
     { definition: LoopDefinition; spec: LoopSpecDraft; workstreamId?: string }
@@ -126,6 +127,13 @@ export class MemoryBackend implements Backend {
     workstreamId?: string,
   ): void {
     this.loopDefinitions.set(definition.path, { definition, spec, workstreamId });
+  }
+
+  seedLoopDelayScale(scale: number): void {
+    if (!Number.isFinite(scale) || scale <= 0) {
+      throw new Error("Loop delay scale must be a positive number");
+    }
+    this.loopDelayScale = scale;
   }
 
   async listProjects(): Promise<Project[]> {
@@ -807,7 +815,7 @@ export class MemoryBackend implements Backend {
         const next = update(snapshot);
         this.loopSnapshots.set(workstreamId, this.addPendingApproval(snapshot, next));
         this.emitLoopUpdate(workstreamId);
-      }, delay);
+      }, delay * this.loopDelayScale);
 
     const timers = [
       transition(300, (snapshot) => {
@@ -830,10 +838,27 @@ export class MemoryBackend implements Backend {
           createdAt: now(),
           updatedAt: now(),
         };
-        return this.applyMemoryOutcome(
+        const transitioned = this.applyMemoryOutcome(
           { ...snapshot, tasks: snapshot.tasks.length > 0 ? snapshot.tasks : [] },
           { type: "tasks_proposed", tasks: [{ ...task, state: "queued" }] },
         );
+        const finishedAt = now();
+        return {
+          ...transitioned,
+          stages: [
+            ...transitioned.stages,
+            {
+              id: generateId(),
+              loopRunId: runId,
+              role: "orchestrator",
+              attempt: 1,
+              status: "completed",
+              startedAt: finishedAt,
+              finishedAt,
+              durationMs: 1_800,
+            },
+          ],
+        };
       }),
       transition(650, (snapshot) => {
         if (snapshot.latestRun?.state !== "working") return snapshot;
@@ -844,13 +869,27 @@ export class MemoryBackend implements Backend {
         return {
           ...transitioned,
           tasks: transitioned.tasks.map((task) => ({
-          ...task,
-          workerResult: JSON.stringify({
-            status: "completed",
-            summary: "Implemented the configured objective",
-            evidence: ["memory fixture"],
-          }),
-        })),
+            ...task,
+            workerResult: JSON.stringify({
+              status: "completed",
+              summary: "Implemented bounded retry handling",
+              evidence: ["src/retry-policy.test.ts: 8 assertions passed"],
+            }),
+          })),
+          stages: [
+            ...transitioned.stages,
+            {
+              id: generateId(),
+              loopRunId: runId,
+              loopTaskId: transitioned.tasks[0]?.id,
+              role: "worker",
+              attempt: transitioned.tasks[0]?.revisionCount + 1,
+              status: "completed",
+              startedAt: now(),
+              finishedAt: now(),
+              durationMs: 3_500,
+            },
+          ],
         };
       }),
       transition(1_000, (snapshot) => {
@@ -861,28 +900,43 @@ export class MemoryBackend implements Backend {
                 result: { kind: "passed" },
               })
             : snapshot;
+        const verification = snapshot.spec?.verifier && snapshot.tasks[0]
+          ? {
+              id: generateId(),
+              loopTaskId: snapshot.tasks[0].id,
+              attempt: snapshot.tasks[0].revisionCount + 1,
+              status: "passed" as const,
+              program: snapshot.spec.verifier.program,
+              args: [...snapshot.spec.verifier.args],
+              cwd: snapshot.spec.verifier.cwd,
+              durationMs: 1_200,
+              stdout: "8 deterministic assertions passed",
+              stderr: "",
+              truncated: false,
+              createdAt: now(),
+            }
+          : null;
         return {
           ...transitioned,
-          verifications:
-            snapshot.spec?.verifier && snapshot.tasks[0]
-              ? [
-                  ...snapshot.verifications,
-                  {
-                    id: generateId(),
-                    loopTaskId: snapshot.tasks[0].id,
-                    attempt: snapshot.tasks[0].revisionCount + 1,
-                    status: "passed",
-                    program: snapshot.spec.verifier.program,
-                    args: [...snapshot.spec.verifier.args],
-                    cwd: snapshot.spec.verifier.cwd,
-                    durationMs: 12,
-                    stdout: "Verification passed",
-                    stderr: "",
-                    truncated: false,
-                    createdAt: now(),
-                  },
-                ]
-              : snapshot.verifications,
+          verifications: verification
+            ? [...snapshot.verifications, verification]
+            : snapshot.verifications,
+          stages: verification
+            ? [
+                ...transitioned.stages,
+                {
+                  id: generateId(),
+                  loopRunId: runId,
+                  loopTaskId: verification.loopTaskId,
+                  role: "verifier",
+                  attempt: verification.attempt,
+                  status: "passed",
+                  startedAt: now(),
+                  finishedAt: now(),
+                  durationMs: verification.durationMs,
+                },
+              ]
+            : transitioned.stages,
         };
       }),
       transition(1_450, (snapshot) => {
@@ -912,11 +966,28 @@ export class MemoryBackend implements Backend {
                     sessionId: "memory-evaluator-session",
                     verdict: "accepted",
                     summary: "The result satisfies the objective.",
-                    evidence: ["memory fixture"],
+                    evidence: ["Bounded retry behavior matches the objective"],
                     createdAt: now(),
                   },
                 ]
               : snapshot.evaluations,
+          stages:
+            snapshot.tasks[0] && snapshot.latestRun?.state === "evaluating"
+              ? [
+                  ...transitioned.stages,
+                  {
+                    id: generateId(),
+                    loopRunId: runId,
+                    loopTaskId: snapshot.tasks[0].id,
+                    role: "evaluator",
+                    attempt: snapshot.tasks[0].revisionCount + 1,
+                    status: "completed",
+                    startedAt: now(),
+                    finishedAt: now(),
+                    durationMs: 2_400,
+                  },
+                ]
+              : transitioned.stages,
         };
       }),
       transition(1_800, (snapshot) => {
@@ -929,6 +1000,19 @@ export class MemoryBackend implements Backend {
           latestRun: transitioned.latestRun
             ? { ...transitioned.latestRun, finishedAt: now() }
             : transitioned.latestRun,
+          stages: [
+            ...transitioned.stages,
+            {
+              id: generateId(),
+              loopRunId: runId,
+              role: "orchestrator",
+              attempt: 2,
+              status: "completed",
+              startedAt: now(),
+              finishedAt: now(),
+              durationMs: 900,
+            },
+          ],
         };
       }),
     ];

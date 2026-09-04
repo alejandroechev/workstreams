@@ -39,6 +39,9 @@ instead of buried behind tabs.
   completion. Every loop must carry deterministic verification, an independent
   evaluator, human approval, or a mix. Runs pin the definition by hash, show a
   measured per-stage time breakdown, and survive a pause-quit-resume.
+  [Watch a deterministic Goal Loop run](docs/assets/demos/goal-loop.webm)
+  ([MP4](docs/assets/demos/goal-loop.mp4) ·
+  [poster](docs/assets/demos/goal-loop.png)).
 - **Local code review, no round-trips** — a diff-first, PR-style tile for agent
   or human code. Comment inline, edit code in place, and the agent replies in
   the same threads. No Azure DevOps, no MCP.

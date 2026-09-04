@@ -118,6 +118,86 @@
           ]
         }
       ]
+    },
+    {
+      "id": "goal-loop",
+      "scenario": "e2e/demos/goal-loop.spec.ts",
+      "sources": [
+            "e2e/demos/goal-loop.spec.ts",
+            "src/backend/memory-backend.ts",
+            "src/domain/loop.ts",
+            "src/domain/loop-timing.ts",
+            "src/tiles/LoopControlTile.tsx",
+            "src/styles/theme.css"
+      ],
+      "viewport": {
+            "width": 1280,
+            "height": 800
+      },
+      "theme": "dark",
+      "sourceHash": "a7132775d1ad43d2b9b460d853cb457bad4ed64483ef4c6fd7625bf5f4d59afa",
+      "artifacts": [
+            {
+              "type": "video",
+              "path": "docs/assets/demos/goal-loop.webm",
+              "container": "webm",
+              "codec": "vp9",
+              "width": 1280,
+              "height": 800,
+              "maxBytes": 6000000,
+              "maxDurationSeconds": 30,
+              "references": [
+                {
+                  "file": "README.md",
+                  "target": "docs/assets/demos/goal-loop.webm"
+                },
+                {
+                  "file": "site/index.html",
+                  "target": "assets/demos/goal-loop.webm"
+                }
+              ]
+            },
+            {
+              "type": "video",
+              "path": "docs/assets/demos/goal-loop.mp4",
+              "container": "mp4",
+              "codec": "h264",
+              "pixelFormat": "yuv420p",
+              "fastStart": true,
+              "width": 1280,
+              "height": 800,
+              "maxBytes": 8000000,
+              "maxDurationSeconds": 30,
+              "references": [
+                {
+                  "file": "README.md",
+                  "target": "docs/assets/demos/goal-loop.mp4"
+                },
+                {
+                  "file": "site/index.html",
+                  "target": "assets/demos/goal-loop.mp4"
+                }
+              ]
+            },
+            {
+              "type": "poster",
+              "path": "docs/assets/demos/goal-loop.png",
+              "codec": "png",
+              "width": 1280,
+              "height": 800,
+              "maxBytes": 2000000,
+              "references": [
+                {
+                  "file": "README.md",
+                  "target": "docs/assets/demos/goal-loop.png"
+                },
+                {
+                  "file": "site/index.html",
+                  "target": "assets/demos/goal-loop.png"
+                }
+          ]
+        }
+      ]
     }
   ]
 }
