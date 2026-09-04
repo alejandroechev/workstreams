@@ -45,6 +45,10 @@ reference.
 4. Run `npm run demos:check` to reject stale, malformed, missing, oversized, or
    incorrectly encoded media.
 
+After copying `docs/assets/` into `site/assets/`, run `npm run pages:check` to
+verify every local `img`, `video`, and `source` URL resolves in the exact tree
+that Pages will publish. The Pages workflow runs this check after staging media.
+
 Recording scenarios use Playwright 1.60's `page.screencast` API against the
 Vite E2E host and synthetic `MemoryBackend` data. The checker never launches
 the app or rewrites media, and `--check` is safe for CI.

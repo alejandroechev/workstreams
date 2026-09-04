@@ -34,6 +34,7 @@
     "keymaps:check": "node scripts/gen-keymaps.mjs --check",
     "demos:record": "node scripts/demo-media.mjs",
     "demos:check": "node scripts/demo-media.mjs --check",
+    "pages:check": "node scripts/pages-media.mjs site",
     "check-adrs": "node scripts/check-adrs.mjs",
     "hooks:install": "node scripts/install-hooks.mjs",
     "postinstall": "node scripts/install-hooks.mjs",

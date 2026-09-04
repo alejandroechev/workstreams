@@ -16,6 +16,7 @@ on:
     paths:
       - "site/**"
       - "docs/assets/**"
+      - "scripts/pages-media.mjs"
       - ".github/workflows/pages.yml"
   workflow_dispatch:
 
@@ -42,20 +43,9 @@ jobs:
           cp -R docs/assets/. site/assets/
 
       - name: Fail on references to missing local media
-        # A broken <img> is invisible in review and obvious to visitors, so
-        # check every local src before publishing rather than after.
-        run: |
-          status=0
-          for ref in $(grep -o 'src="[^"]*"' site/index.html | cut -d'"' -f2); do
-            case "$ref" in
-              http*) continue ;;
-            esac
-            if [ ! -f "site/$ref" ]; then
-              echo "::error file=site/index.html::missing media referenced as '$ref'"
-              status=1
-            fi
-          done
-          exit $status
+        # Check the staged tree, including video posters and nested sources,
+        # before publishing broken media references.
+        run: node scripts/pages-media.mjs site
 
       - uses: actions/configure-pages@v5
         # Enable Pages on first run rather than requiring a manual visit to
