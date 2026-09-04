@@ -57,6 +57,26 @@ describe("extractLocalMediaReferences", () => {
       },
     ]);
   });
+
+  it("ignores media tags inside HTML comments", () => {
+    const html = `
+      <!-- <img src="assets/commented-out.png"> -->
+      <img src="assets/visible.png">
+    `;
+
+    expect(extractLocalMediaReferences(html)).toEqual([
+      { tag: "img", attribute: "src", value: "assets/visible.png" },
+    ]);
+  });
+
+  it("does not parse attribute-like text inside another attribute", () => {
+    const html =
+      '<img alt="example src=assets/ghost.png" src="assets/real.png">';
+
+    expect(extractLocalMediaReferences(html)).toEqual([
+      { tag: "img", attribute: "src", value: "assets/real.png" },
+    ]);
+  });
 });
 
 describe("checkPagesMedia", () => {
