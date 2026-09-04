@@ -265,9 +265,30 @@ impl EvaluatorVerdict {
 struct EvaluatorOutput {
     verdict: EvaluatorVerdict,
     summary: String,
+    #[serde(default, deserialize_with = "deserialize_evaluator_feedback")]
     feedback: Option<String>,
     #[serde(default)]
     evidence: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum EvaluatorFeedback {
+    String(String),
+    Strings(Vec<String>),
+}
+
+fn deserialize_evaluator_feedback<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let feedback = Option::<EvaluatorFeedback>::deserialize(deserializer)?;
+    Ok(match feedback {
+        None => None,
+        Some(EvaluatorFeedback::String(feedback)) => Some(feedback),
+        Some(EvaluatorFeedback::Strings(feedback)) if feedback.is_empty() => None,
+        Some(EvaluatorFeedback::Strings(feedback)) => Some(feedback.join("\n\n")),
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2027,8 +2048,10 @@ fn evaluator_prompt(
          Deterministic verification: {}\n\n\
          Independently inspect the work with read-only actions. Return only JSON:\n\
          {{\"verdict\":\"accepted|revise|blocked|invalid\",\
-         \"summary\":\"judgment\",\"feedback\":null,\"evidence\":[]}}.\n\
-         A revise verdict must include actionable feedback.\n\
+         \"summary\":\"judgment\",\
+         \"feedback\":\"single actionable revision message, or null\",\
+         \"evidence\":[]}}.\n\
+         A revise verdict must include actionable feedback. Feedback must be one JSON string, never an array.\n\
          Do not include Markdown code fences or explanatory prose.",
         evaluator_instructions,
         task.title,
@@ -6501,6 +6524,78 @@ mod tests {
         )
         .expect("parse fenced evaluator JSON");
         assert_eq!(evaluator.verdict, EvaluatorVerdict::Accepted);
+    }
+
+    #[test]
+    fn evaluator_feedback_accepts_null_a_string_or_a_string_array() {
+        let without_feedback = parse_evaluator_output(
+            r#"{"verdict":"accepted","summary":"Correct","feedback":null,"evidence":[]}"#,
+        )
+        .expect("null feedback");
+        assert_eq!(without_feedback.feedback, None);
+
+        let single = parse_evaluator_output(
+            r#"{"verdict":"revise","summary":"Needs one fix","feedback":"Add the regression test.","evidence":[]}"#,
+        )
+        .expect("string feedback");
+        assert_eq!(single.feedback.as_deref(), Some("Add the regression test."));
+
+        let multiple = parse_evaluator_output(
+            r#"{"verdict":"revise","summary":"Needs two fixes","feedback":["Add the regression test.","Restore Node.js and rerun verification."],"evidence":[]}"#,
+        )
+        .expect("array feedback");
+        assert_eq!(
+            multiple.feedback.as_deref(),
+            Some("Add the regression test.\n\nRestore Node.js and rerun verification.")
+        );
+    }
+
+    #[test]
+    fn evaluator_feedback_array_requires_strings_and_actionable_content() {
+        let wrong_type = parse_evaluator_output(
+            r#"{"verdict":"revise","summary":"Bad shape","feedback":["Fix it",42],"evidence":[]}"#,
+        )
+        .expect_err("non-string array items must fail");
+        assert!(wrong_type.contains("invalid verdict JSON"));
+
+        let empty = parse_evaluator_output(
+            r#"{"verdict":"revise","summary":"No instructions","feedback":[],"evidence":[]}"#,
+        )
+        .expect_err("an empty array is not actionable");
+        assert!(empty.contains("requires actionable feedback"));
+    }
+
+    #[test]
+    fn evaluator_prompt_requires_feedback_to_be_one_string() {
+        let conn = test_db();
+        let spec = save_loop_spec(&conn, "ws-1", spec_input()).expect("save spec");
+        set_loop_enabled(&conn, &spec.id, true).expect("enable spec");
+        let run = create_loop_run(&conn, &spec.id, 600).expect("create run");
+        let task = enqueue_task(
+            &conn,
+            &run.id,
+            &spec.id,
+            &DiscoveredTask {
+                key: "prompt-contract".to_string(),
+                title: "Review the output shape".to_string(),
+                objective: "Require feedback to be one string".to_string(),
+            },
+        )
+        .expect("enqueue task")
+        .expect("new task");
+        let prompt = evaluator_prompt(
+            &spec,
+            &task,
+            &WorkerOutput {
+                status: WorkerStatus::Completed,
+                summary: "Done".to_string(),
+                evidence: Vec::new(),
+            },
+            None,
+        );
+
+        assert!(prompt.contains("\"feedback\":\"single actionable revision message, or null\""));
+        assert!(prompt.contains("Feedback must be one JSON string, never an array."));
     }
 
     #[test]

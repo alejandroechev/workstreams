@@ -51,6 +51,9 @@ for any release is attached to its
 ### Fixed
 
 - The duplicate ADR number 004: the Repo Explorer record is now 024.
+- Evaluators may return revision feedback as either one string or an array of
+  strings. Array feedback is joined into one actionable revision message
+  instead of interrupting the loop with an invalid-verdict error.
 
 ## [0.7.0] - 2026-09-03
 
