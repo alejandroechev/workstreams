@@ -11,18 +11,11 @@
 **[Feature reference](docs/features-detailed.md)** ·
 **[Design decisions](docs/adrs/)**
 
-<video
-  controls
-  poster="docs/assets/demos/overview.png"
-  aria-label="Workstreams in use: a workstream sidebar beside a tiled canvas of Copilot session, repo browser and terminal tiles."
->
-  <source src="docs/assets/demos/overview.webm" type="video/webm">
-  <source src="docs/assets/demos/overview.mp4" type="video/mp4">
-  <img
-    src="docs/assets/demos/overview.gif"
-    alt="Workstreams in use: a workstream sidebar beside a tiled canvas of Copilot session, repo browser and terminal tiles."
-  >
-</video>
+[![Workstreams in use: a workstream sidebar beside a tiled canvas of Copilot session, repo browser and terminal tiles.](docs/assets/demos/overview.gif)](docs/assets/demos/overview.webm)
+
+[Watch the WebM recording](docs/assets/demos/overview.webm) ·
+[Watch the MP4 recording](docs/assets/demos/overview.mp4) ·
+[View the poster](docs/assets/demos/overview.png)
 
 ## Why Workstreams?
 
