@@ -123,167 +123,167 @@
       "id": "goal-loop",
       "scenario": "e2e/demos/goal-loop.spec.ts",
       "sources": [
-            "e2e/demos/goal-loop.spec.ts",
-            "src/backend/memory-backend.ts",
-            "src/domain/loop.ts",
-            "src/domain/loop-timing.ts",
-            "src/tiles/LoopControlTile.tsx",
-            "src/styles/theme.css"
+        "e2e/demos/goal-loop.spec.ts",
+        "src/backend/memory-backend.ts",
+        "src/domain/loop.ts",
+        "src/domain/loop-timing.ts",
+        "src/tiles/LoopControlTile.tsx",
+        "src/styles/theme.css"
       ],
       "viewport": {
-            "width": 1280,
-            "height": 800
+        "width": 1280,
+        "height": 800
       },
       "theme": "dark",
-      "sourceHash": "06ca3d0cfb1f011e08bb6de2a75bb5b3763a5d373c26cfdd15b35fab20ee9047",
+      "sourceHash": "7bd25a48ec804fca67c23bcc9019593390aeabda5f43b45fbac83bbf7b32a8fa",
       "artifacts": [
+        {
+          "type": "video",
+          "path": "docs/assets/demos/goal-loop.webm",
+          "container": "webm",
+          "codec": "vp9",
+          "width": 1280,
+          "height": 800,
+          "maxBytes": 6000000,
+          "maxDurationSeconds": 30,
+          "references": [
             {
-              "type": "video",
-              "path": "docs/assets/demos/goal-loop.webm",
-              "container": "webm",
-              "codec": "vp9",
-              "width": 1280,
-              "height": 800,
-              "maxBytes": 6000000,
-              "maxDurationSeconds": 30,
-              "references": [
-                {
-                  "file": "README.md",
-                  "target": "docs/assets/demos/goal-loop.webm"
-                },
-                {
-                  "file": "site/index.html",
-                  "target": "assets/demos/goal-loop.webm"
-                }
-              ]
+              "file": "README.md",
+              "target": "docs/assets/demos/goal-loop.webm"
             },
             {
-              "type": "video",
-              "path": "docs/assets/demos/goal-loop.mp4",
-              "container": "mp4",
-              "codec": "h264",
-              "pixelFormat": "yuv420p",
-              "fastStart": true,
-              "width": 1280,
-              "height": 800,
-              "maxBytes": 8000000,
-              "maxDurationSeconds": 30,
-              "references": [
-                {
-                  "file": "README.md",
-                  "target": "docs/assets/demos/goal-loop.mp4"
-                },
-                {
-                  "file": "site/index.html",
-                  "target": "assets/demos/goal-loop.mp4"
-                }
-              ]
-            },
-            {
-              "type": "poster",
-              "path": "docs/assets/demos/goal-loop.png",
-              "codec": "png",
-              "width": 1280,
-              "height": 800,
-              "maxBytes": 2000000,
-              "references": [
-                {
-                  "file": "README.md",
-                  "target": "docs/assets/demos/goal-loop.png"
-                },
-                {
-                  "file": "site/index.html",
-                  "target": "assets/demos/goal-loop.png"
-                }
-              ]
+              "file": "site/index.html",
+              "target": "assets/demos/goal-loop.webm"
             }
           ]
         },
         {
-          "id": "local-code-review",
-          "scenario": "e2e/demos/local-code-review.spec.ts",
-          "sources": [
-                "e2e/demos/local-code-review.spec.ts",
-                "src/App.tsx",
-                "src/backend/memory-backend.ts",
-                "src/domain/code-review-view.ts",
-                "src/domain/layout.ts",
-                "src/styles/theme.css",
-                "src/tiles/CodeReviewTile.tsx",
-                "src/tiling/Tile.tsx",
-                "src/tiling/TileGrid.tsx",
-                "src/ui/interactive-zones.ts",
-                "src/ui/monaco-diff-theme.ts",
-                "src/workstream/WorkstreamSidebar.tsx"
-          ],
-          "viewport": {
-                "width": 1280,
-                "height": 800
-          },
-          "theme": "dark",
-          "sourceHash": "3e648208e7006b798abdd7649c056fb11b86b5c0e14a313c9ef301d394bb3d70",
-          "artifacts": [
-                {
-                  "type": "video",
-                  "path": "docs/assets/demos/local-code-review.webm",
-                  "container": "webm",
-                  "codec": "vp9",
-                  "width": 1280,
-                  "height": 800,
-                  "maxBytes": 6000000,
-                  "maxDurationSeconds": 30,
-                  "references": [
-                    {
-                      "file": "README.md",
-                      "target": "docs/assets/demos/local-code-review.webm"
-                    },
-                    {
-                      "file": "site/index.html",
-                      "target": "assets/demos/local-code-review.webm"
-                    }
-                  ]
-                },
-                {
-                  "type": "video",
-                  "path": "docs/assets/demos/local-code-review.mp4",
-                  "container": "mp4",
-                  "codec": "h264",
-                  "pixelFormat": "yuv420p",
-                  "fastStart": true,
-                  "width": 1280,
-                  "height": 800,
-                  "maxBytes": 8000000,
-                  "maxDurationSeconds": 30,
-                  "references": [
-                    {
-                      "file": "README.md",
-                      "target": "docs/assets/demos/local-code-review.mp4"
-                    },
-                    {
-                      "file": "site/index.html",
-                      "target": "assets/demos/local-code-review.mp4"
-                    }
-                  ]
-                },
-                {
-                  "type": "poster",
-                  "path": "docs/assets/demos/local-code-review.png",
-                  "codec": "png",
-                  "width": 1280,
-                  "height": 800,
-                  "maxBytes": 2000000,
-                  "references": [
-                    {
-                      "file": "README.md",
-                      "target": "docs/assets/demos/local-code-review.png"
-                    },
-                    {
-                      "file": "site/index.html",
-                      "target": "assets/demos/local-code-review.png"
-                    }
-                  ]
-                }
+          "type": "video",
+          "path": "docs/assets/demos/goal-loop.mp4",
+          "container": "mp4",
+          "codec": "h264",
+          "pixelFormat": "yuv420p",
+          "fastStart": true,
+          "width": 1280,
+          "height": 800,
+          "maxBytes": 8000000,
+          "maxDurationSeconds": 30,
+          "references": [
+            {
+              "file": "README.md",
+              "target": "docs/assets/demos/goal-loop.mp4"
+            },
+            {
+              "file": "site/index.html",
+              "target": "assets/demos/goal-loop.mp4"
+            }
+          ]
+        },
+        {
+          "type": "poster",
+          "path": "docs/assets/demos/goal-loop.png",
+          "codec": "png",
+          "width": 1280,
+          "height": 800,
+          "maxBytes": 2000000,
+          "references": [
+            {
+              "file": "README.md",
+              "target": "docs/assets/demos/goal-loop.png"
+            },
+            {
+              "file": "site/index.html",
+              "target": "assets/demos/goal-loop.png"
+            }
           ]
         }
+      ]
+    },
+    {
+      "id": "local-code-review",
+      "scenario": "e2e/demos/local-code-review.spec.ts",
+      "sources": [
+        "e2e/demos/local-code-review.spec.ts",
+        "src/App.tsx",
+        "src/backend/memory-backend.ts",
+        "src/domain/code-review-view.ts",
+        "src/domain/layout.ts",
+        "src/styles/theme.css",
+        "src/tiles/CodeReviewTile.tsx",
+        "src/tiling/Tile.tsx",
+        "src/tiling/TileGrid.tsx",
+        "src/ui/interactive-zones.ts",
+        "src/ui/monaco-diff-theme.ts",
+        "src/workstream/WorkstreamSidebar.tsx"
+      ],
+      "viewport": {
+        "width": 1280,
+        "height": 800
+      },
+      "theme": "dark",
+      "sourceHash": "f8b3f84f5bb3fd3793873828c72ff869f2ed08f162d954e71fdfeaf38a42e2d5",
+      "artifacts": [
+        {
+          "type": "video",
+          "path": "docs/assets/demos/local-code-review.webm",
+          "container": "webm",
+          "codec": "vp9",
+          "width": 1280,
+          "height": 800,
+          "maxBytes": 6000000,
+          "maxDurationSeconds": 30,
+          "references": [
+            {
+              "file": "README.md",
+              "target": "docs/assets/demos/local-code-review.webm"
+            },
+            {
+              "file": "site/index.html",
+              "target": "assets/demos/local-code-review.webm"
+            }
+          ]
+        },
+        {
+          "type": "video",
+          "path": "docs/assets/demos/local-code-review.mp4",
+          "container": "mp4",
+          "codec": "h264",
+          "pixelFormat": "yuv420p",
+          "fastStart": true,
+          "width": 1280,
+          "height": 800,
+          "maxBytes": 8000000,
+          "maxDurationSeconds": 30,
+          "references": [
+            {
+              "file": "README.md",
+              "target": "docs/assets/demos/local-code-review.mp4"
+            },
+            {
+              "file": "site/index.html",
+              "target": "assets/demos/local-code-review.mp4"
+            }
+          ]
+        },
+        {
+          "type": "poster",
+          "path": "docs/assets/demos/local-code-review.png",
+          "codec": "png",
+          "width": 1280,
+          "height": 800,
+          "maxBytes": 2000000,
+          "references": [
+            {
+              "file": "README.md",
+              "target": "docs/assets/demos/local-code-review.png"
+            },
+            {
+              "file": "site/index.html",
+              "target": "assets/demos/local-code-review.png"
+            }
+          ]
+        }
+      ]
+    }
   ]
 }
