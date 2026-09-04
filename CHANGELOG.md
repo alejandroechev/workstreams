@@ -28,7 +28,8 @@ for any release is attached to its
   against synthetic in-memory data without launching the desktop app.
 - The published overview now demonstrates workstream context and adaptive
   Copilot, Repo Explorer, and terminal tiling in WebM, MP4, PNG, and GIF formats,
-  with playback controls and a clean high-motion-quality GIF fallback.
+  with playback controls and explicitly-cleared chapter overlays in the
+  high-motion-quality GIF fallback.
 
 ### Changed
 

@@ -105,12 +105,15 @@ export const test = base.extend<DemoFixtures>({
       await use({
         page,
         showChapter: async (title, options) => {
+          await page.screencast.showOverlays();
           await page.screencast.showChapter(title, options);
           await page.waitForTimeout(options?.duration ?? 2_000);
+          await page.screencast.hideOverlays();
           await waitForStableFrame(page);
         },
         settled: (locator) => waitForStableFrame(page, locator),
       });
+      await page.screencast.hideOverlays();
       await waitForStableFrame(page);
       await page.waitForTimeout(FINAL_HOLD_MS);
       succeeded = true;
