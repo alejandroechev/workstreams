@@ -58,7 +58,8 @@ function accumulate(stages: readonly LoopStageRecord[]): LoopRoleTotal[] {
     }
   }
   return [...totals.values()].sort(
-    (left, right) => right.totalMs - left.totalMs || left.role.localeCompare(right.role),
+    (left, right) =>
+      right.totalMs - left.totalMs || left.role.localeCompare(right.role),
   );
 }
 
@@ -92,7 +93,10 @@ export function summarizeRunTiming(input: {
   const finishedAt = parseTime(run?.finishedAt);
   const elapsedMs =
     startedAt === null ? 0 : Math.max(0, (finishedAt ?? now) - startedAt);
-  const measuredMs = stages.reduce((total, stage) => total + stage.durationMs, 0);
+  const measuredMs = stages.reduce(
+    (total, stage) => total + stage.durationMs,
+    0,
+  );
   const slowest = stages.reduce<LoopStageRecord | null>(
     (slowestSoFar, stage) =>
       slowestSoFar === null || stage.durationMs > slowestSoFar.durationMs
@@ -108,7 +112,12 @@ export function summarizeRunTiming(input: {
   };
 }
 
-export const LOOP_TASK_FILTERS = ["all", "active", "accepted", "attention"] as const;
+export const LOOP_TASK_FILTERS = [
+  "all",
+  "active",
+  "accepted",
+  "attention",
+] as const;
 
 export type LoopTaskFilter = (typeof LOOP_TASK_FILTERS)[number];
 
@@ -162,7 +171,9 @@ export function countRunsByFilter(
 ): Record<LoopRunFilter, number> {
   return LOOP_RUN_FILTERS.reduce(
     (counts, filter) => {
-      counts[filter] = runs.filter((run) => matchesRunFilter(run, filter)).length;
+      counts[filter] = runs.filter((run) =>
+        matchesRunFilter(run, filter),
+      ).length;
       return counts;
     },
     {} as Record<LoopRunFilter, number>,
@@ -210,7 +221,10 @@ const ATTENTION_STATES: ReadonlySet<LoopTask["state"]> = new Set([
   "interrupted",
 ]);
 
-export function matchesTaskFilter(task: LoopTask, filter: LoopTaskFilter): boolean {
+export function matchesTaskFilter(
+  task: LoopTask,
+  filter: LoopTaskFilter,
+): boolean {
   switch (filter) {
     case "all":
       return true;
@@ -219,7 +233,9 @@ export function matchesTaskFilter(task: LoopTask, filter: LoopTaskFilter): boole
     case "accepted":
       return task.state === "accepted";
     case "attention":
-      return ATTENTION_STATES.has(task.state);
+      // A superseded task failed, but planning already handled it — counting it
+      // as needing attention would misreport a run that went on to finish.
+      return ATTENTION_STATES.has(task.state) && !task.supersededByReplan;
   }
 }
 
@@ -244,7 +260,9 @@ export function orderTasks(
       if (leftTime !== null && rightTime !== null && leftTime !== rightTime) {
         return sort === "newest" ? rightTime - leftTime : leftTime - rightTime;
       }
-      return sort === "newest" ? right.index - left.index : left.index - right.index;
+      return sort === "newest"
+        ? right.index - left.index
+        : left.index - right.index;
     })
     .map((entry) => entry.task);
 }

@@ -13,6 +13,10 @@ for any release is attached to its
 
 ### Added
 
+- A goal loop now asks the orchestrator to break a stuck task into smaller ones
+  before stopping for a human. The failed task stays visible as *Superseded*
+  with its evidence intact, and a run that can be rescued this way finishes on
+  its own. See [ADR 025](docs/adrs/025-orchestrator-replan-on-attention.md).
 - `CODE_OF_CONDUCT.md`, issue forms and a pull request template, so the project
   states how to contribute and what to expect.
 - An index for the Architecture Decision Records at `docs/adrs/`, listing every

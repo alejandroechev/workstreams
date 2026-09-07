@@ -85,6 +85,12 @@ export interface LoopTask {
   error?: string;
   createdAt?: string;
   updatedAt?: string;
+  /**
+   * True when planning replaced this task with narrower ones after it used its
+   * whole attempt budget. It keeps its failed state and reason as evidence, but
+   * no longer needs a human — so it must not read as "action required".
+   */
+  supersededByReplan?: boolean;
 }
 
 export type VerificationResult =

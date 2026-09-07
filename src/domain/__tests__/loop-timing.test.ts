@@ -54,7 +54,12 @@ function run(overrides: Partial<LoopRun> = {}): LoopRun {
 describe("loop timing summaries", () => {
   it("totals each role and finds the slowest stage", () => {
     const stages = [
-      stage({ id: "s1", role: "orchestrator", loopTaskId: undefined, durationMs: 30_000 }),
+      stage({
+        id: "s1",
+        role: "orchestrator",
+        loopTaskId: undefined,
+        durationMs: 30_000,
+      }),
       stage({ id: "s2", role: "worker", durationMs: 120_000 }),
       stage({ id: "s3", role: "verifier", durationMs: 45_000 }),
       stage({ id: "s4", role: "evaluator", durationMs: 90_000 }),
@@ -69,7 +74,9 @@ describe("loop timing summaries", () => {
 
     expect(timing.elapsedMs).toBe(600_000);
     expect(timing.measuredMs).toBe(345_000);
-    expect(timing.roles.map((role) => [role.role, role.totalMs, role.count])).toEqual([
+    expect(
+      timing.roles.map((role) => [role.role, role.totalMs, role.count]),
+    ).toEqual([
       ["worker", 180_000, 2],
       ["evaluator", 90_000, 1],
       ["verifier", 45_000, 1],
@@ -106,8 +113,18 @@ describe("loop timing summaries", () => {
     const stages = [
       stage({ id: "s1", loopTaskId: "task-1", durationMs: 10_000 }),
       stage({ id: "s2", loopTaskId: "task-2", durationMs: 20_000 }),
-      stage({ id: "s3", loopTaskId: "task-1", role: "evaluator", durationMs: 5_000 }),
-      stage({ id: "s4", loopTaskId: undefined, role: "orchestrator", durationMs: 1_000 }),
+      stage({
+        id: "s3",
+        loopTaskId: "task-1",
+        role: "evaluator",
+        durationMs: 5_000,
+      }),
+      stage({
+        id: "s4",
+        loopTaskId: undefined,
+        role: "orchestrator",
+        durationMs: 1_000,
+      }),
     ];
 
     expect(stagesForTask(stages, "task-1").map((entry) => entry.id)).toEqual([
@@ -250,7 +267,36 @@ describe("loop timing summaries", () => {
       "awaiting_approval",
     ]);
     expect(matching("accepted")).toEqual(["accepted"]);
-    expect(matching("attention")).toEqual(["blocked", "attention", "interrupted"]);
+    expect(matching("attention")).toEqual([
+      "blocked",
+      "attention",
+      "interrupted",
+    ]);
+  });
+
+  it("stops counting a failed task once planning superseded it", () => {
+    const superseded: LoopTask = {
+      id: "t1",
+      loopRunId: "run-1",
+      loopSpecId: "spec-1",
+      key: "sliders",
+      title: "All sliders",
+      objective: "Seven features at once",
+      state: "attention",
+      revisionCount: 5,
+      supersededByReplan: true,
+    };
+
+    // It stays visible under "all" as evidence, but no longer reads as work
+    // waiting on a human — the run it belongs to may well have completed.
+    expect(matchesTaskFilter(superseded, "all")).toBe(true);
+    expect(matchesTaskFilter(superseded, "attention")).toBe(false);
+    expect(
+      matchesTaskFilter(
+        { ...superseded, supersededByReplan: false },
+        "attention",
+      ),
+    ).toBe(true);
   });
 });
 
@@ -339,9 +385,9 @@ describe("run filtering", () => {
   });
 
   it("describes a run for the list row without needing its evidence", () => {
-    expect(describeRun(summary("working", { taskTotal: 3, taskAttention: 0 }))).toBe(
-      "3 tasks",
-    );
+    expect(
+      describeRun(summary("working", { taskTotal: 3, taskAttention: 0 })),
+    ).toBe("3 tasks");
     expect(
       describeRun(summary("attention", { taskTotal: 3, taskAttention: 2 })),
     ).toBe("3 tasks · 2 need attention");

@@ -317,7 +317,10 @@ function DefinitionRow({
       }}
     >
       <span style={{ display: "flex", alignItems: "center", gap: 5 }}>
-        <Icon aria-hidden="true" style={{ width: 12, height: 12, flexShrink: 0 }} />
+        <Icon
+          aria-hidden="true"
+          style={{ width: 12, height: 12, flexShrink: 0 }}
+        />
         <span
           style={{
             flex: 1,
@@ -386,7 +389,7 @@ function CollapsibleObjective({ objective }: { objective: string }) {
  * Mirrors the Repo Explorer diff layout so selecting a definition and reading
  * its source is the same gesture as selecting a file and reading its diff. Run
  * lives in the toolbar because it acts on the selection, not on the editor.
- */function DefinitionsPanel({
+ */ function DefinitionsPanel({
   catalog,
   selectedPath,
   editorSnapshot,
@@ -417,12 +420,18 @@ function CollapsibleObjective({ objective }: { objective: string }) {
     selectedDefinition?.name ??
     selectedPath?.split(/[\\/]/).pop() ??
     "Loop definition";
-  const empty = catalog.definitions.length === 0 && catalog.invalid.length === 0;
+  const empty =
+    catalog.definitions.length === 0 && catalog.invalid.length === 0;
 
   return (
     <div
       data-testid="loop-definitions-tab"
-      style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}
+      style={{
+        flex: 1,
+        minHeight: 0,
+        display: "flex",
+        flexDirection: "column",
+      }}
     >
       <div style={toolbarStyle}>
         <span
@@ -491,7 +500,14 @@ function CollapsibleObjective({ objective }: { objective: string }) {
           </div>
         </div>
 
-        <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
+        <div
+          style={{
+            flex: 1,
+            minWidth: 0,
+            display: "flex",
+            flexDirection: "column",
+          }}
+        >
           {selectedPath ? (
             <>
               <div
@@ -512,8 +528,11 @@ function CollapsibleObjective({ objective }: { objective: string }) {
                   {selectedPath}
                 </div>
                 {selectedDefinition &&
-                  (selectedDefinition.objective.length > OBJECTIVE_PREVIEW_LIMIT ? (
-                    <CollapsibleObjective objective={selectedDefinition.objective} />
+                  (selectedDefinition.objective.length >
+                  OBJECTIVE_PREVIEW_LIMIT ? (
+                    <CollapsibleObjective
+                      objective={selectedDefinition.objective}
+                    />
                   ) : (
                     <div style={{ color: "#bac2de", marginTop: 2 }}>
                       {selectedDefinition.objective}
@@ -529,7 +548,10 @@ function CollapsibleObjective({ objective }: { objective: string }) {
                       marginTop: 3,
                     }}
                   >
-                    <ExclamationTriangleIcon aria-hidden="true" style={iconStyle} />
+                    <ExclamationTriangleIcon
+                      aria-hidden="true"
+                      style={iconStyle}
+                    />
                     Not portable: this definition uses machine-specific
                     configuration.
                   </div>
@@ -574,12 +596,16 @@ function VerificationEvidence({ record }: { record: LoopVerificationRecord }) {
         {` in ${formatDuration(record.durationMs)}`}
       </div>
       {record.stdout && (
-        <pre style={{ whiteSpace: "pre-wrap", color: "#a6e3a1", margin: "4px 0" }}>
+        <pre
+          style={{ whiteSpace: "pre-wrap", color: "#a6e3a1", margin: "4px 0" }}
+        >
           {record.stdout}
         </pre>
       )}
       {record.stderr && (
-        <pre style={{ whiteSpace: "pre-wrap", color: "#f38ba8", margin: "4px 0" }}>
+        <pre
+          style={{ whiteSpace: "pre-wrap", color: "#f38ba8", margin: "4px 0" }}
+        >
           {record.stderr}
         </pre>
       )}
@@ -597,7 +623,9 @@ function EvaluationEvidence({ record }: { record: LoopEvaluationRecord }) {
         Evaluator: <strong>{record.verdict}</strong>
       </div>
       <div>{record.summary}</div>
-      {record.feedback && <div style={{ color: "#f9e2af" }}>{record.feedback}</div>}
+      {record.feedback && (
+        <div style={{ color: "#f9e2af" }}>{record.feedback}</div>
+      )}
       {record.evidence.length > 0 && (
         <ul style={{ margin: "4px 0", paddingLeft: 18 }}>
           {record.evidence.map((item) => (
@@ -619,7 +647,9 @@ function ApprovalEvidence({ record }: { record: LoopApprovalRecord }) {
         Human approval: <strong>{record.status.replace("_", " ")}</strong>
       </div>
       <div>{record.prompt}</div>
-      {record.feedback && <div style={{ color: "#f9e2af" }}>{record.feedback}</div>}
+      {record.feedback && (
+        <div style={{ color: "#f9e2af" }}>{record.feedback}</div>
+      )}
     </div>
   );
 }
@@ -630,7 +660,9 @@ type ParsedWorkerResult = {
   evidence?: string[];
 };
 
-function parseWorkerResult(value: string | undefined): ParsedWorkerResult | null {
+function parseWorkerResult(
+  value: string | undefined,
+): ParsedWorkerResult | null {
   if (!value) return null;
   try {
     const parsed = JSON.parse(value) as unknown;
@@ -640,7 +672,9 @@ function parseWorkerResult(value: string | undefined): ParsedWorkerResult | null
       status: typeof record.status === "string" ? record.status : undefined,
       summary: typeof record.summary === "string" ? record.summary : undefined,
       evidence: Array.isArray(record.evidence)
-        ? record.evidence.filter((item): item is string => typeof item === "string")
+        ? record.evidence.filter(
+            (item): item is string => typeof item === "string",
+          )
         : undefined,
     };
   } catch {
@@ -649,10 +683,11 @@ function parseWorkerResult(value: string | undefined): ParsedWorkerResult | null
 }
 
 function concisePreview(value: string, maxLength = 320): string {
-  const line = value
-    .split(/\r?\n/)
-    .map((part) => part.trim())
-    .find(Boolean) ?? "";
+  const line =
+    value
+      .split(/\r?\n/)
+      .map((part) => part.trim())
+      .find(Boolean) ?? "";
   return line.length > maxLength ? `${line.slice(0, maxLength)}…` : line;
 }
 
@@ -666,11 +701,20 @@ function taskStatusSummary(
   const worker = parseWorkerResult(task.workerResult);
   const latestVerification = verifications[verifications.length - 1];
   const latestEvaluation = evaluations[evaluations.length - 1];
-  const pendingApproval = approvals.find((approval) => approval.status === "pending");
+  const pendingApproval = approvals.find(
+    (approval) => approval.status === "pending",
+  );
   if (pendingApproval) {
     return {
       label: "Approval required",
       message: pendingApproval.prompt,
+    };
+  }
+  if (task.supersededByReplan) {
+    return {
+      label: "Superseded",
+      message:
+        "This task used its whole attempt budget, so it was split into smaller tasks. Kept for its evidence; no action needed.",
     };
   }
   if (task.state === "attention" || task.state === "blocked") {
@@ -679,7 +723,8 @@ function taskStatusSummary(
       latestVerification && latestVerification.status !== "passed";
     const verifierIsNewest =
       verifierFailed &&
-      (!latestEvaluation || latestVerification.attempt >= latestEvaluation.attempt);
+      (!latestEvaluation ||
+        latestVerification.attempt >= latestEvaluation.attempt);
     const verifierMessage =
       concisePreview(latestVerification?.stderr ?? "") ||
       concisePreview(latestVerification?.stdout ?? "") ||
@@ -706,17 +751,36 @@ function taskStatusSummary(
     case "queued":
       return { label: "Queued", message: "Waiting for the worker." };
     case "working":
-      return { label: "Working", message: worker?.summary ?? "Worker is implementing the task." };
+      return {
+        label: "Working",
+        message: worker?.summary ?? "Worker is implementing the task.",
+      };
     case "verifying":
-      return { label: "Verifying", message: "Deterministic verification is running." };
+      return {
+        label: "Verifying",
+        message: "Deterministic verification is running.",
+      };
     case "evaluating":
-      return { label: "Evaluating", message: "Independent evaluation is running." };
+      return {
+        label: "Evaluating",
+        message: "Independent evaluation is running.",
+      };
     case "awaiting_approval":
-      return { label: "Approval required", message: "Review the task evidence." };
+      return {
+        label: "Approval required",
+        message: "Review the task evidence.",
+      };
     case "accepted":
-      return { label: "Accepted", message: latestEvaluation?.summary ?? worker?.summary ?? "Task accepted." };
+      return {
+        label: "Accepted",
+        message:
+          latestEvaluation?.summary ?? worker?.summary ?? "Task accepted.",
+      };
     case "interrupted":
-      return { label: "Interrupted", message: task.error ?? "The task was interrupted." };
+      return {
+        label: "Interrupted",
+        message: task.error ?? "The task was interrupted.",
+      };
   }
 }
 
@@ -732,7 +796,10 @@ function CurrentTaskDetail({
     <>
       <div style={{ color: "#a6adc8" }}>{taskHeadline(task)}</div>
       {timing.totalMs > 0 && (
-        <div data-testid="loop-current-task-duration" style={{ color: "#a6adc8" }}>
+        <div
+          data-testid="loop-current-task-duration"
+          style={{ color: "#a6adc8" }}
+        >
           Stage time: {formatDuration(timing.totalMs)}
         </div>
       )}
@@ -749,7 +816,10 @@ function CurrentTaskDetail({
         {open && (
           <div style={{ marginTop: 4, color: "#a6adc8" }}>
             {task.objective}
-            <StageTimings timing={timing} testId="loop-current-task-stage-timings" />
+            <StageTimings
+              timing={timing}
+              testId="loop-current-task-stage-timings"
+            />
           </div>
         )}
       </details>
@@ -779,7 +849,9 @@ function TaskStatusMessage({
         }}
         style={{ cursor: "pointer", userSelect: "none" }}
       >
-        {open ? "Show less" : `${message.slice(0, STATUS_PREVIEW_LIMIT).trimEnd()}…`}
+        {open
+          ? "Show less"
+          : `${message.slice(0, STATUS_PREVIEW_LIMIT).trimEnd()}…`}
       </summary>
       {open && <div style={{ marginTop: 4 }}>{message}</div>}
     </details>
@@ -838,9 +910,10 @@ function TaskCard({
     maxTaskIterations,
   );
   const needsAction =
-    task.state === "attention" ||
-    task.state === "blocked" ||
-    approvals.some((approval) => approval.status === "pending");
+    !task.supersededByReplan &&
+    (task.state === "attention" ||
+      task.state === "blocked" ||
+      approvals.some((approval) => approval.status === "pending"));
 
   return (
     <article
@@ -911,7 +984,9 @@ function TaskCard({
             />
             <div style={{ color: "#6c7086", marginTop: 3 }}>
               Revisions: {task.revisionCount}
-              {task.workerSessionId ? ` / Worker session: ${task.workerSessionId}` : ""}
+              {task.workerSessionId
+                ? ` / Worker session: ${task.workerSessionId}`
+                : ""}
             </div>
             {task.workerResult && (
               <div
@@ -979,8 +1054,8 @@ function TaskList({
   maxTaskIterations: number;
   stages: LoopStageRecord[];
 }) {
-  const actionable = tasks.filter(
-    (task) => task.state === "attention" || task.state === "blocked",
+  const actionable = tasks.filter((task) =>
+    matchesTaskFilter(task, "attention"),
   ).length;
   const [open, setOpen] = useState(actionable > 0);
   const [sort, setSort] = useState<LoopTaskSort>("newest");
@@ -996,7 +1071,12 @@ function TaskList({
           event.preventDefault();
           setOpen((current) => !current);
         }}
-        style={{ ...headingStyle, margin: 0, cursor: "pointer", userSelect: "none" }}
+        style={{
+          ...headingStyle,
+          margin: 0,
+          cursor: "pointer",
+          userSelect: "none",
+        }}
       >
         Tasks ({tasks.length}
         {actionable > 0 ? `, ${actionable} need attention` : ""})
@@ -1034,7 +1114,9 @@ function TaskList({
               data-testid="loop-task-sort"
               type="button"
               onClick={() =>
-                setSort((current) => (current === "newest" ? "oldest" : "newest"))
+                setSort((current) =>
+                  current === "newest" ? "oldest" : "newest",
+                )
               }
               style={buttonStyle}
             >
@@ -1042,7 +1124,10 @@ function TaskList({
             </button>
           </div>
           {visible.length === 0 ? (
-            <div data-testid="loop-task-empty" style={{ color: "#6c7086", marginTop: 8 }}>
+            <div
+              data-testid="loop-task-empty"
+              style={{ color: "#6c7086", marginTop: 8 }}
+            >
               {tasks.length === 0
                 ? "No tasks have been proposed."
                 : "No tasks match this filter."}
@@ -1082,48 +1167,55 @@ function TaskList({
 function EventTimeline({ events }: { events: LoopEventRecord[] }) {
   const [open, setOpen] = useState(false);
   return (
-    <details
-      data-testid="loop-event-timeline"
-      open={open}
-      style={sectionStyle}
-    >
+    <details data-testid="loop-event-timeline" open={open} style={sectionStyle}>
       <summary
         onClick={(event) => {
           event.preventDefault();
           setOpen((current) => !current);
         }}
-        style={{ ...headingStyle, margin: 0, cursor: "pointer", userSelect: "none" }}
+        style={{
+          ...headingStyle,
+          margin: 0,
+          cursor: "pointer",
+          userSelect: "none",
+        }}
       >
         Event timeline ({events.length})
       </summary>
-      {open && (events.length === 0 ? (
-        <div style={{ color: "#6c7086", marginTop: 8 }}>No loop events yet.</div>
-      ) : (
-        <ol style={{ listStyle: "none", padding: 0, margin: 0 }}>
-          {events.map((event) => {
-            const payload = formatPayload(event.payload);
-            return (
-              <li
-                key={event.id}
-                data-testid={`loop-event-${event.id}`}
-                style={{ borderLeft: "2px solid #45475a", padding: "3px 0 6px 8px" }}
-              >
-                <div>
-                  <strong>{event.eventType}</strong>
-                  <span style={{ color: "#6c7086", marginLeft: 6 }}>
-                    {event.createdAt}
-                  </span>
-                </div>
-                {payload && (
-                  <code style={{ color: "#a6adc8", whiteSpace: "pre-wrap" }}>
-                    {payload}
-                  </code>
-                )}
-              </li>
-            );
-          })}
-        </ol>
-      ))}
+      {open &&
+        (events.length === 0 ? (
+          <div style={{ color: "#6c7086", marginTop: 8 }}>
+            No loop events yet.
+          </div>
+        ) : (
+          <ol style={{ listStyle: "none", padding: 0, margin: 0 }}>
+            {events.map((event) => {
+              const payload = formatPayload(event.payload);
+              return (
+                <li
+                  key={event.id}
+                  data-testid={`loop-event-${event.id}`}
+                  style={{
+                    borderLeft: "2px solid #45475a",
+                    padding: "3px 0 6px 8px",
+                  }}
+                >
+                  <div>
+                    <strong>{event.eventType}</strong>
+                    <span style={{ color: "#6c7086", marginLeft: 6 }}>
+                      {event.createdAt}
+                    </span>
+                  </div>
+                  {payload && (
+                    <code style={{ color: "#a6adc8", whiteSpace: "pre-wrap" }}>
+                      {payload}
+                    </code>
+                  )}
+                </li>
+              );
+            })}
+          </ol>
+        ))}
     </details>
   );
 }
@@ -1138,7 +1230,12 @@ function RunDefinition({ run, spec }: { run: LoopRun; spec: LoopSpec }) {
     <details
       data-testid="loop-run-definition"
       open={open}
-      style={{ marginTop: 8, padding: 7, background: "#11111b", borderRadius: 4 }}
+      style={{
+        marginTop: 8,
+        padding: 7,
+        background: "#11111b",
+        borderRadius: 4,
+      }}
     >
       <summary
         onClick={(event) => {
@@ -1151,17 +1248,27 @@ function RunDefinition({ run, spec }: { run: LoopRun; spec: LoopSpec }) {
       </summary>
       {open && (
         <div style={{ marginTop: 6 }}>
-          {spec.objective && <div style={{ color: "#bac2de" }}>{spec.objective}</div>}
+          {spec.objective && (
+            <div style={{ color: "#bac2de" }}>{spec.objective}</div>
+          )}
           {spec.definitionPath && (
             <div
-              style={{ color: "#a6adc8", fontFamily: "monospace", overflowWrap: "anywhere" }}
+              style={{
+                color: "#a6adc8",
+                fontFamily: "monospace",
+                overflowWrap: "anywhere",
+              }}
             >
               {spec.definitionPath}
             </div>
           )}
           {hash && (
             <div
-              style={{ color: "#6c7086", fontFamily: "monospace", overflowWrap: "anywhere" }}
+              style={{
+                color: "#6c7086",
+                fontFamily: "monospace",
+                overflowWrap: "anywhere",
+              }}
             >
               Pinned hash: {hash}
             </div>
@@ -1191,7 +1298,9 @@ function HumanApprovalPanel({
 
   return (
     <section data-testid="loop-human-approval" style={sectionStyle}>
-      <h2 style={{ ...headingStyle, color: "#cba6f7" }}>Awaiting human approval</h2>
+      <h2 style={{ ...headingStyle, color: "#cba6f7" }}>
+        Awaiting human approval
+      </h2>
       <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
         <HandRaisedIcon aria-hidden="true" style={iconStyle} />
         <strong>{approval.prompt}</strong>
@@ -1274,21 +1383,25 @@ function RunPanel({
   }
 
   const currentTask =
-    snapshot.tasks.find((candidate) => candidate.id === run.activeTaskId) ?? null;
+    snapshot.tasks.find((candidate) => candidate.id === run.activeTaskId) ??
+    null;
   const timing = summarizeRunTiming({
     run,
     stages: snapshot.stages,
     now,
   });
-  const elapsed = run.startedAt ? formatDuration(timing.elapsedMs) : "Not available";
+  const elapsed = run.startedAt
+    ? formatDuration(timing.elapsedMs)
+    : "Not available";
   const canControl = !TERMINAL_RUN_STATES.has(run.state);
-  const hasActionableTask = snapshot.tasks.some(
-    (task) => task.state === "attention" || task.state === "blocked",
+  const hasActionableTask = snapshot.tasks.some((task) =>
+    matchesTaskFilter(task, "attention"),
   );
   const pendingApproval =
     snapshot.approvals.find(
       (approval) =>
-        approval.loopTaskId === run.activeTaskId && approval.status === "pending",
+        approval.loopTaskId === run.activeTaskId &&
+        approval.status === "pending",
     ) ?? null;
 
   return (
@@ -1296,12 +1409,19 @@ function RunPanel({
       <section style={sectionStyle}>
         <div
           data-testid="loop-run-state"
-          style={{ fontSize: 20, fontWeight: 700, color: "#89b4fa", marginBottom: 8 }}
+          style={{
+            fontSize: 20,
+            fontWeight: 700,
+            color: "#89b4fa",
+            marginBottom: 8,
+          }}
         >
           {stateLabel(run.state)}
         </div>
         <div data-testid="loop-elapsed">Elapsed: {elapsed}</div>
-        <div data-testid="loop-next-evidence">Next evidence: {nextEvidence(run, spec)}</div>
+        <div data-testid="loop-next-evidence">
+          Next evidence: {nextEvidence(run, spec)}
+        </div>
         {timing.roles.length > 0 && (
           <div data-testid="loop-time-breakdown" style={{ marginTop: 6 }}>
             <div style={{ color: "#a6adc8" }}>
@@ -1316,7 +1436,10 @@ function RunPanel({
                 .join(" · ")}
             </div>
             {timing.slowest && (
-              <div data-testid="loop-slowest-stage" style={{ color: "#6c7086" }}>
+              <div
+                data-testid="loop-slowest-stage"
+                style={{ color: "#6c7086" }}
+              >
                 Slowest: {timing.slowest.role} #{timing.slowest.attempt} —{" "}
                 {formatDuration(timing.slowest.durationMs)}
               </div>
@@ -1330,7 +1453,12 @@ function RunPanel({
         {(currentTask || run.state !== "attention") && (
           <div
             data-testid="loop-current-task"
-            style={{ marginTop: 8, padding: 7, background: "#11111b", borderRadius: 4 }}
+            style={{
+              marginTop: 8,
+              padding: 7,
+              background: "#11111b",
+              borderRadius: 4,
+            }}
           >
             <strong>Current task</strong>
             <div>{currentTask ? currentTask.title : "No active task"}</div>
@@ -1343,11 +1471,15 @@ function RunPanel({
           </div>
         )}
         {run.deadlineAt && (
-          <div style={{ color: "#6c7086", marginTop: 6 }}>Deadline: {run.deadlineAt}</div>
+          <div style={{ color: "#6c7086", marginTop: 6 }}>
+            Deadline: {run.deadlineAt}
+          </div>
         )}
 
         {canControl && (
-          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8 }}>
+          <div
+            style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8 }}
+          >
             {run.state === "paused" ? (
               <ActionButton
                 testId="loop-resume"
@@ -1535,7 +1667,9 @@ function RunsPanel({
   onApproval: (decision: LoopApprovalDecision, feedback?: string) => void;
 }) {
   const counts = countRunsByFilter(runs);
-  const visible = orderRuns(runs.filter((run) => matchesRunFilter(run, filter)));
+  const visible = orderRuns(
+    runs.filter((run) => matchesRunFilter(run, filter)),
+  );
 
   return (
     <div
@@ -1597,11 +1731,16 @@ function RunsPanel({
         </div>
       </div>
 
-      <div style={{ ...scrollStyle, minWidth: 0 }} data-testid="loop-run-detail">
+      <div
+        style={{ ...scrollStyle, minWidth: 0 }}
+        data-testid="loop-run-detail"
+      >
         {selectedRunId === null ? (
           <div style={{ color: "#6c7086" }}>Select a run on the left.</div>
         ) : loadingSnapshot ? (
-          <div data-testid="loop-run-detail-loading">Loading run evidence...</div>
+          <div data-testid="loop-run-detail-loading">
+            Loading run evidence...
+          </div>
         ) : (
           <RunPanel
             snapshot={snapshot}
@@ -1630,7 +1769,8 @@ export default function LoopControlTile({
   isFocused = false,
 }: LoopControlTileProps) {
   const backend = useBackend();
-  const [snapshot, setSnapshot] = useState<PersistedLoopSnapshot>(EMPTY_SNAPSHOT);
+  const [snapshot, setSnapshot] =
+    useState<PersistedLoopSnapshot>(EMPTY_SNAPSHOT);
   const [catalog, setCatalog] = useState<LoopDefinitionCatalog>(EMPTY_CATALOG);
   const catalogRef = useRef<LoopDefinitionCatalog>(EMPTY_CATALOG);
   const [activeTab, setActiveTab] = useState<LoopTabId>("definitions");
@@ -1667,7 +1807,7 @@ export default function LoopControlTile({
     const retainedPath =
       editorPathRef.current && paths.includes(editorPathRef.current)
         ? editorPathRef.current
-        : paths[0] ?? null;
+        : (paths[0] ?? null);
     editorPathRef.current = retainedPath;
     setEditorPath(retainedPath);
   }, []);
@@ -1718,7 +1858,9 @@ export default function LoopControlTile({
       try {
         if (saveEditor) {
           const loopPaths = new Set([
-            ...catalogRef.current.definitions.map((definition) => definition.path),
+            ...catalogRef.current.definitions.map(
+              (definition) => definition.path,
+            ),
             ...catalogRef.current.invalid.map((definition) => definition.path),
           ]);
           const dirtyDefinitions = fileBufferRegistry
@@ -1773,7 +1915,10 @@ export default function LoopControlTile({
     let disposed = false;
     let unlisten: (() => void) | undefined;
     void listen<{ workstreamId?: string }>("loop-updated", (event) => {
-      if (!event.payload?.workstreamId || event.payload.workstreamId === workstreamId) {
+      if (
+        !event.payload?.workstreamId ||
+        event.payload.workstreamId === workstreamId
+      ) {
         void loadProgress();
       }
     })
@@ -1869,7 +2014,9 @@ export default function LoopControlTile({
       const startedId = started?.id ?? null;
       if (startedId) selectRun(startedId);
       else {
-        const latest = orderRuns(await backend.listWorkstreamLoopRuns(workstreamId));
+        const latest = orderRuns(
+          await backend.listWorkstreamLoopRuns(workstreamId),
+        );
         const fresh = latest.find((run) => !before.has(run.id)) ?? latest[0];
         if (fresh) selectRun(fresh.id);
       }

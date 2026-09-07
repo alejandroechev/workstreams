@@ -102,6 +102,7 @@ export interface LoopTaskWire {
   error: string | null;
   created_at: string;
   updated_at: string;
+  superseded_by_replan?: boolean;
 }
 
 export interface LoopVerificationWire {
@@ -288,6 +289,7 @@ function decodeTask(task: LoopTaskWire): LoopTask {
     error: optional(task.error),
     createdAt: timestamp(task.created_at),
     updatedAt: timestamp(task.updated_at),
+    supersededByReplan: task.superseded_by_replan ?? false,
   };
 }
 

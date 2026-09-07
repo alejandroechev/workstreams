@@ -1,4 +1,11 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { BackendProvider } from "../../backend/context";
@@ -118,7 +125,9 @@ function task(overrides: Partial<LoopTask> = {}): LoopTask {
   };
 }
 
-function snapshot(overrides: Partial<PersistedLoopSnapshot> = {}): PersistedLoopSnapshot {
+function snapshot(
+  overrides: Partial<PersistedLoopSnapshot> = {},
+): PersistedLoopSnapshot {
   return {
     spec: null,
     latestRun: null,
@@ -132,7 +141,9 @@ function snapshot(overrides: Partial<PersistedLoopSnapshot> = {}): PersistedLoop
   };
 }
 
-function approval(overrides: Partial<LoopApprovalRecord> = {}): LoopApprovalRecord {
+function approval(
+  overrides: Partial<LoopApprovalRecord> = {},
+): LoopApprovalRecord {
   return {
     id: "approval-1",
     loopTaskId: "task-1",
@@ -331,9 +342,9 @@ describe("LoopControlTile definitions tab", () => {
       (await screen.findByTestId("loop-definition-evaluated-loop")).textContent,
     ).toContain("Evaluator");
     expect(listDefinitions).toHaveBeenCalledWith("ws-1");
-    expect(screen.getByTestId("loop-definition-full-loop").textContent).toContain(
-      "Verification + Evaluator",
-    );
+    expect(
+      screen.getByTestId("loop-definition-full-loop").textContent,
+    ).toContain("Verification + Evaluator");
     expect(screen.getByTestId("loop-definition-editor-path").textContent).toBe(
       evaluator.path,
     );
@@ -342,9 +353,9 @@ describe("LoopControlTile definitions tab", () => {
     expect(screen.getByTestId("loop-definition-editor-path").textContent).toBe(
       both.path,
     );
-    expect(screen.getByTestId("loop-definition-editor-header").textContent).toContain(
-      "Verify and evaluate the result",
-    );
+    expect(
+      screen.getByTestId("loop-definition-editor-header").textContent,
+    ).toContain("Verify and evaluate the result");
 
     setCatalog({
       definitions: [
@@ -433,16 +444,16 @@ describe("LoopControlTile definitions tab", () => {
     expect(preview.textContent).toContain("Deliver the pipeline.");
 
     fireEvent.click(preview.querySelector("summary")!);
-    expect(screen.getByTestId("loop-definition-objective").textContent).toContain(
-      long.trimEnd(),
-    );
+    expect(
+      screen.getByTestId("loop-definition-objective").textContent,
+    ).toContain(long.trimEnd());
 
     // A one-line objective is more useful shown than hidden behind a click.
     fireEvent.click(screen.getByTestId("loop-definition-short-loop"));
     expect(screen.queryByTestId("loop-definition-objective")).toBeNull();
-    expect(screen.getByTestId("loop-definition-editor-header").textContent).toContain(
-      "Keep checkout retries bounded.",
-    );
+    expect(
+      screen.getByTestId("loop-definition-editor-header").textContent,
+    ).toContain("Keep checkout retries bounded.");
   });
 
   it("shows the YAML authoring empty state without form fields", async () => {
@@ -453,9 +464,9 @@ describe("LoopControlTile definitions tab", () => {
     expect(empty.textContent).toContain("create-loop");
     expect(screen.queryByTestId("loop-setup-form")).toBeNull();
     expect(screen.queryByRole("textbox")).toBeNull();
-    expect((screen.getByTestId("loop-run-selected") as HTMLButtonElement).disabled).toBe(
-      true,
-    );
+    expect(
+      (screen.getByTestId("loop-run-selected") as HTMLButtonElement).disabled,
+    ).toBe(true);
   });
 
   it("lists invalid files alongside valid ones and warns when one is not portable", async () => {
@@ -475,21 +486,23 @@ describe("LoopControlTile definitions tab", () => {
     });
 
     await screen.findByTestId("loop-definition-frontend-loop");
-    expect(screen.getByTestId("loop-definition-editor-header").textContent).toContain(
-      "Not portable",
-    );
+    expect(
+      screen.getByTestId("loop-definition-editor-header").textContent,
+    ).toContain("Not portable");
 
-    fireEvent.click(screen.getByTestId("loop-definition-invalid-broken.loop.yaml"));
+    fireEvent.click(
+      screen.getByTestId("loop-definition-invalid-broken.loop.yaml"),
+    );
     expect(screen.getByTestId("loop-definition-editor-path").textContent).toBe(
       "/sessions/session-1/files/loops/broken.loop.yaml",
     );
-    expect(screen.getByTestId("loop-definition-editor-header").textContent).toContain(
-      "missing required field objective",
-    );
+    expect(
+      screen.getByTestId("loop-definition-editor-header").textContent,
+    ).toContain("missing required field objective");
     // An unparseable file can be repaired in the editor but never launched.
-    expect((screen.getByTestId("loop-run-selected") as HTMLButtonElement).disabled).toBe(
-      true,
-    );
+    expect(
+      (screen.getByTestId("loop-run-selected") as HTMLButtonElement).disabled,
+    ).toBe(true);
   });
 
   it("disables running a definition while a nonterminal run exists", async () => {
@@ -549,22 +562,30 @@ describe("LoopControlTile loops tab", () => {
     fireEvent.click(await screen.findByTestId("loop-tab-loops"));
 
     // Newest first, and the newest run is opened by default.
-    await waitFor(() => expect(screen.getByTestId("loop-run-row-run-live")).toBeTruthy());
+    await waitFor(() =>
+      expect(screen.getByTestId("loop-run-row-run-live")).toBeTruthy(),
+    );
     expect(screen.getByTestId("loop-run-row-run-done").textContent).toContain(
       "Yesterday loop",
     );
     expect(screen.getByTestId("loop-run-row-run-done").textContent).toContain(
       "2 tasks",
     );
-    expect(screen.getByTestId("loop-run-filter-running").textContent).toContain("(1)");
-    expect(screen.getByTestId("loop-run-filter-completed").textContent).toContain("(1)");
+    expect(screen.getByTestId("loop-run-filter-running").textContent).toContain(
+      "(1)",
+    );
+    expect(
+      screen.getByTestId("loop-run-filter-completed").textContent,
+    ).toContain("(1)");
 
     fireEvent.click(screen.getByTestId("loop-run-filter-completed"));
     expect(screen.queryByTestId("loop-run-row-run-live")).toBeNull();
 
     fireEvent.click(screen.getByTestId("loop-run-row-run-done"));
     await waitFor(() =>
-      expect(screen.getByTestId("loop-run-state").textContent).toContain("Completed"),
+      expect(screen.getByTestId("loop-run-state").textContent).toContain(
+        "Completed",
+      ),
     );
   });
 
@@ -655,22 +676,30 @@ describe("LoopControlTile run monitoring", () => {
       }),
       { definitions: [definition()], invalid: [] },
     );
-    const control = vi.spyOn(backend, "controlWorkstreamLoop").mockResolvedValue();
+    const control = vi
+      .spyOn(backend, "controlWorkstreamLoop")
+      .mockResolvedValue();
 
     await openLoops();
-    expect((await screen.findByTestId("loop-run-state")).textContent).toContain("Working");
+    expect((await screen.findByTestId("loop-run-state")).textContent).toContain(
+      "Working",
+    );
     const breakdown = screen.getByTestId("loop-time-breakdown");
     expect(breakdown.textContent).toContain("Agent time: 4m 30s");
     expect(breakdown.textContent).toContain("worker 4m 0s");
     expect(breakdown.textContent).toContain("orchestrator 30s");
-    expect(screen.getByTestId("loop-slowest-stage").textContent).toContain("worker #1");
+    expect(screen.getByTestId("loop-slowest-stage").textContent).toContain(
+      "worker #1",
+    );
 
     const definitionDisclosure = screen.getByTestId(
       "loop-run-definition",
     ) as HTMLDetailsElement;
     expect(definitionDisclosure.open).toBe(false);
     expect(definitionDisclosure.textContent).toContain("Frontend loop");
-    expect(definitionDisclosure.textContent).not.toContain("Deliver the pinned objective");
+    expect(definitionDisclosure.textContent).not.toContain(
+      "Deliver the pinned objective",
+    );
     fireEvent.click(definitionDisclosure.querySelector("summary")!);
     expect(screen.getByTestId("loop-run-definition").textContent).toContain(
       "sha256:pinned",
@@ -682,18 +711,22 @@ describe("LoopControlTile run monitoring", () => {
     const currentTask = screen.getByTestId("loop-current-task");
     expect(currentTask.textContent).toContain("Implement the domain");
     expect(currentTask.textContent).toContain("Worker running");
-    expect(screen.getByTestId("loop-current-task-duration").textContent).toContain(
-      "4m 0s",
+    expect(
+      screen.getByTestId("loop-current-task-duration").textContent,
+    ).toContain("4m 0s");
+    expect(currentTask.textContent).not.toContain(
+      "Build the requested behavior",
     );
-    expect(currentTask.textContent).not.toContain("Build the requested behavior");
 
     const taskList = screen.getByTestId("loop-task-list") as HTMLDetailsElement;
     expect(taskList.open).toBe(false);
     fireEvent.click(taskList.querySelector("summary")!);
-    expect(screen.getByTestId("loop-task-duration-task-1").textContent).toContain(
-      "4m 0s",
-    );
-    const details = screen.getByTestId("loop-task-details-task-1") as HTMLDetailsElement;
+    expect(
+      screen.getByTestId("loop-task-duration-task-1").textContent,
+    ).toContain("4m 0s");
+    const details = screen.getByTestId(
+      "loop-task-details-task-1",
+    ) as HTMLDetailsElement;
     expect(details.open).toBe(false);
     expect(screen.getByTestId("loop-task-status-task-1").textContent).toContain(
       "Worker is implementing the task",
@@ -703,19 +736,23 @@ describe("LoopControlTile run monitoring", () => {
     expect(
       screen.getByTestId("loop-task-stage-timings-task-1").textContent,
     ).toContain("worker #1: 4m 0s");
-    expect(screen.getByTestId("loop-worker-result-task-1").textContent).toContain(
-      "Implemented the state machine",
-    );
-    expect(screen.getByTestId("loop-verification-verify-1").textContent).toContain(
-      "12 tests passed",
-    );
-    expect(screen.getByTestId("loop-evaluation-evaluation-1").textContent).toContain(
-      "Needs another pass",
-    );
-    const timeline = screen.getByTestId("loop-event-timeline") as HTMLDetailsElement;
+    expect(
+      screen.getByTestId("loop-worker-result-task-1").textContent,
+    ).toContain("Implemented the state machine");
+    expect(
+      screen.getByTestId("loop-verification-verify-1").textContent,
+    ).toContain("12 tests passed");
+    expect(
+      screen.getByTestId("loop-evaluation-evaluation-1").textContent,
+    ).toContain("Needs another pass");
+    const timeline = screen.getByTestId(
+      "loop-event-timeline",
+    ) as HTMLDetailsElement;
     expect(timeline.open).toBe(false);
     expect(screen.queryByTestId("loop-event-7")).toBeNull();
-    fireEvent.click(screen.getByTestId("loop-event-timeline").querySelector("summary")!);
+    fireEvent.click(
+      screen.getByTestId("loop-event-timeline").querySelector("summary")!,
+    );
     expect(screen.getByTestId("loop-event-7").textContent).toContain(
       "verification.finished",
     );
@@ -777,7 +814,9 @@ describe("LoopControlTile run monitoring", () => {
     await openLoops();
     const status = await screen.findByTestId("loop-task-status-task-1");
     expect(status.textContent).toContain("Action required");
-    expect(status.textContent).toContain("Change analysing to analyzing at line 145.");
+    expect(status.textContent).toContain(
+      "Change analysing to analyzing at line 145.",
+    );
     expect(status.textContent).toContain("Automatic revisions exhausted");
     expect(status.textContent).not.toContain("Fix many earlier issues");
     expect(
@@ -786,12 +825,12 @@ describe("LoopControlTile run monitoring", () => {
     expect(screen.queryByText("No active task")).toBeNull();
 
     fireEvent.click(screen.getByText("Details"));
-    expect(screen.getByTestId("loop-worker-summary-task-1").textContent).toContain(
-      "Applied the requested spelling corrections",
-    );
-    expect(screen.getByTestId("loop-worker-evidence-task-1").textContent).toContain(
-      "British spelling scan is clean",
-    );
+    expect(
+      screen.getByTestId("loop-worker-summary-task-1").textContent,
+    ).toContain("Applied the requested spelling corrections");
+    expect(
+      screen.getByTestId("loop-worker-evidence-task-1").textContent,
+    ).toContain("British spelling scan is clean");
     expect(screen.getByTestId("loop-evaluation-evaluation-1")).toBeTruthy();
     expect(screen.getByTestId("loop-evaluation-evaluation-2")).toBeTruthy();
   });
@@ -850,7 +889,12 @@ describe("LoopControlTile run monitoring", () => {
       snapshot({
         spec: loopSpec(),
         latestRun: run({ state: "attention", activeTaskId: null }),
-        tasks: [task({ state: "attention", error: "Human reviewer rejected the task" })],
+        tasks: [
+          task({
+            state: "attention",
+            error: "Human reviewer rejected the task",
+          }),
+        ],
         evaluations: [
           {
             id: "evaluation-1",
@@ -876,7 +920,9 @@ describe("LoopControlTile run monitoring", () => {
       snapshot({
         spec: loopSpec(),
         latestRun: run({ state: "attention", activeTaskId: null }),
-        tasks: [task({ state: "attention", revisionCount: 1, error: undefined })],
+        tasks: [
+          task({ state: "attention", revisionCount: 1, error: undefined }),
+        ],
         verifications: [
           {
             id: "verification-2",
@@ -903,7 +949,9 @@ describe("LoopControlTile run monitoring", () => {
       );
     });
     status = await screen.findByTestId("loop-task-status-task-1");
-    await waitFor(() => expect(status.textContent).toContain("First failure line"));
+    await waitFor(() =>
+      expect(status.textContent).toContain("First failure line"),
+    );
     expect(status.textContent?.length).toBeLessThan(600);
   });
 
@@ -948,9 +996,9 @@ describe("LoopControlTile run monitoring", () => {
       .mockResolvedValue(awaitingRun);
 
     await openLoops();
-    expect((await screen.findByTestId("loop-human-approval")).textContent).toContain(
-      "Review the implementation and evidence.",
-    );
+    expect(
+      (await screen.findByTestId("loop-human-approval")).textContent,
+    ).toContain("Review the implementation and evidence.");
     expect(screen.queryByTestId("loop-pause")).toBeNull();
     expect(screen.getByTestId("loop-stop")).toBeTruthy();
     expect(screen.getByTestId("loop-kill")).toBeTruthy();
@@ -979,6 +1027,37 @@ describe("LoopControlTile run monitoring", () => {
         "Add the missing timeout case",
       ),
     );
+  });
+
+  it("labels a superseded task instead of demanding action on a finished run", async () => {
+    setup(
+      snapshot({
+        spec: loopSpec(),
+        latestRun: run({ state: "completed" }),
+        tasks: [
+          task({
+            id: "task-old",
+            state: "attention",
+            revisionCount: 5,
+            supersededByReplan: true,
+          }),
+          task({ id: "task-new", key: "sliders:touch", state: "accepted" }),
+        ],
+      }),
+      { definitions: [definition()], invalid: [] },
+    );
+
+    await openLoops();
+    // The list stays collapsed because nothing needs attention any more, which
+    // is itself the point: a superseded task must not reopen it.
+    const list = (await screen.findByTestId(
+      "loop-task-list",
+    )) as HTMLDetailsElement;
+    expect(list.textContent).not.toContain("need attention");
+    fireEvent.click(list.querySelector("summary") as HTMLElement);
+    const card = await screen.findByTestId("loop-task-status-task-old");
+    expect(card.textContent).toContain("Superseded");
+    expect(card.textContent).not.toContain("Action required");
   });
 
   it("collapses long task results and supports sorting and filtering", async () => {
@@ -1015,23 +1094,27 @@ describe("LoopControlTile run monitoring", () => {
     );
 
     await openLoops();
-    const list = (await screen.findByTestId("loop-task-list")) as HTMLDetailsElement;
+    const list = (await screen.findByTestId(
+      "loop-task-list",
+    )) as HTMLDetailsElement;
     fireEvent.click(list.querySelector("summary")!);
 
     const order = () =>
-      Array.from(document.querySelectorAll('article[data-testid^="loop-task-"]')).map(
-        (card) => card.getAttribute("data-testid"),
-      );
+      Array.from(
+        document.querySelectorAll('article[data-testid^="loop-task-"]'),
+      ).map((card) => card.getAttribute("data-testid"));
     expect(order()).toEqual(["loop-task-task-new", "loop-task-task-old"]);
 
-    const message = screen.getByTestId("loop-task-message-task-old") as HTMLDetailsElement;
+    const message = screen.getByTestId(
+      "loop-task-message-task-old",
+    ) as HTMLDetailsElement;
     expect(message.open).toBe(false);
     expect(message.textContent).toContain("…");
     expect(message.textContent!.length).toBeLessThan(longSummary.length);
     fireEvent.click(message.querySelector("summary")!);
-    expect(screen.getByTestId("loop-task-message-task-old").textContent).toContain(
-      "Detail sentence.",
-    );
+    expect(
+      screen.getByTestId("loop-task-message-task-old").textContent,
+    ).toContain("Detail sentence.");
 
     fireEvent.click(screen.getByTestId("loop-task-sort"));
     expect(order()).toEqual(["loop-task-task-old", "loop-task-task-new"]);
@@ -1088,17 +1171,20 @@ describe("LoopControlTile run monitoring", () => {
       spec: loopSpec({ verifier: undefined, evaluator: undefined }),
       expected: "Completion is next",
     },
-  ])("projects the next evidence for $label-only definitions", async ({ spec, expected }) => {
-    setup(
-      snapshot({ spec, latestRun: run(), tasks: [task()] }),
-      { definitions: [definition()], invalid: [] },
-    );
+  ])(
+    "projects the next evidence for $label-only definitions",
+    async ({ spec, expected }) => {
+      setup(snapshot({ spec, latestRun: run(), tasks: [task()] }), {
+        definitions: [definition()],
+        invalid: [],
+      });
 
-    await openLoops();
-    expect((await screen.findByTestId("loop-next-evidence")).textContent).toContain(
-      expected,
-    );
-  });
+      await openLoops();
+      expect(
+        (await screen.findByTestId("loop-next-evidence")).textContent,
+      ).toContain(expected);
+    },
+  );
 
   it("refreshes the run projection for matching memory and Tauri events", async () => {
     const { listRuns } = setup(
@@ -1125,16 +1211,22 @@ describe("LoopControlTile run monitoring", () => {
         }),
       );
     });
-    await waitFor(() => expect(listRuns.mock.calls.length).toBeGreaterThan(initialCalls));
+    await waitFor(() =>
+      expect(listRuns.mock.calls.length).toBeGreaterThan(initialCalls),
+    );
 
-    const tauriCall = listenMock.mock.calls.find(([name]) => name === "loop-updated");
+    const tauriCall = listenMock.mock.calls.find(
+      ([name]) => name === "loop-updated",
+    );
     expect(tauriCall).toBeTruthy();
     const listener = tauriCall?.[1] as (event: {
       payload: { workstreamId: string };
     }) => void;
     const beforeTauri = listRuns.mock.calls.length;
     act(() => listener({ payload: { workstreamId: "ws-1" } }));
-    await waitFor(() => expect(listRuns.mock.calls.length).toBeGreaterThan(beforeTauri));
+    await waitFor(() =>
+      expect(listRuns.mock.calls.length).toBeGreaterThan(beforeTauri),
+    );
   });
 
   it("polls a lightweight version and reloads evidence only when it changes", async () => {

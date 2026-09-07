@@ -37,6 +37,7 @@ whatever replaced it — the history is the point.
 | [022](022-versioned-loop-definitions.md) | Session-stored YAML loop definitions, pinned per run by hash | Accepted |
 | [023](023-human-loop-approval.md) | Human approval as a first-class loop sensor | Accepted |
 | [024](024-repo-explorer-tile.md) | Repo Explorer tile — multi-tab browsing, search, and font resize | Accepted |
+| [025](025-orchestrator-replan-on-attention.md) | Re-plan a stuck task through the orchestrator before asking a human | Accepted |
 
 ## Writing a new ADR
 

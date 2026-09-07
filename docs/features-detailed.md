@@ -259,6 +259,14 @@ Execution model:
 - Accepted batches feed back into orchestration, and the run continues until a
   cycle reports that the overall goal has no work remaining.
 - Verifiers may be repository scripts outside the definition folder.
+- When a task exhausts its attempt budget, the orchestrator is asked to split it
+  into narrower tasks and the run continues. The failed task is kept as
+  **Superseded** — its verifier output, evaluator feedback and timings stay
+  readable as the reason the smaller tasks exist, but it no longer blocks the
+  run or counts as needing attention. Only `attention` tasks are re-planned:
+  `blocked` and `interrupted` are deliberate escalations and go straight to a
+  human. If decomposition yields nothing usable, the run stops and says so.
+  See [ADR 025](adrs/025-orchestrator-replan-on-attention.md).
 - Every run pins the exact YAML and its SHA-256 hash, so the evidence stays
   durable even if the definition later changes.
 

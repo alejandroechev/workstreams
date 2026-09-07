@@ -1,7 +1,7 @@
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -308,6 +308,9 @@ pub struct LoopTask {
     pub error: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+    /// True when planning replaced this task with narrower ones. It keeps its
+    /// failed state and reason as evidence, but no longer needs a human.
+    pub superseded_by_replan: bool,
 }
 
 pub struct LoopManager {
@@ -536,6 +539,10 @@ pub fn init_loop_schema(conn: &Connection) -> rusqlite::Result<()> {
         "ALTER TABLE loop_runs ADD COLUMN definition_id TEXT",
         "ALTER TABLE loop_runs ADD COLUMN definition_name TEXT",
         "ALTER TABLE loop_tasks ADD COLUMN definition_id TEXT NOT NULL DEFAULT ''",
+        // Set when planning replaced a stuck task with narrower ones. The task
+        // keeps its failed state and reason as evidence, but no longer holds the
+        // run open: its work was handed to the replacements.
+        "ALTER TABLE loop_tasks ADD COLUMN superseded_by_replan INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE loop_specs ADD COLUMN human_approval_prompt TEXT",
         "ALTER TABLE loop_specs ADD COLUMN max_tasks_per_cycle INTEGER NOT NULL DEFAULT 1",
     ] {
@@ -982,6 +989,14 @@ fn decode_run_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<LoopRun> {
     })
 }
 
+/// How many times one run may ask the orchestrator to decompose stuck work.
+///
+/// One is deliberate. A re-plan is a recovery attempt, not a second budget: if
+/// splitting the task did not land it, the next useful signal is a human, not
+/// another round of guesses at the operator's expense. `taskAttempts` remains
+/// the knob for how hard to try a *given* task.
+const MAX_REPLANS_PER_RUN: u32 = 1;
+
 const RUN_COLUMNS: &str = "id, loop_spec_id, state, current_task_id,
     control_requested, error, started_at, finished_at, deadline_at,
     definition_hash, definition_yaml, definition_id, definition_name";
@@ -1172,7 +1187,8 @@ fn finish_run_from_persisted_tasks(conn: &Connection, run_id: &str) -> Result<()
         .query_row(
             "SELECT COUNT(*) FROM loop_tasks
              WHERE loop_run_id = ?1
-               AND state IN ('blocked', 'attention', 'interrupted')",
+               AND state IN ('blocked', 'attention', 'interrupted')
+               AND superseded_by_replan = 0",
             [run_id],
             |row| row.get(0),
         )
@@ -1229,12 +1245,13 @@ fn decode_task_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<LoopTask> {
         error: row.get(10)?,
         created_at: row.get(11)?,
         updated_at: row.get(12)?,
+        superseded_by_replan: row.get::<_, i64>(13)? != 0,
     })
 }
 
 const TASK_COLUMNS: &str = "id, loop_run_id, loop_spec_id, task_key, title,
     objective, state, worker_session_id, revision_count, worker_result, error,
-    created_at, updated_at";
+    created_at, updated_at, superseded_by_replan";
 
 pub fn enqueue_task(
     conn: &Connection,
@@ -2030,6 +2047,100 @@ fn orchestrator_prompt(spec: &LoopSpec, accepted_keys: &[String]) -> String {
     )
 }
 
+/// A task the cycle could not land, with the reason it stopped.
+struct StuckTask {
+    key: String,
+    title: String,
+    objective: String,
+    reason: String,
+}
+
+/// The tasks that ended a cycle needing a human, newest first.
+///
+/// Deliberately only `attention`. `blocked` is an explicit escalation — the
+/// worker or evaluator saying it cannot proceed — and `interrupted` means the
+/// operator stopped the run; re-planning either would override a decision
+/// somebody already made. `attention` is the one that means "ran out of
+/// attempts", which is the case decomposition can actually help.
+///
+/// The reason prefers the evaluator's last feedback over its summary, because
+/// feedback is the actionable half — it says what to change rather than what
+/// was wrong.
+fn stuck_tasks(conn: &Connection, run_id: &str) -> Result<Vec<StuckTask>, String> {
+    let mut statement = conn
+        .prepare(
+            "SELECT t.task_key, t.title, t.objective, t.error,
+                    (SELECT COALESCE(NULLIF(e.feedback, ''), e.summary)
+                       FROM loop_evaluations e
+                      WHERE e.loop_task_id = t.id
+                      ORDER BY e.attempt DESC LIMIT 1)
+             FROM loop_tasks t
+             WHERE t.loop_run_id = ?1
+               AND t.state = 'attention'
+               AND t.superseded_by_replan = 0
+             ORDER BY t.ordinal DESC",
+        )
+        .map_err(|error| format!("Failed to prepare stuck task query: {error}"))?;
+    let rows = statement
+        .query_map([run_id], |row| {
+            let error: Option<String> = row.get(3)?;
+            let verdict: Option<String> = row.get(4)?;
+            Ok(StuckTask {
+                key: row.get(0)?,
+                title: row.get(1)?,
+                objective: row.get(2)?,
+                reason: verdict
+                    .or(error)
+                    .unwrap_or_else(|| "No reason was recorded".to_string()),
+            })
+        })
+        .map_err(|error| format!("Failed to list stuck tasks: {error}"))?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|error| format!("Failed to decode stuck tasks: {error}"))
+}
+
+/// Asks the orchestrator to decompose work that exhausted its attempt budget.
+///
+/// A task that burns every attempt is usually too big rather than too hard:
+/// the worker fixes something real each round while the evaluator keeps finding
+/// another defect in the same oversized surface. The orchestrator already owns
+/// planning and knows which keys are accepted, so it is the role with the
+/// authority to split that work — it just was never asked before the run gave
+/// up and waited for a human.
+fn replan_prompt(spec: &LoopSpec, accepted_keys: &[String], stuck: &[StuckTask]) -> String {
+    let failures = stuck
+        .iter()
+        .map(|task| {
+            format!(
+                "- key `{}` ({}): {}\n  Objective: {}",
+                task.key, task.title, task.reason, task.objective
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!(
+        "{}\n\nThe following task(s) used their whole attempt budget without being accepted:\n{}\n\n\
+         Decide how to make progress. A task that exhausts its budget is usually too broad: the \
+         worker fixes a real defect each attempt while the reviewer finds another one in the same \
+         surface. Prefer splitting it into smaller tasks that can each be finished and judged on \
+         their own.\n\
+         You MUST NOT return any of these keys again: {}. Return new, narrower keys instead, or \
+         return {{\"tasks\":[]}} if the remaining work genuinely needs a human.\n\n\
+         Return only JSON with this shape:\n\
+         {{\"tasks\":[{{\"key\":\"stable-id\",\"title\":\"short title\",\
+         \"objective\":\"complete coding objective\"}}]}}\n\
+         Return no more than {} tasks in one cycle.\n\
+         These task keys were already accepted and must not be returned again: {}\n\
+         Do not include Markdown code fences or explanatory prose.",
+        spec.orchestrator_prompt,
+        failures,
+        serde_json::to_string(&stuck.iter().map(|task| &task.key).collect::<Vec<_>>())
+            .expect("string arrays always serialize"),
+        spec.max_tasks_per_cycle,
+        serde_json::to_string(accepted_keys).expect("string arrays always serialize"),
+    )
+}
+
 fn worker_prompt(spec: &LoopSpec, task: &LoopTask) -> String {
     format!(
         "{}\n\nTask: {}\nObjective: {}\n\n\
@@ -2791,6 +2902,12 @@ async fn execute_manual_loop_inner(
         Vec::new()
     };
 
+    // Re-plans already spent this run. Counted in memory rather than derived
+    // from events because a resumed run should get its own allowance: the
+    // operator has just looked at it, which is the human judgement the budget
+    // exists to defer to.
+    let mut replans_used = 0_u32;
+
     'run_loop: loop {
         if tasks.is_empty() {
             {
@@ -3028,21 +3145,121 @@ async fn execute_manual_loop_inner(
             runtime.disconnect(&worker_response.session_id).await?;
         }
 
-        let conn = db.lock().unwrap();
-        let attention_tasks: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM loop_tasks
-                 WHERE loop_run_id = ?1
-                   AND state IN ('blocked', 'attention', 'interrupted')",
-                [run_id],
-                |row| row.get(0),
+        let (needs_human, attention_tasks) = {
+            let conn = db.lock().unwrap();
+            let needs_human: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM loop_tasks
+                     WHERE loop_run_id = ?1
+                       AND state IN ('blocked', 'attention', 'interrupted')
+                       AND superseded_by_replan = 0",
+                    [run_id],
+                    |row| row.get(0),
+                )
+                .map_err(|error| format!("Failed to derive loop cycle disposition: {error}"))?;
+            (needs_human, stuck_tasks(&conn, run_id)?)
+        };
+        if needs_human > 0 {
+            // Re-plan only when every unfinished task is one decomposition can
+            // help. A blocked or interrupted task needs a human whatever
+            // planning decides, so splitting the rest would just delay saying
+            // so. Bounded per run: a re-plan that cannot produce new, narrower
+            // work is a signal to stop, not to try again.
+            let replannable =
+                attention_tasks.len() as i64 == needs_human && replans_used < MAX_REPLANS_PER_RUN;
+            if !replannable {
+                let conn = db.lock().unwrap();
+                finish_run_from_persisted_tasks(&conn, run_id)?;
+                return Ok(());
+            }
+            replans_used += 1;
+            {
+                let conn = db.lock().unwrap();
+                if !apply_control_boundary(&conn, run_id)? {
+                    return Ok(());
+                }
+                update_run_current_task(&conn, run_id, None)?;
+                set_run_state(&conn, run_id, LoopRunState::Orchestrating, None)?;
+            }
+            let accepted_keys = accepted_task_keys(&db.lock().unwrap(), &spec)?;
+            let orchestrator = start_agent_stage(
+                &db,
+                &runtime,
+                AgentRequest {
+                    role: AgentRole::Orchestrator,
+                    prompt: replan_prompt(&spec, &accepted_keys, &attention_tasks),
+                    working_directory: working_directory.clone(),
+                    model: spec.orchestrator_model.clone(),
+                    timeout: remaining_run_timeout(&db, run_id)?,
+                    keep_session: false,
+                    excluded_tools: Vec::new(),
+                },
+                &spec.id,
+                run_id,
+                None,
             )
-            .map_err(|error| format!("Failed to derive loop cycle disposition: {error}"))?;
-        if attention_tasks > 0 {
-            finish_run_from_persisted_tasks(&conn, run_id)?;
-            return Ok(());
+            .await?;
+            let discovered = parse_discovered_tasks(&orchestrator.content)?;
+            // Re-issuing a key that just exhausted its budget would reproduce
+            // the same failure, so those are dropped rather than trusted.
+            let stuck_keys: HashSet<&str> = attention_tasks
+                .iter()
+                .map(|task| task.key.as_str())
+                .collect();
+            let replanned: Vec<DiscoveredTask> = discovered
+                .into_iter()
+                .filter(|candidate| !stuck_keys.contains(candidate.key.as_str()))
+                .collect();
+            append_loop_event(
+                &db.lock().unwrap(),
+                &spec.id,
+                run_id,
+                None,
+                "orchestration.replanned",
+                &serde_json::json!({
+                    "stuckTaskCount": attention_tasks.len(),
+                    "replannedTaskCount": replanned.len(),
+                    "attempt": replans_used,
+                }),
+            )?;
+            if replanned.is_empty() {
+                let conn = db.lock().unwrap();
+                set_run_state(
+                    &conn,
+                    run_id,
+                    LoopRunState::Attention,
+                    Some(
+                        "A task used its whole attempt budget and could not be decomposed \
+                         into smaller work. Correct it manually, then start a new run.",
+                    ),
+                )?;
+                return Ok(());
+            }
+            {
+                let conn = db.lock().unwrap();
+                // Retire the stuck tasks first: their work now belongs to the
+                // replacements, so they must stop holding the run open. The
+                // failed state and reason stay as evidence.
+                for stuck in &attention_tasks {
+                    conn.execute(
+                        "UPDATE loop_tasks SET superseded_by_replan = 1, updated_at = ?1
+                          WHERE loop_run_id = ?2 AND task_key = ?3",
+                        params![crate::now(), run_id, stuck.key],
+                    )
+                    .map_err(|error| format!("Failed to supersede a stuck task: {error}"))?;
+                }
+                for candidate in replanned {
+                    if let Some(task) = enqueue_task(&conn, run_id, &spec.id, &candidate)? {
+                        tasks.push(task);
+                    }
+                }
+            }
+            if tasks.is_empty() {
+                let conn = db.lock().unwrap();
+                finish_run_from_persisted_tasks(&conn, run_id)?;
+                return Ok(());
+            }
         }
-        drop(conn);
         continue 'run_loop;
     }
 }
@@ -3243,7 +3460,8 @@ pub(crate) fn list_loop_runs(
                     (SELECT COUNT(*) FROM loop_tasks t WHERE t.loop_run_id = r.id),
                     (SELECT COUNT(*) FROM loop_tasks t
                       WHERE t.loop_run_id = r.id
-                        AND t.state IN ('attention', 'blocked')),
+                        AND t.state IN ('attention', 'blocked')
+                        AND t.superseded_by_replan = 0),
                     r.definition_yaml
              FROM loop_runs r
              WHERE r.loop_spec_id = ?1
@@ -4838,6 +5056,161 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_stuck_task_is_replanned_by_the_orchestrator_before_asking_for_a_human() {
+        use crate::loop_agent::{AgentRole, ScriptedAgentResponse, ScriptedAgentRuntime};
+        use std::sync::{Arc, Mutex};
+
+        let conn = test_db();
+        let mut input = spec_input();
+        input.verifier_program = None;
+        input.verifier_args.clear();
+        input.max_task_iterations = 1;
+        input.max_tasks_per_cycle = 2;
+        let spec = save_loop_spec(&conn, "ws-1", input).expect("save loop spec");
+        set_loop_enabled(&conn, &spec.id, true).expect("enable loop");
+        let run = create_loop_run(&conn, &spec.id, 600).expect("create run");
+        let runtime = Arc::new(ScriptedAgentRuntime::new(vec![
+            // One oversized task, rejected by the evaluator.
+            ScriptedAgentResponse {
+                role: AgentRole::Orchestrator,
+                session_id: "orchestrator-1".to_string(),
+                content: r#"{"tasks":[{"key":"sliders","title":"All sliders","objective":"Seven features at once"}]}"#.to_string(),
+                events: vec![],
+            },
+            ScriptedAgentResponse {
+                role: AgentRole::Worker,
+                session_id: "worker-1".to_string(),
+                content: r#"{"status":"completed","summary":"Attempt","evidence":[]}"#.to_string(),
+                events: vec![],
+            },
+            ScriptedAgentResponse {
+                role: AgentRole::Evaluator,
+                session_id: "evaluator-1".to_string(),
+                content: r#"{"verdict":"revise","summary":"Touch target too small","feedback":"Split this up","evidence":[]}"#.to_string(),
+                events: vec![],
+            },
+            // The re-plan: the same work, decomposed into a narrower task.
+            ScriptedAgentResponse {
+                role: AgentRole::Orchestrator,
+                session_id: "orchestrator-2".to_string(),
+                content: r#"{"tasks":[{"key":"sliders:touch-target","title":"Touch target","objective":"Only the touch target"}]}"#.to_string(),
+                events: vec![],
+            },
+            ScriptedAgentResponse {
+                role: AgentRole::Worker,
+                session_id: "worker-2".to_string(),
+                content: r#"{"status":"completed","summary":"Narrow fix","evidence":[]}"#.to_string(),
+                events: vec![],
+            },
+            ScriptedAgentResponse {
+                role: AgentRole::Evaluator,
+                session_id: "evaluator-2".to_string(),
+                content: r#"{"verdict":"accepted","summary":"Meets the criterion","evidence":[]}"#.to_string(),
+                events: vec![],
+            },
+            ScriptedAgentResponse {
+                role: AgentRole::Orchestrator,
+                session_id: "orchestrator-3".to_string(),
+                content: r#"{"tasks":[]}"#.to_string(),
+                events: vec![],
+            },
+        ]));
+        let db = Arc::new(Mutex::new(conn));
+
+        execute_manual_loop(
+            Arc::clone(&db),
+            runtime,
+            &run.id,
+            std::path::PathBuf::from("/tmp/repo"),
+        )
+        .await
+        .expect("execute replanned loop");
+
+        let snapshot = loop_snapshot(&db.lock().unwrap(), "ws-1").expect("load snapshot");
+        // The decomposed task carried the objective home, so the run completes
+        // instead of stopping at the oversized task.
+        assert_eq!(snapshot.latest_run.unwrap().state, LoopRunState::Completed);
+        let replanned = snapshot
+            .tasks
+            .iter()
+            .find(|task| task.key == "sliders:touch-target")
+            .expect("replanned task exists");
+        assert_eq!(replanned.state, LoopTaskState::Accepted);
+        assert!(snapshot
+            .events
+            .iter()
+            .any(|event| event.event_type == "orchestration.replanned"));
+    }
+
+    #[tokio::test]
+    async fn a_replan_that_repeats_the_stuck_key_stops_instead_of_spinning() {
+        use crate::loop_agent::{AgentRole, ScriptedAgentResponse, ScriptedAgentRuntime};
+        use std::sync::{Arc, Mutex};
+
+        let conn = test_db();
+        let mut input = spec_input();
+        input.verifier_program = None;
+        input.verifier_args.clear();
+        input.max_task_iterations = 1;
+        let spec = save_loop_spec(&conn, "ws-1", input).expect("save loop spec");
+        set_loop_enabled(&conn, &spec.id, true).expect("enable loop");
+        let run = create_loop_run(&conn, &spec.id, 600).expect("create run");
+        let stuck = r#"{"tasks":[{"key":"sliders","title":"All sliders","objective":"Seven features at once"}]}"#;
+        let runtime = Arc::new(ScriptedAgentRuntime::new(vec![
+            ScriptedAgentResponse {
+                role: AgentRole::Orchestrator,
+                session_id: "orchestrator-1".to_string(),
+                content: stuck.to_string(),
+                events: vec![],
+            },
+            ScriptedAgentResponse {
+                role: AgentRole::Worker,
+                session_id: "worker-1".to_string(),
+                content: r#"{"status":"completed","summary":"Attempt","evidence":[]}"#.to_string(),
+                events: vec![],
+            },
+            ScriptedAgentResponse {
+                role: AgentRole::Evaluator,
+                session_id: "evaluator-1".to_string(),
+                content: r#"{"verdict":"revise","summary":"Still wrong","feedback":"Again","evidence":[]}"#.to_string(),
+                events: vec![],
+            },
+            // Re-plan returns the very same key: re-running it would reproduce
+            // the same failure, which is the spin this guard exists to stop.
+            ScriptedAgentResponse {
+                role: AgentRole::Orchestrator,
+                session_id: "orchestrator-2".to_string(),
+                content: stuck.to_string(),
+                events: vec![],
+            },
+        ]));
+        let db = Arc::new(Mutex::new(conn));
+
+        execute_manual_loop(
+            Arc::clone(&db),
+            runtime,
+            &run.id,
+            std::path::PathBuf::from("/tmp/repo"),
+        )
+        .await
+        .expect("execute loop that cannot be replanned");
+
+        let snapshot = loop_snapshot(&db.lock().unwrap(), "ws-1").expect("load snapshot");
+        let latest = snapshot.latest_run.expect("run exists");
+        assert_eq!(latest.state, LoopRunState::Attention);
+        // The operator is told the loop already tried to re-plan, so the
+        // message is actionable rather than just "revisions exhausted".
+        assert!(
+            latest
+                .error
+                .as_deref()
+                .is_some_and(|error| error.contains("could not be decomposed")),
+            "unexpected error: {:?}",
+            latest.error,
+        );
+    }
+
+    #[tokio::test]
     async fn evaluator_revision_stops_at_the_configured_attempt_budget() {
         use crate::loop_agent::{AgentRole, ScriptedAgentResponse, ScriptedAgentRuntime};
         use std::sync::{Arc, Mutex};
@@ -4869,6 +5242,14 @@ mod tests {
                 role: AgentRole::Evaluator,
                 session_id: "evaluator-1".to_string(),
                 content: r#"{"verdict":"revise","summary":"Still incomplete","feedback":"Try again","evidence":[]}"#.to_string(),
+                events: vec![],
+            },
+            // Exhausting the budget now asks planning whether the work can be
+            // split; declining is what hands it to a human.
+            ScriptedAgentResponse {
+                role: AgentRole::Orchestrator,
+                session_id: "orchestrator-2".to_string(),
+                content: r#"{"tasks":[]}"#.to_string(),
                 events: vec![],
             },
         ]));
@@ -5349,6 +5730,14 @@ mod tests {
                 session_id: "worker-1".to_string(),
                 content: r#"{"status":"completed","summary":"Claimed success","evidence":[]}"#
                     .to_string(),
+                events: vec![],
+            },
+            // A failing verifier still exhausts the budget, so planning is
+            // offered the same chance to split the work before a human is asked.
+            ScriptedAgentResponse {
+                role: AgentRole::Orchestrator,
+                session_id: "orchestrator-2".to_string(),
+                content: r#"{"tasks":[]}"#.to_string(),
                 events: vec![],
             },
         ]));
