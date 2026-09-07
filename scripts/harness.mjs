@@ -46,6 +46,16 @@ const CASES = {
     // Clicking Resolve must flip the thread status.
     expectText: { selector: '[data-testid="thread-status"]', text: "Resolved" },
   },
+  "comments-tab": {
+    describe: "Comments tab Resolve button survives the tile's own re-renders",
+    // The tab opens on the list, so the thread has to be selected before the
+    // editor — and its comment zone — exists at all.
+    setup: ['[data-testid="comments-thread-c1"]'],
+    button: '[data-testid="comment-resolve-c1"]',
+    // Resolving swaps the button for Reopen; a zone rebuilt underneath the
+    // click leaves the original button in place instead.
+    expectVisible: '[data-testid="comment-reopen-c1"]',
+  },
 };
 
 async function serverUp() {
@@ -78,6 +88,23 @@ async function ensureServer() {
 async function probeCase(page, id, cfg) {
   await page.goto(`${BASE}/?harness=${id}`, { waitUntil: "networkidle", timeout: 60_000 });
   await page.waitForSelector('[data-testid="harness-case"]', { timeout: 30_000 });
+
+  // Optional navigation to reach the component under test. Kept as plain clicks
+  // so a case can start from the list a real user starts from, rather than the
+  // case faking the selected state the bug depends on.
+  for (const selector of cfg.setup ?? []) {
+    try {
+      await page.click(selector, { timeout: 15_000 });
+    } catch (e) {
+      return {
+        ok: false,
+        reason: `setup click ${selector} failed: ${e instanceof Error ? e.message.split("\n")[0] : String(e)}`,
+      };
+    }
+  }
+
+  // After setup: a case whose editor only exists once something is selected
+  // would otherwise time out here before it could click anything.
   await page.waitForFunction(() => document.querySelectorAll(".monaco-editor").length > 0, null, {
     timeout: 30_000,
   });

@@ -383,4 +383,81 @@ test.describe("resolving imported comments", () => {
       page.locator('[data-testid="comment-delete-ado-1513151-16261206-1"]'),
     ).toHaveCount(0);
   });
+
+  /**
+   * Regression: comment view zones were rebuilt on every parent render, because
+   * the zone renderer depended on the inline action callbacks the tile passes.
+   * The app re-renders tiles on a 2s poll, so the zones flickered constantly —
+   * and because a render also happens on mousedown, the button was replaced
+   * before mouseup, so the browser never fired a click and Resolve/Reply/Copy
+   * silently did nothing.
+   */
+  test.describe("Comments tab zones survive the tile's re-renders", () => {
+    async function openThread(page: Page) {
+      await page.goto("/?harness=comments-tab", { waitUntil: "networkidle" });
+      await expect(page.locator('[data-testid="harness-case"]')).toBeVisible();
+      await page.locator('[data-testid="comments-thread-c1"]').click();
+      await expect(page.locator('[data-testid="comment-resolve-c1"]')).toBeVisible();
+    }
+
+    test("the zone is not rebuilt while the tile re-renders", async ({ page }) => {
+      await openThread(page);
+      // The case re-renders on a timer like the app's poll does.
+      const rebuilds = await page.evaluate(async () => {
+        let seen = 0;
+        const host = document.querySelector(".monaco-editor")?.parentElement;
+        if (!host) return -1;
+        const observer = new MutationObserver((records) => {
+          for (const record of records) {
+            for (const node of record.addedNodes) {
+              if (
+                node instanceof HTMLElement &&
+                node.querySelector('[data-testid^="comment-zone-"]')
+              ) {
+                seen += 1;
+              }
+            }
+          }
+        });
+        observer.observe(host, { childList: true, subtree: true });
+        await new Promise((resolve) => setTimeout(resolve, 2_000));
+        observer.disconnect();
+        return seen;
+      });
+      expect(rebuilds, "comment zone was rebuilt while idle (flicker)").toBe(0);
+    });
+
+    test("Resolve, Reply and Copy all act on a real click", async ({ page }) => {
+      await openThread(page);
+
+      // A real click is mousedown + mouseup: the browser only fires `click`
+      // when both land on the same node, so this fails if the zone is rebuilt
+      // underneath the press.
+      await page.locator('[data-testid="comment-resolve-c1"]').click({ timeout: 5_000 });
+      await expect(page.locator('[data-testid="comment-reopen-c1"]')).toBeVisible();
+
+      await page.locator('[data-testid="comment-reply-c1"]').click({ timeout: 5_000 });
+      await expect(page.locator('[data-testid="comment-composer"]')).toBeVisible();
+      await page.keyboard.press("Escape");
+
+      const copied = await page.evaluate(async () => {
+        const button = document.querySelector('[data-testid="comment-copy-c1"]');
+        if (!button) return false;
+        let fired = false;
+        button.addEventListener("click", () => {
+          fired = true;
+        });
+        const rect = button.getBoundingClientRect();
+        button.dispatchEvent(
+          new MouseEvent("click", {
+            bubbles: true,
+            clientX: Math.round(rect.left + rect.width / 2),
+            clientY: Math.round(rect.top + rect.height / 2),
+          }),
+        );
+        return fired;
+      });
+      expect(copied, "Copy button did not receive its click").toBe(true);
+    });
+  });
 });

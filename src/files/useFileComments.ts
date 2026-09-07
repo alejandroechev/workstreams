@@ -24,6 +24,15 @@ export interface UseFileCommentsResult {
 }
 
 /**
+ * Shared empty result.
+ *
+ * Returning a fresh `[]` here would give consumers a new array identity on
+ * every render, re-running any effect keyed on the comment list — which for the
+ * Monaco layer means rebuilding every view zone.
+ */
+const NO_COMMENTS: SessionFileComment[] = [];
+
+/**
  * Loads, mutates, and exposes inline file comments for a (workstreamId, file)
  * pair, stored in the bound Copilot session's session.db (unify-commenting).
  * `absolutePath` is converted to a repo-relative path against `rootDir` before
@@ -209,7 +218,7 @@ export function useFileComments(
 
   return {
     comments:
-      isActive && commentState.file === file ? commentState.comments : [],
+      isActive && commentState.file === file ? commentState.comments : NO_COMMENTS,
     loading,
     error,
     file: isActive ? file : null,

@@ -91,8 +91,7 @@ CDP-on-Tauri remains a documented **escalation** for genuinely Tauri/webview
 - Comment buttons work in both tiles; verified GREEN by the harness and the CI
   interactivity spec.
 - A reusable, low-friction loop exists for the next real-DOM UI bug: add a
-  harness case, reproduce **red**, fix against the live repro, confirm **green**.
-- Unit tests are explicitly scoped to logic/state; a note in the affected tests
+  harness case, reproduce **red**, fix against the live repro, confirm **green**.- Unit tests are explicitly scoped to logic/state; a note in the affected tests
   points to the harness for interactivity so nobody "fixes" a green unit test and
   assumes the UI works.
 - Risk: the CSS lift is global to any editor carrying `INTERACTIVE_ZONES_CLASS`;
@@ -110,3 +109,30 @@ CDP-on-Tauri remains a documented **escalation** for genuinely Tauri/webview
   source of false confidence; jsdom has no real layout.
 - **CDP-on-Tauri** as the primary signal — rejected for the inner loop (slow Rust
   build + WebView2 attach); kept as an escalation.
+
+## Follow-up: zone identity is part of the contract (2026-09-07)
+
+Occlusion was only half the problem. A second failure had the same symptom —
+"the button is right there and nothing happens" — but a different cause: the
+zones were being *rebuilt* rather than covered.
+
+`FileCommentsLayer` rendered its zones from a `renderCommentZone` callback that
+depended on the `onSetCommentStatus` / `onReplyComment` / `onDeleteComment`
+props. Callers pass inline arrows, so those props change identity on every
+parent render, which tore down and re-added every view zone. The app re-renders
+tiles on a two-second poll, so threads flickered continuously; and because a
+render also happens on mousedown, the button was replaced before mouseup. A
+browser only fires `click` when press and release land on the same node, so
+Resolve, Reply and Copy did nothing at all.
+
+The layer now reaches those callbacks through a ref, and keeps only the
+*capability* booleans in the effect's dependencies, so a callback's identity
+cannot rebuild a zone while an appearing or disappearing action still can.
+
+Two rules follow, both guarded by `comments-tab` in the harness and CI:
+
+- **A zone's DOM node must outlive a parent re-render.** Anything that rebuilds
+  zones on render breaks clicking, not just rendering.
+- **Hit-testing is not sufficient.** The harness reported the button as the top
+  element at its centre while the click did nothing, so a case must assert an
+  observable state change, never mere clickability.

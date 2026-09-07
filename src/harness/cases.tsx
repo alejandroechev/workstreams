@@ -183,6 +183,95 @@ const ReviewThreadCase: FC = () => {
 };
 
 /**
+ * Case: the real Repo Explorer **Comments tab**, mounted as the tile itself
+ * rather than reassembled from parts.
+ *
+ * `comments-navigation` composes `CommentsPanel` + `FileEditorView` directly,
+ * so it never exercises the tile's own wiring — which is where the comment
+ * action props are created. This case seeds a backend comment, opens the tab
+ * through view state, and lets the probe select the thread and click Resolve,
+ * so a zone rebuilt underneath an in-flight click fails here.
+ */
+const CommentsTabCase: FC = () => {
+  const backend = useMemo(() => {
+    const instance = new MemoryBackend();
+    instance.seedBoundSession("ws-1", "sess-1");
+    instance.seedSessionFileComment({
+      id: "c1",
+      workstream_id: "ws-1",
+      file: "src/example.ts",
+      anchor_line_start: 2,
+      anchor_line_end: 2,
+      anchor_text: "const b = 2;",
+      body: "Prefer a clearer name than `b`.",
+      // Imported from an external review, so Edit/Delete are correctly absent
+      // and Resolve/Reply/Copy are the only actions — exactly the reported case.
+      author: "Eduardo Fernandez",
+      status: "open",
+    });
+
+    // The tile reads files through the *global* buffer registry, which goes to
+    // Tauri `invoke`. Unhandled commands resolve to null in the browser shim,
+    // which would hand FileEditorView a null path — so serve the file here.
+    const content = "const a = 1;\nconst b = 2;\nconst c = 3;\n";
+    const handlers = (window.__WS_INVOKE_HANDLERS__ ??= {});
+    handlers.canonicalize_path = (args) => args.path as string;
+    handlers.read_text_file = () => ({
+      content,
+      mtime_unix_ms: Date.now(),
+      hash_hex: "0",
+      line_ending: "lf",
+      has_trailing_newline: true,
+      sniffed_binary: false,
+      size_bytes: content.length,
+    });
+    return instance;
+  }, []);
+
+  // The real tile is a controlled component: it persists view state through
+  // onConfigChange and receives it back as configJson. Wiring that loop here
+  // is what makes the case faithful — an unstable view-state snapshot shows up
+  // as a re-render storm only when the round-trip exists.
+  const [configJson, setConfigJson] = useState(() =>
+    JSON.stringify({ viewState: { kind: "repo_explorer", activeTab: "comments" } }),
+  );
+
+  // Measured behaviour of the real app, reproduced explicitly: App.tsx polls
+  // loop summaries every 2s and re-renders every tile, and pressing the mouse
+  // re-renders it again. Comment zones must survive both — in the app the node
+  // was being replaced between mousedown and mouseup, so the browser never
+  // fired a click and Resolve/Reply/Copy silently did nothing.
+  const [renders, setRenders] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setRenders((n) => n + 1), 400);
+    return () => clearInterval(t);
+  }, []);
+
+  return (
+    <div
+      data-testid="harness-case"
+      data-case="comments-tab"
+      style={full}
+      onMouseDownCapture={() => setRenders((n) => n + 1)}
+    >
+      <span data-testid="comments-tab-renders" style={{ display: "none" }}>
+        {renders}
+      </span>
+      <BackendProvider backend={backend}>
+        <RepoExplorerTile
+          tileId="t1"
+          isFocused
+          rootDir="C:/repo"
+          workstreamId="ws-1"
+          configJson={configJson}
+          onConfigChange={setConfigJson}
+        />
+      </BackendProvider>
+    </div>
+  );
+};
+
+/**
  * Case: Repo Explorer Unstaged diff with the shared file-comment layer mounted
  * on the DiffEditor's modified side.
  */
@@ -653,6 +742,10 @@ export const harnessCases: Record<string, HarnessCase> = {
   "comments-navigation": {
     title: "Comments tab: cross-file navigation to a thread",
     Component: CommentsNavigationCase,
+  },
+  "comments-tab": {
+    title: "Repo Explorer Comments tab: Resolve inside the real tile",
+    Component: CommentsTabCase,
   },
   "diff-comment-zone": {
     title: "Repo Explorer Unstaged diff file-comment zone",

@@ -75,6 +75,32 @@ export function FileCommentsLayer({
   const zoneDescriptorsRef = useRef<Map<string, MonacoNs.editor.IViewZone>>(new Map());
   const measureRafRef = useRef<number | null>(null);
 
+  /**
+   * Latest action callbacks, reached through a ref rather than closed over.
+   *
+   * Callers pass inline arrows (`onSetCommentStatus={(id, s) => …}`), so these
+   * props get a new identity on every parent render. Depending on the functions
+   * themselves made the zone renderer — and therefore the effect that builds
+   * the view zones — unstable, so every render tore down and rebuilt every
+   * comment zone. That flickered continuously (the app re-renders tiles on a
+   * 2s poll) and, worse, replaced the button between `mousedown` and `mouseup`:
+   * the browser only fires `click` when both land on the same node, so
+   * Resolve/Reply/Copy silently did nothing.
+   */
+  const actionsRef = useRef({ onDeleteComment, onSetCommentStatus, onReplyComment });
+  useEffect(() => {
+    actionsRef.current = { onDeleteComment, onSetCommentStatus, onReplyComment };
+  });
+
+  /**
+   * Whether each action is offered at all. Identity churn must not rebuild
+   * zones, but a capability genuinely appearing or disappearing must, so the
+   * booleans stay in the effect's dependencies while the functions do not.
+   */
+  const canDelete = Boolean(onDeleteComment);
+  const canSetStatus = Boolean(onSetCommentStatus);
+  const canReply = Boolean(onReplyComment);
+
   const handleEditClick = useCallback((comment: SessionFileComment) => {
     setComposer({ mode: "edit", comment, body: comment.body });
   }, []);
@@ -92,20 +118,19 @@ export function FileCommentsLayer({
     void writeTextToClipboard(formatThreadForCopy(thread));
   }, []);
 
-  const handleDeleteClick = useCallback(
-    (comment: SessionFileComment) => {
-      if (!onDeleteComment || !window.confirm("Delete this comment?")) return;
-      void onDeleteComment(comment.id);
-    },
-    [onDeleteComment],
-  );
+  const handleDeleteClick = useCallback((comment: SessionFileComment) => {
+    const onDelete = actionsRef.current.onDeleteComment;
+    if (!onDelete || !window.confirm("Delete this comment?")) return;
+    void onDelete(comment.id);
+  }, []);
 
   const handleStatusClick = useCallback(
     (comment: SessionFileComment, status: string) => {
-      if (!onSetCommentStatus) return;
-      void onSetCommentStatus(comment.id, status);
+      const onStatus = actionsRef.current.onSetCommentStatus;
+      if (!onStatus) return;
+      void onStatus(comment.id, status);
     },
-    [onSetCommentStatus],
+    [],
   );
 
   const renderCommentZone = useCallback(
@@ -176,7 +201,7 @@ export function FileCommentsLayer({
         // external review, which are exactly the ones you most need to close
         // out. Edit/Delete stay author-gated below: changing someone else's
         // words is a different question from marking their point handled.
-        if (onSetCommentStatus) {
+        if (canSetStatus) {
           header.appendChild(
             isClosedStatus(comment.status)
               ? makeButton("Reopen", "#a6e3a1", `comment-reopen-${comment.id}`, () =>
@@ -193,14 +218,16 @@ export function FileCommentsLayer({
               handleEditClick(comment),
             ),
           );
-          header.appendChild(
-            makeButton("Delete", "#f38ba8", `comment-delete-${comment.id}`, () =>
-              handleDeleteClick(comment),
-            ),
-          );
+          if (canDelete) {
+            header.appendChild(
+              makeButton("Delete", "#f38ba8", `comment-delete-${comment.id}`, () =>
+                handleDeleteClick(comment),
+              ),
+            );
+          }
         }
         if (!isReply) {
-          if (onReplyComment) {
+          if (canReply) {
             header.appendChild(
               makeButton("Reply", "#89b4fa", `comment-reply-${comment.id}`, () =>
                 handleReplyClick(comment),
@@ -236,13 +263,14 @@ export function FileCommentsLayer({
       for (const reply of thread.replies) appendEntry(reply, true);
     },
     [
+      canDelete,
+      canReply,
+      canSetStatus,
       handleCopyThread,
       handleDeleteClick,
       handleEditClick,
       handleReplyClick,
       handleStatusClick,
-      onReplyComment,
-      onSetCommentStatus,
     ],
   );
 

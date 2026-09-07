@@ -68,6 +68,11 @@ for any release is attached to its
 ### Fixed
 
 - The duplicate ADR number 004: the Repo Explorer record is now 024.
+- Comment threads in the Repo Explorer Comments tab no longer flicker, and their
+  Resolve, Reply and Copy buttons work. The inline view zones were rebuilt on
+  every re-render of the tile, which the app triggers on a two-second poll, so
+  the button was replaced between pressing and releasing the mouse and the
+  browser never delivered the click.
 - Evaluators may return revision feedback as either one string or an array of
   strings. Array feedback is joined into one actionable revision message
   instead of interrupting the loop with an invalid-verdict error.
