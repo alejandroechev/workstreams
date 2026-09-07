@@ -60,9 +60,18 @@ Two mechanical guards prevent a re-plan loop:
 1. Keys that just exhausted their budget are filtered out of the orchestrator's
    response. An orchestrator that returns the same task under the same key
    cannot resurrect it.
-2. `MAX_REPLANS_PER_RUN` bounds how many times one run may re-plan. The counter
+2. `spec.limits.replanAttempts` bounds how many times one run may re-plan. It
+   defaults to `1`, so definitions written before re-planning existed get one
+   recovery attempt without being edited. `0` restores the old behaviour of
+   escalating immediately, which is the right choice for a loop whose tasks are
+   already narrow or whose operator wants every failure surfaced. The counter
    lives in memory rather than being derived from events, so a run the operator
    resumes gets a fresh allowance — they have just looked at it.
+
+   The budget belongs to the definition rather than to the build because the
+   right number depends on the objective: a loop whose decomposition is obvious
+   wants `0`, while one whose right shape is hard to guess up front benefits
+   from several. Hardcoding it would have imposed one loop's answer on all.
 
 ### Superseded tasks keep their evidence
 

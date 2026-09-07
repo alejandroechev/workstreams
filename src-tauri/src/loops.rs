@@ -30,6 +30,8 @@ pub struct LoopSpecInput {
     pub max_task_iterations: u32,
     #[serde(default = "default_one")]
     pub max_tasks_per_cycle: u32,
+    #[serde(default = "default_one")]
+    pub max_replans_per_run: u32,
 }
 
 const fn default_one() -> u32 {
@@ -54,6 +56,7 @@ pub struct LoopSpec {
     pub run_timeout_seconds: u64,
     pub max_task_iterations: u32,
     pub max_tasks_per_cycle: u32,
+    pub max_replans_per_run: u32,
     pub enabled: bool,
     pub created_at: String,
     pub updated_at: String,
@@ -545,6 +548,9 @@ pub fn init_loop_schema(conn: &Connection) -> rusqlite::Result<()> {
         "ALTER TABLE loop_tasks ADD COLUMN superseded_by_replan INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE loop_specs ADD COLUMN human_approval_prompt TEXT",
         "ALTER TABLE loop_specs ADD COLUMN max_tasks_per_cycle INTEGER NOT NULL DEFAULT 1",
+        // How many times one run may ask the orchestrator to decompose stuck
+        // work before escalating. Zero escalates immediately.
+        "ALTER TABLE loop_specs ADD COLUMN max_replans_per_run INTEGER NOT NULL DEFAULT 1",
     ] {
         let _ = conn.execute_batch(migration);
     }
@@ -641,6 +647,7 @@ fn decode_spec_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<LoopSpec> {
         portable: row.get::<_, Option<i64>>(23)?.map(|value| value != 0),
         definition_yaml: row.get(24)?,
         max_tasks_per_cycle: row.get(25)?,
+        max_replans_per_run: row.get(26)?,
     })
 }
 
@@ -649,7 +656,7 @@ const SPEC_COLUMNS: &str = "id, workstream_id, orchestrator_prompt, worker_promp
     human_approval_prompt, verifier_program, verifier_args_json, verifier_cwd, verifier_timeout_seconds,
     run_timeout_seconds, max_task_iterations, enabled, created_at, updated_at, definition_id,
     definition_path, definition_hash, definition_name, objective, portable,
-    definition_yaml, max_tasks_per_cycle";
+    definition_yaml, max_tasks_per_cycle, max_replans_per_run";
 
 pub fn get_loop_spec(conn: &Connection, workstream_id: &str) -> Result<Option<LoopSpec>, String> {
     conn.query_row(
@@ -703,10 +710,10 @@ pub fn save_loop_spec(
             orchestrator_model, worker_model, evaluator_model, human_approval_prompt, verifier_program,
             verifier_args_json, verifier_cwd, run_timeout_seconds,
             verifier_timeout_seconds, max_task_iterations, enabled, created_at, updated_at,
-            max_tasks_per_cycle
+            max_tasks_per_cycle, max_replans_per_run
          ) VALUES (
             ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, 0, ?16, ?17,
-            ?18
+            ?18, ?19
          )
          ON CONFLICT(workstream_id) DO UPDATE SET
             orchestrator_prompt = excluded.orchestrator_prompt,
@@ -723,6 +730,7 @@ pub fn save_loop_spec(
             run_timeout_seconds = excluded.run_timeout_seconds,
             max_task_iterations = excluded.max_task_iterations,
             max_tasks_per_cycle = excluded.max_tasks_per_cycle,
+            max_replans_per_run = excluded.max_replans_per_run,
             updated_at = excluded.updated_at",
         params![
             id,
@@ -747,6 +755,7 @@ pub fn save_loop_spec(
             created_at,
             updated_at,
             input.max_tasks_per_cycle,
+            input.max_replans_per_run,
         ],
     )
     .map_err(|error| format!("Failed to save loop specification: {error}"))?;
@@ -835,6 +844,7 @@ pub(crate) fn definition_to_materialized(
             verifier_timeout_seconds: fields.verifier_timeout_seconds,
             run_timeout_seconds: fields.run_timeout_seconds,
             max_task_iterations: fields.task_attempts,
+            max_replans_per_run: fields.replan_attempts,
             max_tasks_per_cycle: fields.max_tasks_per_run,
         },
     }
@@ -886,10 +896,10 @@ pub fn materialize_loop_definition(
             verifier_args_json, verifier_cwd, run_timeout_seconds,
             verifier_timeout_seconds, max_task_iterations, enabled, created_at, updated_at, definition_id,
             definition_path, definition_hash, definition_name, objective, portable,
-            definition_yaml, max_tasks_per_cycle
+            definition_yaml, max_tasks_per_cycle, max_replans_per_run
          ) VALUES (
             ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, 1,
-            ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25
+            ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26
          )
          ON CONFLICT(workstream_id) DO UPDATE SET
             orchestrator_prompt = excluded.orchestrator_prompt,
@@ -906,6 +916,7 @@ pub fn materialize_loop_definition(
             run_timeout_seconds = excluded.run_timeout_seconds,
             max_task_iterations = excluded.max_task_iterations,
             max_tasks_per_cycle = excluded.max_tasks_per_cycle,
+            max_replans_per_run = excluded.max_replans_per_run,
             enabled = 1,
             definition_id = excluded.definition_id,
             definition_path = excluded.definition_path,
@@ -946,6 +957,7 @@ pub fn materialize_loop_definition(
             i64::from(definition.portable),
             definition.yaml,
             definition.spec.max_tasks_per_cycle,
+            definition.spec.max_replans_per_run,
         ],
     )
     .map_err(|error| format!("Failed to bind loop definition: {error}"))?;
@@ -988,14 +1000,6 @@ fn decode_run_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<LoopRun> {
         definition_name: row.get(12)?,
     })
 }
-
-/// How many times one run may ask the orchestrator to decompose stuck work.
-///
-/// One is deliberate. A re-plan is a recovery attempt, not a second budget: if
-/// splitting the task did not land it, the next useful signal is a human, not
-/// another round of guesses at the operator's expense. `taskAttempts` remains
-/// the knob for how hard to try a *given* task.
-const MAX_REPLANS_PER_RUN: u32 = 1;
 
 const RUN_COLUMNS: &str = "id, loop_spec_id, state, current_task_id,
     control_requested, error, started_at, finished_at, deadline_at,
@@ -3165,8 +3169,8 @@ async fn execute_manual_loop_inner(
             // planning decides, so splitting the rest would just delay saying
             // so. Bounded per run: a re-plan that cannot produce new, narrower
             // work is a signal to stop, not to try again.
-            let replannable =
-                attention_tasks.len() as i64 == needs_human && replans_used < MAX_REPLANS_PER_RUN;
+            let replannable = attention_tasks.len() as i64 == needs_human
+                && replans_used < spec.max_replans_per_run;
             if !replannable {
                 let conn = db.lock().unwrap();
                 finish_run_from_persisted_tasks(&conn, run_id)?;
@@ -4556,6 +4560,7 @@ mod tests {
             verifier_timeout_seconds: Some(300),
             run_timeout_seconds: 600,
             max_task_iterations: 2,
+            max_replans_per_run: 1,
             max_tasks_per_cycle: 1,
         }
     }
@@ -4746,6 +4751,7 @@ mod tests {
         let conn = test_db();
         let mut first_input = spec_input();
         first_input.human_approval_prompt = Some("Review first".to_string());
+        first_input.max_replans_per_run = 0;
         let first = materialize_loop_definition(
             &conn,
             "ws-1",
@@ -4774,6 +4780,10 @@ mod tests {
             .expect("complete first run");
         assert_eq!(first.definition_id.as_deref(), Some("first-loop"));
         assert_eq!(first.definition_hash.as_deref(), Some("hash-1"));
+        // The definition's re-plan budget survives materialization, so binding
+        // a definition is what configures recovery rather than a build-time
+        // constant.
+        assert_eq!(first.max_replans_per_run, 0);
         let pinned = get_loop_run(&conn, &first_run.id)
             .expect("load run")
             .expect("run exists");
@@ -5208,6 +5218,138 @@ mod tests {
             "unexpected error: {:?}",
             latest.error,
         );
+    }
+
+    #[tokio::test]
+    async fn a_definition_can_switch_replanning_off_entirely() {
+        use crate::loop_agent::{AgentRole, ScriptedAgentResponse, ScriptedAgentRuntime};
+        use std::sync::{Arc, Mutex};
+
+        let conn = test_db();
+        let mut input = spec_input();
+        input.verifier_program = None;
+        input.verifier_args.clear();
+        input.max_task_iterations = 1;
+        input.max_replans_per_run = 0;
+        let spec = save_loop_spec(&conn, "ws-1", input).expect("save loop spec");
+        set_loop_enabled(&conn, &spec.id, true).expect("enable loop");
+        let run = create_loop_run(&conn, &spec.id, 600).expect("create run");
+        let runtime = Arc::new(ScriptedAgentRuntime::new(vec![
+            ScriptedAgentResponse {
+                role: AgentRole::Orchestrator,
+                session_id: "orchestrator-1".to_string(),
+                content: r#"{"tasks":[{"key":"sliders","title":"All sliders","objective":"Seven features at once"}]}"#.to_string(),
+                events: vec![],
+            },
+            ScriptedAgentResponse {
+                role: AgentRole::Worker,
+                session_id: "worker-1".to_string(),
+                content: r#"{"status":"completed","summary":"Attempt","evidence":[]}"#.to_string(),
+                events: vec![],
+            },
+            ScriptedAgentResponse {
+                role: AgentRole::Evaluator,
+                session_id: "evaluator-1".to_string(),
+                content: r#"{"verdict":"revise","summary":"Wrong","feedback":"Split it","evidence":[]}"#.to_string(),
+                events: vec![],
+            },
+        ]));
+        let db = Arc::new(Mutex::new(conn));
+
+        execute_manual_loop(
+            Arc::clone(&db),
+            runtime,
+            &run.id,
+            std::path::PathBuf::from("/tmp/repo"),
+        )
+        .await
+        .expect("execute loop with replanning disabled");
+
+        let snapshot = loop_snapshot(&db.lock().unwrap(), "ws-1").expect("load snapshot");
+        assert_eq!(
+            snapshot.latest_run.expect("run exists").state,
+            LoopRunState::Attention
+        );
+        // No orchestrator call was spent: the operator asked to be told
+        // immediately, so the escalation must be immediate.
+        assert!(!snapshot
+            .events
+            .iter()
+            .any(|event| event.event_type == "orchestration.replanned"));
+        assert!(!snapshot.tasks.iter().any(|task| task.superseded_by_replan));
+    }
+
+    #[tokio::test]
+    async fn a_definition_can_allow_more_than_one_replan() {
+        use crate::loop_agent::{AgentRole, ScriptedAgentResponse, ScriptedAgentRuntime};
+        use std::sync::{Arc, Mutex};
+
+        let conn = test_db();
+        let mut input = spec_input();
+        input.verifier_program = None;
+        input.verifier_args.clear();
+        input.max_task_iterations = 1;
+        input.max_replans_per_run = 2;
+        let spec = save_loop_spec(&conn, "ws-1", input).expect("save loop spec");
+        set_loop_enabled(&conn, &spec.id, true).expect("enable loop");
+        let run = create_loop_run(&conn, &spec.id, 600).expect("create run");
+
+        // Each round: orchestrator proposes, worker attempts, evaluator rejects.
+        let round = |index: u32, key: &str| {
+            vec![
+                ScriptedAgentResponse {
+                    role: AgentRole::Orchestrator,
+                    session_id: format!("orchestrator-{index}"),
+                    content: format!(
+                        r#"{{"tasks":[{{"key":"{key}","title":"Task {index}","objective":"Objective {index}"}}]}}"#
+                    ),
+                    events: vec![],
+                },
+                ScriptedAgentResponse {
+                    role: AgentRole::Worker,
+                    session_id: format!("worker-{index}"),
+                    content: r#"{"status":"completed","summary":"Attempt","evidence":[]}"#
+                        .to_string(),
+                    events: vec![],
+                },
+                ScriptedAgentResponse {
+                    role: AgentRole::Evaluator,
+                    session_id: format!("evaluator-{index}"),
+                    content:
+                        r#"{"verdict":"revise","summary":"Wrong","feedback":"Narrow it","evidence":[]}"#
+                            .to_string(),
+                    events: vec![],
+                },
+            ]
+        };
+        let mut script = round(1, "wide");
+        script.extend(round(2, "narrow"));
+        script.extend(round(3, "narrowest"));
+        let runtime = Arc::new(ScriptedAgentRuntime::new(script));
+        let db = Arc::new(Mutex::new(conn));
+
+        execute_manual_loop(
+            Arc::clone(&db),
+            runtime,
+            &run.id,
+            std::path::PathBuf::from("/tmp/repo"),
+        )
+        .await
+        .expect("execute loop with two replans");
+
+        let snapshot = loop_snapshot(&db.lock().unwrap(), "ws-1").expect("load snapshot");
+        assert_eq!(
+            snapshot.latest_run.expect("run exists").state,
+            LoopRunState::Attention
+        );
+        // Two re-plans were allowed and both were spent before escalating.
+        let replans = snapshot
+            .events
+            .iter()
+            .filter(|event| event.event_type == "orchestration.replanned")
+            .count();
+        assert_eq!(replans, 2);
+        assert!(snapshot.tasks.iter().any(|task| task.key == "narrowest"));
     }
 
     #[tokio::test]

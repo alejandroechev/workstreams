@@ -58,6 +58,7 @@ describe("loop wire mapping", () => {
       run_timeout_seconds: 90,
       max_task_iterations: 2,
       max_tasks_per_cycle: 1,
+      max_replans_per_run: 1,
     });
   });
 
@@ -93,70 +94,83 @@ describe("loop wire mapping", () => {
         finished_at: null,
         deadline_at: "deadline",
       },
-      tasks: [{
-        id: "task-1",
-        loop_run_id: "run-1",
-        loop_spec_id: "spec-1",
-        key: "key-1",
-        title: "Task",
-        objective: "Do it",
-        state: "evaluating",
-        worker_session_id: "session-1",
-        revision_count: 0,
-        worker_result: "{}",
-        error: null,
-        created_at: "created",
-        updated_at: "updated",
-      }],
-      verifications: [{
-        id: "verify-1",
-        loop_task_id: "task-1",
-        attempt: 1,
-        status: "passed",
-        program: "npm",
-        args: ["test"],
-        cwd: "/repo",
-        program_hash: "abc",
-        exit_code: 0,
-        duration_ms: 12,
-        stdout: "ok",
-        stderr: "",
-        truncated: false,
-        created_at: "created",
-      }],
-      evaluations: [{
-        id: "evaluation-1",
-        loop_task_id: "task-1",
-        attempt: 1,
-        session_id: "evaluator-1",
-        verdict: "accepted",
-        summary: "good",
-        feedback: null,
-        evidence: ["tests"],
-        created_at: "created",
-      }],
-      approvals: [{
-        id: "approval-1",
-        loop_task_id: "task-1",
-        attempt: 1,
-        status: "pending",
-        prompt: "Human review",
-        feedback: null,
-        created_at: "created",
-        decided_at: null,
-      }],
-      events: [{
-        id: 1,
-        loop_spec_id: "spec-1",
-        loop_run_id: "run-1",
-        loop_task_id: "task-1",
-        event_type: "assistant.message",
-        payload: { content: "working" },
-        created_at: "created",
-      }],
+      tasks: [
+        {
+          id: "task-1",
+          loop_run_id: "run-1",
+          loop_spec_id: "spec-1",
+          key: "key-1",
+          title: "Task",
+          objective: "Do it",
+          state: "evaluating",
+          worker_session_id: "session-1",
+          revision_count: 0,
+          worker_result: "{}",
+          error: null,
+          created_at: "created",
+          updated_at: "updated",
+        },
+      ],
+      verifications: [
+        {
+          id: "verify-1",
+          loop_task_id: "task-1",
+          attempt: 1,
+          status: "passed",
+          program: "npm",
+          args: ["test"],
+          cwd: "/repo",
+          program_hash: "abc",
+          exit_code: 0,
+          duration_ms: 12,
+          stdout: "ok",
+          stderr: "",
+          truncated: false,
+          created_at: "created",
+        },
+      ],
+      evaluations: [
+        {
+          id: "evaluation-1",
+          loop_task_id: "task-1",
+          attempt: 1,
+          session_id: "evaluator-1",
+          verdict: "accepted",
+          summary: "good",
+          feedback: null,
+          evidence: ["tests"],
+          created_at: "created",
+        },
+      ],
+      approvals: [
+        {
+          id: "approval-1",
+          loop_task_id: "task-1",
+          attempt: 1,
+          status: "pending",
+          prompt: "Human review",
+          feedback: null,
+          created_at: "created",
+          decided_at: null,
+        },
+      ],
+      events: [
+        {
+          id: 1,
+          loop_spec_id: "spec-1",
+          loop_run_id: "run-1",
+          loop_task_id: "task-1",
+          event_type: "assistant.message",
+          payload: { content: "working" },
+          created_at: "created",
+        },
+      ],
     });
 
-    expect(decoded.spec?.orchestrator).toEqual({ prompt: "discover", model: "" });
+    expect(decoded.spec?.orchestrator).toEqual({
+      prompt: "discover",
+      model: "",
+    });
     expect(decoded.latestRun).toMatchObject({
       loopSpecId: "spec-1",
       activeTaskId: "task-1",
@@ -181,33 +195,39 @@ describe("loop wire mapping", () => {
 
   it("decodes sidebar summaries", () => {
     expect(
-      decodeLoopSummaries([{
-        workstream_id: "ws-1",
-        loop_spec_id: "spec-1",
+      decodeLoopSummaries([
+        {
+          workstream_id: "ws-1",
+          loop_spec_id: "spec-1",
+          enabled: true,
+          run_id: "run-1",
+          run_state: "working",
+          control_requested: "none",
+          current_task_id: "task-1",
+          started_at: "started",
+        },
+      ]),
+    ).toEqual([
+      {
+        workstreamId: "ws-1",
+        loopSpecId: "spec-1",
         enabled: true,
-        run_id: "run-1",
-        run_state: "working",
-        control_requested: "none",
-        current_task_id: "task-1",
-        started_at: "started",
-      }]),
-    ).toEqual([{
-      workstreamId: "ws-1",
-      loopSpecId: "spec-1",
-      enabled: true,
-      runId: "run-1",
-      runState: "working",
-      controlRequested: "none",
-      currentTaskId: "task-1",
-      startedAt: "started",
-    }]);
+        runId: "run-1",
+        runState: "working",
+        controlRequested: "none",
+        currentTaskId: "task-1",
+        startedAt: "started",
+      },
+    ]);
   });
 
   it("normalizes epoch timestamps and supports a verifier without a cwd", () => {
-    const decoded = decodeLoopSpec(specWire({
-      verifier_program: "npm",
-      verifier_args: ["test"],
-    }));
+    const decoded = decodeLoopSpec(
+      specWire({
+        verifier_program: "npm",
+        verifier_args: ["test"],
+      }),
+    );
 
     expect(decoded.createdAt).toBe("1970-01-01T00:01:40.000Z");
     expect(decoded.updatedAt).toBe("1970-01-01T00:01:41.000Z");
@@ -218,12 +238,14 @@ describe("loop wire mapping", () => {
   });
 
   it("supports a verification-only loop with no evaluator", () => {
-    const decoded = decodeLoopSpec(specWire({
-      evaluator_prompt: null,
-      evaluator_model: null,
-      verifier_program: "scripts/verify.sh",
-      verifier_args: [],
-    }));
+    const decoded = decodeLoopSpec(
+      specWire({
+        evaluator_prompt: null,
+        evaluator_model: null,
+        verifier_program: "scripts/verify.sh",
+        verifier_args: [],
+      }),
+    );
 
     expect(decoded.evaluator).toBeUndefined();
     expect(decoded.verifier?.program).toBe("scripts/verify.sh");
@@ -233,16 +255,27 @@ describe("loop wire mapping", () => {
     expect(
       decodeLoopSpec(specWire({ max_task_iterations: 4 })).maxTaskIterations,
     ).toBe(4);
-    expect(() =>
-      decodeLoopSpec(specWire({ max_task_iterations: 0 })),
-    ).toThrow("Invalid max task iterations: 0");
+    expect(() => decodeLoopSpec(specWire({ max_task_iterations: 0 }))).toThrow(
+      "Invalid max task iterations: 0",
+    );
   });
 
   it("decodes configurable orchestration batch size", () => {
-    const decoded = decodeLoopSpec(specWire({
-      max_tasks_per_cycle: 6,
-    }));
+    const decoded = decodeLoopSpec(
+      specWire({
+        max_tasks_per_cycle: 6,
+      }),
+    );
     expect(decoded.maxTasksPerCycle).toBe(6);
+  });
+
+  it("decodes the re-plan budget and defaults it for older specs", () => {
+    expect(
+      decodeLoopSpec(specWire({ max_replans_per_run: 0 })).maxReplansPerRun,
+    ).toBe(0);
+    // Specs saved before the setting existed must keep the single recovery
+    // attempt rather than silently losing it.
+    expect(decodeLoopSpec(specWire({})).maxReplansPerRun).toBe(1);
   });
 
   it("decodes an unconfigured workstream and nullable sidebar run fields", () => {
@@ -305,26 +338,30 @@ describe("loop wire mapping", () => {
     ]);
 
     expect(
-      decodeLoopSummaries([{
-        workstream_id: "ws-1",
-        loop_spec_id: "spec-1",
+      decodeLoopSummaries([
+        {
+          workstream_id: "ws-1",
+          loop_spec_id: "spec-1",
+          enabled: false,
+          run_id: null,
+          run_state: null,
+          control_requested: null,
+          current_task_id: null,
+          started_at: null,
+        },
+      ]),
+    ).toEqual([
+      {
+        workstreamId: "ws-1",
+        loopSpecId: "spec-1",
         enabled: false,
-        run_id: null,
-        run_state: null,
-        control_requested: null,
-        current_task_id: null,
-        started_at: null,
-      }]),
-    ).toEqual([{
-      workstreamId: "ws-1",
-      loopSpecId: "spec-1",
-      enabled: false,
-      runId: undefined,
-      runState: undefined,
-      controlRequested: undefined,
-      currentTaskId: undefined,
-      startedAt: undefined,
-    }]);
+        runId: undefined,
+        runState: undefined,
+        controlRequested: undefined,
+        currentTaskId: undefined,
+        startedAt: undefined,
+      },
+    ]);
   });
 });
 

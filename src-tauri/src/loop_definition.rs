@@ -198,6 +198,17 @@ pub enum EvaluatorRejectAction {
 pub struct LoopLimits {
     pub run_timeout: DurationSpec,
     pub task_attempts: u32,
+    /// How many times one run may ask the orchestrator to decompose stuck work
+    /// before escalating to a human. Zero escalates immediately.
+    ///
+    /// Optional so definitions written before re-planning existed keep parsing,
+    /// and because one recovery attempt is the right default for most loops.
+    #[serde(default = "default_replan_attempts")]
+    pub replan_attempts: u32,
+}
+
+const fn default_replan_attempts() -> u32 {
+    1
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -261,6 +272,7 @@ pub struct LoopSpecSummary {
     pub human_approval: Option<HumanApprovalSummary>,
     pub run_timeout_seconds: u64,
     pub task_attempts: u32,
+    pub replan_attempts: u32,
     pub max_active_runs: u32,
 }
 
@@ -331,6 +343,7 @@ pub struct LoopSpecInputFields {
     pub human_approval_prompt: Option<String>,
     pub run_timeout_seconds: u64,
     pub task_attempts: u32,
+    pub replan_attempts: u32,
 }
 
 impl ValidatedLoopDefinition {
@@ -379,6 +392,7 @@ impl ValidatedLoopDefinition {
                 .map(|value| value.prompt.clone()),
             run_timeout_seconds: self.document.spec.limits.run_timeout.seconds(),
             task_attempts: self.document.spec.limits.task_attempts,
+            replan_attempts: self.document.spec.limits.replan_attempts,
         }
     }
 }
@@ -1192,6 +1206,7 @@ fn build_summary(document: &LoopDefinition, validation: &ValidationState) -> Loo
         human_approval,
         run_timeout_seconds: document.spec.limits.run_timeout.seconds(),
         task_attempts: document.spec.limits.task_attempts,
+        replan_attempts: document.spec.limits.replan_attempts,
         max_active_runs: document.spec.flow_control.max_active_runs,
     }
 }
@@ -1493,6 +1508,42 @@ spec:
             .validation_errors
             .iter()
             .any(|issue| issue.field == "spec.limits.taskAttempts"));
+    }
+
+    #[test]
+    fn replan_attempts_defaults_to_one_and_accepts_zero_to_disable() {
+        let root = prepared_root();
+        // Existing definitions predate the field, so omitting it must keep the
+        // single recovery attempt rather than failing to parse.
+        let default = yaml_with_sensors("", evaluator_yaml());
+        let result = parse_loop_definition_bytes(
+            &root.path,
+            &root.path.join("default.loop.yaml"),
+            default.as_bytes(),
+        );
+        assert!(result.valid, "{:?}", result.validation_errors);
+        assert_eq!(
+            result
+                .definition
+                .expect("validated definition")
+                .document
+                .spec
+                .limits
+                .replan_attempts,
+            1
+        );
+
+        // Zero is a legitimate choice: escalate to a human immediately.
+        let disabled = default.replace("taskAttempts: 2", "taskAttempts: 2\n    replanAttempts: 0");
+        let result = parse_loop_definition_bytes(
+            &root.path,
+            &root.path.join("disabled.loop.yaml"),
+            disabled.as_bytes(),
+        );
+        assert!(result.valid, "{:?}", result.validation_errors);
+        let definition = result.definition.expect("validated definition");
+        assert_eq!(definition.document.spec.limits.replan_attempts, 0);
+        assert_eq!(definition.to_loop_spec_input_fields().replan_attempts, 0);
     }
 
     #[test]

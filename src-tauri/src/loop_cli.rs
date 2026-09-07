@@ -372,6 +372,7 @@ fn run_approval_scenario(
             verifier_timeout_seconds: None,
             run_timeout_seconds: 30,
             max_task_iterations: 2,
+            max_replans_per_run: 1,
             max_tasks_per_cycle: 1,
         },
     )?;
@@ -504,6 +505,7 @@ fn run_scenario(db_path: &Path, workspace: &Path) -> Result<ScenarioResult, Stri
             verifier_timeout_seconds: Some(30),
             run_timeout_seconds: 30,
             max_task_iterations: 2,
+            max_replans_per_run: 1,
             max_tasks_per_cycle: 1,
         },
     )?;

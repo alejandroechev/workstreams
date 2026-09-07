@@ -33,6 +33,7 @@ export interface LoopSpecWire {
   run_timeout_seconds: number;
   max_task_iterations: number;
   max_tasks_per_cycle?: number;
+  max_replans_per_run?: number;
   enabled: boolean;
   created_at: string;
   updated_at: string;
@@ -59,6 +60,7 @@ export interface LoopSpecInputWire {
   run_timeout_seconds: number;
   max_task_iterations: number;
   max_tasks_per_cycle?: number;
+  max_replans_per_run?: number;
 }
 
 export interface LoopRunWire {
@@ -209,7 +211,10 @@ function model(value: string): string | null {
 }
 
 function decodeSpec(spec: LoopSpecWire): LoopSpec {
-  if (!Number.isInteger(spec.max_task_iterations) || spec.max_task_iterations < 1) {
+  if (
+    !Number.isInteger(spec.max_task_iterations) ||
+    spec.max_task_iterations < 1
+  ) {
     throw new Error(`Invalid max task iterations: ${spec.max_task_iterations}`);
   }
   return {
@@ -242,6 +247,7 @@ function decodeSpec(spec: LoopSpecWire): LoopSpec {
     runTimeoutMs: spec.run_timeout_seconds * 1000,
     maxTaskIterations: spec.max_task_iterations,
     maxTasksPerCycle: spec.max_tasks_per_cycle ?? 1,
+    maxReplansPerRun: spec.max_replans_per_run ?? 1,
     enabled: spec.enabled,
     createdAt: timestamp(spec.created_at),
     updatedAt: timestamp(spec.updated_at),
@@ -314,7 +320,9 @@ function decodeVerification(
   };
 }
 
-function decodeEvaluation(evaluation: LoopEvaluationWire): LoopEvaluationRecord {
+function decodeEvaluation(
+  evaluation: LoopEvaluationWire,
+): LoopEvaluationRecord {
   return {
     id: evaluation.id,
     loopTaskId: evaluation.loop_task_id,
@@ -369,6 +377,7 @@ export function encodeLoopSpecDraft(input: LoopSpecDraft): LoopSpecInputWire {
     run_timeout_seconds: Math.max(1, Math.ceil(input.runTimeoutMs / 1000)),
     max_task_iterations: input.maxTaskIterations,
     max_tasks_per_cycle: input.maxTasksPerCycle ?? 1,
+    max_replans_per_run: input.maxReplansPerRun ?? 1,
   };
 }
 

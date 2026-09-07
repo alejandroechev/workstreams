@@ -267,6 +267,9 @@ Execution model:
   `blocked` and `interrupted` are deliberate escalations and go straight to a
   human. If decomposition yields nothing usable, the run stops and says so.
   See [ADR 025](adrs/025-orchestrator-replan-on-attention.md).
+- `limits.replanAttempts` sets how many re-plans one run may spend. It defaults
+  to `1`; use `0` to escalate to a human on the first stuck task, or a higher
+  number for objectives whose right decomposition is hard to guess up front.
 - Every run pins the exact YAML and its SHA-256 hash, so the evidence stays
   durable even if the definition later changes.
 

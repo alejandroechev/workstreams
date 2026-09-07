@@ -108,6 +108,7 @@ spec:
   limits:
     runTimeout: 30m
     taskAttempts: 2
+    replanAttempts: 1
 
   permissions:
     tools: full
@@ -183,6 +184,12 @@ Create a wrapper verifier script when several deterministic commands must run.
 `limits.taskAttempts` counts total worker attempts. Use `1` for no revisions,
 `2` for one revision, or `N` for up to `N - 1` revisions. Run timeout remains
 the outer safety bound.
+
+`limits.replanAttempts` is optional and defaults to `1`. When a task exhausts
+its attempt budget, the orchestrator is asked to split it into narrower tasks
+and the run continues; this is how many times per run that may happen. Use `0`
+to escalate to a human immediately, or a higher number for objectives whose
+right decomposition is hard to guess up front.
 
 After every accepted batch, Workstreams invokes the orchestrator again with
 the accumulated accepted task keys. The run completes only when a later cycle

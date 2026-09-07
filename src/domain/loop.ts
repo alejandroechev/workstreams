@@ -55,6 +55,11 @@ export interface LoopSpec {
   runTimeoutMs: number;
   maxTaskIterations: number;
   maxTasksPerCycle?: number;
+  /**
+   * How many times one run may ask the orchestrator to decompose stuck work
+   * before escalating to a human. Zero escalates immediately.
+   */
+  maxReplansPerRun?: number;
   enabled: boolean;
   createdAt?: string;
   updatedAt?: string;
@@ -187,11 +192,7 @@ export interface LoopEvaluationRecord {
 }
 
 export type LoopApprovalStatus =
-  | "pending"
-  | "approved"
-  | "revision_requested"
-  | "rejected"
-  | "cancelled";
+  "pending" | "approved" | "revision_requested" | "rejected" | "cancelled";
 
 export interface LoopApprovalRecord {
   id: string;
@@ -226,7 +227,8 @@ export interface LoopEventRecord {
   createdAt: string;
 }
 
-export interface PersistedLoopSnapshot {  spec: LoopSpec | null;
+export interface PersistedLoopSnapshot {
+  spec: LoopSpec | null;
   latestRun: LoopRun | null;
   tasks: LoopTask[];
   verifications: LoopVerificationRecord[];
@@ -294,8 +296,7 @@ export interface LoopTransition {
 }
 
 export type AddLoopSpecResult =
-  | { ok: true; specs: LoopSpec[] }
-  | { ok: false; reason: string };
+  { ok: true; specs: LoopSpec[] } | { ok: false; reason: string };
 
 export function addLoopSpec(
   existing: readonly LoopSpec[],
@@ -311,8 +312,7 @@ export function addLoopSpec(
 }
 
 export type TaskKeyDedupeResult =
-  | { ok: true }
-  | { ok: false; duplicateKeys: string[] };
+  { ok: true } | { ok: false; duplicateKeys: string[] };
 
 const DEDUPE_OCCUPIED_STATES: ReadonlySet<LoopTaskState> = new Set([
   "queued",
@@ -356,7 +356,8 @@ export function dedupeTaskKeys(
 }
 
 export function makeLoopRun(
-  input: Pick<LoopRun, "id" | "loopSpecId"> & Partial<Omit<LoopRun, "id" | "loopSpecId">>,
+  input: Pick<LoopRun, "id" | "loopSpecId"> &
+    Partial<Omit<LoopRun, "id" | "loopSpecId">>,
 ): LoopRun {
   return {
     id: input.id,
@@ -390,7 +391,9 @@ function attention(
 ): LoopTransition {
   const next = copySnapshot(snapshot);
   if (activeTaskState && next.run.activeTaskId) {
-    const task = next.tasks.find((candidate) => candidate.id === next.run.activeTaskId);
+    const task = next.tasks.find(
+      (candidate) => candidate.id === next.run.activeTaskId,
+    );
     if (task) task.state = activeTaskState;
   }
   next.run.state = "attention";
@@ -532,7 +535,8 @@ function awaitHumanApproval(snapshot: LoopSnapshot): LoopTransition {
   const task = next.run.activeTaskId
     ? next.tasks.find((candidate) => candidate.id === next.run.activeTaskId)
     : undefined;
-  if (!task) return attention(snapshot, "Human approval requires an active task");
+  if (!task)
+    return attention(snapshot, "Human approval requires an active task");
   task.state = "awaiting_approval";
   next.run.state = "awaiting_approval";
   next.run.pendingAction = null;
@@ -553,7 +557,9 @@ function acceptActiveTask(snapshot: LoopSnapshot): LoopTransition {
   return startNextQueued(next);
 }
 
-function verificationFailureReason(result: Exclude<VerificationResult, { kind: "passed" }>): string {
+function verificationFailureReason(
+  result: Exclude<VerificationResult, { kind: "passed" }>,
+): string {
   switch (result.kind) {
     case "nonzero":
       return `Verifier exited with code ${result.exitCode}`;
@@ -636,7 +642,10 @@ export function transitionLoop(
   if (current.run.state === "awaiting_approval") {
     const task = activeTask(current, "awaiting_approval");
     if (!task) {
-      return attention(current, "Human approval run has no active approval task");
+      return attention(
+        current,
+        "Human approval run has no active approval task",
+      );
     }
     if (outcome.type !== "approval_decided") {
       return unchanged(current);
@@ -648,7 +657,11 @@ export function transitionLoop(
       return attention(current, "Human reviewer rejected the task", "blocked");
     }
     if (task.revisionCount + 1 >= current.spec.maxTaskIterations) {
-      return attention(current, "Human reviewer exhausted the task attempt budget", "attention");
+      return attention(
+        current,
+        "Human reviewer exhausted the task attempt budget",
+        "attention",
+      );
     }
     const next = copySnapshot(current);
     const nextTask = activeTask(next, "awaiting_approval");
@@ -702,7 +715,10 @@ export function transitionLoop(
       return atSafeBoundary({ snapshot: next, action: noAction() });
     }
     if (outcome.type !== "tasks_proposed") {
-      return attention(current, `Unexpected ${outcome.type} while orchestrating`);
+      return attention(
+        current,
+        `Unexpected ${outcome.type} while orchestrating`,
+      );
     }
 
     const malformed = malformedBatchReason(current, outcome.tasks);
@@ -721,7 +737,8 @@ export function transitionLoop(
 
   if (current.run.state === "working") {
     const task = activeTask(current, "working");
-    if (!task) return attention(current, "Working run has no working active task");
+    if (!task)
+      return attention(current, "Working run has no working active task");
     if (outcome.type === "worker_failed") {
       return atSafeBoundary(attention(current, outcome.reason, "attention"));
     }
@@ -756,13 +773,18 @@ export function transitionLoop(
 
   if (current.run.state === "verifying") {
     const task = activeTask(current, "verifying");
-    if (!task) return attention(current, "Verifying run has no verifying active task");
+    if (!task)
+      return attention(current, "Verifying run has no verifying active task");
     if (outcome.type !== "verification_completed") {
       return attention(current, `Unexpected ${outcome.type} while verifying`);
     }
     if (outcome.result.kind !== "passed") {
       return atSafeBoundary(
-        attention(current, verificationFailureReason(outcome.result), "blocked"),
+        attention(
+          current,
+          verificationFailureReason(outcome.result),
+          "blocked",
+        ),
       );
     }
 
@@ -783,7 +805,8 @@ export function transitionLoop(
   }
 
   const task = activeTask(current, "evaluating");
-  if (!task) return attention(current, "Evaluating run has no evaluating active task");
+  if (!task)
+    return attention(current, "Evaluating run has no evaluating active task");
   if (outcome.type !== "evaluation_completed") {
     return attention(current, `Unexpected ${outcome.type} while evaluating`);
   }
@@ -797,7 +820,11 @@ export function transitionLoop(
   if (outcome.verdict === "revise") {
     if (task.revisionCount + 1 >= current.spec.maxTaskIterations) {
       return atSafeBoundary(
-        attention(current, "Evaluator exhausted the task attempt budget", "attention"),
+        attention(
+          current,
+          "Evaluator exhausted the task attempt budget",
+          "attention",
+        ),
       );
     }
     const next = copySnapshot(current);
