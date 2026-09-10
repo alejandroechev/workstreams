@@ -31,6 +31,49 @@ pub enum Caller {
     },
 }
 
+/// Whether this caller may act on `workstream_id`.
+///
+/// An agent owns the workstream it runs in, plus any it created. The second
+/// clause is what makes handoff and parallel runs possible: an agent has to be
+/// able to follow up on the workstream it just provisioned.
+///
+/// Checked here, against `created_by_session` in the database, rather than
+/// against anything the request said — the caller was resolved from a token the
+/// app issued, so this is the app checking its own records.
+pub fn may_act_on(db: &Connection, caller: &Caller, workstream_id: &str) -> Result<(), AgentError> {
+    let Caller::Agent {
+        tile_id,
+        workstream_id: own,
+    } = caller
+    else {
+        return Ok(()); // The UI is not fenced.
+    };
+    if own == workstream_id {
+        return Ok(());
+    }
+    let created_by: Option<String> = db
+        .query_row(
+            "SELECT created_by_session FROM workstreams WHERE id = ?1",
+            [workstream_id],
+            |row| row.get(0),
+        )
+        .map_err(|_| {
+            AgentError::new(
+                "NO_SUCH_WORKSTREAM",
+                format!("No workstream with id {workstream_id}"),
+                "Use ws.list to see the workstreams you can act on.",
+            )
+        })?;
+    if created_by.as_deref() == Some(tile_id.as_str()) {
+        return Ok(());
+    }
+    Err(AgentError::new(
+        "OUT_OF_SCOPE",
+        format!("This session may not act on workstream {workstream_id}"),
+        "You can act on your own workstream and ones you created. Ask the human to do this one.",
+    ))
+}
+
 impl Caller {
     /// How this caller is recorded in the command log.
     ///
@@ -206,7 +249,166 @@ pub const COMMANDS: &[Command] = &[
         destructive: false,
         handler: whoami,
     },
+    Command {
+        id: "ws.list",
+        summary: "List workstreams this session may act on",
+        requires_identity: true,
+        destructive: false,
+        handler: ws_list,
+    },
+    Command {
+        id: "ws.create",
+        summary: "Create a workstream (params: name, description, directory, projectId)",
+        requires_identity: true,
+        destructive: false,
+        handler: ws_create,
+    },
+    Command {
+        id: "ws.update",
+        summary: "Rename or re-describe a workstream (params: id, name, description)",
+        requires_identity: true,
+        destructive: false,
+        handler: ws_update,
+    },
 ];
+
+/// Reads a required string parameter, explaining the shape when it is absent.
+fn required_str(params: &serde_json::Value, key: &str) -> Result<String, AgentError> {
+    params
+        .get(key)
+        .and_then(|value| value.as_str())
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| {
+            AgentError::new(
+                "MISSING_PARAM",
+                format!("Missing required parameter: {key}"),
+                format!("Add {key}=<value> to the command."),
+            )
+        })
+}
+
+fn optional_str(params: &serde_json::Value, key: &str) -> Option<String> {
+    params
+        .get(key)
+        .and_then(|value| value.as_str())
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_string)
+}
+
+fn ws_list(
+    context: &CommandContext,
+    _params: &serde_json::Value,
+) -> Result<serde_json::Value, AgentError> {
+    let caller = context.caller()?;
+    let Caller::Agent {
+        tile_id,
+        workstream_id,
+    } = caller
+    else {
+        return Ok(serde_json::json!({ "workstreams": [] }));
+    };
+    // Only what this session may act on. Listing everything would tell an agent
+    // about work it cannot touch and invite it to try.
+    let mut statement = context
+        .db
+        .prepare(
+            "SELECT id, name, status, created_by_session FROM workstreams
+             WHERE id = ?1 OR created_by_session = ?2 ORDER BY created_at DESC",
+        )
+        .map_err(db_error)?;
+    let rows = statement
+        .query_map([workstream_id, tile_id], |row| {
+            Ok(serde_json::json!({
+                "id": row.get::<_, String>(0)?,
+                "name": row.get::<_, String>(1)?,
+                "status": row.get::<_, String>(2)?,
+                "createdBySession": row.get::<_, Option<String>>(3)?,
+            }))
+        })
+        .map_err(db_error)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(db_error)?;
+    Ok(serde_json::json!({ "workstreams": rows }))
+}
+
+fn ws_create(
+    context: &CommandContext,
+    params: &serde_json::Value,
+) -> Result<serde_json::Value, AgentError> {
+    let caller = context.caller()?;
+    let name = required_str(params, "name")?;
+    let created_by_session = match caller {
+        Caller::Agent { tile_id, .. } => Some(tile_id.clone()),
+        Caller::Human => None,
+    };
+    let workstream = crate::insert_workstream(
+        context.db,
+        crate::NewWorkstream {
+            name,
+            directory: optional_str(params, "directory"),
+            description: optional_str(params, "description"),
+            project_id: optional_str(params, "projectId"),
+            workstream_type: optional_str(params, "type"),
+            worktree_branch: optional_str(params, "branch"),
+            // Recorded here rather than taken from the request: provenance is
+            // what scope checks rely on, so it must come from the resolved
+            // identity and never from a parameter.
+            created_by_session,
+        },
+    )
+    .map_err(|error| {
+        AgentError::new(
+            "CREATE_FAILED",
+            error,
+            "Check the name and project id, then retry.",
+        )
+    })?;
+    Ok(serde_json::json!({
+        "id": workstream.id,
+        "name": workstream.name,
+        "status": workstream.status,
+    }))
+}
+
+fn ws_update(
+    context: &CommandContext,
+    params: &serde_json::Value,
+) -> Result<serde_json::Value, AgentError> {
+    let caller = context.caller()?;
+    let id = required_str(params, "id")?;
+    may_act_on(context.db, caller, &id)?;
+
+    let name = optional_str(params, "name");
+    let description = optional_str(params, "description");
+    if name.is_none() && description.is_none() {
+        return Err(AgentError::new(
+            "NOTHING_TO_UPDATE",
+            "No updatable field was given",
+            "Pass name=<value> or description=<value>.",
+        ));
+    }
+    context
+        .db
+        .execute(
+            "UPDATE workstreams
+             SET name = COALESCE(?2, name),
+                 description = COALESCE(?3, description),
+                 updated_at = ?4
+             WHERE id = ?1",
+            rusqlite::params![id, name, description, crate::now()],
+        )
+        .map_err(db_error)?;
+    Ok(serde_json::json!({ "id": id, "updated": true }))
+}
+
+fn db_error(error: rusqlite::Error) -> AgentError {
+    AgentError::new(
+        "DB_ERROR",
+        format!("Database error: {error}"),
+        "This is likely a bug; report it with the command you ran.",
+    )
+}
 
 fn ping(
     _context: &CommandContext,
@@ -278,7 +480,28 @@ mod tests {
     use super::*;
 
     fn memory_db() -> Connection {
-        Connection::open_in_memory().expect("open in-memory db")
+        let conn = Connection::open_in_memory().expect("open in-memory db");
+        crate::db::init_db(&conn).expect("schema");
+        conn
+    }
+
+    fn call(
+        db: &Connection,
+        caller: &Caller,
+        cmd: &str,
+        params: serde_json::Value,
+    ) -> Result<serde_json::Value, AgentError> {
+        dispatch(
+            &AgentRequest {
+                cmd: cmd.to_string(),
+                params,
+                token: None,
+            },
+            &CommandContext {
+                db,
+                caller: Some(caller),
+            },
+        )
     }
 
     fn agent(tile: &str, workstream: &str) -> Caller {
@@ -426,6 +649,204 @@ mod tests {
                 command.id
             );
         }
+    }
+
+    // ── Scope ──────────────────────────────────────────────────────────────
+
+    /// The fence in one test: own workstream yes, one it created yes, a
+    /// stranger's no.
+    #[test]
+    fn an_agent_reaches_its_own_and_its_offspring_but_not_a_strangers() {
+        let db = memory_db();
+        let caller = agent("tile-1", "ws-own");
+        for (id, creator) in [
+            ("ws-own", None),
+            ("ws-made-by-me", Some("tile-1")),
+            ("ws-someone-else", Some("tile-9")),
+            ("ws-made-in-ui", None),
+        ] {
+            db.execute(
+                "INSERT INTO workstreams (id, name, status, created_by_session, created_at, updated_at)
+                 VALUES (?1, ?1, 'active', ?2, '2026-01-01', '2026-01-01')",
+                rusqlite::params![id, creator],
+            )
+            .unwrap();
+        }
+
+        assert!(may_act_on(&db, &caller, "ws-own").is_ok());
+        assert!(
+            may_act_on(&db, &caller, "ws-made-by-me").is_ok(),
+            "handoff depends on this"
+        );
+
+        for forbidden in ["ws-someone-else", "ws-made-in-ui"] {
+            let error = may_act_on(&db, &caller, forbidden)
+                .expect_err("a workstream this session did not create is out of scope");
+            assert_eq!(error.code, "OUT_OF_SCOPE", "{forbidden}");
+            assert!(error.hint.contains("Ask the human"));
+        }
+
+        let missing = may_act_on(&db, &caller, "ws-nope").expect_err("unknown id");
+        assert_eq!(missing.code, "NO_SUCH_WORKSTREAM");
+    }
+
+    /// The UI is not fenced: a person acting through the app is the authority
+    /// the fence exists to protect.
+    #[test]
+    fn the_human_is_not_fenced() {
+        let db = memory_db();
+        assert!(may_act_on(&db, &Caller::Human, "anything-at-all").is_ok());
+    }
+
+    // ── Entity commands ────────────────────────────────────────────────────
+
+    /// Provenance must come from the resolved identity, never from the request,
+    /// or an agent could grant itself scope over what it creates for others.
+    #[test]
+    fn creating_a_workstream_records_the_session_that_asked() {
+        let db = memory_db();
+        let caller = agent("tile-1", "ws-own");
+        let created = call(
+            &db,
+            &caller,
+            "ws.create",
+            serde_json::json!({ "name": "Alpha", "createdBySession": "tile-impostor" }),
+        )
+        .expect("create");
+
+        let id = created["id"].as_str().expect("id").to_string();
+        let recorded: Option<String> = db
+            .query_row(
+                "SELECT created_by_session FROM workstreams WHERE id = ?1",
+                [&id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            recorded.as_deref(),
+            Some("tile-1"),
+            "a parameter must not be able to forge provenance"
+        );
+
+        // The shared core ran, so the workstream is complete rather than a bare
+        // row: the layout the UI relies on exists too.
+        let layouts: i64 = db
+            .query_row(
+                "SELECT COUNT(*) FROM workstream_layouts WHERE workstream_id = ?1",
+                [&id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            layouts, 1,
+            "an agent-made workstream must not be half-built"
+        );
+
+        // And it is immediately actionable by its creator.
+        assert!(may_act_on(&db, &caller, &id).is_ok());
+    }
+
+    #[test]
+    fn creating_without_a_name_says_which_parameter_is_missing() {
+        let db = memory_db();
+        let error = call(
+            &db,
+            &agent("tile-1", "ws-own"),
+            "ws.create",
+            serde_json::json!({}),
+        )
+        .expect_err("name is required");
+        assert_eq!(error.code, "MISSING_PARAM");
+        assert!(error.hint.contains("name="), "{}", error.hint);
+    }
+
+    #[test]
+    fn listing_shows_only_what_this_session_may_touch() {
+        let db = memory_db();
+        let caller = agent("tile-1", "ws-own");
+        db.execute(
+            "INSERT INTO workstreams (id, name, status, created_at, updated_at)
+             VALUES ('ws-own', 'Mine', 'active', '2026-01-01', '2026-01-01')",
+            [],
+        )
+        .unwrap();
+        db.execute(
+            "INSERT INTO workstreams (id, name, status, created_by_session, created_at, updated_at)
+             VALUES ('ws-other', 'Theirs', 'active', 'tile-9', '2026-01-01', '2026-01-01')",
+            [],
+        )
+        .unwrap();
+        call(
+            &db,
+            &caller,
+            "ws.create",
+            serde_json::json!({ "name": "Made by me" }),
+        )
+        .expect("create");
+
+        let listed = call(&db, &caller, "ws.list", serde_json::Value::Null).expect("list");
+        let names: Vec<&str> = listed["workstreams"]
+            .as_array()
+            .expect("array")
+            .iter()
+            .map(|entry| entry["name"].as_str().unwrap_or_default())
+            .collect();
+        assert!(names.contains(&"Mine"));
+        assert!(names.contains(&"Made by me"));
+        assert!(
+            !names.contains(&"Theirs"),
+            "listing work an agent cannot touch only invites it to try: {names:?}"
+        );
+    }
+
+    #[test]
+    fn updating_a_workstream_out_of_scope_is_refused() {
+        let db = memory_db();
+        db.execute(
+            "INSERT INTO workstreams (id, name, status, created_by_session, created_at, updated_at)
+             VALUES ('ws-other', 'Theirs', 'active', 'tile-9', '2026-01-01', '2026-01-01')",
+            [],
+        )
+        .unwrap();
+        let error = call(
+            &db,
+            &agent("tile-1", "ws-own"),
+            "ws.update",
+            serde_json::json!({ "id": "ws-other", "name": "Hijacked" }),
+        )
+        .expect_err("out of scope");
+        assert_eq!(error.code, "OUT_OF_SCOPE");
+
+        let name: String = db
+            .query_row(
+                "SELECT name FROM workstreams WHERE id = 'ws-other'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            name, "Theirs",
+            "the refusal must actually prevent the write"
+        );
+    }
+
+    #[test]
+    fn updating_with_nothing_to_change_says_so() {
+        let db = memory_db();
+        db.execute(
+            "INSERT INTO workstreams (id, name, status, created_at, updated_at)
+             VALUES ('ws-own', 'Mine', 'active', '2026-01-01', '2026-01-01')",
+            [],
+        )
+        .unwrap();
+        let error = call(
+            &db,
+            &agent("tile-1", "ws-own"),
+            "ws.update",
+            serde_json::json!({ "id": "ws-own" }),
+        )
+        .expect_err("nothing to update");
+        assert_eq!(error.code, "NOTHING_TO_UPDATE");
     }
 
     /// Guards the contract every error is supposed to keep, across the whole

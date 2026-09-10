@@ -365,19 +365,61 @@ fn create_workstream(
     workstream_type: Option<String>,
     worktree_branch: Option<String>,
 ) -> Result<Workstream, String> {
+    let db = state.db.lock().unwrap();
+    insert_workstream(
+        &db,
+        NewWorkstream {
+            name,
+            directory,
+            description,
+            project_id,
+            workstream_type,
+            worktree_branch,
+            // A workstream made through the UI has no creating session, and that
+            // absence is meaningful: scope checks treat it as nobody's.
+            created_by_session: None,
+        },
+    )
+}
+
+/// What it takes to create a workstream, independent of who is asking.
+pub struct NewWorkstream {
+    pub name: String,
+    pub directory: Option<String>,
+    pub description: Option<String>,
+    pub project_id: Option<String>,
+    pub workstream_type: Option<String>,
+    pub worktree_branch: Option<String>,
+    pub created_by_session: Option<String>,
+}
+
+/// Creates a workstream and its default layout.
+///
+/// Shared by the UI command and the agent registry so the two cannot drift: a
+/// workstream made by an agent gets the same layout row, the same defaults and
+/// the same shape as one made by a person.
+pub fn insert_workstream(db: &Connection, input: NewWorkstream) -> Result<Workstream, String> {
     let id = uuid::Uuid::new_v4().to_string();
     let ts = now();
-    let ws_type = workstream_type.unwrap_or_else(|| "standalone".into());
-    let db = state.db.lock().unwrap();
+    let ws_type = input.workstream_type.unwrap_or_else(|| "standalone".into());
 
     db.execute(
-        "INSERT INTO workstreams (id, name, description, directory, status, project_id, workstream_type, worktree_branch, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, 'active', ?5, ?6, ?7, ?8, ?8)",
-        (&id, &name, &description, &directory, &project_id, &ws_type, &worktree_branch, &ts),
+        "INSERT INTO workstreams (id, name, description, directory, status, project_id, workstream_type, worktree_branch, created_by_session, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, 'active', ?5, ?6, ?7, ?8, ?9, ?9)",
+        (
+            &id,
+            &input.name,
+            &input.description,
+            &input.directory,
+            &input.project_id,
+            &ws_type,
+            &input.worktree_branch,
+            &input.created_by_session,
+            &ts,
+        ),
     )
     .map_err(|e| format!("DB error: {e}"))?;
 
-    // Create default layout
     db.execute(
         "INSERT INTO workstream_layouts (workstream_id, layout_mode, tile_order_json, updated_at)
          VALUES (?1, 'adaptive', '[]', ?2)",
@@ -387,15 +429,15 @@ fn create_workstream(
 
     Ok(Workstream {
         id,
-        name,
-        description,
-        directory,
+        name: input.name,
+        description: input.description,
+        directory: input.directory,
         git_repo: None,
         git_branch: None,
         status: "active".into(),
-        project_id,
+        project_id: input.project_id,
         workstream_type: ws_type,
-        worktree_branch,
+        worktree_branch: input.worktree_branch,
         created_at: ts.clone(),
         updated_at: ts,
     })
