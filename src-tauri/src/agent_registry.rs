@@ -584,14 +584,22 @@ const MAX_LOGGED_STRING: usize = 120;
 /// exactly what the rule exists to prevent. Long strings are summarised wherever
 /// they appear, because a caller can put prose under a key this code has never
 /// heard of.
-/// `sensitive` marks a subtree that arrived under a known free-text key.
+/// Replaces free-text values with their length, keeping the shape of the call
+/// visible without storing what was said.
 ///
-/// It has to be carried down rather than re-derived per level: replacing the
-/// inherited key with each child's name meant `{"prompt": {"text": "..."}}`
-/// evaluated the string under `text`, which is not a free-text key, and logged
-/// the prose in full. The whole subtree under a sensitive key is sensitive,
-/// whatever its children are called.
-fn redact_value(value: &serde_json::Value, sensitive: bool, depth: usize) -> serde_json::Value {
+/// A sensitive subtree is replaced **whole**, not walked. Two earlier attempts
+/// leaked through here, and both came from trying to preserve structure inside
+/// something that should not be inspected at all:
+///
+/// - re-deriving sensitivity from each child's own key let
+///   `{"prompt": {"text": "..."}}` through, because `text` is not a listed key;
+/// - carrying a flag down still preserved descendant *keys*, and a key can
+///   itself be prose — `{"notes": {"private patient diagnosis": true}}`.
+///
+/// Outside a sensitive subtree, structure is preserved and long strings are
+/// summarised wherever they appear, since a caller can put prose under a key
+/// this code has never heard of.
+fn redact_value(value: &serde_json::Value, depth: usize) -> serde_json::Value {
     if depth >= MAX_REDACT_DEPTH {
         return serde_json::json!("<redacted:deep>");
     }
@@ -600,39 +608,40 @@ fn redact_value(value: &serde_json::Value, sensitive: bool, depth: usize) -> ser
             object
                 .iter()
                 .map(|(name, nested)| {
-                    let nested_sensitive = sensitive || REDACTED_KEYS.contains(&name.as_str());
-                    (
-                        name.clone(),
-                        redact_value(nested, nested_sensitive, depth + 1),
-                    )
+                    let redacted = if REDACTED_KEYS.contains(&name.as_str()) {
+                        summarise(nested)
+                    } else {
+                        redact_value(nested, depth + 1)
+                    };
+                    (name.clone(), redacted)
                 })
                 .collect(),
         ),
         serde_json::Value::Array(items) => serde_json::Value::Array(
             items
                 .iter()
-                .map(|item| redact_value(item, sensitive, depth + 1))
+                .map(|item| redact_value(item, depth + 1))
                 .collect(),
         ),
-        serde_json::Value::String(text) => {
-            if sensitive || text.len() > MAX_LOGGED_STRING {
-                serde_json::json!(format!("<redacted:{}>", text.len()))
-            } else {
-                value.clone()
-            }
-        }
-        // A number or boolean under a sensitive key carries little, but keeping
-        // it would still leak a choice the caller made in prose-adjacent input.
-        other if sensitive => serde_json::json!(format!("<redacted:{}>", other.to_string().len())),
+        serde_json::Value::String(text) if text.len() > MAX_LOGGED_STRING => summarise(value),
         other => other.clone(),
     }
+}
+
+/// Records that something was here, and how big, and nothing else.
+fn summarise(value: &serde_json::Value) -> serde_json::Value {
+    let length = match value {
+        serde_json::Value::String(text) => text.len(),
+        other => other.to_string().len(),
+    };
+    serde_json::json!(format!("<redacted:{length}>"))
 }
 
 fn redact(params: &serde_json::Value) -> String {
     if !params.is_object() {
         return "{}".to_string();
     }
-    serde_json::to_string(&redact_value(params, false, 0)).unwrap_or_else(|_| "{}".to_string())
+    serde_json::to_string(&redact_value(params, 0)).unwrap_or_else(|_| "{}".to_string())
 }
 
 /// Turns a handler result into a response.
@@ -1137,6 +1146,22 @@ mod tests {
         for leaked in ["private short", "private array", "private nested"] {
             assert!(!redacted.contains(leaked), "leaked {leaked:?}: {redacted}");
         }
+    }
+
+    /// A key can be prose too. Preserving descendant keys inside a sensitive
+    /// subtree leaked the interesting half of `{"notes": {"<diagnosis>": true}}`
+    /// while dutifully redacting the boolean.
+    #[test]
+    fn keys_inside_a_sensitive_subtree_are_not_preserved() {
+        let redacted = redact(&serde_json::json!({
+            "notes": { "private patient diagnosis": true },
+            "prompt": [{ "private key name": 1 }],
+            "name": "Alpha",
+        }));
+        assert!(!redacted.contains("private patient"), "{redacted}");
+        assert!(!redacted.contains("private key name"), "{redacted}");
+        // Outside the sensitive subtree, shape still survives.
+        assert!(redacted.contains("\"name\":\"Alpha\""), "{redacted}");
     }
 
     #[test]
