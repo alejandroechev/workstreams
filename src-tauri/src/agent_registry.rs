@@ -607,13 +607,14 @@ fn redact_value(value: &serde_json::Value, depth: usize) -> serde_json::Value {
         serde_json::Value::Object(object) => serde_json::Value::Object(
             object
                 .iter()
-                .map(|(name, nested)| {
+                .enumerate()
+                .map(|(index, (name, nested))| {
                     let redacted = if REDACTED_KEYS.contains(&name.as_str()) {
                         summarise(nested)
                     } else {
                         redact_value(nested, depth + 1)
                     };
-                    (name.clone(), redacted)
+                    (redact_key(name, index), redacted)
                 })
                 .collect(),
         ),
@@ -625,6 +626,25 @@ fn redact_value(value: &serde_json::Value, depth: usize) -> serde_json::Value {
         ),
         serde_json::Value::String(text) if text.len() > MAX_LOGGED_STRING => summarise(value),
         other => other.clone(),
+    }
+}
+
+/// Longest parameter name kept verbatim.
+///
+/// Real names are identifiers -- `name`, `projectId`, `branch`. Commands accept
+/// parameters they do not declare, so a caller can put prose in a *key* just as
+/// easily as in a value, and the value-side limit alone let that through.
+const MAX_LOGGED_KEY: usize = 64;
+
+/// Keeps a parameter name only if it is short enough to be a name.
+///
+/// The index is part of the replacement so two long keys in the same object do
+/// not collapse into one entry and quietly change the recorded shape.
+fn redact_key(name: &str, index: usize) -> String {
+    if name.len() > MAX_LOGGED_KEY {
+        format!("<redacted-key:{}#{index}>", name.len())
+    } else {
+        name.to_string()
     }
 }
 
@@ -1146,6 +1166,36 @@ mod tests {
         for leaked in ["private short", "private array", "private nested"] {
             assert!(!redacted.contains(leaked), "leaked {leaked:?}: {redacted}");
         }
+    }
+
+    /// Keys are unbounded input too. Commands accept parameters they do not
+    /// declare, so prose fits in a key as easily as in a value, and the
+    /// value-side length limit alone did not cover it.
+    #[test]
+    fn a_long_key_is_redacted_wherever_it_appears() {
+        let prose = "a confidential medical narrative that is well over the key limit ".repeat(4);
+        let unicode = "診断".repeat(60);
+        let redacted = redact(&serde_json::json!({
+            prose.clone(): "x",
+            unicode.clone(): "y",
+            "metadata": { prose.clone(): true },
+            "name": "Alpha",
+        }));
+        assert!(!redacted.contains(&prose), "{redacted}");
+        assert!(!redacted.contains(&unicode), "{redacted}");
+        assert!(redacted.contains("<redacted-key:"), "{redacted}");
+        assert!(redacted.contains("\"name\":\"Alpha\""), "{redacted}");
+    }
+
+    /// Two long keys in one object must not collapse into a single entry, which
+    /// would quietly misreport the shape of the call.
+    #[test]
+    fn two_long_keys_stay_two_entries() {
+        let first = "p".repeat(80);
+        let second = "q".repeat(90);
+        let redacted = redact(&serde_json::json!({ first: 1, second: 2 }));
+        let parsed: serde_json::Value = serde_json::from_str(&redacted).expect("parse");
+        assert_eq!(parsed.as_object().expect("object").len(), 2, "{redacted}");
     }
 
     /// A key can be prose too. Preserving descendant keys inside a sensitive
