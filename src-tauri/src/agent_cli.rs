@@ -26,6 +26,16 @@ Destructive commands (anything that deletes a workstream, removes a worktree,
 or writes to a workstream you did not create) require the human's agreement
 first. Ask before running one.";
 
+/// Reads the identity the app issued to this session.
+///
+/// Absent when the process was not spawned by Workstreams; the app answers that
+/// case, so the CLI does not need to guess at it here.
+fn agent_token() -> Option<String> {
+    std::env::var(crate::agent_registry::TOKEN_ENV_VAR)
+        .ok()
+        .filter(|token| !token.trim().is_empty())
+}
+
 /// How long to wait for the app before giving up.
 ///
 /// Generous because the slowest command creates a git worktree, which is
@@ -47,6 +57,7 @@ pub fn run(args: Vec<String>) -> Result<(), String> {
         "ping" => dispatch_and_report(AgentRequest {
             cmd: "agent.ping".to_string(),
             params: serde_json::Value::Null,
+            token: agent_token(),
         }),
         "call" => {
             let Some((name, pairs)) = rest.split_first() else {
@@ -56,6 +67,7 @@ pub fn run(args: Vec<String>) -> Result<(), String> {
             dispatch_and_report(AgentRequest {
                 cmd: name.clone(),
                 params,
+                token: agent_token(),
             })
         }
         _ => Err(USAGE.to_string()),

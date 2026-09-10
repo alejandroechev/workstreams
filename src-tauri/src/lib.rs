@@ -1,4 +1,5 @@
 mod agent_cli;
+pub mod agent_registry;
 pub mod agent_socket;
 mod code_review;
 mod db;
@@ -108,6 +109,9 @@ struct AppState {
     /// Socket that lets an agent drive this instance. Held so the listener lives
     /// as long as the app and unlinks its path on shutdown.
     agent_socket: Mutex<Option<agent_socket::AgentSocketServer>>,
+    /// Tokens this instance has issued to sessions it spawned. A request proves
+    /// who it is by presenting one; it can never simply name an identity.
+    agent_identities: Arc<agent_registry::IdentityRegistry>,
 }
 
 struct FeaturesWatcherHandle {
@@ -837,12 +841,52 @@ fn update_layout(
 /// Looks up the workstream id from the tile via the DB. Returns None if the
 /// tile is not found — terminals can still spawn, the env var just won't
 /// be present (matches dev behavior before this was added).
+/// Answers one request from an agent.
+///
+/// Identity is resolved from the presented token before anything else runs, so
+/// a handler is never reachable without one and can never be handed an identity
+/// through its parameters.
+fn serve_agent_request(
+    db: &Arc<Mutex<Connection>>,
+    identities: &agent_registry::IdentityRegistry,
+    request: agent_socket::AgentRequest,
+) -> agent_socket::AgentResponse {
+    // Resolve, but do not fail yet: a connectivity check must answer even when
+    // the identity is missing or stale. Keep the resolution error so that when a
+    // command *does* need identity, the caller learns which of the two it was —
+    // "never had one" and "the app forgot you" have different fixes.
+    let resolved = identities.resolve(request.token.as_deref());
+    let requires_identity = agent_registry::find(&request.cmd)
+        .map(|command| command.requires_identity)
+        .unwrap_or(false);
+    let caller = match (resolved, requires_identity) {
+        (Ok(caller), _) => Some(caller),
+        (Err(error), true) => return agent_socket::AgentResponse::failed(error),
+        (Err(_), false) => None,
+    };
+
+    let Ok(conn) = db.lock() else {
+        return agent_socket::AgentResponse::failed(agent_socket::AgentError::new(
+            "APP_BUSY",
+            "The app's database is temporarily unavailable",
+            "Retry in a moment.",
+        ));
+    };
+    agent_registry::respond(agent_registry::dispatch(
+        &request,
+        &agent_registry::CommandContext {
+            db: &conn,
+            caller: caller.as_ref(),
+        },
+    ))
+}
+
 fn build_workstream_env(
     state: &State<'_, AppState>,
     tile_id: &str,
 ) -> Option<std::collections::HashMap<String, String>> {
     let db = state.db.lock().ok()?;
-    workstream_env_from_db(&db, tile_id)
+    workstream_env_from_db(&db, tile_id, &state.agent_identities)
 }
 
 /// Pure helper: builds the env-var map from a DB connection + tile id.
@@ -850,6 +894,7 @@ fn build_workstream_env(
 fn workstream_env_from_db(
     db: &rusqlite::Connection,
     tile_id: &str,
+    identities: &agent_registry::IdentityRegistry,
 ) -> Option<std::collections::HashMap<String, String>> {
     let ws_id: String = db
         .query_row(
@@ -858,6 +903,7 @@ fn workstream_env_from_db(
             |row| row.get(0),
         )
         .ok()?;
+    let ws_id_for_token = ws_id.clone();
     let mut env = std::collections::HashMap::new();
     env.insert("WORKSTREAMS_ACTIVE_WS".to_string(), ws_id);
     env.insert("WORKSTREAMS_ACTIVE_TILE".to_string(), tile_id.to_string());
@@ -870,6 +916,14 @@ fn workstream_env_from_db(
         agent_socket::resolve_socket_path()
             .to_string_lossy()
             .into_owned(),
+    );
+    // One socket serves every session of this instance, so the socket alone
+    // cannot say who is calling. The token can: the app mints it here and keeps
+    // the mapping, which is why a request presents an identity instead of
+    // naming one.
+    env.insert(
+        agent_registry::TOKEN_ENV_VAR.to_string(),
+        identities.issue(tile_id, &ws_id_for_token),
     );
     Some(env)
 }
@@ -5144,6 +5198,7 @@ pub fn run() {
         search_epoch: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         features_watchers: Arc::new(Mutex::new(std::collections::HashMap::new())),
         agent_socket: Mutex::new(None),
+        agent_identities: Arc::new(agent_registry::IdentityRegistry::new()),
     };
 
     tauri::Builder::default()
@@ -5166,11 +5221,18 @@ pub fn run() {
             {
                 let state = app.state::<AppState>();
                 let path = agent_socket::resolve_socket_path();
-                match agent_socket::AgentSocketServer::start(path, agent_socket::dispatch) {
+                let db = Arc::clone(&state.db);
+                let identities = Arc::clone(&state.agent_identities);
+                let server = agent_socket::AgentSocketServer::start(path.clone(), move |request| {
+                    serve_agent_request(&db, &identities, request)
+                });
+                match server {
                     Ok(server) => {
                         *state.agent_socket.lock().unwrap() = Some(server);
                     }
-                    Err(error) => eprintln!("[agent] Socket unavailable: {error}"),
+                    Err(error) => {
+                        eprintln!("[agent] Socket unavailable at {}: {error}", path.display())
+                    }
                 }
             }
             // Start the session stats poller background thread
@@ -6486,7 +6548,12 @@ Body here.
     fn workstream_env_returns_active_ws_and_tile_for_known_tile() {
         let conn = fresh_mem_db();
         setup_tiles_table(&conn);
-        let env = workstream_env_from_db(&conn, "tile-1").expect("env should be Some");
+        let env = workstream_env_from_db(
+            &conn,
+            "tile-1",
+            &crate::agent_registry::IdentityRegistry::new(),
+        )
+        .expect("env should be Some");
         assert_eq!(
             env.get("WORKSTREAMS_ACTIVE_WS").map(String::as_str),
             Some("ws-abc")
@@ -6501,7 +6568,12 @@ Body here.
     fn workstream_env_carries_the_socket_of_the_instance_that_spawned_the_session() {
         let conn = fresh_mem_db();
         setup_tiles_table(&conn);
-        let env = workstream_env_from_db(&conn, "tile-1").expect("env should be Some");
+        let env = workstream_env_from_db(
+            &conn,
+            "tile-1",
+            &crate::agent_registry::IdentityRegistry::new(),
+        )
+        .expect("env should be Some");
         let socket = env
             .get(crate::agent_socket::SOCKET_ENV_VAR)
             .map(String::as_str)
@@ -6519,17 +6591,56 @@ Body here.
         )));
     }
 
+    /// The token is what makes a request's identity provable, so it has to
+    /// reach the session the same way the workstream id does.
+    #[test]
+    fn workstream_env_carries_a_token_that_resolves_to_this_tile() {
+        let conn = fresh_mem_db();
+        setup_tiles_table(&conn);
+        let identities = crate::agent_registry::IdentityRegistry::new();
+        let env = workstream_env_from_db(&conn, "tile-1", &identities).expect("env should be Some");
+
+        let token = env
+            .get(crate::agent_registry::TOKEN_ENV_VAR)
+            .map(String::as_str)
+            .expect("a token must be issued");
+        assert_eq!(
+            identities.resolve(Some(token)).expect("resolve"),
+            crate::agent_registry::Caller::Agent {
+                tile_id: "tile-1".to_string(),
+                workstream_id: "ws-abc".to_string(),
+            }
+        );
+
+        // Two tiles must not be able to act as each other.
+        let other = workstream_env_from_db(&conn, "tile-2", &identities).expect("env");
+        assert_ne!(
+            other.get(crate::agent_registry::TOKEN_ENV_VAR),
+            env.get(crate::agent_registry::TOKEN_ENV_VAR)
+        );
+    }
+
     #[test]
     fn workstream_env_returns_none_for_unknown_tile() {
         let conn = fresh_mem_db();
         setup_tiles_table(&conn);
-        assert!(workstream_env_from_db(&conn, "tile-missing").is_none());
+        assert!(workstream_env_from_db(
+            &conn,
+            "tile-missing",
+            &crate::agent_registry::IdentityRegistry::new()
+        )
+        .is_none());
     }
 
     #[test]
     fn workstream_env_returns_none_when_tiles_table_missing() {
         let conn = fresh_mem_db();
-        assert!(workstream_env_from_db(&conn, "tile-1").is_none());
+        assert!(workstream_env_from_db(
+            &conn,
+            "tile-1",
+            &crate::agent_registry::IdentityRegistry::new()
+        )
+        .is_none());
     }
 
     #[test]

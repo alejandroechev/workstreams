@@ -261,6 +261,12 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
         "ALTER TABLE workstreams ADD COLUMN workstream_type TEXT NOT NULL DEFAULT 'standalone'",
         "ALTER TABLE workstreams ADD COLUMN worktree_branch TEXT",
         "ALTER TABLE projects ADD COLUMN copilot_command TEXT",
+        // Which Copilot session created this workstream, when one did. An agent
+        // may act on its own workstream and ones it created, and that second
+        // clause is unenforceable without a record of who created what. NULL
+        // means "a human made this in the UI", which is the common case and not
+        // an error.
+        "ALTER TABLE workstreams ADD COLUMN created_by_session TEXT",
         "ALTER TABLE tasks ADD COLUMN notes TEXT NOT NULL DEFAULT ''",
         // Defence in depth for the 1:1 task↔workstream relation. Partial, so
         // the many tasks with no workstream are unaffected. On a database that
@@ -366,6 +372,45 @@ mod tests {
             )
             .unwrap();
         assert_eq!(count, 1, "notes column duplicated or missing");
+    }
+
+    /// Scope enforcement lets an agent act on workstreams it created, which is
+    /// unenforceable without recording who created each one.
+    #[test]
+    fn provenance_survives_a_rerun_and_leaves_existing_rows_alone() {
+        let conn = open_in_memory();
+        conn.execute(
+            "INSERT INTO workstreams (id, name, status, created_at, updated_at)
+             VALUES ('ws-old', 'Made in the UI', 'active', '2026-01-01', '2026-01-01')",
+            [],
+        )
+        .unwrap();
+
+        // Re-running init_db is how a second launch behaves; the column must
+        // appear exactly once and must not disturb rows that predate it.
+        init_db(&conn).unwrap();
+        init_db(&conn).unwrap();
+
+        let columns: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('workstreams') WHERE name='created_by_session'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(columns, 1, "created_by_session duplicated or missing");
+
+        let existing: Option<String> = conn
+            .query_row(
+                "SELECT created_by_session FROM workstreams WHERE id = 'ws-old'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            existing, None,
+            "a workstream created before provenance existed has none, and that is not an error"
+        );
     }
 
     #[test]

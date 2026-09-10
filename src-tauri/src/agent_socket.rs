@@ -81,6 +81,13 @@ pub struct AgentRequest {
     pub cmd: String,
     #[serde(default)]
     pub params: serde_json::Value,
+    /// Proof of identity the app issued when it spawned this session.
+    ///
+    /// Separate from `params` so a command can never be written that accepts an
+    /// identity as an argument — the only identity available is the one the app
+    /// handed out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token: Option<String>,
 }
 
 /// A failure an agent can act on.
@@ -265,31 +272,6 @@ pub fn send_request(
     })
 }
 
-/// Commands the socket currently understands.
-///
-/// Kept as data so the "unknown command" hint cannot drift from what is
-/// actually dispatchable.
-const COMMANDS: &[&str] = &["agent.ping"];
-
-/// Routes one request to its handler.
-///
-/// This is the seam the command registry grows into. Until then it answers the
-/// health check and refuses everything else *by name*, so an agent pointed at a
-/// command that does not exist learns which ones do instead of guessing.
-pub fn dispatch(request: AgentRequest) -> AgentResponse {
-    match request.cmd.as_str() {
-        "agent.ping" => AgentResponse::ok(serde_json::json!({
-            "pong": true,
-            "pid": std::process::id(),
-        })),
-        unknown => AgentResponse::failed(AgentError::new(
-            "UNKNOWN_COMMAND",
-            format!("No such command: {unknown}"),
-            format!("Available commands: {}", COMMANDS.join(", ")),
-        )),
-    }
-}
-
 /// Owns the agent socket for the lifetime of the app.
 ///
 /// Accepts on a background thread and answers each connection on its own
@@ -417,6 +399,12 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
     use std::time::Duration;
 
+    /// Stands in for the app's real dispatcher, which needs a database and an
+    /// identity registry this layer knows nothing about.
+    fn test_dispatch(request: AgentRequest) -> AgentResponse {
+        AgentResponse::ok(serde_json::json!({ "saw": request.cmd }))
+    }
+
     /// Short on purpose: the 104-byte budget applies to test paths too, and a
     /// descriptive directory name is enough to exhaust it under `$TMPDIR`.
     fn scratch_dir(label: &str) -> PathBuf {
@@ -478,6 +466,7 @@ mod tests {
         let encoded = encode_request(&AgentRequest {
             cmd: "ws.create".to_string(),
             params: serde_json::json!({ "name": "alpha" }),
+            token: None,
         });
         assert!(encoded.ends_with('\n'), "requests must be newline-framed");
         assert_eq!(encoded.matches('\n').count(), 1, "exactly one frame");
@@ -524,6 +513,7 @@ mod tests {
         let encoded = encode_request(&AgentRequest {
             cmd: "ws.create".to_string(),
             params: serde_json::json!({ "blob": body }),
+            token: None,
         });
         assert_eq!(
             encoded.matches('\n').count(),
@@ -555,6 +545,7 @@ mod tests {
                 encode_request(&AgentRequest {
                     cmd: "ws.create".to_string(),
                     params: serde_json::Value::Null,
+                    token: None,
                 })
                 .as_bytes(),
             )
@@ -620,6 +611,7 @@ mod tests {
                     encode_request(&AgentRequest {
                         cmd: format!("ws.create.{index}"),
                         params: serde_json::Value::Null,
+                        token: None,
                     })
                     .as_bytes(),
                 )
@@ -636,38 +628,6 @@ mod tests {
         let gone = !path.exists();
         std::fs::remove_dir_all(&dir).ok();
         assert!(gone, "the server must unlink its socket on shutdown");
-    }
-
-    /// A health check the CLI can use to prove the channel works before blaming
-    /// a command for a connectivity problem.
-    #[test]
-    fn ping_answers_so_connectivity_is_separable_from_command_failure() {
-        let response = dispatch(AgentRequest {
-            cmd: "agent.ping".to_string(),
-            params: serde_json::Value::Null,
-        });
-        assert!(response.ok);
-        assert_eq!(
-            response.data.expect("data")["pong"],
-            serde_json::Value::Bool(true)
-        );
-    }
-
-    /// An unknown command must name what *is* available. Without that an agent
-    /// guesses, and guessing is how a session burns turns.
-    #[test]
-    fn an_unknown_command_is_told_what_exists() {
-        let response = dispatch(AgentRequest {
-            cmd: "ws.summon".to_string(),
-            params: serde_json::Value::Null,
-        });
-        assert!(!response.ok);
-        assert_eq!(response.code.as_deref(), Some("UNKNOWN_COMMAND"));
-        let hint = response.hint.unwrap_or_default();
-        assert!(
-            hint.contains("agent.ping"),
-            "the hint should list a real command, got: {hint}"
-        );
     }
 
     // ── Client ─────────────────────────────────────────────────────────────
@@ -699,12 +659,13 @@ mod tests {
     fn the_client_round_trips_against_a_running_server() {
         let dir = scratch_dir("client");
         let path = socket_path_in(&dir, 8);
-        let server = AgentSocketServer::start(path.clone(), dispatch).expect("start");
+        let server = AgentSocketServer::start(path.clone(), test_dispatch).expect("start");
         let response = send_request(
             &path,
             &AgentRequest {
                 cmd: "agent.ping".to_string(),
                 params: serde_json::Value::Null,
+                token: None,
             },
             Duration::from_secs(5),
         )
@@ -728,6 +689,7 @@ mod tests {
             &AgentRequest {
                 cmd: "agent.ping".to_string(),
                 params: serde_json::Value::Null,
+                token: None,
             },
             Duration::from_secs(1),
         )
@@ -742,6 +704,7 @@ mod tests {
             &AgentRequest {
                 cmd: "agent.ping".to_string(),
                 params: serde_json::Value::Null,
+                token: None,
             },
             Duration::from_secs(1),
         )
@@ -776,6 +739,7 @@ mod tests {
             &AgentRequest {
                 cmd: "agent.ping".to_string(),
                 params: serde_json::Value::Null,
+                token: None,
             },
             Duration::from_secs(2),
         )
@@ -804,6 +768,7 @@ mod tests {
             &AgentRequest {
                 cmd: "agent.ping".to_string(),
                 params: serde_json::Value::Null,
+                token: None,
             },
             Duration::from_millis(200),
         )
