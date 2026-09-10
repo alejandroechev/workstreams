@@ -10,6 +10,8 @@ fn main() {
                 std::process::exit(1);
             }
         }
+        // Always dispatched; the library reports the unsupported platform so a
+        // Windows user gets an explanation instead of "unknown command".
         Some("agent") => {
             if let Err(error) = workstreams_lib::run_agent_cli(args.collect()) {
                 eprintln!("{error}");

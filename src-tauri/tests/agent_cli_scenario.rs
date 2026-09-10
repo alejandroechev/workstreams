@@ -1,3 +1,6 @@
+//! Unix-only: the agent channel is a Unix domain socket (see ADR 026).
+#![cfg(unix)]
+
 //! CLI scenario for `workstreams agent …`.
 //!
 //! Runs the **real binary as a separate process** against a live socket, which
@@ -145,7 +148,7 @@ fn running_outside_a_workstreams_session_says_exactly_that() {
 }
 
 #[test]
-fn parameters_are_passed_as_typed_values() {
+fn parameters_reach_the_app_verbatim() {
     let dir = scratch_dir("params");
     let path = socket_path_in(&dir, 4);
     // Echo the params back so the scenario can assert on what crossed the wire.
@@ -161,6 +164,10 @@ fn parameters_are_passed_as_typed_values() {
             "name=Alpha Stream",
             "attempts=3",
             "worktree=true",
+            // A name that looks like a number must stay a name: coercion used
+            // to turn this into an integer, which then failed as a missing name
+            // with no way to quote around it.
+            "label=2026",
         ])
         .env(SOCKET_ENV_VAR, &path)
         .output()
@@ -171,8 +178,9 @@ fn parameters_are_passed_as_typed_values() {
     let parsed: serde_json::Value =
         serde_json::from_str(&String::from_utf8_lossy(&output.stdout)).expect("parse stdout");
     assert_eq!(parsed["data"]["name"], "Alpha Stream");
-    assert_eq!(parsed["data"]["attempts"], 3);
-    assert_eq!(parsed["data"]["worktree"], true);
+    assert_eq!(parsed["data"]["attempts"], "3");
+    assert_eq!(parsed["data"]["worktree"], "true");
+    assert_eq!(parsed["data"]["label"], "2026");
 }
 
 /// A hung app must not hang the agent. The CLI's own timeout is 120s, so this

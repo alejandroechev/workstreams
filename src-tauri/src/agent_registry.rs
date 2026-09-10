@@ -14,7 +14,9 @@
 //! is no confirmation UI, so [`Command::destructive`] exists to be *stated* in
 //! the CLI help and the skill, not to block.
 
-use crate::agent_socket::{AgentError, AgentRequest, AgentResponse};
+// From the protocol module, not the transport: the registry is
+// platform-independent and must keep compiling where the socket does not exist.
+use crate::agent_protocol::{AgentError, AgentRequest, AgentResponse};
 use rusqlite::Connection;
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -118,7 +120,7 @@ impl IdentityRegistry {
     /// Re-spawning a tile invalidates the old token, so a stale process holding
     /// it cannot keep acting on the workstream.
     pub fn issue(&self, tile_id: &str, workstream_id: &str) -> String {
-        let token = format!("wst_{}", uuid_like(tile_id));
+        let token = mint_token();
         let mut tokens = self.tokens.lock().unwrap();
         tokens.retain(|_, caller| !matches!(caller, Caller::Agent { tile_id: existing, .. } if existing == tile_id));
         tokens.insert(
@@ -161,27 +163,17 @@ impl IdentityRegistry {
     }
 }
 
-/// Builds a token that is unguessable in practice without pulling in a crate.
+/// Builds a token.
 ///
-/// Combines the tile, the clock and the address of a fresh allocation, so two
-/// tokens issued in the same millisecond for the same tile still differ.
-fn uuid_like(tile_id: &str) -> String {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-
-    let mut hasher = DefaultHasher::new();
-    tile_id.hash(&mut hasher);
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|elapsed| elapsed.as_nanos())
-        .unwrap_or_default()
-        .hash(&mut hasher);
-    let scratch = Box::new(0u8);
-    (Box::into_raw(scratch) as usize).hash(&mut hasher);
-    let high = hasher.finish();
-    // Hash again so the two halves do not share an obvious relationship.
-    high.hash(&mut hasher);
-    format!("{high:016x}{:016x}", hasher.finish())
+/// Two v4 UUIDs rather than a hash of the clock and an allocation address: the
+/// earlier version derived entropy from things an attacker can observe or
+/// influence, and leaked the allocation it used as a source.
+fn mint_token() -> String {
+    format!(
+        "wst_{}{}",
+        uuid::Uuid::new_v4().simple(),
+        uuid::Uuid::new_v4().simple()
+    )
 }
 
 /// Everything a command handler is allowed to touch.
@@ -573,27 +565,74 @@ const REDACTED_KEYS: &[&str] = &[
     "notes",
 ];
 
+/// How deep a nested parameter may go before the subtree is summarised.
+///
+/// Bounds the walk so a pathological payload cannot make logging expensive.
+const MAX_REDACT_DEPTH: usize = 6;
+
+/// Longest string kept verbatim under a key that is not known free text.
+///
+/// Identifiers, names and branches are short; anything longer is prose by
+/// another name, whatever key it arrived under.
+const MAX_LOGGED_STRING: usize = 120;
+
 /// Replaces free-text values with their length, keeping the shape of the call
 /// visible without storing what was said.
-fn redact(params: &serde_json::Value) -> String {
-    let Some(object) = params.as_object() else {
-        return "{}".to_string();
-    };
-    let redacted: serde_json::Map<String, serde_json::Value> = object
-        .iter()
-        .map(|(key, value)| {
-            if REDACTED_KEYS.contains(&key.as_str()) {
-                let length = value.as_str().map(str::len).unwrap_or(0);
-                (
-                    key.clone(),
-                    serde_json::json!(format!("<redacted:{length}>")),
-                )
+///
+/// Walks the whole structure. A top-level-only pass leaves prose one level down
+/// -- `{"metadata": {"description": "..."}}` -- in the log verbatim, which is
+/// exactly what the rule exists to prevent. Long strings are summarised wherever
+/// they appear, because a caller can put prose under a key this code has never
+/// heard of.
+/// `sensitive` marks a subtree that arrived under a known free-text key.
+///
+/// It has to be carried down rather than re-derived per level: replacing the
+/// inherited key with each child's name meant `{"prompt": {"text": "..."}}`
+/// evaluated the string under `text`, which is not a free-text key, and logged
+/// the prose in full. The whole subtree under a sensitive key is sensitive,
+/// whatever its children are called.
+fn redact_value(value: &serde_json::Value, sensitive: bool, depth: usize) -> serde_json::Value {
+    if depth >= MAX_REDACT_DEPTH {
+        return serde_json::json!("<redacted:deep>");
+    }
+    match value {
+        serde_json::Value::Object(object) => serde_json::Value::Object(
+            object
+                .iter()
+                .map(|(name, nested)| {
+                    let nested_sensitive = sensitive || REDACTED_KEYS.contains(&name.as_str());
+                    (
+                        name.clone(),
+                        redact_value(nested, nested_sensitive, depth + 1),
+                    )
+                })
+                .collect(),
+        ),
+        serde_json::Value::Array(items) => serde_json::Value::Array(
+            items
+                .iter()
+                .map(|item| redact_value(item, sensitive, depth + 1))
+                .collect(),
+        ),
+        serde_json::Value::String(text) => {
+            if sensitive || text.len() > MAX_LOGGED_STRING {
+                serde_json::json!(format!("<redacted:{}>", text.len()))
             } else {
-                (key.clone(), value.clone())
+                value.clone()
             }
-        })
-        .collect();
-    serde_json::to_string(&redacted).unwrap_or_else(|_| "{}".to_string())
+        }
+        // A number or boolean under a sensitive key carries little, but keeping
+        // it would still leak a choice the caller made in prose-adjacent input.
+        other if sensitive => serde_json::json!(format!("<redacted:{}>", other.to_string().len())),
+        other => other.clone(),
+    }
+}
+
+fn redact(params: &serde_json::Value) -> String {
+    if !params.is_object() {
+        return "{}".to_string();
+    }
+    serde_json::to_string(&redact_value(params, false, 0)).unwrap_or_else(|_| "{}".to_string())
 }
 
 /// Turns a handler result into a response.
@@ -1057,6 +1096,7 @@ mod tests {
             "description": "a long private explanation of the work",
             "count": 3,
         }));
+        assert!(!redacted.contains("private explanation"), "{redacted}");
         assert!(redacted.contains("\"name\":\"Alpha\""), "{redacted}");
         assert!(redacted.contains("\"count\":3"), "{redacted}");
         assert!(
@@ -1064,6 +1104,58 @@ mod tests {
             "prose leaked into the log: {redacted}"
         );
         assert!(redacted.contains("<redacted:"), "{redacted}");
+    }
+
+    /// A top-level-only pass would leave all of this in the log verbatim.
+    /// Commands accept unknown parameters, so prose can arrive anywhere.
+    #[test]
+    fn prose_is_redacted_however_deeply_it_is_nested() {
+        let redacted = redact(&serde_json::json!({
+            "metadata": { "description": "private text in a nested object" },
+            "items": [{ "prompt": "private prompt inside an array" }],
+            "unnamed": "x".repeat(400),
+            "name": "Alpha",
+        }));
+        for leaked in ["private text", "private prompt", &"x".repeat(400)] {
+            assert!(!redacted.contains(leaked), "leaked {leaked:?}: {redacted}");
+        }
+        // Shape survives, so the log still shows what kind of call was made.
+        assert!(redacted.contains("metadata"), "{redacted}");
+        assert!(redacted.contains("\"name\":\"Alpha\""), "{redacted}");
+    }
+
+    /// A sensitive key whose value is an object or array must stay sensitive
+    /// all the way down. Re-deriving sensitivity from each child's own name let
+    /// `{"prompt": {"text": "..."}}` through in full.
+    #[test]
+    fn a_sensitive_key_protects_everything_beneath_it() {
+        let redacted = redact(&serde_json::json!({
+            "prompt": { "text": "private short message" },
+            "notes": [{ "text": "private array message" }],
+            "deep": { "context": { "inner": { "text": "private nested message" } } },
+        }));
+        for leaked in ["private short", "private array", "private nested"] {
+            assert!(!redacted.contains(leaked), "leaked {leaked:?}: {redacted}");
+        }
+    }
+
+    #[test]
+    fn a_pathological_nesting_depth_does_not_run_away() {
+        let mut value = serde_json::json!("leaf");
+        for _ in 0..50 {
+            value = serde_json::json!({ "next": value });
+        }
+        let redacted = redact(&value);
+        assert!(redacted.contains("<redacted:deep>"), "{redacted}");
+    }
+
+    #[test]
+    fn tokens_do_not_repeat_across_many_issuances() {
+        let registry = IdentityRegistry::new();
+        let tokens: std::collections::HashSet<String> = (0..500)
+            .map(|i| registry.issue(&format!("tile-{i}"), "ws"))
+            .collect();
+        assert_eq!(tokens.len(), 500, "token collision");
     }
 
     /// Logging is evidence, not a participant: if it fails, the command that

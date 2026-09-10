@@ -123,6 +123,24 @@ no blocked call waiting on a modal, no re-entrancy while a prompt is open.
 The split is worth stating plainly: **scope** (which workstreams are reachable at
 all) is enforced in code; **permission to destroy within that scope** is not.
 
+#### What the token does not defend against
+
+A cross-model review of the implementation established that a sibling process
+under the same user account can read another session's token out of its
+environment (`ps eww`) and present it. **The scope fence therefore does not
+withstand a hostile local process.**
+
+This is accepted rather than fixed, and the reasoning should be explicit so the
+scheme is not mistaken for something stronger: the fence exists to contain
+*mistakes* — a confused agent acting on the wrong workstream — and every session
+here is the user's own agent running on the user's own machine under the user's
+own account. A process that can read another session's environment can already
+read the database directly.
+
+Closing it properly means attesting identity from the kernel — the socket peer's
+credentials checked against an app-tracked session process tree — rather than
+from a bearer token. That is a worthwhile change and a different design.
+
 ### One log for humans and agents
 
 Every dispatch is recorded in `command_log`. One table, because "do agents drive
@@ -149,6 +167,10 @@ storing it would quietly turn an audit trail into a transcript.
 - A skill in `~/.copilot/skills/workstreams/` documents the surface, and a drift
   test asserts every command and error code it names is real — the two version
   separately and will otherwise diverge silently.
+- **The transport is `cfg(unix)`.** The app builds and ships on Windows without
+  the agent channel; `workstreams agent` there returns an explanatory error
+  rather than failing to compile. Note that CI runs on Linux only, so a
+  platform-gating regression would not be caught until a release build.
 - **Windows is unimplemented.** Named pipes (`\\.\pipe\…`) are the equivalent and
   have no path-length problem, but a different permission model: a security
   descriptor at creation rather than a `chmod`. Both findings above need a

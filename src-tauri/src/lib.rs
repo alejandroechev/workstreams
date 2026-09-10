@@ -1,5 +1,12 @@
+#[cfg(unix)]
 mod agent_cli;
+pub mod agent_protocol;
 pub mod agent_registry;
+// Unix domain sockets only, for now. Windows needs named pipes, which have a
+// different permission model (a security descriptor at creation rather than a
+// chmod) -- see ADR 026. Gated so the desktop app still builds and ships on
+// Windows without the agent channel, rather than failing to compile at all.
+#[cfg(unix)]
 pub mod agent_socket;
 mod code_review;
 mod db;
@@ -31,8 +38,14 @@ pub fn run_loop_cli(args: Vec<String>) -> Result<(), String> {
     loop_cli::run(args)
 }
 
+#[cfg(unix)]
 pub fn run_agent_cli(args: Vec<String>) -> Result<(), String> {
     agent_cli::run(args)
+}
+
+#[cfg(not(unix))]
+pub fn run_agent_cli(_args: Vec<String>) -> Result<(), String> {
+    Err("The agent channel is not available on this platform yet (see ADR 026).".to_string())
 }
 
 // ── Types ──────────────────────────────────────────────────────────────
@@ -108,6 +121,7 @@ struct AppState {
     features_watchers: Arc<Mutex<std::collections::HashMap<String, FeaturesWatcherHandle>>>,
     /// Socket that lets an agent drive this instance. Held so the listener lives
     /// as long as the app and unlinks its path on shutdown.
+    #[cfg(unix)]
     agent_socket: Mutex<Option<agent_socket::AgentSocketServer>>,
     /// Tokens this instance has issued to sessions it spawned. A request proves
     /// who it is by presenting one; it can never simply name an identity.
@@ -514,6 +528,26 @@ fn delete_workstream(state: State<'_, AppState>, id: String) -> Result<(), Strin
         state.pty.close(tid)?;
     }
 
+    // Revoke every tile's identity, not just the terminals closed above. The
+    // query there filters tile_type = 'terminal', but it is the *session* tiles
+    // that hold tokens -- and a token outliving its workstream would let a
+    // surviving process keep acting on other workstreams that tile created,
+    // since created_by_session is plain text and does not cascade.
+    {
+        let mut all_tiles = db
+            .prepare("SELECT id FROM tiles WHERE workstream_id = ?1")
+            .map_err(|e| format!("DB error: {e}"))?;
+        let every_tile: Vec<String> = all_tiles
+            .query_map([&id], |row| row.get(0))
+            .map_err(|e| format!("DB error: {e}"))?
+            .filter_map(|r| r.ok())
+            .collect();
+        drop(all_tiles);
+        for tid in &every_tile {
+            state.agent_identities.forget_tile(tid);
+        }
+    }
+
     db.execute("DELETE FROM workstreams WHERE id = ?1", [&id])
         .map_err(|e| format!("DB error: {e}"))?;
     Ok(())
@@ -746,6 +780,10 @@ fn list_tiles(state: State<'_, AppState>, workstream_id: String) -> Result<Vec<T
 #[tauri::command]
 fn delete_tile(state: State<'_, AppState>, tile_id: String) -> Result<(), String> {
     state.pty.close(&tile_id)?;
+    // Revoke the tile's identity as it goes. A token copied out of the
+    // environment would otherwise keep working until the app exits, letting a
+    // leftover process act as a tile that no longer exists.
+    state.agent_identities.forget_tile(&tile_id);
     let db = state.db.lock().unwrap();
 
     // Remove from layout order
@@ -888,6 +926,7 @@ fn update_layout(
 /// Identity is resolved from the presented token before anything else runs, so
 /// a handler is never reachable without one and can never be handed an identity
 /// through its parameters.
+#[cfg(unix)]
 fn serve_agent_request(
     app: &AppHandle,
     db: &Arc<Mutex<Connection>>,
@@ -953,6 +992,10 @@ fn build_workstream_env(
 
 /// Pure helper: builds the env-var map from a DB connection + tile id.
 /// Returns None when the tile is unknown.
+// `identities` and the token id are only read on Unix, where the agent socket
+// exists. Silence the unused warnings on other platforms rather than splitting
+// the function in two.
+#[cfg_attr(not(unix), allow(unused_variables))]
 fn workstream_env_from_db(
     db: &rusqlite::Connection,
     tile_id: &str,
@@ -965,6 +1008,7 @@ fn workstream_env_from_db(
             |row| row.get(0),
         )
         .ok()?;
+    #[cfg_attr(not(unix), allow(unused_variables))]
     let ws_id_for_token = ws_id.clone();
     let mut env = std::collections::HashMap::new();
     env.insert("WORKSTREAMS_ACTIVE_WS".to_string(), ws_id);
@@ -973,6 +1017,7 @@ fn workstream_env_from_db(
     // relying on a well-known path is what keeps two running apps from stealing
     // each other's sessions, and it means a session started outside Workstreams
     // simply has no way in.
+    #[cfg(unix)]
     env.insert(
         agent_socket::SOCKET_ENV_VAR.to_string(),
         agent_socket::resolve_socket_path()
@@ -983,6 +1028,7 @@ fn workstream_env_from_db(
     // cannot say who is calling. The token can: the app mints it here and keeps
     // the mapping, which is why a request presents an identity instead of
     // naming one.
+    #[cfg(unix)]
     env.insert(
         agent_registry::TOKEN_ENV_VAR.to_string(),
         identities.issue(tile_id, &ws_id_for_token),
@@ -1089,6 +1135,9 @@ fn resize_pty(
 
 #[tauri::command]
 fn close_terminal(state: State<'_, AppState>, tile_id: String) -> Result<(), String> {
+    // The process that held this tile's token is going away; the token should
+    // go with it rather than outliving the session it names.
+    state.agent_identities.forget_tile(&tile_id);
     state.pty.close(&tile_id)
 }
 
@@ -5259,6 +5308,7 @@ pub fn run() {
         fs_watcher,
         search_epoch: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         features_watchers: Arc::new(Mutex::new(std::collections::HashMap::new())),
+        #[cfg(unix)]
         agent_socket: Mutex::new(None),
         agent_identities: Arc::new(agent_registry::IdentityRegistry::new()),
     };
@@ -5280,6 +5330,7 @@ pub fn run() {
             // Open the agent channel. A failure here must not stop the app:
             // everything else still works, the agent surface is simply absent,
             // and the reason is on stderr rather than in a crash.
+            #[cfg(unix)]
             {
                 let state = app.state::<AppState>();
                 let path = agent_socket::resolve_socket_path();
@@ -6627,6 +6678,54 @@ Body here.
         );
     }
 
+    /// Deleting a workstream must retire every tile's identity, including the
+    /// session tiles the terminal-only close loop above never touches. A token
+    /// that outlives its workstream keeps working against other workstreams
+    /// that tile created, because `created_by_session` is plain text.
+    #[test]
+    fn revoking_a_workstreams_tiles_covers_sessions_not_just_terminals() {
+        let conn = fresh_mem_db();
+        conn.execute_batch(
+            "CREATE TABLE tiles (id TEXT PRIMARY KEY, workstream_id TEXT NOT NULL, tile_type TEXT NOT NULL);
+             INSERT INTO tiles VALUES ('tile-term','ws-doomed','terminal');
+             INSERT INTO tiles VALUES ('tile-session','ws-doomed','copilot_session');
+             INSERT INTO tiles VALUES ('tile-other','ws-kept','copilot_session');",
+        )
+        .unwrap();
+        let identities = crate::agent_registry::IdentityRegistry::new();
+        let doomed_session = identities.issue("tile-session", "ws-doomed");
+        let doomed_term = identities.issue("tile-term", "ws-doomed");
+        let survivor = identities.issue("tile-other", "ws-kept");
+
+        // Mirrors the revocation query in delete_workstream.
+        let mut statement = conn
+            .prepare("SELECT id FROM tiles WHERE workstream_id = ?1")
+            .unwrap();
+        let ids: Vec<String> = statement
+            .query_map(["ws-doomed"], |row| row.get(0))
+            .unwrap()
+            .filter_map(|row| row.ok())
+            .collect();
+        drop(statement);
+        for id in &ids {
+            identities.forget_tile(id);
+        }
+
+        assert!(
+            identities.resolve(Some(&doomed_session)).is_err(),
+            "session token survived"
+        );
+        assert!(
+            identities.resolve(Some(&doomed_term)).is_err(),
+            "terminal token survived"
+        );
+        assert!(
+            identities.resolve(Some(&survivor)).is_ok(),
+            "an unrelated workstream's token must not be collateral"
+        );
+    }
+
+    #[cfg(unix)]
     #[test]
     fn workstream_env_carries_the_socket_of_the_instance_that_spawned_the_session() {
         let conn = fresh_mem_db();
@@ -6656,6 +6755,7 @@ Body here.
 
     /// The token is what makes a request's identity provable, so it has to
     /// reach the session the same way the workstream id does.
+    #[cfg(unix)]
     #[test]
     fn workstream_env_carries_a_token_that_resolves_to_this_tile() {
         let conn = fresh_mem_db();

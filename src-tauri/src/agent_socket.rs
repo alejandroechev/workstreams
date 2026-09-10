@@ -7,9 +7,11 @@
 //!
 //! See ADR 026 and `files/features/agent-driven-workstreams/spikes/socket/`.
 
-use serde::{Deserialize, Serialize};
-use std::io::ErrorKind;
-use std::os::unix::fs::PermissionsExt;
+pub use crate::agent_protocol::{
+    decode_request, encode_request, encode_response, AgentError, AgentRequest, AgentResponse,
+};
+use std::io::{ErrorKind, Read};
+use std::os::unix::fs::{FileTypeExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 
@@ -73,111 +75,6 @@ pub fn resolve_socket_path() -> PathBuf {
 /// `InvalidInput` from the OS with nothing pointing at the length.
 pub fn fits_sun_path(path: &Path) -> bool {
     path.as_os_str().len() < SUN_PATH_MAX
-}
-
-/// One command an agent asks the app to run.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AgentRequest {
-    pub cmd: String,
-    #[serde(default)]
-    pub params: serde_json::Value,
-    /// Proof of identity the app issued when it spawned this session.
-    ///
-    /// Separate from `params` so a command can never be written that accepts an
-    /// identity as an argument — the only identity available is the one the app
-    /// handed out.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub token: Option<String>,
-}
-
-/// A failure an agent can act on.
-///
-/// `hint` is not decoration. An agent that receives only "invalid argument"
-/// tends to rewrite its arguments at random; one that is told what to do
-/// instead repairs the call. Every error carries one.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AgentError {
-    pub code: String,
-    pub message: String,
-    pub hint: String,
-}
-
-impl AgentError {
-    pub fn new(
-        code: impl Into<String>,
-        message: impl Into<String>,
-        hint: impl Into<String>,
-    ) -> Self {
-        Self {
-            code: code.into(),
-            message: message.into(),
-            hint: hint.into(),
-        }
-    }
-}
-
-/// The app's answer to one request.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AgentResponse {
-    pub ok: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub data: Option<serde_json::Value>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub code: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub message: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub hint: Option<String>,
-}
-
-impl AgentResponse {
-    pub fn ok(data: serde_json::Value) -> Self {
-        Self {
-            ok: true,
-            data: Some(data),
-            code: None,
-            message: None,
-            hint: None,
-        }
-    }
-
-    pub fn failed(error: AgentError) -> Self {
-        Self {
-            ok: false,
-            data: None,
-            code: Some(error.code),
-            message: Some(error.message),
-            hint: Some(error.hint),
-        }
-    }
-}
-
-/// Encodes a request as one newline-terminated frame.
-///
-/// `serde_json` escapes embedded newlines, so a payload containing one cannot
-/// split the frame. That is what lets the wire format stay newline-delimited
-/// instead of length-prefixed.
-pub fn encode_request(request: &AgentRequest) -> String {
-    let body = serde_json::to_string(request).unwrap_or_else(|_| "{}".to_string());
-    format!("{body}\n")
-}
-
-pub fn decode_request(line: &str) -> Result<AgentRequest, AgentError> {
-    serde_json::from_str(line.trim()).map_err(|error| {
-        AgentError::new(
-            "BAD_REQUEST",
-            format!("Could not parse the request: {error}"),
-            "Send one JSON object per line, shaped {\"cmd\": \"...\", \"params\": {}}",
-        )
-    })
-}
-
-pub fn encode_response(response: &AgentResponse) -> String {
-    let body = serde_json::to_string(response).unwrap_or_else(|_| {
-        r#"{"ok":false,"code":"ENCODE_FAILED","message":"Could not encode the response","hint":"Report this as a bug"}"#
-            .to_string()
-    });
-    format!("{body}\n")
 }
 
 /// Resolves the socket a *client* should talk to.
@@ -272,6 +169,42 @@ pub fn send_request(
     })
 }
 
+/// Largest request the app will read.
+///
+/// Generous relative to any real command, and bounded so an unauthenticated
+/// client cannot make the app allocate without limit.
+pub const MAX_FRAME_BYTES: usize = 4 * 1024 * 1024;
+
+/// How long a connection may stall before it is dropped.
+const CLIENT_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Connections served at once.
+///
+/// Thread-per-connection is right for the expected load, but unbounded thread
+/// creation is not: `thread::spawn` panics when the OS refuses, and the release
+/// profile aborts on panic, so an unauthenticated client could take the app
+/// down with it.
+const MAX_CONCURRENT_CONNECTIONS: usize = 32;
+
+/// Holds one slot in the connection budget, releasing it on drop.
+struct ConnectionPermit {
+    in_flight: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl ConnectionPermit {
+    fn acquire(in_flight: std::sync::Arc<std::sync::atomic::AtomicUsize>) -> Self {
+        in_flight.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Self { in_flight }
+    }
+}
+
+impl Drop for ConnectionPermit {
+    fn drop(&mut self) {
+        self.in_flight
+            .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
 /// Owns the agent socket for the lifetime of the app.
 ///
 /// Accepts on a background thread and answers each connection on its own
@@ -292,6 +225,7 @@ impl AgentSocketServer {
     {
         let listener = bind_agent_socket(&path)?;
         let dispatch = std::sync::Arc::new(dispatch);
+        let in_flight = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         std::thread::spawn(move || {
             for stream in listener.incoming() {
                 let Ok(stream) = stream else {
@@ -300,8 +234,43 @@ impl AgentSocketServer {
                     // channel for the rest of the session.
                     continue;
                 };
+                if in_flight.load(std::sync::atomic::Ordering::SeqCst) >= MAX_CONCURRENT_CONNECTIONS
+                {
+                    // Refuse politely rather than queueing without limit, so a
+                    // client learns why instead of hanging.
+                    let mut stream = stream;
+                    let response = AgentResponse::failed(AgentError::new(
+                        "APP_BUSY",
+                        "Too many agent connections are already in flight",
+                        "Retry in a moment.",
+                    ));
+                    let _ = std::io::Write::write_all(
+                        &mut stream,
+                        encode_response(&response).as_bytes(),
+                    );
+                    continue;
+                }
+
                 let dispatch = std::sync::Arc::clone(&dispatch);
-                std::thread::spawn(move || handle_connection(stream, |request| dispatch(request)));
+                // An RAII permit rather than a manual decrement: a dispatch
+                // panic unwinds past any trailing statement, so a hand-written
+                // decrement would silently consume a slot each time and, after
+                // enough panics, refuse every connection as APP_BUSY. Drop runs
+                // on unwind, on early return, and when a failed spawn returns
+                // the closure to us.
+                let permit = ConnectionPermit::acquire(std::sync::Arc::clone(&in_flight));
+                let spawned = std::thread::Builder::new()
+                    .name("agent-conn".to_string())
+                    .spawn(move || {
+                        let _permit = permit;
+                        handle_connection(stream, |request| dispatch(request));
+                    });
+                if spawned.is_err() {
+                    // The permit moved into the closure, which was never run;
+                    // spawn gives it back inside the error, and dropping that
+                    // releases the slot.
+                    eprintln!("[agent] Could not start a connection thread; dropping it");
+                }
             }
         });
         Ok(Self { path })
@@ -329,13 +298,31 @@ pub fn handle_connection<F>(mut stream: UnixStream, dispatch: F)
 where
     F: FnOnce(AgentRequest) -> AgentResponse,
 {
+    // A client that connects and says nothing would otherwise hold its thread
+    // and descriptor until the app exits, and one that never sends a newline
+    // would grow the buffer without limit. Neither needs to authenticate first,
+    // so both bounds apply before any identity is known.
+    let _ = stream.set_read_timeout(Some(CLIENT_IDLE_TIMEOUT));
+    let _ = stream.set_write_timeout(Some(CLIENT_IDLE_TIMEOUT));
+
     let Ok(peer) = stream.try_clone() else {
         return;
     };
-    let mut line = String::new();
-    if std::io::BufRead::read_line(&mut std::io::BufReader::new(peer), &mut line).is_err() {
+    let mut line = Vec::new();
+    let mut reader = std::io::BufReader::new(peer).take(MAX_FRAME_BYTES as u64 + 1);
+    if std::io::BufRead::read_until(&mut reader, b'\n', &mut line).is_err() {
         return;
     }
+    if line.len() > MAX_FRAME_BYTES {
+        let response = AgentResponse::failed(AgentError::new(
+            "REQUEST_TOO_LARGE",
+            format!("Requests are limited to {MAX_FRAME_BYTES} bytes"),
+            "Send less data, or reference a file by path instead of inlining it.",
+        ));
+        let _ = std::io::Write::write_all(&mut stream, encode_response(&response).as_bytes());
+        return;
+    }
+    let line = String::from_utf8_lossy(&line).into_owned();
 
     let response = match decode_request(&line) {
         Ok(request) => dispatch(request),
@@ -376,6 +363,18 @@ pub fn bind_agent_socket(path: &Path) -> Result<UnixListener, String> {
             if UnixStream::connect(path).is_ok() {
                 return Err(format!(
                     "another instance is already serving {}",
+                    path.display()
+                ));
+            }
+            // A failed connect is not a licence to delete whatever is there. If
+            // the path is a regular file -- a misconfigured override, or a name
+            // collision -- unlinking it would destroy someone's data to make
+            // room for a socket.
+            let metadata = std::fs::symlink_metadata(path)
+                .map_err(|error| format!("Failed to inspect {}: {error}", path.display()))?;
+            if !metadata.file_type().is_socket() {
+                return Err(format!(
+                    "{} exists and is not a socket; refusing to remove it",
                     path.display()
                 ));
             }
@@ -457,71 +456,6 @@ mod tests {
             error.is_some_and(|message| message.contains("another instance")),
             "a live socket must not be stolen"
         );
-    }
-
-    // ── Protocol ───────────────────────────────────────────────────────────
-
-    #[test]
-    fn a_request_round_trips_as_one_json_line() {
-        let encoded = encode_request(&AgentRequest {
-            cmd: "ws.create".to_string(),
-            params: serde_json::json!({ "name": "alpha" }),
-            token: None,
-        });
-        assert!(encoded.ends_with('\n'), "requests must be newline-framed");
-        assert_eq!(encoded.matches('\n').count(), 1, "exactly one frame");
-
-        let decoded = decode_request(&encoded).expect("decode");
-        assert_eq!(decoded.cmd, "ws.create");
-        assert_eq!(decoded.params["name"], "alpha");
-    }
-
-    /// A malformed request must produce a structured error the agent can act
-    /// on, not a dropped connection it has to guess about.
-    #[test]
-    fn a_malformed_request_becomes_a_structured_error() {
-        let error = decode_request("{not json").expect_err("should not parse");
-        assert_eq!(error.code, "BAD_REQUEST");
-        assert!(!error.hint.is_empty(), "an agent needs a repair hint");
-    }
-
-    #[test]
-    fn responses_carry_a_code_and_hint_on_failure_and_neither_on_success() {
-        let ok = encode_response(&AgentResponse::ok(serde_json::json!({ "id": "ws-1" })));
-        let parsed: serde_json::Value = serde_json::from_str(ok.trim()).expect("parse");
-        assert_eq!(parsed["ok"], true);
-        assert_eq!(parsed["data"]["id"], "ws-1");
-        assert!(parsed.get("code").is_none());
-
-        let failed = encode_response(&AgentResponse::failed(AgentError::new(
-            "WORKTREE_EXISTS",
-            "That branch already has a worktree",
-            "Pass a different branch, or attach to the existing workstream",
-        )));
-        let parsed: serde_json::Value = serde_json::from_str(failed.trim()).expect("parse");
-        assert_eq!(parsed["ok"], false);
-        assert_eq!(parsed["code"], "WORKTREE_EXISTS");
-        assert!(parsed["hint"].as_str().is_some_and(|hint| !hint.is_empty()));
-    }
-
-    /// The spike sent 512 KiB on one line intact, so no length-prefix framing is
-    /// needed — but a payload containing a newline would silently split the
-    /// frame, so encoding must escape it.
-    #[test]
-    fn a_large_payload_with_newlines_stays_one_frame() {
-        let body = format!("{}\n{}", "y".repeat(256 * 1024), "z".repeat(256 * 1024));
-        let encoded = encode_request(&AgentRequest {
-            cmd: "ws.create".to_string(),
-            params: serde_json::json!({ "blob": body }),
-            token: None,
-        });
-        assert_eq!(
-            encoded.matches('\n').count(),
-            1,
-            "an embedded newline must not split the frame"
-        );
-        let decoded = decode_request(&encoded).expect("decode");
-        assert_eq!(decoded.params["blob"], body);
     }
 
     /// Exercises bind, frame, dispatch and reply over a real socket rather than
@@ -778,6 +712,88 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
         assert_eq!(error.code, "TIMEOUT");
         assert!(elapsed < Duration::from_secs(1), "took {elapsed:?}");
+    }
+
+    /// An unauthenticated client must not be able to make the app allocate
+    /// without limit, so the cap applies before any identity is known.
+    #[test]
+    fn an_oversized_request_is_refused_rather_than_buffered() {
+        let dir = scratch_dir("toobig");
+        let path = socket_path_in(&dir, 13);
+        let listener = bind_agent_socket(&path).expect("bind");
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().expect("accept");
+            handle_connection(stream, |_| {
+                panic!("an oversized frame must never reach the dispatcher")
+            });
+        });
+
+        let mut client = UnixStream::connect(&path).expect("connect");
+        // No newline anywhere: the naive reader would grow until memory ran out.
+        client
+            .write_all(&vec![b'x'; MAX_FRAME_BYTES + 1024])
+            .or_else(|error| {
+                // The server may close mid-write once the cap trips, which is
+                // the behaviour we want rather than a failure.
+                if error.kind() == ErrorKind::BrokenPipe {
+                    Ok(())
+                } else {
+                    Err(error)
+                }
+            })
+            .expect("write");
+        let mut reply = String::new();
+        let _ = std::io::BufReader::new(&client).read_line(&mut reply);
+        server.join().expect("server thread");
+        std::fs::remove_dir_all(&dir).ok();
+
+        // The reply must actually arrive: asserting only "the dispatcher was
+        // not reached" would pass if the server silently dropped the client,
+        // which is a different and worse behaviour.
+        let parsed: serde_json::Value = serde_json::from_str(reply.trim())
+            .unwrap_or_else(|error| panic!("expected a refusal, got {reply:?}: {error}"));
+        assert_eq!(parsed["code"], "REQUEST_TOO_LARGE");
+    }
+
+    /// A failed connect is not a licence to delete whatever is at the path.
+    #[test]
+    fn a_regular_file_at_the_socket_path_is_not_destroyed() {
+        let dir = scratch_dir("notsock");
+        let path = socket_path_in(&dir, 14);
+        std::fs::write(&path, b"someone's data").expect("write file");
+
+        let error = bind_agent_socket(&path)
+            .err()
+            .unwrap_or_else(|| "unexpectedly bound over a regular file".to_string());
+        let survived = std::fs::read(&path).ok();
+        std::fs::remove_dir_all(&dir).ok();
+
+        assert_eq!(
+            survived.as_deref(),
+            Some(&b"someone's data"[..]),
+            "the file must not be deleted to make room for a socket"
+        );
+        assert!(error.contains("not a socket"), "unexpected error: {error}");
+    }
+
+    /// A handler that panics must not consume its slot permanently, or enough
+    /// panics leave the app refusing every connection.
+    #[test]
+    fn a_panicking_handler_releases_its_connection_slot() {
+        let in_flight = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let permit = ConnectionPermit::acquire(std::sync::Arc::clone(&in_flight));
+        assert_eq!(in_flight.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            let _permit = permit;
+            panic!("dispatch blew up");
+        }));
+        assert!(result.is_err(), "the panic should have propagated");
+        assert_eq!(
+            in_flight.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "unwinding past a manual decrement is exactly the leak this guards"
+        );
     }
 
     #[test]

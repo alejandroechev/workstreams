@@ -90,17 +90,12 @@ fn parse_params(pairs: &[String]) -> Result<serde_json::Value, String> {
         if key.is_empty() {
             return Err(format!("Empty parameter name in: {pair}"));
         }
-        // Numbers and booleans arrive as strings from a shell; parsing them here
-        // keeps the wire types honest without the caller having to think about
-        // it. Anything else stays a string.
-        let parsed = match value {
-            "true" => serde_json::Value::Bool(true),
-            "false" => serde_json::Value::Bool(false),
-            other => other
-                .parse::<i64>()
-                .map(serde_json::Value::from)
-                .unwrap_or_else(|_| serde_json::Value::String(other.to_string())),
-        };
+        // Values stay strings. Coercing anything that *looks* numeric silently
+        // breaks real input: `name=2026` became the number 2026 and then failed
+        // as a missing name, with no way to quote around it because the shell
+        // has already removed the quotes. A command that wants a number can
+        // parse one; a command that wants a name cannot recover a mangled one.
+        let parsed = serde_json::Value::String(value.to_string());
         map.insert(key.to_string(), parsed);
     }
     Ok(serde_json::Value::Object(map))
@@ -177,7 +172,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn key_value_pairs_become_typed_parameters() {
+    fn key_value_pairs_are_passed_through_as_strings() {
         let params = parse_params(&[
             "name=alpha".to_string(),
             "count=3".to_string(),
@@ -185,8 +180,19 @@ mod tests {
         ])
         .expect("parse");
         assert_eq!(params["name"], "alpha");
-        assert_eq!(params["count"], 3);
-        assert_eq!(params["worktree"], true);
+        assert_eq!(params["count"], "3");
+        assert_eq!(params["worktree"], "true");
+    }
+
+    /// A name that happens to look like a number is still a name. Coercing it
+    /// made `ws.create name=2026` fail as if no name had been given, and shell
+    /// quoting could not work around it.
+    #[test]
+    fn a_numeric_looking_value_survives_as_text() {
+        let params = parse_params(&["name=2026".to_string(), "description=false".to_string()])
+            .expect("parse");
+        assert_eq!(params["name"], "2026");
+        assert_eq!(params["description"], "false");
     }
 
     /// A value containing `=` must survive: branch names and paths routinely do.
