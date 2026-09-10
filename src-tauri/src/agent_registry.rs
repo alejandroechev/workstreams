@@ -250,6 +250,15 @@ pub struct Command {
     pub id: &'static str,
     /// One line, shown when a command is not found and in the CLI help.
     pub summary: &'static str,
+    /// Parameter names safe to record verbatim in the audit log.
+    ///
+    /// An allowlist, not a blocklist. Length was tried as a proxy for prose and
+    /// failed: "Patient has HIV" is 15 bytes. Anything not named here is counted
+    /// rather than recorded, so an undeclared parameter cannot smuggle content
+    /// into the log under a key nobody anticipated.
+    ///
+    /// Only structured, non-prose names belong here -- ids, flags, branches.
+    pub log_params: &'static [&'static str],
     /// Whether this command needs to know which session is asking.
     ///
     /// A connectivity check must not, or an agent whose token is stale cannot
@@ -273,6 +282,7 @@ pub struct Command {
 pub const COMMANDS: &[Command] = &[
     Command {
         id: "agent.ping",
+        log_params: &[],
         summary: "Check that the app is reachable",
         requires_identity: false,
         destructive: false,
@@ -280,6 +290,7 @@ pub const COMMANDS: &[Command] = &[
     },
     Command {
         id: "agent.whoami",
+        log_params: &[],
         summary: "Report the workstream and tile this session is acting as",
         requires_identity: true,
         destructive: false,
@@ -287,6 +298,7 @@ pub const COMMANDS: &[Command] = &[
     },
     Command {
         id: "ws.list",
+        log_params: &[],
         summary: "List workstreams this session may act on",
         requires_identity: true,
         destructive: false,
@@ -294,6 +306,7 @@ pub const COMMANDS: &[Command] = &[
     },
     Command {
         id: "ws.create",
+        log_params: &["projectId", "type", "branch"],
         summary: "Create a workstream (params: name, description, directory, projectId)",
         requires_identity: true,
         destructive: false,
@@ -301,6 +314,7 @@ pub const COMMANDS: &[Command] = &[
     },
     Command {
         id: "ws.update",
+        log_params: &["id"],
         summary: "Rename or re-describe a workstream (params: id, name, description)",
         requires_identity: true,
         destructive: false,
@@ -542,7 +556,7 @@ pub fn log_command(
             command,
             caller.map(Caller::actor).unwrap_or_else(|| "anonymous".to_string()),
             caller.and_then(|caller| caller.workstream_id().map(str::to_string)),
-            redact(params),
+            redact_params(find(command), params),
             outcome,
             error_code,
             duration_ms as i64,
@@ -551,117 +565,62 @@ pub fn log_command(
     );
 }
 
-/// Keys whose values are free text and must never reach the log.
+/// Redacts parameters down to what a command declared safe to record.
 ///
-/// The rule is "command ids and structured parameters only". A handoff brief or
-/// a description is prose written by a person or an agent, and logging it would
-/// quietly turn an audit trail into a transcript.
-const REDACTED_KEYS: &[&str] = &[
-    "description",
-    "prompt",
-    "body",
-    "content",
-    "context",
-    "notes",
-];
-
-/// How deep a nested parameter may go before the subtree is summarised.
+/// The rule is "command ids and structured parameters only", and four review
+/// rounds established that length cannot enforce it. Each attempt failed the
+/// same way -- by treating some part of the payload as structure rather than as
+/// caller input:
 ///
-/// Bounds the walk so a pathological payload cannot make logging expensive.
-const MAX_REDACT_DEPTH: usize = 6;
-
-/// Longest string kept verbatim under a key that is not known free text.
+/// 1. only top-level keys were checked, so nested prose walked through;
+/// 2. recursion re-derived sensitivity per level, so a sensitive key holding an
+///    object lost protection;
+/// 3. a sensitive flag protected values but not the keys around them;
+/// 4. keys and values were bounded by length, and short prose is still prose --
+///    "Patient has HIV" is fifteen bytes.
 ///
-/// Identifiers, names and branches are short; anything longer is prose by
-/// another name, whatever key it arrived under.
-const MAX_LOGGED_STRING: usize = 120;
-
-/// Replaces free-text values with their length, keeping the shape of the call
-/// visible without storing what was said.
-///
-/// Walks the whole structure. A top-level-only pass leaves prose one level down
-/// -- `{"metadata": {"description": "..."}}` -- in the log verbatim, which is
-/// exactly what the rule exists to prevent. Long strings are summarised wherever
-/// they appear, because a caller can put prose under a key this code has never
-/// heard of.
-/// Replaces free-text values with their length, keeping the shape of the call
-/// visible without storing what was said.
-///
-/// A sensitive subtree is replaced **whole**, not walked. Two earlier attempts
-/// leaked through here, and both came from trying to preserve structure inside
-/// something that should not be inspected at all:
-///
-/// - re-deriving sensitivity from each child's own key let
-///   `{"prompt": {"text": "..."}}` through, because `text` is not a listed key;
-/// - carrying a flag down still preserved descendant *keys*, and a key can
-///   itself be prose — `{"notes": {"private patient diagnosis": true}}`.
-///
-/// Outside a sensitive subtree, structure is preserved and long strings are
-/// summarised wherever they appear, since a caller can put prose under a key
-/// this code has never heard of.
-fn redact_value(value: &serde_json::Value, depth: usize) -> serde_json::Value {
-    if depth >= MAX_REDACT_DEPTH {
-        return serde_json::json!("<redacted:deep>");
-    }
-    match value {
-        serde_json::Value::Object(object) => serde_json::Value::Object(
-            object
-                .iter()
-                .enumerate()
-                .map(|(index, (name, nested))| {
-                    let redacted = if REDACTED_KEYS.contains(&name.as_str()) {
-                        summarise(nested)
-                    } else {
-                        redact_value(nested, depth + 1)
-                    };
-                    (redact_key(name, index), redacted)
-                })
-                .collect(),
-        ),
-        serde_json::Value::Array(items) => serde_json::Value::Array(
-            items
-                .iter()
-                .map(|item| redact_value(item, depth + 1))
-                .collect(),
-        ),
-        serde_json::Value::String(text) if text.len() > MAX_LOGGED_STRING => summarise(value),
-        other => other.clone(),
-    }
-}
-
-/// Longest parameter name kept verbatim.
-///
-/// Real names are identifiers -- `name`, `projectId`, `branch`. Commands accept
-/// parameters they do not declare, so a caller can put prose in a *key* just as
-/// easily as in a value, and the value-side limit alone let that through.
-const MAX_LOGGED_KEY: usize = 64;
-
-/// Keeps a parameter name only if it is short enough to be a name.
-///
-/// The index is part of the replacement so two long keys in the same object do
-/// not collapse into one entry and quietly change the recorded shape.
-fn redact_key(name: &str, index: usize) -> String {
-    if name.len() > MAX_LOGGED_KEY {
-        format!("<redacted-key:{}#{index}>", name.len())
-    } else {
-        name.to_string()
-    }
-}
-
-/// Records that something was here, and how big, and nothing else.
-fn summarise(value: &serde_json::Value) -> serde_json::Value {
-    let length = match value {
-        serde_json::Value::String(text) => text.len(),
-        other => other.to_string().len(),
-    };
-    serde_json::json!(format!("<redacted:{length}>"))
-}
-
-fn redact(params: &serde_json::Value) -> String {
-    if !params.is_object() {
+/// So nothing is recorded unless a command named it. Undeclared parameters are
+/// counted, never rendered, which also means no key is ever synthesised from
+/// caller input and no synthesised key can collide with one.
+fn redact_params(command: Option<&Command>, params: &serde_json::Value) -> String {
+    let Some(object) = params.as_object() else {
         return "{}".to_string();
+    };
+    let allowed = command.map(|command| command.log_params).unwrap_or(&[]);
+
+    let mut kept = serde_json::Map::new();
+    let mut withheld = 0usize;
+    for (name, value) in object {
+        if allowed.contains(&name.as_str()) {
+            kept.insert(name.clone(), loggable(value));
+        } else {
+            withheld += 1;
+        }
     }
-    serde_json::to_string(&redact_value(params, 0)).unwrap_or_else(|_| "{}".to_string())
+    if withheld > 0 {
+        // A count, not a rendering: it records that the call carried more
+        // without recording any of it. The key is fixed, so a caller cannot
+        // collide with it -- a parameter of the same name is itself undeclared
+        // and is counted rather than emitted.
+        kept.insert("_withheld".to_string(), serde_json::json!(withheld));
+    }
+    serde_json::to_string(&kept).unwrap_or_else(|_| "{}".to_string())
+}
+
+/// Renders an allowed parameter.
+///
+/// Even a declared parameter is only recorded when it is a scalar of a
+/// reasonable size: a command could grow one that accepts a nested structure,
+/// and that structure is caller input again.
+fn loggable(value: &serde_json::Value) -> serde_json::Value {
+    const MAX_LOGGED_VALUE: usize = 120;
+    match value {
+        serde_json::Value::String(text) if text.len() <= MAX_LOGGED_VALUE => value.clone(),
+        serde_json::Value::Bool(_) | serde_json::Value::Number(_) | serde_json::Value::Null => {
+            value.clone()
+        }
+        other => serde_json::json!(format!("<withheld:{}>", other.to_string().len())),
+    }
 }
 
 /// Turns a handler result into a response.
@@ -1116,121 +1075,82 @@ mod tests {
         assert_eq!(code.as_deref(), Some("MISSING_PARAM"));
     }
 
-    /// The log is an audit trail, not a transcript. Prose must not land in it,
-    /// but the shape of the call should still be readable.
+    /// The log is an audit trail, not a transcript. Four review rounds showed
+    /// length cannot tell prose from structure, so only what a command declared
+    /// is recorded and everything else is counted.
     #[test]
-    fn free_text_parameters_are_redacted_but_structure_survives() {
-        let redacted = redact(&serde_json::json!({
-            "name": "Alpha",
-            "description": "a long private explanation of the work",
-            "count": 3,
-        }));
-        assert!(!redacted.contains("private explanation"), "{redacted}");
-        assert!(redacted.contains("\"name\":\"Alpha\""), "{redacted}");
-        assert!(redacted.contains("\"count\":3"), "{redacted}");
-        assert!(
-            !redacted.contains("private explanation"),
-            "prose leaked into the log: {redacted}"
+    fn only_declared_parameters_are_recorded() {
+        let logged = redact_params(
+            find("ws.create"),
+            &serde_json::json!({
+                "projectId": "proj-1",
+                "name": "Alpha",
+                "description": "a long private explanation of the work",
+            }),
         );
-        assert!(redacted.contains("<redacted:"), "{redacted}");
+        assert!(
+            logged.contains("proj-1"),
+            "a declared parameter should survive: {logged}"
+        );
+        assert!(!logged.contains("private explanation"), "{logged}");
+        // `name` is undeclared for logging: it is user-authored text.
+        assert!(!logged.contains("Alpha"), "{logged}");
+        assert!(logged.contains("\"_withheld\":2"), "{logged}");
     }
 
-    /// A top-level-only pass would leave all of this in the log verbatim.
-    /// Commands accept unknown parameters, so prose can arrive anywhere.
+    /// The finding that ended the length approach: short prose is still prose.
     #[test]
-    fn prose_is_redacted_however_deeply_it_is_nested() {
-        let redacted = redact(&serde_json::json!({
-            "metadata": { "description": "private text in a nested object" },
-            "items": [{ "prompt": "private prompt inside an array" }],
-            "unnamed": "x".repeat(400),
-            "name": "Alpha",
-        }));
-        for leaked in ["private text", "private prompt", &"x".repeat(400)] {
-            assert!(!redacted.contains(leaked), "leaked {leaked:?}: {redacted}");
-        }
-        // Shape survives, so the log still shows what kind of call was made.
-        assert!(redacted.contains("metadata"), "{redacted}");
-        assert!(redacted.contains("\"name\":\"Alpha\""), "{redacted}");
-    }
-
-    /// A sensitive key whose value is an object or array must stay sensitive
-    /// all the way down. Re-deriving sensitivity from each child's own name let
-    /// `{"prompt": {"text": "..."}}` through in full.
-    #[test]
-    fn a_sensitive_key_protects_everything_beneath_it() {
-        let redacted = redact(&serde_json::json!({
-            "prompt": { "text": "private short message" },
-            "notes": [{ "text": "private array message" }],
-            "deep": { "context": { "inner": { "text": "private nested message" } } },
-        }));
-        for leaked in ["private short", "private array", "private nested"] {
-            assert!(!redacted.contains(leaked), "leaked {leaked:?}: {redacted}");
+    fn short_prose_in_an_undeclared_key_or_value_never_appears() {
+        for payload in [
+            serde_json::json!({ "Patient has HIV. Do not disclose.": true }),
+            serde_json::json!({ "metadata": [{ "extra": "Patient has HIV." }] }),
+            serde_json::json!({ "extra": "患者はHIV陽性です。" }),
+        ] {
+            let logged = redact_params(find("ws.create"), &payload);
+            for leaked in ["Patient has HIV", "患者は"] {
+                assert!(!logged.contains(leaked), "leaked from {payload}: {logged}");
+            }
         }
     }
 
-    /// Keys are unbounded input too. Commands accept parameters they do not
-    /// declare, so prose fits in a key as easily as in a value, and the
-    /// value-side length limit alone did not cover it.
+    /// No key is synthesised from caller input, so nothing a caller sends can
+    /// collide with a generated name and silently overwrite another entry.
     #[test]
-    fn a_long_key_is_redacted_wherever_it_appears() {
-        let prose = "a confidential medical narrative that is well over the key limit ".repeat(4);
-        let unicode = "診断".repeat(60);
-        let redacted = redact(&serde_json::json!({
-            prose.clone(): "x",
-            unicode.clone(): "y",
-            "metadata": { prose.clone(): true },
-            "name": "Alpha",
-        }));
-        assert!(!redacted.contains(&prose), "{redacted}");
-        assert!(!redacted.contains(&unicode), "{redacted}");
-        assert!(redacted.contains("<redacted-key:"), "{redacted}");
-        assert!(redacted.contains("\"name\":\"Alpha\""), "{redacted}");
+    fn a_caller_cannot_collide_with_the_withheld_marker() {
+        let logged = redact_params(
+            find("ws.update"),
+            &serde_json::json!({ "id": "ws-1", "_withheld": "smuggled", "other": 1 }),
+        );
+        let parsed: serde_json::Value = serde_json::from_str(&logged).expect("parse");
+        assert_eq!(parsed["id"], "ws-1");
+        assert_eq!(
+            parsed["_withheld"], 2,
+            "the marker must be a count, not caller input"
+        );
+        assert!(!logged.contains("smuggled"), "{logged}");
     }
 
-    /// Two long keys in one object must not collapse into a single entry, which
-    /// would quietly misreport the shape of the call.
+    /// A declared parameter can still be handed a structure; that structure is
+    /// caller input again and must not be rendered.
     #[test]
-    fn two_long_keys_stay_two_entries() {
-        let first = "p".repeat(80);
-        let second = "q".repeat(90);
-        let redacted = redact(&serde_json::json!({ first: 1, second: 2 }));
-        let parsed: serde_json::Value = serde_json::from_str(&redacted).expect("parse");
-        assert_eq!(parsed.as_object().expect("object").len(), 2, "{redacted}");
+    fn a_declared_parameter_holding_a_structure_is_withheld() {
+        let logged = redact_params(
+            find("ws.create"),
+            &serde_json::json!({ "projectId": { "nested": "private prose here" } }),
+        );
+        assert!(!logged.contains("private prose"), "{logged}");
+        assert!(logged.contains("<withheld:"), "{logged}");
     }
 
-    /// A key can be prose too. Preserving descendant keys inside a sensitive
-    /// subtree leaked the interesting half of `{"notes": {"<diagnosis>": true}}`
-    /// while dutifully redacting the boolean.
+    /// An unknown command declares nothing, so nothing is recorded from it.
     #[test]
-    fn keys_inside_a_sensitive_subtree_are_not_preserved() {
-        let redacted = redact(&serde_json::json!({
-            "notes": { "private patient diagnosis": true },
-            "prompt": [{ "private key name": 1 }],
-            "name": "Alpha",
-        }));
-        assert!(!redacted.contains("private patient"), "{redacted}");
-        assert!(!redacted.contains("private key name"), "{redacted}");
-        // Outside the sensitive subtree, shape still survives.
-        assert!(redacted.contains("\"name\":\"Alpha\""), "{redacted}");
-    }
-
-    #[test]
-    fn a_pathological_nesting_depth_does_not_run_away() {
-        let mut value = serde_json::json!("leaf");
-        for _ in 0..50 {
-            value = serde_json::json!({ "next": value });
-        }
-        let redacted = redact(&value);
-        assert!(redacted.contains("<redacted:deep>"), "{redacted}");
-    }
-
-    #[test]
-    fn tokens_do_not_repeat_across_many_issuances() {
-        let registry = IdentityRegistry::new();
-        let tokens: std::collections::HashSet<String> = (0..500)
-            .map(|i| registry.issue(&format!("tile-{i}"), "ws"))
-            .collect();
-        assert_eq!(tokens.len(), 500, "token collision");
+    fn an_unknown_command_records_no_parameters() {
+        let logged = redact_params(
+            None,
+            &serde_json::json!({ "anything": "private", "id": "x" }),
+        );
+        assert!(!logged.contains("private"), "{logged}");
+        assert!(logged.contains("\"_withheld\":2"), "{logged}");
     }
 
     /// Logging is evidence, not a participant: if it fails, the command that

@@ -478,8 +478,9 @@ a workstream it did not create. Scope enforcement is mechanical; permission to
 destroy within that scope is social.
 
 Everything is local — a Unix socket in `$TMPDIR`, owner-only, no MCP server and
-no network. Every command is recorded in a local `command_log` by name and
-structured parameters, never prose. See
+no network. Every command is recorded in a local `command_log`. Only parameters
+a command explicitly declares loggable are stored; anything else is counted, not
+recorded, so prose cannot reach the log under a parameter nobody anticipated. See
 [ADR 026](adrs/026-agent-driven-workstreams.md).
 
 Not yet implemented: handing a task off to a freshly provisioned workstream with

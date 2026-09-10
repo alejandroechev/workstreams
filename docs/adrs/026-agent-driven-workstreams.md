@@ -150,9 +150,15 @@ command typed by hand inside a session tile records as that session's agent,
 because the app genuinely cannot tell and a confident lie in an audit trail is
 worse than a coarse truth.
 
-Free-text parameters are redacted to their length. The rule is command ids and
-structured parameters only — a description or a handoff brief is prose, and
-storing it would quietly turn an audit trail into a transcript.
+**Only parameters a command declares loggable are recorded**; everything else is
+counted, not rendered. This is an allowlist because four rounds of review
+established that length cannot separate prose from structure — "Patient has HIV"
+is fifteen bytes. Each earlier attempt failed the same way, by treating some part
+of the payload as structure rather than as caller input: top-level keys only,
+then per-level sensitivity, then values-but-not-keys, then length limits on both.
+
+The allowlist also removes synthesised keys entirely, so nothing a caller sends
+can collide with a generated name and silently overwrite another entry.
 
 ## Consequences
 
