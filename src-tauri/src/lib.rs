@@ -1,3 +1,5 @@
+mod agent_cli;
+pub mod agent_socket;
 mod code_review;
 mod db;
 mod devlog;
@@ -26,6 +28,10 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 pub fn run_loop_cli(args: Vec<String>) -> Result<(), String> {
     loop_cli::run(args)
+}
+
+pub fn run_agent_cli(args: Vec<String>) -> Result<(), String> {
+    agent_cli::run(args)
 }
 
 // ── Types ──────────────────────────────────────────────────────────────
@@ -99,6 +105,9 @@ struct AppState {
     /// `<session>/files/features/` + the session DB every 1s and emits
     /// `session-features-changed` when either advances. See ADR forthcoming.
     features_watchers: Arc<Mutex<std::collections::HashMap<String, FeaturesWatcherHandle>>>,
+    /// Socket that lets an agent drive this instance. Held so the listener lives
+    /// as long as the app and unlinks its path on shutdown.
+    agent_socket: Mutex<Option<agent_socket::AgentSocketServer>>,
 }
 
 struct FeaturesWatcherHandle {
@@ -852,6 +861,16 @@ fn workstream_env_from_db(
     let mut env = std::collections::HashMap::new();
     env.insert("WORKSTREAMS_ACTIVE_WS".to_string(), ws_id);
     env.insert("WORKSTREAMS_ACTIVE_TILE".to_string(), tile_id.to_string());
+    // Points the agent CLI at *this* instance. Injecting per session rather than
+    // relying on a well-known path is what keeps two running apps from stealing
+    // each other's sessions, and it means a session started outside Workstreams
+    // simply has no way in.
+    env.insert(
+        agent_socket::SOCKET_ENV_VAR.to_string(),
+        agent_socket::resolve_socket_path()
+            .to_string_lossy()
+            .into_owned(),
+    );
     Some(env)
 }
 
@@ -5124,6 +5143,7 @@ pub fn run() {
         fs_watcher,
         search_epoch: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         features_watchers: Arc::new(Mutex::new(std::collections::HashMap::new())),
+        agent_socket: Mutex::new(None),
     };
 
     tauri::Builder::default()
@@ -5138,6 +5158,19 @@ pub fn run() {
                 let conn = state.db.lock().unwrap();
                 if let Err(error) = loops::reconcile_interrupted_runs(&conn) {
                     eprintln!("[loop] Startup reconciliation failed: {error}");
+                }
+            }
+            // Open the agent channel. A failure here must not stop the app:
+            // everything else still works, the agent surface is simply absent,
+            // and the reason is on stderr rather than in a crash.
+            {
+                let state = app.state::<AppState>();
+                let path = agent_socket::resolve_socket_path();
+                match agent_socket::AgentSocketServer::start(path, agent_socket::dispatch) {
+                    Ok(server) => {
+                        *state.agent_socket.lock().unwrap() = Some(server);
+                    }
+                    Err(error) => eprintln!("[agent] Socket unavailable: {error}"),
                 }
             }
             // Start the session stats poller background thread
@@ -6462,6 +6495,28 @@ Body here.
             env.get("WORKSTREAMS_ACTIVE_TILE").map(String::as_str),
             Some("tile-1")
         );
+    }
+
+    #[test]
+    fn workstream_env_carries_the_socket_of_the_instance_that_spawned_the_session() {
+        let conn = fresh_mem_db();
+        setup_tiles_table(&conn);
+        let env = workstream_env_from_db(&conn, "tile-1").expect("env should be Some");
+        let socket = env
+            .get(crate::agent_socket::SOCKET_ENV_VAR)
+            .map(String::as_str)
+            .expect("the socket path must be injected");
+        // Per-session injection is what makes multi-instance work: a session
+        // reaches the app that spawned it, not whichever instance happens to
+        // hold a well-known path. A session spawned outside Workstreams gets no
+        // variable and therefore no access, which is the behaviour we want.
+        assert_eq!(
+            socket,
+            crate::agent_socket::resolve_socket_path().to_string_lossy()
+        );
+        assert!(crate::agent_socket::fits_sun_path(std::path::Path::new(
+            socket
+        )));
     }
 
     #[test]
