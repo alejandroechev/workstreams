@@ -441,6 +441,51 @@ node scripts/trace-replay.mjs <trace.json>
 
 See [ADR 018](adrs/018-code-walkthrough-debugger.md).
 
+## Agents driving the app
+
+A Copilot session spawned by Workstreams can act on the app that hosts it. The
+app injects three variables into every session: `WORKSTREAMS_ACTIVE_WS`,
+`WORKSTREAMS_ACTIVE_TILE`, and `WORKSTREAMS_SOCKET`.
+
+```sh
+workstreams agent ping                       # is the app reachable?
+workstreams agent call agent.whoami          # which workstream am I?
+workstreams agent call ws.list               # what may I act on?
+workstreams agent call ws.create name="Refactor the parser"
+workstreams agent call ws.update id=ws-a1b2 name="Phase 2"
+```
+
+Arguments are `key=value`, not JSON on the command line — shell quoting is a
+real failure mode for an agent composing a call. stdout is always JSON;
+human-readable diagnostics go to stderr; the exit code distinguishes a wrong
+command (`2`) from an app that is not running (`3`) from a process that is not
+inside Workstreams at all (`4`).
+
+**Writes go through the app, not the database.** `ws.create` calls the same code
+the UI calls, so an agent-made workstream gets the same default layout as a
+person's rather than being a bare row.
+
+**Identity is issued, not claimed.** The socket is shared by every session of one
+app instance, so the app mints a token per session and keeps the mapping. A
+request presents that token; it cannot name an identity. An agent may act on its
+own workstream and ones it created — the second clause is what makes handoff
+possible.
+
+**Destructive commands are discouraged, not prevented.** There is no confirmation
+dialog by design: the skill at `~/.copilot/skills/workstreams/` tells the agent
+to ask the human before deleting a workstream, removing a worktree, or writing to
+a workstream it did not create. Scope enforcement is mechanical; permission to
+destroy within that scope is social.
+
+Everything is local — a Unix socket in `$TMPDIR`, owner-only, no MCP server and
+no network. Every command is recorded in a local `command_log` by name and
+structured parameters, never prose. See
+[ADR 026](adrs/026-agent-driven-workstreams.md).
+
+Not yet implemented: handing a task off to a freshly provisioned workstream with
+a primed session, and Windows support (named pipes need their own answer for the
+path and permission model).
+
 ## Workstream lifecycle
 
 **Switch a workstream to another repo** with the same **Change worktree…**

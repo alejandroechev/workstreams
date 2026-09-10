@@ -38,6 +38,8 @@ whatever replaced it — the history is the point.
 | [023](023-human-loop-approval.md) | Human approval as a first-class loop sensor | Accepted |
 | [024](024-repo-explorer-tile.md) | Repo Explorer tile — multi-tab browsing, search, and font resize | Accepted |
 | [025](025-orchestrator-replan-on-attention.md) | Re-plan a stuck task through the orchestrator before asking a human | Accepted |
+| [026](026-agent-driven-workstreams.md) | Agents drive the app through a CLI over a local socket | Accepted |
+| [026](026-agent-driven-workstreams.md) | Agents drive the app through a CLI over a local socket | Accepted |
 
 ## Writing a new ADR
 

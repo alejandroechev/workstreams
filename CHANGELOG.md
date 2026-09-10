@@ -13,6 +13,16 @@ for any release is attached to its
 
 ### Added
 
+- An agent inside a Copilot session tile can now act on the app hosting it —
+  creating and updating workstreams, and listing the ones it owns — through a
+  `workstreams agent` CLI over a local socket. Writes go through the app rather
+  than straight to the database, so a workstream an agent creates is built the
+  same way the UI builds one. An agent may act on its own workstream and ones it
+  created; destructive commands ask the human first. See
+  [ADR 026](docs/adrs/026-agent-driven-workstreams.md).
+- Every named command now lands in a local `command_log`, human and agent alike,
+  recording the command and its structured parameters — never prose.
+
 - A goal loop now asks the orchestrator to break a stuck task into smaller ones
   before stopping for a human. The failed task stays visible as *Superseded*
   with its evidence intact, and a run that can be rescued this way finishes on

@@ -57,6 +57,9 @@ instead of buried behind tabs.
 - **Task board that writes your devlog** — labels, swimlanes, subtasks and an
   append-only activity log per task, exported to your wiki as a dated markdown
   page that it commits and pushes.
+- **Agents that can drive the app** — a session can create and update its own
+  workstreams through a local CLI, so the agent does not stop at the edge of the
+  worktree. It acts only on what it owns, and asks before destroying anything.
 - **Everything persists** — workstreams, tile layouts, terminal scrollback,
   open files and per-tile view state all survive a restart.
 - **Keyboard-driven** — `Alt+<letter>` opens any tile type, `Alt+Arrows` moves

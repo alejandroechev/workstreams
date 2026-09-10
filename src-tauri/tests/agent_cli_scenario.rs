@@ -254,3 +254,118 @@ fn the_round_trip_is_fast_enough_to_sit_in_an_agent_loop() {
         "a ping took {elapsed:?}, which is too slow to sit in a loop"
     );
 }
+
+// ── Skill drift ────────────────────────────────────────────────────────────
+//
+// The skill lives in ~/.copilot/skills/ and the CLI ships in this binary, so
+// they version separately and will drift. A renamed flag or a retired command
+// would leave an agent following instructions that no longer work, with no
+// signal until it failed in the field.
+
+/// Every command the skill names must still exist.
+#[test]
+fn the_skill_only_documents_commands_that_exist() {
+    let Some(skill) = read_skill() else {
+        eprintln!("skill not installed; skipping drift check");
+        return;
+    };
+
+    let documented: std::collections::BTreeSet<String> = skill
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix("workstreams agent call "))
+        .filter_map(|rest| rest.split_whitespace().next())
+        .filter(|name| name.contains('.'))
+        .map(str::to_string)
+        .collect();
+    assert!(
+        !documented.is_empty(),
+        "the drift check found no examples to verify, which means it is not checking anything"
+    );
+
+    for name in &documented {
+        assert!(
+            workstreams_lib::agent_registry::find(name).is_some(),
+            "the skill documents `{name}`, which the CLI no longer has"
+        );
+    }
+}
+
+/// Every error code the skill teaches must be one the code can actually
+/// produce, or an agent is being told to expect something it will never see.
+#[test]
+fn the_skill_only_documents_error_codes_that_are_reachable() {
+    let Some(skill) = read_skill() else { return };
+
+    let known = [
+        "APP_NOT_RUNNING",
+        "NOT_IN_WORKSTREAMS",
+        "STALE_IDENTITY",
+        "NO_IDENTITY",
+        "OUT_OF_SCOPE",
+        "NO_SUCH_WORKSTREAM",
+        "MISSING_PARAM",
+        "UNKNOWN_COMMAND",
+        "NOTHING_TO_UPDATE",
+        "CREATE_FAILED",
+        "DB_ERROR",
+        "BAD_REQUEST",
+        "NO_REPLY",
+        "TIMEOUT",
+        "SEND_FAILED",
+        "READ_FAILED",
+        "BAD_REPLY",
+        "APP_BUSY",
+        "ENCODE_FAILED",
+    ];
+    // Environment variables share the SCREAMING_SNAKE shape and are not codes.
+    let not_codes = [
+        SOCKET_ENV_VAR,
+        TOKEN_ENV_VAR,
+        "WORKSTREAMS_ACTIVE_WS",
+        "WORKSTREAMS_ACTIVE_TILE",
+    ];
+    for token in skill.split(|c: char| !(c.is_ascii_uppercase() || c == '_')) {
+        if not_codes.contains(&token) {
+            continue;
+        }
+        if token.len() > 5 && token.contains('_') && token.to_uppercase() == token {
+            assert!(
+                known.contains(&token),
+                "the skill mentions error code `{token}`, which nothing produces"
+            );
+        }
+    }
+}
+
+/// The destructive-command rule has no mechanical enforcement by decision, so
+/// the skill is the only place it lives. Losing it would silently remove the
+/// boundary.
+#[test]
+fn the_skill_still_carries_the_destructive_command_rule() {
+    let Some(skill) = read_skill() else { return };
+    let lowered = skill.to_lowercase();
+    assert!(
+        lowered.contains("ask the human") || lowered.contains("ask the user"),
+        "the skill must tell the agent to ask before destroying anything"
+    );
+    assert!(
+        lowered.contains("remove a worktree") && lowered.contains("delete a workstream"),
+        "the skill must name which actions need permission"
+    );
+}
+
+/// The skill must gate on the variable that actually exists.
+#[test]
+fn the_skill_gates_on_the_real_environment_variable() {
+    let Some(skill) = read_skill() else { return };
+    assert!(
+        skill.contains(SOCKET_ENV_VAR),
+        "the skill's 'are you inside Workstreams' check must use {SOCKET_ENV_VAR}"
+    );
+}
+
+fn read_skill() -> Option<String> {
+    let path = std::path::PathBuf::from(std::env::var("HOME").ok()?)
+        .join(".copilot/skills/workstreams/SKILL.md");
+    std::fs::read_to_string(path).ok()
+}

@@ -37,13 +37,16 @@ graph TB
             CodeTraceRS["code_traces index<br/>list/get/delete/index + staleness"]
             TasksRS["tasks.rs<br/>tasks / subtasks / labels / task_events<br/>ISO-8601 timestamps, append-only events"]
             DevlogRS["devlog.rs<br/>write + commit + push<br/>refuses to clobber hand-written pages"]
+            AgentSocketRS["agent_socket.rs<br/>Unix socket in $TMPDIR, 0600<br/>newline-JSON frames<br/>connect-then-unlink stale reclaim"]
+            AgentRegistryRS["agent_registry.rs<br/>named commands + app-issued tokens<br/>scope via created_by_session<br/>command_log (actor = what app can prove)"]
+            AgentCliRS["agent_cli.rs<br/>workstreams agent ...<br/>JSON stdout / human stderr / exit codes"]
             DbRS["db.rs<br/>SQLite schema + WAL"]
             FileSystemProvider["FileSystemProvider trait<br/>OS / InMemory impls"]
         end
     end
 
     subgraph Storage["Persistence"]
-        AppDB["workstreams.db<br/>(SQLite — workstreams, tiles, layouts, scrollback)"]
+        AppDB["workstreams.db<br/>(SQLite — workstreams, tiles, layouts, scrollback<br/>+ command_log audit/telemetry)"]
         LoopDB["workstreams.db loop ledger<br/>specs / runs / tasks / verifications<br/>evaluations / human approvals / events"]
         LoopYAML["bound session-state/files/loops/*.loop.yaml<br/>loop definition authority"]
         CopilotDB["~/.copilot/session-store.db<br/>(read-only enrichment)"]
@@ -130,6 +133,12 @@ graph TB
     CodeReview -- "manual Sync: list_review_comments" --> LibRS
     InlineComments -- "invoke: list/add/reply/update/<br/>set-status/delete_session_file_comment" --> LibRS
     Agent["Copilot agent (built-in sql tool)"] -- "SELECT/INSERT/UPDATE review_comments + file_comments<br/>(code-review / file-comments skills)" --> CopilotSessionDB
+    Agent -- "workstreams agent call ws.create ...<br/>(workstreams skill, no MCP)" --> AgentCliRS
+    AgentCliRS -- "newline-JSON + app-issued token" --> AgentSocketRS
+    AgentSocketRS --> AgentRegistryRS
+    AgentRegistryRS -- "reuses the UI's own command core" --> LibRS
+    AgentRegistryRS -- "command_log" --> AppDB
+    AgentRegistryRS -- "state-changed event" --> Frontend
     LibRS -- "emit: tile-created (create_tile)" --> App
     App -- "listen: tile-created<br/>route by tile.workstream_id" --> TileGrid
     Sidebar -- "invoke: create_worktree / remove_worktree<br/>(fire-and-forget, background thread)" --> LibRS
