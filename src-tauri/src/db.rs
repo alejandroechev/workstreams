@@ -249,6 +249,26 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
             created_at TEXT NOT NULL
         );
 
+        -- Every named command that ran, whoever ran it. One table, because the
+        -- interesting question -- do agents drive the app differently from
+        -- people? -- is unanswerable if the two are recorded separately.
+        --
+        -- Never stores free text: command ids and structured parameters only,
+        -- no prompts, file contents or terminal output.
+        CREATE TABLE IF NOT EXISTS command_log (
+            id TEXT PRIMARY KEY,
+            command TEXT NOT NULL,
+            actor TEXT NOT NULL,
+            workstream_id TEXT,
+            params_json TEXT NOT NULL DEFAULT '{}',
+            outcome TEXT NOT NULL,
+            error_code TEXT,
+            duration_ms INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS command_log_created_idx ON command_log (created_at);
+        CREATE INDEX IF NOT EXISTS command_log_command_idx ON command_log (command);
         CREATE INDEX IF NOT EXISTS task_events_task_idx ON task_events (task_id);
         CREATE INDEX IF NOT EXISTS task_events_date_idx ON task_events (created_at);
         CREATE INDEX IF NOT EXISTS tasks_completed_idx ON tasks (completed_at);

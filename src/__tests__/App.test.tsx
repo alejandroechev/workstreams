@@ -1,34 +1,71 @@
 import React from "react";
 import "@testing-library/jest-dom/vitest";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "../App";
 import { BackendProvider } from "../backend/context";
 import type { Backend } from "../backend/types";
-import type { Project, Tile, Workstream, WorkstreamLayout } from "../domain/types";
+import type {
+  Project,
+  Tile,
+  Workstream,
+  WorkstreamLayout,
+} from "../domain/types";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 const mocks = vi.hoisted(() => {
-  let closeHandler: ((event: { preventDefault: () => void }) => void | Promise<void>) | null = null;
+  let closeHandler:
+    ((event: { preventDefault: () => void }) => void | Promise<void>) | null =
+    null;
   let tileCreatedHandler: ((event: { payload: unknown }) => void) | null = null;
   const unlisten = vi.fn();
   const destroy = vi.fn();
-  const onCloseRequested = vi.fn(async (handler: (event: { preventDefault: () => void }) => void | Promise<void>) => {
-    closeHandler = handler;
-    return unlisten;
-  });
-  const eventListen = vi.fn(async (eventName: string, handler: (event: { payload: unknown }) => void) => {
-    if (eventName === "tile-created") tileCreatedHandler = handler;
-    return () => { if (eventName === "tile-created") tileCreatedHandler = null; };
-  });
+  const onCloseRequested = vi.fn(
+    async (
+      handler: (event: { preventDefault: () => void }) => void | Promise<void>,
+    ) => {
+      closeHandler = handler;
+      return unlisten;
+    },
+  );
+  let stateChangedHandler: ((event: { payload: unknown }) => void) | null =
+    null;
+  const eventListen = vi.fn(
+    async (
+      eventName: string,
+      handler: (event: { payload: unknown }) => void,
+    ) => {
+      if (eventName === "tile-created") tileCreatedHandler = handler;
+      if (eventName === "state-changed") stateChangedHandler = handler;
+      return () => {
+        if (eventName === "tile-created") tileCreatedHandler = null;
+      };
+    },
+  );
 
   return {
     invoke: vi.fn(async (..._args: unknown[]) => null as unknown),
     listAll: vi.fn<() => Array<{ path: string; dirty: boolean }>>(() => []),
     getCloseHandler: () => closeHandler,
-    resetCloseHandler: () => { closeHandler = null; },
-    emitTileCreated: (tile: unknown) => { tileCreatedHandler?.({ payload: tile }); },
-    resetTileCreatedHandler: () => { tileCreatedHandler = null; },
+    resetCloseHandler: () => {
+      closeHandler = null;
+    },
+    emitTileCreated: (tile: unknown) => {
+      tileCreatedHandler?.({ payload: tile });
+    },
+    emitStateChanged: (change: unknown) => {
+      stateChangedHandler?.({ payload: change });
+    },
+    hasStateChangedListener: () => stateChangedHandler !== null,
+    resetTileCreatedHandler: () => {
+      tileCreatedHandler = null;
+    },
     unlisten,
     destroy,
     onCloseRequested,
@@ -49,7 +86,12 @@ vi.mock("../files/FileBufferRegistry", () => ({
 }));
 
 vi.mock("../workstream/WorkstreamSidebar", () => ({
-  default: ({ workstreams, activeWsId, onSelectWorkstream, onArchiveWorkstream }: {
+  default: ({
+    workstreams,
+    activeWsId,
+    onSelectWorkstream,
+    onArchiveWorkstream,
+  }: {
     workstreams: Workstream[];
     activeWsId: string | null;
     onSelectWorkstream: (id: string) => void;
@@ -66,7 +108,10 @@ vi.mock("../workstream/WorkstreamSidebar", () => ({
           >
             {ws.name}
           </button>
-          <button data-testid={`archive-${ws.id}`} onClick={() => onArchiveWorkstream(ws.id)}>
+          <button
+            data-testid={`archive-${ws.id}`}
+            onClick={() => onArchiveWorkstream(ws.id)}
+          >
             Archive
           </button>
         </div>
@@ -74,8 +119,12 @@ vi.mock("../workstream/WorkstreamSidebar", () => ({
     </aside>
   ),
 }));
-vi.mock("../tiling/TileGrid", () => ({ default: () => <main data-testid="tile-grid" /> }));
-vi.mock("../tiling/StatusBar", () => ({ default: () => <div data-testid="status-bar" /> }));
+vi.mock("../tiling/TileGrid", () => ({
+  default: () => <main data-testid="tile-grid" />,
+}));
+vi.mock("../tiling/StatusBar", () => ({
+  default: () => <div data-testid="status-bar" />,
+}));
 vi.mock("../tiles/SessionPicker", () => ({ default: () => null }));
 vi.mock("../ui/SettingsModal", () => ({ default: () => null }));
 vi.mock("../workstream/ProjectCreateForm", () => ({ default: () => null }));
@@ -116,14 +165,19 @@ const workstreams: Workstream[] = [
 ];
 
 function createBackend(): Backend {
-  const layouts = new Map<string, WorkstreamLayout>(workstreams.map((ws) => [ws.id, {
-    workstream_id: ws.id,
-    layout_mode: "auto",
-    focused_tile_id: null,
-    fullscreen_tile_id: null,
-    tile_order_json: "[]",
-    updated_at: now,
-  }]));
+  const layouts = new Map<string, WorkstreamLayout>(
+    workstreams.map((ws) => [
+      ws.id,
+      {
+        workstream_id: ws.id,
+        layout_mode: "auto",
+        focused_tile_id: null,
+        fullscreen_tile_id: null,
+        tile_order_json: "[]",
+        updated_at: now,
+      },
+    ]),
+  );
 
   return {
     exportDevlogDay: vi.fn(),
@@ -152,7 +206,9 @@ function createBackend(): Backend {
     createTile: vi.fn(),
     deleteTile: vi.fn(),
     updateTileConfig: vi.fn(),
-    getLayout: vi.fn(async (workstreamId: string) => layouts.get(workstreamId)!),
+    getLayout: vi.fn(async (workstreamId: string) =>
+      layouts.get(workstreamId)!,
+    ),
     updateLayout: vi.fn(),
     readFile: vi.fn(),
     listDirectory: vi.fn(),
@@ -210,13 +266,20 @@ function createBackend(): Backend {
     gitShowCommit: vi.fn(),
     gitCurrentBranch: vi.fn(),
     gitListBranches: vi.fn(async () => ["main"]),
-    gitBranchTrackingInfo: vi.fn(async () => ({ ahead: 0, behind: 0, remoteHeadShort: "" })),
+    gitBranchTrackingInfo: vi.fn(async () => ({
+      ahead: 0,
+      behind: 0,
+      remoteHeadShort: "",
+    })),
     discoverCopilotConfig: vi.fn(),
     listSessionPlans: vi.fn(),
     getCurrentSessionPlan: vi.fn(),
     listSessionTodoDeps: vi.fn(),
     listSessionTodos: vi.fn(),
-    listSessionFeatures: vi.fn(async () => ({ features: [], currentPlanId: null })),
+    listSessionFeatures: vi.fn(async () => ({
+      features: [],
+      currentPlanId: null,
+    })),
     completeSessionPlan: vi.fn(),
     watchSessionFeatures: vi.fn(),
     unwatchSessionFeatures: vi.fn(),
@@ -230,7 +293,9 @@ function createBackend(): Backend {
     deleteSessionFileComment: vi.fn(),
     resolveWorkstreamSession: vi.fn().mockResolvedValue(null),
     codeReviewDiffFiles: vi.fn().mockResolvedValue([]),
-    codeReviewDiffFileSides: vi.fn().mockResolvedValue({ before: "", after: "" }),
+    codeReviewDiffFileSides: vi
+      .fn()
+      .mockResolvedValue({ before: "", after: "" }),
     createReview: vi.fn(),
     getActiveReview: vi.fn().mockResolvedValue(null),
     listReviews: vi.fn().mockResolvedValue([]),
@@ -280,28 +345,40 @@ describe("dirty file buffer close confirmations", () => {
     fireEvent.click(screen.getByText("Two"));
 
     expect(window.confirm).not.toHaveBeenCalled();
-    await waitFor(() => expect(screen.getByText("Two")).toHaveAttribute("data-active", "true"));
+    await waitFor(() =>
+      expect(screen.getByText("Two")).toHaveAttribute("data-active", "true"),
+    );
   });
 
   it("confirms and switches workstreams when dirty buffers are discarded", async () => {
-    mocks.listAll.mockReturnValue([{ path: "C:\\repo\\one\\file.ts", dirty: true }]);
+    mocks.listAll.mockReturnValue([
+      { path: "C:\\repo\\one\\file.ts", dirty: true },
+    ]);
     vi.spyOn(window, "confirm").mockReturnValue(true);
     await renderApp();
 
     fireEvent.click(screen.getByText("Two"));
 
-    expect(window.confirm).toHaveBeenCalledWith("You have unsaved changes in 1 file(s). Discard and switch workstreams?");
-    await waitFor(() => expect(screen.getByText("Two")).toHaveAttribute("data-active", "true"));
+    expect(window.confirm).toHaveBeenCalledWith(
+      "You have unsaved changes in 1 file(s). Discard and switch workstreams?",
+    );
+    await waitFor(() =>
+      expect(screen.getByText("Two")).toHaveAttribute("data-active", "true"),
+    );
   });
 
   it("blocks workstream switching when dirty buffer discard is canceled", async () => {
-    mocks.listAll.mockReturnValue([{ path: "C:\\repo\\one\\file.ts", dirty: true }]);
+    mocks.listAll.mockReturnValue([
+      { path: "C:\\repo\\one\\file.ts", dirty: true },
+    ]);
     vi.spyOn(window, "confirm").mockReturnValue(false);
     await renderApp();
 
     fireEvent.click(screen.getByText("Two"));
 
-    expect(window.confirm).toHaveBeenCalledWith("You have unsaved changes in 1 file(s). Discard and switch workstreams?");
+    expect(window.confirm).toHaveBeenCalledWith(
+      "You have unsaved changes in 1 file(s). Discard and switch workstreams?",
+    );
     expect(screen.getByText("One")).toHaveAttribute("data-active", "false");
     expect(screen.getByText("Two")).toHaveAttribute("data-active", "false");
   });
@@ -314,13 +391,17 @@ describe("dirty file buffer close confirmations", () => {
   });
 
   it("confirms before archiving a workstream when buffers are dirty", async () => {
-    mocks.listAll.mockReturnValue([{ path: "C:\\repo\\one\\file.ts", dirty: true }]);
+    mocks.listAll.mockReturnValue([
+      { path: "C:\\repo\\one\\file.ts", dirty: true },
+    ]);
     vi.spyOn(window, "confirm").mockReturnValue(false);
     const backend = await renderApp();
 
     fireEvent.click(screen.getByTestId("archive-ws-1"));
 
-    expect(window.confirm).toHaveBeenCalledWith("You have unsaved changes in 1 file(s). Discard and archive workstream?");
+    expect(window.confirm).toHaveBeenCalledWith(
+      "You have unsaved changes in 1 file(s). Discard and archive workstream?",
+    );
     expect(backend.updateWorkstream).not.toHaveBeenCalled();
   });
 
@@ -343,7 +424,11 @@ describe("dirty file buffer close confirmations", () => {
 
   it("skips the confirm-close dialog and destroys immediately when the pref is disabled", async () => {
     mocks.invoke.mockImplementation(async (cmd: unknown, args?: unknown) => {
-      if (cmd === "get_setting" && (args as { key?: string } | undefined)?.key === "app.confirm-close-disabled") {
+      if (
+        cmd === "get_setting" &&
+        (args as { key?: string } | undefined)?.key ===
+          "app.confirm-close-disabled"
+      ) {
         return "1";
       }
       return null;
@@ -378,7 +463,9 @@ describe("dirty file buffer close confirmations", () => {
   });
 
   it("prevents app quit without destroying the window when dirty buffer discard is canceled", async () => {
-    mocks.listAll.mockReturnValue([{ path: "C:\\repo\\one\\file.ts", dirty: true }]);
+    mocks.listAll.mockReturnValue([
+      { path: "C:\\repo\\one\\file.ts", dirty: true },
+    ]);
     vi.spyOn(window, "confirm").mockReturnValue(false);
     await renderApp();
     const preventDefault = vi.fn();
@@ -420,7 +507,40 @@ describe("tile-created event paths", () => {
     const backend = createBackend();
     await renderApp(backend);
 
-    expect(() => act(() => mocks.emitTileCreated(makeTile("orphan", "ws-99")))).not.toThrow();
+    expect(() =>
+      act(() => mocks.emitTileCreated(makeTile("orphan", "ws-99"))),
+    ).not.toThrow();
     expect(backend.updateLayout).not.toHaveBeenCalled();
+  });
+});
+
+describe("state-changed from an agent", () => {
+  it("reloads workstreams so an agent's write is not invisible until the next click", async () => {
+    const backend = createBackend();
+    await renderApp(backend);
+    expect(mocks.hasStateChangedListener()).toBe(true);
+
+    const before = vi.mocked(backend.listWorkstreams).mock.calls.length;
+    await act(async () => {
+      mocks.emitStateChanged({
+        entity: "workstream",
+        id: "ws-new",
+        action: "created",
+      });
+      await Promise.resolve();
+    });
+    expect(vi.mocked(backend.listWorkstreams).mock.calls.length).toBeGreaterThan(before);
+  });
+
+  it("ignores changes to entities the sidebar does not show", async () => {
+    const backend = createBackend();
+    await renderApp(backend);
+
+    const before = vi.mocked(backend.listWorkstreams).mock.calls.length;
+    await act(async () => {
+      mocks.emitStateChanged({ entity: "task", id: "t-1", action: "created" });
+      await Promise.resolve();
+    });
+    expect(vi.mocked(backend.listWorkstreams).mock.calls.length).toBe(before);
   });
 });

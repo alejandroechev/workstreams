@@ -889,6 +889,7 @@ fn update_layout(
 /// a handler is never reachable without one and can never be handed an identity
 /// through its parameters.
 fn serve_agent_request(
+    app: &AppHandle,
     db: &Arc<Mutex<Connection>>,
     identities: &agent_registry::IdentityRegistry,
     request: agent_socket::AgentRequest,
@@ -914,13 +915,32 @@ fn serve_agent_request(
             "Retry in a moment.",
         ));
     };
-    agent_registry::respond(agent_registry::dispatch(
+    let started = std::time::Instant::now();
+    let result = agent_registry::dispatch(
         &request,
         &agent_registry::CommandContext {
             db: &conn,
             caller: caller.as_ref(),
         },
-    ))
+    );
+    agent_registry::log_command(
+        &conn,
+        &request.cmd,
+        caller.as_ref(),
+        &request.params,
+        &result,
+        started.elapsed().as_millis(),
+    );
+
+    // Tell the UI something moved. Without this an agent's write stays
+    // invisible until the user happens to click something, because the app
+    // listens for one event and polls only loop summaries.
+    if let Ok(outcome) = &result {
+        if let Some(change) = &outcome.change {
+            let _ = app.emit("state-changed", change);
+        }
+    }
+    agent_registry::respond(result)
 }
 
 fn build_workstream_env(
@@ -5265,8 +5285,9 @@ pub fn run() {
                 let path = agent_socket::resolve_socket_path();
                 let db = Arc::clone(&state.db);
                 let identities = Arc::clone(&state.agent_identities);
+                let handle = app.handle().clone();
                 let server = agent_socket::AgentSocketServer::start(path.clone(), move |request| {
-                    serve_agent_request(&db, &identities, request)
+                    serve_agent_request(&handle, &db, &identities, request)
                 });
                 match server {
                     Ok(server) => {

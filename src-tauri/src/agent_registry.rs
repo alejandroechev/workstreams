@@ -207,7 +207,51 @@ impl CommandContext<'_> {
     }
 }
 
-type Handler = fn(&CommandContext, &serde_json::Value) -> Result<serde_json::Value, AgentError>;
+type Handler = fn(&CommandContext, &serde_json::Value) -> Result<CommandOutcome, AgentError>;
+
+/// What changed, so the UI can refresh without polling.
+///
+/// The app does not watch its own database — it listens for one event and polls
+/// loop summaries — so a write from outside the UI is invisible until the user
+/// happens to click something. Handlers return this and the caller turns it into
+/// a Tauri event.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct StateChange {
+    pub entity: String,
+    pub id: String,
+    pub action: String,
+}
+
+impl StateChange {
+    pub fn new(entity: &str, id: impl Into<String>, action: &str) -> Self {
+        Self {
+            entity: entity.to_string(),
+            id: id.into(),
+            action: action.to_string(),
+        }
+    }
+}
+
+/// What a handler produces: a payload, and optionally news of a change.
+#[derive(Debug)]
+pub struct CommandOutcome {
+    pub data: serde_json::Value,
+    pub change: Option<StateChange>,
+}
+
+impl CommandOutcome {
+    /// A read: nothing changed, so nothing to announce.
+    pub fn read(data: serde_json::Value) -> Self {
+        Self { data, change: None }
+    }
+
+    pub fn changed(data: serde_json::Value, change: StateChange) -> Self {
+        Self {
+            data,
+            change: Some(change),
+        }
+    }
+}
 
 /// One named thing an agent can ask the app to do.
 pub struct Command {
@@ -299,14 +343,16 @@ fn optional_str(params: &serde_json::Value, key: &str) -> Option<String> {
 fn ws_list(
     context: &CommandContext,
     _params: &serde_json::Value,
-) -> Result<serde_json::Value, AgentError> {
+) -> Result<CommandOutcome, AgentError> {
     let caller = context.caller()?;
     let Caller::Agent {
         tile_id,
         workstream_id,
     } = caller
     else {
-        return Ok(serde_json::json!({ "workstreams": [] }));
+        return Ok(CommandOutcome::read(
+            serde_json::json!({ "workstreams": [] }),
+        ));
     };
     // Only what this session may act on. Listing everything would tell an agent
     // about work it cannot touch and invite it to try.
@@ -329,13 +375,15 @@ fn ws_list(
         .map_err(db_error)?
         .collect::<Result<Vec<_>, _>>()
         .map_err(db_error)?;
-    Ok(serde_json::json!({ "workstreams": rows }))
+    Ok(CommandOutcome::read(
+        serde_json::json!({ "workstreams": rows }),
+    ))
 }
 
 fn ws_create(
     context: &CommandContext,
     params: &serde_json::Value,
-) -> Result<serde_json::Value, AgentError> {
+) -> Result<CommandOutcome, AgentError> {
     let caller = context.caller()?;
     let name = required_str(params, "name")?;
     let created_by_session = match caller {
@@ -364,17 +412,21 @@ fn ws_create(
             "Check the name and project id, then retry.",
         )
     })?;
-    Ok(serde_json::json!({
-        "id": workstream.id,
-        "name": workstream.name,
-        "status": workstream.status,
-    }))
+    let change = StateChange::new("workstream", &workstream.id, "created");
+    Ok(CommandOutcome::changed(
+        serde_json::json!({
+            "id": workstream.id,
+            "name": workstream.name,
+            "status": workstream.status,
+        }),
+        change,
+    ))
 }
 
 fn ws_update(
     context: &CommandContext,
     params: &serde_json::Value,
-) -> Result<serde_json::Value, AgentError> {
+) -> Result<CommandOutcome, AgentError> {
     let caller = context.caller()?;
     let id = required_str(params, "id")?;
     may_act_on(context.db, caller, &id)?;
@@ -399,7 +451,11 @@ fn ws_update(
             rusqlite::params![id, name, description, crate::now()],
         )
         .map_err(db_error)?;
-    Ok(serde_json::json!({ "id": id, "updated": true }))
+    let change = StateChange::new("workstream", &id, "updated");
+    Ok(CommandOutcome::changed(
+        serde_json::json!({ "id": id, "updated": true }),
+        change,
+    ))
 }
 
 fn db_error(error: rusqlite::Error) -> AgentError {
@@ -413,19 +469,21 @@ fn db_error(error: rusqlite::Error) -> AgentError {
 fn ping(
     _context: &CommandContext,
     _params: &serde_json::Value,
-) -> Result<serde_json::Value, AgentError> {
-    Ok(serde_json::json!({ "pong": true, "pid": std::process::id() }))
+) -> Result<CommandOutcome, AgentError> {
+    Ok(CommandOutcome::read(
+        serde_json::json!({ "pong": true, "pid": std::process::id() }),
+    ))
 }
 
 fn whoami(
     context: &CommandContext,
     _params: &serde_json::Value,
-) -> Result<serde_json::Value, AgentError> {
+) -> Result<CommandOutcome, AgentError> {
     let caller = context.caller()?;
-    Ok(serde_json::json!({
+    Ok(CommandOutcome::read(serde_json::json!({
         "actor": caller.actor(),
         "workstreamId": caller.workstream_id(),
-    }))
+    })))
 }
 
 pub fn find(id: &str) -> Option<&'static Command> {
@@ -436,7 +494,7 @@ pub fn find(id: &str) -> Option<&'static Command> {
 pub fn dispatch(
     request: &AgentRequest,
     context: &CommandContext,
-) -> Result<serde_json::Value, AgentError> {
+) -> Result<CommandOutcome, AgentError> {
     let Some(command) = find(&request.cmd) else {
         return Err(unknown_command(&request.cmd));
     };
@@ -467,10 +525,81 @@ pub fn unknown_command(attempted: &str) -> AgentError {
     )
 }
 
+/// Records a command in the audit log.
+///
+/// Best-effort: a logging failure must not turn a command that worked into one
+/// that reports failure. The log is evidence, not a participant.
+pub fn log_command(
+    db: &Connection,
+    command: &str,
+    caller: Option<&Caller>,
+    params: &serde_json::Value,
+    result: &Result<CommandOutcome, AgentError>,
+    duration_ms: u128,
+) {
+    let (outcome, error_code) = match result {
+        Ok(_) => ("ok", None),
+        Err(error) => ("error", Some(error.code.clone())),
+    };
+    let _ = db.execute(
+        "INSERT INTO command_log
+            (id, command, actor, workstream_id, params_json, outcome, error_code, duration_ms, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        rusqlite::params![
+            uuid::Uuid::new_v4().to_string(),
+            command,
+            caller.map(Caller::actor).unwrap_or_else(|| "anonymous".to_string()),
+            caller.and_then(|caller| caller.workstream_id().map(str::to_string)),
+            redact(params),
+            outcome,
+            error_code,
+            duration_ms as i64,
+            crate::now(),
+        ],
+    );
+}
+
+/// Keys whose values are free text and must never reach the log.
+///
+/// The rule is "command ids and structured parameters only". A handoff brief or
+/// a description is prose written by a person or an agent, and logging it would
+/// quietly turn an audit trail into a transcript.
+const REDACTED_KEYS: &[&str] = &[
+    "description",
+    "prompt",
+    "body",
+    "content",
+    "context",
+    "notes",
+];
+
+/// Replaces free-text values with their length, keeping the shape of the call
+/// visible without storing what was said.
+fn redact(params: &serde_json::Value) -> String {
+    let Some(object) = params.as_object() else {
+        return "{}".to_string();
+    };
+    let redacted: serde_json::Map<String, serde_json::Value> = object
+        .iter()
+        .map(|(key, value)| {
+            if REDACTED_KEYS.contains(&key.as_str()) {
+                let length = value.as_str().map(str::len).unwrap_or(0);
+                (
+                    key.clone(),
+                    serde_json::json!(format!("<redacted:{length}>")),
+                )
+            } else {
+                (key.clone(), value.clone())
+            }
+        })
+        .collect();
+    serde_json::to_string(&redacted).unwrap_or_else(|_| "{}".to_string())
+}
+
 /// Turns a handler result into a response.
-pub fn respond(result: Result<serde_json::Value, AgentError>) -> AgentResponse {
+pub fn respond(result: Result<CommandOutcome, AgentError>) -> AgentResponse {
     match result {
-        Ok(data) => AgentResponse::ok(data),
+        Ok(outcome) => AgentResponse::ok(outcome.data),
         Err(error) => AgentResponse::failed(error),
     }
 }
@@ -490,7 +619,7 @@ mod tests {
         caller: &Caller,
         cmd: &str,
         params: serde_json::Value,
-    ) -> Result<serde_json::Value, AgentError> {
+    ) -> Result<CommandOutcome, AgentError> {
         dispatch(
             &AgentRequest {
                 cmd: cmd.to_string(),
@@ -597,7 +726,8 @@ mod tests {
                 caller: Some(&caller),
             },
         )
-        .expect("dispatch");
+        .expect("dispatch")
+        .data;
         assert_eq!(data["actor"], "agent:tile-1");
         assert_eq!(data["workstreamId"], "ws-abc");
     }
@@ -622,7 +752,8 @@ mod tests {
                 },
                 &anonymous,
             )
-            .expect("ping needs no identity")["pong"],
+            .expect("ping needs no identity")
+            .data["pong"],
             true
         );
 
@@ -712,7 +843,8 @@ mod tests {
             "ws.create",
             serde_json::json!({ "name": "Alpha", "createdBySession": "tile-impostor" }),
         )
-        .expect("create");
+        .expect("create")
+        .data;
 
         let id = created["id"].as_str().expect("id").to_string();
         let recorded: Option<String> = db
@@ -784,7 +916,9 @@ mod tests {
         )
         .expect("create");
 
-        let listed = call(&db, &caller, "ws.list", serde_json::Value::Null).expect("list");
+        let listed = call(&db, &caller, "ws.list", serde_json::Value::Null)
+            .expect("list")
+            .data;
         let names: Vec<&str> = listed["workstreams"]
             .as_array()
             .expect("array")
@@ -847,6 +981,108 @@ mod tests {
         )
         .expect_err("nothing to update");
         assert_eq!(error.code, "NOTHING_TO_UPDATE");
+    }
+
+    // ── State change + log ─────────────────────────────────────────────────
+
+    /// Writes must announce themselves; the UI has no other way to notice.
+    #[test]
+    fn writes_report_a_change_and_reads_do_not() {
+        let db = memory_db();
+        let caller = agent("tile-1", "ws-own");
+
+        let created = call(
+            &db,
+            &caller,
+            "ws.create",
+            serde_json::json!({ "name": "Alpha" }),
+        )
+        .expect("create");
+        let change = created.change.expect("a create must announce itself");
+        assert_eq!(change.entity, "workstream");
+        assert_eq!(change.action, "created");
+        assert_eq!(change.id, created.data["id"].as_str().unwrap());
+
+        let listed = call(&db, &caller, "ws.list", serde_json::Value::Null).expect("list");
+        assert!(
+            listed.change.is_none(),
+            "a read that announced a change would refresh the UI for nothing"
+        );
+    }
+
+    #[test]
+    fn the_log_records_the_actor_the_app_resolved() {
+        let db = memory_db();
+        let caller = agent("tile-1", "ws-own");
+        let params = serde_json::json!({ "name": "Alpha" });
+        let result = call(&db, &caller, "ws.create", params.clone());
+        log_command(&db, "ws.create", Some(&caller), &params, &result, 12);
+
+        let (command, actor, workstream, outcome): (String, String, Option<String>, String) = db
+            .query_row(
+                "SELECT command, actor, workstream_id, outcome FROM command_log",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(command, "ws.create");
+        assert_eq!(actor, "agent:tile-1");
+        assert_eq!(workstream.as_deref(), Some("ws-own"));
+        assert_eq!(outcome, "ok");
+    }
+
+    #[test]
+    fn a_failure_is_logged_with_its_code_rather_than_dropped() {
+        let db = memory_db();
+        let caller = agent("tile-1", "ws-own");
+        let params = serde_json::json!({});
+        let result = call(&db, &caller, "ws.create", params.clone());
+        log_command(&db, "ws.create", Some(&caller), &params, &result, 3);
+
+        let (outcome, code): (String, Option<String>) = db
+            .query_row("SELECT outcome, error_code FROM command_log", [], |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })
+            .unwrap();
+        assert_eq!(outcome, "error");
+        assert_eq!(code.as_deref(), Some("MISSING_PARAM"));
+    }
+
+    /// The log is an audit trail, not a transcript. Prose must not land in it,
+    /// but the shape of the call should still be readable.
+    #[test]
+    fn free_text_parameters_are_redacted_but_structure_survives() {
+        let redacted = redact(&serde_json::json!({
+            "name": "Alpha",
+            "description": "a long private explanation of the work",
+            "count": 3,
+        }));
+        assert!(redacted.contains("\"name\":\"Alpha\""), "{redacted}");
+        assert!(redacted.contains("\"count\":3"), "{redacted}");
+        assert!(
+            !redacted.contains("private explanation"),
+            "prose leaked into the log: {redacted}"
+        );
+        assert!(redacted.contains("<redacted:"), "{redacted}");
+    }
+
+    /// Logging is evidence, not a participant: if it fails, the command that
+    /// already succeeded must still be reported as succeeding.
+    #[test]
+    fn a_broken_log_does_not_fail_the_command() {
+        let db = Connection::open_in_memory().expect("db"); // no schema at all
+        let caller = agent("tile-1", "ws-own");
+        let result: Result<CommandOutcome, AgentError> =
+            Ok(CommandOutcome::read(serde_json::json!({})));
+        log_command(
+            &db,
+            "ws.create",
+            Some(&caller),
+            &serde_json::json!({}),
+            &result,
+            1,
+        );
+        assert!(result.is_ok());
     }
 
     /// Guards the contract every error is supposed to keep, across the whole
