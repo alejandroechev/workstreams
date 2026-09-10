@@ -556,7 +556,7 @@ pub fn log_command(
             command,
             caller.map(Caller::actor).unwrap_or_else(|| "anonymous".to_string()),
             caller.and_then(|caller| caller.workstream_id().map(str::to_string)),
-            redact_params(find(command), params),
+            summarise_params(find(command), params),
             outcome,
             error_code,
             duration_ms as i64,
@@ -565,62 +565,49 @@ pub fn log_command(
     );
 }
 
-/// Redacts parameters down to what a command declared safe to record.
+/// Summarises a call's parameters without recording any caller-supplied bytes.
 ///
-/// The rule is "command ids and structured parameters only", and four review
-/// rounds established that length cannot enforce it. Each attempt failed the
-/// same way -- by treating some part of the payload as structure rather than as
-/// caller input:
+/// Six rounds of review converged on this. Every earlier attempt tried to decide
+/// which caller data was safe, and each one was wrong in a new way:
 ///
-/// 1. only top-level keys were checked, so nested prose walked through;
-/// 2. recursion re-derived sensitivity per level, so a sensitive key holding an
-///    object lost protection;
-/// 3. a sensitive flag protected values but not the keys around them;
-/// 4. keys and values were bounded by length, and short prose is still prose --
-///    "Patient has HIV" is fifteen bytes.
+/// | Attempt | What it trusted | How it leaked |
+/// | --- | --- | --- |
+/// | Top-level keys | nested values | `{"a":{"description":…}}` |
+/// | Per-level sensitivity | each child's own key | `{"prompt":{"text":…}}` |
+/// | Sensitive-value flag | keys around values | `{"notes":{"<diagnosis>":true}}` |
+/// | Length limits | short input | `"Patient has HIV"` is 15 bytes |
+/// | Name allowlist | values under allowed names | `branch` is user-authored |
 ///
-/// So nothing is recorded unless a command named it. Undeclared parameters are
-/// counted, never rendered, which also means no key is ever synthesised from
-/// caller input and no synthesised key can collide with one.
-fn redact_params(command: Option<&Command>, params: &serde_json::Value) -> String {
+/// The last one is the instructive failure: allowlisting a *name* says nothing
+/// about its *value*. A branch name is written by a person, and a rejected
+/// `projectId` is simply whatever was typed.
+///
+/// So no caller bytes are recorded at all. What remains is which parameters were
+/// present — a fact about the shape of the call rather than its content — and
+/// how many were not recognised. Everything else in the row (command, actor,
+/// workstream, outcome, duration) is derived by the app.
+fn summarise_params(command: Option<&Command>, params: &serde_json::Value) -> String {
     let Some(object) = params.as_object() else {
         return "{}".to_string();
     };
     let allowed = command.map(|command| command.log_params).unwrap_or(&[]);
 
-    let mut kept = serde_json::Map::new();
-    let mut withheld = 0usize;
-    for (name, value) in object {
-        if allowed.contains(&name.as_str()) {
-            kept.insert(name.clone(), loggable(value));
-        } else {
-            withheld += 1;
-        }
-    }
-    if withheld > 0 {
-        // A count, not a rendering: it records that the call carried more
-        // without recording any of it. The key is fixed, so a caller cannot
-        // collide with it -- a parameter of the same name is itself undeclared
-        // and is counted rather than emitted.
-        kept.insert("_withheld".to_string(), serde_json::json!(withheld));
-    }
-    serde_json::to_string(&kept).unwrap_or_else(|_| "{}".to_string())
-}
+    // Sorted for stable rows, and drawn from the static allowlist rather than
+    // from the request, so not one byte of caller input is echoed back.
+    let mut present: Vec<&str> = allowed
+        .iter()
+        .copied()
+        .filter(|name| object.contains_key(*name))
+        .collect();
+    present.sort_unstable();
+    let withheld = object.len() - present.len();
 
-/// Renders an allowed parameter.
-///
-/// Even a declared parameter is only recorded when it is a scalar of a
-/// reasonable size: a command could grow one that accepts a nested structure,
-/// and that structure is caller input again.
-fn loggable(value: &serde_json::Value) -> serde_json::Value {
-    const MAX_LOGGED_VALUE: usize = 120;
-    match value {
-        serde_json::Value::String(text) if text.len() <= MAX_LOGGED_VALUE => value.clone(),
-        serde_json::Value::Bool(_) | serde_json::Value::Number(_) | serde_json::Value::Null => {
-            value.clone()
-        }
-        other => serde_json::json!(format!("<withheld:{}>", other.to_string().len())),
+    let mut summary = serde_json::Map::new();
+    summary.insert("params".to_string(), serde_json::json!(present));
+    if withheld > 0 {
+        summary.insert("_withheld".to_string(), serde_json::json!(withheld));
     }
+    serde_json::to_string(&summary).unwrap_or_else(|_| "{}".to_string())
 }
 
 /// Turns a handler result into a response.
@@ -1075,82 +1062,76 @@ mod tests {
         assert_eq!(code.as_deref(), Some("MISSING_PARAM"));
     }
 
-    /// The log is an audit trail, not a transcript. Four review rounds showed
-    /// length cannot tell prose from structure, so only what a command declared
-    /// is recorded and everything else is counted.
+    /// The terminal property: no caller-supplied byte reaches the log, whatever
+    /// its name, length, nesting or encoding.
     #[test]
-    fn only_declared_parameters_are_recorded() {
-        let logged = redact_params(
-            find("ws.create"),
-            &serde_json::json!({
-                "projectId": "proj-1",
-                "name": "Alpha",
-                "description": "a long private explanation of the work",
-            }),
-        );
-        assert!(
-            logged.contains("proj-1"),
-            "a declared parameter should survive: {logged}"
-        );
-        assert!(!logged.contains("private explanation"), "{logged}");
-        // `name` is undeclared for logging: it is user-authored text.
-        assert!(!logged.contains("Alpha"), "{logged}");
-        assert!(logged.contains("\"_withheld\":2"), "{logged}");
-    }
-
-    /// The finding that ended the length approach: short prose is still prose.
-    #[test]
-    fn short_prose_in_an_undeclared_key_or_value_never_appears() {
-        for payload in [
-            serde_json::json!({ "Patient has HIV. Do not disclose.": true }),
-            serde_json::json!({ "metadata": [{ "extra": "Patient has HIV." }] }),
-            serde_json::json!({ "extra": "患者はHIV陽性です。" }),
+    fn no_caller_supplied_content_reaches_the_log() {
+        let prose = "Patient has HIV. Do not disclose.";
+        for (command, payload) in [
+            // Under an allowlisted name, which is where the previous attempt failed.
+            (
+                "ws.create",
+                serde_json::json!({ "projectId": prose, "branch": prose }),
+            ),
+            ("ws.update", serde_json::json!({ "id": prose })),
+            // As a key.
+            ("ws.create", serde_json::json!({ prose: true })),
+            // Nested, and in an array.
+            ("ws.create", serde_json::json!({ "meta": [{ "x": prose }] })),
+            // Unicode.
+            (
+                "ws.create",
+                serde_json::json!({ "branch": "患者はHIV陽性です。" }),
+            ),
+            // Against a command that declares nothing.
+            ("agent.ping", serde_json::json!({ "projectId": prose })),
         ] {
-            let logged = redact_params(find("ws.create"), &payload);
-            for leaked in ["Patient has HIV", "患者は"] {
-                assert!(!logged.contains(leaked), "leaked from {payload}: {logged}");
+            let logged = summarise_params(find(command), &payload);
+            for leaked in [prose, "Patient", "患者"] {
+                assert!(
+                    !logged.contains(leaked),
+                    "{command} leaked {leaked:?} from {payload}: {logged}"
+                );
             }
         }
     }
 
-    /// No key is synthesised from caller input, so nothing a caller sends can
-    /// collide with a generated name and silently overwrite another entry.
+    /// Still useful: the row says which recognised parameters were present and
+    /// how many were not, which is what an audit trail needs.
     #[test]
-    fn a_caller_cannot_collide_with_the_withheld_marker() {
-        let logged = redact_params(
-            find("ws.update"),
-            &serde_json::json!({ "id": "ws-1", "_withheld": "smuggled", "other": 1 }),
+    fn the_shape_of_a_call_is_still_recorded() {
+        let logged = summarise_params(
+            find("ws.create"),
+            &serde_json::json!({
+                "projectId": "proj-1",
+                "branch": "feature/x",
+                "name": "Alpha",
+                "description": "prose",
+            }),
         );
         let parsed: serde_json::Value = serde_json::from_str(&logged).expect("parse");
-        assert_eq!(parsed["id"], "ws-1");
-        assert_eq!(
-            parsed["_withheld"], 2,
-            "the marker must be a count, not caller input"
-        );
-        assert!(!logged.contains("smuggled"), "{logged}");
+        assert_eq!(parsed["params"], serde_json::json!(["branch", "projectId"]));
+        assert_eq!(parsed["_withheld"], 2);
     }
 
-    /// A declared parameter can still be handed a structure; that structure is
-    /// caller input again and must not be rendered.
+    /// The marker is app-generated, so a caller cannot forge or overwrite it.
     #[test]
-    fn a_declared_parameter_holding_a_structure_is_withheld() {
-        let logged = redact_params(
-            find("ws.create"),
-            &serde_json::json!({ "projectId": { "nested": "private prose here" } }),
+    fn a_caller_cannot_influence_the_withheld_count() {
+        let logged = summarise_params(
+            find("ws.update"),
+            &serde_json::json!({ "id": "ws-1", "_withheld": 99, "params": ["forged"] }),
         );
-        assert!(!logged.contains("private prose"), "{logged}");
-        assert!(logged.contains("<withheld:"), "{logged}");
+        let parsed: serde_json::Value = serde_json::from_str(&logged).expect("parse");
+        assert_eq!(parsed["params"], serde_json::json!(["id"]));
+        assert_eq!(parsed["_withheld"], 2, "the count is ours, not theirs");
+        assert!(!logged.contains("forged"), "{logged}");
     }
 
-    /// An unknown command declares nothing, so nothing is recorded from it.
     #[test]
-    fn an_unknown_command_records_no_parameters() {
-        let logged = redact_params(
-            None,
-            &serde_json::json!({ "anything": "private", "id": "x" }),
-        );
+    fn an_unknown_command_records_nothing_but_a_count() {
+        let logged = summarise_params(None, &serde_json::json!({ "anything": "private" }));
         assert!(!logged.contains("private"), "{logged}");
-        assert!(logged.contains("\"_withheld\":2"), "{logged}");
+        assert!(logged.contains("\"_withheld\":1"), "{logged}");
     }
 
     /// Logging is evidence, not a participant: if it fails, the command that

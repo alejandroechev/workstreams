@@ -150,15 +150,18 @@ command typed by hand inside a session tile records as that session's agent,
 because the app genuinely cannot tell and a confident lie in an audit trail is
 worse than a coarse truth.
 
-**Only parameters a command declares loggable are recorded**; everything else is
-counted, not rendered. This is an allowlist because four rounds of review
-established that length cannot separate prose from structure — "Patient has HIV"
-is fifteen bytes. Each earlier attempt failed the same way, by treating some part
-of the payload as structure rather than as caller input: top-level keys only,
-then per-level sensitivity, then values-but-not-keys, then length limits on both.
+**No caller-supplied bytes are recorded at all.** The row stores which
+recognised parameters were *present* — a fact about the shape of the call — plus
+a count of unrecognised ones. Everything else in it (command, actor, workstream,
+outcome, duration) is derived by the app.
 
-The allowlist also removes synthesised keys entirely, so nothing a caller sends
-can collide with a generated name and silently overwrite another entry.
+Six rounds of review arrived here, and the path is worth recording because each
+step looks reasonable in isolation: check top-level keys; recurse; carry
+sensitivity down; bound by length; allowlist the parameter names. The last is the
+instructive failure — allowlisting a *name* says nothing about its *value*, and
+`branch` is written by a person while a rejected `projectId` is simply whatever
+was typed. Every attempt tried to decide which caller data was safe. None of them
+could, so none is recorded.
 
 ## Consequences
 
