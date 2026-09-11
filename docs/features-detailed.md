@@ -463,6 +463,23 @@ workstreams agent call ws.create name="Read chunks" type=worktree \
 workstreams agent call ws.create name="Waimea main" type=base_repo repo=<id>
 ```
 
+Pull requests can be linked to a workstream, many-to-many: a workstream often
+carries several PRs, and the same PR is frequently relevant to more than one
+workstream — the one whose branch produced it, and the one reviewing it.
+
+```sh
+workstreams agent call pr.link url=https://dev.azure.com/org/proj/_git/repo/pullrequest/25563 note="review round 2"
+workstreams agent call pr.list
+workstreams agent call pr.unlink url=https://.../pullrequest/25563
+```
+
+The URL is parsed when it is stored, so a typo is rejected while the agent can
+still fix it and a listing can show `repo#25563` instead of the full URL.
+Re-linking is idempotent — the same PR pasted in either Azure DevOps host shape,
+with different casing or a `?_a=…` query string, resolves to one link rather
+than several — and never erases an existing note. This stores the **link only**:
+nothing reads the pull request, its comments or its builds.
+
 **`ws.create` provisions, it does not merely record.** A `type=worktree` request
 runs the same `git worktree add` the UI runs, creates the pinned session tile,
 and returns the resulting directory — so the workstream opens on real code and

@@ -267,6 +267,35 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
             created_at TEXT NOT NULL
         );
 
+        -- Pull requests linked to workstreams, many-to-many: a workstream often
+        -- carries several PRs, and one PR is frequently relevant to more than
+        -- one workstream (the branch that produced it, and the one reviewing
+        -- it). Stores the link only -- nothing here talks to Azure DevOps.
+        CREATE TABLE IF NOT EXISTS workstream_pull_requests (
+            id TEXT PRIMARY KEY,
+            workstream_id TEXT NOT NULL REFERENCES workstreams(id) ON DELETE CASCADE,
+            url TEXT NOT NULL,
+            organization TEXT NOT NULL,
+            project TEXT NOT NULL,
+            repository TEXT NOT NULL,
+            number INTEGER NOT NULL,
+            -- Canonical form, so the same PR pasted from either Azure DevOps
+            -- host shape (or with different casing) links once, not twice.
+            identity TEXT NOT NULL,
+            note TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
+        -- Makes re-linking idempotent at the storage layer rather than relying
+        -- on a check-then-insert, which two concurrent agents could interleave.
+        CREATE UNIQUE INDEX IF NOT EXISTS workstream_pull_requests_unique
+            ON workstream_pull_requests (workstream_id, identity);
+        CREATE INDEX IF NOT EXISTS workstream_pull_requests_ws_idx
+            ON workstream_pull_requests (workstream_id);
+        CREATE INDEX IF NOT EXISTS workstream_pull_requests_identity_idx
+            ON workstream_pull_requests (identity);
+
         CREATE INDEX IF NOT EXISTS command_log_created_idx ON command_log (created_at);
         CREATE INDEX IF NOT EXISTS command_log_command_idx ON command_log (command);
         CREATE INDEX IF NOT EXISTS task_events_task_idx ON task_events (task_id);
@@ -349,6 +378,7 @@ mod tests {
             "loop_verifications",
             "loop_evaluations",
             "loop_events",
+            "workstream_pull_requests",
         ];
         for table in &expected {
             let count: i64 = conn
@@ -431,6 +461,50 @@ mod tests {
             existing, None,
             "a workstream created before provenance existed has none, and that is not an error"
         );
+    }
+
+    /// The link table is many-to-many and idempotent, and a deleted workstream
+    /// must not leave its links behind.
+    #[test]
+    fn pull_request_links_are_many_to_many_and_deduplicated() {
+        let conn = open_in_memory();
+        conn.execute_batch(
+            "PRAGMA foreign_keys = ON;
+             INSERT INTO workstreams (id, name, status, created_at, updated_at)
+                VALUES ('ws-1','One','active','2026-01-01','2026-01-01');
+             INSERT INTO workstreams (id, name, status, created_at, updated_at)
+                VALUES ('ws-2','Two','active','2026-01-01','2026-01-01');",
+        )
+        .unwrap();
+        let link = |id: &str, ws: &str, identity: &str| {
+            conn.execute(
+                "INSERT INTO workstream_pull_requests
+                    (id, workstream_id, url, organization, project, repository, number,
+                     identity, created_at, updated_at)
+                 VALUES (?1, ?2, 'https://example', 'org', 'proj', 'repo', 1, ?3,
+                         '2026-01-01', '2026-01-01')",
+                rusqlite::params![id, ws, identity],
+            )
+        };
+
+        // One workstream, several PRs.
+        link("l1", "ws-1", "org/proj/repo#1").unwrap();
+        link("l2", "ws-1", "org/proj/repo#2").unwrap();
+        // One PR, several workstreams.
+        link("l3", "ws-2", "org/proj/repo#1").unwrap();
+
+        // The same PR twice on one workstream is refused by the index, so
+        // linking can be idempotent without a check-then-insert race.
+        assert!(link("l4", "ws-1", "org/proj/repo#1").is_err());
+
+        conn.execute("DELETE FROM workstreams WHERE id = 'ws-1'", [])
+            .unwrap();
+        let remaining: i64 = conn
+            .query_row("SELECT COUNT(*) FROM workstream_pull_requests", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(remaining, 1, "links must not outlive their workstream");
     }
 
     #[test]

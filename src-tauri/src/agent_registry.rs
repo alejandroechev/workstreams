@@ -17,7 +17,7 @@
 // From the protocol module, not the transport: the registry is
 // platform-independent and must keep compiling where the socket does not exist.
 use crate::agent_protocol::{AgentError, AgentRequest, AgentResponse};
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use std::collections::HashMap;
 use std::sync::Mutex;
 
@@ -367,6 +367,32 @@ pub const COMMANDS: &[Command] = &[
         requires_identity: true,
         destructive: false,
         handler: ws_create,
+    },
+    Command {
+        id: "pr.link",
+        log_params: &["ws"],
+        summary: "Link a pull request to a workstream (params: url, note, ws)",
+        requires_identity: true,
+        destructive: false,
+        handler: pr_link,
+    },
+    Command {
+        id: "pr.unlink",
+        log_params: &["ws"],
+        summary: "Remove a pull request link (params: url or id, ws)",
+        requires_identity: true,
+        // Removes a link, not the pull request. Reversible with pr.link, so it
+        // does not need the human's agreement first.
+        destructive: false,
+        handler: pr_unlink,
+    },
+    Command {
+        id: "pr.list",
+        log_params: &["ws"],
+        summary: "List pull requests linked to a workstream (params: ws)",
+        requires_identity: true,
+        destructive: false,
+        handler: pr_list,
     },
     Command {
         id: "ws.update",
@@ -741,6 +767,203 @@ fn ws_update(
         serde_json::json!({ "id": id, "updated": true }),
         change,
     ))
+}
+
+/// Resolves which workstream a `pr.*` command acts on.
+///
+/// Defaults to the caller's own, because "link this PR" almost always means the
+/// workstream the agent is sitting in, and making it type an id it already
+/// implicitly knows is friction that invites mistakes. An explicit `ws=` is
+/// still scope-checked.
+fn target_workstream(
+    context: &CommandContext,
+    params: &serde_json::Value,
+) -> Result<String, AgentError> {
+    let caller = context.caller()?;
+    let id = match optional_str(params, "ws") {
+        Some(explicit) => explicit,
+        None => caller
+            .workstream_id()
+            .ok_or_else(|| {
+                AgentError::new(
+                    "NO_WORKSTREAM",
+                    "This session is not attached to a workstream",
+                    "Pass ws=<id> to say which workstream you mean.",
+                )
+            })?
+            .to_string(),
+    };
+    may_act_on(context.db, caller, &id)?;
+    Ok(id)
+}
+
+fn parse_pr(
+    params: &serde_json::Value,
+) -> Result<crate::pull_requests::PullRequestRef, AgentError> {
+    let url = required_str(params, "url")?;
+    crate::pull_requests::parse_pull_request_url(&url).map_err(|error| {
+        AgentError::new(
+            "BAD_PR_URL",
+            error,
+            "Paste the pull request URL from the browser, e.g. https://dev.azure.com/<org>/<project>/_git/<repo>/pullrequest/<id>",
+        )
+    })
+}
+
+fn pr_link(
+    context: &CommandContext,
+    params: &serde_json::Value,
+) -> Result<CommandOutcome, AgentError> {
+    let workstream_id = target_workstream(context, params)?;
+    let pr = parse_pr(params)?;
+    let note = optional_str(params, "note");
+    let now = crate::now();
+
+    // Ask first purely so the answer can say whether this was new. The insert
+    // below is still ON CONFLICT rather than conditional, so two agents racing
+    // cannot both insert; this read only affects the wording of the reply.
+    let already_linked: bool = context
+        .db
+        .query_row(
+            "SELECT 1 FROM workstream_pull_requests WHERE workstream_id = ?1 AND identity = ?2",
+            rusqlite::params![workstream_id, pr.identity()],
+            |_| Ok(true),
+        )
+        .optional()
+        .map_err(db_error)?
+        .unwrap_or(false);
+
+    // Idempotent: an agent that retries, or links a PR someone already linked,
+    // should get the existing link rather than an error it has to interpret.
+    context
+        .db
+        .execute(
+            "INSERT INTO workstream_pull_requests
+                (id, workstream_id, url, organization, project, repository, number,
+                 identity, note, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10)
+             ON CONFLICT(workstream_id, identity) DO UPDATE SET
+                url = excluded.url,
+                note = COALESCE(excluded.note, workstream_pull_requests.note),
+                updated_at = excluded.updated_at",
+            rusqlite::params![
+                uuid::Uuid::new_v4().to_string(),
+                workstream_id,
+                pr.url,
+                pr.organization,
+                pr.project,
+                pr.repository,
+                pr.number,
+                pr.identity(),
+                note,
+                now,
+            ],
+        )
+        .map_err(db_error)?;
+
+    let id: String = context
+        .db
+        .query_row(
+            "SELECT id FROM workstream_pull_requests WHERE workstream_id = ?1 AND identity = ?2",
+            rusqlite::params![workstream_id, pr.identity()],
+            |row| row.get(0),
+        )
+        .map_err(db_error)?;
+
+    Ok(CommandOutcome::changed(
+        serde_json::json!({
+            "id": id,
+            "workstreamId": workstream_id,
+            "label": pr.label(),
+            "url": pr.url,
+            "number": pr.number,
+            "repository": pr.repository,
+            "alreadyLinked": already_linked,
+        }),
+        StateChange::new("workstream", &workstream_id, "pr_linked"),
+    ))
+}
+
+fn pr_unlink(
+    context: &CommandContext,
+    params: &serde_json::Value,
+) -> Result<CommandOutcome, AgentError> {
+    let workstream_id = target_workstream(context, params)?;
+    // By URL or by the link id from pr.list -- an agent has whichever is to
+    // hand, and requiring the other is needless friction.
+    let identity = match optional_str(params, "url") {
+        Some(_) => Some(parse_pr(params)?.identity()),
+        None => None,
+    };
+    let link_id = optional_str(params, "id");
+    if identity.is_none() && link_id.is_none() {
+        return Err(AgentError::new(
+            "MISSING_PARAM",
+            "Say which link to remove",
+            "Pass url=<pull request url>, or id=<link id from pr.list>.",
+        ));
+    }
+
+    let removed = context
+        .db
+        .execute(
+            "DELETE FROM workstream_pull_requests
+             WHERE workstream_id = ?1 AND (identity = ?2 OR id = ?3)",
+            rusqlite::params![workstream_id, identity, link_id],
+        )
+        .map_err(db_error)?;
+    if removed == 0 {
+        return Err(AgentError::new(
+            "NO_SUCH_LINK",
+            "That pull request is not linked to this workstream",
+            "Run pr.list to see what is linked.",
+        ));
+    }
+
+    Ok(CommandOutcome::changed(
+        serde_json::json!({ "workstreamId": workstream_id, "removed": removed }),
+        StateChange::new("workstream", &workstream_id, "pr_unlinked"),
+    ))
+}
+
+fn pr_list(
+    context: &CommandContext,
+    params: &serde_json::Value,
+) -> Result<CommandOutcome, AgentError> {
+    let workstream_id = target_workstream(context, params)?;
+    let mut statement = context
+        .db
+        .prepare(
+            "SELECT id, url, repository, number, note, created_at
+             FROM workstream_pull_requests
+             WHERE workstream_id = ?1
+             ORDER BY created_at DESC",
+        )
+        .map_err(db_error)?;
+    let rows = statement
+        .query_map([&workstream_id], |row| {
+            let repository: String = row.get(2)?;
+            let number: i64 = row.get(3)?;
+            Ok(serde_json::json!({
+                "id": row.get::<_, String>(0)?,
+                "url": row.get::<_, String>(1)?,
+                // Precomputed so a listing is readable without the caller
+                // having to reassemble it from parts.
+                "label": format!("{repository}#{number}"),
+                "repository": repository,
+                "number": number,
+                "note": row.get::<_, Option<String>>(4)?,
+                "linkedAt": row.get::<_, String>(5)?,
+            }))
+        })
+        .map_err(db_error)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(db_error)?;
+
+    Ok(CommandOutcome::read(serde_json::json!({
+        "workstreamId": workstream_id,
+        "pullRequests": rows,
+    })))
 }
 
 fn db_error(error: rusqlite::Error) -> AgentError {
@@ -1482,6 +1705,265 @@ mod tests {
         assert_eq!(detail["branch"], "feature/x");
         assert_eq!(detail["type"], "worktree");
         assert_eq!(detail["tileCount"], 1);
+    }
+
+    // ── Pull request links ─────────────────────────────────────────────────
+
+    fn seed_workstream(db: &Connection, id: &str, creator: Option<&str>) {
+        db.execute(
+            "INSERT INTO workstreams (id, name, status, created_by_session, created_at, updated_at)
+             VALUES (?1, ?1, 'active', ?2, '2026-01-01', '2026-01-01')",
+            rusqlite::params![id, creator],
+        )
+        .unwrap();
+    }
+
+    const PR_ONE: &str = "https://dev.azure.com/org/proj/_git/repo/pullrequest/1";
+    const PR_TWO: &str = "https://dev.azure.com/org/proj/_git/repo/pullrequest/2";
+
+    /// The relationship the feature exists for: many PRs per workstream, and the
+    /// same PR on more than one workstream.
+    #[test]
+    fn links_are_many_to_many() {
+        let db = memory_db();
+        seed_workstream(&db, "ws-own", None);
+        seed_workstream(&db, "ws-other", Some("tile-1"));
+        let caller = agent("tile-1", "ws-own");
+
+        call(
+            &db,
+            &caller,
+            "pr.link",
+            serde_json::json!({ "url": PR_ONE }),
+        )
+        .expect("link 1");
+        call(
+            &db,
+            &caller,
+            "pr.link",
+            serde_json::json!({ "url": PR_TWO }),
+        )
+        .expect("link 2");
+        // Same PR, different workstream.
+        call(
+            &db,
+            &caller,
+            "pr.link",
+            serde_json::json!({ "url": PR_ONE, "ws": "ws-other" }),
+        )
+        .expect("link across workstreams");
+
+        let own = call(&db, &caller, "pr.list", serde_json::Value::Null)
+            .expect("list")
+            .data;
+        let labels: Vec<&str> = own["pullRequests"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| entry["label"].as_str().unwrap())
+            .collect();
+        assert_eq!(labels.len(), 2, "{labels:?}");
+        assert!(labels.contains(&"repo#1") && labels.contains(&"repo#2"));
+
+        let other = call(
+            &db,
+            &caller,
+            "pr.list",
+            serde_json::json!({ "ws": "ws-other" }),
+        )
+        .expect("list other")
+        .data;
+        assert_eq!(other["pullRequests"].as_array().unwrap().len(), 1);
+    }
+
+    /// An agent retries. Linking the same PR twice must be a no-op that says so,
+    /// not an error it has to interpret.
+    #[test]
+    fn linking_the_same_pull_request_twice_is_idempotent() {
+        let db = memory_db();
+        seed_workstream(&db, "ws-own", None);
+        let caller = agent("tile-1", "ws-own");
+
+        let first = call(
+            &db,
+            &caller,
+            "pr.link",
+            serde_json::json!({ "url": PR_ONE }),
+        )
+        .expect("first")
+        .data;
+        assert_eq!(first["alreadyLinked"], false);
+
+        // Same PR, pasted in the other host shape and different casing.
+        let again = call(
+            &db,
+            &caller,
+            "pr.link",
+            serde_json::json!({ "url": "https://dev.azure.com/Org/Proj/_git/Repo/pullrequest/1?_a=files" }),
+        )
+        .expect("second")
+        .data;
+        assert_eq!(again["alreadyLinked"], true);
+        assert_eq!(again["id"], first["id"], "must reuse the existing link");
+
+        let listed = call(&db, &caller, "pr.list", serde_json::Value::Null)
+            .expect("list")
+            .data;
+        assert_eq!(
+            listed["pullRequests"].as_array().unwrap().len(),
+            1,
+            "a re-link must not create a second row"
+        );
+    }
+
+    #[test]
+    fn a_note_survives_and_is_not_erased_by_a_relink() {
+        let db = memory_db();
+        seed_workstream(&db, "ws-own", None);
+        let caller = agent("tile-1", "ws-own");
+        call(
+            &db,
+            &caller,
+            "pr.link",
+            serde_json::json!({ "url": PR_ONE, "note": "fixes review round 2" }),
+        )
+        .expect("link");
+        // Re-linking without a note must not silently discard the old one.
+        call(
+            &db,
+            &caller,
+            "pr.link",
+            serde_json::json!({ "url": PR_ONE }),
+        )
+        .expect("relink");
+
+        let listed = call(&db, &caller, "pr.list", serde_json::Value::Null)
+            .expect("list")
+            .data;
+        assert_eq!(listed["pullRequests"][0]["note"], "fixes review round 2");
+    }
+
+    #[test]
+    fn unlinking_works_by_url_or_by_link_id() {
+        let db = memory_db();
+        seed_workstream(&db, "ws-own", None);
+        let caller = agent("tile-1", "ws-own");
+        let first = call(
+            &db,
+            &caller,
+            "pr.link",
+            serde_json::json!({ "url": PR_ONE }),
+        )
+        .expect("link")
+        .data;
+        call(
+            &db,
+            &caller,
+            "pr.link",
+            serde_json::json!({ "url": PR_TWO }),
+        )
+        .expect("link");
+
+        call(
+            &db,
+            &caller,
+            "pr.unlink",
+            serde_json::json!({ "id": first["id"] }),
+        )
+        .expect("unlink by id");
+        call(
+            &db,
+            &caller,
+            "pr.unlink",
+            serde_json::json!({ "url": PR_TWO }),
+        )
+        .expect("unlink by url");
+
+        let listed = call(&db, &caller, "pr.list", serde_json::Value::Null)
+            .expect("list")
+            .data;
+        assert!(listed["pullRequests"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn unlinking_something_that_is_not_linked_says_so() {
+        let db = memory_db();
+        seed_workstream(&db, "ws-own", None);
+        let caller = agent("tile-1", "ws-own");
+
+        let error = call(
+            &db,
+            &caller,
+            "pr.unlink",
+            serde_json::json!({ "url": PR_ONE }),
+        )
+        .expect_err("not linked");
+        assert_eq!(error.code, "NO_SUCH_LINK");
+
+        let error =
+            call(&db, &caller, "pr.unlink", serde_json::Value::Null).expect_err("nothing named");
+        assert_eq!(error.code, "MISSING_PARAM");
+    }
+
+    /// The same fence as every other command: an agent cannot reach a
+    /// workstream it neither owns nor created.
+    #[test]
+    fn linking_to_a_workstream_out_of_scope_is_refused() {
+        let db = memory_db();
+        seed_workstream(&db, "ws-own", None);
+        seed_workstream(&db, "ws-stranger", Some("tile-9"));
+        let caller = agent("tile-1", "ws-own");
+
+        for command in ["pr.link", "pr.list", "pr.unlink"] {
+            let error = call(
+                &db,
+                &caller,
+                command,
+                serde_json::json!({ "url": PR_ONE, "ws": "ws-stranger" }),
+            )
+            .expect_err("out of scope");
+            assert_eq!(error.code, "OUT_OF_SCOPE", "{command}");
+        }
+
+        let leaked: i64 = db
+            .query_row(
+                "SELECT COUNT(*) FROM workstream_pull_requests WHERE workstream_id = 'ws-stranger'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(leaked, 0, "the refusal must actually prevent the write");
+    }
+
+    #[test]
+    fn a_malformed_pull_request_url_is_refused_with_an_example() {
+        let db = memory_db();
+        seed_workstream(&db, "ws-own", None);
+        let error = call(
+            &db,
+            &agent("tile-1", "ws-own"),
+            "pr.link",
+            serde_json::json!({ "url": "https://github.com/owner/repo/pull/1" }),
+        )
+        .expect_err("not an ADO url");
+        assert_eq!(error.code, "BAD_PR_URL");
+        assert!(error.hint.contains("dev.azure.com"), "{}", error.hint);
+    }
+
+    /// The log must record which workstream was touched, never the PR URL --
+    /// that is caller-supplied content.
+    #[test]
+    fn linking_records_the_workstream_but_not_the_url() {
+        let logged = summarise_params(
+            find("pr.link"),
+            &serde_json::json!({ "ws": "ws-1", "url": PR_ONE, "note": "private context" }),
+        );
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&logged).unwrap()["params"],
+            serde_json::json!(["ws"])
+        );
+        assert!(!logged.contains("pullrequest"), "{logged}");
+        assert!(!logged.contains("private context"), "{logged}");
     }
 
     #[test]

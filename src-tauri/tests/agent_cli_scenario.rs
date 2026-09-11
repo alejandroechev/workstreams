@@ -21,8 +21,26 @@ use workstreams_lib::agent_socket::{
 /// dispatch. Rebuilt here rather than reused, because the real one is wired into
 /// Tauri state a CLI scenario has no business starting.
 fn serve(identities: std::sync::Arc<IdentityRegistry>) -> impl Fn(AgentRequest) -> AgentResponse {
+    serve_inner(identities, None)
+}
+
+/// Same, but against a real database file so state survives between CLI calls.
+fn serve_with_db(
+    identities: std::sync::Arc<IdentityRegistry>,
+    db_path: std::path::PathBuf,
+) -> impl Fn(AgentRequest) -> AgentResponse {
+    serve_inner(identities, Some(db_path))
+}
+
+fn serve_inner(
+    identities: std::sync::Arc<IdentityRegistry>,
+    db_path: Option<std::path::PathBuf>,
+) -> impl Fn(AgentRequest) -> AgentResponse {
     move |request| {
-        let db = rusqlite::Connection::open_in_memory().expect("db");
+        let db = match &db_path {
+            Some(path) => workstreams_lib::db::open_db(path).expect("db"),
+            None => rusqlite::Connection::open_in_memory().expect("db"),
+        };
         let resolved = identities.resolve(request.token.as_deref());
         let requires_identity = workstreams_lib::agent_registry::find(&request.cmd)
             .map(|command| command.requires_identity)
@@ -262,6 +280,74 @@ fn the_round_trip_is_fast_enough_to_sit_in_an_agent_loop() {
         elapsed < Duration::from_secs(5),
         "a ping took {elapsed:?}, which is too slow to sit in a loop"
     );
+}
+
+/// Drives link, list and unlink through the real binary against a real
+/// database, which is the only way to see the full round trip an agent makes.
+#[test]
+fn pull_requests_link_list_and_unlink_through_the_cli() {
+    let dir = scratch_dir("prlink");
+    let path = socket_path_in(&dir, 7);
+    let db_path = dir.join("ws.db");
+    let db = workstreams_lib::db::open_db(&db_path).expect("db");
+    db.execute(
+        "INSERT INTO workstreams (id, name, status, created_at, updated_at)
+         VALUES ('ws-1','One','active','2026-01-01','2026-01-01')",
+        [],
+    )
+    .expect("seed");
+    drop(db);
+
+    let identities = std::sync::Arc::new(IdentityRegistry::new());
+    let token = identities.issue("tile-1", "ws-1");
+    let server = AgentSocketServer::start(
+        path.clone(),
+        serve_with_db(std::sync::Arc::clone(&identities), db_path.clone()),
+    )
+    .expect("start server");
+
+    let run = |args: &[&str]| {
+        let output = cli()
+            .args(args)
+            .env(SOCKET_ENV_VAR, &path)
+            .env(TOKEN_ENV_VAR, &token)
+            .output()
+            .expect("run the CLI");
+        serde_json::from_str::<serde_json::Value>(&String::from_utf8_lossy(&output.stdout))
+            .expect("parse stdout")
+    };
+
+    let linked = run(&[
+        "agent",
+        "call",
+        "pr.link",
+        "url=https://dev.azure.com/org/proj/_git/repo/pullrequest/42",
+        "note=review round 2",
+    ]);
+    assert_eq!(linked["ok"], true, "{linked}");
+    assert_eq!(linked["data"]["label"], "repo#42");
+    assert_eq!(linked["data"]["alreadyLinked"], false);
+
+    let listed = run(&["agent", "call", "pr.list"]);
+    assert_eq!(listed["data"]["pullRequests"][0]["label"], "repo#42");
+    assert_eq!(listed["data"]["pullRequests"][0]["note"], "review round 2");
+
+    let unlinked = run(&[
+        "agent",
+        "call",
+        "pr.unlink",
+        "url=https://dev.azure.com/org/proj/_git/repo/pullrequest/42",
+    ]);
+    assert_eq!(unlinked["ok"], true, "{unlinked}");
+
+    let empty = run(&["agent", "call", "pr.list"]);
+    assert!(empty["data"]["pullRequests"]
+        .as_array()
+        .expect("array")
+        .is_empty());
+
+    drop(server);
+    std::fs::remove_dir_all(&dir).ok();
 }
 
 // ── Skill drift ────────────────────────────────────────────────────────────

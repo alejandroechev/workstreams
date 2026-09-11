@@ -2,6 +2,7 @@
 mod agent_cli;
 pub mod agent_protocol;
 pub mod agent_registry;
+pub mod pull_requests;
 // Unix domain sockets only, for now. Windows needs named pipes, which have a
 // different permission model (a security descriptor at creation rather than a
 // chmod) -- see ADR 026. Gated so the desktop app still builds and ships on
@@ -9,7 +10,7 @@ pub mod agent_registry;
 #[cfg(unix)]
 pub mod agent_socket;
 mod code_review;
-mod db;
+pub mod db;
 mod devlog;
 mod file_io;
 mod fs_watcher;

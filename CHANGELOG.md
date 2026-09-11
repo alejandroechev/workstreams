@@ -25,6 +25,11 @@ for any release is attached to its
 
 ### Added
 
+- `pr.link`, `pr.list` and `pr.unlink` agent commands associate pull requests
+  with workstreams, many-to-many. The URL is parsed on the way in, so a listing
+  reads `repo#25563` and a typo is caught immediately; re-linking the same PR is
+  idempotent however it was pasted. CLI only — there is no UI for this yet, and
+  nothing reads the pull request itself.
 - `repo.list` and `ws.get` agent commands, so an agent can find a repository to
   create a workstream in and verify what it created.
 - An agent inside a Copilot session tile can now act on the app hosting it —
