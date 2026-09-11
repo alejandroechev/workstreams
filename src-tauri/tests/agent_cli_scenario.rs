@@ -37,6 +37,7 @@ fn serve(identities: std::sync::Arc<IdentityRegistry>) -> impl Fn(AgentRequest) 
             &CommandContext {
                 db: &db,
                 caller: caller.as_ref(),
+                provisioner: None,
             },
         ))
     }
@@ -273,10 +274,7 @@ fn the_round_trip_is_fast_enough_to_sit_in_an_agent_loop() {
 /// Every command the skill names must still exist.
 #[test]
 fn the_skill_only_documents_commands_that_exist() {
-    let Some(skill) = read_skill() else {
-        eprintln!("skill not installed; skipping drift check");
-        return;
-    };
+    let skill = read_skill().expect("skill must be installed; see the test above");
 
     let documented: std::collections::BTreeSet<String> = skill
         .lines()
@@ -302,29 +300,11 @@ fn the_skill_only_documents_commands_that_exist() {
 /// produce, or an agent is being told to expect something it will never see.
 #[test]
 fn the_skill_only_documents_error_codes_that_are_reachable() {
-    let Some(skill) = read_skill() else { return };
+    let skill = read_skill().expect("skill must be installed; see the discoverability test");
 
-    let known = [
-        "APP_NOT_RUNNING",
-        "NOT_IN_WORKSTREAMS",
-        "STALE_IDENTITY",
-        "NO_IDENTITY",
-        "OUT_OF_SCOPE",
-        "NO_SUCH_WORKSTREAM",
-        "MISSING_PARAM",
-        "UNKNOWN_COMMAND",
-        "NOTHING_TO_UPDATE",
-        "CREATE_FAILED",
-        "DB_ERROR",
-        "BAD_REQUEST",
-        "NO_REPLY",
-        "TIMEOUT",
-        "SEND_FAILED",
-        "READ_FAILED",
-        "BAD_REPLY",
-        "APP_BUSY",
-        "ENCODE_FAILED",
-    ];
+    // Derived from the source, not a hand-kept list: the previous hardcoded
+    // array was itself a drift risk, and this test exists to catch drift.
+    let known = error_codes_in_source();
     // Environment variables share the SCREAMING_SNAKE shape and are not codes.
     let not_codes = [
         SOCKET_ENV_VAR,
@@ -332,13 +312,18 @@ fn the_skill_only_documents_error_codes_that_are_reachable() {
         "WORKSTREAMS_ACTIVE_WS",
         "WORKSTREAMS_ACTIVE_TILE",
     ];
+    assert!(
+        known.len() > 5,
+        "failed to extract error codes from source; the check would be vacuous"
+    );
+
     for token in skill.split(|c: char| !(c.is_ascii_uppercase() || c == '_')) {
         if not_codes.contains(&token) {
             continue;
         }
         if token.len() > 5 && token.contains('_') && token.to_uppercase() == token {
             assert!(
-                known.contains(&token),
+                known.contains(token),
                 "the skill mentions error code `{token}`, which nothing produces"
             );
         }
@@ -350,7 +335,7 @@ fn the_skill_only_documents_error_codes_that_are_reachable() {
 /// boundary.
 #[test]
 fn the_skill_still_carries_the_destructive_command_rule() {
-    let Some(skill) = read_skill() else { return };
+    let skill = read_skill().expect("skill must be installed; see the discoverability test");
     let lowered = skill.to_lowercase();
     assert!(
         lowered.contains("ask the human") || lowered.contains("ask the user"),
@@ -365,15 +350,63 @@ fn the_skill_still_carries_the_destructive_command_rule() {
 /// The skill must gate on the variable that actually exists.
 #[test]
 fn the_skill_gates_on_the_real_environment_variable() {
-    let Some(skill) = read_skill() else { return };
+    let skill = read_skill().expect("skill must be installed; see the discoverability test");
     assert!(
         skill.contains(SOCKET_ENV_VAR),
         "the skill's 'are you inside Workstreams' check must use {SOCKET_ENV_VAR}"
     );
 }
 
+/// Finds the installed skill, wherever it is named.
+///
+/// Searches rather than hardcoding a folder: the skill was renamed from
+/// `workstreams` to `ws` and every drift test silently *skipped* for weeks,
+/// because a missing file returned None and each test treated that as "nothing
+/// to check". A guard that passes when it cannot find its subject is worse than
+/// no guard, so this identifies the skill by its content.
+/// Every code passed to `AgentError::new` anywhere in the crate.
+fn error_codes_in_source() -> std::collections::BTreeSet<String> {
+    let mut codes = std::collections::BTreeSet::new();
+    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    for entry in std::fs::read_dir(src).into_iter().flatten().flatten() {
+        let Ok(body) = std::fs::read_to_string(entry.path()) else {
+            continue;
+        };
+        for chunk in body.split("AgentError::new(").skip(1) {
+            if let Some(quoted) = chunk.split('"').nth(1) {
+                if quoted.chars().all(|c| c.is_ascii_uppercase() || c == '_') {
+                    codes.insert(quoted.to_string());
+                }
+            }
+        }
+    }
+    codes
+}
+
 fn read_skill() -> Option<String> {
-    let path = std::path::PathBuf::from(std::env::var("HOME").ok()?)
-        .join(".copilot/skills/workstreams/SKILL.md");
-    std::fs::read_to_string(path).ok()
+    let root = std::path::PathBuf::from(std::env::var("HOME").ok()?).join(".copilot/skills");
+    for entry in std::fs::read_dir(root).ok()?.flatten() {
+        let candidate = entry.path().join("SKILL.md");
+        let Ok(body) = std::fs::read_to_string(&candidate) else {
+            continue;
+        };
+        if body.contains("workstreams agent call") {
+            return Some(body);
+        }
+    }
+    None
+}
+
+/// Fails when the skill cannot be found at all.
+///
+/// Separate from the checks below so the reason is unambiguous: "the skill is
+/// missing" and "the skill is wrong" need different fixes.
+#[test]
+fn the_skill_is_installed_and_discoverable() {
+    assert!(
+        read_skill().is_some(),
+        "no SKILL.md under ~/.copilot/skills mentions `workstreams agent call`. \
+         Either the skill is not installed or it no longer documents the CLI, \
+         and every drift check below is vacuous until that is fixed."
+    );
 }

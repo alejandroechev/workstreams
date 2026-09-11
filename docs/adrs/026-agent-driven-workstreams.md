@@ -205,6 +205,33 @@ disadvantage disappears.
 than presented. Rejected for bookkeeping: a listener per tile, created and torn
 down as tiles come and go, versus one bind and a map.
 
+## Correction: provisioning, not recording
+
+The first implementation of `ws.create` accepted a `branch` parameter and wrote
+it to the `worktree_branch` column. Nothing else happened — no worktree, no
+directory, no repository link, no session tile. The result was precisely the
+failure this ADR claims the design prevents: a workstream that *looks* right in
+the database and opens empty, with no repository colour, pointing at a branch
+whose worktree does not exist.
+
+The lesson is narrower than "call the app's code" and worth stating exactly:
+**a parameter a command cannot act on must be refused, not stored.** Accepting
+`branch=` and recording it was worse than rejecting it, because it produced a
+confident success for work that never happened, and the agent that ran it could
+not tell — `ws.list` returned only id, name and status.
+
+So `ws.create` now takes an explicit `type`, provisions before it records, and
+refuses `branch=` unless the type can act on it. `repo.list` exists because a
+workstream needs a repository to be coloured and to have anywhere to open, and
+an agent had no way to discover one. `ws.get` exists because an agent must be
+able to verify its own work.
+
+A related bug surfaced underneath: worktree creation always passed
+`git worktree add -b`, which fails on an existing branch. Creating a workstream
+for a colleague's PR branch — the case that exposed all of this — was therefore
+impossible from the UI as well. The branch is now resolved first: check out a
+local branch, track a remote one, or create a new one from the base.
+
 ## Follow-ups
 
 Not yet implemented, and deliberately out of scope here:

@@ -11,8 +11,22 @@ for any release is attached to its
 
 ## [Unreleased]
 
+### Fixed
+
+- `ws.create` with a branch now actually creates the worktree, the session tile
+  and the repository link. It previously recorded the branch name and nothing
+  else, producing a workstream that had no colour and opened empty. A failed
+  provision now writes nothing instead of leaving a half-built workstream.
+- A worktree can now be created for a branch that already exists — checking out
+  a local branch, or branching from `origin` when only the remote has it.
+  Previously every worktree was created with `git worktree add -b`, which fails
+  outright on an existing branch, so making a workstream for a colleague's PR
+  branch was impossible.
+
 ### Added
 
+- `repo.list` and `ws.get` agent commands, so an agent can find a repository to
+  create a workstream in and verify what it created.
 - An agent inside a Copilot session tile can now act on the app hosting it —
   creating and updating workstreams, and listing the ones it owns — through a
   `workstreams agent` CLI over a local socket. Writes go through the app rather

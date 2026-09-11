@@ -450,10 +450,29 @@ app injects three variables into every session: `WORKSTREAMS_ACTIVE_WS`,
 ```sh
 workstreams agent ping                       # is the app reachable?
 workstreams agent call agent.whoami          # which workstream am I?
+workstreams agent call repo.list             # which repositories exist?
 workstreams agent call ws.list               # what may I act on?
-workstreams agent call ws.create name="Refactor the parser"
+workstreams agent call ws.get id=ws-a1b2     # one workstream in full
 workstreams agent call ws.update id=ws-a1b2 name="Phase 2"
+
+# The common flow: a workstream with its own worktree and branch.
+workstreams agent call ws.create name="Read chunks" type=worktree \
+  repo=<id from repo.list> branch=eralvare/add-read-chunks
+
+# Or one that works directly in the repository clone.
+workstreams agent call ws.create name="Waimea main" type=base_repo repo=<id>
 ```
+
+**`ws.create` provisions, it does not merely record.** A `type=worktree` request
+runs the same `git worktree add` the UI runs, creates the pinned session tile,
+and returns the resulting directory — so the workstream opens on real code and
+carries its repository's colour. If git fails, nothing is written at all, rather
+than leaving a workstream that points at a directory which was never created.
+
+The branch may already exist: an existing local branch is checked out, one that
+exists only on `origin` gets a local branch at the remote tip, and an unknown
+branch is created from the base. Passing `branch=` without `type=worktree` is
+refused rather than silently stored.
 
 Arguments are `key=value`, not JSON on the command line — shell quoting is a
 real failure mode for an agent composing a call. stdout is always JSON;

@@ -176,11 +176,41 @@ fn mint_token() -> String {
     )
 }
 
+/// Side effects that live outside the database.
+///
+/// A seam rather than a direct call into the app: creating a worktree is git
+/// work, and the registry has to stay testable without a Tauri handle or a real
+/// repository. The app supplies the real implementation; tests supply a fake.
+pub trait Provisioner: Send + Sync {
+    /// Where a worktree for `branch` off `project_directory` would live.
+    fn derive_worktree_path(
+        &self,
+        project_directory: &str,
+        branch: &str,
+    ) -> Result<DerivedWorktree, String>;
+
+    /// Creates the worktree and returns its path.
+    fn create_worktree(
+        &self,
+        project_directory: &str,
+        branch: &str,
+        base_branch: Option<&str>,
+    ) -> Result<String, String>;
+}
+
+/// Where a worktree would go, and whether something is already there.
+pub struct DerivedWorktree {
+    pub path: String,
+    pub exists: bool,
+}
+
 /// Everything a command handler is allowed to touch.
 pub struct CommandContext<'a> {
     pub db: &'a Connection,
     /// `None` only for commands that declared they do not need one.
     pub caller: Option<&'a Caller>,
+    /// `None` in tests that exercise no provisioning command.
+    pub provisioner: Option<&'a dyn Provisioner>,
 }
 
 impl CommandContext<'_> {
@@ -188,6 +218,16 @@ impl CommandContext<'_> {
     ///
     /// Infallible for any command with `requires_identity`, which the dispatcher
     /// checks before the handler runs.
+    fn provisioner(&self) -> Result<&dyn Provisioner, AgentError> {
+        self.provisioner.ok_or_else(|| {
+            AgentError::new(
+                "NO_PROVISIONER",
+                "This build cannot create worktrees",
+                "Report this as a bug.",
+            )
+        })
+    }
+
     pub fn caller(&self) -> Result<&Caller, AgentError> {
         self.caller.ok_or_else(|| {
             AgentError::new(
@@ -297,6 +337,22 @@ pub const COMMANDS: &[Command] = &[
         handler: whoami,
     },
     Command {
+        id: "repo.list",
+        log_params: &[],
+        summary: "List repositories (projects) you can create workstreams in",
+        requires_identity: true,
+        destructive: false,
+        handler: repo_list,
+    },
+    Command {
+        id: "ws.get",
+        log_params: &["id"],
+        summary: "Show one workstream in full: directory, repo, branch, type, status",
+        requires_identity: true,
+        destructive: false,
+        handler: ws_get,
+    },
+    Command {
         id: "ws.list",
         log_params: &[],
         summary: "List workstreams this session may act on",
@@ -307,7 +363,7 @@ pub const COMMANDS: &[Command] = &[
     Command {
         id: "ws.create",
         log_params: &["projectId", "type", "branch"],
-        summary: "Create a workstream (params: name, description, directory, projectId)",
+        summary: "Create a workstream. type=worktree needs repo+branch; type=base_repo needs repo; type=standalone needs directory",
         requires_identity: true,
         destructive: false,
         handler: ws_create,
@@ -386,28 +442,127 @@ fn ws_list(
     ))
 }
 
+/// Workstream kinds an agent may create.
+const WORKSTREAM_TYPES: &[&str] = &["worktree", "base_repo", "standalone"];
+
 fn ws_create(
     context: &CommandContext,
     params: &serde_json::Value,
 ) -> Result<CommandOutcome, AgentError> {
     let caller = context.caller()?;
     let name = required_str(params, "name")?;
+
+    // Explicit rather than inferred. The first version defaulted to
+    // "standalone" and passed `branch` straight through to a column, so a
+    // request that asked for a worktree got a workstream that merely *recorded*
+    // a branch name: no worktree, no directory, nothing to open.
+    let kind = optional_str(params, "type").unwrap_or_else(|| "worktree".to_string());
+    if !WORKSTREAM_TYPES.contains(&kind.as_str()) {
+        return Err(AgentError::new(
+            "BAD_TYPE",
+            format!("Unknown workstream type: {kind}"),
+            format!("Use one of: {}.", WORKSTREAM_TYPES.join(", ")),
+        ));
+    }
+
+    let branch = optional_str(params, "branch");
+    if branch.is_some() && kind != "worktree" {
+        return Err(AgentError::new(
+            "BRANCH_NEEDS_WORKTREE",
+            format!("branch was given but type is {kind}"),
+            "Pass type=worktree to get a worktree on that branch, or drop branch=.",
+        ));
+    }
+
     let created_by_session = match caller {
         Caller::Agent { tile_id, .. } => Some(tile_id.clone()),
         Caller::Human => None,
     };
+
+    let (directory, project_id, worktree_branch) = match kind.as_str() {
+        "worktree" => {
+            let repo = required_str(params, "repo").map_err(|_| {
+                AgentError::new(
+                    "MISSING_PARAM",
+                    "A worktree workstream needs a repository",
+                    "Run repo.list, then pass repo=<id>.",
+                )
+            })?;
+            let branch = branch.clone().ok_or_else(|| {
+                AgentError::new(
+                    "MISSING_PARAM",
+                    "A worktree workstream needs a branch",
+                    "Pass branch=<name>. An existing branch is checked out; a new one is created.",
+                )
+            })?;
+            let project = load_project(context.db, &repo)?;
+            let provisioner = context.provisioner()?;
+
+            let derived = provisioner
+                .derive_worktree_path(&project.directory, &branch)
+                .map_err(|error| {
+                    AgentError::new("WORKTREE_PATH_FAILED", error, "Check the repository path.")
+                })?;
+            if derived.exists {
+                return Err(AgentError::new(
+                    "WORKTREE_EXISTS",
+                    format!("There is already a directory at {}", derived.path),
+                    "Use a different branch, or ask the human whether to reuse that worktree.",
+                ));
+            }
+
+            // Provision before recording. The failure this replaces left a
+            // workstream row pointing at a worktree that was never created, so
+            // it opened empty; if git fails now, nothing is written at all.
+            let path = provisioner
+                .create_worktree(
+                    &project.directory,
+                    &branch,
+                    optional_str(params, "base").as_deref(),
+                )
+                .map_err(|error| {
+                    AgentError::new(
+                        "WORKTREE_FAILED",
+                        error,
+                        "Check the branch name and that the repository is clean.",
+                    )
+                })?;
+            (Some(path), Some(project.id), Some(branch))
+        }
+        "base_repo" => {
+            let repo = required_str(params, "repo").map_err(|_| {
+                AgentError::new(
+                    "MISSING_PARAM",
+                    "A base_repo workstream needs a repository",
+                    "Run repo.list, then pass repo=<id>.",
+                )
+            })?;
+            let project = load_project(context.db, &repo)?;
+            (Some(project.directory), Some(project.id), None)
+        }
+        _ => {
+            let directory = required_str(params, "directory").map_err(|_| {
+                AgentError::new(
+                    "MISSING_PARAM",
+                    "A standalone workstream needs a directory",
+                    "Pass directory=<absolute path>, or use type=worktree with repo= and branch=.",
+                )
+            })?;
+            (Some(directory), optional_str(params, "repo"), None)
+        }
+    };
+
     let workstream = crate::insert_workstream(
         context.db,
         crate::NewWorkstream {
-            name,
-            directory: optional_str(params, "directory"),
+            name: name.clone(),
+            directory: directory.clone(),
             description: optional_str(params, "description"),
-            project_id: optional_str(params, "projectId"),
-            workstream_type: optional_str(params, "type"),
-            worktree_branch: optional_str(params, "branch"),
-            // Recorded here rather than taken from the request: provenance is
-            // what scope checks rely on, so it must come from the resolved
-            // identity and never from a parameter.
+            project_id: project_id.clone(),
+            workstream_type: Some(kind.clone()),
+            worktree_branch: worktree_branch.clone(),
+            // From the resolved identity, never a parameter: provenance is what
+            // scope checks read.
             created_by_session,
         },
     )
@@ -415,18 +570,142 @@ fn ws_create(
         AgentError::new(
             "CREATE_FAILED",
             error,
-            "Check the name and project id, then retry.",
+            "Check the name and repository, then retry.",
         )
     })?;
+
+    // A workstream with no tile opens blank. The UI always creates a pinned
+    // session tile here, so an agent-made one gets the same.
+    let tile_config = serde_json::json!({
+        "session_name": name,
+        "cwd": directory,
+        "is_resumed": false,
+        "pinned": true,
+        "created_at": crate::now(),
+    })
+    .to_string();
+    let tile = crate::insert_tile(
+        context.db,
+        &workstream.id,
+        "copilot_session",
+        Some(name.clone()),
+        Some(tile_config),
+    )
+    .map_err(|error| {
+        AgentError::new(
+            "TILE_FAILED",
+            error,
+            "The workstream exists but has no session tile; open it in the app.",
+        )
+    })?;
+
     let change = StateChange::new("workstream", &workstream.id, "created");
     Ok(CommandOutcome::changed(
         serde_json::json!({
             "id": workstream.id,
             "name": workstream.name,
+            "type": kind,
             "status": workstream.status,
+            "directory": directory,
+            "repoId": project_id,
+            "branch": worktree_branch,
+            "tileId": tile.id,
         }),
         change,
     ))
+}
+
+/// A repository the app knows about.
+struct ProjectRow {
+    id: String,
+    directory: String,
+}
+
+fn load_project(db: &Connection, repo: &str) -> Result<ProjectRow, AgentError> {
+    // Accept an id or a name, because an agent reading repo.list output has
+    // both in front of it and either is a reasonable thing to type.
+    db.query_row(
+        "SELECT id, directory FROM projects WHERE id = ?1 OR name = ?1",
+        [repo],
+        |row| {
+            Ok(ProjectRow {
+                id: row.get(0)?,
+                directory: row.get(1)?,
+            })
+        },
+    )
+    .map_err(|_| {
+        AgentError::new(
+            "NO_SUCH_REPO",
+            format!("No repository matches {repo}"),
+            "Run repo.list to see the available repositories and their ids.",
+        )
+    })
+}
+
+fn repo_list(
+    context: &CommandContext,
+    _params: &serde_json::Value,
+) -> Result<CommandOutcome, AgentError> {
+    context.caller()?;
+    let mut statement = context
+        .db
+        .prepare("SELECT id, name, directory FROM projects ORDER BY name")
+        .map_err(db_error)?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok(serde_json::json!({
+                "id": row.get::<_, String>(0)?,
+                "name": row.get::<_, String>(1)?,
+                "directory": row.get::<_, String>(2)?,
+            }))
+        })
+        .map_err(db_error)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(db_error)?;
+    Ok(CommandOutcome::read(serde_json::json!({ "repos": rows })))
+}
+
+fn ws_get(
+    context: &CommandContext,
+    params: &serde_json::Value,
+) -> Result<CommandOutcome, AgentError> {
+    let caller = context.caller()?;
+    let id = required_str(params, "id")?;
+    may_act_on(context.db, caller, &id)?;
+    // Enough to verify the result of a create without opening the app, which
+    // the previous id/name/status listing could not do.
+    let detail = context
+        .db
+        .query_row(
+            "SELECT w.id, w.name, w.status, w.directory, w.workstream_type,
+                    w.worktree_branch, w.project_id, p.name,
+                    (SELECT COUNT(*) FROM tiles t WHERE t.workstream_id = w.id)
+             FROM workstreams w LEFT JOIN projects p ON p.id = w.project_id
+             WHERE w.id = ?1",
+            [&id],
+            |row| {
+                Ok(serde_json::json!({
+                    "id": row.get::<_, String>(0)?,
+                    "name": row.get::<_, String>(1)?,
+                    "status": row.get::<_, String>(2)?,
+                    "directory": row.get::<_, Option<String>>(3)?,
+                    "type": row.get::<_, Option<String>>(4)?,
+                    "branch": row.get::<_, Option<String>>(5)?,
+                    "repoId": row.get::<_, Option<String>>(6)?,
+                    "repoName": row.get::<_, Option<String>>(7)?,
+                    "tileCount": row.get::<_, i64>(8)?,
+                }))
+            },
+        )
+        .map_err(|_| {
+            AgentError::new(
+                "NO_SUCH_WORKSTREAM",
+                format!("No workstream with id {id}"),
+                "Run ws.list to see the workstreams you can act on.",
+            )
+        })?;
+    Ok(CommandOutcome::read(detail))
 }
 
 fn ws_update(
@@ -628,11 +907,60 @@ mod tests {
         conn
     }
 
+    /// Records what it was asked to provision, so a test can assert the git
+    /// work actually happened rather than trusting the response.
+    #[derive(Default)]
+    struct FakeProvisioner {
+        created: Mutex<Vec<(String, String, Option<String>)>>,
+        path_exists: bool,
+        fail_with: Option<String>,
+    }
+
+    impl Provisioner for FakeProvisioner {
+        fn derive_worktree_path(
+            &self,
+            project_directory: &str,
+            branch: &str,
+        ) -> Result<DerivedWorktree, String> {
+            Ok(DerivedWorktree {
+                path: format!("{project_directory}-{}", branch.replace('/', "-")),
+                exists: self.path_exists,
+            })
+        }
+
+        fn create_worktree(
+            &self,
+            project_directory: &str,
+            branch: &str,
+            base_branch: Option<&str>,
+        ) -> Result<String, String> {
+            if let Some(error) = &self.fail_with {
+                return Err(error.clone());
+            }
+            self.created.lock().unwrap().push((
+                project_directory.to_string(),
+                branch.to_string(),
+                base_branch.map(str::to_string),
+            ));
+            Ok(format!("{project_directory}-{}", branch.replace('/', "-")))
+        }
+    }
+
     fn call(
         db: &Connection,
         caller: &Caller,
         cmd: &str,
         params: serde_json::Value,
+    ) -> Result<CommandOutcome, AgentError> {
+        call_with(db, caller, cmd, params, &FakeProvisioner::default())
+    }
+
+    fn call_with(
+        db: &Connection,
+        caller: &Caller,
+        cmd: &str,
+        params: serde_json::Value,
+        provisioner: &dyn Provisioner,
     ) -> Result<CommandOutcome, AgentError> {
         dispatch(
             &AgentRequest {
@@ -643,8 +971,18 @@ mod tests {
             &CommandContext {
                 db,
                 caller: Some(caller),
+                provisioner: Some(provisioner),
             },
         )
+    }
+
+    fn seed_repo(db: &Connection, id: &str, directory: &str) {
+        db.execute(
+            "INSERT INTO projects (id, name, directory, color, created_at, updated_at)
+             VALUES (?1, ?1, ?2, '#fff', '2026-01-01', '2026-01-01')",
+            rusqlite::params![id, directory],
+        )
+        .unwrap();
     }
 
     fn agent(tile: &str, workstream: &str) -> Caller {
@@ -738,6 +1076,7 @@ mod tests {
             &CommandContext {
                 db: &db,
                 caller: Some(&caller),
+                provisioner: None,
             },
         )
         .expect("dispatch")
@@ -755,6 +1094,7 @@ mod tests {
         let anonymous = CommandContext {
             db: &db,
             caller: None,
+            provisioner: None,
         };
 
         assert_eq!(
@@ -855,7 +1195,12 @@ mod tests {
             &db,
             &caller,
             "ws.create",
-            serde_json::json!({ "name": "Alpha", "createdBySession": "tile-impostor" }),
+            serde_json::json!({
+                "name": "Alpha",
+                "type": "standalone",
+                "directory": "/tmp/alpha",
+                "createdBySession": "tile-impostor",
+            }),
         )
         .expect("create")
         .data;
@@ -892,6 +1237,253 @@ mod tests {
         assert!(may_act_on(&db, &caller, &id).is_ok());
     }
 
+    /// The reported failure, end to end: a worktree request produced a
+    /// workstream with no directory, no repo and no tile -- so it had no colour
+    /// and opened empty -- while recording a branch whose worktree was never
+    /// created.
+    #[test]
+    fn a_worktree_workstream_is_fully_provisioned() {
+        let db = memory_db();
+        seed_repo(&db, "repo-1", "/code/waimea");
+        let caller = agent("tile-1", "ws-own");
+        let provisioner = FakeProvisioner::default();
+
+        let created = call_with(
+            &db,
+            &caller,
+            "ws.create",
+            serde_json::json!({
+                "name": "MediaStore Read Chunks",
+                "type": "worktree",
+                "repo": "repo-1",
+                "branch": "eralvare/add-read-chunks",
+            }),
+            &provisioner,
+        )
+        .expect("create")
+        .data;
+
+        // The worktree was actually created, not merely named.
+        assert_eq!(
+            provisioner.created.lock().unwrap().as_slice(),
+            &[(
+                "/code/waimea".to_string(),
+                "eralvare/add-read-chunks".to_string(),
+                None
+            )]
+        );
+
+        let id = created["id"].as_str().expect("id");
+        let (directory, project, kind, branch): (
+            Option<String>,
+            Option<String>,
+            String,
+            Option<String>,
+        ) = db
+            .query_row(
+                "SELECT directory, project_id, workstream_type, worktree_branch
+                 FROM workstreams WHERE id = ?1",
+                [id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        // A directory, so the workstream opens on something.
+        assert_eq!(
+            directory.as_deref(),
+            Some("/code/waimea-eralvare-add-read-chunks")
+        );
+        // A repository, which is where the sidebar colour comes from.
+        assert_eq!(project.as_deref(), Some("repo-1"));
+        assert_eq!(kind, "worktree");
+        assert_eq!(branch.as_deref(), Some("eralvare/add-read-chunks"));
+
+        // And a pinned session tile, or it opens blank.
+        let tiles: i64 = db
+            .query_row(
+                "SELECT COUNT(*) FROM tiles WHERE workstream_id = ?1 AND tile_type = 'copilot_session'",
+                [id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(tiles, 1);
+    }
+
+    /// If git fails, nothing is recorded. The earlier version wrote the row
+    /// first, so a failed provision left a workstream pointing nowhere.
+    #[test]
+    fn a_failed_worktree_leaves_no_workstream_behind() {
+        let db = memory_db();
+        seed_repo(&db, "repo-1", "/code/waimea");
+        let provisioner = FakeProvisioner {
+            fail_with: Some("git worktree add failed: branch is checked out".to_string()),
+            ..Default::default()
+        };
+
+        let error = call_with(
+            &db,
+            &agent("tile-1", "ws-own"),
+            "ws.create",
+            serde_json::json!({
+                "name": "Doomed", "type": "worktree", "repo": "repo-1", "branch": "x",
+            }),
+            &provisioner,
+        )
+        .expect_err("git failed");
+        assert_eq!(error.code, "WORKTREE_FAILED");
+
+        let rows: i64 = db
+            .query_row("SELECT COUNT(*) FROM workstreams", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(
+            rows, 0,
+            "a failed provision must not leave a half-built workstream"
+        );
+    }
+
+    #[test]
+    fn an_occupied_worktree_path_is_refused_before_anything_is_written() {
+        let db = memory_db();
+        seed_repo(&db, "repo-1", "/code/waimea");
+        let provisioner = FakeProvisioner {
+            path_exists: true,
+            ..Default::default()
+        };
+        let error = call_with(
+            &db,
+            &agent("tile-1", "ws-own"),
+            "ws.create",
+            serde_json::json!({
+                "name": "Clash", "type": "worktree", "repo": "repo-1", "branch": "x",
+            }),
+            &provisioner,
+        )
+        .expect_err("path taken");
+        assert_eq!(error.code, "WORKTREE_EXISTS");
+        assert!(provisioner.created.lock().unwrap().is_empty());
+    }
+
+    /// A base-repo workstream points at the repository itself and still carries
+    /// the project, so it is coloured and opens on the code.
+    #[test]
+    fn a_base_repo_workstream_points_at_the_repository() {
+        let db = memory_db();
+        seed_repo(&db, "repo-1", "/code/waimea");
+        let created = call(
+            &db,
+            &agent("tile-1", "ws-own"),
+            "ws.create",
+            serde_json::json!({ "name": "Waimea", "type": "base_repo", "repo": "repo-1" }),
+        )
+        .expect("create")
+        .data;
+        assert_eq!(created["directory"], "/code/waimea");
+        assert_eq!(created["repoId"], "repo-1");
+        assert_eq!(created["branch"], serde_json::Value::Null);
+    }
+
+    /// The silent failure that started this: `branch` was accepted by a create
+    /// that could not act on it, and recorded as if it had.
+    #[test]
+    fn a_branch_without_a_worktree_type_is_refused_rather_than_recorded() {
+        let db = memory_db();
+        let error = call(
+            &db,
+            &agent("tile-1", "ws-own"),
+            "ws.create",
+            serde_json::json!({
+                "name": "Alpha", "type": "standalone", "directory": "/tmp/a", "branch": "feature",
+            }),
+        )
+        .expect_err("branch is meaningless here");
+        assert_eq!(error.code, "BRANCH_NEEDS_WORKTREE");
+        assert!(error.hint.contains("type=worktree"), "{}", error.hint);
+    }
+
+    #[test]
+    fn a_worktree_without_a_repo_or_branch_says_which_is_missing() {
+        let db = memory_db();
+        seed_repo(&db, "repo-1", "/code/waimea");
+        let caller = agent("tile-1", "ws-own");
+
+        let error = call(
+            &db,
+            &caller,
+            "ws.create",
+            serde_json::json!({ "name": "A" }),
+        )
+        .expect_err("no repo");
+        assert_eq!(error.code, "MISSING_PARAM");
+        assert!(error.hint.contains("repo.list"), "{}", error.hint);
+
+        let error = call(
+            &db,
+            &caller,
+            "ws.create",
+            serde_json::json!({ "name": "A", "repo": "repo-1" }),
+        )
+        .expect_err("no branch");
+        assert!(error.message.contains("branch"), "{}", error.message);
+
+        let error = call(
+            &db,
+            &caller,
+            "ws.create",
+            serde_json::json!({ "name": "A", "repo": "nope", "branch": "b" }),
+        )
+        .expect_err("unknown repo");
+        assert_eq!(error.code, "NO_SUCH_REPO");
+    }
+
+    #[test]
+    fn repos_are_listable_so_an_agent_can_find_one() {
+        let db = memory_db();
+        seed_repo(&db, "repo-1", "/code/waimea");
+        let listed = call(
+            &db,
+            &agent("tile-1", "ws-own"),
+            "repo.list",
+            serde_json::Value::Null,
+        )
+        .expect("list")
+        .data;
+        assert_eq!(listed["repos"][0]["id"], "repo-1");
+        assert_eq!(listed["repos"][0]["directory"], "/code/waimea");
+    }
+
+    /// ws.list returns only id/name/status, which is why the agent that hit this
+    /// bug could not tell whether its request had worked.
+    #[test]
+    fn ws_get_reports_enough_to_verify_a_create() {
+        let db = memory_db();
+        seed_repo(&db, "repo-1", "/code/waimea");
+        let caller = agent("tile-1", "ws-own");
+        let created = call_with(
+            &db,
+            &caller,
+            "ws.create",
+            serde_json::json!({
+                "name": "Alpha", "type": "worktree", "repo": "repo-1", "branch": "feature/x",
+            }),
+            &FakeProvisioner::default(),
+        )
+        .expect("create")
+        .data;
+
+        let detail = call(
+            &db,
+            &caller,
+            "ws.get",
+            serde_json::json!({ "id": created["id"] }),
+        )
+        .expect("get")
+        .data;
+        assert_eq!(detail["directory"], "/code/waimea-feature-x");
+        assert_eq!(detail["repoName"], "repo-1");
+        assert_eq!(detail["branch"], "feature/x");
+        assert_eq!(detail["type"], "worktree");
+        assert_eq!(detail["tileCount"], 1);
+    }
+
     #[test]
     fn creating_without_a_name_says_which_parameter_is_missing() {
         let db = memory_db();
@@ -926,7 +1518,7 @@ mod tests {
             &db,
             &caller,
             "ws.create",
-            serde_json::json!({ "name": "Made by me" }),
+            serde_json::json!({ "name": "Made by me", "type": "standalone", "directory": "/tmp/x" }),
         )
         .expect("create");
 
@@ -1009,7 +1601,7 @@ mod tests {
             &db,
             &caller,
             "ws.create",
-            serde_json::json!({ "name": "Alpha" }),
+            serde_json::json!({ "name": "Alpha", "type": "standalone", "directory": "/tmp/a" }),
         )
         .expect("create");
         let change = created.change.expect("a create must announce itself");
@@ -1028,7 +1620,9 @@ mod tests {
     fn the_log_records_the_actor_the_app_resolved() {
         let db = memory_db();
         let caller = agent("tile-1", "ws-own");
-        let params = serde_json::json!({ "name": "Alpha" });
+        let params = serde_json::json!({
+            "name": "Alpha", "type": "standalone", "directory": "/tmp/alpha",
+        });
         let result = call(&db, &caller, "ws.create", params.clone());
         log_command(&db, "ws.create", Some(&caller), &params, &result, 12);
 

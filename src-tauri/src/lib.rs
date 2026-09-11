@@ -704,10 +704,29 @@ fn create_tile(
     title: Option<String>,
     config_json: Option<String>,
 ) -> Result<Tile, String> {
+    let tile = {
+        let db = state.db.lock().unwrap();
+        insert_tile(&db, &workstream_id, &tile_type, title, config_json)?
+    };
+    let _ = app.emit("tile-created", &tile);
+    Ok(tile)
+}
+
+/// Inserts a tile and appends it to the workstream's layout order.
+///
+/// Shared with the agent registry so a workstream an agent creates is furnished
+/// the same way the UI furnishes one -- a pinned session tile that is actually
+/// in the layout, rather than a workstream that opens empty.
+pub fn insert_tile(
+    db: &Connection,
+    workstream_id: &str,
+    tile_type: &str,
+    title: Option<String>,
+    config_json: Option<String>,
+) -> Result<Tile, String> {
     let id = uuid::Uuid::new_v4().to_string();
     let ts = now();
     let config = config_json.unwrap_or_else(|| "{}".into());
-    let db = state.db.lock().unwrap();
 
     db.execute(
         "INSERT INTO tiles (id, workstream_id, tile_type, title, config_json, created_at, updated_at)
@@ -721,7 +740,7 @@ fn create_tile(
         let order_json: String = db
             .query_row(
                 "SELECT tile_order_json FROM workstream_layouts WHERE workstream_id = ?1",
-                [&workstream_id],
+                [workstream_id],
                 |row| row.get(0),
             )
             .unwrap_or_else(|_| "[]".into());
@@ -731,22 +750,19 @@ fn create_tile(
     let new_order = serde_json::to_string(&order).unwrap();
     db.execute(
         "UPDATE workstream_layouts SET tile_order_json = ?1, updated_at = ?2 WHERE workstream_id = ?3",
-        (&new_order, &ts, &workstream_id),
+        (&new_order, &ts, workstream_id),
     )
     .map_err(|e| format!("DB error: {e}"))?;
 
-    let tile = Tile {
+    Ok(Tile {
         id,
-        workstream_id,
-        tile_type,
+        workstream_id: workstream_id.to_string(),
+        tile_type: tile_type.to_string(),
         title,
         config_json: config,
         created_at: ts.clone(),
         updated_at: ts,
-    };
-    drop(db);
-    let _ = app.emit("tile-created", &tile);
-    Ok(tile)
+    })
 }
 
 #[tauri::command]
@@ -926,6 +942,49 @@ fn update_layout(
 /// Identity is resolved from the presented token before anything else runs, so
 /// a handler is never reachable without one and can never be handed an identity
 /// through its parameters.
+/// Real provisioning for agent commands, on the app's own git code path.
+///
+/// Holds an `AppHandle` so worktree creation emits the same `worktree-progress`
+/// events the UI shows; an agent-provisioned worktree is therefore visible in
+/// the app while it runs, not just after it lands.
+struct AppProvisioner {
+    app: AppHandle,
+}
+
+impl agent_registry::Provisioner for AppProvisioner {
+    fn derive_worktree_path(
+        &self,
+        project_directory: &str,
+        branch: &str,
+    ) -> Result<agent_registry::DerivedWorktree, String> {
+        let derived = derive_worktree_path(project_directory.to_string(), branch.to_string())?;
+        Ok(agent_registry::DerivedWorktree {
+            path: derived.path,
+            exists: derived.exists,
+        })
+    }
+
+    fn create_worktree(
+        &self,
+        project_directory: &str,
+        branch: &str,
+        base_branch: Option<&str>,
+    ) -> Result<String, String> {
+        // Synchronous, unlike the UI's fire-and-forget command: the agent is
+        // blocking on the answer, and telling it "created" before git has run
+        // is what produced a workstream pointing at a directory that did not
+        // exist. Pull the base first so a new branch starts from the real tip.
+        create_worktree_inner(
+            &self.app,
+            "agent",
+            project_directory,
+            branch,
+            base_branch,
+            true,
+        )
+    }
+}
+
 #[cfg(unix)]
 fn serve_agent_request(
     app: &AppHandle,
@@ -960,6 +1019,7 @@ fn serve_agent_request(
         &agent_registry::CommandContext {
             db: &conn,
             caller: caller.as_ref(),
+            provisioner: Some(&AppProvisioner { app: app.clone() }),
         },
     );
     agent_registry::log_command(
@@ -1994,6 +2054,64 @@ fn git_branch_tracking_info(directory: String) -> Result<(u32, u32, String), Str
 /// `src/domain/worktree-path.ts`. The branch suffix is the last
 /// `/`-separated segment; the repo name is prefixed unless the suffix
 /// already starts with `<repo>-`.
+/// How a new worktree should get its branch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BranchPlan {
+    /// The branch already exists locally: check it out rather than recreating
+    /// it. `git worktree add -b` fails outright on an existing branch, which is
+    /// what made "make a worktree for this PR branch" impossible.
+    CheckoutLocal,
+    /// The branch exists only on a remote: create a local branch tracking it,
+    /// so the worktree starts at the published tip.
+    TrackRemote(String),
+    /// No such branch anywhere: create it from the base branch.
+    CreateNew,
+}
+
+/// Chooses how to attach `branch` to a new worktree.
+///
+/// Pure so the decision is testable without a git fixture; the caller supplies
+/// what git reported.
+pub fn plan_worktree_branch(exists_locally: bool, remote_ref: Option<&str>) -> BranchPlan {
+    if exists_locally {
+        BranchPlan::CheckoutLocal
+    } else if let Some(remote) = remote_ref {
+        BranchPlan::TrackRemote(remote.to_string())
+    } else {
+        BranchPlan::CreateNew
+    }
+}
+
+/// Builds the `git worktree add` arguments for a plan.
+pub fn worktree_add_args(
+    worktree_path: &str,
+    branch: &str,
+    plan: &BranchPlan,
+    base_branch: Option<&str>,
+) -> Vec<String> {
+    let mut args = vec![
+        "worktree".to_string(),
+        "add".to_string(),
+        worktree_path.to_string(),
+    ];
+    match plan {
+        BranchPlan::CheckoutLocal => args.push(branch.to_string()),
+        BranchPlan::TrackRemote(remote) => {
+            args.push("-b".to_string());
+            args.push(branch.to_string());
+            args.push(remote.clone());
+        }
+        BranchPlan::CreateNew => {
+            args.push("-b".to_string());
+            args.push(branch.to_string());
+            if let Some(base) = base_branch {
+                args.push(base.to_string());
+            }
+        }
+    }
+    args
+}
+
 fn derive_worktree_folder_name(base_repo_name: Option<&str>, branch_name: &str) -> String {
     let branch_suffix = branch_name.rsplit('/').next().unwrap_or(branch_name);
     match base_repo_name {
@@ -2050,6 +2168,41 @@ fn derive_worktree_path(
 /// `git worktree add`), emitting id-keyed `worktree-progress` running events.
 /// Returns the created worktree path. Extracted so the non-blocking command
 /// and any future reconciliation share one implementation.
+/// Whether `branch` exists as a local branch in `git_root`.
+fn local_branch_exists(git_root: &str, branch: &str) -> bool {
+    git_cmd()
+        .args([
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            &format!("refs/heads/{branch}"),
+        ])
+        .current_dir(git_root)
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false)
+}
+
+/// The remote-tracking ref for `branch`, if some remote publishes it.
+///
+/// Checked so an agent asked to work on a published branch gets that branch's
+/// actual tip, not an empty new branch that merely shares its name.
+fn remote_branch_ref(git_root: &str, branch: &str) -> Option<String> {
+    for remote in ["origin", "upstream"] {
+        let candidate = format!("refs/remotes/{remote}/{branch}");
+        let found = git_cmd()
+            .args(["rev-parse", "--verify", "--quiet", &candidate])
+            .current_dir(git_root)
+            .output()
+            .map(|output| output.status.success())
+            .unwrap_or(false);
+        if found {
+            return Some(format!("{remote}/{branch}"));
+        }
+    }
+    None
+}
+
 fn create_worktree_inner(
     app: &AppHandle,
     workstream_id: &str,
@@ -2133,16 +2286,26 @@ fn create_worktree_inner(
         "running",
     );
 
-    let mut args = vec![
-        "worktree".to_string(),
-        "add".to_string(),
-        worktree_path.to_string_lossy().to_string(),
-        "-b".to_string(),
-        branch_name.to_string(),
-    ];
-    if let Some(base) = base_branch {
-        args.push(base.to_string());
+    // Work out whether the branch already exists before assuming it must be
+    // created. Always passing `-b` meant a worktree for an existing branch --
+    // reviewing a colleague's PR, say -- failed with "branch already exists".
+    let plan = plan_worktree_branch(
+        local_branch_exists(&git_root, branch_name),
+        remote_branch_ref(&git_root, branch_name).as_deref(),
+    );
+    if let BranchPlan::TrackRemote(remote) = &plan {
+        emit(
+            "tracking-remote",
+            &format!("Branching {branch_name} from {remote}"),
+            "running",
+        );
     }
+    let args = worktree_add_args(
+        &worktree_path.to_string_lossy(),
+        branch_name,
+        &plan,
+        base_branch,
+    );
 
     let output = git_cmd()
         .args(args.iter().map(|s| s.as_str()))
@@ -5715,6 +5878,105 @@ mod tests {
     fn rewrite_tile_cwd_errors_on_malformed_json() {
         let err = rewrite_tile_cwd("{ not json", "terminal", "C:/new").unwrap_err();
         assert!(err.contains("Invalid tile config JSON"));
+    }
+
+    #[test]
+    fn branch_detection_matches_real_git() {
+        // The unit tests above pin the decision; this pins the facts it is fed,
+        // because the reported bug was git rejecting `-b` on a branch that
+        // already existed.
+        let dir = std::env::temp_dir().join(format!("ws-branch-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::create_dir_all(&dir).unwrap();
+        let root = dir.to_string_lossy().to_string();
+        let git = |args: &[&str]| {
+            git_cmd()
+                .args(args)
+                .current_dir(&root)
+                .output()
+                .expect("git")
+        };
+        git(&["init", "-q"]);
+        git(&["config", "user.email", "t@example.com"]);
+        git(&["config", "user.name", "Test"]);
+        std::fs::write(dir.join("f.txt"), "x").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-qm", "init"]);
+        git(&["branch", "eralvare/add-read-chunks"]);
+
+        assert!(
+            local_branch_exists(&root, "eralvare/add-read-chunks"),
+            "a slashed branch name must be detected"
+        );
+        assert!(!local_branch_exists(&root, "does/not-exist"));
+        // No remote is configured, so nothing should be claimed.
+        assert_eq!(remote_branch_ref(&root, "eralvare/add-read-chunks"), None);
+
+        // The decision that follows is the one that was broken.
+        assert_eq!(
+            plan_worktree_branch(
+                local_branch_exists(&root, "eralvare/add-read-chunks"),
+                remote_branch_ref(&root, "eralvare/add-read-chunks").as_deref()
+            ),
+            BranchPlan::CheckoutLocal
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn plan_worktree_branch_prefers_an_existing_branch_over_recreating_it() {
+        // The bug this encodes: `-b` on an existing branch fails outright, so a
+        // worktree for a colleague's PR branch was impossible.
+        assert_eq!(
+            plan_worktree_branch(true, Some("origin/feature")),
+            BranchPlan::CheckoutLocal
+        );
+        assert_eq!(
+            plan_worktree_branch(false, Some("origin/feature")),
+            BranchPlan::TrackRemote("origin/feature".to_string())
+        );
+        assert_eq!(plan_worktree_branch(false, None), BranchPlan::CreateNew);
+    }
+
+    #[test]
+    fn worktree_add_args_match_the_plan() {
+        // Existing local branch: check it out, never -b.
+        assert_eq!(
+            worktree_add_args(
+                "/w/path",
+                "feature",
+                &BranchPlan::CheckoutLocal,
+                Some("main")
+            ),
+            vec!["worktree", "add", "/w/path", "feature"]
+        );
+        // Published but not local: create a local branch at the remote tip, so
+        // the worktree holds the real work rather than an empty namesake.
+        assert_eq!(
+            worktree_add_args(
+                "/w/path",
+                "feature",
+                &BranchPlan::TrackRemote("origin/feature".to_string()),
+                Some("main")
+            ),
+            vec![
+                "worktree",
+                "add",
+                "/w/path",
+                "-b",
+                "feature",
+                "origin/feature"
+            ]
+        );
+        // Brand new: branch from the base.
+        assert_eq!(
+            worktree_add_args("/w/path", "feature", &BranchPlan::CreateNew, Some("main")),
+            vec!["worktree", "add", "/w/path", "-b", "feature", "main"]
+        );
+        assert_eq!(
+            worktree_add_args("/w/path", "feature", &BranchPlan::CreateNew, None),
+            vec!["worktree", "add", "/w/path", "-b", "feature"]
+        );
     }
 
     #[test]
