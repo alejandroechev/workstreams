@@ -640,6 +640,36 @@ describe("clicking an archived workstream", () => {
     mocks.listAll.mockReturnValue([]);
   });
 
+  /**
+   * There are two ways in — the row click and the Unarchive menu action — so
+   * the guard lives inside unarchiveAndOpen rather than at one call site.
+   */
+  it("refuses while the worktree is still being removed", async () => {
+    const backend = createBackend();
+    vi.mocked(backend.listWorkstreams).mockResolvedValue([
+      ...workstreams,
+      { ...archivedWorkstream("/still-here"), status: "archiving" },
+    ]);
+    mocks.invoke.mockImplementation(async (cmd: unknown) =>
+      cmd === "path_exists" ? true : null,
+    );
+    const alert = vi.spyOn(window, "alert").mockImplementation(() => {});
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    await renderApp(backend);
+    const row = await screen.findByText("Old work");
+    await act(async () => {
+      fireEvent.click(row);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(alert).toHaveBeenCalledWith(expect.stringContaining("still being archived"));
+    expect(backend.updateWorkstream).not.toHaveBeenCalled();
+    alert.mockRestore();
+    confirm.mockRestore();
+  });
+
   it("does nothing when the confirmation is declined", async () => {
     const backend = createBackend();
     vi.mocked(backend.listWorkstreams).mockResolvedValue([

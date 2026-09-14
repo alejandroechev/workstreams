@@ -258,7 +258,14 @@ export class MemoryBackend implements Backend {
     return Array.from(this.workLanes.values());
   }
 
-  async createWorkLane(name: string): Promise<WorkLane> {
+  /**
+   * Validation shared by create and rename.
+   *
+   * Guarding only creation let a rename reintroduce everything the guard
+   * existed to prevent — a lane named "none" shadowing the clearing sentinel,
+   * or a case-only duplicate.
+   */
+  private validateLaneName(name: string, allowId?: string): string {
     const trimmed = name.trim();
     if (!trimmed) throw new Error("A lane needs a name");
     // `ws.lane lane=none` means "no lane", so a lane by that name could never
@@ -266,12 +273,26 @@ export class MemoryBackend implements Backend {
     if (trimmed.toLowerCase() === "none") {
       throw new Error(`"${trimmed}" is reserved — it means "no lane". Pick another name.`);
     }
-    // Idempotent and case-insensitive, matching the unique index in SQLite —
-    // otherwise the stub would accept what the real backend rejects.
-    const existing = Array.from(this.workLanes.values()).find(
-      (lane) => lane.name.toLowerCase() === trimmed.toLowerCase(),
+    const clash = this.findLaneByName(trimmed);
+    if (clash && clash.id !== allowId) {
+      throw new Error(`A lane named ${clash.name} already exists`);
+    }
+    return trimmed;
+  }
+
+  private findLaneByName(name: string): WorkLane | undefined {
+    const folded = name.trim().toLowerCase();
+    return Array.from(this.workLanes.values()).find(
+      (lane) => lane.name.trim().toLowerCase() === folded,
     );
+  }
+
+  async createWorkLane(name: string): Promise<WorkLane> {
+    // Idempotent: an existing lane is returned rather than rejected, so the
+    // collision check only bites on rename.
+    const existing = this.findLaneByName(name);
     if (existing) return existing;
+    const trimmed = this.validateLaneName(name);
     const lane: WorkLane = { id: `lane-${this.nextLaneId++}`, name: trimmed };
     this.workLanes.set(lane.id, lane);
     return lane;
@@ -279,7 +300,8 @@ export class MemoryBackend implements Backend {
 
   async renameWorkLane(id: string, name: string): Promise<void> {
     const lane = this.workLanes.get(id);
-    if (lane) lane.name = name.trim();
+    if (!lane) return;
+    lane.name = this.validateLaneName(name, id);
   }
 
   async deleteWorkLane(id: string): Promise<void> {

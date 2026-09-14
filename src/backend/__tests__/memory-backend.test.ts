@@ -33,6 +33,21 @@ describe("MemoryBackend work lanes", () => {
     await expect(backend.createWorkLane("None")).rejects.toThrow(/reserved/);
   });
 
+  /** Rename must enforce everything creation does. */
+  it("refuses a rename that duplicates or reserves a name", async () => {
+    const backend = new MemoryBackend();
+    await backend.createWorkLane("Équipe");
+    const other = await backend.createWorkLane("Other");
+
+    await expect(backend.renameWorkLane(other.id, "équipe")).rejects.toThrow(/already exists/);
+    await expect(backend.renameWorkLane(other.id, " NONE ")).rejects.toThrow(/reserved/);
+
+    // Its own name in different casing is not a collision with itself.
+    await backend.renameWorkLane(other.id, "OTHER");
+    const lanes = await backend.listWorkLanes();
+    expect(lanes.find((l) => l.id === other.id)?.name).toBe("OTHER");
+  });
+
   it("re-files members as No lane when their lane is deleted", async () => {
     const backend = new MemoryBackend();
     const ws = await backend.createWorkstream("One", "/w");

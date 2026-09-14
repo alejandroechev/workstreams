@@ -792,6 +792,17 @@ export default function App() {
    */
   const unarchiveAndOpen = useCallback(
     async (ws: Workstream) => {
+      // Checked here rather than by the caller, because there are two ways in —
+      // clicking the row and the Unarchive menu action — and guarding only one
+      // of them leaves the other able to reopen a workstream mid-deletion.
+      // `archiving` is frontend-only, so a reload can lose it; the in-flight
+      // set is the authority while the app is running.
+      const removalRunning = () => inFlightRef.current.has(ws.id);
+      if (removalRunning()) {
+        window.alert("This workstream is still being archived.");
+        return;
+      }
+
       let directoryExists = false;
       if (ws.directory) {
         try {
@@ -824,6 +835,12 @@ export default function App() {
         if (!ok) return;
       }
       if (!confirmDiscardDirtyFileBuffers("switch workstreams")) return;
+      // Re-checked after the awaits: a removal can start while the dialogs are
+      // open, and the check above would not have seen it.
+      if (removalRunning()) {
+        window.alert("This workstream is still being archived.");
+        return;
+      }
 
       if (outcome.action === "confirm") {
         await backend.updateWorkstream(ws.id, { status: "active" });
@@ -852,14 +869,7 @@ export default function App() {
       // something. Unarchiving is asynchronous because it has to stat the
       // directory first.
       if (target && (target.status === "archived" || target.status === "archiving")) {
-        // `archiving` is frontend-only state — the row is persisted as
-        // `archived` the moment the archive is confirmed — so a reload (an
-        // agent's state-changed event, say) would drop it and let the user
-        // unarchive a workstream whose worktree is still being deleted. The
-        // in-flight set is the authority while the app is running.
-        void unarchiveAndOpen(
-          inFlightRef.current.has(id) ? { ...target, status: "archiving" } : target,
-        );
+        void unarchiveAndOpen(target);
         return;
       }
 

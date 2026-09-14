@@ -478,21 +478,47 @@ pub fn insert_workstream(db: &Connection, input: NewWorkstream) -> Result<Workst
 ///
 /// Idempotent because the caller usually wants "a lane called X to exist", and
 /// making that an error would force every caller to list first.
-pub fn upsert_lane(db: &Connection, name: &str) -> Result<WorkLane, String> {
+/// Validates a lane name for both creation and rename.
+///
+/// Shared deliberately: the first version guarded only creation, so a rename
+/// could reintroduce every problem the guard existed to prevent -- a lane called
+/// "none" that shadows the clearing sentinel, or a Unicode-equivalent duplicate
+/// the ASCII-only unique index does not catch.
+///
+/// `allow_id` is the lane being renamed, which must not collide with itself.
+fn validate_lane_name(
+    db: &Connection,
+    name: &str,
+    allow_id: Option<&str>,
+) -> Result<String, String> {
     let trimmed = name.trim();
     if trimmed.is_empty() {
         return Err("A lane needs a name".to_string());
     }
-    // Reserved: `ws.lane lane=none` means "take it out of its lane", so a lane
-    // actually called that could never be assigned to.
+    // `ws.lane lane=none` means "take it out of its lane", so a lane actually
+    // called that could never be assigned to.
     if trimmed.eq_ignore_ascii_case(agent_registry::CLEAR_LANE) {
         return Err(format!(
             "\"{trimmed}\" is reserved — it means \"no lane\". Pick another name."
         ));
     }
     if let Some(existing) = find_lane_by_name(db, trimmed)? {
+        if allow_id != Some(existing.id.as_str()) {
+            return Err(format!("A lane named {} already exists", existing.name));
+        }
+    }
+    Ok(trimmed.to_string())
+}
+
+pub fn upsert_lane(db: &Connection, name: &str) -> Result<WorkLane, String> {
+    let trimmed = name.trim();
+    // Creation is idempotent, so an existing lane is returned rather than
+    // rejected -- the collision check in validate_lane_name is for rename.
+    if let Some(existing) = find_lane_by_name(db, trimmed)? {
         return Ok(existing);
     }
+    let trimmed = validate_lane_name(db, name, None)?;
+    let trimmed = trimmed.as_str();
     let lane = WorkLane {
         id: uuid::Uuid::new_v4().to_string(),
         name: trimmed.to_string(),
@@ -583,24 +609,15 @@ fn create_work_lane(state: State<'_, AppState>, name: String) -> Result<WorkLane
 
 #[tauri::command]
 fn rename_work_lane(state: State<'_, AppState>, id: String, name: String) -> Result<(), String> {
-    let trimmed = name.trim();
-    if trimmed.is_empty() {
-        return Err("A lane needs a name".to_string());
-    }
     let db = state.db.lock().unwrap();
+    // The same validation creation uses, excluding this lane from the collision
+    // check so renaming a lane to a different casing of its own name works.
+    let trimmed = validate_lane_name(&db, &name, Some(&id))?;
     db.execute(
         "UPDATE work_lanes SET name = ?2, updated_at = ?3 WHERE id = ?1",
-        (&id, trimmed, now()),
+        (&id, &trimmed, now()),
     )
-    .map_err(|e| {
-        // The unique index is what produces this, and the caller needs to know
-        // which of the two failures it was.
-        if e.to_string().contains("UNIQUE") {
-            format!("A lane named {trimmed} already exists")
-        } else {
-            format!("DB error: {e}")
-        }
-    })?;
+    .map_err(|e| format!("DB error: {e}"))?;
     Ok(())
 }
 
@@ -7114,6 +7131,33 @@ Body here.
 
     /// SQLite's bundled lower() is ASCII-only, so folding in SQL would make
     /// these two lanes here and one in the in-memory stub.
+    /// Rename must enforce everything creation does. Guarding only creation
+    /// let a rename reintroduce a reserved name or a duplicate the ASCII-only
+    /// unique index cannot see.
+    #[test]
+    fn renaming_a_lane_enforces_the_same_rules_as_creating_one() {
+        let db = lane_db();
+        let equipe = upsert_lane(&db, "Équipe").expect("lane");
+        let other = upsert_lane(&db, "Other").expect("lane");
+
+        // A Unicode-equivalent duplicate: the unique index would allow it.
+        let error = validate_lane_name(&db, "équipe", Some(&other.id)).expect_err("duplicate");
+        assert!(error.contains("already exists"), "{error}");
+
+        // The reserved sentinel.
+        for reserved in ["none", " NONE "] {
+            assert!(
+                validate_lane_name(&db, reserved, Some(&other.id)).is_err(),
+                "{reserved:?}"
+            );
+        }
+
+        // Renaming a lane to a different casing of its own name is fine.
+        validate_lane_name(&db, "ÉQUIPE", Some(&equipe.id)).expect("self-rename");
+        // And an ordinary new name is fine.
+        validate_lane_name(&db, "Tooling", Some(&other.id)).expect("new name");
+    }
+
     #[test]
     fn lane_lookup_folds_non_ascii_case() {
         let db = lane_db();
