@@ -350,6 +350,63 @@ fn pull_requests_link_list_and_unlink_through_the_cli() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
+/// Files a workstream into a lane and back out, through the real binary.
+#[test]
+fn work_lanes_are_assignable_through_the_cli() {
+    let dir = scratch_dir("lane");
+    let path = socket_path_in(&dir, 8);
+    let db_path = dir.join("ws.db");
+    let db = workstreams_lib::db::open_db(&db_path).expect("db");
+    db.execute(
+        "INSERT INTO workstreams (id, name, status, created_at, updated_at)
+         VALUES ('ws-1','One','active','2026-01-01','2026-01-01')",
+        [],
+    )
+    .expect("seed");
+    drop(db);
+
+    let identities = std::sync::Arc::new(IdentityRegistry::new());
+    let token = identities.issue("tile-1", "ws-1");
+    let server = AgentSocketServer::start(
+        path.clone(),
+        serve_with_db(std::sync::Arc::clone(&identities), db_path.clone()),
+    )
+    .expect("start server");
+
+    let run = |args: &[&str]| {
+        let output = cli()
+            .args(args)
+            .env(SOCKET_ENV_VAR, &path)
+            .env(TOKEN_ENV_VAR, &token)
+            .output()
+            .expect("run the CLI");
+        serde_json::from_str::<serde_json::Value>(&String::from_utf8_lossy(&output.stdout))
+            .expect("parse stdout")
+    };
+
+    let filed = run(&["agent", "call", "ws.lane", "lane=Media Store"]);
+    assert_eq!(filed["ok"], true, "{filed}");
+    assert_eq!(filed["data"]["lane"], "Media Store");
+
+    // The lane survives in storage rather than only in the reply.
+    let check = workstreams_lib::db::open_db(&db_path).expect("db");
+    let lane: Option<String> = check
+        .query_row(
+            "SELECT lane_id FROM workstreams WHERE id='ws-1'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("read lane");
+    assert!(lane.is_some(), "the workstream should be filed");
+    drop(check);
+
+    let cleared = run(&["agent", "call", "ws.lane", "lane=none"]);
+    assert_eq!(cleared["data"]["lane"], serde_json::Value::Null);
+
+    drop(server);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 // ── Skill drift ────────────────────────────────────────────────────────────
 //
 // The skill lives in ~/.copilot/skills/ and the CLI ships in this binary, so

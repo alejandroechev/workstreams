@@ -369,6 +369,14 @@ pub const COMMANDS: &[Command] = &[
         handler: ws_create,
     },
     Command {
+        id: "ws.lane",
+        log_params: &["ws"],
+        summary: "Put a workstream in a work lane (params: lane, ws; lane=none to clear)",
+        requires_identity: true,
+        destructive: false,
+        handler: ws_lane,
+    },
+    Command {
         id: "pr.link",
         log_params: &["ws"],
         summary: "Link a pull request to a workstream (params: url, note, ws)",
@@ -964,6 +972,47 @@ fn pr_list(
         "workstreamId": workstream_id,
         "pullRequests": rows,
     })))
+}
+
+fn ws_lane(
+    context: &CommandContext,
+    params: &serde_json::Value,
+) -> Result<CommandOutcome, AgentError> {
+    let workstream_id = target_workstream(context, params)?;
+    let lane = required_str(params, "lane")?;
+
+    // "none" clears rather than naming a lane, because an agent that can file a
+    // workstream should be able to unfile it without a second command.
+    let (lane_id, lane_name) = if lane.eq_ignore_ascii_case("none") {
+        (None, None)
+    } else {
+        let created = crate::upsert_lane(context.db, &lane).map_err(|error| {
+            AgentError::new(
+                "LANE_FAILED",
+                error,
+                "Lane names must be non-empty; an existing name is reused rather than duplicated.",
+            )
+        })?;
+        (Some(created.id), Some(created.name))
+    };
+
+    crate::set_workstream_lane(context.db, &workstream_id, lane_id.as_deref()).map_err(
+        |error| {
+            AgentError::new(
+                "LANE_ASSIGN_FAILED",
+                error,
+                "Run ws.list to see the workstreams you can act on.",
+            )
+        },
+    )?;
+
+    Ok(CommandOutcome::changed(
+        serde_json::json!({
+            "workstreamId": workstream_id,
+            "lane": lane_name,
+        }),
+        StateChange::new("workstream", &workstream_id, "lane_changed"),
+    ))
 }
 
 fn db_error(error: rusqlite::Error) -> AgentError {
@@ -1705,6 +1754,133 @@ mod tests {
         assert_eq!(detail["branch"], "feature/x");
         assert_eq!(detail["type"], "worktree");
         assert_eq!(detail["tileCount"], 1);
+    }
+
+    // ── Work lanes ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn an_agent_can_file_a_workstream_in_a_lane_and_unfile_it() {
+        let db = memory_db();
+        seed_workstream(&db, "ws-own", None);
+        let caller = agent("tile-1", "ws-own");
+
+        let filed = call(
+            &db,
+            &caller,
+            "ws.lane",
+            serde_json::json!({ "lane": "Media Store" }),
+        )
+        .expect("file")
+        .data;
+        assert_eq!(filed["lane"], "Media Store");
+        let placed: Option<String> = db
+            .query_row(
+                "SELECT lane_id FROM workstreams WHERE id='ws-own'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(placed.is_some());
+
+        // "none" is the inverse, so filing and unfiling are one command.
+        let cleared = call(
+            &db,
+            &caller,
+            "ws.lane",
+            serde_json::json!({ "lane": "none" }),
+        )
+        .expect("clear")
+        .data;
+        assert_eq!(cleared["lane"], serde_json::Value::Null);
+        let after: Option<String> = db
+            .query_row(
+                "SELECT lane_id FROM workstreams WHERE id='ws-own'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(after, None);
+    }
+
+    /// Naming an existing lane reuses it, so two agents filing into the same
+    /// lane do not end up with two folders that look identical.
+    #[test]
+    fn filing_into_an_existing_lane_reuses_it() {
+        let db = memory_db();
+        seed_workstream(&db, "ws-own", None);
+        seed_workstream(&db, "ws-two", Some("tile-1"));
+        let caller = agent("tile-1", "ws-own");
+
+        call(
+            &db,
+            &caller,
+            "ws.lane",
+            serde_json::json!({ "lane": "Media Store" }),
+        )
+        .expect("a");
+        call(
+            &db,
+            &caller,
+            "ws.lane",
+            serde_json::json!({ "lane": "media store", "ws": "ws-two" }),
+        )
+        .expect("b");
+
+        let lanes: i64 = db
+            .query_row("SELECT COUNT(*) FROM work_lanes", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(lanes, 1, "case alone must not create a second lane");
+    }
+
+    #[test]
+    fn filing_a_workstream_out_of_scope_is_refused() {
+        let db = memory_db();
+        seed_workstream(&db, "ws-own", None);
+        seed_workstream(&db, "ws-stranger", Some("tile-9"));
+
+        let error = call(
+            &db,
+            &agent("tile-1", "ws-own"),
+            "ws.lane",
+            serde_json::json!({ "lane": "Mine", "ws": "ws-stranger" }),
+        )
+        .expect_err("out of scope");
+        assert_eq!(error.code, "OUT_OF_SCOPE");
+
+        let moved: Option<String> = db
+            .query_row(
+                "SELECT lane_id FROM workstreams WHERE id='ws-stranger'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(moved, None, "the refusal must prevent the write");
+    }
+
+    #[test]
+    fn filing_without_a_lane_name_says_so() {
+        let db = memory_db();
+        seed_workstream(&db, "ws-own", None);
+        let error = call(
+            &db,
+            &agent("tile-1", "ws-own"),
+            "ws.lane",
+            serde_json::json!({}),
+        )
+        .expect_err("no lane");
+        assert_eq!(error.code, "MISSING_PARAM");
+    }
+
+    /// The log records which workstream moved, never the lane name -- that is
+    /// caller-supplied text like any other.
+    #[test]
+    fn filing_records_the_workstream_but_not_the_lane_name() {
+        let logged = summarise_params(
+            find("ws.lane"),
+            &serde_json::json!({ "ws": "ws-1", "lane": "A private codename" }),
+        );
+        assert!(!logged.contains("private codename"), "{logged}");
+        assert!(logged.contains("\"ws\""), "{logged}");
     }
 
     // ── Pull request links ─────────────────────────────────────────────────
