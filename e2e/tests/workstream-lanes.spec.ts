@@ -44,8 +44,13 @@ async function createWorkstream(page: Page, name: string) {
 }
 
 async function addLane(page: Page, name: string) {
-  page.once("dialog", (dialog) => dialog.accept(name));
+  // An inline input, not a dialog: window.prompt does not exist in the Tauri
+  // webview, so a prompt-based control is dead in the packaged app while
+  // working perfectly here in Chromium.
   await page.locator('[data-testid="ws-add-lane"]').click();
+  const input = page.locator('[data-testid="ws-new-lane-input"]');
+  await input.fill(name);
+  await input.press("Enter");
 }
 
 test.describe("workstream lanes", () => {

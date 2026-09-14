@@ -187,6 +187,12 @@ export default function WorkstreamSidebar({
 }: Props) {
   const [showArchived, setShowArchived] = useState(false);
   const [renamingWsId, setRenamingWsId] = useState<string | null>(null);
+  // An inline input rather than window.prompt, which WKWebView does not
+  // implement -- the button silently did nothing in the packaged app while
+  // working in every test environment.
+  const [addingLane, setAddingLane] = useState(false);
+  const [newLaneName, setNewLaneName] = useState("");
+  const newLaneInputRef = useRef<HTMLInputElement>(null);
   const [renameValue, setRenameValue] = useState("");
   const renameInputRef = useRef<HTMLInputElement>(null);
   const [actionMenuWsId, setActionMenuWsId] = useState<string | null>(null);
@@ -304,6 +310,10 @@ export default function WorkstreamSidebar({
   }, [workstreams.map((w) => w.id).join(","), activeWsId]);
 
   // Auto-focus rename input
+  useEffect(() => {
+    if (addingLane) newLaneInputRef.current?.focus();
+  }, [addingLane]);
+
   useEffect(() => {
     if (renamingWsId && renameInputRef.current) {
       renameInputRef.current.focus();
@@ -805,25 +815,61 @@ export default function WorkstreamSidebar({
             ))}
           </div>
         )}
-        {onCreateLane && (
-          <button
-            data-testid="ws-add-lane"
-            onClick={() => {
-              const name = window.prompt("New work lane name");
-              if (name?.trim()) onCreateLane(name.trim());
-            }}
-            style={{
-              ...sectionHeaderStyle,
-              color: "#6c7086",
-              justifyContent: "flex-start",
-              gap: 4,
-            }}
-            title="New work lane"
-          >
-            <PlusIcon style={{ width: 10, height: 10 }} />
-            <span>New lane</span>
-          </button>
-        )}
+        {onCreateLane &&
+          (addingLane ? (
+            <input
+              ref={newLaneInputRef}
+              data-testid="ws-new-lane-input"
+              type="text"
+              value={newLaneName}
+              placeholder="Lane name"
+              onChange={(e) => setNewLaneName(e.target.value)}
+              onKeyDown={(e) => {
+                e.stopPropagation();
+                if (e.key === "Enter") {
+                  const name = newLaneName.trim();
+                  if (name) onCreateLane(name);
+                  setAddingLane(false);
+                  setNewLaneName("");
+                }
+                if (e.key === "Escape") {
+                  setAddingLane(false);
+                  setNewLaneName("");
+                }
+              }}
+              onBlur={() => {
+                setAddingLane(false);
+                setNewLaneName("");
+              }}
+              style={{
+                width: "100%",
+                background: "#313244",
+                border: "1px solid #45475a",
+                borderRadius: 3,
+                color: "#cdd6f4",
+                padding: "3px 6px",
+                fontSize: 11,
+                fontFamily: "inherit",
+                outline: "none",
+                margin: "2px 0",
+              }}
+            />
+          ) : (
+            <button
+              data-testid="ws-add-lane"
+              onClick={() => setAddingLane(true)}
+              style={{
+                ...sectionHeaderStyle,
+                color: "#6c7086",
+                justifyContent: "flex-start",
+                gap: 4,
+              }}
+              title="New work lane"
+            >
+              <PlusIcon style={{ width: 10, height: 10 }} />
+              <span>New lane</span>
+            </button>
+          ))}
         {laneGroups.map((group) => {
           const key = laneKey(group);
           const collapsed = collapsedSections[key] === true;

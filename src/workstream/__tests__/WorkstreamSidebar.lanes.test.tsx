@@ -140,6 +140,107 @@ describe("archive cleanup in the unified list", () => {
   });
 });
 
+describe("creating a lane", () => {
+  /**
+   * The bug this encodes: the button used `window.prompt`, which WKWebView --
+   * and therefore the packaged app -- does not implement. jsdom and Chromium
+   * both provide it, so neither the unit tests nor the Playwright suite could
+   * see the failure; only the real app could.
+   *
+   * Deleting it here models the host we actually ship on.
+   */
+  it("works without window.prompt, which the Tauri webview does not implement", () => {
+    const original = window.prompt;
+    // @ts-expect-error -- modelling a host that has no prompt at all.
+    delete window.prompt;
+    const onCreateLane = vi.fn();
+    try {
+      render(
+        <WorkstreamSidebar
+          projects={[project]}
+          workstreams={[mkWs("a")]}
+          loadedWsIds={new Set()}
+          activeWsId={null}
+          onSelectWorkstream={vi.fn()}
+          onCreateProject={vi.fn()}
+          onImportProject={vi.fn()}
+          onCreateWorkstream={vi.fn()}
+          onArchiveWorkstream={vi.fn()}
+          onRenameWorkstream={vi.fn()}
+          onUpdateProject={vi.fn()}
+          onChangeStatus={vi.fn()}
+          onCreateLane={onCreateLane}
+        />,
+      );
+
+      fireEvent.click(screen.getByTestId("ws-add-lane"));
+      const input = screen.getByTestId("ws-new-lane-input");
+      fireEvent.change(input, { target: { value: "  Media Store  " } });
+      fireEvent.keyDown(input, { key: "Enter" });
+
+      expect(onCreateLane).toHaveBeenCalledWith("Media Store");
+    } finally {
+      window.prompt = original;
+    }
+  });
+
+  it("abandons the new lane on Escape", () => {
+    const onCreateLane = vi.fn();
+    render(
+      <WorkstreamSidebar
+        projects={[project]}
+        workstreams={[mkWs("a")]}
+        loadedWsIds={new Set()}
+        activeWsId={null}
+        onSelectWorkstream={vi.fn()}
+        onCreateProject={vi.fn()}
+        onImportProject={vi.fn()}
+        onCreateWorkstream={vi.fn()}
+        onArchiveWorkstream={vi.fn()}
+        onRenameWorkstream={vi.fn()}
+        onUpdateProject={vi.fn()}
+        onChangeStatus={vi.fn()}
+        onCreateLane={onCreateLane}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId("ws-add-lane"));
+    const input = screen.getByTestId("ws-new-lane-input");
+    fireEvent.keyDown(input, { key: "Escape" });
+
+    expect(onCreateLane).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("ws-new-lane-input")).toBeNull();
+  });
+
+  it("ignores an empty name", () => {
+    const onCreateLane = vi.fn();
+    render(
+      <WorkstreamSidebar
+        projects={[project]}
+        workstreams={[mkWs("a")]}
+        loadedWsIds={new Set()}
+        activeWsId={null}
+        onSelectWorkstream={vi.fn()}
+        onCreateProject={vi.fn()}
+        onImportProject={vi.fn()}
+        onCreateWorkstream={vi.fn()}
+        onArchiveWorkstream={vi.fn()}
+        onRenameWorkstream={vi.fn()}
+        onUpdateProject={vi.fn()}
+        onChangeStatus={vi.fn()}
+        onCreateLane={onCreateLane}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId("ws-add-lane"));
+    const input = screen.getByTestId("ws-new-lane-input");
+    fireEvent.change(input, { target: { value: "   " } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    expect(onCreateLane).not.toHaveBeenCalled();
+  });
+});
+
 describe("assigning lanes by drag", () => {
   const lanes = [
     { id: "l1", name: "Media Store" },
