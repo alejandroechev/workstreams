@@ -186,7 +186,6 @@ export default function WorkstreamSidebar({
   onRetryRemove,
   onDiscardWorkstream,
 }: Props) {
-  const [showArchived, setShowArchived] = useState(false);
   const [renamingWsId, setRenamingWsId] = useState<string | null>(null);
   // An inline input rather than window.prompt, which WKWebView does not
   // implement -- the button silently did nothing in the packaged app while
@@ -200,7 +199,6 @@ export default function WorkstreamSidebar({
   const [actionMenuAnchor, setActionMenuAnchor] = useState<{ top: number; left: number }>({ top: 0, left: 0 });
   const [hoveredWsId, setHoveredWsId] = useState<string | null>(null);
   const [draggedWsId, setDraggedWsId] = useState<string | null>(null);
-  const [dragOverWsId, setDragOverWsId] = useState<string | null>(null);
   const [workstreamsCollapsed, setWorkstreamsCollapsed] = useState(false);
   // Idle starts collapsed: it is the pile you keep but are not working on, and
   // leaving it open reproduces exactly the crowding this split exists to fix.
@@ -383,7 +381,6 @@ export default function WorkstreamSidebar({
   const renderWorkstreamRow = (ws: Workstream) => {
           const isActive = ws.id === activeWsId;
           const project = getProject(ws.project_id);
-          const isDragOver = dragOverWsId === ws.id;
           const isBeingDragged = draggedWsId === ws.id;
           const loop = loopByWorkstream.get(ws.id);
           const loopRunning = runningLoopStates.has(loop?.runState ?? "");
@@ -416,14 +413,10 @@ export default function WorkstreamSidebar({
                 cursor: isBeingDragged ? "grabbing" : "pointer",
                 opacity: isBeingDragged ? 0.4 : isArchived ? 0.45 : 1,
                 background: isActive ? "#313244" : "transparent",
-                borderTop: isDragOver ? "2px solid #89b4fa" : isActive ? "1px solid #45475a" : "1px solid transparent",
-                borderRight: isActive ? "1px solid #45475a" : "1px solid transparent",
-                borderBottom: isActive ? "1px solid #45475a" : "1px solid transparent",
-                borderLeft: isActive
-                  ? `3px solid ${project ? project.color : "#89b4fa"}`
-                  : project
-                    ? `3px solid ${project.color}`
-                    : "3px solid transparent",
+                // No per-repo colour bar here any more: the lane it sits in now
+                // carries the colour, and two competing accents in one row made
+                // both harder to read. The repo is still named in the row.
+                border: isActive ? "1px solid #45475a" : "1px solid transparent",
                 boxShadow: isActive ? "0 1px 0 rgba(137, 180, 250, 0.18) inset" : "none",
                 transition: "background 0.1s, border-color 0.1s",
                 position: "relative",

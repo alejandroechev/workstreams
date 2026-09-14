@@ -190,6 +190,36 @@ describe("lane header layout", () => {
     expect(borderOf("__no_lane__")).not.toBe(borderOf("l1"));
   });
 
+  /**
+   * The lane carries the colour now. A second accent on the row competed with
+   * it and made both harder to read, so the per-repo bar is gone -- the repo is
+   * still named in the row itself.
+   */
+  it("does not put a repo-coloured bar on a workstream row", () => {
+    const colouredRepo: Project = { ...project, color: "#ff0000" };
+    render(
+      <WorkstreamSidebar
+        projects={[colouredRepo]}
+        workstreams={[mkWs("a", { project_id: colouredRepo.id })]}
+        loadedWsIds={new Set()}
+        activeWsId={null}
+        onSelectWorkstream={vi.fn()}
+        onCreateProject={vi.fn()}
+        onImportProject={vi.fn()}
+        onCreateWorkstream={vi.fn()}
+        onArchiveWorkstream={vi.fn()}
+        onRenameWorkstream={vi.fn()}
+        onUpdateProject={vi.fn()}
+        onChangeStatus={vi.fn()}
+      />,
+    );
+
+    const row = screen.getByTestId("workstream-item");
+    expect(row.style.borderLeftColor).not.toBe("rgb(255, 0, 0)");
+    // The repo is still identified, just by name rather than by colour.
+    expect(screen.getByText(colouredRepo.name)).toBeInTheDocument();
+  });
+
   it("does not offer to delete the No lane group", () => {
     renderLanes([{ id: "l1", name: "Media Store" }]);
 
