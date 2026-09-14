@@ -792,63 +792,65 @@ export default function App() {
    */
   const unarchiveAndOpen = useCallback(
     async (ws: Workstream) => {
-      // Checked here rather than by the caller, because there are two ways in —
-      // clicking the row and the Unarchive menu action — and guarding only one
-      // of them leaves the other able to reopen a workstream mid-deletion.
-      // `archiving` is frontend-only, so a reload can lose it; the in-flight
-      // set is the authority while the app is running.
-      const removalRunning = () => inFlightRef.current.has(ws.id);
-      if (removalRunning()) {
+      // `inFlightRef` is the app's single per-workstream operation claim. It
+      // already blocks a second worktree removal; unarchiving claims it too, so
+      // the two exclude each other in both directions.
+      //
+      // Three rounds of review found three separate ordering windows here --
+      // the second entry point, the dialogs, and the persistence await -- each
+      // closed by adding another check. A claim ends the category instead:
+      // there is no window between checking and holding, because JavaScript
+      // does not interleave without an await.
+      if (inFlightRef.current.has(ws.id)) {
         window.alert("This workstream is still being archived.");
         return;
       }
-
-      let directoryExists = false;
-      if (ws.directory) {
-        try {
-          directoryExists = await invoke<boolean>("path_exists", { path: ws.directory });
-        } catch {
-          // Treat an unreadable path as missing: offering to recreate is
-          // recoverable, opening onto nothing is not.
-          directoryExists = false;
+      inFlightRef.current.add(ws.id);
+      try {
+        let directoryExists = false;
+        if (ws.directory) {
+          try {
+            directoryExists = await invoke<boolean>("path_exists", { path: ws.directory });
+          } catch {
+            // Treat an unreadable path as missing: offering to recreate is
+            // recoverable, opening onto nothing is not.
+            directoryExists = false;
+          }
         }
-      }
 
-      const outcome = decideUnarchive(ws, directoryExists);
-      if (outcome.action === "blocked") {
-        window.alert(outcome.reason);
-        return;
-      }
-      if (outcome.action === "recreate") {
-        window.alert(
-          `The worktree for "${ws.name}" is gone (${outcome.directory}).\n\n` +
-            "Unarchiving would open an empty workspace, so create a new workstream " +
-            "for this branch instead.",
-        );
-        return;
-      }
-      // Both questions are asked before anything is written: cancelling the
-      // second one used to leave the workstream unarchived but unopened, which
-      // is a state the user never asked for.
-      if (outcome.action === "confirm") {
-        const ok = window.confirm(`Unarchive "${ws.name}" and open it?`);
-        if (!ok) return;
-      }
-      if (!confirmDiscardDirtyFileBuffers("switch workstreams")) return;
-      // Re-checked after the awaits: a removal can start while the dialogs are
-      // open, and the check above would not have seen it.
-      if (removalRunning()) {
-        window.alert("This workstream is still being archived.");
-        return;
-      }
+        const outcome = decideUnarchive(ws, directoryExists);
+        if (outcome.action === "blocked") {
+          window.alert(outcome.reason);
+          return;
+        }
+        if (outcome.action === "recreate") {
+          window.alert(
+            `The worktree for "${ws.name}" is gone (${outcome.directory}).\n\n` +
+              "Unarchiving would open an empty workspace, so create a new workstream " +
+              "for this branch instead.",
+          );
+          return;
+        }
 
-      if (outcome.action === "confirm") {
-        await backend.updateWorkstream(ws.id, { status: "active" });
-        setWorkstreams((prev) =>
-          prev.map((w) => (w.id === ws.id ? { ...w, status: "active" } : w)),
-        );
+        // Both questions are asked before anything is written: cancelling the
+        // second one used to leave the workstream unarchived but unopened,
+        // which is a state the user never asked for.
+        if (outcome.action === "confirm") {
+          const ok = window.confirm(`Unarchive "${ws.name}" and open it?`);
+          if (!ok) return;
+        }
+        if (!confirmDiscardDirtyFileBuffers("switch workstreams")) return;
+
+        if (outcome.action === "confirm") {
+          await backend.updateWorkstream(ws.id, { status: "active" });
+          setWorkstreams((prev) =>
+            prev.map((w) => (w.id === ws.id ? { ...w, status: "active" } : w)),
+          );
+        }
+        setActiveWsId(ws.id);
+      } finally {
+        inFlightRef.current.delete(ws.id);
       }
-      setActiveWsId(ws.id);
     },
     [backend, confirmDiscardDirtyFileBuffers],
   );

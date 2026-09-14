@@ -670,6 +670,53 @@ describe("clicking an archived workstream", () => {
     confirm.mockRestore();
   });
 
+  /**
+   * The window round three found: a Retry could start a removal while the
+   * unarchive write was still pending, and the continuation would then open a
+   * workstream mid-deletion. Unarchiving now claims the same per-workstream
+   * slot a removal uses, so the two cannot overlap in either direction.
+   */
+  it("holds the workstream's operation slot for the whole unarchive", async () => {
+    const backend = createBackend();
+    vi.mocked(backend.listWorkstreams).mockResolvedValue([
+      ...workstreams,
+      archivedWorkstream("/still-here"),
+    ]);
+    mocks.invoke.mockImplementation(async (cmd: unknown) =>
+      cmd === "path_exists" ? true : null,
+    );
+    // Hold the persistence open so a second action can race it.
+    let releaseWrite: () => void = () => {};
+    vi.mocked(backend.updateWorkstream).mockImplementation(
+      () => new Promise<void>((resolve) => { releaseWrite = () => resolve(); }),
+    );
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const alert = vi.spyOn(window, "alert").mockImplementation(() => {});
+
+    await renderApp(backend);
+    const row = await screen.findByText("Old work");
+    await act(async () => {
+      fireEvent.click(row);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // Mid-write, a second unarchive must be refused rather than queued.
+    await act(async () => {
+      fireEvent.click(screen.getByText("Old work"));
+      await Promise.resolve();
+    });
+    expect(alert).toHaveBeenCalledWith(expect.stringContaining("still being archived"));
+    expect(backend.updateWorkstream).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      releaseWrite();
+      await Promise.resolve();
+    });
+    confirm.mockRestore();
+    alert.mockRestore();
+  });
+
   it("does nothing when the confirmation is declined", async () => {
     const backend = createBackend();
     vi.mocked(backend.listWorkstreams).mockResolvedValue([
