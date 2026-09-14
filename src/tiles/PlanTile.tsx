@@ -188,25 +188,34 @@ function AcceptanceTab({
           }}
         >
           <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
-            <span style={{ color: "#89b4fa", fontSize: 11, fontWeight: 600 }}>
+            <span
+              style={{ color: "#89b4fa", fontSize: 11, fontWeight: 600, flexShrink: 0 }}
+            >
               {test.at_id}
             </span>
-            <span style={{ flex: 1, fontSize: 12, color: "#cdd6f4" }}>{test.title}</span>
+            <span style={{ flex: 1, fontSize: 12, color: "#cdd6f4", minWidth: 0 }}>
+              {test.title}
+            </span>
+          </div>
+          <div
+            style={{
+              display: "flex",
+              gap: 8,
+              fontSize: 10,
+              color: "#6c7086",
+              marginTop: 2,
+            }}
+          >
+            {test.validates && <span>validates {test.validates}</span>}
             {test.automation && (
               <span
                 data-testid={`acceptance-automation-${test.at_id}`}
-                style={{ fontSize: 10, color: "#6c7086" }}
                 title="How this test is run"
               >
                 {test.automation}
               </span>
             )}
           </div>
-          {test.validates && (
-            <div style={{ fontSize: 10, color: "#6c7086", marginTop: 2 }}>
-              validates {test.validates}
-            </div>
-          )}
           <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6 }}>
             {ACCEPTANCE_STATUSES.map((status) => (
               <button
