@@ -524,6 +524,42 @@ export default function WorkstreamSidebar({
                 )}
               </div>
 
+              {/* Archive cleanup, and its failure.
+                  Archived rows used to have their own renderer carrying this;
+                  merging the lists dropped it, which left a failed worktree
+                  removal with no warning and no way to retry. */}
+              {ws.status === "archiving" && (
+                <div
+                  data-testid={`ws-archiving-${ws.id}`}
+                  style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 3, fontSize: 10, color: "#89b4fa" }}
+                >
+                  <span style={{ display: "inline-block", animation: "ws-spin 0.9s linear infinite" }}>◍</span>
+                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {provisioning?.get(ws.id)?.phase ?? "Removing worktree…"}
+                  </span>
+                </div>
+              )}
+              {ws.status === "archived" && provisioning?.get(ws.id)?.warning && (
+                <div
+                  data-testid={`ws-remove-warning-${ws.id}`}
+                  style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 2 }}
+                >
+                  <span
+                    style={{ fontSize: 10, color: "#f9e2af", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                    title={provisioning.get(ws.id)?.warning ?? undefined}
+                  >
+                    ⚠ {provisioning.get(ws.id)?.warning}
+                  </span>
+                  <button
+                    data-testid={`ws-retry-remove-${ws.id}`}
+                    onClick={(e) => { e.stopPropagation(); onRetryRemove?.(ws.id); }}
+                    style={{ background: "#313244", color: "#a6e3a1", border: "none", borderRadius: 3, padding: "0 8px", cursor: "pointer", fontSize: 10, flexShrink: 0 }}
+                  >
+                    Retry
+                  </button>
+                </div>
+              )}
+
               {/* Worktree provisioning indicator (create) */}
               {ws.status === "creating" && (
                 <div

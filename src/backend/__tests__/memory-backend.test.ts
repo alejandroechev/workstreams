@@ -2,6 +2,49 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { MemoryBackend } from "../memory-backend";
 import { rewriteTileCwd } from "../../domain/worktree-change";
 
+describe("MemoryBackend work lanes", () => {
+  /**
+   * Sizing ids off the map let a deleted lane's id be reused, which silently
+   * moved another lane's members into the new one.
+   */
+  it("never reuses a lane id after a deletion", async () => {
+    const backend = new MemoryBackend();
+    const a = await backend.createWorkLane("A");
+    const b = await backend.createWorkLane("B");
+    await backend.deleteWorkLane(a.id);
+    const c = await backend.createWorkLane("C");
+
+    expect(c.id).not.toBe(b.id);
+    const lanes = await backend.listWorkLanes();
+    expect(lanes.map((l) => l.name).sort()).toEqual(["B", "C"]);
+  });
+
+  it("reuses a lane when the name matches, ignoring case and padding", async () => {
+    const backend = new MemoryBackend();
+    const first = await backend.createWorkLane("Media Store");
+    const again = await backend.createWorkLane("  media store  ");
+    expect(again.id).toBe(first.id);
+    expect(await backend.listWorkLanes()).toHaveLength(1);
+  });
+
+  /** Matches the Rust guard: the clearing sentinel cannot also be a lane. */
+  it("refuses to create a lane called none", async () => {
+    const backend = new MemoryBackend();
+    await expect(backend.createWorkLane("None")).rejects.toThrow(/reserved/);
+  });
+
+  it("re-files members as No lane when their lane is deleted", async () => {
+    const backend = new MemoryBackend();
+    const ws = await backend.createWorkstream("One", "/w");
+    const lane = await backend.createWorkLane("Media Store");
+    await backend.assignWorkstreamLane(ws.id, lane.id);
+
+    await backend.deleteWorkLane(lane.id);
+    const [after] = await backend.listWorkstreams();
+    expect(after.lane_id).toBeNull();
+  });
+});
+
 describe("MemoryBackend", () => {
   let backend: MemoryBackend;
 

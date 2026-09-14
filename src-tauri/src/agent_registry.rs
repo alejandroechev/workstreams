@@ -369,6 +369,14 @@ pub const COMMANDS: &[Command] = &[
         handler: ws_create,
     },
     Command {
+        id: "ws.lanes",
+        log_params: &[],
+        summary: "List the work lanes that exist",
+        requires_identity: true,
+        destructive: false,
+        handler: ws_lanes,
+    },
+    Command {
         id: "ws.lane",
         log_params: &["ws"],
         summary: "Put a workstream in a work lane (params: lane, ws; lane=none to clear)",
@@ -974,6 +982,12 @@ fn pr_list(
     })))
 }
 
+/// Sentinel for "take this workstream out of its lane".
+///
+/// Reserved as a lane name so the two can never mean different things: the app
+/// refuses to create a lane called this.
+pub const CLEAR_LANE: &str = "none";
+
 fn ws_lane(
     context: &CommandContext,
     params: &serde_json::Value,
@@ -982,18 +996,24 @@ fn ws_lane(
     let lane = required_str(params, "lane")?;
 
     // "none" clears rather than naming a lane, because an agent that can file a
-    // workstream should be able to unfile it without a second command.
-    let (lane_id, lane_name) = if lane.eq_ignore_ascii_case("none") {
+    // workstream should be able to unfile it without a second command. Trimmed
+    // first so " none " means the same thing as "none".
+    let (lane_id, lane_name) = if lane.trim().eq_ignore_ascii_case(CLEAR_LANE) {
         (None, None)
     } else {
-        let created = crate::upsert_lane(context.db, &lane).map_err(|error| {
+        // Look up, never create. An agent may file a workstream into a lane;
+        // deciding what the lanes *are* is the operator's call, and a create-on
+        // -assign would let a single typo add a permanent folder nobody chose.
+        let existing = crate::find_lane_by_name(context.db, &lane)
+            .map_err(|error| AgentError::new("LANE_LOOKUP_FAILED", error, "Retry once."))?;
+        let found = existing.ok_or_else(|| {
             AgentError::new(
-                "LANE_FAILED",
-                error,
-                "Lane names must be non-empty; an existing name is reused rather than duplicated.",
+                "NO_SUCH_LANE",
+                format!("There is no lane named {lane}"),
+                "Run ws.lanes to see the lanes that exist. Ask the human to create one if you need a new lane.",
             )
         })?;
-        (Some(created.id), Some(created.name))
+        (Some(found.id), Some(found.name))
     };
 
     crate::set_workstream_lane(context.db, &workstream_id, lane_id.as_deref()).map_err(
@@ -1013,6 +1033,24 @@ fn ws_lane(
         }),
         StateChange::new("workstream", &workstream_id, "lane_changed"),
     ))
+}
+
+fn ws_lanes(
+    context: &CommandContext,
+    _params: &serde_json::Value,
+) -> Result<CommandOutcome, AgentError> {
+    context.caller()?;
+    let mut statement = context
+        .db
+        .prepare("SELECT name FROM work_lanes")
+        .map_err(db_error)?;
+    let mut names = statement
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(db_error)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(db_error)?;
+    names.sort_by_key(|name| name.to_lowercase());
+    Ok(CommandOutcome::read(serde_json::json!({ "lanes": names })))
 }
 
 fn db_error(error: rusqlite::Error) -> AgentError {
@@ -1758,21 +1796,29 @@ mod tests {
 
     // ── Work lanes ─────────────────────────────────────────────────────────
 
+    fn seed_lane(db: &Connection, name: &str) -> String {
+        crate::upsert_lane(db, name).expect("lane").id
+    }
+
     #[test]
-    fn an_agent_can_file_a_workstream_in_a_lane_and_unfile_it() {
+    fn an_agent_can_file_a_workstream_in_an_existing_lane_and_unfile_it() {
         let db = memory_db();
         seed_workstream(&db, "ws-own", None);
+        let lane_id = seed_lane(&db, "Media Store");
         let caller = agent("tile-1", "ws-own");
 
         let filed = call(
             &db,
             &caller,
             "ws.lane",
-            serde_json::json!({ "lane": "Media Store" }),
+            serde_json::json!({ "lane": "media store" }),
         )
         .expect("file")
         .data;
-        assert_eq!(filed["lane"], "Media Store");
+        assert_eq!(
+            filed["lane"], "Media Store",
+            "the lane's own casing is kept"
+        );
         let placed: Option<String> = db
             .query_row(
                 "SELECT lane_id FROM workstreams WHERE id='ws-own'",
@@ -1780,56 +1826,78 @@ mod tests {
                 |r| r.get(0),
             )
             .unwrap();
-        assert!(placed.is_some());
+        assert_eq!(placed.as_deref(), Some(lane_id.as_str()));
 
         // "none" is the inverse, so filing and unfiling are one command.
-        let cleared = call(
-            &db,
-            &caller,
-            "ws.lane",
-            serde_json::json!({ "lane": "none" }),
-        )
-        .expect("clear")
-        .data;
-        assert_eq!(cleared["lane"], serde_json::Value::Null);
-        let after: Option<String> = db
-            .query_row(
-                "SELECT lane_id FROM workstreams WHERE id='ws-own'",
-                [],
-                |r| r.get(0),
+        for sentinel in ["none", " NONE "] {
+            call(
+                &db,
+                &caller,
+                "ws.lane",
+                serde_json::json!({ "lane": sentinel }),
             )
-            .unwrap();
-        assert_eq!(after, None);
+            .unwrap_or_else(|error| panic!("{sentinel:?}: {error:?}"));
+            let after: Option<String> = db
+                .query_row(
+                    "SELECT lane_id FROM workstreams WHERE id='ws-own'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(after, None, "{sentinel:?} should clear the lane");
+            call(
+                &db,
+                &caller,
+                "ws.lane",
+                serde_json::json!({ "lane": "Media Store" }),
+            )
+            .expect("refile");
+        }
     }
 
-    /// Naming an existing lane reuses it, so two agents filing into the same
-    /// lane do not end up with two folders that look identical.
+    /// Assignment only, by decision: one typo should not add a permanent folder
+    /// to someone's sidebar.
     #[test]
-    fn filing_into_an_existing_lane_reuses_it() {
+    fn filing_into_a_lane_that_does_not_exist_creates_nothing() {
         let db = memory_db();
         seed_workstream(&db, "ws-own", None);
-        seed_workstream(&db, "ws-two", Some("tile-1"));
-        let caller = agent("tile-1", "ws-own");
+        seed_lane(&db, "Media Store");
 
-        call(
+        let error = call(
             &db,
-            &caller,
+            &agent("tile-1", "ws-own"),
             "ws.lane",
-            serde_json::json!({ "lane": "Media Store" }),
+            serde_json::json!({ "lane": "Media Stor" }),
         )
-        .expect("a");
-        call(
-            &db,
-            &caller,
-            "ws.lane",
-            serde_json::json!({ "lane": "media store", "ws": "ws-two" }),
-        )
-        .expect("b");
+        .expect_err("typo");
+        assert_eq!(error.code, "NO_SUCH_LANE");
+        assert!(error.hint.contains("ws.lanes"), "{}", error.hint);
 
         let lanes: i64 = db
             .query_row("SELECT COUNT(*) FROM work_lanes", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(lanes, 1, "case alone must not create a second lane");
+        assert_eq!(lanes, 1, "a typo must not create a lane");
+    }
+
+    #[test]
+    fn an_agent_can_see_which_lanes_exist() {
+        let db = memory_db();
+        seed_workstream(&db, "ws-own", None);
+        seed_lane(&db, "Tooling");
+        seed_lane(&db, "Media Store");
+
+        let listed = call(
+            &db,
+            &agent("tile-1", "ws-own"),
+            "ws.lanes",
+            serde_json::Value::Null,
+        )
+        .expect("list")
+        .data;
+        assert_eq!(
+            listed["lanes"],
+            serde_json::json!(["Media Store", "Tooling"])
+        );
     }
 
     #[test]

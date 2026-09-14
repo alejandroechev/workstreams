@@ -246,6 +246,13 @@ export class MemoryBackend implements Backend {
   }
 
   private workLanes = new Map<string, WorkLane>();
+  /**
+   * Never reset by deletion.
+   *
+   * Sizing ids off the map meant deleting a lane let the next one reuse an
+   * occupied id, silently moving another lane's members into it.
+   */
+  private nextLaneId = 1;
 
   async listWorkLanes(): Promise<WorkLane[]> {
     return Array.from(this.workLanes.values());
@@ -254,13 +261,18 @@ export class MemoryBackend implements Backend {
   async createWorkLane(name: string): Promise<WorkLane> {
     const trimmed = name.trim();
     if (!trimmed) throw new Error("A lane needs a name");
+    // `ws.lane lane=none` means "no lane", so a lane by that name could never
+    // be assigned to. Mirrors the same guard in the Rust backend.
+    if (trimmed.toLowerCase() === "none") {
+      throw new Error(`"${trimmed}" is reserved — it means "no lane". Pick another name.`);
+    }
     // Idempotent and case-insensitive, matching the unique index in SQLite —
     // otherwise the stub would accept what the real backend rejects.
     const existing = Array.from(this.workLanes.values()).find(
       (lane) => lane.name.toLowerCase() === trimmed.toLowerCase(),
     );
     if (existing) return existing;
-    const lane: WorkLane = { id: `lane-${this.workLanes.size + 1}`, name: trimmed };
+    const lane: WorkLane = { id: `lane-${this.nextLaneId++}`, name: trimmed };
     this.workLanes.set(lane.id, lane);
     return lane;
   }

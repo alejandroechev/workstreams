@@ -605,6 +605,41 @@ describe("clicking an archived workstream", () => {
     confirm.mockRestore();
   });
 
+  /**
+   * The status write used to happen before the dirty-buffer prompt, so
+   * cancelling that second dialog left the workstream unarchived but unopened
+   * — a state the user never asked for.
+   */
+  it("writes nothing when the dirty-buffer prompt is cancelled", async () => {
+    const backend = createBackend();
+    vi.mocked(backend.listWorkstreams).mockResolvedValue([
+      ...workstreams,
+      archivedWorkstream("/still-here"),
+    ]);
+    mocks.invoke.mockImplementation(async (cmd: unknown) =>
+      cmd === "path_exists" ? true : null,
+    );
+    mocks.listAll.mockReturnValue([{ path: "/a.ts", dirty: true }]);
+    // First confirm = "unarchive and open" (yes), second = discard buffers (no).
+    const confirm = vi
+      .spyOn(window, "confirm")
+      .mockReturnValueOnce(true)
+      .mockReturnValueOnce(false);
+
+    await renderApp(backend);
+    const row = await screen.findByText("Old work");
+    await act(async () => {
+      fireEvent.click(row);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(confirm).toHaveBeenCalledTimes(2);
+    expect(backend.updateWorkstream).not.toHaveBeenCalled();
+    confirm.mockRestore();
+    mocks.listAll.mockReturnValue([]);
+  });
+
   it("does nothing when the confirmation is declined", async () => {
     const backend = createBackend();
     vi.mocked(backend.listWorkstreams).mockResolvedValue([

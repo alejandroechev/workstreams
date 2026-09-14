@@ -363,6 +363,8 @@ fn work_lanes_are_assignable_through_the_cli() {
         [],
     )
     .expect("seed");
+    // The operator creates lanes; an agent may only file into them.
+    workstreams_lib::upsert_lane(&db, "Media Store").expect("lane");
     drop(db);
 
     let identities = std::sync::Arc::new(IdentityRegistry::new());
@@ -383,6 +385,13 @@ fn work_lanes_are_assignable_through_the_cli() {
         serde_json::from_str::<serde_json::Value>(&String::from_utf8_lossy(&output.stdout))
             .expect("parse stdout")
     };
+
+    let listed = run(&["agent", "call", "ws.lanes"]);
+    assert_eq!(listed["data"]["lanes"], serde_json::json!(["Media Store"]));
+
+    // A name that does not exist is refused rather than created.
+    let typo = run(&["agent", "call", "ws.lane", "lane=Media Stor"]);
+    assert_eq!(typo["code"], "NO_SUCH_LANE", "{typo}");
 
     let filed = run(&["agent", "call", "ws.lane", "lane=Media Store"]);
     assert_eq!(filed["ok"], true, "{filed}");

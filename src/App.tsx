@@ -816,15 +816,21 @@ export default function App() {
         );
         return;
       }
+      // Both questions are asked before anything is written: cancelling the
+      // second one used to leave the workstream unarchived but unopened, which
+      // is a state the user never asked for.
       if (outcome.action === "confirm") {
         const ok = window.confirm(`Unarchive "${ws.name}" and open it?`);
         if (!ok) return;
+      }
+      if (!confirmDiscardDirtyFileBuffers("switch workstreams")) return;
+
+      if (outcome.action === "confirm") {
         await backend.updateWorkstream(ws.id, { status: "active" });
         setWorkstreams((prev) =>
           prev.map((w) => (w.id === ws.id ? { ...w, status: "active" } : w)),
         );
       }
-      if (!confirmDiscardDirtyFileBuffers("switch workstreams")) return;
       setActiveWsId(ws.id);
     },
     [backend, confirmDiscardDirtyFileBuffers],
@@ -846,7 +852,14 @@ export default function App() {
       // something. Unarchiving is asynchronous because it has to stat the
       // directory first.
       if (target && (target.status === "archived" || target.status === "archiving")) {
-        void unarchiveAndOpen(target);
+        // `archiving` is frontend-only state — the row is persisted as
+        // `archived` the moment the archive is confirmed — so a reload (an
+        // agent's state-changed event, say) would drop it and let the user
+        // unarchive a workstream whose worktree is still being deleted. The
+        // in-flight set is the authority while the app is running.
+        void unarchiveAndOpen(
+          inFlightRef.current.has(id) ? { ...target, status: "archiving" } : target,
+        );
         return;
       }
 

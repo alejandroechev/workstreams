@@ -29,7 +29,7 @@ mod trace_record;
 use db::open_db;
 use fs_watcher::FsWatcher;
 use pty::PtyManager;
-use rusqlite::{Connection, OptionalExtension, Row};
+use rusqlite::{Connection, Row};
 use serde::{Deserialize, Serialize};
 use session_poller::SessionPoller;
 use std::sync::{Arc, Mutex};
@@ -483,6 +483,13 @@ pub fn upsert_lane(db: &Connection, name: &str) -> Result<WorkLane, String> {
     if trimmed.is_empty() {
         return Err("A lane needs a name".to_string());
     }
+    // Reserved: `ws.lane lane=none` means "take it out of its lane", so a lane
+    // actually called that could never be assigned to.
+    if trimmed.eq_ignore_ascii_case(agent_registry::CLEAR_LANE) {
+        return Err(format!(
+            "\"{trimmed}\" is reserved — it means \"no lane\". Pick another name."
+        ));
+    }
     if let Some(existing) = find_lane_by_name(db, trimmed)? {
         return Ok(existing);
     }
@@ -500,23 +507,33 @@ pub fn upsert_lane(db: &Connection, name: &str) -> Result<WorkLane, String> {
     Ok(lane)
 }
 
-/// Looks a lane up by name, case-insensitively, matching the unique index.
+/// Looks a lane up by name, case-insensitively.
+///
+/// Folds in Rust rather than relying on SQLite's `lower()`, which is ASCII-only
+/// in the bundled build — so `Équipe` and `équipe` would otherwise be two lanes
+/// here and one in the in-memory stub.
 pub fn find_lane_by_name(db: &Connection, name: &str) -> Result<Option<WorkLane>, String> {
-    db.query_row(
-        "SELECT id, name, created_at, updated_at FROM work_lanes
-         WHERE lower(name) = lower(?1)",
-        [name.trim()],
-        |row| {
+    let folded = name.trim().to_lowercase();
+    let mut statement = db
+        .prepare("SELECT id, name, created_at, updated_at FROM work_lanes")
+        .map_err(|e| format!("DB error: {e}"))?;
+    let rows = statement
+        .query_map([], |row| {
             Ok(WorkLane {
                 id: row.get(0)?,
                 name: row.get(1)?,
                 created_at: row.get(2)?,
                 updated_at: row.get(3)?,
             })
-        },
-    )
-    .optional()
-    .map_err(|e| format!("DB error: {e}"))
+        })
+        .map_err(|e| format!("DB error: {e}"))?;
+    for lane in rows {
+        let lane = lane.map_err(|e| format!("DB error: {e}"))?;
+        if lane.name.trim().to_lowercase() == folded {
+            return Ok(Some(lane));
+        }
+    }
+    Ok(None)
 }
 
 /// Places a workstream in a lane, or removes it from one when `lane_id` is
@@ -7083,6 +7100,32 @@ Body here.
         let again = upsert_lane(&db, "  media store  ").expect("create again");
         assert_eq!(first.id, again.id, "case and padding must not fork a lane");
         assert_eq!(again.name, "Media Store", "the original name is kept");
+    }
+
+    /// The sentinel and a lane name must never mean two different things.
+    #[test]
+    fn a_lane_cannot_be_called_none() {
+        let db = lane_db();
+        for reserved in ["none", "None", "  NONE  "] {
+            let error = upsert_lane(&db, reserved).expect_err("reserved");
+            assert!(error.contains("reserved"), "{reserved:?}: {error}");
+        }
+    }
+
+    /// SQLite's bundled lower() is ASCII-only, so folding in SQL would make
+    /// these two lanes here and one in the in-memory stub.
+    #[test]
+    fn lane_lookup_folds_non_ascii_case() {
+        let db = lane_db();
+        let lane = upsert_lane(&db, "Équipe").expect("lane");
+        assert_eq!(
+            find_lane_by_name(&db, "équipe")
+                .expect("find")
+                .map(|l| l.id),
+            Some(lane.id.clone())
+        );
+        // And creating it again under the other casing reuses it.
+        assert_eq!(upsert_lane(&db, "ÉQUIPE").expect("again").id, lane.id);
     }
 
     #[test]

@@ -81,6 +81,65 @@ afterEach(() => {
   localStorage.clear();
 });
 
+describe("archive cleanup in the unified list", () => {
+  /**
+   * Regression: merging the archived section into the main list dropped the
+   * removal warning and its Retry, leaving a failed worktree deletion with no
+   * visible signal and no recovery.
+   */
+  it("shows a failed worktree removal and offers a retry", () => {
+    const onRetryRemove = vi.fn();
+    render(
+      <WorkstreamSidebar
+        projects={[project]}
+        workstreams={[mkWs("a", { status: "archived" })]}
+        loadedWsIds={new Set()}
+        activeWsId={null}
+        onSelectWorkstream={vi.fn()}
+        onCreateProject={vi.fn()}
+        onImportProject={vi.fn()}
+        onCreateWorkstream={vi.fn()}
+        onArchiveWorkstream={vi.fn()}
+        onRenameWorkstream={vi.fn()}
+        onUpdateProject={vi.fn()}
+        onChangeStatus={vi.fn()}
+        onRetryRemove={onRetryRemove}
+        provisioning={
+          new Map([["a", { op: "archive", phase: "remove-failed", warning: "git said no" }]]) as never
+        }
+      />,
+    );
+
+    // Archived rows are hidden by default.
+    fireEvent.click(screen.getByTestId("ws-list-filter-all"));
+    expect(screen.getByTestId("ws-remove-warning-a")).toHaveTextContent("git said no");
+    fireEvent.click(screen.getByTestId("ws-retry-remove-a"));
+    expect(onRetryRemove).toHaveBeenCalledWith("a");
+  });
+
+  it("shows cleanup progress while a worktree is being removed", () => {
+    render(
+      <WorkstreamSidebar
+        projects={[project]}
+        workstreams={[mkWs("a", { status: "archiving" })]}
+        loadedWsIds={new Set()}
+        activeWsId={null}
+        onSelectWorkstream={vi.fn()}
+        onCreateProject={vi.fn()}
+        onImportProject={vi.fn()}
+        onCreateWorkstream={vi.fn()}
+        onArchiveWorkstream={vi.fn()}
+        onRenameWorkstream={vi.fn()}
+        onUpdateProject={vi.fn()}
+        onChangeStatus={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId("ws-list-filter-all"));
+    expect(screen.getByTestId("ws-archiving-a")).toBeInTheDocument();
+  });
+});
+
 describe("assigning lanes by drag", () => {
   const lanes = [
     { id: "l1", name: "Media Store" },
