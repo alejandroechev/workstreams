@@ -158,6 +158,23 @@ export interface Backend {
   listSessionTodoDeps(sessionId: string): Promise<SessionTodoDep[]>;
   listSessionTodos(sessionId: string): Promise<SessionTodo[]>;
   /**
+   * A plan's acceptance tests, as `after-grill` records them.
+   *
+   * Empty for a feature planned before acceptance tests existed — the tile
+   * hides the tab rather than showing an empty one.
+   */
+  listSessionAcceptanceTests(sessionId: string, planId: string): Promise<AcceptanceTest[]>;
+  /**
+   * Records a run outcome. Writes status, timestamp and notes only — a test's
+   * prose belongs to the user.
+   */
+  setSessionAcceptanceStatus(
+    sessionId: string,
+    testId: string,
+    status: AcceptanceStatus,
+    notes?: string | null,
+  ): Promise<void>;
+  /**
    * Per-feature summary for the redesigned Plan tile. Joins
    * `<session>/files/features/<name>/` folder state with the session
    * SQLite `plans` + `todos` tables to produce one row per feature
@@ -388,6 +405,25 @@ export interface SessionPlanEntry {
 export interface SessionTodoDep {
   todo_id: string;
   depends_on: string;
+}
+
+/** `not_run` | `pass` | `fail` | `blocked`. */
+export type AcceptanceStatus = "not_run" | "pass" | "fail" | "blocked";
+
+export interface AcceptanceTest {
+  id: string;
+  plan_id: string;
+  /** `AT-3`, as written in `acceptance.md`. */
+  at_id: string;
+  title: string;
+  /** What it validates, e.g. `US-4, Round-2 B3`. */
+  validates: string | null;
+  /** `agent` | `agent-partial` | `human-only`. */
+  automation: string | null;
+  status: AcceptanceStatus;
+  last_run_at: string | null;
+  evidence: string | null;
+  notes: string | null;
 }
 
 export interface SessionTodo {

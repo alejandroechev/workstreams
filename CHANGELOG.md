@@ -11,6 +11,15 @@ for any release is attached to its
 
 ## [Unreleased]
 
+### Changed
+
+- The Plan tile follows the `after-grill` flow: **Overview / Grill / Acceptance /
+  Graph**. The Plan and Todos tabs are gone — `plan.md` is read outside the app,
+  and todo data still feeds Overview's progress bar. The new **Acceptance** tab
+  renders a plan's acceptance tests with their status, what they validate and how
+  they are run, and lets you mark one pass / fail / blocked. It is hidden for
+  features that have no tests.
+
 ### Fixed
 
 - Unarchiving no longer opens a workstream whose worktree was deleted when it

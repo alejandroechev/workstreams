@@ -326,6 +326,8 @@ function createBackend(): Backend {
     renameWorkLane: vi.fn(),
     deleteWorkLane: vi.fn(),
     assignWorkstreamLane: vi.fn(),
+    listSessionAcceptanceTests: vi.fn(async () => []),
+    setSessionAcceptanceStatus: vi.fn(),
   } as Backend;
 }
 

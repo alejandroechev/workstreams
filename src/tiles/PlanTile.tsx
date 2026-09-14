@@ -20,6 +20,8 @@ import {
 import type {
   FeatureSummary,
   SessionFeaturesPayload,
+  AcceptanceStatus,
+  AcceptanceTest,
   SessionTodo,
   SessionTodoDep,
 } from "../backend/types";
@@ -41,13 +43,12 @@ interface Props {
   workstreamVisible?: boolean;
 }
 
-type TabId = "overview" | "plan" | "todos" | "graph" | "grill";
+type TabId = "overview" | "grill" | "acceptance" | "graph";
 
 const TABS: { id: TabId; label: string; icon: React.ComponentType<React.SVGProps<SVGSVGElement>> }[] = [
   { id: "overview", label: "Overview", icon: ChartBarSquareIcon },
   { id: "grill", label: "Grill", icon: ChatBubbleLeftRightIcon },
-  { id: "plan", label: "Plan", icon: DocumentTextIcon },
-  { id: "todos", label: "Todos", icon: ClipboardDocumentListIcon },
+  { id: "acceptance", label: "Acceptance", icon: ClipboardDocumentListIcon },
   { id: "graph", label: "Graph", icon: ShareIcon },
 ];
 
@@ -110,6 +111,134 @@ function ProgressBar({ done, total }: { done: number; total: number }) {
       <span>
         {done}/{total}
       </span>
+    </div>
+  );
+}
+
+const ACCEPTANCE_STATUSES: AcceptanceStatus[] = ["not_run", "pass", "fail", "blocked"];
+
+const ACCEPTANCE_LABELS: Record<AcceptanceStatus, string> = {
+  not_run: "Not run",
+  pass: "Pass",
+  fail: "Fail",
+  blocked: "Blocked",
+};
+
+const ACCEPTANCE_COLORS: Record<AcceptanceStatus, string> = {
+  not_run: "#6c7086",
+  pass: "#a6e3a1",
+  fail: "#f38ba8",
+  blocked: "#f9e2af",
+};
+
+/**
+ * The acceptance tests a feature will be judged against.
+ *
+ * Renders the `acceptance_tests` table rather than `acceptance.md`, because the
+ * prose does not carry the part you come here for: current status, when it last
+ * ran, and why it failed. The file remains the source of truth for the tests
+ * themselves — nothing here edits a test's title or body.
+ */
+function AcceptanceTab({
+  tests,
+  onSetStatus,
+}: {
+  tests: AcceptanceTest[];
+  onSetStatus: (
+    testId: string,
+    status: AcceptanceStatus,
+    notes: string | null,
+  ) => void | Promise<void>;
+}) {
+  if (tests.length === 0) {
+    return (
+      <div style={{ padding: 12, opacity: 0.6, fontSize: 12 }}>
+        No acceptance tests for this feature.
+      </div>
+    );
+  }
+
+  const counts = tests.reduce<Record<string, number>>((acc, test) => {
+    acc[test.status] = (acc[test.status] ?? 0) + 1;
+    return acc;
+  }, {});
+
+  return (
+    <div style={{ padding: 12 }} data-testid="acceptance-list">
+      <div
+        data-testid="acceptance-summary"
+        style={{ display: "flex", gap: 10, marginBottom: 10, fontSize: 11 }}
+      >
+        {ACCEPTANCE_STATUSES.filter((status) => counts[status]).map((status) => (
+          <span key={status} style={{ color: ACCEPTANCE_COLORS[status] }}>
+            {counts[status]} {ACCEPTANCE_LABELS[status].toLowerCase()}
+          </span>
+        ))}
+      </div>
+      {tests.map((test) => (
+        <div
+          key={test.id}
+          data-testid={`acceptance-test-${test.at_id}`}
+          style={{
+            border: "1px solid #2a2a2a",
+            borderLeft: `3px solid ${ACCEPTANCE_COLORS[test.status]}`,
+            borderRadius: 4,
+            padding: "8px 10px",
+            marginBottom: 6,
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+            <span style={{ color: "#89b4fa", fontSize: 11, fontWeight: 600 }}>
+              {test.at_id}
+            </span>
+            <span style={{ flex: 1, fontSize: 12, color: "#cdd6f4" }}>{test.title}</span>
+            {test.automation && (
+              <span
+                data-testid={`acceptance-automation-${test.at_id}`}
+                style={{ fontSize: 10, color: "#6c7086" }}
+                title="How this test is run"
+              >
+                {test.automation}
+              </span>
+            )}
+          </div>
+          {test.validates && (
+            <div style={{ fontSize: 10, color: "#6c7086", marginTop: 2 }}>
+              validates {test.validates}
+            </div>
+          )}
+          <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6 }}>
+            {ACCEPTANCE_STATUSES.map((status) => (
+              <button
+                key={status}
+                data-testid={`acceptance-set-${test.at_id}-${status}`}
+                onClick={() => onSetStatus(test.id, status, test.notes)}
+                aria-pressed={test.status === status}
+                style={{
+                  background: test.status === status ? "#313244" : "transparent",
+                  color: test.status === status ? ACCEPTANCE_COLORS[status] : "#6c7086",
+                  border: "1px solid #2a2a2a",
+                  borderRadius: 3,
+                  padding: "1px 7px",
+                  cursor: "pointer",
+                  font: "inherit",
+                  fontSize: 10,
+                }}
+              >
+                {ACCEPTANCE_LABELS[status]}
+              </button>
+            ))}
+            {test.last_run_at && (
+              <span style={{ fontSize: 10, color: "#45475a", marginLeft: "auto" }}>
+                {test.last_run_at.slice(0, 16).replace("T", " ")}
+              </span>
+            )}
+          </div>
+          {test.notes && (
+            <div style={{ fontSize: 10, color: "#a6adc8", marginTop: 4 }}>{test.notes}</div>
+          )}
+        </div>
+      ))}
     </div>
   );
 }
@@ -184,7 +313,21 @@ export default function PlanTile({ linkedSessionIds, configJson, onConfigChange,
   const [editorSnapshot, setEditorSnapshot] = useState<BufferSnapshot | null>(null);
   const [editorViewState, setEditorViewState] = useState<MarkdownViewState | null>(null);
   const [todos, setTodos] = useState<SessionTodo[]>([]);
+  const [acceptanceTests, setAcceptanceTests] = useState<AcceptanceTest[]>([]);
+  /** The plan whose tests are loaded, so a refresh does not need `selected`,
+   *  which is derived further down the render. */
+  const loadedPlanRef = useRef<string | null>(null);
   const [deps, setDeps] = useState<SessionTodoDep[]>([]);
+
+  /** Re-reads just the tests, so setting a status does not reload the feature. */
+  const loadAcceptance = useCallback(async () => {
+    const planId = loadedPlanRef.current;
+    if (!sessionId || !planId) return;
+    const tests = await backend
+      .listSessionAcceptanceTests(sessionId, planId)
+      .catch(() => [] as AcceptanceTest[]);
+    setAcceptanceTests(tests);
+  }, [backend, sessionId]);
 
   const load = useCallback(async () => {
     if (!sessionId) return;
@@ -224,6 +367,8 @@ export default function PlanTile({ linkedSessionIds, configJson, onConfigChange,
       setPlanMd(null);
       setTodos([]);
       setDeps([]);
+      setAcceptanceTests([]);
+      loadedPlanRef.current = null;
       return;
     }
     Promise.all([
@@ -235,11 +380,18 @@ export default function PlanTile({ linkedSessionIds, configJson, onConfigChange,
         : Promise.resolve(null),
       backend.listSessionTodos(sessionId).catch(() => [] as SessionTodo[]),
       backend.listSessionTodoDeps(sessionId).catch(() => [] as SessionTodoDep[]),
-    ]).then(([plan, allTodos, allDeps]) => {
+      feat.planId
+        ? backend
+            .listSessionAcceptanceTests(sessionId, feat.planId)
+            .catch(() => [] as AcceptanceTest[])
+        : Promise.resolve([] as AcceptanceTest[]),
+    ]).then(([plan, allTodos, allDeps, tests]) => {
       if (cancelled) return;
       setPlanMd(plan);
       setTodos(allTodos);
       setDeps(allDeps);
+      setAcceptanceTests(tests);
+      loadedPlanRef.current = feat.planId ?? null;
     });
     return () => { cancelled = true; };
   }, [backend, sessionId, selectedName, payload.features]);
@@ -288,6 +440,16 @@ export default function PlanTile({ linkedSessionIds, configJson, onConfigChange,
   }
 
   const selected = sortedFiltered.find((f) => f.name === selectedName) ?? null;
+  // A feature planned before acceptance tests existed has none, and an empty
+  // tab is a worse answer than no tab.
+  const visibleTabs = TABS.filter(
+    (tab) => tab.id !== "acceptance" || acceptanceTests.length > 0,
+  );
+  // Switching to a feature without tests while Acceptance is open would
+  // otherwise leave every tab unselected and the pane blank.
+  const shownTab: TabId = visibleTabs.some((tab) => tab.id === activeTab)
+    ? activeTab
+    : "overview";
 
   return (
     <div data-testid="plan-tile" style={{ display: "flex", flexDirection: "column", height: "100%", color: "#eee" }}>
@@ -416,15 +578,15 @@ export default function PlanTile({ linkedSessionIds, configJson, onConfigChange,
                   background: "#181818",
                 }}
               >
-                {TABS.map(({ id, label, icon: Icon }) => (
+                {visibleTabs.map(({ id, label, icon: Icon }) => (
                   <button
                     key={id}
                     data-testid={`plan-tab-${id}`}
                     onClick={() => setActiveTab(id)}
                     style={{
-                      background: activeTab === id ? "#2a2a2a" : "transparent",
+                      background: shownTab === id ? "#2a2a2a" : "transparent",
                       border: "none",
-                      borderBottom: activeTab === id ? "2px solid #89b4fa" : "2px solid transparent",
+                      borderBottom: shownTab === id ? "2px solid #89b4fa" : "2px solid transparent",
                       color: "#eee",
                       padding: "8px 12px",
                       cursor: "pointer",
@@ -440,7 +602,7 @@ export default function PlanTile({ linkedSessionIds, configJson, onConfigChange,
                 ))}
               </div>
               <div style={{ flex: 1, overflow: "auto", minHeight: 0 }}>
-                {activeTab === "overview" && (
+                {shownTab === "overview" && (
                   <OverviewTab
                     feature={selected}
                     todos={todosForPlan(todos, selected.planId)}
@@ -455,23 +617,19 @@ export default function PlanTile({ linkedSessionIds, configJson, onConfigChange,
                     }
                   />
                 )}
-                {activeTab === "plan" && (
-                  <div style={{ padding: 12 }}>
-                    {planMd === null ? (
-                      <div style={{ opacity: 0.6, fontSize: 12 }}>
-                        {selected.hasPlan
-                          ? "Loading plan.md…"
-                          : "No plan.md yet — run feature-plan in the linked Copilot session after answering grill-me."}
-                      </div>
-                    ) : (
-                      <MarkdownView>{planMd}</MarkdownView>
-                    )}
-                  </div>
+                {shownTab === "acceptance" && (
+                  <AcceptanceTab
+                    tests={acceptanceTests}
+                    onSetStatus={async (testId, status, notes) => {
+                      if (!sessionId) return;
+                      await backend
+                        .setSessionAcceptanceStatus(sessionId, testId, status, notes)
+                        .catch(() => {});
+                      await loadAcceptance();
+                    }}
+                  />
                 )}
-                {activeTab === "todos" && (
-                  <TodoList todos={todosForPlan(todos, selected.planId)} />
-                )}
-                {activeTab === "graph" && (
+                {shownTab === "graph" && (
                   <div style={{ height: "100%" }}>
                     <MermaidDiagram
                       source={buildTodoDepsMermaid(
@@ -481,7 +639,7 @@ export default function PlanTile({ linkedSessionIds, configJson, onConfigChange,
                     />
                   </div>
                 )}
-                {activeTab === "grill" && (
+                {shownTab === "grill" && (
                   <div style={{ height: "100%", display: "flex", flexDirection: "column", minHeight: 0 }}>
                     {selected.grillMePath ? (
                       <>

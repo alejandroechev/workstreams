@@ -3902,6 +3902,27 @@ pub struct SessionTodoEntry {
     pub plan_id: Option<String>,
 }
 
+/// One acceptance test, as `after-grill` records it.
+///
+/// `acceptance.md` is the human artifact and wins on conflict; this table is a
+/// derived index. The tile reads the index because it carries the parts the
+/// prose does not: current status, evidence and notes.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct AcceptanceTestEntry {
+    pub id: String,
+    pub plan_id: String,
+    pub at_id: String,
+    pub title: String,
+    pub validates: Option<String>,
+    /// `agent` | `agent-partial` | `human-only`.
+    pub automation: Option<String>,
+    /// `not_run` | `pass` | `fail` | `blocked`.
+    pub status: String,
+    pub last_run_at: Option<String>,
+    pub evidence: Option<String>,
+    pub notes: Option<String>,
+}
+
 /// Read a file from within a session-state directory
 #[tauri::command]
 fn read_session_file(session_id: String, relative_path: String) -> Result<String, String> {
@@ -5350,6 +5371,140 @@ fn unwatch_session_features(state: State<'_, AppState>, session_id: String) -> R
 /// `complete-feature-plan` skill so the UI button and the skill stay in
 /// sync. Best-effort on the file rewrite — a missing plan.md doesn't
 /// fail the SQL update.
+/// Lists a plan's acceptance tests.
+///
+/// Returns empty rather than erroring when the table is absent: a feature
+/// planned before `after-grill` existed simply has no tests, and the tile hides
+/// the tab rather than showing a failure.
+#[tauri::command]
+fn query_session_acceptance_tests(
+    session_id: String,
+    plan_id: String,
+) -> Result<Vec<AcceptanceTestEntry>, String> {
+    let home = dirs::home_dir().ok_or("No home directory")?;
+    let db_path = home
+        .join(".copilot")
+        .join("session-state")
+        .join(&session_id)
+        .join("session.db");
+    if !db_path.exists() {
+        return Ok(Vec::new());
+    }
+    let conn = Connection::open_with_flags(
+        &db_path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .map_err(|e| e.to_string())?;
+    if !table_exists(&conn, "acceptance_tests") {
+        return Ok(Vec::new());
+    }
+    read_acceptance_tests(&conn, &plan_id)
+}
+
+fn read_acceptance_tests(
+    conn: &Connection,
+    plan_id: &str,
+) -> Result<Vec<AcceptanceTestEntry>, String> {
+    let mut statement = conn
+        .prepare(
+            "SELECT id, plan_id, at_id, title, validates, automation, status,
+                    last_run_at, evidence, notes
+             FROM acceptance_tests WHERE plan_id = ?1",
+        )
+        .map_err(|e| format!("DB error: {e}"))?;
+    let rows = statement
+        .query_map([plan_id], |row| {
+            Ok(AcceptanceTestEntry {
+                id: row.get(0)?,
+                plan_id: row.get(1)?,
+                at_id: row.get(2)?,
+                title: row.get(3)?,
+                validates: row.get(4)?,
+                automation: row.get(5)?,
+                status: row.get(6)?,
+                last_run_at: row.get(7)?,
+                evidence: row.get(8)?,
+                notes: row.get(9)?,
+            })
+        })
+        .map_err(|e| format!("DB error: {e}"))?;
+    let mut tests = rows
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("DB error: {e}"))?;
+    // `AT-10` must follow `AT-9`, so sort on the number rather than the string.
+    tests.sort_by_key(|test| acceptance_sort_key(&test.at_id));
+    Ok(tests)
+}
+
+/// Orders `AT-n` ids numerically, keeping anything unparseable at the end.
+fn acceptance_sort_key(at_id: &str) -> (u32, String) {
+    let digits: String = at_id.chars().filter(|c| c.is_ascii_digit()).collect();
+    match digits.parse::<u32>() {
+        Ok(number) => (number, at_id.to_string()),
+        Err(_) => (u32::MAX, at_id.to_string()),
+    }
+}
+
+/// Statuses an acceptance test may hold.
+const ACCEPTANCE_STATUSES: &[&str] = &["not_run", "pass", "fail", "blocked"];
+
+/// Records the outcome of running an acceptance test.
+///
+/// Writes only `status`, `last_run_at`, `evidence` and `notes` -- never the
+/// title or body. `after-grill` is explicit that a test's prose belongs to the
+/// user: if a test is wrong, it gets said out loud, not edited underneath them.
+#[tauri::command]
+fn set_session_acceptance_status(
+    session_id: String,
+    test_id: String,
+    status: String,
+    notes: Option<String>,
+) -> Result<(), String> {
+    if !ACCEPTANCE_STATUSES.contains(&status.as_str()) {
+        return Err(format!(
+            "Unknown acceptance status: {status}. Expected one of {}.",
+            ACCEPTANCE_STATUSES.join(", ")
+        ));
+    }
+    let home = dirs::home_dir().ok_or("No home directory")?;
+    let db_path = home
+        .join(".copilot")
+        .join("session-state")
+        .join(&session_id)
+        .join("session.db");
+    if !db_path.exists() {
+        return Err("No session.db found".into());
+    }
+    let conn = Connection::open(&db_path).map_err(|e| format!("DB error: {e}"))?;
+    if !table_exists(&conn, "acceptance_tests") {
+        return Err("This plan has no acceptance tests".into());
+    }
+
+    // `not_run` clears the run metadata: it means "never run", so leaving a
+    // timestamp behind would contradict the status it sits beside.
+    let changed = if status == "not_run" {
+        conn.execute(
+            "UPDATE acceptance_tests
+             SET status = ?2, last_run_at = NULL, notes = ?3, updated_at = datetime('now')
+             WHERE id = ?1",
+            rusqlite::params![test_id, status, notes],
+        )
+    } else {
+        conn.execute(
+            "UPDATE acceptance_tests
+             SET status = ?2, last_run_at = datetime('now'), notes = ?3,
+                 updated_at = datetime('now')
+             WHERE id = ?1",
+            rusqlite::params![test_id, status, notes],
+        )
+    }
+    .map_err(|e| format!("DB error: {e}"))?;
+    if changed == 0 {
+        return Err(format!("No acceptance test with id {test_id}"));
+    }
+    Ok(())
+}
+
 #[tauri::command]
 fn complete_session_plan(session_id: String, plan_id: String) -> Result<(), String> {
     let home = dirs::home_dir().ok_or("No home directory")?;
@@ -5800,6 +5955,8 @@ pub fn run() {
             list_session_events,
             query_session_files,
             query_session_todos,
+            query_session_acceptance_tests,
+            set_session_acceptance_status,
             query_session_plans,
             query_session_current_plan,
             query_session_todo_deps,
@@ -7097,6 +7254,75 @@ Body here.
         let conn = fresh_mem_db();
         let deps = query_session_todo_deps_impl(&conn).unwrap();
         assert!(deps.is_empty());
+    }
+
+    // ── Acceptance tests ───────────────────────────────────────────────
+
+    fn acceptance_db() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE acceptance_tests (
+                id TEXT PRIMARY KEY, plan_id TEXT NOT NULL, at_id TEXT NOT NULL,
+                title TEXT NOT NULL, validates TEXT, automation TEXT,
+                status TEXT NOT NULL DEFAULT 'not_run', last_run_at TEXT,
+                evidence TEXT, notes TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now')));",
+        )
+        .unwrap();
+        conn
+    }
+
+    fn seed_test(conn: &Connection, id: &str, plan: &str, at_id: &str) {
+        conn.execute(
+            "INSERT INTO acceptance_tests (id, plan_id, at_id, title, automation)
+             VALUES (?1, ?2, ?3, ?3, 'agent')",
+            rusqlite::params![id, plan, at_id],
+        )
+        .unwrap();
+    }
+
+    /// `AT-10` must follow `AT-9`. String ordering puts it second.
+    #[test]
+    fn acceptance_tests_sort_numerically_not_lexically() {
+        let conn = acceptance_db();
+        for (index, at) in ["AT-10", "AT-2", "AT-1", "AT-9"].iter().enumerate() {
+            seed_test(&conn, &format!("p-{index}"), "plan-1", at);
+        }
+        let tests = read_acceptance_tests(&conn, "plan-1").expect("read");
+        assert_eq!(
+            tests.iter().map(|t| t.at_id.as_str()).collect::<Vec<_>>(),
+            vec!["AT-1", "AT-2", "AT-9", "AT-10"]
+        );
+    }
+
+    #[test]
+    fn acceptance_tests_are_scoped_to_their_plan() {
+        let conn = acceptance_db();
+        seed_test(&conn, "a", "plan-1", "AT-1");
+        seed_test(&conn, "b", "plan-2", "AT-1");
+        assert_eq!(
+            read_acceptance_tests(&conn, "plan-1").expect("read").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn an_unparseable_test_id_sorts_last_rather_than_being_dropped() {
+        let conn = acceptance_db();
+        seed_test(&conn, "a", "plan-1", "AT-2");
+        seed_test(&conn, "b", "plan-1", "smoke");
+        let tests = read_acceptance_tests(&conn, "plan-1").expect("read");
+        assert_eq!(tests.len(), 2, "nothing may be silently dropped");
+        assert_eq!(tests[1].at_id, "smoke");
+    }
+
+    #[test]
+    fn only_the_four_known_statuses_are_accepted() {
+        for status in ["not_run", "pass", "fail", "blocked"] {
+            assert!(ACCEPTANCE_STATUSES.contains(&status), "{status}");
+        }
+        assert!(!ACCEPTANCE_STATUSES.contains(&"passed"));
     }
 
     // ── Work lanes ─────────────────────────────────────────────────────

@@ -1295,6 +1295,36 @@ export class MemoryBackend implements Backend {
     return [];
   }
 
+  /** Seeded by tests and the E2E harness; empty otherwise. */
+  private acceptanceTests = new Map<string, import("./types").AcceptanceTest>();
+
+  seedAcceptanceTests(tests: import("./types").AcceptanceTest[]) {
+    for (const test of tests) this.acceptanceTests.set(test.id, { ...test });
+  }
+
+  async listSessionAcceptanceTests(
+    _sessionId: string,
+    planId: string,
+  ): Promise<import("./types").AcceptanceTest[]> {
+    return Array.from(this.acceptanceTests.values())
+      .filter((test) => test.plan_id === planId)
+      .sort((left, right) => acceptanceOrder(left.at_id) - acceptanceOrder(right.at_id));
+  }
+
+  async setSessionAcceptanceStatus(
+    _sessionId: string,
+    testId: string,
+    status: import("./types").AcceptanceStatus,
+    notes?: string | null,
+  ): Promise<void> {
+    const test = this.acceptanceTests.get(testId);
+    if (!test) throw new Error(`No acceptance test with id ${testId}`);
+    test.status = status;
+    test.notes = notes ?? null;
+    // `not_run` means never run, so a leftover timestamp would contradict it.
+    test.last_run_at = status === "not_run" ? null : new Date().toISOString();
+  }
+
   async listSessionFeatures(sessionId: string): Promise<import("./types").SessionFeaturesPayload> {
     return this.sessionFeatures.get(sessionId) ?? { features: [], currentPlanId: null };
   }
@@ -1977,4 +2007,10 @@ export class MemoryBackend implements Backend {
       pushed: opts?.push === true,
     };
   }
+}
+
+/** Orders `AT-n` numerically, keeping unparseable ids last. */
+function acceptanceOrder(atId: string): number {
+  const digits = atId.replace(/\D/g, "");
+  return digits ? Number(digits) : Number.MAX_SAFE_INTEGER;
 }

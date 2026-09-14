@@ -3,7 +3,7 @@ import { fireEvent, render, screen, waitFor, cleanup } from "@testing-library/re
 import PlanTile from "../PlanTile";
 import { BackendProvider } from "../../backend/context";
 import { MemoryBackend } from "../../backend/memory-backend";
-import type { FeatureSummary, SessionFeaturesPayload } from "../../backend/types";
+import type { AcceptanceTest, FeatureSummary, SessionFeaturesPayload } from "../../backend/types";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(async () => "# plan body") }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) }));
@@ -52,9 +52,28 @@ function feat(name: string, overrides: Partial<FeatureSummary> = {}): FeatureSum
   };
 }
 
-function setup(payload: SessionFeaturesPayload) {
+function setup(
+  payload: SessionFeaturesPayload,
+  acceptance: Partial<AcceptanceTest>[] = [],
+) {
   const backend = new MemoryBackend();
   backend.seedSessionFeatures("sess-1", payload);
+  if (acceptance.length > 0) {
+    backend.seedAcceptanceTests(
+      acceptance.map((test, index) => ({
+        id: test.id ?? `t-${index}`,
+        plan_id: test.plan_id ?? "alpha-plan",
+        at_id: test.at_id ?? `AT-${index + 1}`,
+        title: test.title ?? `Test ${index + 1}`,
+        validates: test.validates ?? null,
+        automation: test.automation ?? "agent",
+        status: test.status ?? "not_run",
+        last_run_at: test.last_run_at ?? null,
+        evidence: test.evidence ?? null,
+        notes: test.notes ?? null,
+      })),
+    );
+  }
   render(
     <BackendProvider backend={backend}>
       <PlanTile tileId="t1" isFocused linkedSessionIds={["sess-1"]} />
@@ -148,12 +167,6 @@ describe("PlanTile shell", () => {
   it("each tab is clickable and content swaps", async () => {
     setup({ features: [feat("alpha")], currentPlanId: null });
     await waitFor(() => expect(screen.getByTestId("plan-tab-overview")).toBeTruthy());
-    // Plan tab → MarkdownView shim with content from mocked invoke
-    fireEvent.click(screen.getByTestId("plan-tab-plan"));
-    await waitFor(() => expect(screen.getAllByTestId("md").length).toBeGreaterThan(0));
-    // Todos tab
-    fireEvent.click(screen.getByTestId("plan-tab-todos"));
-    expect(screen.getByText(/No todos for this plan/)).toBeTruthy();
     // Graph tab
     fireEvent.click(screen.getByTestId("plan-tab-graph"));
     expect(screen.getByTestId("mermaid")).toBeTruthy();
@@ -167,11 +180,12 @@ describe("PlanTile shell", () => {
     await waitFor(() => expect(screen.getByTestId("plan-tab-overview")).toBeTruthy());
     const tabIds = Array.from(document.querySelectorAll('[data-testid^="plan-tab-"]'))
       .map((t) => t.getAttribute("data-testid"));
+    // Plan and Todos are gone: plans are read outside the app, and the todo
+    // data still feeds Overview's progress bar without a tab of its own.
+    // Acceptance is absent here because this feature has no tests.
     expect(tabIds).toEqual([
       "plan-tab-overview",
       "plan-tab-grill",
-      "plan-tab-plan",
-      "plan-tab-todos",
       "plan-tab-graph",
     ]);
   });
@@ -242,5 +256,75 @@ describe("PlanTile shell", () => {
     setup({ features: [feat("draft", { derivedStatus: "drafting", planId: null, planStatus: null })], currentPlanId: null });
     await waitFor(() => expect(screen.getByTestId("feature-row-draft")).toBeTruthy());
     expect(screen.queryByTestId("plan-complete-button")).toBeNull();
+  });
+});
+
+describe("PlanTile acceptance tab", () => {
+  const withTests = (over: Partial<AcceptanceTest>[] = [{}]) =>
+    setup({ features: [feat("alpha")], currentPlanId: null }, over);
+
+  /** A feature planned before acceptance tests existed has none. */
+  it("hides the tab when a feature has no acceptance tests", async () => {
+    setup({ features: [feat("alpha")], currentPlanId: null });
+    await waitFor(() => expect(screen.getByTestId("plan-tab-overview")).toBeTruthy());
+    expect(screen.queryByTestId("plan-tab-acceptance")).toBeNull();
+  });
+
+  it("shows the tab, and the tests, when a feature has them", async () => {
+    withTests([
+      { at_id: "AT-1", title: "Lane colours are distinct", automation: "human-only" },
+      { at_id: "AT-2", title: "Drag files a workstream", status: "pass" },
+    ]);
+    await waitFor(() => expect(screen.getByTestId("plan-tab-acceptance")).toBeTruthy());
+
+    fireEvent.click(screen.getByTestId("plan-tab-acceptance"));
+    expect(screen.getByText("Lane colours are distinct")).toBeTruthy();
+    // How a test is run is the thing you need before deciding to run it.
+    expect(screen.getByTestId("acceptance-automation-AT-1").textContent).toBe("human-only");
+    expect(screen.getByTestId("acceptance-summary").textContent).toContain("1 pass");
+  });
+
+  it("sorts AT-10 after AT-9 rather than after AT-1", async () => {
+    withTests([{ at_id: "AT-10" }, { at_id: "AT-9" }, { at_id: "AT-2" }]);
+    await waitFor(() => expect(screen.getByTestId("plan-tab-acceptance")).toBeTruthy());
+    fireEvent.click(screen.getByTestId("plan-tab-acceptance"));
+
+    const ids = Array.from(document.querySelectorAll('[data-testid^="acceptance-test-"]')).map(
+      (node) => node.getAttribute("data-testid"),
+    );
+    expect(ids).toEqual([
+      "acceptance-test-AT-2",
+      "acceptance-test-AT-9",
+      "acceptance-test-AT-10",
+    ]);
+  });
+
+  it("records a status the user sets", async () => {
+    const backend = withTests([{ id: "t-a", at_id: "AT-1" }]);
+    await waitFor(() => expect(screen.getByTestId("plan-tab-acceptance")).toBeTruthy());
+    fireEvent.click(screen.getByTestId("plan-tab-acceptance"));
+
+    fireEvent.click(screen.getByTestId("acceptance-set-AT-1-pass"));
+    await waitFor(async () => {
+      const [test] = await backend.listSessionAcceptanceTests("sess-1", "alpha-plan");
+      expect(test.status).toBe("pass");
+      expect(test.last_run_at).not.toBeNull();
+    });
+  });
+
+  /** `not_run` means never run, so a leftover timestamp would contradict it. */
+  it("clears the run time when a test is set back to not run", async () => {
+    const backend = withTests([
+      { id: "t-a", at_id: "AT-1", status: "pass", last_run_at: "2026-09-14T10:00:00Z" },
+    ]);
+    await waitFor(() => expect(screen.getByTestId("plan-tab-acceptance")).toBeTruthy());
+    fireEvent.click(screen.getByTestId("plan-tab-acceptance"));
+
+    fireEvent.click(screen.getByTestId("acceptance-set-AT-1-not_run"));
+    await waitFor(async () => {
+      const [test] = await backend.listSessionAcceptanceTests("sess-1", "alpha-plan");
+      expect(test.status).toBe("not_run");
+      expect(test.last_run_at).toBeNull();
+    });
   });
 });
