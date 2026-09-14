@@ -140,6 +140,63 @@ describe("archive cleanup in the unified list", () => {
   });
 });
 
+describe("lane header layout", () => {
+  const renderLanes = (lanes: { id: string; name: string }[]) =>
+    render(
+      <WorkstreamSidebar
+        projects={[project]}
+        workstreams={[mkWs("a", { lane_id: lanes[0]?.id })]}
+        loadedWsIds={new Set()}
+        activeWsId={null}
+        onSelectWorkstream={vi.fn()}
+        onCreateProject={vi.fn()}
+        onImportProject={vi.fn()}
+        onCreateWorkstream={vi.fn()}
+        onArchiveWorkstream={vi.fn()}
+        onRenameWorkstream={vi.fn()}
+        onUpdateProject={vi.fn()}
+        onChangeStatus={vi.fn()}
+        lanes={lanes}
+        onDeleteLane={vi.fn()}
+      />,
+    );
+
+  /**
+   * The toggle is `width: 100%`, so as a plain sibling the delete button
+   * wrapped onto its own line. They must share a row.
+   */
+  it("keeps the delete button on the same row as the lane name", () => {
+    renderLanes([{ id: "l1", name: "Media Store" }]);
+
+    const toggle = screen.getByTestId("ws-lane-toggle-l1");
+    const remove = screen.getByTestId("ws-lane-delete-l1");
+    expect(remove.parentElement).toBe(toggle.parentElement);
+    expect(toggle.parentElement).toHaveStyle({ display: "flex" });
+  });
+
+  it("gives each lane its own accent colour, and No lane a neutral one", () => {
+    renderLanes([
+      { id: "l1", name: "Media Store" },
+      { id: "l2", name: "Tooling" },
+    ]);
+
+    const borderOf = (key: string) =>
+      screen.getByTestId(`ws-lane-${key}`).style.borderLeftColor;
+
+    // Two lanes must not be the same colour, or the accent tells you nothing.
+    expect(borderOf("l1")).not.toBe(borderOf("l2"));
+    expect(borderOf("l1")).toBeTruthy();
+    // The unfiled group is deliberately grey rather than a palette colour.
+    expect(borderOf("__no_lane__")).not.toBe(borderOf("l1"));
+  });
+
+  it("does not offer to delete the No lane group", () => {
+    renderLanes([{ id: "l1", name: "Media Store" }]);
+
+    expect(screen.queryByTestId("ws-lane-delete-__no_lane__")).toBeNull();
+  });
+});
+
 describe("creating a lane", () => {
   /**
    * The bug this encodes: the button used `window.prompt`, which WKWebView --

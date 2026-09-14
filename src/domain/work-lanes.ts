@@ -202,3 +202,47 @@ export function decideUnarchive(
   }
   return { action: "confirm" };
 }
+
+/**
+ * Accent colours lanes are drawn from.
+ *
+ * The app's existing palette, so a lane accent reads as part of the UI rather
+ * than as decoration. Ordered so adjacent hues do not sit next to each other,
+ * which keeps two lanes created back to back visually distinct.
+ */
+const LANE_COLORS = [
+  "#89b4fa", // blue
+  "#a6e3a1", // green
+  "#f9e2af", // yellow
+  "#cba6f7", // mauve
+  "#fab387", // peach
+  "#f38ba8", // red
+] as const;
+
+/**
+ * Deliberately six, and deliberately not including sapphire or teal: they read
+ * as the same colour as blue in a 2px bar, which defeats the point of giving
+ * lanes a colour at all. Fewer, more separable hues beat more, similar ones.
+ */
+
+/** Colour for the unfiled group: deliberately grey, so it reads as "none". */
+export const NO_LANE_COLOR = "#45475a";
+
+/**
+ * Picks a lane's accent colour from its id.
+ *
+ * Derived rather than stored, so a lane has a colour the moment it exists and
+ * nobody has to choose one. Keyed on the id, not the name, so renaming a lane
+ * does not change the colour you have learned to recognise it by.
+ */
+export function laneColor(laneId: string | null | undefined): string {
+  if (!laneId) return NO_LANE_COLOR;
+  let hash = 0;
+  for (let index = 0; index < laneId.length; index += 1) {
+    // Bit-shift accumulation, coerced to 32-bit; enough spread for short ids
+    // where a plain character sum would collide constantly.
+    hash = (hash << 5) - hash + laneId.charCodeAt(index);
+    hash |= 0;
+  }
+  return LANE_COLORS[Math.abs(hash) % LANE_COLORS.length];
+}

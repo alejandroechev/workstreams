@@ -6,6 +6,7 @@ import {
   groupByLane,
   laneKey,
   laneLabel,
+  laneColor,
   matchesFilter,
   LIST_FILTERS,
   LIST_FILTER_LABELS,
@@ -874,6 +875,7 @@ export default function WorkstreamSidebar({
           const key = laneKey(group);
           const collapsed = collapsedSections[key] === true;
           const hidden = hiddenByLane.get(key) ?? 0;
+          const accent = laneColor(group.lane?.id ?? null);
           // Every lane renders, empty or not. Hiding an empty one would make a
           // lane you just created impossible to drag into, and would make a
           // lane whose rows are all filtered out look deleted.
@@ -897,57 +899,97 @@ export default function WorkstreamSidebar({
               }}
               style={{
                 borderRadius: 4,
-                outline: dragOverLaneKey === key ? "1px dashed #89b4fa" : "none",
+                // A left bar in the lane's own colour, so the vertical extent
+                // of a lane is visible at a glance and two lanes are told
+                // apart by colour rather than by reading their headers.
+                borderLeft: `3px solid ${accent}`,
+                background: dragOverLaneKey === key ? "#1e1e2e" : "transparent",
+                outline: dragOverLaneKey === key ? `1px dashed ${accent}` : "none",
+                paddingLeft: 5,
+                marginBottom: 8,
               }}
             >
-              <button
-                data-testid={`ws-lane-toggle-${key}`}
-                onClick={() => toggleLane(key)}
-                aria-expanded={!collapsed}
-                style={sectionHeaderStyle}
-                title={collapsed ? `Show ${laneLabel(group)}` : `Hide ${laneLabel(group)}`}
-              >
-                {collapsed
-                  ? <ChevronRightIcon style={{ width: 10, height: 10 }} />
-                  : <ChevronDownIcon style={{ width: 10, height: 10 }} />}
-                <span style={{ flex: 1, textAlign: "left" }}>{laneLabel(group)}</span>
-                {hidden > 0 && (
-                  <span
-                    data-testid={`ws-lane-hidden-${key}`}
-                    style={{ ...sectionCountStyle, color: "#585b70" }}
-                    title={`${hidden} hidden by the current filter`}
-                  >
-                    {hidden} hidden
-                  </span>
-                )}
-                <span data-testid={`ws-lane-count-${key}`} style={sectionCountStyle}>
-                  {group.workstreams.length}
-                </span>
-              </button>
-              {group.lane && onDeleteLane && (
+              <div style={{ display: "flex", alignItems: "center" }}>
                 <button
-                  data-testid={`ws-lane-delete-${key}`}
-                  onClick={() => {
-                    // Named in the prompt because the reassurance is the point:
-                    // deleting a lane is a filing change, not a destructive one.
-                    const ok = window.confirm(
-                      `Delete the lane "${group.lane?.name}"? Its workstreams move to No lane.`,
-                    );
-                    if (ok && group.lane) onDeleteLane(group.lane.id);
-                  }}
+                  data-testid={`ws-lane-toggle-${key}`}
+                  onClick={() => toggleLane(key)}
+                  aria-expanded={!collapsed}
                   style={{
-                    background: "none",
-                    border: "none",
-                    color: "#45475a",
-                    cursor: "pointer",
+                    ...sectionHeaderStyle,
+                    // The header carries the lane's colour too. A 3px bar alone
+                    // is easy to miss while scanning; tinting the label is what
+                    // actually makes two lanes separable at a glance.
+                    color: group.lane ? accent : "#6c7086",
+                    // Brighter than the old section headers: a lane is a thing
+                    // you organise by, not a divider you read past.
                     fontSize: 10,
-                    padding: "0 6px",
+                    minWidth: 0,
+                    marginTop: 0,
                   }}
-                  title={`Delete lane ${group.lane.name}`}
+                  title={collapsed ? `Show ${laneLabel(group)}` : `Hide ${laneLabel(group)}`}
                 >
-                  ×
+                  {collapsed
+                    ? <ChevronRightIcon style={{ width: 10, height: 10, flexShrink: 0 }} />
+                    : <ChevronDownIcon style={{ width: 10, height: 10, flexShrink: 0 }} />}
+                  <span
+                    style={{
+                      flex: 1,
+                      textAlign: "left",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {laneLabel(group)}
+                  </span>
+                  {hidden > 0 && (
+                    <span
+                      data-testid={`ws-lane-hidden-${key}`}
+                      style={{ ...sectionCountStyle, color: "#585b70", flexShrink: 0 }}
+                      title={`${hidden} hidden by the current filter`}
+                    >
+                      {hidden} hidden
+                    </span>
+                  )}
+                  <span
+                    data-testid={`ws-lane-count-${key}`}
+                    style={{ ...sectionCountStyle, flexShrink: 0 }}
+                  >
+                    {group.workstreams.length}
+                  </span>
                 </button>
-              )}
+                {group.lane && onDeleteLane && (
+                  <button
+                    data-testid={`ws-lane-delete-${key}`}
+                    onClick={() => {
+                      // Named in the prompt because the reassurance is the
+                      // point: deleting a lane is a filing change, not a
+                      // destructive one.
+                      const ok = window.confirm(
+                        `Delete the lane "${group.lane?.name}"? Its workstreams move to No lane.`,
+                      );
+                      if (ok && group.lane) onDeleteLane(group.lane.id);
+                    }}
+                    style={{
+                      // Sits beside the toggle rather than below it: the toggle
+                      // is width:100%, so as a plain sibling this wrapped onto
+                      // its own line.
+                      flexShrink: 0,
+                      background: "none",
+                      border: "none",
+                      color: "#45475a",
+                      cursor: "pointer",
+                      fontSize: 11,
+                      lineHeight: 1,
+                      padding: "0 6px",
+                      alignSelf: "center",
+                    }}
+                    title={`Delete lane ${group.lane.name}`}
+                  >
+                    ×
+                  </button>
+                )}
+              </div>
               {!collapsed && group.workstreams.map(renderWorkstreamRow)}
             </div>
           );

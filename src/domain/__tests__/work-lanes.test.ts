@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
 import {
   compareNames,
+  laneColor,
+  NO_LANE_COLOR,
   decideUnarchive,
   matchesFilter,
   LIST_FILTERS,
@@ -215,5 +217,56 @@ describe("decideUnarchive", () => {
   it("refuses an archived workstream that never had a directory", () => {
     const outcome = decideUnarchive({ status: "archived", directory: null }, true);
     expect(outcome.action).toBe("blocked");
+  });
+});
+
+describe("laneColor", () => {
+  it("gives the unfiled group a neutral grey", () => {
+    expect(laneColor(null)).toBe(NO_LANE_COLOR);
+    expect(laneColor(undefined)).toBe(NO_LANE_COLOR);
+    expect(laneColor("")).toBe(NO_LANE_COLOR);
+  });
+
+  it("is stable for the same lane", () => {
+    expect(laneColor("lane-1")).toBe(laneColor("lane-1"));
+  });
+
+  /**
+   * Keyed on the id rather than the name, so renaming a lane keeps the colour
+   * you have learned to recognise it by.
+   */
+  it("does not depend on the lane name", () => {
+    const before = laneColor("lane-7");
+    // Nothing about the name is an input, so this is really a documentation
+    // test: the signature takes only the id.
+    expect(laneColor("lane-7")).toBe(before);
+  });
+
+  it("spreads consecutive ids across different colours", () => {
+    const colors = ["lane-1", "lane-2", "lane-3", "lane-4"].map(laneColor);
+    // Sequential ids are the common case (the backend mints them in order), so
+    // adjacent lanes must not collide.
+    expect(new Set(colors).size).toBeGreaterThan(1);
+    expect(colors[0]).not.toBe(colors[1]);
+  });
+
+  /**
+   * A 2px bar cannot distinguish two blues, so the palette holds only hues that
+   * stay separable at that size.
+   */
+  it("uses only clearly separable hues", () => {
+    const palette = new Set(
+      Array.from({ length: 200 }, (_, index) => laneColor(`lane-${index}`)),
+    );
+    // Blue is in; its near-neighbours sapphire and teal are deliberately not.
+    expect(palette.has("#89b4fa")).toBe(true);
+    expect(palette.has("#74c7ec")).toBe(false);
+    expect(palette.has("#94e2d5")).toBe(false);
+  });
+
+  it("always returns a colour from the palette", () => {
+    for (let index = 0; index < 50; index += 1) {
+      expect(laneColor(`lane-${index}`)).toMatch(/^#[0-9a-f]{6}$/);
+    }
   });
 });
