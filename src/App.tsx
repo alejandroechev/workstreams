@@ -54,6 +54,7 @@ import {
 import { workbenchStore } from "./domain/workbench-store-instance";
 import { setWorkbenchStoreForDispatcher } from "./domain/workbench-events";
 import { useBackend } from "./backend/context";
+import { decideUnarchive, type WorkLane } from "./domain/work-lanes";
 import type { Project, Workstream, Tile, TileType } from "./domain/types";
 import type { LoopSummary } from "./domain/loop";
 
@@ -65,6 +66,7 @@ setWorkbenchStoreForDispatcher(workbenchStore);
 export default function App() {
   const backend = useBackend();
   const [projects, setProjects] = useState<Project[]>([]);
+  const [workLanes, setWorkLanes] = useState<WorkLane[]>([]);
   const [workstreams, setWorkstreams] = useState<Workstream[]>([]);
   const [loopSummaries, setLoopSummaries] = useState<LoopSummary[]>([]);
   // Latest projects/workstreams held in refs so spawn helpers invoked from
@@ -537,9 +539,14 @@ export default function App() {
 
   // Load projects and workstreams on mount (with saved order)
   useEffect(() => {
-    Promise.all([backend.listProjects(), backend.listWorkstreams()]).then(
-      async ([p, ws]) => {
+    Promise.all([
+      backend.listProjects(),
+      backend.listWorkstreams(),
+      backend.listWorkLanes(),
+    ]).then(
+      async ([p, ws, lanes]) => {
         setProjects(p);
+        setWorkLanes(lanes);
         setWorkstreams(ws);
 
         // Populate session info from each workstream's pinned tile (background).
@@ -775,6 +782,54 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeWsId]);
 
+  /**
+   * Opens an archived workstream, after confirming and checking it still has
+   * somewhere to open.
+   *
+   * The directory check is the point: archiving offers to delete the worktree,
+   * so without it an unarchived workstream can open onto a path that no longer
+   * exists and look broken for reasons the user cannot see.
+   */
+  const unarchiveAndOpen = useCallback(
+    async (ws: Workstream) => {
+      let directoryExists = false;
+      if (ws.directory) {
+        try {
+          directoryExists = await invoke<boolean>("path_exists", { path: ws.directory });
+        } catch {
+          // Treat an unreadable path as missing: offering to recreate is
+          // recoverable, opening onto nothing is not.
+          directoryExists = false;
+        }
+      }
+
+      const outcome = decideUnarchive(ws, directoryExists);
+      if (outcome.action === "blocked") {
+        window.alert(outcome.reason);
+        return;
+      }
+      if (outcome.action === "recreate") {
+        window.alert(
+          `The worktree for "${ws.name}" is gone (${outcome.directory}).\n\n` +
+            "Unarchiving would open an empty workspace, so create a new workstream " +
+            "for this branch instead.",
+        );
+        return;
+      }
+      if (outcome.action === "confirm") {
+        const ok = window.confirm(`Unarchive "${ws.name}" and open it?`);
+        if (!ok) return;
+        await backend.updateWorkstream(ws.id, { status: "active" });
+        setWorkstreams((prev) =>
+          prev.map((w) => (w.id === ws.id ? { ...w, status: "active" } : w)),
+        );
+      }
+      if (!confirmDiscardDirtyFileBuffers("switch workstreams")) return;
+      setActiveWsId(ws.id);
+    },
+    [backend, confirmDiscardDirtyFileBuffers],
+  );
+
   const selectWorkstream = useCallback(
     (id: string) => {
       if (id === activeWsId) return;
@@ -786,10 +841,19 @@ export default function App() {
         (target.status === "creating" || target.status === "create_failed")
       )
         return;
+
+      // Archived rows live in the same list now, so a click has to mean
+      // something. Unarchiving is asynchronous because it has to stat the
+      // directory first.
+      if (target && (target.status === "archived" || target.status === "archiving")) {
+        void unarchiveAndOpen(target);
+        return;
+      }
+
       if (!confirmDiscardDirtyFileBuffers("switch workstreams")) return;
       setActiveWsId(id);
     },
-    [activeWsId, workstreams, confirmDiscardDirtyFileBuffers],
+    [activeWsId, workstreams, confirmDiscardDirtyFileBuffers, unarchiveAndOpen],
   );
 
   // Workstream commands stored per-workstream for terminal spawning
@@ -1225,15 +1289,12 @@ export default function App() {
       const ws = workstreams.find((w) => w.id === id);
       if (!ws) return;
 
-      // Unarchive is immediate, no dialog.
+      // The explicit Unarchive action shares the click path's guard rather
+      // than keeping a second, unguarded way to do the same thing.
       if (ws.status === "archived") {
-        await backend.updateWorkstream(id, { status: "active" });
-        setWorkstreams((prev) =>
-          prev.map((w) => (w.id === id ? { ...w, status: "active" } : w)),
-        );
+        await unarchiveAndOpen(ws);
         return;
       }
-
       if (!confirmDiscardDirtyFileBuffers("archive workstream")) return;
       // Detect whether the directory is *actually* a git worktree at runtime
       // (the same check remove_worktree uses). We can't rely on the stored
@@ -1928,6 +1989,45 @@ export default function App() {
         onCloseWorkstream={handleCloseWorkstream}
         onRenameWorkstream={handleRenameWorkstream}
         onUpdateProject={handleUpdateProject}
+        lanes={workLanes}
+        onCreateLane={async (name) => {
+          try {
+            const lane = await backend.createWorkLane(name);
+            // Idempotent server-side, so re-adding an existing name must not
+            // produce a duplicate row in the list either.
+            setWorkLanes((prev) =>
+              prev.some((l) => l.id === lane.id) ? prev : [...prev, lane],
+            );
+          } catch (error) {
+            console.error("Failed to create lane:", error);
+          }
+        }}
+        onDeleteLane={async (laneId) => {
+          try {
+            await backend.deleteWorkLane(laneId);
+            setWorkLanes((prev) => prev.filter((l) => l.id !== laneId));
+            // Members survive the lane; mirror the DB's ON DELETE SET NULL so
+            // the sidebar does not need a refetch to look right.
+            setWorkstreams((prev) =>
+              prev.map((w) => (w.lane_id === laneId ? { ...w, lane_id: null } : w)),
+            );
+          } catch (error) {
+            console.error("Failed to delete lane:", error);
+          }
+        }}
+        onAssignLane={async (workstreamId, laneId) => {
+          // Optimistic: the row moves as the drag ends rather than after a
+          // round trip, and a failure re-reads rather than guessing.
+          setWorkstreams((prev) =>
+            prev.map((w) => (w.id === workstreamId ? { ...w, lane_id: laneId } : w)),
+          );
+          try {
+            await backend.assignWorkstreamLane(workstreamId, laneId);
+          } catch (error) {
+            console.error("Failed to assign lane:", error);
+            backend.listWorkstreams().then(setWorkstreams).catch(() => {});
+          }
+        }}
         onChangeStatus={async (id, status) => {
           await backend.updateWorkstream(id, { status });
           setWorkstreams((prev) =>

@@ -206,8 +206,18 @@ function createBackend(): Backend {
     createTile: vi.fn(),
     deleteTile: vi.fn(),
     updateTileConfig: vi.fn(),
+    // Falls back to an empty layout rather than undefined: a workstream the
+    // fixture never registered (an archived one being opened, say) would
+    // otherwise crash the caller on `layout.tile_order_json`.
     getLayout: vi.fn(async (workstreamId: string) =>
-      layouts.get(workstreamId)!,
+      layouts.get(workstreamId) ?? {
+        workstream_id: workstreamId,
+        layout_mode: "adaptive",
+        focused_tile_id: null,
+        fullscreen_tile_id: null,
+        tile_order_json: "[]",
+        updated_at: now,
+      },
     ),
     updateLayout: vi.fn(),
     readFile: vi.fn(),
@@ -311,6 +321,11 @@ function createBackend(): Backend {
     traceStaleness: vi.fn(async () => "fresh" as const),
     listRustTests: vi.fn(async () => []),
     recordCodeTrace: vi.fn(async () => "/t.json"),
+    listWorkLanes: vi.fn(async () => []),
+    createWorkLane: vi.fn(),
+    renameWorkLane: vi.fn(),
+    deleteWorkLane: vi.fn(),
+    assignWorkstreamLane: vi.fn(),
   } as Backend;
 }
 
@@ -511,6 +526,106 @@ describe("tile-created event paths", () => {
       act(() => mocks.emitTileCreated(makeTile("orphan", "ws-99"))),
     ).not.toThrow();
     expect(backend.updateLayout).not.toHaveBeenCalled();
+  });
+});
+
+describe("clicking an archived workstream", () => {
+  const archivedWorkstream = (directory: string): Workstream => ({
+    id: "ws-archived",
+    name: "Old work",
+    description: null,
+    directory,
+    git_repo: null,
+    git_branch: null,
+    status: "archived",
+    project_id: null,
+    workstream_type: "worktree",
+    worktree_branch: "feature/x",
+    created_at: "2026-01-01",
+    updated_at: "2026-01-01",
+  });
+
+  /**
+   * The guard that matters: archiving offers to delete the worktree, so
+   * unarchiving without checking can open a workspace pointing at nothing.
+   */
+  it("refuses to open one whose worktree is gone, and offers a recreate instead", async () => {
+    const backend = createBackend();
+    vi.mocked(backend.listWorkstreams).mockResolvedValue([
+      ...workstreams,
+      archivedWorkstream("/gone"),
+    ]);
+    mocks.invoke.mockImplementation(async (cmd: unknown) =>
+      cmd === "path_exists" ? false : null,
+    );
+    const alert = vi.spyOn(window, "alert").mockImplementation(() => {});
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    await renderApp(backend);
+    const row = await screen.findByText("Old work");
+    await act(async () => {
+      fireEvent.click(row);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(alert).toHaveBeenCalledWith(expect.stringContaining("/gone"));
+    expect(confirm).not.toHaveBeenCalled();
+    expect(backend.updateWorkstream).not.toHaveBeenCalledWith(
+      "ws-archived",
+      expect.objectContaining({ status: "active" }),
+    );
+    alert.mockRestore();
+    confirm.mockRestore();
+  });
+
+  it("confirms, then unarchives when the worktree is still there", async () => {
+    const backend = createBackend();
+    vi.mocked(backend.listWorkstreams).mockResolvedValue([
+      ...workstreams,
+      archivedWorkstream("/still-here"),
+    ]);
+    mocks.invoke.mockImplementation(async (cmd: unknown) =>
+      cmd === "path_exists" ? true : null,
+    );
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    await renderApp(backend);
+    const row = await screen.findByText("Old work");
+    await act(async () => {
+      fireEvent.click(row);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining("Unarchive"));
+    expect(backend.updateWorkstream).toHaveBeenCalledWith("ws-archived", {
+      status: "active",
+    });
+    confirm.mockRestore();
+  });
+
+  it("does nothing when the confirmation is declined", async () => {
+    const backend = createBackend();
+    vi.mocked(backend.listWorkstreams).mockResolvedValue([
+      ...workstreams,
+      archivedWorkstream("/still-here"),
+    ]);
+    mocks.invoke.mockImplementation(async (cmd: unknown) =>
+      cmd === "path_exists" ? true : null,
+    );
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+
+    await renderApp(backend);
+    const row = await screen.findByText("Old work");
+    await act(async () => {
+      fireEvent.click(row);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(backend.updateWorkstream).not.toHaveBeenCalled();
+    confirm.mockRestore();
   });
 });
 

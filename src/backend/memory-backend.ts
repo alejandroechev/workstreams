@@ -1,3 +1,4 @@
+import type { WorkLane } from "../domain/work-lanes";
 import type { Project, Workstream, Tile, TileType, WorkstreamLayout, CopilotConfigItem } from "../domain/types";
 import type { SessionFileComment } from "../domain/file-comments";
 import type { Review, ReviewComment, ChangedFile, DiffSides } from "../domain/code-review";
@@ -242,6 +243,45 @@ export class MemoryBackend implements Backend {
 
   async listWorkstreams(): Promise<Workstream[]> {
     return Array.from(this.workstreams.values());
+  }
+
+  private workLanes = new Map<string, WorkLane>();
+
+  async listWorkLanes(): Promise<WorkLane[]> {
+    return Array.from(this.workLanes.values());
+  }
+
+  async createWorkLane(name: string): Promise<WorkLane> {
+    const trimmed = name.trim();
+    if (!trimmed) throw new Error("A lane needs a name");
+    // Idempotent and case-insensitive, matching the unique index in SQLite —
+    // otherwise the stub would accept what the real backend rejects.
+    const existing = Array.from(this.workLanes.values()).find(
+      (lane) => lane.name.toLowerCase() === trimmed.toLowerCase(),
+    );
+    if (existing) return existing;
+    const lane: WorkLane = { id: `lane-${this.workLanes.size + 1}`, name: trimmed };
+    this.workLanes.set(lane.id, lane);
+    return lane;
+  }
+
+  async renameWorkLane(id: string, name: string): Promise<void> {
+    const lane = this.workLanes.get(id);
+    if (lane) lane.name = name.trim();
+  }
+
+  async deleteWorkLane(id: string): Promise<void> {
+    this.workLanes.delete(id);
+    // Mirrors ON DELETE SET NULL: members survive, re-filed as "No lane".
+    for (const ws of this.workstreams.values()) {
+      if (ws.lane_id === id) ws.lane_id = null;
+    }
+  }
+
+  async assignWorkstreamLane(workstreamId: string, laneId: string | null): Promise<void> {
+    const ws = this.workstreams.get(workstreamId);
+    if (!ws) throw new Error(`No workstream with id ${workstreamId}`);
+    ws.lane_id = laneId;
   }
 
   async createWorkstream(name: string, directory: string, opts?: { projectId?: string; workstreamType?: string; worktreeBranch?: string }): Promise<Workstream> {

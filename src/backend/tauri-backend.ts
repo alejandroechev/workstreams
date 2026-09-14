@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import type { WorkLane } from "../domain/work-lanes";
 import type { Project, Workstream, Tile, TileType, WorkstreamLayout, CopilotConfigItem } from "../domain/types";
 import type { SessionFileComment } from "../domain/file-comments";
 import type { Review, ReviewComment, ChangedFile, DiffSides } from "../domain/code-review";
@@ -70,6 +71,26 @@ export class TauriBackend implements Backend {
 
   async listWorkstreams(): Promise<Workstream[]> {
     return invoke<Workstream[]>("list_workstreams");
+  }
+
+  async listWorkLanes(): Promise<WorkLane[]> {
+    return invoke<WorkLane[]>("list_work_lanes");
+  }
+
+  async createWorkLane(name: string): Promise<WorkLane> {
+    return invoke<WorkLane>("create_work_lane", { name });
+  }
+
+  async renameWorkLane(id: string, name: string): Promise<void> {
+    return invoke<void>("rename_work_lane", { id, name });
+  }
+
+  async deleteWorkLane(id: string): Promise<void> {
+    return invoke<void>("delete_work_lane", { id });
+  }
+
+  async assignWorkstreamLane(workstreamId: string, laneId: string | null): Promise<void> {
+    return invoke<void>("assign_workstream_lane", { workstreamId, laneId });
   }
 
   async createWorkstream(name: string, directory: string, opts?: { projectId?: string; workstreamType?: string; worktreeBranch?: string }): Promise<Workstream> {

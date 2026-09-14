@@ -165,3 +165,40 @@ export function laneLabel(group: LaneGroup): string {
 export function laneKey(group: LaneGroup): string {
   return group.lane?.id ?? NO_LANE_ID;
 }
+
+/** What clicking an archived workstream should do. */
+export type UnarchiveOutcome =
+  | { action: "open" }
+  | { action: "confirm" }
+  | { action: "recreate"; directory: string }
+  | { action: "blocked"; reason: string };
+
+/**
+ * Decides what a click on a workstream means.
+ *
+ * Archived rows are now in the same list as live ones, so a click has to do
+ * something sensible rather than nothing. Unarchiving is guarded twice:
+ *
+ * - by a confirmation, because a misclick while scanning a list should not
+ *   silently mutate state;
+ * - by a directory check, because archiving offers to delete the worktree, so
+ *   an unarchived workstream can otherwise open onto a path that no longer
+ *   exists and render an empty, broken-looking workspace.
+ */
+export function decideUnarchive(
+  workstream: Pick<Workstream, "status" | "directory">,
+  directoryExists: boolean,
+): UnarchiveOutcome {
+  if (workstream.status === "archiving") {
+    // Its worktree is mid-deletion; unarchiving now would race the cleanup.
+    return { action: "blocked", reason: "This workstream is still being archived." };
+  }
+  if (workstream.status !== "archived") return { action: "open" };
+  if (!workstream.directory) {
+    return { action: "blocked", reason: "This workstream has no directory to open." };
+  }
+  if (!directoryExists) {
+    return { action: "recreate", directory: workstream.directory };
+  }
+  return { action: "confirm" };
+}

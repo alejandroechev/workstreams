@@ -1,4 +1,5 @@
 // @test-skip: Type-only interface; behaviour covered by MemoryBackend + TauriBackend tests.
+import type { WorkLane } from "../domain/work-lanes";
 import type { Project, Workstream, Tile, TileType, WorkstreamLayout, CopilotConfigItem } from "../domain/types";
 import type { SessionFileComment } from "../domain/file-comments";
 import type { TraceFile } from "../domain/trace-format";
@@ -53,6 +54,15 @@ export interface Backend {
   deleteProject(id: string): Promise<void>;
   // Workstreams
   listWorkstreams(): Promise<Workstream[]>;
+  /** Work lanes, the folders the sidebar groups workstreams into. */
+  listWorkLanes(): Promise<WorkLane[]>;
+  /** Creates a lane, or returns the existing one with that name. */
+  createWorkLane(name: string): Promise<WorkLane>;
+  renameWorkLane(id: string, name: string): Promise<void>;
+  /** Deletes a lane. Its workstreams survive, re-filed as "No lane". */
+  deleteWorkLane(id: string): Promise<void>;
+  /** Moves a workstream into a lane, or out of one when `laneId` is null. */
+  assignWorkstreamLane(workstreamId: string, laneId: string | null): Promise<void>;
   createWorkstream(name: string, directory: string, opts?: { projectId?: string; workstreamType?: string; worktreeBranch?: string }): Promise<Workstream>;
   updateWorkstream(id: string, updates: Partial<Workstream>): Promise<void>;
   changeWorkstreamWorktree(

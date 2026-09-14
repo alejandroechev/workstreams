@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   compareNames,
+  decideUnarchive,
   matchesFilter,
   LIST_FILTERS,
   type ListFilter,
@@ -178,5 +179,41 @@ describe("matchesFilter", () => {
   it("exposes exactly three stops", () => {
     const stops: ListFilter[] = [...LIST_FILTERS];
     expect(stops).toEqual(["loaded", "not_archived", "all"]);
+  });
+});
+
+describe("decideUnarchive", () => {
+  it("opens a workstream that is not archived", () => {
+    expect(decideUnarchive({ status: "active", directory: "/w" }, true)).toEqual({
+      action: "open",
+    });
+  });
+
+  it("asks before unarchiving, so a misclick does not mutate state", () => {
+    expect(decideUnarchive({ status: "archived", directory: "/w" }, true)).toEqual({
+      action: "confirm",
+    });
+  });
+
+  /**
+   * The failure this exists to prevent: archiving offers to delete the
+   * worktree, so unarchiving can open a workstream pointing at nothing — the
+   * same empty-workspace bug already fixed in ws.create.
+   */
+  it("offers to recreate when the worktree is gone", () => {
+    expect(decideUnarchive({ status: "archived", directory: "/gone" }, false)).toEqual({
+      action: "recreate",
+      directory: "/gone",
+    });
+  });
+
+  it("refuses while the archive cleanup is still running", () => {
+    const outcome = decideUnarchive({ status: "archiving", directory: "/w" }, true);
+    expect(outcome.action).toBe("blocked");
+  });
+
+  it("refuses an archived workstream that never had a directory", () => {
+    const outcome = decideUnarchive({ status: "archived", directory: null }, true);
+    expect(outcome.action).toBe("blocked");
   });
 });

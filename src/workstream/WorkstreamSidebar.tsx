@@ -74,6 +74,10 @@ interface Props {
   lanes?: WorkLane[];
   /** Moves a workstream into a lane, or out of one when `laneId` is null. */
   onAssignLane?: (workstreamId: string, laneId: string | null) => void;
+  /** Creates a lane. Without this the add control is hidden. */
+  onCreateLane?: (name: string) => void;
+  /** Deletes a lane; its workstreams fall back to "No lane". */
+  onDeleteLane?: (laneId: string) => void;
   onChangeStatus: (id: string, status: Workstream['status']) => void;
   onForkWorkstream?: (id: string) => void;
   onChangeWorktree?: (ws: Workstream) => void;
@@ -170,6 +174,8 @@ export default function WorkstreamSidebar({
   onRenameWorkstream,
   lanes = [],
   onAssignLane,
+  onCreateLane,
+  onDeleteLane,
   onUpdateProject,
   onChangeStatus,
   onForkWorkstream,
@@ -305,33 +311,14 @@ export default function WorkstreamSidebar({
     }
   }, [renamingWsId]);
 
-  // Drag-and-drop reorder helpers.
+  // Drag expresses lane membership: a row is the thing dragged, a lane is the
+  // thing dropped on. Nothing here targets another row.
   const handleDragStart = (e: React.DragEvent, wsId: string) => {
     setDraggedWsId(wsId);
     e.dataTransfer.effectAllowed = "move";
     try { e.dataTransfer.setData("text/plain", wsId); } catch { /* ignore */ }
   };
-  const handleDragOver = (e: React.DragEvent, targetWsId: string) => {
-    if (!draggedWsId || draggedWsId === targetWsId) return;
-    e.preventDefault();
-    e.dataTransfer.dropEffect = "move";
-    if (dragOverWsId !== targetWsId) setDragOverWsId(targetWsId);
-  };
-  const handleDragLeave = (_e: React.DragEvent, targetWsId: string) => {
-    if (dragOverWsId === targetWsId) setDragOverWsId(null);
-  };
-  const handleDrop = (e: React.DragEvent, targetWsId: string) => {
-    e.preventDefault();
-    if (!draggedWsId || draggedWsId === targetWsId) {
-      setDraggedWsId(null); setDragOverWsId(null); return;
-    }
-    // Dropping on another workstream no longer means anything: manual ordering
-    // is gone and drag now expresses lane membership, which is a drop on a lane
-    // header rather than on a row.
-    setDraggedWsId(null);
-    setDragOverWsId(null);
-  };
-  const handleDragEnd = () => { setDraggedWsId(null); setDragOverWsId(null); };
+  const handleDragEnd = () => { setDraggedWsId(null); setDragOverLaneKey(null); };
 
   // One list. The old Live / Idle / Archived split conflated two axes: whether
   // a workstream's tiles are loaded (runtime) and whether it is archived
@@ -403,9 +390,10 @@ export default function WorkstreamSidebar({
               data-archived={isArchived ? "true" : "false"}
               draggable={renamingWsId !== ws.id}
               onDragStart={(e) => handleDragStart(e, ws.id)}
-              onDragOver={(e) => handleDragOver(e, ws.id)}
-              onDragLeave={(e) => handleDragLeave(e, ws.id)}
-              onDrop={(e) => handleDrop(e, ws.id)}
+              // No drop handling on the row itself. Dropping is a statement
+              // about which lane a workstream belongs to, so the event bubbles
+              // to the enclosing lane -- which also makes dropping onto a row
+              // inside a lane do the forgiving thing rather than nothing.
               onDragEnd={handleDragEnd}
               onClick={() => onSelectWorkstream(ws.id)}
               onMouseEnter={() => setHoveredWsId(ws.id)}
@@ -781,14 +769,32 @@ export default function WorkstreamSidebar({
             ))}
           </div>
         )}
+        {onCreateLane && (
+          <button
+            data-testid="ws-add-lane"
+            onClick={() => {
+              const name = window.prompt("New work lane name");
+              if (name?.trim()) onCreateLane(name.trim());
+            }}
+            style={{
+              ...sectionHeaderStyle,
+              color: "#6c7086",
+              justifyContent: "flex-start",
+              gap: 4,
+            }}
+            title="New work lane"
+          >
+            <PlusIcon style={{ width: 10, height: 10 }} />
+            <span>New lane</span>
+          </button>
+        )}
         {laneGroups.map((group) => {
           const key = laneKey(group);
           const collapsed = collapsedSections[key] === true;
           const hidden = hiddenByLane.get(key) ?? 0;
-          const isUnfiled = group.lane === null;
-          // An empty lane with nothing hidden is noise; "No lane" stays
-          // regardless because it is the drop target for leaving a lane.
-          if (!isUnfiled && group.workstreams.length === 0 && hidden === 0) return null;
+          // Every lane renders, empty or not. Hiding an empty one would make a
+          // lane you just created impossible to drag into, and would make a
+          // lane whose rows are all filtered out look deleted.
           return (
             <div
               key={key}
@@ -836,6 +842,30 @@ export default function WorkstreamSidebar({
                   {group.workstreams.length}
                 </span>
               </button>
+              {group.lane && onDeleteLane && (
+                <button
+                  data-testid={`ws-lane-delete-${key}`}
+                  onClick={() => {
+                    // Named in the prompt because the reassurance is the point:
+                    // deleting a lane is a filing change, not a destructive one.
+                    const ok = window.confirm(
+                      `Delete the lane "${group.lane?.name}"? Its workstreams move to No lane.`,
+                    );
+                    if (ok && group.lane) onDeleteLane(group.lane.id);
+                  }}
+                  style={{
+                    background: "none",
+                    border: "none",
+                    color: "#45475a",
+                    cursor: "pointer",
+                    fontSize: 10,
+                    padding: "0 6px",
+                  }}
+                  title={`Delete lane ${group.lane.name}`}
+                >
+                  ×
+                </button>
+              )}
               {!collapsed && group.workstreams.map(renderWorkstreamRow)}
             </div>
           );

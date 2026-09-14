@@ -1,0 +1,154 @@
+import "@testing-library/jest-dom/vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
+import { render, fireEvent, cleanup, screen } from "@testing-library/react";
+import WorkstreamSidebar from "../WorkstreamSidebar";
+import type { Project, Workstream } from "../../domain/types";
+
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: vi.fn().mockResolvedValue(() => {}),
+}));
+
+const now = new Date().toISOString();
+
+const mkWs = (id: string, over: Partial<Workstream> = {}): Workstream => ({
+  id,
+  name: id,
+  description: null,
+  directory: null,
+  git_repo: null,
+  git_branch: null,
+  status: "active",
+  project_id: null,
+  workstream_type: "standalone",
+  worktree_branch: null,
+  created_at: now,
+  updated_at: now,
+  ...over,
+});
+
+const project: Project = {
+  id: "p1",
+  name: "App",
+  directory: "/repos/app",
+  git_remote: null,
+  color: "#89b4fa",
+  copilot_command: null,
+  created_at: now,
+  updated_at: now,
+};
+
+function renderSidebar(
+  workstreams: Workstream[],
+  over: Partial<React.ComponentProps<typeof WorkstreamSidebar>> = {},
+) {
+  const onAssignLane = vi.fn();
+  render(
+    <WorkstreamSidebar
+      projects={[project]}
+      workstreams={workstreams}
+      loadedWsIds={new Set()}
+      activeWsId={null}
+      onSelectWorkstream={vi.fn()}
+      onCreateProject={vi.fn()}
+      onImportProject={vi.fn()}
+      onCreateWorkstream={vi.fn()}
+      onArchiveWorkstream={vi.fn()}
+      onRenameWorkstream={vi.fn()}
+      onUpdateProject={vi.fn()}
+      onChangeStatus={vi.fn()}
+      onAssignLane={onAssignLane}
+      {...over}
+    />,
+  );
+  return { onAssignLane };
+}
+
+/** jsdom has no drag implementation, so the events are driven directly. */
+function dragRowOnto(workstreamId: string, laneTestId: string) {
+  const row = screen
+    .getAllByTestId("workstream-item")
+    .find((node) => node.getAttribute("data-workstream-id") === workstreamId);
+  if (!row) throw new Error(`no row for ${workstreamId}`);
+  const dataTransfer = { setData: vi.fn(), effectAllowed: "" };
+  fireEvent.dragStart(row, { dataTransfer });
+  const lane = screen.getByTestId(laneTestId);
+  fireEvent.dragOver(lane, { dataTransfer });
+  fireEvent.drop(lane, { dataTransfer });
+}
+
+afterEach(() => {
+  cleanup();
+  localStorage.clear();
+});
+
+describe("assigning lanes by drag", () => {
+  const lanes = [
+    { id: "l1", name: "Media Store" },
+    { id: "l2", name: "Tooling" },
+  ];
+
+  it("dropping a workstream on a lane assigns it there", () => {
+    const { onAssignLane } = renderSidebar([mkWs("a")], { lanes });
+
+    dragRowOnto("a", "ws-lane-l1");
+    expect(onAssignLane).toHaveBeenCalledWith("a", "l1");
+  });
+
+  it("dropping on another lane moves it", () => {
+    const { onAssignLane } = renderSidebar([mkWs("a", { lane_id: "l1" })], { lanes });
+
+    dragRowOnto("a", "ws-lane-l2");
+    expect(onAssignLane).toHaveBeenCalledWith("a", "l2");
+  });
+
+  /**
+   * The inverse gesture. Without a droppable "No lane" the interaction would be
+   * asymmetric — draggable in, menu out — which is why that group renders even
+   * when empty.
+   */
+  it("dropping on No lane takes a workstream out of its lane", () => {
+    const { onAssignLane } = renderSidebar([mkWs("a", { lane_id: "l1" })], { lanes });
+
+    dragRowOnto("a", "ws-lane-__no_lane__");
+    expect(onAssignLane).toHaveBeenCalledWith("a", null);
+  });
+
+  it("does nothing when no lane handler is supplied", () => {
+    renderSidebar([mkWs("a")], { lanes, onAssignLane: undefined });
+
+    // The whole point is that this must not throw.
+    expect(() => dragRowOnto("a", "ws-lane-l1")).not.toThrow();
+  });
+
+  /**
+   * Manual ordering is gone, so a drop on a row is not a reorder. Rather than
+   * doing nothing -- which reads as broken -- the event bubbles to the
+   * enclosing lane, so dropping beside a lane's members joins that lane.
+   */
+  it("dropping onto a row joins the lane that row is in", () => {
+    const { onAssignLane } = renderSidebar(
+      [mkWs("a"), mkWs("b", { lane_id: "l2" })],
+      { lanes },
+    );
+
+    const target = screen
+      .getAllByTestId("workstream-item")
+      .find((node) => node.getAttribute("data-workstream-id") === "b");
+    const source = screen
+      .getAllByTestId("workstream-item")
+      .find((node) => node.getAttribute("data-workstream-id") === "a");
+    const dataTransfer = { setData: vi.fn(), effectAllowed: "" };
+    fireEvent.dragStart(source!, { dataTransfer });
+    fireEvent.dragOver(target!, { dataTransfer });
+    fireEvent.drop(target!, { dataTransfer });
+
+    expect(onAssignLane).toHaveBeenCalledWith("a", "l2");
+  });
+
+  it("dropping a workstream on the lane it is already in is harmless", () => {
+    const { onAssignLane } = renderSidebar([mkWs("a", { lane_id: "l1" })], { lanes });
+
+    dragRowOnto("a", "ws-lane-l1");
+    expect(onAssignLane).toHaveBeenCalledWith("a", "l1");
+  });
+});
