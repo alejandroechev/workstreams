@@ -57,10 +57,9 @@ describe("WorkstreamSidebar activity indicator", () => {
   });
 
   it("renders stopped indicator for workstreams not in loadedWsIds", () => {
-    const { getAllByTestId, queryAllByTestId, getByTestId } = renderWith(new Set(["a"]));
-    // Unloaded workstreams now live in the Idle section, which auto-collapses
-    // while something is live. Expand it to assert on the row itself.
-    fireEvent.click(getByTestId("ws-section-toggle-idle"));
+    const { getAllByTestId, queryAllByTestId } = renderWith(new Set(["a"]));
+    // Both rows are visible: lanes render expanded, and the default filter is
+    // "Not archived" rather than a loaded-only view.
     expect(getAllByTestId("ws-indicator-stopped")).toHaveLength(1);
     expect(queryAllByTestId("ws-indicator-idle").length).toBeGreaterThanOrEqual(1);
     cleanup();

@@ -2,7 +2,17 @@
 import { useState, useRef, useEffect } from "react";
 import { listen } from "@tauri-apps/api/event";
 import type { Project, Workstream } from "../domain/types";
-import { bucketWorkstreams, isSectionCollapsed } from "../domain/workstream-sections";
+import {
+  groupByLane,
+  laneKey,
+  laneLabel,
+  matchesFilter,
+  LIST_FILTERS,
+  LIST_FILTER_LABELS,
+  NO_LANE_ID,
+  type ListFilter,
+  type WorkLane,
+} from "../domain/work-lanes";
 import { RepoManagerModal } from "./RepoManagerModal";
 import type { ProvisioningState } from "../domain/worktree-provisioning";
 import {
@@ -60,11 +70,10 @@ interface Props {
   onCloseWorkstream?: (id: string) => void;
   onRenameWorkstream: (id: string, newName: string) => void;
   onUpdateProject: (id: string, updates: { name: string; color: string; copilot_command: string | null }) => void;
-  /**
-   * Called after a drag-and-drop reorder with the FULL new order of active
-   * workstream ids. The caller persists this (and any archived rows can be
-   * left untouched).
-   */
+    /** Lanes to render as folders. Empty means only "No lane" shows. */
+  lanes?: WorkLane[];
+  /** Moves a workstream into a lane, or out of one when `laneId` is null. */
+  onAssignLane?: (workstreamId: string, laneId: string | null) => void;
   onChangeStatus: (id: string, status: Workstream['status']) => void;
   onForkWorkstream?: (id: string) => void;
   onChangeWorktree?: (ws: Workstream) => void;
@@ -159,6 +168,8 @@ export default function WorkstreamSidebar({
   onArchiveWorkstream,
   onCloseWorkstream,
   onRenameWorkstream,
+  lanes = [],
+  onAssignLane,
   onUpdateProject,
   onChangeStatus,
   onForkWorkstream,
@@ -189,21 +200,34 @@ export default function WorkstreamSidebar({
       return {};
     },
   );
-  const toggleSection = (key: "live" | "idle") => {
+  /** Lanes default to expanded; a collapsed one is remembered by lane id. */
+  const toggleLane = (key: string) => {
     setCollapsedSections((prev) => {
-      // Toggle relative to what is CURRENTLY shown, so the first click always
-      // does the visible thing even when the value is still defaulted.
-      const next = {
-        ...prev,
-        [key]: !isSectionCollapsed(key, prev, liveCountRef.current),
-      };
+      const next = { ...prev, [key]: !prev[key] };
       try {
         localStorage.setItem("ws-sidebar-collapsed-sections", JSON.stringify(next));
       } catch { /* persistence is best-effort */ }
       return next;
     });
   };
+
+  const [listFilter, setListFilter] = useState<ListFilter>(() => {
+    try {
+      const raw = localStorage.getItem("ws-sidebar-list-filter");
+      if (raw && (LIST_FILTERS as readonly string[]).includes(raw)) return raw as ListFilter;
+    } catch { /* fall through */ }
+    return "not_archived";
+  });
+  const chooseFilter = (next: ListFilter) => {
+    setListFilter(next);
+    try {
+      localStorage.setItem("ws-sidebar-list-filter", next);
+    } catch { /* persistence is best-effort */ }
+  };
+  /** The lane a drag is hovering, so the drop target is visible. */
+  const [dragOverLaneKey, setDragOverLaneKey] = useState<string | null>(null);
   const [showRepoManager, setShowRepoManager] = useState(false);
+
   const liveCountRef = useRef(0);
 
   // Live activity status per workstream (from session poller)
@@ -309,26 +333,30 @@ export default function WorkstreamSidebar({
   };
   const handleDragEnd = () => { setDraggedWsId(null); setDragOverWsId(null); };
 
-  // `archiving` rows belong in the archived section (the workstream is
-  // logically archived; only its worktree dir is still being cleaned up).
-  const activeWorkstreams = workstreams.filter((ws) => ws.status !== "archived" && ws.status !== "archiving");
-  const archivedWorkstreams = workstreams.filter((ws) => ws.status === "archived" || ws.status === "archiving");
-  // Live vs Idle is a RUNTIME split (are its tiles/processes loaded?), not a
-  // persisted status — see domain/workstream-sections.ts.
-  const { live: liveWorkstreams, idle: idleWorkstreams } = bucketWorkstreams(
-    activeWorkstreams,
-    loadedWsIds,
+  // One list. The old Live / Idle / Archived split conflated two axes: whether
+  // a workstream's tiles are loaded (runtime) and whether it is archived
+  // (persisted). The filter now names each honestly.
+  const visibleWorkstreams = workstreams.filter((ws) =>
+    matchesFilter(ws, listFilter, loadedWsIds),
+  );
+  const laneGroups = groupByLane(visibleWorkstreams, lanes);
+  /** Per lane, how many rows the current filter is hiding. */
+  const hiddenByLane = new Map<string, number>();
+  for (const ws of workstreams) {
+    if (matchesFilter(ws, listFilter, loadedWsIds)) continue;
+    const key =
+      ws.lane_id && lanes.some((lane) => lane.id === ws.lane_id) ? ws.lane_id : NO_LANE_ID;
+    hiddenByLane.set(key, (hiddenByLane.get(key) ?? 0) + 1);
+  }
+  const activeWorkstreams = workstreams.filter(
+    (ws) => ws.status !== "archived" && ws.status !== "archiving",
   );
   // Repos with no active workstreams — a triage signal the old 240px list
   // could never show.
   const dormantRepoCount = projects.filter(
     (p) => !activeWorkstreams.some((ws) => ws.project_id === p.id),
   ).length;
-  liveCountRef.current = liveWorkstreams.length;
-  const sections = [
-    { key: "live" as const, label: "Live", rows: liveWorkstreams, collapsed: isSectionCollapsed("live", collapsedSections, liveWorkstreams.length) },
-    { key: "idle" as const, label: "Idle", rows: idleWorkstreams, collapsed: isSectionCollapsed("idle", collapsedSections, liveWorkstreams.length) },
-  ];
+  liveCountRef.current = activeWorkstreams.filter((ws) => loadedWsIds?.has(ws.id)).length;
   const runningLoopStates = new Set([
     "starting",
     "resuming",
@@ -363,12 +391,16 @@ export default function WorkstreamSidebar({
           const loopRunning = runningLoopStates.has(loop?.runState ?? "");
           const loopNeedsAttention = loop?.runState === "attention";
           const loopNeedsApproval = loop?.runState === "awaiting_approval";
+          // Archived rows now sit in the list rather than a separate section,
+          // so transparency is what separates them from live work.
+          const isArchived = ws.status === "archived" || ws.status === "archiving";
           return (
             <div
               key={ws.id}
               data-testid="workstream-item"
               data-workstream-id={ws.id}
               data-active={isActive ? "true" : "false"}
+              data-archived={isArchived ? "true" : "false"}
               draggable={renamingWsId !== ws.id}
               onDragStart={(e) => handleDragStart(e, ws.id)}
               onDragOver={(e) => handleDragOver(e, ws.id)}
@@ -383,7 +415,7 @@ export default function WorkstreamSidebar({
                 marginBottom: 1,
                 borderRadius: 4,
                 cursor: isBeingDragged ? "grabbing" : "pointer",
-                opacity: isBeingDragged ? 0.4 : 1,
+                opacity: isBeingDragged ? 0.4 : isArchived ? 0.45 : 1,
                 background: isActive ? "#313244" : "transparent",
                 borderTop: isDragOver ? "2px solid #89b4fa" : isActive ? "1px solid #45475a" : "1px solid transparent",
                 borderRight: isActive ? "1px solid #45475a" : "1px solid transparent",
@@ -720,99 +752,92 @@ export default function WorkstreamSidebar({
             No workstreams yet
           </div>
         )}
-        {sections.map((section) => (
-          <div key={section.key} data-testid={`ws-section-${section.key}`}>
-            <button
-              data-testid={`ws-section-toggle-${section.key}`}
-              onClick={() => toggleSection(section.key)}
-              aria-expanded={!section.collapsed}
-              style={sectionHeaderStyle}
-              title={section.collapsed ? `Show ${section.label}` : `Hide ${section.label}`}
-            >
-              {section.collapsed
-                ? <ChevronRightIcon style={{ width: 10, height: 10 }} />
-                : <ChevronDownIcon style={{ width: 10, height: 10 }} />}
-              <span style={{ flex: 1, textAlign: "left" }}>{section.label}</span>
-              <span data-testid={`ws-section-count-${section.key}`} style={sectionCountStyle}>
-                {section.rows.length}
-              </span>
-            </button>
-            {!section.collapsed && section.rows.map(renderWorkstreamRow)}
-          </div>
-        ))}
-
-        {/* Archived toggle */}
-        {archivedWorkstreams.length > 0 && (
+        {LIST_FILTERS.length > 0 && (
           <div
-            onClick={() => setShowArchived(!showArchived)}
-            style={{
-              padding: "4px 8px",
-              marginTop: 4,
-              fontSize: 10,
-              color: "#45475a",
-              cursor: "pointer",
-              userSelect: "none",
-            }}
+            data-testid="ws-list-filter"
+            style={{ display: "flex", gap: 3, padding: "4px 4px 6px" }}
           >
-            {showArchived ? "▾" : "▸"} Archived ({archivedWorkstreams.length})
+            {LIST_FILTERS.map((option) => (
+              <button
+                key={option}
+                data-testid={`ws-list-filter-${option}`}
+                onClick={() => chooseFilter(option)}
+                aria-pressed={listFilter === option}
+                style={{
+                  flex: 1,
+                  background: listFilter === option ? "#313244" : "transparent",
+                  color: listFilter === option ? "#89b4fa" : "#6c7086",
+                  border: "none",
+                  borderRadius: 3,
+                  padding: "3px 4px",
+                  cursor: "pointer",
+                  font: "inherit",
+                  fontSize: 10,
+                }}
+                title={LIST_FILTER_LABELS[option]}
+              >
+                {LIST_FILTER_LABELS[option]}
+              </button>
+            ))}
           </div>
         )}
-        {showArchived && archivedWorkstreams.map((ws) => {
-          const prov = provisioning?.get(ws.id);
-          const removeWarning = prov?.warning && ws.status === "archived" ? prov.warning : null;
+        {laneGroups.map((group) => {
+          const key = laneKey(group);
+          const collapsed = collapsedSections[key] === true;
+          const hidden = hiddenByLane.get(key) ?? 0;
+          const isUnfiled = group.lane === null;
+          // An empty lane with nothing hidden is noise; "No lane" stays
+          // regardless because it is the drop target for leaving a lane.
+          if (!isUnfiled && group.workstreams.length === 0 && hidden === 0) return null;
           return (
-          <div
-            key={ws.id}
-            style={{
-              padding: "4px 8px",
-              marginBottom: 1,
-              borderRadius: 4,
-              opacity: ws.status === "archiving" ? 0.7 : 0.5,
-              fontSize: 11,
-              color: "#585b70",
-            }}
-          >
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <span style={{ display: "flex", alignItems: "center", gap: 5, overflow: "hidden" }}>
-                {ws.status === "archiving" && (
-                  <span data-testid={`ws-archiving-${ws.id}`} style={{ display: "inline-block", color: "#89b4fa", animation: "ws-spin 0.9s linear infinite" }}>◍</span>
+            <div
+              key={key}
+              data-testid={`ws-lane-${key}`}
+              onDragOver={(e) => {
+                if (!draggedWsId || !onAssignLane) return;
+                e.preventDefault();
+                setDragOverLaneKey(key);
+              }}
+              onDragLeave={() => setDragOverLaneKey((k) => (k === key ? null : k))}
+              onDrop={(e) => {
+                e.preventDefault();
+                if (draggedWsId && onAssignLane) {
+                  onAssignLane(draggedWsId, group.lane?.id ?? null);
+                }
+                setDraggedWsId(null);
+                setDragOverLaneKey(null);
+              }}
+              style={{
+                borderRadius: 4,
+                outline: dragOverLaneKey === key ? "1px dashed #89b4fa" : "none",
+              }}
+            >
+              <button
+                data-testid={`ws-lane-toggle-${key}`}
+                onClick={() => toggleLane(key)}
+                aria-expanded={!collapsed}
+                style={sectionHeaderStyle}
+                title={collapsed ? `Show ${laneLabel(group)}` : `Hide ${laneLabel(group)}`}
+              >
+                {collapsed
+                  ? <ChevronRightIcon style={{ width: 10, height: 10 }} />
+                  : <ChevronDownIcon style={{ width: 10, height: 10 }} />}
+                <span style={{ flex: 1, textAlign: "left" }}>{laneLabel(group)}</span>
+                {hidden > 0 && (
+                  <span
+                    data-testid={`ws-lane-hidden-${key}`}
+                    style={{ ...sectionCountStyle, color: "#585b70" }}
+                    title={`${hidden} hidden by the current filter`}
+                  >
+                    {hidden} hidden
+                  </span>
                 )}
-                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                  {ws.name}
+                <span data-testid={`ws-lane-count-${key}`} style={sectionCountStyle}>
+                  {group.workstreams.length}
                 </span>
-              </span>
-              {ws.status === "archived" && (
-                <button
-                  onClick={() => onArchiveWorkstream(ws.id)}
-                  style={{
-                    background: "none",
-                    border: "none",
-                    color: "#585b70",
-                    cursor: "pointer",
-                    fontSize: 10,
-                    padding: "0 4px",
-                  }}
-                  title="Unarchive"
-                >
-                  ↩
-                </button>
-              )}
+              </button>
+              {!collapsed && group.workstreams.map(renderWorkstreamRow)}
             </div>
-            {removeWarning && (
-              <div data-testid={`ws-remove-warning-${ws.id}`} style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 2 }}>
-                <span style={{ fontSize: 10, color: "#f9e2af", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={removeWarning}>
-                  ⚠ {removeWarning}
-                </span>
-                <button
-                  data-testid={`ws-retry-remove-${ws.id}`}
-                  onClick={(e) => { e.stopPropagation(); onRetryRemove?.(ws.id); }}
-                  style={{ background: "#313244", color: "#a6e3a1", border: "none", borderRadius: 3, padding: "0 8px", cursor: "pointer", fontSize: 10, flexShrink: 0 }}
-                >
-                  Retry
-                </button>
-              </div>
-            )}
-          </div>
           );
         })}
       </div>

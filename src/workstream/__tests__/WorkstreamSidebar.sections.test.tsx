@@ -66,69 +66,102 @@ afterEach(() => {
   localStorage.clear();
 });
 
-describe("WorkstreamSidebar status sections", () => {
-  it("splits workstreams into Live and Idle by what is loaded", () => {
+describe("WorkstreamSidebar unified list", () => {
+  it("shows every non-archived workstream by default, whatever is loaded", () => {
+    // The old Live/Idle split hid unloaded rows behind a collapsed section.
     renderSidebar([mkWs("a"), mkWs("b"), mkWs("c")], new Set(["a"]));
 
-    expect(screen.getByTestId("ws-section-count-live")).toHaveTextContent("1");
-    expect(screen.getByTestId("ws-section-count-idle")).toHaveTextContent("2");
+    for (const name of ["a", "b", "c"]) {
+      expect(screen.getByText(name)).toBeInTheDocument();
+    }
   });
 
-  it("shows live rows immediately", () => {
-    renderSidebar([mkWs("a"), mkWs("b")], new Set(["a"]));
+  it("puts unfiled workstreams in a No lane group", () => {
+    renderSidebar([mkWs("a")], new Set());
 
-    const live = screen.getByTestId("ws-section-live");
-    expect(within(live).getByText("a")).toBeInTheDocument();
+    const unfiled = screen.getByTestId("ws-lane-__no_lane__");
+    expect(within(unfiled).getByText("a")).toBeInTheDocument();
   });
 
-  it("collapses Idle while there is live work, to stop it crowding the list", () => {
+  it("nests workstreams under their lane", () => {
+    renderSidebar([mkWs("a", { lane_id: "l1" }), mkWs("b")], new Set(), {
+      lanes: [{ id: "l1", name: "Media Store" }],
+    });
+
+    const lane = screen.getByTestId("ws-lane-l1");
+    expect(within(lane).getByText("a")).toBeInTheDocument();
+    expect(within(lane).queryByText("b")).not.toBeInTheDocument();
+    expect(screen.getByText("Media Store")).toBeInTheDocument();
+  });
+
+  /**
+   * "No lane" is the drop target for taking a workstream *out* of a lane, so it
+   * cannot disappear when every workstream happens to be filed.
+   */
+  it("keeps the No lane group even when it is empty", () => {
+    renderSidebar([mkWs("a", { lane_id: "l1" })], new Set(), {
+      lanes: [{ id: "l1", name: "Media Store" }],
+    });
+
+    expect(screen.getByTestId("ws-lane-__no_lane__")).toBeInTheDocument();
+  });
+
+  it("collapses a lane and persists the choice", () => {
+    renderSidebar([mkWs("a", { lane_id: "l1" })], new Set(), {
+      lanes: [{ id: "l1", name: "Media Store" }],
+    });
+
+    expect(screen.getByText("a")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("ws-lane-toggle-l1"));
+    expect(screen.queryByText("a")).not.toBeInTheDocument();
+    expect(localStorage.getItem("ws-sidebar-collapsed-sections")).toContain("l1");
+  });
+
+  it("filters to loaded workstreams only", () => {
     renderSidebar([mkWs("a"), mkWs("b")], new Set(["a"]));
 
+    fireEvent.click(screen.getByTestId("ws-list-filter-loaded"));
+    expect(screen.getByText("a")).toBeInTheDocument();
     expect(screen.queryByText("b")).not.toBeInTheDocument();
   });
 
-  it("EXPANDS Idle when nothing is loaded, so a cold start is never empty", () => {
-    // Regression: bucketing everything as idle and defaulting idle to collapsed
-    // hid the entire workstream list on launch.
-    renderSidebar([mkWs("a"), mkWs("b")], new Set());
+  it("hides archived until the All filter, then shows them dimmed", () => {
+    renderSidebar([mkWs("a"), mkWs("b", { status: "archived" })], new Set());
 
-    expect(screen.getByText("a")).toBeInTheDocument();
-    expect(screen.getByText("b")).toBeInTheDocument();
-  });
-
-  it("is never empty when loadedWsIds is not supplied at all", () => {
-    renderSidebar([mkWs("a")]);
-
-    expect(screen.getByText("a")).toBeInTheDocument();
-  });
-
-  it("toggling a section reveals its rows and persists the choice", () => {
-    const { unmount } = renderSidebar([mkWs("a"), mkWs("b")], new Set(["a"]));
     expect(screen.queryByText("b")).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByTestId("ws-section-toggle-idle"));
+    fireEvent.click(screen.getByTestId("ws-list-filter-all"));
     expect(screen.getByText("b")).toBeInTheDocument();
-
-    unmount();
-    renderSidebar([mkWs("a"), mkWs("b")], new Set(["a"]));
-    expect(screen.getByText("b")).toBeInTheDocument();
+    const archived = screen
+      .getAllByTestId("workstream-item")
+      .find((row) => row.getAttribute("data-workstream-id") === "b");
+    expect(archived).toHaveAttribute("data-archived", "true");
   });
 
-  it("keeps archived workstreams out of both working sections", () => {
-    renderSidebar([mkWs("a"), mkWs("z", { status: "archived" })], new Set(["a"]));
+  it("reports how many rows a filter is hiding", () => {
+    renderSidebar([mkWs("a"), mkWs("b", { status: "archived" })], new Set());
 
-    expect(screen.getByTestId("ws-section-count-live")).toHaveTextContent("1");
-    expect(screen.getByTestId("ws-section-count-idle")).toHaveTextContent("0");
+    expect(screen.getByTestId("ws-lane-hidden-__no_lane__")).toHaveTextContent("1 hidden");
   });
 
-  it("keeps a workstream whose worktree is being created in the working list", () => {
-    renderSidebar([mkWs("new", { status: "creating" })], new Set());
+  /**
+   * `create_failed` has no other signal in the UI, so a filter that hid it
+   * would make a broken workstream silently vanish.
+   */
+  it("never hides a failed creation, even under the narrowest filter", () => {
+    renderSidebar([mkWs("a"), mkWs("broken", { status: "create_failed" })], new Set());
 
-    expect(screen.getByText("new")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("ws-list-filter-loaded"));
+    expect(screen.getByText("broken")).toBeInTheDocument();
+    expect(screen.queryByText("a")).not.toBeInTheDocument();
   });
-});
 
-describe("WorkstreamSidebar repo footer", () => {
+  it("keeps a workstream whose worktree is being created visible", () => {
+    renderSidebar([mkWs("a", { status: "creating" })], new Set());
+
+    expect(screen.getByText("a")).toBeInTheDocument();
+  });
+
   it("replaces the repo list with a single footer control", () => {
     renderSidebar([mkWs("a")], new Set(["a"]));
 

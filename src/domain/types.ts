@@ -39,6 +39,8 @@ export interface Workstream {
   project_id: string | null;
   workstream_type: string;
   worktree_branch: string | null;
+  /** Work lane this workstream sits in; `null` is the "No lane" group. */
+  lane_id?: string | null;
   created_at: string;
   updated_at: string;
 }
