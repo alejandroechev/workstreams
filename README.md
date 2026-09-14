@@ -57,6 +57,9 @@ instead of buried behind tabs.
 - **Task board that writes your devlog** — labels, swimlanes, subtasks and an
   append-only activity log per task, exported to your wiki as a dated markdown
   page that it commits and pushes.
+- **One list, grouped into lanes** — related workstreams share a collapsible
+  folder, filtered by Loaded / Not archived / All. Drag a workstream between
+  lanes; archived ones sit inline, dimmed, one click from coming back.
 - **Agents that can drive the app** — a session can create and update its own
   workstreams through a local CLI, so the agent does not stop at the edge of the
   worktree. It acts only on what it owns, and asks before destroying anything.

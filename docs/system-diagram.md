@@ -39,6 +39,7 @@ graph TB
             DevlogRS["devlog.rs<br/>write + commit + push<br/>refuses to clobber hand-written pages"]
             AgentSocketRS["agent_socket.rs<br/>Unix socket in $TMPDIR, 0600<br/>newline-JSON frames<br/>connect-then-unlink stale reclaim"]
             AgentRegistryRS["agent_registry.rs<br/>named commands + app-issued tokens<br/>scope via created_by_session<br/>command_log (actor = what app can prove)"]
+            WorkLanesRS["work_lanes + lane_id<br/>named folders for related workstreams<br/>unique names, ON DELETE SET NULL"]
             PullRequestsRS["pull_requests.rs<br/>ADO PR URL parsing<br/>canonical identity for dedup<br/>link storage only, no network"]
             AgentCliRS["agent_cli.rs<br/>workstreams agent ...<br/>JSON stdout / human stderr / exit codes"]
             DbRS["db.rs<br/>SQLite schema + WAL"]
@@ -47,7 +48,7 @@ graph TB
     end
 
     subgraph Storage["Persistence"]
-        AppDB["workstreams.db<br/>(SQLite — workstreams, tiles, layouts, scrollback<br/>+ command_log audit/telemetry<br/>+ workstream_pull_requests N:M links)"]
+        AppDB["workstreams.db<br/>(SQLite — workstreams, tiles, layouts, scrollback<br/>+ command_log audit/telemetry<br/>+ workstream_pull_requests N:M links<br/>+ work_lanes)"]
         LoopDB["workstreams.db loop ledger<br/>specs / runs / tasks / verifications<br/>evaluations / human approvals / events"]
         LoopYAML["bound session-state/files/loops/*.loop.yaml<br/>loop definition authority"]
         CopilotDB["~/.copilot/session-store.db<br/>(read-only enrichment)"]

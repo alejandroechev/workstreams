@@ -454,6 +454,7 @@ workstreams agent call repo.list             # which repositories exist?
 workstreams agent call ws.list               # what may I act on?
 workstreams agent call ws.get id=ws-a1b2     # one workstream in full
 workstreams agent call ws.update id=ws-a1b2 name="Phase 2"
+workstreams agent call ws.lane lane="Media Store"   # or lane=none to unfile
 
 # The common flow: a workstream with its own worktree and branch.
 workstreams agent call ws.create name="Read chunks" type=worktree \
@@ -523,6 +524,48 @@ a transcript. See
 Not yet implemented: handing a task off to a freshly provisioned workstream with
 a primed session, and Windows support (named pipes need their own answer for the
 path and permission model).
+
+## Work lanes and the workstream list
+
+Workstreams live in one list, grouped into **work lanes** — collapsible folders
+for related work. A lane holds any number of workstreams, a workstream sits in
+at most one, and a lane is independent of the repository: `project_id` already
+carries that, so a lane can span several repos or split one.
+
+Drag a workstream onto a lane to file it, or onto **No lane** to take it out.
+"No lane" is always visible, even when empty, because it is what you drag onto
+to remove a workstream from a lane. Dropping onto a row joins that row's lane.
+
+Lane names are unique regardless of case, and **deleting a lane never deletes
+its workstreams** — they fall back to "No lane".
+
+The list is filtered by three stops:
+
+| Stop | Shows |
+| --- | --- |
+| **Loaded** | Workstreams whose tiles are currently open |
+| **Not archived** | Everything still in play (the default) |
+| **All** | Including archived, rendered dimmed |
+
+The labels name the axis deliberately. "Loaded" is a *runtime* question — are
+this workstream's tiles open? — while archived is a stored status, so a restart
+makes everything unloaded and archives nothing. Calling the first stop "Live"
+would imply one scale across two different things.
+
+`creating` and `create_failed` stay visible under **every** filter: a failed
+creation has no other signal, so hiding it would make a broken workstream
+vanish exactly when it needs attention. A lane whose rows are all filtered out
+keeps its folder and shows a hidden count, so it never looks deleted.
+
+**Clicking an archived workstream** offers to unarchive and open it. It asks
+first, and refuses when the worktree is gone — archiving can delete the
+worktree, so unarchiving blindly would open an empty workspace that looks broken
+for invisible reasons.
+
+Ordering is automatic: lanes and workstreams sort by name, case-insensitively
+and with numeric collation, so `PR 10` follows `PR 9`. Manual drag-ordering was
+removed so that drag could mean lane membership and nothing else.
+See [ADR 027](adrs/027-work-lanes.md).
 
 ## Workstream lifecycle
 

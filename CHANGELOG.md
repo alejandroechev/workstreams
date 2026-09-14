@@ -13,6 +13,10 @@ for any release is attached to its
 
 ### Fixed
 
+- Unarchiving no longer opens a workstream whose worktree was deleted when it
+  was archived — it says the directory is gone instead of opening an empty
+  workspace. Unarchiving now also asks for confirmation, so a misclick in the
+  list does not silently change state.
 - `ws.create` with a branch now actually creates the worktree, the session tile
   and the repository link. It previously recorded the branch name and nothing
   else, producing a workstream that had no colour and opened empty. A failed
@@ -24,6 +28,16 @@ for any release is attached to its
   branch was impossible.
 
 ### Added
+
+- **Work lanes** group related workstreams into collapsible folders in the
+  sidebar — one lane per workstream, optional, and independent of which repo it
+  belongs to. Drag a workstream onto a lane to file it, or onto "No lane" to
+  take it out. Agents can file a workstream with `ws.lane`; creating and
+  deleting lanes stays a human action. See
+  [ADR 027](docs/adrs/027-work-lanes.md).
+- The Live, Idle and Archived sections are now **one list** with a
+  Loaded / Not archived / All filter. Archived workstreams appear inline at
+  reduced opacity, and clicking one offers to unarchive and open it.
 
 - `pr.link`, `pr.list` and `pr.unlink` agent commands associate pull requests
   with workstreams, many-to-many. The URL is parsed on the way in, so a listing

@@ -38,39 +38,37 @@ test.beforeEach(async ({ page }) => {
   await page.waitForLoadState("networkidle");
 });
 
-test.describe("Sidebar status sections", () => {
-  test("renders Live and Idle sections with counts", async ({ page }) => {
-    await expect(page.locator('[data-testid="ws-section-live"]')).toBeVisible();
-    await expect(page.locator('[data-testid="ws-section-idle"]')).toBeVisible();
-    await expect(page.locator('[data-testid="ws-section-count-live"]')).toBeVisible();
+test.describe("Sidebar workstream list", () => {
+  test("renders one list with a No lane group", async ({ page }) => {
+    // The old Live / Idle split conflated a runtime fact with a persisted
+    // status; there is now one list grouped by lane.
+    await expect(page.locator('[data-testid="ws-lane-__no_lane__"]')).toBeVisible();
+    await expect(page.locator('[data-testid="ws-list-filter"]')).toBeVisible();
   });
 
-  test("a newly created workstream is visible in a section", async ({ page }) => {
+  test("a newly created workstream is visible in the list", async ({ page }) => {
     await createWorkstream(page, "Section Demo");
 
-    const live = Number(await page.locator('[data-testid="ws-section-count-live"]').innerText());
-    const idle = Number(await page.locator('[data-testid="ws-section-count-idle"]').innerText());
-    expect(live + idle).toBeGreaterThan(0);
-    // Whichever section owns it, the row itself must be on screen — a section
-    // that hides every row is the failure mode this guards.
-    await expect(page.locator('[data-testid="workstream-item"]', { hasText: "Section Demo" })).toBeVisible();
+    // A list that hides every row is the failure mode this guards.
+    await expect(
+      page.locator('[data-testid="workstream-item"]', { hasText: "Section Demo" }),
+    ).toBeVisible();
   });
 
-  test("a section can be collapsed and expanded", async ({ page }) => {
+  test("a lane can be collapsed and expanded", async ({ page }) => {
     await createWorkstream(page, "Toggle Demo");
     const before = await page.locator('[data-testid="workstream-item"]').count();
     expect(before).toBeGreaterThan(0);
 
-    // Collapse whichever section currently holds rows.
-    const liveCount = Number(await page.locator('[data-testid="ws-section-count-live"]').innerText());
-    const key = liveCount > 0 ? "live" : "idle";
+    // Unfiled workstreams live in the No lane group.
+    const key = "__no_lane__";
 
-    await page.locator(`[data-testid="ws-section-toggle-${key}"]`).click();
+    await page.locator(`[data-testid="ws-lane-toggle-${key}"]`).click();
     await expect
       .poll(() => page.locator('[data-testid="workstream-item"]').count())
       .toBeLessThan(before);
 
-    await page.locator(`[data-testid="ws-section-toggle-${key}"]`).click();
+    await page.locator(`[data-testid="ws-lane-toggle-${key}"]`).click();
     await expect
       .poll(() => page.locator('[data-testid="workstream-item"]').count())
       .toBe(before);
