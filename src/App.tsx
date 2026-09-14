@@ -540,27 +540,6 @@ export default function App() {
     Promise.all([backend.listProjects(), backend.listWorkstreams()]).then(
       async ([p, ws]) => {
         setProjects(p);
-        // Apply saved order
-        try {
-          const savedOrder = await invoke<string | null>("get_setting", {
-            key: "workstream_order",
-          });
-          if (savedOrder) {
-            const orderIds: string[] = JSON.parse(savedOrder);
-            const ordered: typeof ws = [];
-            for (const id of orderIds) {
-              const found = ws.find((w) => w.id === id);
-              if (found) ordered.push(found);
-            }
-            // Append any new workstreams not in saved order
-            for (const w of ws) {
-              if (!ordered.some((o) => o.id === w.id)) ordered.push(w);
-            }
-            ws = ordered;
-          }
-        } catch {
-          /* ignore */
-        }
         setWorkstreams(ws);
 
         // Populate session info from each workstream's pinned tile (background).
@@ -1090,14 +1069,7 @@ export default function App() {
         }
       }
 
-      setWorkstreams((prev) => {
-        const next = [ws, ...prev];
-        invoke("set_setting", {
-          key: "workstream_order",
-          value: JSON.stringify(next.map((w) => w.id)),
-        }).catch(() => {});
-        return next;
-      });
+      setWorkstreams((prev) => [ws, ...prev]);
 
       if (needsWorktree) {
         // Seed provisioning state and kick off the non-blocking worktree add.
@@ -1456,14 +1428,7 @@ export default function App() {
 
       // Insert the forked ws in the sidebar (creating). Do NOT auto-select or
       // spawn — it provisions in the background like a normal worktree create.
-      setWorkstreams((prev) => {
-        const next = [newWs, ...prev];
-        invoke("set_setting", {
-          key: "workstream_order",
-          value: JSON.stringify(next.map((w) => w.id)),
-        }).catch(() => {});
-        return next;
-      });
+      setWorkstreams((prev) => [newWs, ...prev]);
       setShowForkWs({ show: false });
       fireCreateWorktree(newWs.id, {
         projectDirectory: sourceWs.directory,
@@ -1963,27 +1928,6 @@ export default function App() {
         onCloseWorkstream={handleCloseWorkstream}
         onRenameWorkstream={handleRenameWorkstream}
         onUpdateProject={handleUpdateProject}
-        onReorderWorkstreams={(orderedIds) => {
-          setWorkstreams((prev) => {
-            const byId = new Map(prev.map((w) => [w.id, w]));
-            const reordered: typeof prev = [];
-            for (const id of orderedIds) {
-              const w = byId.get(id);
-              if (w) {
-                reordered.push(w);
-                byId.delete(id);
-              }
-            }
-            // Append any workstreams missing from the order (archived rows
-            // or anything the sidebar didn't enumerate).
-            for (const w of prev) if (byId.has(w.id)) reordered.push(w);
-            invoke("set_setting", {
-              key: "workstream_order",
-              value: JSON.stringify(reordered.map((w) => w.id)),
-            }).catch(() => {});
-            return reordered;
-          });
-        }}
         onChangeStatus={async (id, status) => {
           await backend.updateWorkstream(id, { status });
           setWorkstreams((prev) =>

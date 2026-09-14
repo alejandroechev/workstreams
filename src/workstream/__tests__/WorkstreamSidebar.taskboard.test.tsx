@@ -53,7 +53,6 @@ function renderSidebar(over: Record<string, unknown> = {}) {
       onArchiveWorkstream={vi.fn()}
       onRenameWorkstream={vi.fn()}
       onUpdateProject={vi.fn()}
-      onReorderWorkstreams={vi.fn()}
       {...over}
     />,
   );

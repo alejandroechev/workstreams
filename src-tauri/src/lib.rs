@@ -29,7 +29,7 @@ mod trace_record;
 use db::open_db;
 use fs_watcher::FsWatcher;
 use pty::PtyManager;
-use rusqlite::{Connection, Row};
+use rusqlite::{Connection, OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
 use session_poller::SessionPoller;
 use std::sync::{Arc, Mutex};
@@ -77,6 +77,18 @@ pub struct Workstream {
     pub project_id: Option<String>,
     pub workstream_type: String,
     pub worktree_branch: Option<String>,
+    /// Work lane this workstream sits in. `None` is "No lane", which is a real
+    /// place in the sidebar rather than an absence.
+    pub lane_id: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+/// A named container for related workstreams.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct WorkLane {
+    pub id: String,
+    pub name: String,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -182,13 +194,15 @@ fn workstream_from_row(row: &Row<'_>) -> rusqlite::Result<Workstream> {
         worktree_branch: row.get(9)?,
         created_at: row.get(10)?,
         updated_at: row.get(11)?,
+        lane_id: row.get(12)?,
     })
 }
 
 fn get_workstream_by_id(db: &Connection, id: &str) -> Result<Workstream, String> {
     db.query_row(
         "SELECT id, name, description, directory, git_repo, git_branch, status,
-                project_id, workstream_type, worktree_branch, created_at, updated_at
+                project_id, workstream_type, worktree_branch, created_at, updated_at,
+                lane_id
          FROM workstreams WHERE id = ?1",
         [id],
         workstream_from_row,
@@ -453,9 +467,144 @@ pub fn insert_workstream(db: &Connection, input: NewWorkstream) -> Result<Workst
         project_id: input.project_id,
         workstream_type: ws_type,
         worktree_branch: input.worktree_branch,
+        // A new workstream starts unfiled; the operator or an agent places it.
+        lane_id: None,
         created_at: ts.clone(),
         updated_at: ts,
     })
+}
+
+/// Creates a lane, or returns the existing one with that name.
+///
+/// Idempotent because the caller usually wants "a lane called X to exist", and
+/// making that an error would force every caller to list first.
+pub fn upsert_lane(db: &Connection, name: &str) -> Result<WorkLane, String> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err("A lane needs a name".to_string());
+    }
+    if let Some(existing) = find_lane_by_name(db, trimmed)? {
+        return Ok(existing);
+    }
+    let lane = WorkLane {
+        id: uuid::Uuid::new_v4().to_string(),
+        name: trimmed.to_string(),
+        created_at: now(),
+        updated_at: now(),
+    };
+    db.execute(
+        "INSERT INTO work_lanes (id, name, created_at, updated_at) VALUES (?1, ?2, ?3, ?3)",
+        (&lane.id, &lane.name, &lane.created_at),
+    )
+    .map_err(|e| format!("DB error: {e}"))?;
+    Ok(lane)
+}
+
+/// Looks a lane up by name, case-insensitively, matching the unique index.
+pub fn find_lane_by_name(db: &Connection, name: &str) -> Result<Option<WorkLane>, String> {
+    db.query_row(
+        "SELECT id, name, created_at, updated_at FROM work_lanes
+         WHERE lower(name) = lower(?1)",
+        [name.trim()],
+        |row| {
+            Ok(WorkLane {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                created_at: row.get(2)?,
+                updated_at: row.get(3)?,
+            })
+        },
+    )
+    .optional()
+    .map_err(|e| format!("DB error: {e}"))
+}
+
+/// Places a workstream in a lane, or removes it from one when `lane_id` is
+/// `None`.
+pub fn set_workstream_lane(
+    db: &Connection,
+    workstream_id: &str,
+    lane_id: Option<&str>,
+) -> Result<(), String> {
+    let changed = db
+        .execute(
+            "UPDATE workstreams SET lane_id = ?2, updated_at = ?3 WHERE id = ?1",
+            (workstream_id, lane_id, now()),
+        )
+        .map_err(|e| format!("DB error: {e}"))?;
+    if changed == 0 {
+        return Err(format!("No workstream with id {workstream_id}"));
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn list_work_lanes(state: State<'_, AppState>) -> Result<Vec<WorkLane>, String> {
+    let db = state.db.lock().unwrap();
+    let mut stmt = db
+        .prepare("SELECT id, name, created_at, updated_at FROM work_lanes")
+        .map_err(|e| format!("DB error: {e}"))?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(WorkLane {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                created_at: row.get(2)?,
+                updated_at: row.get(3)?,
+            })
+        })
+        .map_err(|e| format!("DB error: {e}"))?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("DB error: {e}"))
+}
+
+#[tauri::command]
+fn create_work_lane(state: State<'_, AppState>, name: String) -> Result<WorkLane, String> {
+    let db = state.db.lock().unwrap();
+    upsert_lane(&db, &name)
+}
+
+#[tauri::command]
+fn rename_work_lane(state: State<'_, AppState>, id: String, name: String) -> Result<(), String> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err("A lane needs a name".to_string());
+    }
+    let db = state.db.lock().unwrap();
+    db.execute(
+        "UPDATE work_lanes SET name = ?2, updated_at = ?3 WHERE id = ?1",
+        (&id, trimmed, now()),
+    )
+    .map_err(|e| {
+        // The unique index is what produces this, and the caller needs to know
+        // which of the two failures it was.
+        if e.to_string().contains("UNIQUE") {
+            format!("A lane named {trimmed} already exists")
+        } else {
+            format!("DB error: {e}")
+        }
+    })?;
+    Ok(())
+}
+
+/// Deletes a lane. Its workstreams survive, re-filed as "No lane" by the
+/// `ON DELETE SET NULL` on the column.
+#[tauri::command]
+fn delete_work_lane(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    let db = state.db.lock().unwrap();
+    db.execute("DELETE FROM work_lanes WHERE id = ?1", [&id])
+        .map_err(|e| format!("DB error: {e}"))?;
+    Ok(())
+}
+
+#[tauri::command]
+fn assign_workstream_lane(
+    state: State<'_, AppState>,
+    workstream_id: String,
+    lane_id: Option<String>,
+) -> Result<(), String> {
+    let db = state.db.lock().unwrap();
+    set_workstream_lane(&db, &workstream_id, lane_id.as_deref())
 }
 
 #[tauri::command]
@@ -464,7 +613,8 @@ fn list_workstreams(state: State<'_, AppState>) -> Result<Vec<Workstream>, Strin
     let mut stmt = db
         .prepare(
             "SELECT id, name, description, directory, git_repo, git_branch, status,
-                    project_id, workstream_type, worktree_branch, created_at, updated_at
+                    project_id, workstream_type, worktree_branch, created_at, updated_at,
+                    lane_id
              FROM workstreams ORDER BY created_at ASC",
         )
         .map_err(|e| format!("DB error: {e}"))?;
@@ -5528,6 +5678,11 @@ pub fn run() {
             // Workstream
             create_workstream,
             list_workstreams,
+            list_work_lanes,
+            create_work_lane,
+            rename_work_lane,
+            delete_work_lane,
+            assign_workstream_lane,
             update_workstream,
             delete_workstream,
             change_workstream_worktree,
@@ -6908,6 +7063,82 @@ Body here.
         let conn = fresh_mem_db();
         let deps = query_session_todo_deps_impl(&conn).unwrap();
         assert!(deps.is_empty());
+    }
+
+    // ── Work lanes ─────────────────────────────────────────────────────
+
+    fn lane_db() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::db::init_db(&conn).unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+        conn
+    }
+
+    /// Callers want "a lane called X to exist", so asking twice must not be an
+    /// error they have to special-case.
+    #[test]
+    fn creating_a_lane_twice_returns_the_same_lane() {
+        let db = lane_db();
+        let first = upsert_lane(&db, "Media Store").expect("create");
+        let again = upsert_lane(&db, "  media store  ").expect("create again");
+        assert_eq!(first.id, again.id, "case and padding must not fork a lane");
+        assert_eq!(again.name, "Media Store", "the original name is kept");
+    }
+
+    #[test]
+    fn a_lane_needs_a_name() {
+        let db = lane_db();
+        assert!(upsert_lane(&db, "   ").is_err());
+    }
+
+    #[test]
+    fn a_workstream_can_be_placed_in_a_lane_and_taken_out_again() {
+        let db = lane_db();
+        db.execute(
+            "INSERT INTO workstreams (id, name, status, created_at, updated_at)
+             VALUES ('ws-1','One','active','2026-01-01','2026-01-01')",
+            [],
+        )
+        .unwrap();
+        let lane = upsert_lane(&db, "Tooling").expect("lane");
+
+        set_workstream_lane(&db, "ws-1", Some(&lane.id)).expect("assign");
+        let placed: Option<String> = db
+            .query_row("SELECT lane_id FROM workstreams WHERE id='ws-1'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(placed.as_deref(), Some(lane.id.as_str()));
+
+        // Removing from a lane is the same call with None -- there is no
+        // separate "unassign" path to keep in step.
+        set_workstream_lane(&db, "ws-1", None).expect("clear");
+        let cleared: Option<String> = db
+            .query_row("SELECT lane_id FROM workstreams WHERE id='ws-1'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(cleared, None);
+    }
+
+    #[test]
+    fn assigning_a_lane_to_an_unknown_workstream_is_an_error() {
+        let db = lane_db();
+        let error = set_workstream_lane(&db, "ws-missing", None).expect_err("no such workstream");
+        assert!(error.contains("ws-missing"), "{error}");
+    }
+
+    #[test]
+    fn finding_a_lane_by_name_ignores_case() {
+        let db = lane_db();
+        let lane = upsert_lane(&db, "Media Store").expect("lane");
+        assert_eq!(
+            find_lane_by_name(&db, "MEDIA STORE")
+                .expect("find")
+                .map(|l| l.id),
+            Some(lane.id)
+        );
+        assert!(find_lane_by_name(&db, "Nope").expect("find").is_none());
     }
 
     // ── PTY env injection ──────────────────────────────────────────────

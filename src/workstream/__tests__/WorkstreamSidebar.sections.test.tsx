@@ -55,7 +55,6 @@ function renderSidebar(
       onArchiveWorkstream={vi.fn()}
       onRenameWorkstream={vi.fn()}
       onUpdateProject={vi.fn()}
-      onReorderWorkstreams={vi.fn()}
       onChangeStatus={vi.fn()}
       {...over}
     />,

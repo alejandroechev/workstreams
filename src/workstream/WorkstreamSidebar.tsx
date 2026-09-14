@@ -18,7 +18,6 @@ import {
   ExclamationTriangleIcon,
   HandRaisedIcon,
 } from "@heroicons/react/20/solid";
-import { reorderById } from "../domain/reorder";
 import { getAppSettings } from "../domain/app-settings";
 import { WorkstreamActionMenu } from "./WorkstreamActionMenu";
 import type { LoopSummary } from "../domain/loop";
@@ -66,7 +65,6 @@ interface Props {
    * workstream ids. The caller persists this (and any archived rows can be
    * left untouched).
    */
-  onReorderWorkstreams: (orderedIds: string[]) => void;
   onChangeStatus: (id: string, status: Workstream['status']) => void;
   onForkWorkstream?: (id: string) => void;
   onChangeWorktree?: (ws: Workstream) => void;
@@ -162,7 +160,6 @@ export default function WorkstreamSidebar({
   onCloseWorkstream,
   onRenameWorkstream,
   onUpdateProject,
-  onReorderWorkstreams,
   onChangeStatus,
   onForkWorkstream,
   onChangeWorktree,
@@ -304,10 +301,9 @@ export default function WorkstreamSidebar({
     if (!draggedWsId || draggedWsId === targetWsId) {
       setDraggedWsId(null); setDragOverWsId(null); return;
     }
-    const next = reorderById(activeWorkstreams, draggedWsId, targetWsId);
-    if (next !== activeWorkstreams) {
-      onReorderWorkstreams(next.map((w) => w.id));
-    }
+    // Dropping on another workstream no longer means anything: manual ordering
+    // is gone and drag now expresses lane membership, which is a drop on a lane
+    // header rather than on a row.
     setDraggedWsId(null);
     setDragOverWsId(null);
   };

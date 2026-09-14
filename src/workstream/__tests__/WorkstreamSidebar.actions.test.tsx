@@ -36,7 +36,6 @@ function renderWith(handlers: Partial<React.ComponentProps<typeof WorkstreamSide
       onArchiveWorkstream={vi.fn()}
       onRenameWorkstream={vi.fn()}
       onUpdateProject={vi.fn()}
-      onReorderWorkstreams={vi.fn()}
       onChangeStatus={vi.fn()}
       {...handlers}
     />,

@@ -43,7 +43,6 @@ function renderWith(
       onArchiveWorkstream={vi.fn()}
       onRenameWorkstream={vi.fn()}
       onUpdateProject={vi.fn()}
-      onReorderWorkstreams={vi.fn()}
       onChangeStatus={vi.fn()}
     />,
   );

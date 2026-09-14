@@ -267,6 +267,21 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
             created_at TEXT NOT NULL
         );
 
+        -- Work lanes: a named container for related workstreams. One lane per
+        -- workstream, optional. Deliberately not a repository -- project_id
+        -- already carries that -- so a lane can span repos or split one.
+        CREATE TABLE IF NOT EXISTS work_lanes (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
+        -- Two lanes with the same name would make the folder list unreadable
+        -- and a drop target ambiguous, so names are unique regardless of case.
+        CREATE UNIQUE INDEX IF NOT EXISTS work_lanes_name_unique
+            ON work_lanes (lower(name));
+
         -- Pull requests linked to workstreams, many-to-many: a workstream often
         -- carries several PRs, and one PR is frequently relevant to more than
         -- one workstream (the branch that produced it, and the one reviewing
@@ -316,6 +331,13 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
         // means "a human made this in the UI", which is the common case and not
         // an error.
         "ALTER TABLE workstreams ADD COLUMN created_by_session TEXT",
+        // Which work lane this workstream belongs to. NULL means "No lane",
+        // which is a real state rather than an absence: it is the section
+        // workstreams are dragged into to leave a lane.
+        //
+        // ON DELETE SET NULL, so deleting a lane re-files its members instead
+        // of destroying them -- reorganising should never lose work.
+        "ALTER TABLE workstreams ADD COLUMN lane_id TEXT REFERENCES work_lanes(id) ON DELETE SET NULL",
         "ALTER TABLE tasks ADD COLUMN notes TEXT NOT NULL DEFAULT ''",
         // Defence in depth for the 1:1 task↔workstream relation. Partial, so
         // the many tasks with no workstream are unaffected. On a database that
@@ -379,6 +401,7 @@ mod tests {
             "loop_evaluations",
             "loop_events",
             "workstream_pull_requests",
+            "work_lanes",
         ];
         for table in &expected {
             let count: i64 = conn
@@ -461,6 +484,92 @@ mod tests {
             existing, None,
             "a workstream created before provenance existed has none, and that is not an error"
         );
+    }
+
+    /// Reorganising must never destroy work: deleting a lane re-files its
+    /// members as "No lane" rather than deleting them.
+    #[test]
+    fn deleting_a_lane_reassigns_its_workstreams_instead_of_removing_them() {
+        let conn = open_in_memory();
+        conn.execute_batch(
+            "PRAGMA foreign_keys = ON;
+             INSERT INTO work_lanes (id, name, created_at, updated_at)
+                VALUES ('lane-1','Media Store','2026-01-01','2026-01-01');
+             INSERT INTO workstreams (id, name, status, lane_id, created_at, updated_at)
+                VALUES ('ws-1','Read chunks','active','lane-1','2026-01-01','2026-01-01');",
+        )
+        .unwrap();
+
+        conn.execute("DELETE FROM work_lanes WHERE id = 'lane-1'", [])
+            .unwrap();
+
+        let (surviving, lane): (i64, Option<String>) = conn
+            .query_row(
+                "SELECT COUNT(*), MAX(lane_id) FROM workstreams WHERE id = 'ws-1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(surviving, 1, "the workstream must outlive its lane");
+        assert_eq!(lane, None, "it should fall back to No lane");
+    }
+
+    /// Duplicate folder names make the list unreadable and a drop target
+    /// ambiguous, so case alone cannot distinguish two lanes.
+    #[test]
+    fn lane_names_are_unique_regardless_of_case() {
+        let conn = open_in_memory();
+        conn.execute(
+            "INSERT INTO work_lanes (id, name, created_at, updated_at)
+             VALUES ('lane-1','Media Store','2026-01-01','2026-01-01')",
+            [],
+        )
+        .unwrap();
+        for duplicate in ["Media Store", "media store", "MEDIA STORE"] {
+            let attempt = conn.execute(
+                "INSERT INTO work_lanes (id, name, created_at, updated_at)
+                 VALUES ('lane-2', ?1, '2026-01-01','2026-01-01')",
+                [duplicate],
+            );
+            assert!(attempt.is_err(), "{duplicate:?} should collide");
+        }
+        // A genuinely different name is fine.
+        conn.execute(
+            "INSERT INTO work_lanes (id, name, created_at, updated_at)
+             VALUES ('lane-2','Tooling','2026-01-01','2026-01-01')",
+            [],
+        )
+        .expect("a distinct name must be accepted");
+    }
+
+    #[test]
+    fn the_lane_column_is_added_once_and_defaults_to_no_lane() {
+        let conn = open_in_memory();
+        conn.execute(
+            "INSERT INTO workstreams (id, name, status, created_at, updated_at)
+             VALUES ('ws-old','Made before lanes','active','2026-01-01','2026-01-01')",
+            [],
+        )
+        .unwrap();
+        init_db(&conn).unwrap();
+        init_db(&conn).unwrap();
+
+        let columns: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('workstreams') WHERE name='lane_id'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(columns, 1, "lane_id duplicated or missing");
+        let lane: Option<String> = conn
+            .query_row(
+                "SELECT lane_id FROM workstreams WHERE id='ws-old'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(lane, None, "a workstream that predates lanes has none");
     }
 
     /// The link table is many-to-many and idempotent, and a deleted workstream
