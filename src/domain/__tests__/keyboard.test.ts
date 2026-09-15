@@ -58,6 +58,19 @@ describe("parseKeyAction", () => {
     expect(parseKeyAction({ key: "Escape", ...noMod })).toEqual({ type: "escape" });
   });
 
+  it("returns focusWorkstreamSearch for Alt+K", () => {
+    // Alt, not Cmd: every binding here is Alt-based and Cmd+F is the webview's
+    // own find. Not Alt+F either -- that is already toggleFullscreen, which is
+    // how the first attempt at this binding silently stole it.
+    expect(parseKeyAction({ key: "k", ...alt })).toEqual({
+      type: "focusWorkstreamSearch",
+    });
+  });
+
+  it("does not fire the filter shortcut without Alt", () => {
+    expect(parseKeyAction({ key: "k", ...noMod })).toBeNull();
+  });
+
   it("returns navigate for Alt+Arrow keys", () => {
     expect(parseKeyAction({ key: "ArrowLeft", ...alt })).toEqual({ type: "navigate", direction: "left" });
     expect(parseKeyAction({ key: "ArrowRight", ...alt })).toEqual({ type: "navigate", direction: "right" });
@@ -302,6 +315,7 @@ describe("APP_KEY_BINDINGS registry", () => {
         "Alt+L",
         "Alt+Q",
         "Alt+F",
+        "Alt+K",
         "Alt+S",
       ].sort(),
     );

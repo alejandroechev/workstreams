@@ -20,6 +20,7 @@ combos are typed with Option.
 | Keys | Description | Action |
 | --- | --- | --- |
 | `Escape` | Dismiss the open overlay or clear the current selection | `escape` |
+| `Alt+K` | Focus the workstream filter box in the sidebar | `focusWorkstreamSearch` |
 | `Alt+ArrowLeft` | Move focus to the tile on the left | `navigate (left)` |
 | `Alt+ArrowRight` | Move focus to the tile on the right | `navigate (right)` |
 | `Alt+ArrowUp` | Move focus to the tile above | `navigate (up)` |

@@ -144,6 +144,8 @@ export default function App() {
   // Focus token bumped on every workstream switch so per-tile effects know to
   // re-focus their xterm textarea.
   const [focusToken, setFocusToken] = useState(0);
+  /** Bumped by Alt+F so the sidebar focuses its filter box. */
+  const [searchFocusToken, setSearchFocusToken] = useState(0);
 
   // Derived helpers for the ACTIVE workstream's state
   const activeState = (activeWsId && wsStates.get(activeWsId)) || EMPTY_STATE;
@@ -1932,6 +1934,14 @@ export default function App() {
           }
           break;
         }
+        case "focusWorkstreamSearch": {
+          e.preventDefault();
+          // A token rather than a ref: the sidebar owns its own input, and
+          // bumping a number is the same mechanism the tile grid already uses
+          // to re-focus after a switch.
+          setSearchFocusToken((n) => n + 1);
+          break;
+        }
         case "navigate": {
           e.preventDefault();
           // Blur current active element so focus moves to new tile
@@ -2031,6 +2041,7 @@ export default function App() {
         sessionInfoByWs={sessionInfoByWs}
         loopSummaries={loopSummaries}
         loadedWsIds={loadedWsIds}
+        searchFocusToken={searchFocusToken}
         onSelectWorkstream={selectWorkstream}
         provisioning={provisioning}
         onRetryCreate={handleRetryCreate}

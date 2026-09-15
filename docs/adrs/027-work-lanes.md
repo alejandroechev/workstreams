@@ -104,6 +104,13 @@ removal impossible at precisely the moment every workstream has a lane.
 Empty lanes render too, for the same class of reason: a lane you have just
 created would otherwise be impossible to drag into.
 
+> **Narrowed (2026-09-15).** Empty lanes are hidden **while a text filter is
+> active** in the sidebar's search box. The reasoning above is about dragging,
+> and you are not dragging mid-search — you are reading a result set, where
+> eight empty lane headers wrapped around one hit is unreadable. They reappear
+> the moment the box is cleared, so the drop target is never missing when you
+> want it. See `domain/workstream-search.ts`.
+
 ### Unarchiving is guarded twice
 
 Clicking an archived workstream confirms, then unarchives and opens it.
@@ -155,4 +162,6 @@ renders the same workstream more than once, and "collapse the folder" stops
 having a single meaning.
 
 **Hide empty lanes.** Rejected after it broke drag-to-assign in testing — a lane
-with no members is exactly the one you most need to drop into.
+with no members is exactly the one you most need to drop into. (Later narrowed:
+they *are* hidden while the text filter is active, where nobody is dragging.
+See the note above.)

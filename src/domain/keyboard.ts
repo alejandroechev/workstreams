@@ -27,7 +27,8 @@ export type KeyAction =
   | { type: "closeTile" }
   | { type: "toggleFullscreen" }
   | { type: "toggleSideBySide" }
-  | { type: "focusTile"; index: number };
+  | { type: "focusTile"; index: number }
+  | { type: "focusWorkstreamSearch" };
 
 /**
  * Returns true if the active element is an input, textarea, select, or xterm terminal.
@@ -131,13 +132,19 @@ export const APP_KEY_BINDINGS: readonly KeyBinding[] = [
     action: { type: "escape" },
   },
   {
+    key: "k",
+    altKey: true,
+    combo: "Alt+K",
+    description: "Focus the workstream filter box in the sidebar",
+    action: { type: "focusWorkstreamSearch" },
+  },
+  {
     key: "ArrowLeft",
     altKey: true,
     combo: "Alt+ArrowLeft",
     description: "Move focus to the tile on the left",
     action: { type: "navigate", direction: "left" },
-  },
-  {
+  },  {
     key: "ArrowRight",
     altKey: true,
     combo: "Alt+ArrowRight",

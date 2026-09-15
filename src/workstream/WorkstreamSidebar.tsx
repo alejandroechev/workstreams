@@ -14,6 +14,12 @@ import {
   type ListFilter,
   type WorkLane,
 } from "../domain/work-lanes";
+import {
+  isSearching,
+  matchesText,
+  matchesElsewhere,
+  laneVisibleWhileSearching,
+} from "../domain/workstream-search";
 import { RepoManagerModal } from "./RepoManagerModal";
 import type { ProvisioningState } from "../domain/worktree-provisioning";
 import {
@@ -28,6 +34,8 @@ import {
   ArrowPathRoundedSquareIcon,
   ExclamationTriangleIcon,
   HandRaisedIcon,
+  MagnifyingGlassIcon,
+  XMarkIcon,
 } from "@heroicons/react/20/solid";
 import { getAppSettings } from "../domain/app-settings";
 import { WorkstreamActionMenu } from "./WorkstreamActionMenu";
@@ -45,6 +53,13 @@ interface Props {
    * `wsStates` map (i.e. tiles + activity wired up). Workstreams not in this
    * set render a "stopped" indicator (gray hollow square). */
   loadedWsIds?: Set<string>;
+  /**
+   * Bumped by the app when Alt+F is pressed, to focus the filter box.
+   *
+   * A token rather than a ref so the sidebar keeps ownership of its own input
+   * and the app needs no handle on it.
+   */
+  searchFocusToken?: number;
   onSelectWorkstream: (id: string) => void;
   /** Opens the global task board. Optional so the sidebar stays renderable
    * without a backend (the board is owned by App, which has one). */
@@ -161,6 +176,7 @@ export default function WorkstreamSidebar({
   sessionInfoByWs,
   loopSummaries = [],
   loadedWsIds,
+  searchFocusToken,
   onSelectWorkstream,
   onOpenTaskBoard,
   inProgressTasks,
@@ -235,6 +251,25 @@ export default function WorkstreamSidebar({
       localStorage.setItem("ws-sidebar-list-filter", next);
     } catch { /* persistence is best-effort */ }
   };
+  /**
+   * Free-text filter over the list.
+   *
+   * Deliberately **not** persisted, unlike the filter stop above. A stop is a
+   * standing preference about how you like the list; a search is a question you
+   * asked once. Restoring yesterday's query would open the app to a list that
+   * is mysteriously missing most of its rows.
+   */
+  const [search, setSearch] = useState("");
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
+  // Alt+F. Skips the first render so the box is not focused at startup, which
+  // would swallow keystrokes meant for the terminal you just opened.
+  const searchFocusHandled = useRef(searchFocusToken);
+  useEffect(() => {
+    if (searchFocusToken === searchFocusHandled.current) return;
+    searchFocusHandled.current = searchFocusToken;
+    searchInputRef.current?.focus();
+    searchInputRef.current?.select();
+  }, [searchFocusToken]);
   /** The lane a drag is hovering, so the drop target is visible. */
   const [dragOverLaneKey, setDragOverLaneKey] = useState<string | null>(null);
   const [showRepoManager, setShowRepoManager] = useState(false);
@@ -332,14 +367,37 @@ export default function WorkstreamSidebar({
   // One list. The old Live / Idle / Archived split conflated two axes: whether
   // a workstream's tiles are loaded (runtime) and whether it is archived
   // (persisted). The filter now names each honestly.
-  const visibleWorkstreams = workstreams.filter((ws) =>
-    matchesFilter(ws, listFilter, loadedWsIds),
+  //
+  // The text query composes with the stop rather than overriding it: it
+  // narrows *within* what you are looking at. When that yields nothing but the
+  // text does match elsewhere, `elsewhereCount` below says so, which is what
+  // stops an empty list reading as a broken search.
+  const getProject = (projectId: string | null) =>
+    projectId ? projects.find((p) => p.id === projectId) : undefined;
+  const repoName = (projectId: string | null) => getProject(projectId)?.name;
+  const searching = isSearching(search);
+  const visibleWorkstreams = workstreams.filter(
+    (ws) => matchesFilter(ws, listFilter, loadedWsIds) && matchesText(ws, search, repoName),
   );
-  const laneGroups = groupByLane(visibleWorkstreams, lanes);
-  /** Per lane, how many rows the current filter is hiding. */
+  const elsewhereCount = matchesElsewhere(workstreams, visibleWorkstreams, search, repoName);
+  const laneGroups = groupByLane(visibleWorkstreams, lanes).filter((group) =>
+    laneVisibleWhileSearching(group.workstreams.length, searching),
+  );
+  /**
+   * Per lane, how many rows the current *stop* is hiding.
+   *
+   * Deliberately ignores the text query. The badge exists to say "the filter
+   * you picked is holding rows back" — which is worth knowing because you did
+   * not choose it just now. Rows excluded by what you are actively typing need
+   * no such announcement: a search that hides non-matches is a search working.
+   * Counting those made every lane sprout a "2 hidden" badge mid-search.
+   */
   const hiddenByLane = new Map<string, number>();
   for (const ws of workstreams) {
     if (matchesFilter(ws, listFilter, loadedWsIds)) continue;
+    // Still gated on the text query, so a lane you have filtered away entirely
+    // does not report hidden rows from behind the search.
+    if (!matchesText(ws, search, repoName)) continue;
     const key =
       ws.lane_id && lanes.some((lane) => lane.id === ws.lane_id) ? ws.lane_id : NO_LANE_ID;
     hiddenByLane.set(key, (hiddenByLane.get(key) ?? 0) + 1);
@@ -371,9 +429,6 @@ export default function WorkstreamSidebar({
   const loopByWorkstream = new Map(
     loopSummaries.map((summary) => [summary.workstreamId, summary]),
   );
-
-  const getProject = (projectId: string | null) =>
-    projectId ? projects.find((p) => p.id === projectId) : undefined;
 
   // One row implementation shared by the Live and Idle sections. Hoisted out
   // of the old single `.map()` so splitting the list by status cannot make the
@@ -780,6 +835,74 @@ export default function WorkstreamSidebar({
             No workstreams yet
           </div>
         )}
+        {/* Search sits above the stops because it is the narrower question:
+            you pick a stop occasionally and type a name constantly. */}
+        <div style={{ padding: "4px 4px 0" }}>
+          <div style={{ position: "relative", display: "flex", alignItems: "center" }}>
+            <MagnifyingGlassIcon
+              style={{
+                width: 11,
+                height: 11,
+                position: "absolute",
+                left: 6,
+                color: "#6c7086",
+                pointerEvents: "none",
+              }}
+            />
+            <input
+              ref={searchInputRef}
+              data-testid="ws-search-input"
+              value={search}
+              placeholder="Filter workstreams"
+              aria-label="Filter workstreams"
+              onChange={(e) => setSearch(e.target.value)}
+              onKeyDown={(e) => {
+                // Escape clears rather than blurs: the box is the only thing
+                // hiding rows, so getting back to the full list is the urgent
+                // action, not getting out of the field.
+                if (e.key === "Escape") {
+                  e.preventDefault();
+                  setSearch("");
+                }
+              }}
+              style={{
+                width: "100%",
+                boxSizing: "border-box",
+                background: "#1e1e2e",
+                border: "1px solid #313244",
+                borderRadius: 3,
+                color: "#cdd6f4",
+                fontSize: 11,
+                fontFamily: "inherit",
+                padding: "3px 22px 3px 21px",
+                outline: "none",
+              }}
+            />
+            {searching && (
+              <button
+                data-testid="ws-search-clear"
+                onClick={() => {
+                  setSearch("");
+                  searchInputRef.current?.focus();
+                }}
+                title="Clear filter (Esc)"
+                style={{
+                  position: "absolute",
+                  right: 4,
+                  background: "transparent",
+                  border: "none",
+                  color: "#6c7086",
+                  cursor: "pointer",
+                  padding: 0,
+                  lineHeight: 1,
+                  display: "flex",
+                }}
+              >
+                <XMarkIcon style={{ width: 11, height: 11 }} />
+              </button>
+            )}
+          </div>
+        </div>
         {LIST_FILTERS.length > 0 && (
           <div
             data-testid="ws-list-filter"
@@ -807,6 +930,18 @@ export default function WorkstreamSidebar({
                 {LIST_FILTER_LABELS[option]}
               </button>
             ))}
+          </div>
+        )}
+        {/* An empty list under a stop is ambiguous: nothing matches, or nothing
+            matches *here*. Only the second is actionable, and only this line
+            distinguishes them. */}
+        {searching && visibleWorkstreams.length === 0 && elsewhereCount > 0 && (
+          <div
+            data-testid="ws-search-elsewhere"
+            style={{ padding: "4px 6px", color: "#f9e2af", fontSize: 10 }}
+          >
+            No matches in {LIST_FILTER_LABELS[listFilter]} — {elsewhereCount} under
+            another filter
           </div>
         )}
         {onCreateLane &&

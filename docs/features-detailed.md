@@ -551,6 +551,28 @@ to remove a workstream from a lane. Dropping onto a row joins that row's lane.
 Lane names are unique regardless of case, and **deleting a lane never deletes
 its workstreams** — they fall back to "No lane".
 
+**Filter by text.** A box above the stops narrows the list as you type, matching
+the workstream name **and** its repo name — so "waimea" finds every workstream
+in that repo even though none of them says "waimea". `Alt+K` focuses it from
+anywhere, `Esc` or the `×` clears it. It is not persisted: a stop is a standing
+preference, a search is a question you asked once, and reopening the app to a
+list mysteriously missing most of its rows would be a bug.
+
+Two things behave differently while you are typing:
+
+- **Empty lanes disappear.** They normally stay visible as drop targets
+  ([ADR 027](adrs/027-work-lanes.md)), but that is about dragging, and eight
+  empty lane headers around one hit is unreadable. They come back when the box
+  is cleared.
+- **A failed creation stays visible** whatever you type, for the same reason it
+  survives every other filter: it has no other signal, so a search that hides it
+  hides the only evidence something is broken. A workstream that is merely
+  `creating` gets no such exemption.
+
+If the text matches nothing under the current stop but *does* match elsewhere,
+the list says so and gives the count — otherwise searching for something you
+archived last week looks like the search is broken.
+
 The list is filtered by three stops:
 
 | Stop | Shows |
