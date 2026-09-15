@@ -407,8 +407,15 @@ export interface SessionTodoDep {
   depends_on: string;
 }
 
-/** `not_run` | `pass` | `fail` | `blocked`. */
-export type AcceptanceStatus = "not_run" | "pass" | "fail" | "blocked";
+/**
+ * `not_run` | `pass` | `pass_unverified` | `fail` | `blocked`.
+ *
+ * `pass_unverified` is a pass an agent reached by judging a screenshot rather
+ * than by a mechanical signal. It is kept distinct from `pass` on purpose: it is
+ * the one outcome that could let a validation loop declare itself finished on a
+ * guess, so a human promotes it rather than the agent.
+ */
+export type AcceptanceStatus = "not_run" | "pass" | "pass_unverified" | "fail" | "blocked";
 
 export interface AcceptanceTest {
   id: string;

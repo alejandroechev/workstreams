@@ -115,18 +115,34 @@ function ProgressBar({ done, total }: { done: number; total: number }) {
   );
 }
 
-const ACCEPTANCE_STATUSES: AcceptanceStatus[] = ["not_run", "pass", "fail", "blocked"];
+const ACCEPTANCE_STATUSES: AcceptanceStatus[] = [
+  "not_run",
+  "pass",
+  "pass_unverified",
+  "fail",
+  "blocked",
+];
 
 const ACCEPTANCE_LABELS: Record<AcceptanceStatus, string> = {
   not_run: "Not run",
   pass: "Pass",
+  pass_unverified: "Pass (unverified)",
   fail: "Fail",
   blocked: "Blocked",
+};
+
+/** Only shown where the name alone does not carry the meaning. */
+const ACCEPTANCE_HINTS: Partial<Record<AcceptanceStatus, string>> = {
+  pass_unverified:
+    "Passed on an agent's judgement of a screenshot rather than a mechanical " +
+    "signal. Does not count as done until you accept it.",
 };
 
 const ACCEPTANCE_COLORS: Record<AcceptanceStatus, string> = {
   not_run: "#6c7086",
   pass: "#a6e3a1",
+  // Deliberately not the `pass` green: at a glance this must not read as done.
+  pass_unverified: "#94e2d5",
   fail: "#f38ba8",
   blocked: "#f9e2af",
 };
@@ -223,6 +239,7 @@ function AcceptanceTab({
                 data-testid={`acceptance-set-${test.at_id}-${status}`}
                 onClick={() => onSetStatus(test.id, status, test.notes)}
                 aria-pressed={test.status === status}
+                title={ACCEPTANCE_HINTS[status]}
                 style={{
                   background: test.status === status ? "#313244" : "transparent",
                   color: test.status === status ? ACCEPTANCE_COLORS[status] : "#6c7086",

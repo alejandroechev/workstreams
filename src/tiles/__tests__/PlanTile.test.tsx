@@ -327,4 +327,23 @@ describe("PlanTile acceptance tab", () => {
       expect(test.last_run_at).toBeNull();
     });
   });
+
+  /**
+   * A judgement-based pass is deliberately not `pass` — it is the one outcome
+   * that could let a validation loop declare itself finished on a guess, so it
+   * stays visibly distinct until a human promotes it.
+   */
+  it("records a judgement-based pass as distinct from a verified pass", async () => {
+    const backend = withTests([{ id: "t-a", at_id: "AT-1" }]);
+    await waitFor(() => expect(screen.getByTestId("plan-tab-acceptance")).toBeTruthy());
+    fireEvent.click(screen.getByTestId("plan-tab-acceptance"));
+
+    fireEvent.click(screen.getByTestId("acceptance-set-AT-1-pass_unverified"));
+    await waitFor(async () => {
+      const [test] = await backend.listSessionAcceptanceTests("sess-1", "alpha-plan");
+      expect(test.status).toBe("pass_unverified");
+      // It did run, so unlike `not_run` it carries a timestamp.
+      expect(test.last_run_at).not.toBeNull();
+    });
+  });
 });

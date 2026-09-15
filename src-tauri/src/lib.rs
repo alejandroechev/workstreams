@@ -3914,9 +3914,10 @@ pub struct AcceptanceTestEntry {
     pub at_id: String,
     pub title: String,
     pub validates: Option<String>,
-    /// `agent` | `agent-partial` | `human-only`.
+    /// `agent` | `agent-partial` | `human-only`. Advisory: a runner attempts
+    /// every test regardless of the tag.
     pub automation: Option<String>,
-    /// `not_run` | `pass` | `fail` | `blocked`.
+    /// `not_run` | `pass` | `pass_unverified` | `fail` | `blocked`.
     pub status: String,
     pub last_run_at: Option<String>,
     pub evidence: Option<String>,
@@ -5446,7 +5447,12 @@ fn acceptance_sort_key(at_id: &str) -> (u32, String) {
 }
 
 /// Statuses an acceptance test may hold.
-const ACCEPTANCE_STATUSES: &[&str] = &["not_run", "pass", "fail", "blocked"];
+///
+/// `pass_unverified` is a pass the agent reached by its own judgement of a
+/// screenshot rather than a mechanical signal. It is kept distinct from `pass`
+/// on purpose: a judgement-based pass is what would let a validation loop
+/// declare itself finished on a guess, so it needs a human to promote it.
+const ACCEPTANCE_STATUSES: &[&str] = &["not_run", "pass", "pass_unverified", "fail", "blocked"];
 
 /// Records the outcome of running an acceptance test.
 ///
@@ -7318,11 +7324,20 @@ Body here.
     }
 
     #[test]
-    fn only_the_four_known_statuses_are_accepted() {
-        for status in ["not_run", "pass", "fail", "blocked"] {
+    fn only_the_five_known_statuses_are_accepted() {
+        for status in ["not_run", "pass", "pass_unverified", "fail", "blocked"] {
             assert!(ACCEPTANCE_STATUSES.contains(&status), "{status}");
         }
         assert!(!ACCEPTANCE_STATUSES.contains(&"passed"));
+    }
+
+    /// A judgement-based pass is deliberately not `pass`: it still ran, so it
+    /// carries a `last_run_at`, but it must never be spelled the same as a
+    /// mechanically verified pass. See `after-grill`, "What may decide pass/fail".
+    #[test]
+    fn pass_unverified_is_distinct_from_pass() {
+        assert!(ACCEPTANCE_STATUSES.contains(&"pass_unverified"));
+        assert_ne!("pass", "pass_unverified");
     }
 
     // ── Work lanes ─────────────────────────────────────────────────────
