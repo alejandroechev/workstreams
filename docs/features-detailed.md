@@ -308,6 +308,18 @@ MVP1 is manual and local: a loop runs while Workstreams is open. See
 
 ## Task board and devlog export
 
+> **Retired (2026-09-15).** The board is hidden behind the `tasks` feature
+> flag and no longer ships enabled — see
+> [ADR 028](adrs/028-sunsetting-the-task-board.md). Tracking work in it made
+> work harder to track, and the free-form text file won. The code and all 26
+> tasks / 213 events are intentionally still there; set `VITE_ENABLE_TASKS=1`
+> to bring it back.
+>
+> The **quick-note bar** described below is *not* retired. It is the part that
+> survived — 87 manual notes on a near-daily cadence — and its history is meant
+> to become a per-workstream activity log. The rest of this section describes
+> the board as it still behaves with the flag on.
+
 The task board is a **global** surface (sidebar → **Tasks**), not a tile,
 because a task may have no workstream and often outlives the one it had.
 
@@ -543,14 +555,25 @@ The list is filtered by three stops:
 
 | Stop | Shows |
 | --- | --- |
-| **Loaded** | Workstreams whose tiles are currently open |
+| **Loaded** | Workstreams you have open — including ones restored from the last session |
 | **Not archived** | Everything still in play (the default) |
 | **All** | Including archived, rendered dimmed |
 
-The labels name the axis deliberately. "Loaded" is a *runtime* question — are
-this workstream's tiles open? — while archived is a stored status, so a restart
-makes everything unloaded and archives nothing. Calling the first stop "Live"
-would imply one scale across two different things.
+The labels name the axis deliberately. "Loaded" asks whether you have this
+workstream open; archived asks whether you have put it away. They are different
+questions — a workstream can be either, both, or neither — so calling the first
+stop "Live" would imply one scale across two different things.
+
+**The loaded set survives a restart** ([ADR 029](adrs/029-persisted-loaded-workstreams.md)).
+The workstreams you had open come back marked loaded, because that set is how
+you track what is in progress and rebuilding it by hand every morning is real
+work. What does *not* come back is the processes: tiles mount when you visit a
+workstream, not at startup, so reopening the app does not spawn every terminal
+and Copilot session at once. A restored workstream you have not visited yet
+shows as loaded and has no tiles running.
+
+Archived workstreams are never restored, whatever the flag says — archiving is
+how you put something away, and it would not stay away.
 
 `creating` and `create_failed` stay visible under **every** filter: a failed
 creation has no other signal, so hiding it would make a broken workstream
@@ -577,9 +600,13 @@ known repo is refused up front rather than importing itself.
 **Close (stop) a workstream** from the row's `⋯` menu → **Close (stop
 processes)**. This tears down a loaded workstream's tiles and terminals
 (killing its PTYs) without archiving it. It stays in the active list and
-reverts to the moon "stopped" indicator, exactly like a workstream that has not
-been opened yet this session; selecting it again reloads and respawns
-everything.
+reverts to the moon "stopped" indicator; selecting it again reloads and
+respawns everything.
+
+Close is also how you take something off the restored set — it clears the
+persisted flag, so a closed workstream does not come back open next launch. It
+works on a workstream restored from the last session but never visited, which
+has nothing mounted to tear down and skips the unsaved-work prompt accordingly.
 
 The sidebar groups workstreams by what they are doing — **Live** (tiles and
 processes running) and **Idle** (kept, but stopped) — with archived work and

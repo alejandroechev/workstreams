@@ -993,24 +993,31 @@ export default function WorkstreamSidebar({
       {/* Divider */}
       <div style={{ borderTop: "1px solid #313244", margin: "4px 8px" }} />
 
-      {/* ── TASKS (global) ──
+            {/* ── TASKS (global) ──
           A sibling of the workstream list rather than a tile: a task may have
           no workstream at all, and often outlives the one it had, so binding
-          the board to a single workstream would make most tasks unreachable. */}
-      <div style={{ borderTop: "1px solid #313244", padding: "4px 6px", flexShrink: 0 }}>
-        <button
-          data-testid="task-board-button"
-          onClick={onOpenTaskBoard}
-          style={footerButtonStyle}
-          onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "#1e1e2e"; }}
-          onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "transparent"; }}
-          title="Open the task board"
-        >
-          <ClipboardDocumentListIcon style={{ width: 12, height: 12 }} />
-          <span style={{ flex: 1, textAlign: "left" }}>Tasks</span>
-        </button>
-        {inProgressTasks}
-      </div>
+          the board to a single workstream would make most tasks unreachable.
+
+          Rendered only when a handler is supplied. The board is being sunset
+          behind the `tasks` feature flag, and App.tsx withholds the handler
+          when it is off -- so this whole section, button and miniview alike,
+          disappears with it rather than leaving a control that opens nothing. */}
+      {onOpenTaskBoard && (
+        <div style={{ borderTop: "1px solid #313244", padding: "4px 6px", flexShrink: 0 }}>
+          <button
+            data-testid="task-board-button"
+            onClick={onOpenTaskBoard}
+            style={footerButtonStyle}
+            onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "#1e1e2e"; }}
+            onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "transparent"; }}
+            title="Open the task board"
+          >
+            <ClipboardDocumentListIcon style={{ width: 12, height: 12 }} />
+            <span style={{ flex: 1, textAlign: "left" }}>Tasks</span>
+          </button>
+          {inProgressTasks}
+        </div>
+      )}
 
       {/* ── REPOS (footer affordance) ──
           The repo list used to live here as a `maxHeight: 40vh` panel, i.e. up

@@ -814,3 +814,36 @@ describe("TauriBackend", () => {
     });
   });
 }); 
+
+/**
+ * The loaded set is how the user tracks in-progress work, so it has to survive
+ * a restart. It rides on the workstream row rather than a settings blob: a
+ * deleted workstream takes its flag with it, so the restored set can never
+ * name a workstream that no longer exists.
+ */
+describe("TauriBackend loaded workstreams", () => {
+  let backend: TauriBackend;
+
+  beforeEach(() => {
+    invoke.mockReset();
+    backend = new TauriBackend();
+  });
+
+  it("persists a workstream being opened", async () => {
+    invoke.mockResolvedValueOnce(undefined);
+    await backend.setWorkstreamLoaded("ws-1", true);
+    expect(invoke).toHaveBeenCalledWith("set_workstream_loaded", {
+      id: "ws-1",
+      loaded: true,
+    });
+  });
+
+  it("persists a workstream being closed", async () => {
+    invoke.mockResolvedValueOnce(undefined);
+    await backend.setWorkstreamLoaded("ws-1", false);
+    expect(invoke).toHaveBeenCalledWith("set_workstream_loaded", {
+      id: "ws-1",
+      loaded: false,
+    });
+  });
+});

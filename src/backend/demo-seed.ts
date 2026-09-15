@@ -9,6 +9,14 @@ export interface DemoMemorySeed {
     project?: string;
     workstreamType?: string;
     worktreeBranch?: string;
+    /**
+     * Stage this workstream as one the user had open when the app last closed.
+     *
+     * Exists so specs can reach the restore-on-startup path: `page.reload()`
+     * discards the in-memory backend, so "restart with these open" cannot be
+     * staged any other way.
+     */
+    loaded?: boolean;
     tiles?: Array<{
       type: TileType;
       title: string;
@@ -55,6 +63,9 @@ export async function applyDemoSeed(
     await backend.updateLayout(workstream.id, {
       tile_order_json: JSON.stringify(tileIds),
     });
+    if (item.loaded) {
+      await backend.setWorkstreamLoaded(workstream.id, true);
+    }
   }
 
   for (const file of seed.files ?? []) {

@@ -352,6 +352,16 @@ export class MemoryBackend implements Backend {
     Object.assign(ws, updates, { updated_at: now() });
   }
 
+  /**
+   * Note the absent `updated_at` bump, unlike `updateWorkstream` above:
+   * opening a window is not an edit to the workstream.
+   */
+  async setWorkstreamLoaded(id: string, loaded: boolean): Promise<void> {
+    const ws = this.workstreams.get(id);
+    if (!ws) throw new Error(`Workstream not found: ${id}`);
+    ws.is_loaded = loaded;
+  }
+
   async changeWorkstreamWorktree(
     wsId: string,
     mode: "switch_existing" | "create_new",

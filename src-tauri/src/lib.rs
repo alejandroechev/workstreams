@@ -80,6 +80,11 @@ pub struct Workstream {
     /// Work lane this workstream sits in. `None` is "No lane", which is a real
     /// place in the sidebar rather than an absence.
     pub lane_id: Option<String>,
+    /// Whether this workstream was open when the app last closed.
+    ///
+    /// The set is restored at startup; the tiles are not. A restored row shows
+    /// as loaded in the sidebar and mounts its tiles on first visit.
+    pub is_loaded: bool,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -195,6 +200,7 @@ fn workstream_from_row(row: &Row<'_>) -> rusqlite::Result<Workstream> {
         created_at: row.get(10)?,
         updated_at: row.get(11)?,
         lane_id: row.get(12)?,
+        is_loaded: row.get::<_, i64>(13)? != 0,
     })
 }
 
@@ -202,7 +208,7 @@ fn get_workstream_by_id(db: &Connection, id: &str) -> Result<Workstream, String>
     db.query_row(
         "SELECT id, name, description, directory, git_repo, git_branch, status,
                 project_id, workstream_type, worktree_branch, created_at, updated_at,
-                lane_id
+                lane_id, is_loaded
          FROM workstreams WHERE id = ?1",
         [id],
         workstream_from_row,
@@ -469,6 +475,9 @@ pub fn insert_workstream(db: &Connection, input: NewWorkstream) -> Result<Workst
         worktree_branch: input.worktree_branch,
         // A new workstream starts unfiled; the operator or an agent places it.
         lane_id: None,
+        // Creation does not open it. The caller selects it if it wants it
+        // loaded, and that path is what records the flag.
+        is_loaded: false,
         created_at: ts.clone(),
         updated_at: ts,
     })
@@ -648,7 +657,7 @@ fn list_workstreams(state: State<'_, AppState>) -> Result<Vec<Workstream>, Strin
         .prepare(
             "SELECT id, name, description, directory, git_repo, git_branch, status,
                     project_id, workstream_type, worktree_branch, created_at, updated_at,
-                    lane_id
+                    lane_id, is_loaded
              FROM workstreams ORDER BY created_at ASC",
         )
         .map_err(|e| format!("DB error: {e}"))?;
@@ -659,6 +668,32 @@ fn list_workstreams(state: State<'_, AppState>) -> Result<Vec<Workstream>, Strin
 
     rows.collect::<Result<Vec<_>, _>>()
         .map_err(|e| format!("DB error: {e}"))
+}
+
+/// Record whether a workstream is currently open.
+///
+/// Deliberately does **not** bump `updated_at`: opening a window is
+/// bookkeeping about the app, not an edit to the workstream, and letting it
+/// move the timestamp would reorder every "recently touched" view for no
+/// reason the user would recognise.
+fn set_loaded(db: &Connection, id: &str, loaded: bool) -> Result<(), String> {
+    db.execute(
+        "UPDATE workstreams SET is_loaded = ?1 WHERE id = ?2",
+        (if loaded { 1 } else { 0 }, id),
+    )
+    .map_err(|e| format!("DB error: {e}"))?;
+    Ok(())
+}
+
+/// Persist the open/closed state of a workstream so the set survives a restart.
+#[tauri::command]
+fn set_workstream_loaded(
+    state: State<'_, AppState>,
+    id: String,
+    loaded: bool,
+) -> Result<(), String> {
+    let db = state.db.lock().unwrap();
+    set_loaded(&db, &id, loaded)
 }
 
 #[tauri::command]
@@ -5879,6 +5914,7 @@ pub fn run() {
             delete_work_lane,
             assign_workstream_lane,
             update_workstream,
+            set_workstream_loaded,
             delete_workstream,
             change_workstream_worktree,
             // Tiles
@@ -7338,6 +7374,86 @@ Body here.
     fn pass_unverified_is_distinct_from_pass() {
         assert!(ACCEPTANCE_STATUSES.contains(&"pass_unverified"));
         assert_ne!("pass", "pass_unverified");
+    }
+
+    // ── Loaded workstreams ─────────────────────────────────────────────
+
+    /// "Loaded" used to live only in React state, so every restart began with
+    /// an empty desk: the workstreams representing in-progress work had to be
+    /// found and reopened by hand before the app reflected reality again.
+    /// Persisting the flag is what lets the set survive a restart.
+    #[test]
+    fn a_workstream_is_not_loaded_until_something_says_so() {
+        let db = loaded_db();
+        seed_ws(&db, "w1");
+        assert!(
+            !read_loaded(&db, "w1"),
+            "a freshly created workstream must not claim to be loaded"
+        );
+    }
+
+    #[test]
+    fn marking_a_workstream_loaded_round_trips() {
+        let db = loaded_db();
+        seed_ws(&db, "w1");
+        set_loaded(&db, "w1", true).expect("mark loaded");
+        assert!(read_loaded(&db, "w1"));
+        set_loaded(&db, "w1", false).expect("unmark");
+        assert!(!read_loaded(&db, "w1"), "closing must clear the flag");
+    }
+
+    /// The flag rides along with the workstream read, so restoring the set at
+    /// startup needs no second query -- and cannot disagree with the list it
+    /// would have been joined against.
+    #[test]
+    fn the_loaded_flag_is_part_of_the_workstream_row() {
+        let db = loaded_db();
+        seed_ws(&db, "w1");
+        seed_ws(&db, "w2");
+        set_loaded(&db, "w2", true).expect("mark loaded");
+
+        let w1 = get_workstream_by_id(&db, "w1").expect("read w1");
+        let w2 = get_workstream_by_id(&db, "w2").expect("read w2");
+        assert!(!w1.is_loaded, "w1 was never loaded");
+        assert!(w2.is_loaded, "w2 was marked loaded");
+    }
+
+    /// Marking a workstream loaded is bookkeeping about the window, not an
+    /// edit the user made. Bumping `updated_at` would push it to the top of
+    /// every "recently touched" ordering just for being open.
+    #[test]
+    fn marking_loaded_does_not_count_as_touching_the_workstream() {
+        let db = loaded_db();
+        seed_ws(&db, "w1");
+        let before = get_workstream_by_id(&db, "w1").unwrap().updated_at;
+        set_loaded(&db, "w1", true).expect("mark loaded");
+        let after = get_workstream_by_id(&db, "w1").unwrap().updated_at;
+        assert_eq!(before, after, "updated_at must not move");
+    }
+
+    fn loaded_db() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::db::init_db(&conn).unwrap();
+        conn
+    }
+
+    fn seed_ws(db: &Connection, id: &str) {
+        db.execute(
+            "INSERT INTO workstreams (id, name, status, workstream_type, created_at, updated_at)
+             VALUES (?1, ?1, 'active', 'standalone', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+            [id],
+        )
+        .unwrap();
+    }
+
+    fn read_loaded(db: &Connection, id: &str) -> bool {
+        db.query_row(
+            "SELECT is_loaded FROM workstreams WHERE id = ?1",
+            [id],
+            |r| r.get::<_, i64>(0),
+        )
+        .unwrap()
+            != 0
     }
 
     // ── Work lanes ─────────────────────────────────────────────────────

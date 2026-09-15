@@ -26,6 +26,12 @@ workstream's tiles are open — but decided archived from `status`, which is
 persisted. Presenting them as one progression implied a scale that does not
 exist: restarting the app makes everything idle and archives nothing.
 
+> **Amended by [ADR 029](029-persisted-loaded-workstreams.md) (2026-09-15).**
+> The loaded set is now persisted, so "restarting the app makes everything
+> idle" is no longer true. The decision below is unaffected: loaded and
+> archived remain different questions — what you have open versus what you have
+> put away — and the filter names still say so.
+
 **Manual ordering was dead weight.** `workstream_order` was written from four
 places in `App.tsx`, and `domain/reorder.ts` existed to serve exactly one
 caller, yet nobody deliberately ordered anything. It also occupied the drag
@@ -60,6 +66,11 @@ The obvious labels would have been "Live / Live + Idle / All", and they would
 have lied. Loaded is a runtime question; archived is a stored status. Naming the
 stops after what they actually select keeps the two legible as different things
 even though they sit on one control.
+
+> **Amended by [ADR 029](029-persisted-loaded-workstreams.md).** Loaded is now
+> persisted too, so the two are no longer runtime-versus-stored. They are still
+> different questions — open versus put away — which is what the labels
+> protect, so the stops are unchanged.
 
 **`creating` and `create_failed` are visible under every filter.** A failed
 creation has no other signal in the UI, so a filter that could hide it would

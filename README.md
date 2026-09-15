@@ -54,12 +54,11 @@ instead of buried behind tabs.
   preview inline, and git hooks open in a real editor.
 - **Search that never freezes the app** — `.gitignore`-aware content search
   across the repo, off the UI thread, with regex and case toggles.
-- **Task board that writes your devlog** — labels, swimlanes, subtasks and an
-  append-only activity log per task, exported to your wiki as a dated markdown
-  page that it commits and pushes.
 - **One list, grouped into lanes** — related workstreams share a collapsible
   folder, filtered by Loaded / Not archived / All. Drag a workstream between
-  lanes; archived ones sit inline, dimmed, one click from coming back.
+  lanes; archived ones sit inline, dimmed, one click from coming back. The set
+  you had open comes back open on the next launch, without respawning
+  everything in it: tiles mount when you visit a workstream, not at startup.
 - **Agents that can drive the app** — a session can create and update its own
   workstreams through a local CLI, so the agent does not stop at the edge of the
   worktree. It acts only on what it owns, and asks before destroying anything.

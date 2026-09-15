@@ -39,8 +39,9 @@ whatever replaced it — the history is the point.
 | [024](024-repo-explorer-tile.md) | Repo Explorer tile — multi-tab browsing, search, and font resize | Accepted |
 | [025](025-orchestrator-replan-on-attention.md) | Re-plan a stuck task through the orchestrator before asking a human | Accepted |
 | [026](026-agent-driven-workstreams.md) | Agents drive the app through a CLI over a local socket | Accepted |
-| [027](027-work-lanes.md) | Work lanes, one workstream list, and the removal of manual ordering | Accepted |
-| [026](026-agent-driven-workstreams.md) | Agents drive the app through a CLI over a local socket | Accepted |
+| [027](027-work-lanes.md) | Work lanes, one workstream list, and the removal of manual ordering | Accepted (amended by [029](029-persisted-loaded-workstreams.md)) |
+| [028](028-sunsetting-the-task-board.md) | Sunsetting the task board behind a sunset-class feature flag | Accepted |
+| [029](029-persisted-loaded-workstreams.md) | The loaded set survives a restart; the tiles mount lazily | Accepted |
 
 ## Writing a new ADR
 

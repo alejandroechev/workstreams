@@ -60,7 +60,7 @@ function renderSidebar(over: Record<string, unknown> = {}) {
 
 describe("WorkstreamSidebar task board entry point", () => {
   it("offers a Tasks button in the footer", () => {
-    renderSidebar();
+    renderSidebar({ onOpenTaskBoard: vi.fn() });
     expect(screen.getByTestId("task-board-button")).toBeInTheDocument();
   });
 
@@ -74,8 +74,25 @@ describe("WorkstreamSidebar task board entry point", () => {
     expect(onOpenTaskBoard).toHaveBeenCalledTimes(1);
   });
 
-  it("stays renderable when no handler is supplied", () => {
+  /**
+   * Was "stays renderable when no handler is supplied" -- a button that
+   * rendered and did nothing. The task board is now sunset behind a feature
+   * flag, and App.tsx withholds the handler when it is off, so the absence of
+   * a handler is how the whole section is hidden. A dead Tasks button in a
+   * build with no task board is worse than no button.
+   */
+  it("hides the whole Tasks section when no handler is supplied", () => {
     renderSidebar({ onOpenTaskBoard: undefined });
-    expect(() => fireEvent.click(screen.getByTestId("task-board-button"))).not.toThrow();
+    expect(screen.queryByTestId("task-board-button")).not.toBeInTheDocument();
+  });
+
+  it("hides the in-progress miniview along with the button", () => {
+    // The miniview is passed as a node; withholding the handler must not leave
+    // it stranded in the footer with nothing to open.
+    renderSidebar({
+      onOpenTaskBoard: undefined,
+      inProgressTasks: <div data-testid="mini-view">in progress</div>,
+    });
+    expect(screen.queryByTestId("mini-view")).not.toBeInTheDocument();
   });
 });

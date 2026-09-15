@@ -107,6 +107,10 @@ export class TauriBackend implements Backend {
     await invoke("update_workstream", { id, ...updates });
   }
 
+  async setWorkstreamLoaded(id: string, loaded: boolean): Promise<void> {
+    await invoke("set_workstream_loaded", { id, loaded });
+  }
+
   async changeWorkstreamWorktree(
     wsId: string,
     mode: "switch_existing" | "create_new",

@@ -41,6 +41,14 @@ export interface Workstream {
   worktree_branch: string | null;
   /** Work lane this workstream sits in; `null` is the "No lane" group. */
   lane_id?: string | null;
+  /**
+   * Whether this workstream was open when the app last closed.
+   *
+   * Restoring the set does **not** restore the tiles: a workstream marked
+   * loaded shows as loaded in the sidebar and mounts its tiles on first visit.
+   * Optional so fixtures and older rows read as not loaded.
+   */
+  is_loaded?: boolean;
   created_at: string;
   updated_at: string;
 }

@@ -5,6 +5,8 @@ import {
   getAppSettings,
   resolveCopilotCommand,
 } from "./domain/app-settings";
+import { isFeatureEnabled } from "./domain/feature-flags";
+import { restorableLoadedIds, visiblyLoadedIds } from "./domain/loaded-workstreams";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { fileBufferRegistry } from "./files/FileBufferRegistry";
@@ -130,6 +132,15 @@ export default function App() {
     sbsSelectionMode: false,
   };
   const [wsStates, setWsStates] = useState<Map<string, WsState>>(new Map());
+  /**
+   * Workstreams that were open when the app last closed, restored at startup.
+   *
+   * Deliberately separate from `wsStates`: an entry there means tiles are
+   * mounted and PTYs are live, and adding 23 of those at boot would spawn
+   * every terminal and Copilot session in the set at once. This holds the ids
+   * only; the tiles mount on first visit. The two are unioned for display.
+   */
+  const [restoredLoadedIds, setRestoredLoadedIds] = useState<Set<string>>(new Set());
   // Focus token bumped on every workstream switch so per-tile effects know to
   // re-focus their xterm textarea.
   const [focusToken, setFocusToken] = useState(0);
@@ -300,6 +311,10 @@ export default function App() {
   const [linkingTileId, setLinkingTileId] = useState<string | null>(null);
   const [showProjectCreate, setShowProjectCreate] = useState(false);
   const [showRepoCreate, setShowRepoCreate] = useState(false);
+  // The task board is sunset behind a flag. Read once at module scope rather
+  // than per render: it is a build-time constant, and threading it through
+  // effects would imply it can change while the app is running.
+  const tasksEnabled = isFeatureEnabled("tasks");
   const [showTaskBoard, setShowTaskBoard] = useState(false);
   const [taskForWsId, setTaskForWsId] = useState<string | null>(null);
   const [focusTaskId, setFocusTaskId] = useState<string | null>(null);
@@ -548,6 +563,10 @@ export default function App() {
         setProjects(p);
         setWorkLanes(lanes);
         setWorkstreams(ws);
+        // Mark the workstreams that were open when the app last closed. This
+        // restores the *set*, not the tiles: each one mounts on first visit,
+        // exactly as if it had just been opened. See domain/loaded-workstreams.
+        setRestoredLoadedIds(restorableLoadedIds(ws));
 
         // Populate session info from each workstream's pinned tile (background).
         void (async () => {
@@ -708,6 +727,18 @@ export default function App() {
     // If already loaded, nothing to do — the existing mounted tree just
     // becomes visible.
     if (wsStates.has(activeWsId)) return;
+
+    // Remember that this workstream is open, so it comes back loaded next
+    // launch. Recorded on mount rather than on selection because this is the
+    // point where it genuinely becomes loaded; selecting a workstream that is
+    // already mounted changes nothing worth persisting.
+    void backend.setWorkstreamLoaded(activeWsId, true).catch(() => {});
+    setRestoredLoadedIds((prev) => {
+      if (prev.has(activeWsId)) return prev;
+      const next = new Set(prev);
+      next.add(activeWsId);
+      return next;
+    });
 
     Promise.all([
       backend.listTiles(activeWsId),
@@ -1388,9 +1419,16 @@ export default function App() {
   // it (selecting the row) re-runs the load effect and respawns everything.
   const handleCloseWorkstream = useCallback(
     async (id: string) => {
-      // Only a loaded workstream can be closed.
-      if (!wsStates.has(id)) return;
-      if (!confirmDiscardDirtyFileBuffers("close workstream")) return;
+      // Only a loaded workstream can be closed -- but "loaded" now includes
+      // one restored from the last session that has never been visited, which
+      // has no wsStates entry. Guarding on wsStates alone would make Close a
+      // no-op on exactly the rows the restore feature lights up.
+      const isMounted = wsStates.has(id);
+      if (!isMounted && !restoredLoadedIds.has(id)) return;
+      // Nothing is mounted in the restored-but-unvisited case, so there are no
+      // dirty buffers to lose and no PTYs to reap -- skip straight to clearing
+      // the flag rather than prompting about work that cannot exist.
+      if (isMounted && !confirmDiscardDirtyFileBuffers("close workstream")) return;
 
       const st = wsStates.get(id);
       const wsTiles = st?.tiles ?? [];
@@ -1418,8 +1456,21 @@ export default function App() {
         next.delete(id);
         return next;
       });
+
+      // Closing is the user saying "not this one any more", so it must not
+      // come back loaded next launch. Both halves are needed: the persisted
+      // flag for the next start, and the restored set for this one -- a
+      // workstream restored but never visited has no wsStates entry to
+      // delete, and would otherwise stay lit in the sidebar after closing.
+      void backend.setWorkstreamLoaded(id, false).catch(() => {});
+      setRestoredLoadedIds((prev) => {
+        if (!prev.has(id)) return prev;
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
     },
-    [wsStates, activeWsId, backend, confirmDiscardDirtyFileBuffers],
+    [wsStates, restoredLoadedIds, activeWsId, backend, confirmDiscardDirtyFileBuffers],
   );
 
   const handleForkWorkstream = useCallback(
@@ -1845,10 +1896,14 @@ export default function App() {
     return map;
   }, [wsStates]);
 
-  // Workstreams that have been "loaded" (have an entry in wsStates so tiles
-  // are mounted + listeners are active). Workstreams the user hasn't opened
-  // yet this session show a "stopped" indicator in the sidebar.
-  const loadedWsIds = useMemo(() => new Set(wsStates.keys()), [wsStates]);
+  // Workstreams the sidebar should show as loaded: the ones restored from the
+  // last session plus the ones mounted since. A restored workstream has no
+  // entry in wsStates until it is visited, so deriving this from wsStates
+  // alone would make the restored set invisible until each row was clicked.
+  const loadedWsIds = useMemo(
+    () => visiblyLoadedIds(restoredLoadedIds, wsStates.keys()),
+    [restoredLoadedIds, wsStates],
+  );
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -1981,29 +2036,39 @@ export default function App() {
         onRetryCreate={handleRetryCreate}
         onRetryRemove={handleRetryRemove}
         onDiscardWorkstream={handleDiscardWorkstream}
-        onOpenTaskBoard={() => setShowTaskBoard(true)}
+        onOpenTaskBoard={tasksEnabled ? () => setShowTaskBoard(true) : undefined}
         inProgressTasks={
-          <InProgressTaskList
-            backend={backend}
-            workstreams={workstreams}
-            activeWsId={activeWsId}
-            onOpenWorkstream={selectWorkstream}
-            onOpenTask={(taskId) => {
-              setFocusTaskId(taskId);
-              setShowTaskBoard(true);
-            }}
-          />
+          tasksEnabled ? (
+            <InProgressTaskList
+              backend={backend}
+              workstreams={workstreams}
+              activeWsId={activeWsId}
+              onOpenWorkstream={selectWorkstream}
+              onOpenTask={(taskId) => {
+                setFocusTaskId(taskId);
+                setShowTaskBoard(true);
+              }}
+            />
+          ) : undefined
         }
-        onCreateTaskForWorkstream={(wsId) => {
-          setTaskForWsId(wsId);
-          setShowTaskBoard(true);
-        }}
-        onGoToTaskForWorkstream={(wsId) => {
-          const taskId = taskIdByWs.get(wsId);
-          if (!taskId) return;
-          setFocusTaskId(taskId);
-          setShowTaskBoard(true);
-        }}
+        onCreateTaskForWorkstream={
+          tasksEnabled
+            ? (wsId) => {
+                setTaskForWsId(wsId);
+                setShowTaskBoard(true);
+              }
+            : undefined
+        }
+        onGoToTaskForWorkstream={
+          tasksEnabled
+            ? (wsId) => {
+                const taskId = taskIdByWs.get(wsId);
+                if (!taskId) return;
+                setFocusTaskId(taskId);
+                setShowTaskBoard(true);
+              }
+            : undefined
+        }
         workstreamsWithTasks={workstreamsWithTasks}
         onCreateProject={() => setShowRepoCreate(true)}
         onImportProject={() => setShowProjectCreate(true)}
@@ -2440,7 +2505,7 @@ export default function App() {
       )}
 
       {/* Repo create-new modal */}
-      {showTaskBoard && (
+      {tasksEnabled && showTaskBoard && (
         <TaskBoard
           backend={backend}
           workstreams={workstreams}

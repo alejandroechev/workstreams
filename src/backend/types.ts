@@ -65,6 +65,15 @@ export interface Backend {
   assignWorkstreamLane(workstreamId: string, laneId: string | null): Promise<void>;
   createWorkstream(name: string, directory: string, opts?: { projectId?: string; workstreamType?: string; worktreeBranch?: string }): Promise<Workstream>;
   updateWorkstream(id: string, updates: Partial<Workstream>): Promise<void>;
+  /**
+   * Record whether a workstream is currently open, so the loaded set survives
+   * a restart.
+   *
+   * Separate from `updateWorkstream` because it is bookkeeping about the app
+   * rather than an edit to the workstream: it deliberately does not move
+   * `updated_at`.
+   */
+  setWorkstreamLoaded(id: string, loaded: boolean): Promise<void>;
   changeWorkstreamWorktree(
     wsId: string,
     mode: "switch_existing" | "create_new",

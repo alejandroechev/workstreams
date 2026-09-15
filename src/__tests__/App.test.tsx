@@ -200,6 +200,7 @@ function createBackend(): Backend {
     listWorkstreams: vi.fn(async () => workstreams),
     createWorkstream: vi.fn(),
     updateWorkstream: vi.fn(async () => undefined),
+    setWorkstreamLoaded: vi.fn(async () => undefined),
     deleteWorkstream: vi.fn(),
     changeWorkstreamWorktree: vi.fn(),
     listTiles: vi.fn(async (): Promise<Tile[]> => []),

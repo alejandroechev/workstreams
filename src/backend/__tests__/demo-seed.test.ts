@@ -93,3 +93,25 @@ describe("applyDemoSeed", () => {
     expect(await backend.listTiles(workstreams[1].id)).toEqual([]);
   });
 });
+
+describe("applyDemoSeed loaded workstreams", () => {
+  /**
+   * The restore-on-startup path reads `is_loaded` off the workstream rows, so
+   * without this a spec has no way to stage "the app was closed with these
+   * open" -- `page.reload()` throws the in-memory backend away along with
+   * everything seeded into it.
+   */
+  it("can stage a workstream as left open", async () => {
+    const backend = new MemoryBackend();
+    await applyDemoSeed(backend, {
+      workstreams: [
+        { name: "open one", directory: "/demo/a", loaded: true },
+        { name: "closed one", directory: "/demo/b" },
+      ],
+    });
+
+    const all = await backend.listWorkstreams();
+    expect(all.find((w) => w.name === "open one")?.is_loaded).toBe(true);
+    expect(all.find((w) => w.name === "closed one")?.is_loaded ?? false).toBe(false);
+  });
+});

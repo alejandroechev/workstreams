@@ -9,6 +9,11 @@
  *    in a snapshot and is unusable in practice
  *
  * So this drives real controls at a real size and asserts the DOM settles.
+ *
+ * The board is now **sunset**: hidden behind the `tasks` flag, which defaults
+ * off everywhere. These specs force the flag on, because the code is still in
+ * the tree and untested hidden code rots quietly. `tasks-hidden.spec.ts`
+ * covers the default state -- that it is genuinely gone when the flag is off.
  */
 import { test, expect, type Page } from "@playwright/test";
 
@@ -17,9 +22,12 @@ async function configureInvokeHandlers(page: Page) {
     const handlers: Record<string, (a: Record<string, unknown>) => unknown> = {
       get_setting: () => null,
       set_setting: () => null,
+      set_workstream_loaded: () => null,
     };
     (window as unknown as { __WS_INVOKE_HANDLERS__: typeof handlers }).__WS_INVOKE_HANDLERS__ =
       handlers;
+    // The board ships disabled; force flags on so these specs still exercise it.
+    (window as unknown as { __WS_FEATURE_FLAGS__?: boolean }).__WS_FEATURE_FLAGS__ = true;
   });
 }
 

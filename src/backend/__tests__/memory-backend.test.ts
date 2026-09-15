@@ -694,3 +694,34 @@ describe("MemoryBackend repo switch for project-less workstreams", () => {
     expect(result.workstream.project_id).toBe(sdk.id);
   });
 });
+
+describe("MemoryBackend loaded workstreams", () => {
+  it("defaults to not loaded, and round-trips the flag", async () => {
+    const backend = new MemoryBackend();
+    const ws = await backend.createWorkstream("w1", "/tmp/w1");
+
+    const before = (await backend.listWorkstreams()).find((w) => w.id === ws.id);
+    expect(before?.is_loaded ?? false).toBe(false);
+
+    await backend.setWorkstreamLoaded(ws.id, true);
+    const after = (await backend.listWorkstreams()).find((w) => w.id === ws.id);
+    expect(after?.is_loaded).toBe(true);
+
+    await backend.setWorkstreamLoaded(ws.id, false);
+    const closed = (await backend.listWorkstreams()).find((w) => w.id === ws.id);
+    expect(closed?.is_loaded).toBe(false);
+  });
+
+  /**
+   * Opening a window is not an edit to the workstream. If it bumped
+   * `updated_at` every open would reorder any recently-touched view.
+   */
+  it("does not count as touching the workstream", async () => {
+    const backend = new MemoryBackend();
+    const ws = await backend.createWorkstream("w1", "/tmp/w1");
+    const before = (await backend.listWorkstreams()).find((w) => w.id === ws.id)!.updated_at;
+    await backend.setWorkstreamLoaded(ws.id, true);
+    const after = (await backend.listWorkstreams()).find((w) => w.id === ws.id)!.updated_at;
+    expect(after).toBe(before);
+  });
+});

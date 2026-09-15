@@ -345,6 +345,19 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
         // migrations here are) -- the command-level check in tasks.rs is the
         // authoritative guard and still holds the line.
         "CREATE UNIQUE INDEX IF NOT EXISTS tasks_workstream_unique          ON tasks (workstream_id) WHERE workstream_id IS NOT NULL",
+        // Whether this workstream was open when the app last closed.
+        //
+        // "Loaded" was runtime-only state (a key in React's wsStates map), so
+        // every launch started from an empty desk and the workstreams that
+        // represent in-progress work had to be reopened by hand. It is
+        // persisted here because the loaded set *is* how the user tracks what
+        // they are working on.
+        //
+        // This records the set, not the processes: restoring it marks the rows
+        // as loaded, and their tiles still mount lazily on first visit. Booting
+        // 23 workstreams' worth of terminals and Copilot sessions at once is
+        // not what "leave my desk as I left it" should cost.
+        "ALTER TABLE workstreams ADD COLUMN is_loaded INTEGER NOT NULL DEFAULT 0",
     ];
     for sql in &migrations {
         // SQLite errors if column already exists — ignore that error
