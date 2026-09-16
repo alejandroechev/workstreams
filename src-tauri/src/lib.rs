@@ -216,19 +216,42 @@ fn get_workstream_by_id(db: &Connection, id: &str) -> Result<Workstream, String>
     .map_err(|e| format!("DB error: {e}"))
 }
 
+/// Give a child the repaired PATH, or leave its environment untouched.
+///
+/// `None` means the inherited PATH is already good — a terminal launch — and
+/// must not be overridden. Setting it anyway would break the only case that
+/// was never broken.
+fn apply_repaired_path(cmd: &mut std::process::Command, repaired: Option<String>) {
+    if let Some(path) = repaired {
+        cmd.env("PATH", path);
+    }
+}
+
 /// Create a child command that doesn't flash a console window on Windows.
+///
+/// Also repairs `PATH`. A GUI app launched from Finder or the Dock inherits
+/// launchd's `PATH=/usr/bin:/bin:/usr/sbin:/sbin` — the login shell's profile
+/// never runs — so Homebrew, `~/.cargo/bin` and every version-manager shim are
+/// invisible to anything the app spawns. `shell_env` already solved this for
+/// PTYs; doing it here means every helper inherits the fix instead of each
+/// call site having to remember.
+///
+/// This is not hypothetical: `git worktree add` on a repo with
+/// `filter.lfs.required = true` failed with `git-lfs: command not found`, while
+/// the identical command pasted into a terminal succeeded.
 ///
 /// Workstreams is a GUI process. `cargo test --no-run` and each built test
 /// binary are long-lived enough that a visible console is especially
 /// disruptive, but the same rule applies to every short helper too.
 fn hidden_command<S: AsRef<std::ffi::OsStr>>(program: S) -> std::process::Command {
-    #[allow(unused_mut)]
     let mut cmd = std::process::Command::new(program);
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
         cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
     }
+    #[cfg(unix)]
+    apply_repaired_path(&mut cmd, shell_env::resolved_path(&pty::default_shell()));
     cmd
 }
 
@@ -7374,6 +7397,90 @@ Body here.
     fn pass_unverified_is_distinct_from_pass() {
         assert!(ACCEPTANCE_STATUSES.contains(&"pass_unverified"));
         assert_ne!("pass", "pass_unverified");
+    }
+
+    // ── Spawned-process PATH ───────────────────────────────────────────
+
+    /// A GUI app launched from Finder or the Dock inherits launchd's stunted
+    /// `PATH=/usr/bin:/bin:/usr/sbin:/sbin`, so Homebrew and per-user tool
+    /// directories are invisible to everything it shells out to.
+    ///
+    /// The bug that produced this test: `git worktree add` on a repo with
+    /// `filter.lfs.required = true` died with `git-lfs: command not found`
+    /// because git-lfs lives in `/opt/homebrew/bin`. The identical command
+    /// pasted into a terminal worked, which makes it a miserable thing to
+    /// diagnose from the symptom alone.
+    ///
+    /// Takes the resolved PATH as an argument rather than reading the ambient
+    /// one: under `cargo test` the inherited PATH is already good, so a test
+    /// that consulted the environment would pass by doing nothing.
+    #[test]
+    fn a_repaired_path_is_applied_to_the_child() {
+        let mut cmd = std::process::Command::new("git");
+        apply_repaired_path(&mut cmd, Some("/opt/homebrew/bin:/usr/bin".to_string()));
+        assert_eq!(
+            child_path(&cmd).as_deref(),
+            Some("/opt/homebrew/bin:/usr/bin")
+        );
+    }
+
+    /// `None` means "the inherited PATH is already correct" — a terminal
+    /// launch. Overriding it with anything, including an empty string, would
+    /// break the case that was never broken.
+    #[test]
+    fn no_repair_leaves_the_inherited_environment_alone() {
+        let mut cmd = std::process::Command::new("git");
+        apply_repaired_path(&mut cmd, None);
+        assert_eq!(child_path(&cmd), None, "PATH must not be set at all");
+    }
+
+    /// Guards the seam rather than one call site. `git` is the one that failed
+    /// in the wild, but `cargo` is equally invisible from `~/.cargo/bin`, and a
+    /// helper added later should not have to rediscover this.
+    #[cfg(unix)]
+    #[test]
+    fn every_spawned_helper_goes_through_the_repair() {
+        let repaired = shell_env::resolved_path(&pty::default_shell());
+        for program in ["git", "cargo", "anything-else"] {
+            let cmd = hidden_command(program);
+            assert_eq!(child_path(&cmd), repaired, "{program}");
+        }
+    }
+
+    /// The end of the causal chain, on this machine.
+    ///
+    /// The unit tests above prove the wiring; `shell_env` proves the repair
+    /// enriches a GUI PATH. This proves the repaired PATH can actually resolve
+    /// the binary whose absence broke `git worktree add` — which is the claim
+    /// that matters and the one neither of the others makes.
+    #[cfg(unix)]
+    #[test]
+    fn the_repaired_path_can_find_the_helper_git_needs() {
+        let Some(lfs) = std::env::var_os("PATH").and_then(|path| {
+            std::env::split_paths(&path).find(|dir| dir.join("git-lfs").is_file())
+        }) else {
+            // No git-lfs installed: nothing to prove, and nothing to break.
+            return;
+        };
+        let Some(repaired) =
+            shell_env::resolve_for(Some("/usr/bin:/bin:/usr/sbin:/sbin"), &pty::default_shell())
+        else {
+            // Sandboxed shell with no profile to source.
+            return;
+        };
+        assert!(
+            std::env::split_paths(&repaired).any(|dir| dir == lfs),
+            "repaired PATH must contain {}, got {repaired}",
+            lfs.display()
+        );
+    }
+
+    /// The child's PATH override, or `None` when the child simply inherits.
+    fn child_path(cmd: &std::process::Command) -> Option<String> {
+        cmd.get_envs()
+            .find(|(key, _)| *key == std::ffi::OsStr::new("PATH"))
+            .and_then(|(_, value)| value)
+            .map(|value| value.to_string_lossy().to_string())
     }
 
     // ── Loaded workstreams ─────────────────────────────────────────────

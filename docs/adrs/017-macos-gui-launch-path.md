@@ -142,6 +142,15 @@ reports a capable terminal, so the repair is `cfg(unix)`-only.
 - Copilot session tiles work when the app is launched from the Dock, Finder,
   Spotlight, or as a login item — the normal way a desktop app is started.
   Backspace and other line editing work in terminal tiles for the same reason.
+- **Every process the app spawns** gets the repaired `PATH`, not just PTYs —
+  the repair lives in the shared `hidden_command` spawner, so `git`, `cargo`
+  and any helper added later inherit it without the author having to know.
+  This was extended after `git worktree add` failed on a Git LFS repo with
+  `git-lfs: command not found`: git found its own binary at `/usr/bin/git`,
+  then could not find the `filter.lfs.process` helper in `/opt/homebrew/bin`,
+  and because `filter.lfs.required = true` the checkout failed outright. The
+  same command pasted into a terminal worked, which is a miserable symptom to
+  diagnose — it looks like a repo problem, not an environment one.
 - Loop orchestrators, workers, and evaluators see the same user-installed
   commands as terminal tiles and deterministic verifiers.
 - One extra process spawn (~100 ms) on GUI launches only, paid once per app
