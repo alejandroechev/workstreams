@@ -13,6 +13,7 @@ function project(id: string, name: string, over: Partial<Project> = {}): Project
     git_remote: null,
     color: "#89b4fa",
     copilot_command: null,
+    archived: false,
     created_at: "2026-01-01T00:00:00Z",
     updated_at: "2026-01-01T00:00:00Z",
     ...over,
@@ -91,6 +92,40 @@ describe("RepoManagerModal", () => {
     expect(screen.getByTestId("repo-manager-empty")).toBeInTheDocument();
   });
 
+  it("hides archived repos by default and shows them in All", () => {
+    render(
+      <RepoManagerModal
+        {...baseProps}
+        projects={[
+          project("p1", "WB"),
+          project("p2", "workstreams", { archived: true }),
+        ]}
+      />,
+    );
+
+    expect(screen.getByTestId("repo-manager-row-p1")).toBeInTheDocument();
+    expect(screen.queryByTestId("repo-manager-row-p2")).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByTestId("repo-manager-filter"), {
+      target: { value: "all" },
+    });
+    expect(screen.getByTestId("repo-manager-row-p2")).toHaveAttribute(
+      "data-archived",
+      "true",
+    );
+  });
+
+  it("can show only non-dormant repos", () => {
+    render(<RepoManagerModal {...baseProps} workstreams={[ws("w1", "p1")]} />);
+
+    fireEvent.change(screen.getByTestId("repo-manager-filter"), {
+      target: { value: "non_dormant" },
+    });
+
+    expect(screen.getByTestId("repo-manager-row-p1")).toBeInTheDocument();
+    expect(screen.queryByTestId("repo-manager-row-p2")).not.toBeInTheDocument();
+  });
+
   it("selecting a repo loads it into the edit form", () => {
     render(<RepoManagerModal {...baseProps} />);
 
@@ -130,6 +165,35 @@ describe("RepoManagerModal", () => {
     fireEvent.click(screen.getByTestId("repo-manager-save"));
 
     expect(onUpdateProject).toHaveBeenCalledWith("p1", expect.objectContaining({ copilot_command: null }));
+  });
+
+  it("archives and restores a repo without deleting it", () => {
+    const onUpdateProject = vi.fn();
+    const { rerender } = render(
+      <RepoManagerModal {...baseProps} onUpdateProject={onUpdateProject} />,
+    );
+
+    fireEvent.click(screen.getByTestId("repo-manager-row-p1"));
+    fireEvent.click(screen.getByTestId("repo-manager-archive"));
+    expect(onUpdateProject).toHaveBeenCalledWith("p1", { archived: true });
+
+    rerender(
+      <RepoManagerModal
+        {...baseProps}
+        projects={[
+          project("p1", "WB", { archived: true }),
+          project("p2", "workstreams"),
+        ]}
+        onUpdateProject={onUpdateProject}
+      />,
+    );
+    fireEvent.change(screen.getByTestId("repo-manager-filter"), {
+      target: { value: "all" },
+    });
+    fireEvent.click(screen.getByTestId("repo-manager-row-p1"));
+    expect(screen.getByTestId("repo-manager-archive")).toHaveTextContent("Restore repo");
+    fireEvent.click(screen.getByTestId("repo-manager-archive"));
+    expect(onUpdateProject).toHaveBeenCalledWith("p1", { archived: false });
   });
 
   it("refuses to save a blank repo name", () => {

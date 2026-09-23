@@ -1332,7 +1332,12 @@ export default function App() {
   const handleUpdateProject = useCallback(
     async (
       id: string,
-      updates: { name: string; color: string; copilot_command?: string | null },
+      updates: {
+        name?: string;
+        color?: string;
+        copilot_command?: string | null;
+        archived?: boolean;
+      },
     ) => {
       await backend.updateProject(id, updates);
       setProjects((prev) =>

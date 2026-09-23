@@ -9,6 +9,8 @@ export interface Project {
    * global `copilotCommand` app setting. Resolved at spawn via
    * `resolveCopilotCommand`. */
   copilot_command: string | null;
+  /** Archived repos stay persisted but are hidden from ordinary repo pickers. */
+  archived?: boolean;
   created_at: string;
   updated_at: string;
 }

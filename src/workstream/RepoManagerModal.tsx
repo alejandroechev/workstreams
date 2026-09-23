@@ -3,6 +3,11 @@ import { XMarkIcon } from "@heroicons/react/24/outline";
 
 import type { Project, Workstream } from "../domain/types";
 import { PROJECT_PRESET_COLORS, isCustomProjectColor } from "../domain/colors";
+import {
+  filterRepositories,
+  repositoryActiveWorkstreamCounts,
+  type RepositoryFilter,
+} from "../domain/repository-visibility";
 
 export interface RepoManagerModalProps {
   projects: Project[];
@@ -11,15 +16,18 @@ export interface RepoManagerModalProps {
   onClose: () => void;
   onUpdateProject: (
     id: string,
-    updates: { name: string; color: string; copilot_command: string | null },
+    updates: {
+      name?: string;
+      color?: string;
+      copilot_command?: string | null;
+      archived?: boolean;
+    },
   ) => void;
   onCreateProject: () => void;
   onImportProject: () => void;
   /** Global Copilot command, shown as the placeholder when a repo inherits it. */
   commandPlaceholder?: string;
 }
-
-const ARCHIVED: ReadonlySet<Workstream["status"]> = new Set(["archived", "archiving"]);
 
 /**
  * Repo administration, moved out of the sidebar.
@@ -42,10 +50,12 @@ export function RepoManagerModal({
   commandPlaceholder = "inherit global",
 }: RepoManagerModalProps) {
   const [query, setQuery] = useState("");
-  const [selectedId, setSelectedId] = useState<string | null>(projects[0]?.id ?? null);
-  const [name, setName] = useState(projects[0]?.name ?? "");
-  const [color, setColor] = useState(projects[0]?.color ?? "#89b4fa");
-  const [command, setCommand] = useState(projects[0]?.copilot_command ?? "");
+  const [filter, setFilter] = useState<RepositoryFilter>("not_archived");
+  const initialProject = projects.find((project) => !project.archived) ?? projects[0];
+  const [selectedId, setSelectedId] = useState<string | null>(initialProject?.id ?? null);
+  const [name, setName] = useState(initialProject?.name ?? "");
+  const [color, setColor] = useState(initialProject?.color ?? "#89b4fa");
+  const [command, setCommand] = useState(initialProject?.copilot_command ?? "");
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -58,25 +68,32 @@ export function RepoManagerModal({
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [onClose]);
 
-  const activeCounts = useMemo(() => {
-    const counts = new Map<string, number>();
-    for (const ws of workstreams) {
-      if (!ws.project_id || ARCHIVED.has(ws.status)) continue;
-      counts.set(ws.project_id, (counts.get(ws.project_id) ?? 0) + 1);
-    }
-    return counts;
-  }, [workstreams]);
+  const activeCounts = useMemo(
+    () => repositoryActiveWorkstreamCounts(workstreams),
+    [workstreams],
+  );
 
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
-    const sorted = [...projects].sort((a, b) =>
+    const sorted = filterRepositories(projects, activeCounts, filter).sort((a, b) =>
       a.name.localeCompare(b.name, undefined, { sensitivity: "base" }),
     );
     if (!q) return sorted;
     return sorted.filter(
       (p) => p.name.toLowerCase().includes(q) || p.directory.toLowerCase().includes(q),
     );
-  }, [projects, query]);
+  }, [activeCounts, filter, projects, query]);
+
+  useEffect(() => {
+    if (visible.some((project) => project.id === selectedId)) return;
+    const next = visible[0];
+    setSelectedId(next?.id ?? null);
+    setName(next?.name ?? "");
+    setColor(next?.color ?? "#89b4fa");
+    setCommand(next?.copilot_command ?? "");
+  }, [selectedId, visible]);
+
+  const selectedProject = projects.find((project) => project.id === selectedId);
 
   const select = (p: Project) => {
     setSelectedId(p.id);
@@ -148,6 +165,16 @@ export function RepoManagerModal({
             placeholder="Search name or path"
             style={{ ...inputStyle, flex: 1 }}
           />
+          <select
+            data-testid="repo-manager-filter"
+            value={filter}
+            onChange={(event) => setFilter(event.target.value as RepositoryFilter)}
+            style={{ ...inputStyle, width: "auto", marginBottom: 0 }}
+          >
+            <option value="not_archived">Not archived</option>
+            <option value="non_dormant">Non-dormant</option>
+            <option value="all">All</option>
+          </select>
           <button data-testid="repo-manager-import" onClick={onImportProject} style={buttonStyle}>
             Import existing repo
           </button>
@@ -184,6 +211,7 @@ export function RepoManagerModal({
                     tabIndex={0}
                     data-testid={`repo-manager-row-${p.id}`}
                     data-dormant={dormant ? "true" : "false"}
+                    data-archived={p.archived ? "true" : "false"}
                     onClick={() => select(p)}
                     onKeyDown={(e) => {
                       if (e.key === "Enter" || e.key === " ") {
@@ -198,7 +226,7 @@ export function RepoManagerModal({
                       padding: "6px 12px",
                       cursor: "pointer",
                       fontSize: 12,
-                      color: "#cdd6f4",
+                      color: p.archived ? "#6c7086" : "#cdd6f4",
                       background: p.id === selectedId ? "#313244" : "transparent",
                       borderLeft: `2px solid ${p.id === selectedId ? p.color : "transparent"}`,
                     }}
@@ -213,6 +241,11 @@ export function RepoManagerModal({
                     {dormant && (
                       <span style={{ color: "#f9e2af", fontSize: 9, border: "1px solid #45475a", borderRadius: 3, padding: "0 4px" }}>
                         dormant
+                      </span>
+                    )}
+                    {p.archived && (
+                      <span style={{ color: "#a6adc8", fontSize: 9, border: "1px solid #45475a", borderRadius: 3, padding: "0 4px" }}>
+                        archived
                       </span>
                     )}
                     <span style={{ color: "#a6adc8", fontSize: 11, minWidth: 16, textAlign: "right" }}>{count}</span>
@@ -293,6 +326,24 @@ export function RepoManagerModal({
               >
                 Save changes
               </button>
+              {selectedProject && (
+                <button
+                  data-testid="repo-manager-archive"
+                  onClick={() =>
+                    onUpdateProject(selectedProject.id, {
+                      archived: !selectedProject.archived,
+                    })
+                  }
+                  style={{
+                    ...buttonStyle,
+                    width: "100%",
+                    marginTop: 6,
+                    color: selectedProject.archived ? "#a6e3a1" : "#f9e2af",
+                  }}
+                >
+                  {selectedProject.archived ? "Restore repo" : "Archive repo"}
+                </button>
+              )}
             </div>
           </div>
         )}

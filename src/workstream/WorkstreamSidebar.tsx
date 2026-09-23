@@ -38,6 +38,7 @@ import {
   XMarkIcon,
 } from "@heroicons/react/20/solid";
 import { getAppSettings } from "../domain/app-settings";
+import { selectableRepositories } from "../domain/repository-visibility";
 import { WorkstreamActionMenu } from "./WorkstreamActionMenu";
 import type { LoopSummary } from "../domain/loop";
 
@@ -85,7 +86,15 @@ interface Props {
   /** Stop a loaded workstream's tiles/processes without archiving it. */
   onCloseWorkstream?: (id: string) => void;
   onRenameWorkstream: (id: string, newName: string) => void;
-  onUpdateProject: (id: string, updates: { name: string; color: string; copilot_command: string | null }) => void;
+  onUpdateProject: (
+    id: string,
+    updates: {
+      name?: string;
+      color?: string;
+      copilot_command?: string | null;
+      archived?: boolean;
+    },
+  ) => void;
     /** Lanes to render as folders. Empty means only "No lane" shows. */
   lanes?: WorkLane[];
   /** Moves a workstream into a lane, or out of one when `laneId` is null. */
@@ -405,9 +414,10 @@ export default function WorkstreamSidebar({
   const activeWorkstreams = workstreams.filter(
     (ws) => ws.status !== "archived" && ws.status !== "archiving",
   );
+  const visibleProjects = selectableRepositories(projects);
   // Repos with no active workstreams — a triage signal the old 240px list
   // could never show.
-  const dormantRepoCount = projects.filter(
+  const dormantRepoCount = visibleProjects.filter(
     (p) => !activeWorkstreams.some((ws) => ws.project_id === p.id),
   ).length;
   liveCountRef.current = activeWorkstreams.filter((ws) => loadedWsIds?.has(ws.id)).length;
@@ -1184,7 +1194,7 @@ export default function WorkstreamSidebar({
         >
           <FolderIcon style={{ width: 12, height: 12 }} />
           <span style={{ flex: 1, textAlign: "left" }}>
-            {projects.length} repo{projects.length === 1 ? "" : "s"}
+            {visibleProjects.length} repo{visibleProjects.length === 1 ? "" : "s"}
           </span>
           {dormantRepoCount > 0 && (
             <span data-testid="repo-dormant-count" style={{ color: "#45475a" }}>

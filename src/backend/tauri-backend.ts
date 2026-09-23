@@ -62,6 +62,7 @@ export class TauriBackend implements Backend {
     if (updates.name !== undefined) args.name = updates.name;
     if (updates.color !== undefined) args.color = updates.color;
     if (updates.copilot_command !== undefined) args.copilotCommand = updates.copilot_command;
+    if (updates.archived !== undefined) args.archived = updates.archived;
     await invoke("update_project", args);
   }
 

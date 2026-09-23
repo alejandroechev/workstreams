@@ -338,11 +338,27 @@ pub const COMMANDS: &[Command] = &[
     },
     Command {
         id: "repo.list",
-        log_params: &[],
-        summary: "List repositories (projects) you can create workstreams in",
+        log_params: &["filter"],
+        summary: "List repositories (params: filter=not_archived|non_dormant|all; default not_archived)",
         requires_identity: true,
         destructive: false,
         handler: repo_list,
+    },
+    Command {
+        id: "repo.archive",
+        log_params: &["repo"],
+        summary: "Archive a repository without deleting it (params: repo)",
+        requires_identity: true,
+        destructive: false,
+        handler: repo_archive,
+    },
+    Command {
+        id: "repo.unarchive",
+        log_params: &["repo"],
+        summary: "Restore an archived repository (params: repo)",
+        requires_identity: true,
+        destructive: false,
+        handler: repo_unarchive,
     },
     Command {
         id: "ws.get",
@@ -667,7 +683,8 @@ fn load_project(db: &Connection, repo: &str) -> Result<ProjectRow, AgentError> {
     // Accept an id or a name, because an agent reading repo.list output has
     // both in front of it and either is a reasonable thing to type.
     db.query_row(
-        "SELECT id, directory FROM projects WHERE id = ?1 OR name = ?1",
+        "SELECT id, directory FROM projects
+         WHERE (id = ?1 OR name = ?1) AND archived = 0",
         [repo],
         |row| {
             Ok(ProjectRow {
@@ -687,25 +704,110 @@ fn load_project(db: &Connection, repo: &str) -> Result<ProjectRow, AgentError> {
 
 fn repo_list(
     context: &CommandContext,
-    _params: &serde_json::Value,
+    params: &serde_json::Value,
 ) -> Result<CommandOutcome, AgentError> {
     context.caller()?;
-    let mut statement = context
-        .db
-        .prepare("SELECT id, name, directory FROM projects ORDER BY name")
-        .map_err(db_error)?;
+    let filter = optional_str(params, "filter").unwrap_or_else(|| "not_archived".to_string());
+    let where_clause = match filter.as_str() {
+        "not_archived" => "WHERE p.archived = 0",
+        "non_dormant" => {
+            "WHERE p.archived = 0
+             AND EXISTS (
+                 SELECT 1 FROM workstreams w
+                 WHERE w.project_id = p.id
+                   AND w.status NOT IN ('archived', 'archiving')
+             )"
+        }
+        "all" => "",
+        _ => {
+            return Err(AgentError::new(
+                "INVALID_FILTER",
+                format!("Unknown repository filter: {filter}"),
+                "Use filter=not_archived, filter=non_dormant, or filter=all.",
+            ))
+        }
+    };
+    let query = format!(
+        "SELECT p.id, p.name, p.directory, p.archived,
+                (
+                    SELECT COUNT(*) FROM workstreams w
+                    WHERE w.project_id = p.id
+                      AND w.status NOT IN ('archived', 'archiving')
+                )
+         FROM projects p
+         {where_clause}
+         ORDER BY p.name"
+    );
+    let mut statement = context.db.prepare(&query).map_err(db_error)?;
     let rows = statement
         .query_map([], |row| {
             Ok(serde_json::json!({
                 "id": row.get::<_, String>(0)?,
                 "name": row.get::<_, String>(1)?,
                 "directory": row.get::<_, String>(2)?,
+                "archived": row.get::<_, i64>(3)? != 0,
+                "activeWorkstreamCount": row.get::<_, i64>(4)?,
             }))
         })
         .map_err(db_error)?
         .collect::<Result<Vec<_>, _>>()
         .map_err(db_error)?;
     Ok(CommandOutcome::read(serde_json::json!({ "repos": rows })))
+}
+
+fn set_repo_archived(
+    context: &CommandContext,
+    params: &serde_json::Value,
+    archived: bool,
+) -> Result<CommandOutcome, AgentError> {
+    context.caller()?;
+    let repo = required_str(params, "repo")?;
+    let id = context
+        .db
+        .query_row(
+            "SELECT id FROM projects WHERE id = ?1 OR name = ?1",
+            [&repo],
+            |row| row.get::<_, String>(0),
+        )
+        .map_err(|_| {
+            AgentError::new(
+                "NO_SUCH_REPO",
+                format!("No repository matches {repo}"),
+                "Run repo.list to see non-archived repositories, or open Repos in the app to inspect archived ones.",
+            )
+        })?;
+    context
+        .db
+        .execute(
+            "UPDATE projects SET archived = ?1, updated_at = ?2 WHERE id = ?3",
+            rusqlite::params![archived, crate::now(), id],
+        )
+        .map_err(db_error)?;
+    Ok(CommandOutcome::changed(
+        serde_json::json!({
+            "id": id,
+            "archived": archived,
+        }),
+        StateChange::new(
+            "project",
+            &id,
+            if archived { "archived" } else { "unarchived" },
+        ),
+    ))
+}
+
+fn repo_archive(
+    context: &CommandContext,
+    params: &serde_json::Value,
+) -> Result<CommandOutcome, AgentError> {
+    set_repo_archived(context, params, true)
+}
+
+fn repo_unarchive(
+    context: &CommandContext,
+    params: &serde_json::Value,
+) -> Result<CommandOutcome, AgentError> {
+    set_repo_archived(context, params, false)
 }
 
 fn ws_get(
@@ -1758,6 +1860,118 @@ mod tests {
         .data;
         assert_eq!(listed["repos"][0]["id"], "repo-1");
         assert_eq!(listed["repos"][0]["directory"], "/code/waimea");
+    }
+
+    #[test]
+    fn archived_repos_are_hidden_from_the_default_agent_list() {
+        let db = memory_db();
+        seed_repo(&db, "active", "/code/active");
+        seed_repo(&db, "archived", "/code/archived");
+        db.execute("UPDATE projects SET archived = 1 WHERE id = 'archived'", [])
+            .unwrap();
+
+        let listed = call(
+            &db,
+            &agent("tile-1", "ws-own"),
+            "repo.list",
+            serde_json::Value::Null,
+        )
+        .expect("list")
+        .data;
+
+        assert_eq!(listed["repos"].as_array().unwrap().len(), 1);
+        assert_eq!(listed["repos"][0]["id"], "active");
+    }
+
+    #[test]
+    fn repo_list_supports_all_and_non_dormant_filters() {
+        let db = memory_db();
+        seed_repo(&db, "active", "/code/active");
+        seed_repo(&db, "dormant", "/code/dormant");
+        seed_repo(&db, "archived", "/code/archived");
+        db.execute("UPDATE projects SET archived = 1 WHERE id = 'archived'", [])
+            .unwrap();
+        db.execute(
+            "INSERT INTO workstreams
+             (id, name, status, project_id, created_at, updated_at)
+             VALUES ('ws-1', 'One', 'active', 'active', 't', 't')",
+            [],
+        )
+        .unwrap();
+        let caller = agent("tile-1", "ws-own");
+
+        let non_dormant = call(
+            &db,
+            &caller,
+            "repo.list",
+            serde_json::json!({ "filter": "non_dormant" }),
+        )
+        .expect("non-dormant")
+        .data;
+        assert_eq!(
+            non_dormant["repos"],
+            serde_json::json!([{
+                "id": "active",
+                "name": "active",
+                "directory": "/code/active",
+                "archived": false,
+                "activeWorkstreamCount": 1,
+            }])
+        );
+
+        let all = call(
+            &db,
+            &caller,
+            "repo.list",
+            serde_json::json!({ "filter": "all" }),
+        )
+        .expect("all")
+        .data;
+        assert_eq!(all["repos"].as_array().unwrap().len(), 3);
+        assert!(all["repos"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|repo| repo["id"] == "archived" && repo["archived"] == true));
+    }
+
+    #[test]
+    fn repo_archive_and_restore_preserve_the_repo() {
+        let db = memory_db();
+        seed_repo(&db, "repo-1", "/code/waimea");
+        let caller = agent("tile-1", "ws-own");
+
+        call(
+            &db,
+            &caller,
+            "repo.archive",
+            serde_json::json!({ "repo": "repo-1" }),
+        )
+        .expect("archive");
+        let archived: i64 = db
+            .query_row(
+                "SELECT archived FROM projects WHERE id = 'repo-1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(archived, 1);
+
+        call(
+            &db,
+            &caller,
+            "repo.unarchive",
+            serde_json::json!({ "repo": "repo-1" }),
+        )
+        .expect("restore");
+        let archived: i64 = db
+            .query_row(
+                "SELECT archived FROM projects WHERE id = 'repo-1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(archived, 0);
     }
 
     /// ws.list returns only id/name/status, which is why the agent that hit this

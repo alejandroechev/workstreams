@@ -3,6 +3,7 @@ import { useState, useEffect } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
 import type { Project } from "../domain/types";
+import { selectableRepositories } from "../domain/repository-visibility";
 
 export type RepoChoice = "import_worktree" | "base_repo" | "worktree";
 export type SessionChoice = "new" | "existing";
@@ -38,8 +39,9 @@ function slugify(s: string): string {
 }
 
 export default function WorkstreamCreateForm({ project: initialProject, projects, onSubmit, onCancel }: Props) {
+  const availableProjects = selectableRepositories(projects);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(initialProject?.id || null);
-  const project = selectedProjectId ? projects.find((p) => p.id === selectedProjectId) : undefined;
+  const project = selectedProjectId ? availableProjects.find((p) => p.id === selectedProjectId) : undefined;
   const hasProject = !!project;
   const [name, setName] = useState(hasProject ? project.name : "");
   const [repoChoice, setRepoChoice] = useState<RepoChoice>(hasProject ? "worktree" : "base_repo");
@@ -58,7 +60,7 @@ export default function WorkstreamCreateForm({ project: initialProject, projects
   // Project changed: reset defaults
   const handleProjectChange = (projectId: string | null) => {
     setSelectedProjectId(projectId);
-    const p = projectId ? projects.find((pr) => pr.id === projectId) : undefined;
+    const p = projectId ? availableProjects.find((pr) => pr.id === projectId) : undefined;
     if (p) {
       setDirectory(p.directory);
       if (!name || name === project?.name) setName(p.name);
@@ -184,7 +186,7 @@ export default function WorkstreamCreateForm({ project: initialProject, projects
           }}
         >
           <option value="">None</option>
-          {[...projects].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" })).map((p) => (
+          {[...availableProjects].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" })).map((p) => (
             <option key={p.id} value={p.id}>
               {p.name}
             </option>

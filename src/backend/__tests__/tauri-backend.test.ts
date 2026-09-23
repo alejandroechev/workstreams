@@ -224,6 +224,15 @@ describe("TauriBackend", () => {
     expect(invoke).toHaveBeenCalledWith("update_project", { id: "p1", copilotCommand: "" });
   });
 
+  it("updateProject forwards archived state", async () => {
+    invoke.mockResolvedValueOnce(undefined);
+    await backend.updateProject("p1", { archived: true });
+    expect(invoke).toHaveBeenCalledWith("update_project", {
+      id: "p1",
+      archived: true,
+    });
+  });
+
   it("updateProject does not forward fields that update_project can't write", async () => {
     invoke.mockResolvedValueOnce(undefined);
     await backend.updateProject("p1", { git_remote: "https://x" } as never);

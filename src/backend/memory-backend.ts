@@ -217,6 +217,7 @@ export class MemoryBackend implements Backend {
       git_remote: null,
       color: color || "#89b4fa",
       copilot_command: null,
+      archived: false,
       created_at: now(),
       updated_at: now(),
     };

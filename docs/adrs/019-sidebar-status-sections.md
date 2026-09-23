@@ -71,6 +71,24 @@ choosing (`features/workstream-status-ui/prototypes`).
    dialog was deleted rather than left orphaned; its preset colour palette moved
    into the manager so no capability was lost.
 
+### Repository archiving and list filters (2026-09-16)
+
+Repository cleanup is non-destructive. `projects.archived` hides a repository
+from the default manager list and from new-workstream repo pickers, but keeps
+the row, its metadata, and every existing workstream relationship intact.
+Archived repositories can be restored from the **All** filter.
+
+The Repo Manager has three views:
+
+- **Not archived** — the default administrative list.
+- **Non-dormant** — non-archived repositories with at least one non-archived
+  workstream.
+- **All** — includes archived repositories.
+
+Dormancy remains derived from workstreams rather than stored on the repository.
+The agent CLI exposes the same filters through `repo.list filter=...`, and
+`repo.archive` / `repo.unarchive` provide mutation parity.
+
 ## Consequences
 
 **Positive**
@@ -80,6 +98,8 @@ choosing (`features/workstream-status-ui/prototypes`).
 - Age/dormancy signals make the idle and repo piles triageable rather than just
   tidy.
 - Repo administration finally has room for path, counts and dormancy.
+- Old repositories can leave the daily list without losing their configuration
+  or severing existing workstreams.
 
 **Negative / risks**
 - A first-run user with **zero repos** now reaches Import/Create through the
@@ -98,7 +118,7 @@ choosing (`features/workstream-status-ui/prototypes`).
 - `src/workstream/__tests__/WorkstreamSidebar.sections.test.tsx` — sections,
   counts, persistence, and the repo footer.
 - `src/workstream/__tests__/RepoManagerModal.test.tsx` — listing, filtering,
-  dormancy, editing, first-run state, dismissal.
+  dormancy, archiving/restoration, editing, first-run state, dismissal.
 - `e2e/tests/sidebar-sections.spec.ts` — real-browser sections plus a
   **reachability** check for the footer control at 1440×900, 1280×720 and
   1180×700. The prototypes of this design shipped with green unit tests and

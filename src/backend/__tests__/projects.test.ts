@@ -19,6 +19,7 @@ describe("MemoryBackend projects", () => {
     expect(p.directory).toBe("C:\\code\\app");
     expect(p.color).toBe("#89b4fa");
     expect(p.git_remote).toBeNull();
+    expect(p.archived).toBe(false);
     expect(p.id).toBeTruthy();
 
     const list = await backend.listProjects();
@@ -65,6 +66,19 @@ describe("MemoryBackend projects", () => {
     await backend.deleteProject(p.id);
     const list = await backend.listProjects();
     expect(list).toHaveLength(0);
+  });
+
+  it("archives and restores a project without deleting it", async () => {
+    const p = await backend.createProject("Temp", "C:\\temp");
+    await backend.updateProject(p.id, { archived: true });
+    expect(await backend.listProjects()).toEqual([
+      expect.objectContaining({ id: p.id, archived: true }),
+    ]);
+
+    await backend.updateProject(p.id, { archived: false });
+    expect(await backend.listProjects()).toEqual([
+      expect.objectContaining({ id: p.id, archived: false }),
+    ]);
   });
 
   it("creates workstream linked to a project", async () => {

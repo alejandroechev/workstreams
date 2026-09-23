@@ -39,6 +39,21 @@ Add repos via two flows, both surfaced via a dropdown menu under the sidebar `+`
 
 ![Create New Repo dialog](assets/feature-repo-create.png)
 
+## Repo management
+
+Open **Repos** from the sidebar footer to search and edit repositories. Repos
+with no active workstreams are marked **dormant**.
+
+Archiving a repo is non-destructive: it remains stored, existing workstreams
+keep their repository link, and it can be restored later. Archived repos are
+hidden from the default list and from new-workstream repo pickers.
+
+The repo filter offers:
+
+- **Not archived** — the default.
+- **Non-dormant** — repos with at least one active workstream.
+- **All** — includes archived repos so they can be restored.
+
 ## Adaptive tiling
 
 Tiles auto-arrange:
@@ -462,7 +477,11 @@ app injects three variables into every session: `WORKSTREAMS_ACTIVE_WS`,
 ```sh
 workstreams agent ping                       # is the app reachable?
 workstreams agent call agent.whoami          # which workstream am I?
-workstreams agent call repo.list             # which repositories exist?
+workstreams agent call repo.list             # non-archived repositories
+workstreams agent call repo.list filter=all  # include archived repositories
+workstreams agent call repo.list filter=non_dormant
+workstreams agent call repo.archive repo=<id>
+workstreams agent call repo.unarchive repo=<id>
 workstreams agent call ws.list               # what may I act on?
 workstreams agent call ws.get id=ws-a1b2     # one workstream in full
 workstreams agent call ws.update id=ws-a1b2 name="Phase 2"

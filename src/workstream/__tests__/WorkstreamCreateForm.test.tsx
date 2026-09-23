@@ -10,7 +10,7 @@ describe("WorkstreamCreateForm", () => {
   afterEach(() => cleanup());
 
   const projects: Project[] = [
-    { id: "p1", name: "App", directory: "C:\\repo", git_remote: null, color: "#89b4fa", copilot_command: null, created_at: "", updated_at: "" },
+    { id: "p1", name: "App", directory: "C:\\repo", git_remote: null, color: "#89b4fa", copilot_command: null, archived: false, created_at: "", updated_at: "" },
   ];
 
   const getRadio = (testId: string) =>
@@ -65,5 +65,21 @@ describe("WorkstreamCreateForm", () => {
     render(<WorkstreamCreateForm projects={projects} onSubmit={vi.fn()} onCancel={vi.fn()} />);
     const btn = screen.getByTestId("ws-create-submit") as HTMLButtonElement;
     expect(btn.disabled).toBe(true);
+  });
+
+  it("does not offer archived repos for a new workstream", () => {
+    render(
+      <WorkstreamCreateForm
+        projects={[
+          ...projects,
+          { ...projects[0], id: "p2", name: "Archived", archived: true },
+        ]}
+        onSubmit={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("option", { name: "App" })).toBeTruthy();
+    expect(screen.queryByRole("option", { name: "Archived" })).toBeNull();
   });
 });

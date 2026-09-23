@@ -26,15 +26,17 @@ const mkWs = (id: string, over: Partial<Workstream> = {}): Workstream => ({
   ...over,
 });
 
-const mkProject = (id: string, name: string): Project => ({
+const mkProject = (id: string, name: string, over: Partial<Project> = {}): Project => ({
   id,
   name,
   directory: `/repos/${name}`,
   git_remote: null,
   color: "#89b4fa",
   copilot_command: null,
+  archived: false,
   created_at: now,
   updated_at: now,
+  ...over,
 });
 
 function renderSidebar(
@@ -184,6 +186,18 @@ describe("WorkstreamSidebar unified list", () => {
   it("counts repos with no active workstreams as dormant", () => {
     renderSidebar([mkWs("a", { project_id: null })], new Set(["a"]));
 
+    expect(screen.getByTestId("repo-dormant-count")).toHaveTextContent("1 dormant");
+  });
+
+  it("excludes archived repos from the footer count and dormant badge", () => {
+    renderSidebar([], new Set(), {
+      projects: [
+        mkProject("p1", "App"),
+        mkProject("p2", "Old", { archived: true }),
+      ],
+    });
+
+    expect(screen.getByTestId("repo-manager-button")).toHaveTextContent("1 repo");
     expect(screen.getByTestId("repo-dormant-count")).toHaveTextContent("1 dormant");
   });
 

@@ -416,6 +416,66 @@ fn work_lanes_are_assignable_through_the_cli() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
+/// Archives and restores a repository through the real CLI/socket/database path.
+#[test]
+fn repositories_archive_and_restore_through_the_cli() {
+    let dir = scratch_dir("repo-archive");
+    let path = socket_path_in(&dir, 9);
+    let db_path = dir.join("ws.db");
+    let db = workstreams_lib::db::open_db(&db_path).expect("db");
+    db.execute(
+        "INSERT INTO projects (id, name, directory, color, created_at, updated_at)
+         VALUES ('repo-1','Repo One','/code/one','#fff','2026-01-01','2026-01-01')",
+        [],
+    )
+    .expect("seed repo");
+    db.execute(
+        "INSERT INTO workstreams (id, name, status, created_at, updated_at)
+         VALUES ('ws-1','One','active','2026-01-01','2026-01-01')",
+        [],
+    )
+    .expect("seed workstream");
+    drop(db);
+
+    let identities = std::sync::Arc::new(IdentityRegistry::new());
+    let token = identities.issue("tile-1", "ws-1");
+    let server = AgentSocketServer::start(
+        path.clone(),
+        serve_with_db(std::sync::Arc::clone(&identities), db_path.clone()),
+    )
+    .expect("start server");
+
+    let run = |args: &[&str]| {
+        let output = cli()
+            .args(args)
+            .env(SOCKET_ENV_VAR, &path)
+            .env(TOKEN_ENV_VAR, &token)
+            .output()
+            .expect("run the CLI");
+        serde_json::from_str::<serde_json::Value>(&String::from_utf8_lossy(&output.stdout))
+            .expect("parse stdout")
+    };
+
+    let listed = run(&["agent", "call", "repo.list"]);
+    assert_eq!(listed["data"]["repos"][0]["id"], "repo-1");
+
+    let archived = run(&["agent", "call", "repo.archive", "repo=repo-1"]);
+    assert_eq!(archived["data"]["archived"], true, "{archived}");
+    let hidden = run(&["agent", "call", "repo.list"]);
+    assert!(hidden["data"]["repos"].as_array().unwrap().is_empty());
+    let all = run(&["agent", "call", "repo.list", "filter=all"]);
+    assert_eq!(all["data"]["repos"][0]["id"], "repo-1");
+    assert_eq!(all["data"]["repos"][0]["archived"], true);
+
+    let restored = run(&["agent", "call", "repo.unarchive", "repo=repo-1"]);
+    assert_eq!(restored["data"]["archived"], false, "{restored}");
+    let visible = run(&["agent", "call", "repo.list"]);
+    assert_eq!(visible["data"]["repos"][0]["id"], "repo-1");
+
+    drop(server);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 // ── Skill drift ────────────────────────────────────────────────────────────
 //
 // The skill lives in ~/.copilot/skills/ and the CLI ships in this binary, so

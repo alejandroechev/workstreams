@@ -61,6 +61,8 @@ pub struct Project {
     /// Optional per-project Copilot command override. NULL/None = inherit the
     /// global `app.copilot_command` setting. See ADR / grill notes.
     pub copilot_command: Option<String>,
+    /// Archived repositories remain stored and can be restored.
+    pub archived: bool,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -296,6 +298,7 @@ fn create_project(
         git_remote,
         color: c,
         copilot_command: None,
+        archived: false,
         created_at: ts.clone(),
         updated_at: ts,
     })
@@ -311,7 +314,7 @@ fn list_projects(state: State<'_, AppState>) -> Result<Vec<Project>, String> {
 /// `change_workstream_worktree`) do not duplicate the column list.
 fn read_projects(db: &Connection) -> Result<Vec<Project>, String> {
     let mut stmt = db
-        .prepare("SELECT id, name, directory, git_remote, color, copilot_command, created_at, updated_at FROM projects ORDER BY name")
+        .prepare("SELECT id, name, directory, git_remote, color, copilot_command, archived, created_at, updated_at FROM projects ORDER BY name")
         .map_err(|e| format!("DB error: {e}"))?;
     let rows = stmt
         .query_map([], |row| {
@@ -322,8 +325,9 @@ fn read_projects(db: &Connection) -> Result<Vec<Project>, String> {
                 git_remote: row.get(3)?,
                 color: row.get(4)?,
                 copilot_command: row.get(5)?,
-                created_at: row.get(6)?,
-                updated_at: row.get(7)?,
+                archived: row.get::<_, i64>(6)? != 0,
+                created_at: row.get(7)?,
+                updated_at: row.get(8)?,
             })
         })
         .map_err(|e| format!("DB error: {e}"))?;
@@ -338,6 +342,7 @@ fn update_project(
     name: Option<String>,
     color: Option<String>,
     copilot_command: Option<String>,
+    archived: Option<bool>,
 ) -> Result<(), String> {
     let db = state.db.lock().unwrap();
     let ts = now();
@@ -367,6 +372,13 @@ fn update_project(
         };
         db.execute(
             "UPDATE projects SET copilot_command = ?1, updated_at = ?2 WHERE id = ?3",
+            (value, &ts, &id),
+        )
+        .map_err(|e| format!("DB error: {e}"))?;
+    }
+    if let Some(value) = archived {
+        db.execute(
+            "UPDATE projects SET archived = ?1, updated_at = ?2 WHERE id = ?3",
             (value, &ts, &id),
         )
         .map_err(|e| format!("DB error: {e}"))?;
@@ -6109,6 +6121,7 @@ mod tests {
             git_remote: remote.map(|r| r.into()),
             color: "#89b4fa".into(),
             copilot_command: None,
+            archived: false,
             created_at: String::new(),
             updated_at: String::new(),
         }

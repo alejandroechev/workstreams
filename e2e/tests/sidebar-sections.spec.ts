@@ -128,6 +128,26 @@ test.describe("Repo Manager", () => {
     await expect(panel).toHaveCount(0);
   });
 
+  test("archives a repo, hides it by default, and restores it from All", async ({ page }) => {
+    await page.locator('[data-testid="repo-manager-button"]').click();
+    const panel = page.locator('[data-testid="repo-manager-panel"]');
+    const row = panel.locator('[data-testid^="repo-manager-row-"]').first();
+    await row.click();
+
+    await panel.locator('[data-testid="repo-manager-archive"]').click();
+    await expect(panel.locator('[data-testid^="repo-manager-row-"]')).toHaveCount(0);
+
+    await panel.locator('[data-testid="repo-manager-filter"]').selectOption("all");
+    const archivedRow = panel.locator('[data-testid^="repo-manager-row-"]').first();
+    await expect(archivedRow).toHaveAttribute("data-archived", "true");
+    await archivedRow.click();
+    await expect(panel.locator('[data-testid="repo-manager-archive"]')).toHaveText("Restore repo");
+
+    await panel.locator('[data-testid="repo-manager-archive"]').click();
+    await panel.locator('[data-testid="repo-manager-filter"]').selectOption("not_archived");
+    await expect(panel.locator('[data-testid^="repo-manager-row-"]').first()).toBeVisible();
+  });
+
   test("closes on Escape", async ({ page }) => {
     await page.locator('[data-testid="repo-manager-button"]').click();
     await expect(page.locator('[data-testid="repo-manager-panel"]')).toBeVisible();

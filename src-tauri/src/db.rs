@@ -98,6 +98,7 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
             git_remote TEXT,
             color TEXT NOT NULL DEFAULT '#89b4fa',
             copilot_command TEXT,
+            archived INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         );
@@ -325,6 +326,9 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
         "ALTER TABLE workstreams ADD COLUMN workstream_type TEXT NOT NULL DEFAULT 'standalone'",
         "ALTER TABLE workstreams ADD COLUMN worktree_branch TEXT",
         "ALTER TABLE projects ADD COLUMN copilot_command TEXT",
+        // Archived repositories remain available for existing workstreams and
+        // can be restored later; ordinary repo lists hide them by default.
+        "ALTER TABLE projects ADD COLUMN archived INTEGER NOT NULL DEFAULT 0",
         // Which Copilot session created this workstream, when one did. An agent
         // may act on its own workstream and ones it created, and that second
         // clause is unenforceable without a record of who created what. NULL
@@ -885,6 +889,32 @@ mod tests {
             )
             .unwrap();
         assert_eq!(cleared, None, "empty override clears back to inherit");
+    }
+
+    #[test]
+    fn projects_archive_state_defaults_to_visible_and_round_trips() {
+        let conn = open_in_memory();
+        conn.execute(
+            "INSERT INTO projects (id, name, directory, color, created_at, updated_at)
+             VALUES ('p1', 'Test', '/tmp', '#fff', 't1', 't1')",
+            [],
+        )
+        .unwrap();
+        let archived: i64 = conn
+            .query_row("SELECT archived FROM projects WHERE id = 'p1'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(archived, 0);
+
+        conn.execute("UPDATE projects SET archived = 1 WHERE id = 'p1'", [])
+            .unwrap();
+        let archived: i64 = conn
+            .query_row("SELECT archived FROM projects WHERE id = 'p1'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(archived, 1);
     }
 
     #[test]
