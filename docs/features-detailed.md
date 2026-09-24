@@ -54,6 +54,52 @@ The repo filter offers:
 - **Non-dormant** — repos with at least one active workstream.
 - **All** — includes archived repos so they can be restored.
 
+## PR inbox
+
+The **PR inbox** in the sidebar collects new direct Azure DevOps review assignments.
+In **Repos**, select an ADO repo and enable **Notify me of new PR review assignments**.
+The checkbox saves immediately, independently of **Save changes**. It is off by default.
+Install Azure CLI and run `az login` with the account that can access the repository.
+
+| Behavior | Rule |
+| --- | --- |
+| First successful check | Silently baseline existing ready-for-review assignments; no backlog flood |
+| Later checks | Notify when an active, non-draft PR first includes the signed-in user directly as reviewer, even if the PR is old |
+| Drafts | Wait until ready for review |
+| Teams/groups | Do not notify for group membership alone |
+| Restart | Catch up on still-active assignments using the saved baseline |
+| Read/unread | Persist locally; clicking the PR opens ADO and marks it read |
+| Reassignment | Do not notify twice for the same repo, account and PR |
+| Disable | Stop polling that repo; keep its history and baseline |
+| Archive repo | Keep notifications enabled until explicitly switched off |
+| Connection failure | Show the repo error and keep the last successful snapshot; auth failures include `az login` guidance |
+
+ADO polling starts with the application, not with the inbox or a workstream.
+A single native worker checks enabled repos every two minutes after the previous
+pass completes. Enabling a repo schedules its first check within two seconds when
+the worker is idle. The UI refreshes the local inbox every five seconds; those
+reads do not contact ADO. Closing Workstreams stops polling.
+
+**Limitation:** this is a snapshot-based inbox, not an ADO event feed. Assignments
+added and removed between checks, or PRs completed while Workstreams was closed,
+cannot be recovered. Existing notifications stay in history after a PR closes.
+Each account gets a separate baseline and history; a successful check with a
+different Azure CLI account switches the visible inbox to that account.
+
+On platforms with the local agent channel, the same controls are available from
+a Workstreams session:
+
+```sh
+workstreams agent call inbox.configure repo=<id-or-name> enabled=true
+workstreams agent call inbox.list
+workstreams agent call inbox.read id=<notification-id> read=true
+workstreams agent call inbox.read id=<notification-id> read=false
+workstreams agent call inbox.configure repo=<id-or-name> enabled=false
+```
+
+`inbox.list` includes notification URLs, read state, per-repo connection errors and
+last successful check timestamps. See [ADR 030](adrs/030-ado-pr-inbox.md).
+
 ## Adaptive tiling
 
 Tiles auto-arrange:

@@ -312,6 +312,36 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
         CREATE INDEX IF NOT EXISTS workstream_pull_requests_identity_idx
             ON workstream_pull_requests (identity);
 
+        CREATE TABLE IF NOT EXISTS pr_inbox_config (
+            project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+            enabled INTEGER NOT NULL DEFAULT 0,
+            revision INTEGER NOT NULL DEFAULT 0,
+            current_identity TEXT,
+            current_source TEXT,
+            last_checked TEXT,
+            error TEXT
+        );
+        CREATE TABLE IF NOT EXISTS pr_inbox_baselines (
+            project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            source TEXT NOT NULL,
+            identity TEXT NOT NULL,
+            PRIMARY KEY (project_id, source, identity)
+        );
+        CREATE TABLE IF NOT EXISTS pr_inbox_seen (
+            id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            source TEXT NOT NULL,
+            identity TEXT NOT NULL,
+            pr_id INTEGER NOT NULL,
+            title TEXT NOT NULL,
+            author TEXT NOT NULL,
+            url TEXT NOT NULL,
+            notified INTEGER NOT NULL,
+            is_read INTEGER NOT NULL DEFAULT 0,
+            discovered_at TEXT NOT NULL,
+            UNIQUE(project_id, source, identity, pr_id)
+        );
+
         CREATE INDEX IF NOT EXISTS command_log_created_idx ON command_log (created_at);
         CREATE INDEX IF NOT EXISTS command_log_command_idx ON command_log (command);
         CREATE INDEX IF NOT EXISTS task_events_task_idx ON task_events (task_id);

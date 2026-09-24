@@ -11,6 +11,8 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { fileBufferRegistry } from "./files/FileBufferRegistry";
 import WorkstreamSidebar from "./workstream/WorkstreamSidebar";
+import { usePrInbox } from "./workstream/usePrInbox";
+import { PrInboxModal } from "./workstream/PrInboxModal";
 import { TaskBoard } from "./tasks/TaskBoard";
 import { WorkstreamQuickNote } from "./tasks/WorkstreamQuickNote";
 import { InProgressTaskList } from "./tasks/InProgressTaskList";
@@ -67,6 +69,8 @@ setWorkbenchStoreForDispatcher(workbenchStore);
 
 export default function App() {
   const backend = useBackend();
+  const inbox = usePrInbox(backend);
+  const [showInbox, setShowInbox] = useState(false);
   const [projects, setProjects] = useState<Project[]>([]);
   const [workLanes, setWorkLanes] = useState<WorkLane[]>([]);
   const [workstreams, setWorkstreams] = useState<Workstream[]>([]);
@@ -2039,7 +2043,16 @@ export default function App() {
         overflow: "hidden",
       }}
     >
+      {showInbox && (
+        <PrInboxModal snapshot={inbox.snapshot} error={inbox.error} loading={inbox.loading}
+          onRead={inbox.setRead} onClose={() => setShowInbox(false)} />
+      )}
       <WorkstreamSidebar
+        onOpenInbox={() => setShowInbox(true)}
+        inboxUnread={inbox.snapshot.items.filter((item) => !item.is_read).length}
+        inboxRepos={inbox.loading ? undefined : inbox.snapshot.repos}
+        inboxError={inbox.error}
+        onConfigureInbox={inbox.configure}
         projects={projects}
         workstreams={workstreams}
         activeWsId={activeWsId}

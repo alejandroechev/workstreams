@@ -1,4 +1,5 @@
 import type { WorkLane } from "../domain/work-lanes";
+import { supportsPrInbox, type PrInboxItem, type PrInboxSnapshot } from "../domain/pr-inbox";
 import type { Project, Workstream, Tile, TileType, WorkstreamLayout, CopilotConfigItem } from "../domain/types";
 import type { SessionFileComment } from "../domain/file-comments";
 import type { Review, ReviewComment, ChangedFile, DiffSides } from "../domain/code-review";
@@ -76,6 +77,40 @@ function pathJoin(parent: string, child: string): string {
  * In-memory Backend implementation for tests and offline development.
  */
 export class MemoryBackend implements Backend {
+  private prInbox: PrInboxSnapshot = { items: [], repos: [] };
+
+  seedPrInboxItems(items: PrInboxItem[]): void {
+    this.prInbox.items = structuredClone(items);
+  }
+
+  async getPrInbox(): Promise<PrInboxSnapshot> {
+    return structuredClone({
+      items: this.prInbox.items.filter((item) => this.projects.has(item.project_id))
+        .map((item) => ({ ...item, repo_name: this.projects.get(item.project_id)!.name })),
+      repos: this.prInbox.repos.filter((repo) => this.projects.has(repo.project_id))
+        .map((repo) => ({ ...repo, repo_name: this.projects.get(repo.project_id)!.name })),
+    });
+  }
+
+  async configurePrInbox(projectId: string, enabled: boolean): Promise<void> {
+    const project = this.projects.get(projectId);
+    if (!project) throw new Error("Repository not found");
+    if (enabled && !supportsPrInbox(project.git_remote)) throw new Error("Select an Azure DevOps repository");
+    const status = this.prInbox.repos.find((repo) => repo.project_id === projectId);
+    if (status) {
+      status.enabled = enabled;
+      status.error = null;
+    } else {
+      this.prInbox.repos.push({ project_id: projectId, repo_name: project.name, enabled, last_checked: null, error: null });
+    }
+  }
+
+  async setPrInboxRead(id: string, isRead: boolean): Promise<void> {
+    const item = this.prInbox.items.find((item) => item.id === id && this.projects.has(item.project_id));
+    if (!item) throw new Error("Notification not found");
+    item.is_read = isRead;
+  }
+
   private projects = new Map<string, Project>();
   private workstreams = new Map<string, Workstream>();
   private tiles = new Map<string, Tile>();

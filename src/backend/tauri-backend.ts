@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { WorkLane } from "../domain/work-lanes";
+import type { PrInboxSnapshot } from "../domain/pr-inbox";
 import type { Project, Workstream, Tile, TileType, WorkstreamLayout, CopilotConfigItem } from "../domain/types";
 import type { SessionFileComment } from "../domain/file-comments";
 import type { Review, ReviewComment, ChangedFile, DiffSides } from "../domain/code-review";
@@ -44,6 +45,18 @@ import {
 } from "./loop-wire";
 
 export class TauriBackend implements Backend {
+  async getPrInbox(): Promise<PrInboxSnapshot> {
+    return invoke<PrInboxSnapshot>("get_pr_inbox");
+  }
+
+  async configurePrInbox(projectId: string, enabled: boolean): Promise<void> {
+    await invoke("configure_pr_inbox", { projectId, enabled });
+  }
+
+  async setPrInboxRead(id: string, isRead: boolean): Promise<void> {
+    await invoke("set_pr_inbox_read", { id, isRead });
+  }
+
   async listProjects(): Promise<Project[]> {
     return invoke<Project[]>("list_projects");
   }

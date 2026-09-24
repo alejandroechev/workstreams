@@ -2,6 +2,7 @@
 mod agent_cli;
 pub mod agent_protocol;
 pub mod agent_registry;
+pub mod pr_inbox;
 pub mod pull_requests;
 // Unix domain sockets only, for now. Windows needs named pipes, which have a
 // different permission model (a security descriptor at creation rather than a
@@ -129,6 +130,7 @@ pub struct WorkstreamLayout {
 
 struct AppState {
     db: Arc<Mutex<Connection>>,
+    _inbox_poller: pr_inbox::InboxPoller,
     pty: PtyManager,
     loop_manager: Arc<loops::LoopManager>,
     session_poller: Arc<SessionPoller>,
@@ -268,6 +270,28 @@ pub(crate) fn git_command() -> std::process::Command {
 }
 
 // ── Project Commands ──────────────────────────────────────────────────
+
+#[tauri::command]
+fn get_pr_inbox(state: State<'_, AppState>) -> Result<pr_inbox::InboxSnapshot, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    pr_inbox::snapshot(&db)
+}
+
+#[tauri::command]
+fn configure_pr_inbox(
+    state: State<'_, AppState>,
+    project_id: String,
+    enabled: bool,
+) -> Result<(), String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    pr_inbox::configure(&db, &project_id, enabled)
+}
+
+#[tauri::command]
+fn set_pr_inbox_read(state: State<'_, AppState>, id: String, is_read: bool) -> Result<(), String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    pr_inbox::set_read(&db, &id, is_read)
+}
 
 #[tauri::command]
 fn create_project(
@@ -5879,8 +5903,10 @@ pub fn run() {
     let fs_watcher = Arc::new(FsWatcher::new());
     let fs_watcher_clone = fs_watcher.clone();
 
+    let db = Arc::new(Mutex::new(conn));
     let app_state = AppState {
-        db: Arc::new(Mutex::new(conn)),
+        _inbox_poller: pr_inbox::InboxPoller::start(Arc::clone(&db)),
+        db,
         pty: PtyManager::new(),
         loop_manager: Arc::new(loops::LoopManager::new()),
         session_poller: poller.clone(),
@@ -5935,6 +5961,9 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            get_pr_inbox,
+            configure_pr_inbox,
+            set_pr_inbox_read,
             // Projects
             create_project,
             list_projects,

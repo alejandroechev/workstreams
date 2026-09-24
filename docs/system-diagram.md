@@ -6,6 +6,7 @@ graph TB
         subgraph Frontend["React Frontend (WebView2)"]
             App["App.tsx<br/>Root shell"]
             Sidebar["WorkstreamSidebar<br/>List/create/switch<br/>loaded set restored at startup (ADR 029)<br/>tiles mount lazily on first visit"]
+            PrInboxUI["PR inbox (ADR 030)<br/>repo opt-in + unread badge<br/>read/unread + open ADO<br/>local snapshot refresh every 5s"]
             TileGrid["TileGrid<br/>Adaptive tiling layout"]
             Terminal["TerminalTile<br/>xterm.js + FitAddon + SerializeAddon"]
             CodeView["CodeViewerTile<br/>Monaco Editor (read-only)"]
@@ -41,6 +42,7 @@ graph TB
             AgentRegistryRS["agent_registry.rs<br/>named commands + app-issued tokens<br/>scope via created_by_session<br/>command_log (actor = what app can prove)"]
             WorkLanesRS["work_lanes + lane_id<br/>named folders for related workstreams<br/>unique names, ON DELETE SET NULL"]
             PullRequestsRS["pull_requests.rs<br/>ADO PR URL parsing<br/>canonical identity for dedup<br/>link storage only, no network"]
+            PrInboxRS["pr_inbox.rs<br/>one app-lifetime polling worker, 120s<br/>az token + strict ADO HTTP targets<br/>complete-page commit + revision guard"]
             AgentCliRS["agent_cli.rs<br/>workstreams agent ...<br/>JSON stdout / human stderr / exit codes"]
             DbRS["db.rs<br/>SQLite schema + WAL"]
             FileSystemProvider["FileSystemProvider trait<br/>OS / InMemory impls"]
@@ -49,6 +51,7 @@ graph TB
 
     subgraph Storage["Persistence"]
         AppDB["workstreams.db<br/>(SQLite — workstreams, tiles, layouts, scrollback<br/>+ command_log audit/telemetry<br/>+ workstream_pull_requests N:M links<br/>+ work_lanes)"]
+        PrInboxDB["workstreams.db inbox state<br/>pr_inbox_config / baselines / seen<br/>account-scoped dedup + durable read state"]
         LoopDB["workstreams.db loop ledger<br/>specs / runs / tasks / verifications<br/>evaluations / human approvals / events"]
         LoopYAML["bound session-state/files/loops/*.loop.yaml<br/>loop definition authority"]
         CopilotDB["~/.copilot/session-store.db<br/>(read-only enrichment)"]
@@ -65,15 +68,24 @@ graph TB
         CopilotServer["Bundled compatible Copilot CLI<br/>server mode / JSON-RPC"]
         VerifierProcess["Verifier process group<br/>program + argument array"]
         GhCli["gh CLI<br/>(optional, for repo create)"]
+        AzureCli["az account get-access-token<br/>30s timeout; token only in memory"]
         FileSystem["Filesystem"]
     end
 
     subgraph Providers["External-integration boundary"]
         RemoteProv["RemoteRepoProvider trait<br/>GhCli / InMemory impls"]
         DiffRunner["DiffCommandRunner trait<br/>Real (git/gh) / Fake impls"]
+        AdoAPI["ADO REST API<br/>authenticated identity + active PR pages<br/>JsonTransport: HTTPS / in-memory test responses"]
     end
 
     App --> Sidebar
+    App --> PrInboxUI
+    Sidebar --> PrInboxUI
+    PrInboxUI -- "Tauri: configure / snapshot / read state" --> PrInboxRS
+    AgentRegistryRS -- "inbox.configure / list / read" --> PrInboxRS
+    PrInboxRS --> AzureCli
+    PrInboxRS -- "bounded HTTPS; redirects refused" --> AdoAPI
+    PrInboxRS --> PrInboxDB
     App --> TileGrid
     TileGrid --> Terminal
     TileGrid --> CodeView

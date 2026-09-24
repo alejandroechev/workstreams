@@ -321,6 +321,30 @@ pub struct Command {
 /// them would make them public API by accident.
 pub const COMMANDS: &[Command] = &[
     Command {
+        id: "inbox.list",
+        log_params: &[],
+        summary: "List PR notifications, read state and repo connection status",
+        requires_identity: true,
+        destructive: false,
+        handler: inbox_list,
+    },
+    Command {
+        id: "inbox.configure",
+        log_params: &["repo", "enabled"],
+        summary: "Enable or disable ADO reviewer notifications (params: repo, enabled=true|false)",
+        requires_identity: true,
+        destructive: false,
+        handler: inbox_configure,
+    },
+    Command {
+        id: "inbox.read",
+        log_params: &["id", "read"],
+        summary: "Mark a notification read or unread (params: id, read=true|false)",
+        requires_identity: true,
+        destructive: false,
+        handler: inbox_read,
+    },
+    Command {
         id: "agent.ping",
         log_params: &[],
         summary: "Check that the app is reachable",
@@ -458,6 +482,65 @@ fn optional_str(params: &serde_json::Value, key: &str) -> Option<String> {
         .and_then(|value| value.as_str())
         .filter(|value| !value.trim().is_empty())
         .map(str::to_string)
+}
+
+fn inbox_error(error: String) -> AgentError {
+    AgentError::new("INBOX_ERROR", error, "Use inbox.list to inspect connection status. Configure an ADO repo and run az login if authentication fails.")
+}
+
+fn inbox_bool(params: &serde_json::Value, key: &str) -> Result<bool, AgentError> {
+    match params.get(key) {
+        Some(serde_json::Value::Bool(value)) => Ok(*value),
+        Some(serde_json::Value::String(value)) if value == "true" => Ok(true),
+        Some(serde_json::Value::String(value)) if value == "false" => Ok(false),
+        _ => Err(AgentError::new(
+            "INVALID_PARAM",
+            format!("{key} must be true or false"),
+            format!("Pass {key}=true or {key}=false."),
+        )),
+    }
+}
+
+fn inbox_list(
+    context: &CommandContext,
+    _: &serde_json::Value,
+) -> Result<CommandOutcome, AgentError> {
+    let snapshot = crate::pr_inbox::snapshot(context.db).map_err(inbox_error)?;
+    Ok(CommandOutcome::read(serde_json::json!(snapshot)))
+}
+
+fn inbox_configure(
+    context: &CommandContext,
+    params: &serde_json::Value,
+) -> Result<CommandOutcome, AgentError> {
+    let repo = required_str(params, "repo")?;
+    let id: String = context
+        .db
+        .query_row(
+            "SELECT id FROM projects WHERE id=?1 OR name=?1 ORDER BY id=?1 DESC LIMIT 1",
+            [&repo],
+            |r| r.get(0),
+        )
+        .map_err(db_error)?;
+    let enabled = inbox_bool(params, "enabled")?;
+    crate::pr_inbox::configure(context.db, &id, enabled).map_err(inbox_error)?;
+    Ok(CommandOutcome::changed(
+        serde_json::json!({"project_id":id,"enabled":enabled}),
+        StateChange::new("pr_inbox", id, "configured"),
+    ))
+}
+
+fn inbox_read(
+    context: &CommandContext,
+    params: &serde_json::Value,
+) -> Result<CommandOutcome, AgentError> {
+    let id = required_str(params, "id")?;
+    let read = inbox_bool(params, "read")?;
+    crate::pr_inbox::set_read(context.db, &id, read).map_err(inbox_error)?;
+    Ok(CommandOutcome::changed(
+        serde_json::json!({"id":id,"is_read":read}),
+        StateChange::new("pr_inbox", id, "read"),
+    ))
 }
 
 fn ws_list(
@@ -1860,6 +1943,49 @@ mod tests {
         .data;
         assert_eq!(listed["repos"][0]["id"], "repo-1");
         assert_eq!(listed["repos"][0]["directory"], "/code/waimea");
+    }
+
+    #[test]
+    fn inbox_commands_configure_list_and_validate_read_updates() {
+        let db = memory_db();
+        seed_repo(&db, "repo-1", "/repo");
+        db.execute(
+            "UPDATE projects SET git_remote='https://dev.azure.com/org/project/_git/repo'",
+            [],
+        )
+        .unwrap();
+        let caller = agent("tile-1", "ws-own");
+        call(
+            &db,
+            &caller,
+            "inbox.configure",
+            serde_json::json!({"repo":"repo-1","enabled":true}),
+        )
+        .unwrap();
+        let listed = call(&db, &caller, "inbox.list", serde_json::Value::Null).unwrap();
+        assert_eq!(listed.data["repos"][0]["enabled"], true);
+        assert!(call(
+            &db,
+            &caller,
+            "inbox.read",
+            serde_json::json!({"id":"missing","read":true})
+        )
+        .is_err());
+        assert!(call(
+            &db,
+            &caller,
+            "inbox.configure",
+            serde_json::json!({"repo":"repo-1","enabled":"maybe"})
+        )
+        .is_err());
+        call(
+            &db,
+            &caller,
+            "inbox.configure",
+            serde_json::json!({"repo":"repo-1","enabled":false}),
+        )
+        .unwrap();
+        assert!(crate::pr_inbox::targets(&db).unwrap().is_empty());
     }
 
     #[test]

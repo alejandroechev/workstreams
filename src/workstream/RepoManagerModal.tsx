@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { XMarkIcon } from "@heroicons/react/24/outline";
 
 import type { Project, Workstream } from "../domain/types";
+import { supportsPrInbox, type PrInboxRepo } from "../domain/pr-inbox";
 import { PROJECT_PRESET_COLORS, isCustomProjectColor } from "../domain/colors";
 import {
   filterRepositories,
@@ -27,6 +28,9 @@ export interface RepoManagerModalProps {
   onImportProject: () => void;
   /** Global Copilot command, shown as the placeholder when a repo inherits it. */
   commandPlaceholder?: string;
+  inboxRepos?: PrInboxRepo[];
+  inboxError?: string | null;
+  onConfigureInbox?: (projectId: string, enabled: boolean) => Promise<void>;
 }
 
 /**
@@ -48,6 +52,9 @@ export function RepoManagerModal({
   onCreateProject,
   onImportProject,
   commandPlaceholder = "inherit global",
+  inboxRepos,
+  inboxError,
+  onConfigureInbox,
 }: RepoManagerModalProps) {
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<RepositoryFilter>("not_archived");
@@ -56,6 +63,8 @@ export function RepoManagerModal({
   const [name, setName] = useState(initialProject?.name ?? "");
   const [color, setColor] = useState(initialProject?.color ?? "#89b4fa");
   const [command, setCommand] = useState(initialProject?.copilot_command ?? "");
+  const [inboxSaving, setInboxSaving] = useState(false);
+  const [inboxSaveError, setInboxSaveError] = useState<{ projectId: string; message: string } | null>(null);
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -94,6 +103,7 @@ export function RepoManagerModal({
   }, [selectedId, visible]);
 
   const selectedProject = projects.find((project) => project.id === selectedId);
+  const inboxRepo = inboxRepos?.find((repo) => repo.project_id === selectedId);
 
   const select = (p: Project) => {
     setSelectedId(p.id);
@@ -343,6 +353,30 @@ export function RepoManagerModal({
                 >
                   {selectedProject.archived ? "Restore repo" : "Archive repo"}
                 </button>
+              )}
+              {selectedProject && onConfigureInbox && (
+                <div style={{ borderTop: "1px solid #313244", marginTop: 16, paddingTop: 12, fontSize: 11, color: "#a6adc8" }}>
+                  <label style={{ display: "flex", gap: 6, alignItems: "flex-start" }}>
+                    <input type="checkbox" checked={inboxRepo?.enabled ?? false}
+                      disabled={inboxSaving || !inboxRepos || !!inboxError || (!inboxRepo?.enabled && !supportsPrInbox(selectedProject.git_remote))}
+                      onChange={async (event) => {
+                        const projectId = selectedProject.id;
+                        setInboxSaving(true);
+                        setInboxSaveError(null);
+                        try { await onConfigureInbox(projectId, event.target.checked); }
+                        catch (error) { setInboxSaveError({ projectId, message: String(error instanceof Error ? error.message : error) }); }
+                        finally { setInboxSaving(false); }
+                      }} />
+                    Notify me of new PR review assignments
+                  </label>
+                  <p>ADO only, direct assignments only. Uses your Azure CLI account (<code>az login</code>). Saved immediately.</p>
+                  <p>The first check is silent. Drafts notify when ready. Archiving a repo does not turn notifications off.</p>
+                  {(inboxError || inboxRepo?.error || inboxSaveError?.projectId === selectedId) && (
+                    <p role="alert" style={{ color: "#f38ba8" }}>
+                      {inboxError ?? (inboxSaveError?.projectId === selectedId ? inboxSaveError.message : inboxRepo?.error)}
+                    </p>
+                  )}
+                </div>
               )}
             </div>
           </div>

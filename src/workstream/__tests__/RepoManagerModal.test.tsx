@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { render, screen, fireEvent, within } from "@testing-library/react";
+import { render, screen, fireEvent, within, waitFor } from "@testing-library/react";
 import { describe, it, expect, vi } from "vitest";
 
 import { RepoManagerModal } from "../RepoManagerModal";
@@ -47,6 +47,20 @@ const baseProps = {
 };
 
 describe("RepoManagerModal", () => {
+  it("offers opt-in for ADO only and reports configuration errors", async () => {
+    const configure = vi.fn().mockRejectedValue(new Error("Could not save notifications"));
+    render(<RepoManagerModal {...baseProps}
+      projects={[project("p1", "ADO", { git_remote: "https://dev.azure.com/o/p/_git/r" }), project("p2", "Local")]}
+      inboxRepos={[]} onConfigureInbox={configure} />);
+    const checkbox = screen.getByRole("checkbox", { name: "Notify me of new PR review assignments" });
+    expect(checkbox).not.toBeChecked();
+    fireEvent.click(checkbox);
+    await waitFor(() => expect(configure).toHaveBeenCalledWith("p1", true));
+    expect(await screen.findByText("Could not save notifications")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("repo-manager-row-p2"));
+    expect(screen.getByRole("checkbox")).toBeDisabled();
+  });
+
   it("lists every repo with its active workstream count", () => {
     render(<RepoManagerModal {...baseProps} />);
 

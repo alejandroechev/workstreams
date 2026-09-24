@@ -42,6 +42,7 @@ whatever replaced it — the history is the point.
 | [027](027-work-lanes.md) | Work lanes, one workstream list, and the removal of manual ordering | Accepted (amended by [029](029-persisted-loaded-workstreams.md)) |
 | [028](028-sunsetting-the-task-board.md) | Sunsetting the task board behind a sunset-class feature flag | Accepted |
 | [029](029-persisted-loaded-workstreams.md) | The loaded set survives a restart; the tiles mount lazily | Accepted |
+| [030](030-ado-pr-inbox.md) | ADO reviewer inbox with per-repo opt-in and app-lifetime polling | Accepted |
 
 ## Writing a new ADR
 

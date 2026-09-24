@@ -4,6 +4,11 @@ import { applyDemoSeed, type DemoMemorySeed } from "../demo-seed";
 import { MemoryBackend } from "../memory-backend";
 
 describe("applyDemoSeed", () => {
+  it("can seed an ADO clone URL before the app loads project configuration", async () => {
+    const backend = new MemoryBackend();
+    await applyDemoSeed(backend, { projects: [{ name: "ADO", directory: "/ado", git_remote: "https://dev.azure.com/o/p/_git/r" }] });
+    expect((await backend.listProjects())[0].git_remote).toBe("https://dev.azure.com/o/p/_git/r");
+  });
   it("creates synthetic projects, workstreams, tiles, layouts, and files", async () => {
     const backend = new MemoryBackend();
     const seed: DemoMemorySeed = {

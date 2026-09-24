@@ -477,6 +477,100 @@ fn repositories_archive_and_restore_through_the_cli() {
 }
 
 // ── Skill drift ────────────────────────────────────────────────────────────
+#[test]
+fn inbox_configuration_and_read_state_survive_cli_connections() {
+    use workstreams_lib::pr_inbox;
+    let dir = scratch_dir("inbox");
+    let path = socket_path_in(&dir, 10);
+    let db_path = dir.join("ws.db");
+    let mut db = workstreams_lib::db::open_db(&db_path).unwrap();
+    db.execute(
+        "INSERT INTO projects(id,name,directory,git_remote,color,created_at,updated_at)
+        VALUES ('repo','Repo','/repo','https://dev.azure.com/org/proj/_git/repo','#fff','t','t')",
+        [],
+    )
+    .unwrap();
+    let identities = std::sync::Arc::new(IdentityRegistry::new());
+    let token = identities.issue("tile", "ws");
+    let server =
+        AgentSocketServer::start(path.clone(), serve_with_db(identities, db_path.clone())).unwrap();
+    let run = |args: &[&str]| {
+        let output = cli()
+            .args(args)
+            .env(SOCKET_ENV_VAR, &path)
+            .env(TOKEN_ENV_VAR, &token)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()["data"].clone()
+    };
+    run(&[
+        "agent",
+        "call",
+        "inbox.configure",
+        "repo=repo",
+        "enabled=true",
+    ]);
+    let target = pr_inbox::targets(&db).unwrap().remove(0);
+    pr_inbox::apply_snapshot(&mut db, &target, "me", &[]).unwrap();
+    pr_inbox::apply_snapshot(
+        &mut db,
+        &target,
+        "me",
+        &[pr_inbox::ReviewPr {
+            id: 42,
+            title: "Review".into(),
+            author: "Author".into(),
+        }],
+    )
+    .unwrap();
+    let listed = run(&["agent", "call", "inbox.list"]);
+    assert_eq!(listed["items"][0]["pr_id"], 42);
+    let id = format!("id={}", listed["items"][0]["id"].as_str().unwrap());
+    run(&["agent", "call", "inbox.read", &id, "read=true"]);
+    drop(db);
+    let mut db = workstreams_lib::db::open_db(&db_path).unwrap();
+    assert!(pr_inbox::snapshot(&db).unwrap().items[0].is_read);
+    pr_inbox::apply_snapshot(
+        &mut db,
+        &target,
+        "me",
+        &[
+            pr_inbox::ReviewPr {
+                id: 42,
+                title: "Review".into(),
+                author: "Author".into(),
+            },
+            pr_inbox::ReviewPr {
+                id: 43,
+                title: "Since restart".into(),
+                author: "Author".into(),
+            },
+        ],
+    )
+    .unwrap();
+    assert_eq!(pr_inbox::snapshot(&db).unwrap().items.len(), 2);
+    run(&["agent", "call", "inbox.read", &id, "read=false"]);
+    let listed = run(&["agent", "call", "inbox.list"]);
+    assert_eq!(listed["items"].as_array().unwrap().len(), 2);
+    assert_eq!(listed["items"][1]["is_read"], false);
+    run(&[
+        "agent",
+        "call",
+        "inbox.configure",
+        "repo=repo",
+        "enabled=false",
+    ]);
+    assert!(pr_inbox::targets(&db).unwrap().is_empty());
+    drop(db);
+    drop(server);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
 //
 // The skill lives in ~/.copilot/skills/ and the CLI ships in this binary, so
 // they version separately and will drift. A renamed flag or a retired command

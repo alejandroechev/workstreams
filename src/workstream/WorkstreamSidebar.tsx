@@ -2,6 +2,7 @@
 import { useState, useRef, useEffect } from "react";
 import { listen } from "@tauri-apps/api/event";
 import type { Project, Workstream } from "../domain/types";
+import type { PrInboxRepo } from "../domain/pr-inbox";
 import {
   groupByLane,
   laneKey,
@@ -36,6 +37,7 @@ import {
   HandRaisedIcon,
   MagnifyingGlassIcon,
   XMarkIcon,
+  InboxIcon,
 } from "@heroicons/react/20/solid";
 import { getAppSettings } from "../domain/app-settings";
 import { selectableRepositories } from "../domain/repository-visibility";
@@ -65,6 +67,11 @@ interface Props {
   /** Opens the global task board. Optional so the sidebar stays renderable
    * without a backend (the board is owned by App, which has one). */
   onOpenTaskBoard?: () => void;
+  onOpenInbox?: () => void;
+  inboxUnread?: number;
+  inboxRepos?: PrInboxRepo[];
+  inboxError?: string | null;
+  onConfigureInbox?: (projectId: string, enabled: boolean) => Promise<void>;
   /**
    * Always-on list of in-progress tasks, rendered under the Tasks button.
    * Passed in as a node so the sidebar keeps no backend dependency.
@@ -188,6 +195,11 @@ export default function WorkstreamSidebar({
   searchFocusToken,
   onSelectWorkstream,
   onOpenTaskBoard,
+  onOpenInbox,
+  inboxUnread = 0,
+  inboxRepos,
+  inboxError,
+  onConfigureInbox,
   inProgressTasks,
   onCreateTaskForWorkstream,
   onGoToTaskForWorkstream,
@@ -1171,6 +1183,16 @@ export default function WorkstreamSidebar({
           filtered. It is now one line that opens a manager with room to show
           the path, active-workstream counts and dormant repos. */}
       <div style={{ borderTop: "1px solid #313244", padding: "4px 6px", flexShrink: 0 }}>
+        {onOpenInbox && (
+          <button data-testid="pr-inbox-button" onClick={onOpenInbox} style={footerButtonStyle}>
+            <InboxIcon style={{ width: 14, height: 14 }} />
+            <span style={{ flex: 1, textAlign: "left" }}>PR inbox</span>
+            {inboxUnread > 0 && <span data-testid="pr-inbox-unread">{inboxUnread}</span>}
+            {(inboxError || inboxRepos?.some((repo) => repo.enabled && repo.error)) && (
+              <ExclamationTriangleIcon aria-label="Inbox connection error" style={{ width: 14, height: 14, color: "#f9e2af" }} />
+            )}
+          </button>
+        )}
         <button
           data-testid="repo-manager-button"
           onClick={() => setShowRepoManager(true)}
@@ -1213,6 +1235,9 @@ export default function WorkstreamSidebar({
           onCreateProject={() => { setShowRepoManager(false); onCreateProject(); }}
           onImportProject={() => { setShowRepoManager(false); onImportProject(); }}
           commandPlaceholder={getAppSettings().copilotCommand}
+          inboxRepos={inboxRepos}
+          inboxError={inboxError}
+          onConfigureInbox={onConfigureInbox}
         />
       )}
 

@@ -2,7 +2,7 @@ import type { TileType } from "../domain/types";
 import { MemoryBackend } from "./memory-backend";
 
 export interface DemoMemorySeed {
-  projects?: Array<{ name: string; directory: string; color?: string }>;
+  projects?: Array<{ name: string; directory: string; color?: string; git_remote?: string }>;
   workstreams?: Array<{
     name: string;
     directory: string;
@@ -38,6 +38,7 @@ export async function applyDemoSeed(
       item.color,
     );
     projects.set(item.name, project.id);
+    if (item.git_remote) await backend.updateProject(project.id, { git_remote: item.git_remote });
   }
 
   for (const item of seed.workstreams ?? []) {

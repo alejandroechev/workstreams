@@ -132,7 +132,7 @@ pub fn parse_pull_request_url(url: &str) -> Result<PullRequestRef, String> {
 }
 
 /// Decodes `%XX` escapes. Hand-rolled to avoid a dependency for one function.
-fn percent_decode(segment: &str) -> String {
+pub(crate) fn percent_decode(segment: &str) -> String {
     let bytes = segment.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut index = 0;
