@@ -73,6 +73,7 @@ Install Azure CLI and run `az login` with the account that can access the reposi
 | Disable | Stop polling that repo; keep its history and baseline |
 | Archive repo | Keep notifications enabled until explicitly switched off |
 | Connection failure | Show the repo error and keep the last successful snapshot; auth failures include `az login` guidance |
+| Passive signal | Sidebar footer shows an accented unread pill (capped at `99+`) and brightens the row, so no click is needed to notice a new assignment |
 
 ADO polling starts with the application, not with the inbox or a workstream.
 A single native worker checks enabled repos every two minutes after the previous

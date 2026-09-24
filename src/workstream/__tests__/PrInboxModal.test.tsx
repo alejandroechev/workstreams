@@ -52,4 +52,43 @@ describe("PR inbox", () => {
     fireEvent.click(screen.getByRole("button", { name: "Close inbox" }));
     expect(props.onClose).toHaveBeenCalled();
   });
+
+  /**
+   * The inbox is reached from the same footer as the repo manager, so it should
+   * not look like it came from a different app: same backdrop, same panel
+   * chrome, same header shape, same dismissal affordances.
+   */
+  describe("chrome consistent with the repo manager", () => {
+    it("uses the shared backdrop and panel shell", () => {
+      render(<PrInboxModal snapshot={snapshot} error={null} loading={false} onRead={vi.fn()} onClose={vi.fn()} />);
+      expect(screen.getByTestId("pr-inbox-backdrop")).toHaveStyle({ background: "rgba(0,0,0,0.5)" });
+      expect(screen.getByTestId("pr-inbox-panel")).toHaveStyle({
+        background: "#1e1e2e",
+        border: "1px solid #313244",
+      });
+    });
+
+    it("closes on backdrop click but not on a click inside the panel", () => {
+      const onClose = vi.fn();
+      render(<PrInboxModal snapshot={snapshot} error={null} loading={false} onRead={vi.fn()} onClose={onClose} />);
+      fireEvent.click(screen.getByTestId("pr-inbox-panel"));
+      expect(onClose).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByTestId("pr-inbox-backdrop"));
+      expect(onClose).toHaveBeenCalledTimes(1);
+    });
+
+    it("summarises unread and total counts in the header subtitle", () => {
+      render(<PrInboxModal snapshot={snapshot} error={null} loading={false} onRead={vi.fn()} onClose={vi.fn()} />);
+      expect(screen.getByTestId("pr-inbox-summary")).toHaveTextContent("1 unread of 1 assignment");
+    });
+
+    it("pluralises the subtitle and counts only unread items", () => {
+      const two = {
+        ...snapshot,
+        items: [snapshot.items[0], { ...snapshot.items[0], id: "n2", pr_id: 43, is_read: true }],
+      };
+      render(<PrInboxModal snapshot={two} error={null} loading={false} onRead={vi.fn()} onClose={vi.fn()} />);
+      expect(screen.getByTestId("pr-inbox-summary")).toHaveTextContent("1 unread of 2 assignments");
+    });
+  });
 });

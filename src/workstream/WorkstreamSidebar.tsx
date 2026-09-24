@@ -1184,10 +1184,39 @@ export default function WorkstreamSidebar({
           the path, active-workstream counts and dormant repos. */}
       <div style={{ borderTop: "1px solid #313244", padding: "4px 6px", flexShrink: 0 }}>
         {onOpenInbox && (
-          <button data-testid="pr-inbox-button" onClick={onOpenInbox} style={footerButtonStyle}>
-            <InboxIcon style={{ width: 14, height: 14 }} />
+          <button
+            data-testid="pr-inbox-button"
+            onClick={onOpenInbox}
+            title={inboxUnread > 0 ? `${inboxUnread} unread review assignment${inboxUnread === 1 ? "" : "s"}` : "Open the PR inbox"}
+            style={{
+              ...footerButtonStyle,
+              color: inboxUnread > 0 ? "#cdd6f4" : "#6c7086",
+              fontWeight: inboxUnread > 0 ? 600 : 400,
+            }}
+            onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "#1e1e2e"; }}
+            onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "transparent"; }}
+          >
+            <InboxIcon style={{ width: 14, height: 14, color: inboxUnread > 0 ? "#f38ba8" : "inherit" }} />
             <span style={{ flex: 1, textAlign: "left" }}>PR inbox</span>
-            {inboxUnread > 0 && <span data-testid="pr-inbox-unread">{inboxUnread}</span>}
+            {inboxUnread > 0 && (
+              <span
+                data-testid="pr-inbox-unread"
+                aria-label={`${inboxUnread} unread review assignment${inboxUnread === 1 ? "" : "s"}`}
+                style={{
+                  background: "#f38ba8",
+                  color: "#11111b",
+                  borderRadius: 999,
+                  fontSize: 9,
+                  fontWeight: 700,
+                  lineHeight: "14px",
+                  minWidth: 14,
+                  padding: "0 5px",
+                  textAlign: "center",
+                }}
+              >
+                {inboxUnread > 99 ? "99+" : inboxUnread}
+              </span>
+            )}
             {(inboxError || inboxRepos?.some((repo) => repo.enabled && repo.error)) && (
               <ExclamationTriangleIcon aria-label="Inbox connection error" style={{ width: 14, height: 14, color: "#f9e2af" }} />
             )}

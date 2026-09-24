@@ -11,6 +11,12 @@ interface Props {
   onClose: () => void;
 }
 
+/**
+ * Chrome deliberately mirrors `RepoManagerModal`: same backdrop, panel border,
+ * header/subtitle pair, toolbar note and 12/11px type scale. The inbox is
+ * reached from the same sidebar footer, so a different shell read as a
+ * different app.
+ */
 export function PrInboxModal({ snapshot, loading, error, onRead, onClose }: Props) {
   const [actionError, setActionError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -30,54 +36,185 @@ export function PrInboxModal({ snapshot, loading, error, onRead, onClose }: Prop
     finally { setBusy(false); }
   };
 
+  const total = snapshot.items.length;
+  const unread = snapshot.items.filter((item) => !item.is_read).length;
+
   return (
-    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.55)", zIndex: 2000, display: "flex", alignItems: "center", justifyContent: "center" }}>
-      <section role="dialog" aria-modal="true" aria-label="PR inbox" onClick={(event) => event.stopPropagation()}
-        style={{ width: "min(820px,92vw)", maxHeight: "82vh", overflowY: "auto", background: "#1e1e2e", color: "#cdd6f4", border: "1px solid #45475a", borderRadius: 8, padding: 20 }}>
-        <header style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <h2 style={{ fontSize: 18, margin: 0 }}>PR inbox</h2>
-          <button aria-label="Close inbox" onClick={onClose} style={buttonStyle}><XMarkIcon width={18} height={18} /></button>
-        </header>
-        <p style={{ color: "#a6adc8", fontSize: 12 }}>
-          Direct ADO review assignments. Enable notifications in Repos. Checks every two minutes while Workstreams is open.
-          The first check is silent; drafts appear only when ready for review.
-        </p>
-        {loading && <p role="status">Loading inbox...</p>}
-        {(error || actionError) && <p role="alert" style={{ color: "#f38ba8" }}>{actionError ?? error}</p>}
-        {!loading && !error && snapshot.items.length === 0 && <p>No review notifications yet.</p>}
-        {snapshot.repos.map((repo) => (
-          <section key={repo.project_id} style={{ borderTop: "1px solid #313244", padding: "12px 0" }}>
-            <h3 style={{ margin: "0 0 6px", fontSize: 13 }}>{repo.repo_name}</h3>
-            <div style={{ color: "#a6adc8", fontSize: 11 }}>
-              {!repo.enabled ? "Notifications off" : repo.last_checked ? `Last checked: ${new Date(repo.last_checked).toLocaleString()}` : "Waiting for first successful check"}
+    <div
+      data-testid="pr-inbox-backdrop"
+      onClick={onClose}
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(0,0,0,0.5)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: 2000,
+      }}
+    >
+      <section
+        role="dialog"
+        aria-modal="true"
+        aria-label="PR inbox"
+        data-testid="pr-inbox-panel"
+        onClick={(event) => event.stopPropagation()}
+        style={{
+          width: "min(820px, 92vw)",
+          maxHeight: "82vh",
+          display: "flex",
+          flexDirection: "column",
+          background: "#1e1e2e",
+          color: "#cdd6f4",
+          border: "1px solid #313244",
+          borderRadius: 8,
+          overflow: "hidden",
+        }}
+      >
+        <div style={headerStyle}>
+          <div>
+            <div style={{ color: "#cdd6f4", fontWeight: 600, fontSize: 13 }}>PR inbox</div>
+            <div data-testid="pr-inbox-summary" style={{ color: "#6c7086", fontSize: 11 }}>
+              {unread} unread of {total} assignment{total === 1 ? "" : "s"}
             </div>
-            {repo.enabled && repo.error && <p role="alert" style={{ color: "#f38ba8", fontSize: 12 }}>{repo.error}</p>}
-            {snapshot.items.filter((item) => item.project_id === repo.project_id).map((item) => (
-              <article key={item.id} data-testid={`pr-notification-${item.id}`} data-read={item.is_read}
-                style={{ display: "flex", gap: 12, alignItems: "center", borderLeft: `3px solid ${item.is_read ? "#45475a" : "#89b4fa"}`, padding: "10px 12px", marginTop: 8, background: "#181825" }}>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <button disabled={busy} onClick={() => void act(async () => { await openUrl(item.url); await onRead(item.id, true); })}
-                    style={{ ...buttonStyle, border: "none", padding: 0, textAlign: "left", color: "#89b4fa", fontWeight: item.is_read ? 400 : 600, overflowWrap: "anywhere" }}>
-                    #{item.pr_id} {item.title}
-                    <ArrowTopRightOnSquareIcon aria-hidden="true" width={13} height={13} style={{ display: "inline", marginLeft: 6 }} />
-                  </button>
-                  <div style={{ color: "#a6adc8", fontSize: 11, marginTop: 4 }}>
-                    {item.author} | {new Date(item.discovered_at).toLocaleString()} | {item.is_read ? "Read" : "Unread"}
+          </div>
+          <button aria-label="Close inbox" data-testid="pr-inbox-close" onClick={onClose} title="Close" style={iconButtonStyle}>
+            <XMarkIcon style={{ width: 16, height: 16 }} />
+          </button>
+        </div>
+
+        <div style={noteStyle}>
+          Direct ADO review assignments. Enable notifications in Repos. Checks every two minutes while
+          Workstreams is open. The first check is silent; drafts appear only when ready for review.
+        </div>
+
+        <div style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
+          {loading && <p role="status" style={emptyStyle}>Loading inbox...</p>}
+          {(error || actionError) && (
+            <p role="alert" style={{ ...emptyStyle, color: "#f38ba8", textAlign: "left" }}>{actionError ?? error}</p>
+          )}
+          {!loading && !error && total === 0 && <p style={emptyStyle}>No review notifications yet.</p>}
+          {snapshot.repos.map((repo) => (
+            <section key={repo.project_id} style={{ borderTop: "1px solid #313244", padding: "10px 12px" }}>
+              <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+                <h3 style={{ margin: 0, fontSize: 12, fontWeight: 600, color: "#cdd6f4" }}>{repo.repo_name}</h3>
+                <span style={{ color: "#6c7086", fontSize: 11 }}>
+                  {!repo.enabled
+                    ? "Notifications off"
+                    : repo.last_checked
+                      ? `Last checked ${new Date(repo.last_checked).toLocaleString()}`
+                      : "Waiting for first successful check"}
+                </span>
+              </div>
+              {repo.enabled && repo.error && (
+                <p role="alert" style={{ color: "#f38ba8", fontSize: 11, margin: "6px 0 0" }}>{repo.error}</p>
+              )}
+              {snapshot.items.filter((item) => item.project_id === repo.project_id).map((item) => (
+                <article
+                  key={item.id}
+                  data-testid={`pr-notification-${item.id}`}
+                  data-read={item.is_read}
+                  style={{
+                    display: "flex",
+                    gap: 12,
+                    alignItems: "center",
+                    border: "1px solid #313244",
+                    borderLeft: `2px solid ${item.is_read ? "#45475a" : "#f38ba8"}`,
+                    borderRadius: 4,
+                    padding: "8px 10px",
+                    marginTop: 8,
+                    background: "#181825",
+                  }}
+                >
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <button
+                      disabled={busy}
+                      onClick={() => void act(async () => { await openUrl(item.url); await onRead(item.id, true); })}
+                      style={{
+                        background: "none",
+                        border: "none",
+                        padding: 0,
+                        textAlign: "left",
+                        cursor: "pointer",
+                        fontFamily: "inherit",
+                        fontSize: 12,
+                        color: "#89b4fa",
+                        fontWeight: item.is_read ? 400 : 600,
+                        overflowWrap: "anywhere",
+                      }}
+                    >
+                      #{item.pr_id} {item.title}
+                      <ArrowTopRightOnSquareIcon aria-hidden="true" width={12} height={12} style={{ display: "inline", marginLeft: 6 }} />
+                    </button>
+                    <div style={{ color: "#6c7086", fontSize: 11, marginTop: 3 }}>
+                      {item.author} · {new Date(item.discovered_at).toLocaleString()}
+                    </div>
                   </div>
-                </div>
-                <button disabled={busy} onClick={() => void act(() => onRead(item.id, !item.is_read))} style={buttonStyle}>
-                  {item.is_read ? "Mark unread" : "Mark read"}
-                </button>
-              </article>
-            ))}
-          </section>
-        ))}
+                  {!item.is_read && <span style={unreadPillStyle}>Unread</span>}
+                  <button disabled={busy} onClick={() => void act(() => onRead(item.id, !item.is_read))} style={buttonStyle}>
+                    {item.is_read ? "Mark unread" : "Mark read"}
+                  </button>
+                </article>
+              ))}
+            </section>
+          ))}
+        </div>
       </section>
     </div>
   );
 }
 
+const headerStyle: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  padding: "10px 12px",
+  borderBottom: "1px solid #313244",
+};
+
+const noteStyle: React.CSSProperties = {
+  padding: "8px 12px",
+  borderBottom: "1px solid #313244",
+  color: "#a6adc8",
+  fontSize: 11,
+  lineHeight: 1.5,
+};
+
+const emptyStyle: React.CSSProperties = {
+  padding: 16,
+  margin: 0,
+  color: "#a6adc8",
+  fontSize: 12,
+  textAlign: "center",
+};
+
 const buttonStyle: React.CSSProperties = {
-  background: "transparent", border: "1px solid #45475a", color: "#cdd6f4",
-  borderRadius: 4, cursor: "pointer", padding: "5px 9px", fontSize: 12,
+  padding: "4px 10px",
+  fontSize: 11,
+  color: "#cdd6f4",
+  background: "#181825",
+  border: "1px solid #45475a",
+  borderRadius: 4,
+  cursor: "pointer",
+  whiteSpace: "nowrap",
+  fontFamily: "inherit",
+};
+
+const iconButtonStyle: React.CSSProperties = {
+  background: "none",
+  border: "none",
+  color: "#6c7086",
+  cursor: "pointer",
+  padding: 2,
+  display: "flex",
+};
+
+const unreadPillStyle: React.CSSProperties = {
+  background: "#f38ba8",
+  color: "#11111b",
+  borderRadius: 999,
+  fontSize: 9,
+  fontWeight: 700,
+  padding: "1px 6px",
+  whiteSpace: "nowrap",
 };
