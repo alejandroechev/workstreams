@@ -18,10 +18,10 @@ describe("TauriBackend", () => {
   it("maps inbox configuration, listing and read state", async () => {
     invoke.mockResolvedValue({ items: [], repos: [] });
     expect(await backend.getPrInbox()).toEqual({ items: [], repos: [] });
-    await backend.configurePrInbox("repo", true);
+    await backend.configurePrInbox("repo", "both");
     await backend.setPrInboxRead("notification", false);
     expect(invoke).toHaveBeenNthCalledWith(1, "get_pr_inbox");
-    expect(invoke).toHaveBeenNthCalledWith(2, "configure_pr_inbox", { projectId: "repo", enabled: true });
+    expect(invoke).toHaveBeenNthCalledWith(2, "configure_pr_inbox", { projectId: "repo", mode: "both" });
     expect(invoke).toHaveBeenNthCalledWith(3, "set_pr_inbox_read", { id: "notification", isRead: false });
   });
 

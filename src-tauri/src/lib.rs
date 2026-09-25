@@ -281,10 +281,11 @@ fn get_pr_inbox(state: State<'_, AppState>) -> Result<pr_inbox::InboxSnapshot, S
 fn configure_pr_inbox(
     state: State<'_, AppState>,
     project_id: String,
-    enabled: bool,
+    mode: String,
 ) -> Result<(), String> {
+    let mode = pr_inbox::WatchMode::parse(&mode)?;
     let db = state.db.lock().map_err(|e| e.to_string())?;
-    pr_inbox::configure(&db, &project_id, enabled)
+    pr_inbox::configure(&db, &project_id, mode)
 }
 
 #[tauri::command]

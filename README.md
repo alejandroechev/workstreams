@@ -63,7 +63,7 @@ instead of buried behind tabs.
 - **Agents that can drive the app** — a session can create and update its own
   workstreams through a local CLI, so the agent does not stop at the edge of the
   worktree. It acts only on what it owns, and asks before destroying anything.
-- **ADO review inbox** — opt in per repo to see new direct PR review assignments.
+- **ADO PR inbox** — opt in per repo to follow reviews assigned to you, PRs you opened, or both, with per-PR comment, vote, build-gate and closure events.
   Uses your `az login` account, checks every two minutes while the app is open,
   and keeps read/unread state across restarts. The first check is silent. An
   unread pill in the sidebar footer flags new assignments without opening it.

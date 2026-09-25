@@ -17,50 +17,63 @@ test.beforeEach(async ({ page }) => {
 test("repo opt-in, background arrival, read/unread, browser-open action and disable", async ({ page }) => {
   test.setTimeout(45_000);
   await page.getByTestId("repo-manager-button").click();
-  const option = page.getByRole("checkbox", { name: "Notify me of new PR review assignments" });
-  await expect(option).not.toBeChecked();
-  await option.check();
-  await expect(option).toBeChecked();
+  const option = page.getByTestId("repo-inbox-mode");
+  await expect(option).toHaveValue("off");
+  await option.selectOption("both");
+  await expect(option).toHaveValue("both");
   await page.getByTestId("repo-manager-close").click();
 
   // Arrives while the inbox is closed and there are no loaded workstreams.
   await page.evaluate(async () => {
     const backend = (window as unknown as { __WS_BACKEND__: MemoryBackend }).__WS_BACKEND__;
     const repo = (await backend.listProjects()).find((p) => p.name === "ADO repo")!;
-    backend.seedPrInboxItems([{
-      id: "review-42", project_id: repo.id, repo_name: repo.name, pr_id: 42,
-      title: "Review the race fix", author: "Dev", is_read: false,
-      url: "https://dev.azure.com/o/p/_git/r/pullrequest/42", discovered_at: new Date().toISOString(),
-    }]);
+    const url = "https://dev.azure.com/o/p/_git/r/pullrequest/42";
+    const common = { project_id: repo.id, repo_name: repo.name, pr_id: 42,
+      title: "Review the race fix", author: "Dev", is_read: false, url };
+    backend.seedPrInboxItems([
+      { ...common, id: "review-42", kind: "assigned", summary: "You were added as a reviewer",
+        discovered_at: new Date(Date.now() - 60_000).toISOString() },
+      { ...common, id: "comment-42", kind: "comment", summary: "Dev: this still races on retry",
+        discovered_at: new Date().toISOString() },
+    ]);
   });
-  await expect(page.getByTestId("pr-inbox-unread")).toHaveText("1", { timeout: 10_000 });
+  await expect(page.getByTestId("pr-inbox-unread")).toHaveText("2", { timeout: 10_000 });
   await page.getByTestId("pr-inbox-button").click();
-  const notification = page.getByTestId("pr-notification-review-42");
-  await expect(notification).toHaveAttribute("data-read", "false");
-  await notification.getByRole("button", { name: "Mark read", exact: true }).click();
-  await expect(notification).toHaveAttribute("data-read", "true");
-  await expect(page.getByTestId("pr-inbox-unread")).toHaveCount(0);
-  await notification.getByRole("button", { name: "Mark unread" }).click();
+  // Both events belong to one PR, so they are read under a single group.
+  const group = page.getByTestId(/^pr-group-.*-42$/);
+  await expect(group).toHaveAttribute("data-unread", "true");
+  const assigned = page.getByTestId("pr-notification-review-42");
+  const comment = page.getByTestId("pr-notification-comment-42");
+  await expect(comment).toContainText("Dev: this still races on retry");
+  await comment.getByRole("button", { name: "Mark read: Dev: this still races on retry" }).click();
+  await expect(comment).toHaveAttribute("data-read", "true");
+  await expect(assigned).toHaveAttribute("data-read", "false");
   await expect(page.getByTestId("pr-inbox-unread")).toHaveText("1");
+  await group.getByRole("button", { name: "Mark read", exact: true }).click();
+  await expect(group).toHaveAttribute("data-unread", "false");
+  await expect(page.getByTestId("pr-inbox-unread")).toHaveCount(0);
+  await group.getByRole("button", { name: "Mark unread", exact: true }).click();
+  await expect(page.getByTestId("pr-inbox-unread")).toHaveText("2");
   // The browser build's opener is a no-op; the unit test verifies the exact ADO URL.
-  await notification.getByRole("button", { name: "#42 Review the race fix" }).click();
-  await expect(notification).toHaveAttribute("data-read", "true");
+  await group.getByRole("button", { name: "#42 Review the race fix" }).click();
+  await expect(assigned).toHaveAttribute("data-read", "true");
+  await expect(comment).toHaveAttribute("data-read", "true");
   await page.getByRole("button", { name: "Close inbox" }).click();
   await page.getByTestId("repo-manager-button").click();
-  await expect(option).toBeChecked();
-  await option.uncheck();
-  await expect(option).not.toBeChecked();
+  await expect(option).toHaveValue("both");
+  await option.selectOption("off");
+  await expect(option).toHaveValue("off");
   await page.getByTestId("repo-manager-panel").getByRole("button", { name: /Local repo/ }).click();
   await expect(option).toBeDisabled();
   await page.getByTestId("repo-manager-close").click();
   await page.getByTestId("pr-inbox-button").click();
-  await expect(notification).toHaveAttribute("data-read", "true");
+  await expect(assigned).toHaveAttribute("data-read", "true");
   await expect(page.getByText("Notifications off")).toBeVisible();
 });
 
 test("connection failures are visible in the inbox and sidebar, not an empty success", async ({ page }) => {
   await page.getByTestId("repo-manager-button").click();
-  await page.getByRole("checkbox").check();
+  await page.getByTestId("repo-inbox-mode").selectOption("reviewer");
   await page.getByTestId("repo-manager-close").click();
   await page.evaluate(async () => {
     const backend = (window as unknown as { __WS_BACKEND__: MemoryBackend }).__WS_BACKEND__;

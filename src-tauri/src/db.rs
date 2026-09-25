@@ -319,13 +319,15 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
             current_identity TEXT,
             current_source TEXT,
             last_checked TEXT,
-            error TEXT
+            error TEXT,
+            watch_mode TEXT NOT NULL DEFAULT 'reviewer'
         );
         CREATE TABLE IF NOT EXISTS pr_inbox_baselines (
             project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
             source TEXT NOT NULL,
             identity TEXT NOT NULL,
-            PRIMARY KEY (project_id, source, identity)
+            role TEXT NOT NULL DEFAULT 'reviewer',
+            PRIMARY KEY (project_id, source, identity, role)
         );
         CREATE TABLE IF NOT EXISTS pr_inbox_seen (
             id TEXT PRIMARY KEY,
@@ -339,8 +341,35 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
             notified INTEGER NOT NULL,
             is_read INTEGER NOT NULL DEFAULT 0,
             discovered_at TEXT NOT NULL,
+            role TEXT NOT NULL DEFAULT 'reviewer',
+            pr_status TEXT NOT NULL DEFAULT 'active',
+            deep_synced INTEGER NOT NULL DEFAULT 0,
+            comment_watermark TEXT NOT NULL DEFAULT '',
+            votes_json TEXT NOT NULL DEFAULT '{}',
+            policies_json TEXT NOT NULL DEFAULT '{}',
             UNIQUE(project_id, source, identity, pr_id)
         );
+        -- One row per *notification*, where pr_inbox_seen holds one row per
+        -- watched PR. A single PR now produces a stream (assigned, comments,
+        -- votes, build gates, closure) rather than the single arrival event the
+        -- inbox started with, so read state cannot live on the PR row.
+        CREATE TABLE IF NOT EXISTS pr_inbox_events (
+            id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            source TEXT NOT NULL,
+            identity TEXT NOT NULL,
+            pr_id INTEGER NOT NULL,
+            kind TEXT NOT NULL,
+            title TEXT NOT NULL,
+            author TEXT NOT NULL,
+            summary TEXT NOT NULL,
+            url TEXT NOT NULL,
+            is_read INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            dedupe_key TEXT NOT NULL,
+            UNIQUE(project_id, source, identity, pr_id, kind, dedupe_key)
+        );
+        CREATE INDEX IF NOT EXISTS pr_inbox_events_unread_idx ON pr_inbox_events (is_read);
 
         CREATE INDEX IF NOT EXISTS command_log_created_idx ON command_log (created_at);
         CREATE INDEX IF NOT EXISTS command_log_command_idx ON command_log (command);
@@ -392,14 +421,68 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
         // 23 workstreams' worth of terminals and Copilot sessions at once is
         // not what "leave my desk as I left it" should cost.
         "ALTER TABLE workstreams ADD COLUMN is_loaded INTEGER NOT NULL DEFAULT 0",
+        // The PR inbox grew from "notify me when I am assigned a review" into a
+        // per-PR event stream. Older databases predate every column below.
+        "ALTER TABLE pr_inbox_config ADD COLUMN watch_mode TEXT NOT NULL DEFAULT 'reviewer'",
+        "ALTER TABLE pr_inbox_seen ADD COLUMN role TEXT NOT NULL DEFAULT 'reviewer'",
+        "ALTER TABLE pr_inbox_seen ADD COLUMN pr_status TEXT NOT NULL DEFAULT 'active'",
+        "ALTER TABLE pr_inbox_seen ADD COLUMN deep_synced INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE pr_inbox_seen ADD COLUMN comment_watermark TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE pr_inbox_seen ADD COLUMN votes_json TEXT NOT NULL DEFAULT '{}'",
+        "ALTER TABLE pr_inbox_seen ADD COLUMN policies_json TEXT NOT NULL DEFAULT '{}'",
     ];
     for sql in &migrations {
         // SQLite errors if column already exists — ignore that error
         let _ = conn.execute_batch(sql);
     }
 
+    migrate_pr_inbox_events(conn)?;
+
     crate::loops::init_loop_schema(conn)?;
 
+    Ok(())
+}
+
+/// Carries a pre-event-stream inbox forward.
+///
+/// Two things cannot be expressed as `ALTER TABLE`. The baseline key gained a
+/// `role`, so widening a repo from reviewer-only to authored starts a *fresh*
+/// silent baseline instead of announcing every PR the user has ever opened; a
+/// plain added column would keep the old three-column primary key and make the
+/// second role unstorable. And the notifications themselves moved out of
+/// `pr_inbox_seen` into `pr_inbox_events`, carrying their original ids so the
+/// read state already on screen survives the upgrade.
+fn migrate_pr_inbox_events(conn: &Connection) -> rusqlite::Result<()> {
+    let keyed_by_role: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('pr_inbox_baselines') WHERE name='role'",
+        [],
+        |r| r.get(0),
+    )?;
+    if keyed_by_role == 0 {
+        conn.execute_batch(
+            "ALTER TABLE pr_inbox_baselines RENAME TO pr_inbox_baselines_old;
+            CREATE TABLE pr_inbox_baselines (
+                project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                source TEXT NOT NULL,
+                identity TEXT NOT NULL,
+                role TEXT NOT NULL DEFAULT 'reviewer',
+                PRIMARY KEY (project_id, source, identity, role)
+            );
+            INSERT OR IGNORE INTO pr_inbox_baselines(project_id,source,identity,role)
+                SELECT project_id, source, identity, 'reviewer' FROM pr_inbox_baselines_old;
+            DROP TABLE pr_inbox_baselines_old;",
+        )?;
+    }
+    // Idempotent: the primary key is the original notification id, so a second
+    // run cannot duplicate or resurrect a notification the user has since read.
+    conn.execute(
+        "INSERT OR IGNORE INTO pr_inbox_events
+        (id,project_id,source,identity,pr_id,kind,title,author,summary,url,is_read,created_at,dedupe_key)
+        SELECT id,project_id,source,identity,pr_id,'assigned',title,author,
+            'Assigned to you as reviewer',url,is_read,discovered_at,''
+        FROM pr_inbox_seen WHERE notified=1",
+        [],
+    )?;
     Ok(())
 }
 

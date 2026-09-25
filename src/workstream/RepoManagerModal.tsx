@@ -2,7 +2,14 @@ import { useEffect, useMemo, useState } from "react";
 import { XMarkIcon } from "@heroicons/react/24/outline";
 
 import type { Project, Workstream } from "../domain/types";
-import { supportsPrInbox, type PrInboxRepo } from "../domain/pr-inbox";
+import {
+  supportsPrInbox,
+  isPrWatchMode,
+  PR_WATCH_MODES,
+  PR_WATCH_MODE_LABELS,
+  type PrInboxRepo,
+  type PrWatchMode,
+} from "../domain/pr-inbox";
 import { PROJECT_PRESET_COLORS, isCustomProjectColor } from "../domain/colors";
 import {
   filterRepositories,
@@ -30,7 +37,7 @@ export interface RepoManagerModalProps {
   commandPlaceholder?: string;
   inboxRepos?: PrInboxRepo[];
   inboxError?: string | null;
-  onConfigureInbox?: (projectId: string, enabled: boolean) => Promise<void>;
+  onConfigureInbox?: (projectId: string, mode: PrWatchMode) => Promise<void>;
 }
 
 /**
@@ -356,21 +363,34 @@ export function RepoManagerModal({
               )}
               {selectedProject && onConfigureInbox && (
                 <div style={{ borderTop: "1px solid #313244", marginTop: 16, paddingTop: 12, fontSize: 11, color: "#a6adc8" }}>
-                  <label style={{ display: "flex", gap: 6, alignItems: "flex-start" }}>
-                    <input type="checkbox" checked={inboxRepo?.enabled ?? false}
-                      disabled={inboxSaving || !inboxRepos || !!inboxError || (!inboxRepo?.enabled && !supportsPrInbox(selectedProject.git_remote))}
-                      onChange={async (event) => {
-                        const projectId = selectedProject.id;
-                        setInboxSaving(true);
-                        setInboxSaveError(null);
-                        try { await onConfigureInbox(projectId, event.target.checked); }
-                        catch (error) { setInboxSaveError({ projectId, message: String(error instanceof Error ? error.message : error) }); }
-                        finally { setInboxSaving(false); }
-                      }} />
-                    Notify me of new PR review assignments
-                  </label>
-                  <p>ADO only, direct assignments only. Uses your Azure CLI account (<code>az login</code>). Saved immediately.</p>
-                  <p>The first check is silent. Drafts notify when ready. Archiving a repo does not turn notifications off.</p>
+                  <label style={labelStyle} htmlFor="repo-inbox-mode">PR notifications</label>
+                  <select
+                    id="repo-inbox-mode"
+                    data-testid="repo-inbox-mode"
+                    value={inboxRepo?.enabled ? inboxRepo.mode : "off"}
+                    disabled={inboxSaving || !inboxRepos || !!inboxError || (!inboxRepo?.enabled && !supportsPrInbox(selectedProject.git_remote))}
+                    onChange={async (event) => {
+                      const projectId = selectedProject.id;
+                      const next = event.target.value;
+                      if (!isPrWatchMode(next)) return;
+                      setInboxSaving(true);
+                      setInboxSaveError(null);
+                      try { await onConfigureInbox(projectId, next); }
+                      catch (error) { setInboxSaveError({ projectId, message: String(error instanceof Error ? error.message : error) }); }
+                      finally { setInboxSaving(false); }
+                    }}
+                    style={{ ...inputStyle, width: "auto" }}
+                  >
+                    {PR_WATCH_MODES.map((mode) => (
+                      <option key={mode} value={mode}>{PR_WATCH_MODE_LABELS[mode]}</option>
+                    ))}
+                  </select>
+                  <p>ADO only. Uses your Azure CLI account (<code>az login</code>). Saved immediately.</p>
+                  <p>
+                    Watched PRs report new comments from others, vote changes, build-gate outcomes and
+                    closure. The first check of a repo — and of each PR — is silent, so turning this on
+                    never replays history. Archiving a repo does not turn notifications off.
+                  </p>
                   {(inboxError || inboxRepo?.error || inboxSaveError?.projectId === selectedId) && (
                     <p role="alert" style={{ color: "#f38ba8" }}>
                       {inboxError ?? (inboxSaveError?.projectId === selectedId ? inboxSaveError.message : inboxRepo?.error)}

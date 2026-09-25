@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import type { Backend } from "../backend/types";
-import type { PrInboxSnapshot } from "../domain/pr-inbox";
+import type { PrInboxSnapshot, PrWatchMode } from "../domain/pr-inbox";
 
 export function usePrInbox(backend: Backend) {
   const [snapshot, setSnapshot] = useState<PrInboxSnapshot>({ items: [], repos: [] });
@@ -32,8 +32,8 @@ export function usePrInbox(backend: Backend) {
     return () => { disposed = true; clearTimeout(timer); };
   }, [backend, revision]);
 
-  const configure = useCallback(async (projectId: string, enabled: boolean) => {
-    await backend.configurePrInbox(projectId, enabled);
+  const configure = useCallback(async (projectId: string, mode: PrWatchMode) => {
+    await backend.configurePrInbox(projectId, mode);
     setRevision((value) => value + 1);
   }, [backend]);
 

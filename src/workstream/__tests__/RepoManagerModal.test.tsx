@@ -52,13 +52,33 @@ describe("RepoManagerModal", () => {
     render(<RepoManagerModal {...baseProps}
       projects={[project("p1", "ADO", { git_remote: "https://dev.azure.com/o/p/_git/r" }), project("p2", "Local")]}
       inboxRepos={[]} onConfigureInbox={configure} />);
-    const checkbox = screen.getByRole("checkbox", { name: "Notify me of new PR review assignments" });
-    expect(checkbox).not.toBeChecked();
-    fireEvent.click(checkbox);
-    await waitFor(() => expect(configure).toHaveBeenCalledWith("p1", true));
+    const mode = screen.getByTestId("repo-inbox-mode");
+    expect(mode).toHaveValue("off");
+    fireEvent.change(mode, { target: { value: "both" } });
+    await waitFor(() => expect(configure).toHaveBeenCalledWith("p1", "both"));
     expect(await screen.findByText("Could not save notifications")).toBeInTheDocument();
     fireEvent.click(screen.getByTestId("repo-manager-row-p2"));
-    expect(screen.getByRole("checkbox")).toBeDisabled();
+    expect(screen.getByTestId("repo-inbox-mode")).toBeDisabled();
+  });
+
+  /**
+   * The selector is the only place the distinction between "watch my reviews"
+   * and "watch what I opened" is expressed, and picking the wrong one silently
+   * produces the wrong notifications for days.
+   */
+  it("reflects the saved watch mode and offers every choice", async () => {
+    const configure = vi.fn().mockResolvedValue(undefined);
+    render(<RepoManagerModal {...baseProps}
+      projects={[project("p1", "ADO", { git_remote: "https://dev.azure.com/o/p/_git/r" })]}
+      inboxRepos={[{ project_id: "p1", repo_name: "ADO", enabled: true, mode: "author",
+        last_checked: null, error: null }]}
+      onConfigureInbox={configure} />);
+    const mode = screen.getByTestId("repo-inbox-mode");
+    expect(mode).toHaveValue("author");
+    expect(within(mode).getAllByRole("option").map((o) => o.getAttribute("value")))
+      .toEqual(["off", "reviewer", "author", "both"]);
+    fireEvent.change(mode, { target: { value: "off" } });
+    await waitFor(() => expect(configure).toHaveBeenCalledWith("p1", "off"));
   });
 
   it("lists every repo with its active workstream count", () => {

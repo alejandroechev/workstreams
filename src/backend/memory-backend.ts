@@ -1,5 +1,5 @@
 import type { WorkLane } from "../domain/work-lanes";
-import { supportsPrInbox, type PrInboxItem, type PrInboxSnapshot } from "../domain/pr-inbox";
+import { supportsPrInbox, type PrInboxItem, type PrInboxSnapshot, type PrWatchMode } from "../domain/pr-inbox";
 import type { Project, Workstream, Tile, TileType, WorkstreamLayout, CopilotConfigItem } from "../domain/types";
 import type { SessionFileComment } from "../domain/file-comments";
 import type { Review, ReviewComment, ChangedFile, DiffSides } from "../domain/code-review";
@@ -92,16 +92,18 @@ export class MemoryBackend implements Backend {
     });
   }
 
-  async configurePrInbox(projectId: string, enabled: boolean): Promise<void> {
+  async configurePrInbox(projectId: string, mode: PrWatchMode): Promise<void> {
     const project = this.projects.get(projectId);
     if (!project) throw new Error("Repository not found");
+    const enabled = mode !== "off";
     if (enabled && !supportsPrInbox(project.git_remote)) throw new Error("Select an Azure DevOps repository");
     const status = this.prInbox.repos.find((repo) => repo.project_id === projectId);
     if (status) {
       status.enabled = enabled;
+      status.mode = mode;
       status.error = null;
     } else {
-      this.prInbox.repos.push({ project_id: projectId, repo_name: project.name, enabled, last_checked: null, error: null });
+      this.prInbox.repos.push({ project_id: projectId, repo_name: project.name, enabled, mode, last_checked: null, error: null });
     }
   }
 

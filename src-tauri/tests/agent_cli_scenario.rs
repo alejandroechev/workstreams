@@ -72,6 +72,18 @@ fn cli() -> Command {
     Command::new(env!("CARGO_BIN_EXE_workstreams"))
 }
 
+/// A direct review assignment with no comments, votes or gates read yet.
+fn review(id: u64, title: &str) -> workstreams_lib::pr_inbox::WatchedPr {
+    workstreams_lib::pr_inbox::WatchedPr {
+        id,
+        title: title.into(),
+        author: "Author".into(),
+        role: workstreams_lib::pr_inbox::PrRole::Reviewer,
+        status: "active".into(),
+        deep: None,
+    }
+}
+
 #[test]
 fn ping_reaches_a_running_app_and_reports_success_on_stdout() {
     let dir = scratch_dir("ping");
@@ -508,28 +520,13 @@ fn inbox_configuration_and_read_state_survive_cli_connections() {
         );
         serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()["data"].clone()
     };
-    run(&[
-        "agent",
-        "call",
-        "inbox.configure",
-        "repo=repo",
-        "enabled=true",
-    ]);
+    run(&["agent", "call", "inbox.configure", "repo=repo", "mode=both"]);
     let target = pr_inbox::targets(&db).unwrap().remove(0);
     pr_inbox::apply_snapshot(&mut db, &target, "me", &[]).unwrap();
-    pr_inbox::apply_snapshot(
-        &mut db,
-        &target,
-        "me",
-        &[pr_inbox::ReviewPr {
-            id: 42,
-            title: "Review".into(),
-            author: "Author".into(),
-        }],
-    )
-    .unwrap();
+    pr_inbox::apply_snapshot(&mut db, &target, "me", &[review(42, "Review")]).unwrap();
     let listed = run(&["agent", "call", "inbox.list"]);
     assert_eq!(listed["items"][0]["pr_id"], 42);
+    assert_eq!(listed["items"][0]["kind"], "assigned");
     let id = format!("id={}", listed["items"][0]["id"].as_str().unwrap());
     run(&["agent", "call", "inbox.read", &id, "read=true"]);
     drop(db);
@@ -539,18 +536,7 @@ fn inbox_configuration_and_read_state_survive_cli_connections() {
         &mut db,
         &target,
         "me",
-        &[
-            pr_inbox::ReviewPr {
-                id: 42,
-                title: "Review".into(),
-                author: "Author".into(),
-            },
-            pr_inbox::ReviewPr {
-                id: 43,
-                title: "Since restart".into(),
-                author: "Author".into(),
-            },
-        ],
+        &[review(42, "Review"), review(43, "Since restart")],
     )
     .unwrap();
     assert_eq!(pr_inbox::snapshot(&db).unwrap().items.len(), 2);
@@ -558,13 +544,7 @@ fn inbox_configuration_and_read_state_survive_cli_connections() {
     let listed = run(&["agent", "call", "inbox.list"]);
     assert_eq!(listed["items"].as_array().unwrap().len(), 2);
     assert_eq!(listed["items"][1]["is_read"], false);
-    run(&[
-        "agent",
-        "call",
-        "inbox.configure",
-        "repo=repo",
-        "enabled=false",
-    ]);
+    run(&["agent", "call", "inbox.configure", "repo=repo", "mode=off"]);
     assert!(pr_inbox::targets(&db).unwrap().is_empty());
     drop(db);
     drop(server);

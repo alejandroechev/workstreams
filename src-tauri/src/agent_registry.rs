@@ -522,10 +522,16 @@ fn inbox_configure(
             |r| r.get(0),
         )
         .map_err(db_error)?;
-    let enabled = inbox_bool(params, "enabled")?;
-    crate::pr_inbox::configure(context.db, &id, enabled).map_err(inbox_error)?;
+    let mode = crate::pr_inbox::WatchMode::parse(&required_str(params, "mode")?).map_err(|e| {
+        AgentError::new(
+            "INVALID_PARAM",
+            e,
+            "Pass mode=off, mode=reviewer, mode=author or mode=both.",
+        )
+    })?;
+    crate::pr_inbox::configure(context.db, &id, mode).map_err(inbox_error)?;
     Ok(CommandOutcome::changed(
-        serde_json::json!({"project_id":id,"enabled":enabled}),
+        serde_json::json!({"project_id":id,"mode":mode}),
         StateChange::new("pr_inbox", id, "configured"),
     ))
 }
@@ -1959,11 +1965,12 @@ mod tests {
             &db,
             &caller,
             "inbox.configure",
-            serde_json::json!({"repo":"repo-1","enabled":true}),
+            serde_json::json!({"repo":"repo-1","mode":"both"}),
         )
         .unwrap();
         let listed = call(&db, &caller, "inbox.list", serde_json::Value::Null).unwrap();
         assert_eq!(listed.data["repos"][0]["enabled"], true);
+        assert_eq!(listed.data["repos"][0]["mode"], "both");
         assert!(call(
             &db,
             &caller,
@@ -1975,14 +1982,14 @@ mod tests {
             &db,
             &caller,
             "inbox.configure",
-            serde_json::json!({"repo":"repo-1","enabled":"maybe"})
+            serde_json::json!({"repo":"repo-1","mode":"sometimes"})
         )
         .is_err());
         call(
             &db,
             &caller,
             "inbox.configure",
-            serde_json::json!({"repo":"repo-1","enabled":false}),
+            serde_json::json!({"repo":"repo-1","mode":"off"}),
         )
         .unwrap();
         assert!(crate::pr_inbox::targets(&db).unwrap().is_empty());

@@ -1,7 +1,13 @@
 import { useEffect, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { ArrowTopRightOnSquareIcon, XMarkIcon } from "@heroicons/react/24/outline";
-import type { PrInboxSnapshot } from "../domain/pr-inbox";
+import {
+  groupPrInboxItems,
+  PR_EVENT_LABELS,
+  PR_WATCH_MODE_LABELS,
+  type PrEventKind,
+  type PrInboxSnapshot,
+} from "../domain/pr-inbox";
 
 interface Props {
   snapshot: PrInboxSnapshot;
@@ -94,70 +100,111 @@ export function PrInboxModal({ snapshot, loading, error, onRead, onClose }: Prop
             <p role="alert" style={{ ...emptyStyle, color: "#f38ba8", textAlign: "left" }}>{actionError ?? error}</p>
           )}
           {!loading && !error && total === 0 && <p style={emptyStyle}>No review notifications yet.</p>}
-          {snapshot.repos.map((repo) => (
-            <section key={repo.project_id} style={{ borderTop: "1px solid #313244", padding: "10px 12px" }}>
-              <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
-                <h3 style={{ margin: 0, fontSize: 12, fontWeight: 600, color: "#cdd6f4" }}>{repo.repo_name}</h3>
-                <span style={{ color: "#6c7086", fontSize: 11 }}>
-                  {!repo.enabled
-                    ? "Notifications off"
-                    : repo.last_checked
-                      ? `Last checked ${new Date(repo.last_checked).toLocaleString()}`
-                      : "Waiting for first successful check"}
-                </span>
-              </div>
-              {repo.enabled && repo.error && (
-                <p role="alert" style={{ color: "#f38ba8", fontSize: 11, margin: "6px 0 0" }}>{repo.error}</p>
-              )}
-              {snapshot.items.filter((item) => item.project_id === repo.project_id).map((item) => (
-                <article
-                  key={item.id}
-                  data-testid={`pr-notification-${item.id}`}
-                  data-read={item.is_read}
-                  style={{
-                    display: "flex",
-                    gap: 12,
-                    alignItems: "center",
-                    border: "1px solid #313244",
-                    borderLeft: `2px solid ${item.is_read ? "#45475a" : "#f38ba8"}`,
-                    borderRadius: 4,
-                    padding: "8px 10px",
-                    marginTop: 8,
-                    background: "#181825",
-                  }}
-                >
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <button
-                      disabled={busy}
-                      onClick={() => void act(async () => { await openUrl(item.url); await onRead(item.id, true); })}
-                      style={{
-                        background: "none",
-                        border: "none",
-                        padding: 0,
-                        textAlign: "left",
-                        cursor: "pointer",
-                        fontFamily: "inherit",
-                        fontSize: 12,
-                        color: "#89b4fa",
-                        fontWeight: item.is_read ? 400 : 600,
-                        overflowWrap: "anywhere",
-                      }}
-                    >
-                      #{item.pr_id} {item.title}
-                      <ArrowTopRightOnSquareIcon aria-hidden="true" width={12} height={12} style={{ display: "inline", marginLeft: 6 }} />
-                    </button>
-                    <div style={{ color: "#6c7086", fontSize: 11, marginTop: 3 }}>
-                      {item.author} · {new Date(item.discovered_at).toLocaleString()}
+          {snapshot.repos.map((repo) => {
+            const groups = groupPrInboxItems(
+              snapshot.items.filter((item) => item.project_id === repo.project_id),
+            );
+            return (
+              <section key={repo.project_id} style={{ borderTop: "1px solid #313244", padding: "10px 12px" }}>
+                <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+                  <h3 style={{ margin: 0, fontSize: 12, fontWeight: 600, color: "#cdd6f4" }}>{repo.repo_name}</h3>
+                  <span style={{ color: "#6c7086", fontSize: 11 }}>
+                    {!repo.enabled
+                      ? "Notifications off"
+                      : `${PR_WATCH_MODE_LABELS[repo.mode]} · ${repo.last_checked
+                          ? `last checked ${new Date(repo.last_checked).toLocaleString()}`
+                          : "waiting for first successful check"}`}
+                  </span>
+                </div>
+                {repo.enabled && repo.error && (
+                  <p role="alert" style={{ color: "#f38ba8", fontSize: 11, margin: "6px 0 0" }}>{repo.error}</p>
+                )}
+                {groups.map((group) => (
+                  <article
+                    key={group.key}
+                    data-testid={`pr-group-${group.project_id}-${group.pr_id}`}
+                    data-unread={group.unread}
+                    style={{
+                      border: "1px solid #313244",
+                      borderLeft: `2px solid ${group.unread ? "#f38ba8" : "#45475a"}`,
+                      borderRadius: 4,
+                      padding: "8px 10px",
+                      marginTop: 8,
+                      background: "#181825",
+                    }}
+                  >
+                    <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <button
+                          disabled={busy}
+                          onClick={() => void act(async () => {
+                            await openUrl(group.url);
+                            for (const event of group.events) {
+                              if (!event.is_read) await onRead(event.id, true);
+                            }
+                          })}
+                          style={{
+                            background: "none",
+                            border: "none",
+                            padding: 0,
+                            textAlign: "left",
+                            cursor: "pointer",
+                            fontFamily: "inherit",
+                            fontSize: 12,
+                            color: "#89b4fa",
+                            fontWeight: group.unread ? 600 : 400,
+                            overflowWrap: "anywhere",
+                          }}
+                        >
+                          #{group.pr_id} {group.title}
+                          <ArrowTopRightOnSquareIcon aria-hidden="true" width={12} height={12} style={{ display: "inline", marginLeft: 6 }} />
+                        </button>
+                        <div style={{ color: "#6c7086", fontSize: 11, marginTop: 3 }}>{group.author}</div>
+                      </div>
+                      <button
+                        disabled={busy}
+                        onClick={() => void act(async () => {
+                          const read = !group.unread;
+                          for (const event of group.events) {
+                            if (event.is_read === read) await onRead(event.id, !read);
+                          }
+                        })}
+                        style={buttonStyle}
+                      >
+                        {group.unread ? "Mark read" : "Mark unread"}
+                      </button>
                     </div>
-                  </div>
-                  {!item.is_read && <span style={unreadPillStyle}>Unread</span>}
-                  <button disabled={busy} onClick={() => void act(() => onRead(item.id, !item.is_read))} style={buttonStyle}>
-                    {item.is_read ? "Mark unread" : "Mark read"}
-                  </button>
-                </article>
-              ))}
-            </section>
-          ))}
+                    <ul style={{ listStyle: "none", margin: "8px 0 0", padding: 0, display: "grid", gap: 4 }}>
+                      {group.events.map((event) => (
+                        <li
+                          key={event.id}
+                          data-testid={`pr-notification-${event.id}`}
+                          data-read={event.is_read}
+                          style={{ display: "flex", gap: 8, alignItems: "baseline", fontSize: 11 }}
+                        >
+                          <span style={kindStyle(event.kind)}>{PR_EVENT_LABELS[event.kind] ?? event.kind}</span>
+                          <span style={{ flex: 1, minWidth: 0, color: event.is_read ? "#6c7086" : "#cdd6f4", overflowWrap: "anywhere" }}>
+                            {event.summary}
+                          </span>
+                          <span style={{ color: "#6c7086", whiteSpace: "nowrap" }}>
+                            {new Date(event.discovered_at).toLocaleString()}
+                          </span>
+                          <button
+                            disabled={busy}
+                            aria-label={`${event.is_read ? "Mark unread" : "Mark read"}: ${event.summary}`}
+                            onClick={() => void act(() => onRead(event.id, !event.is_read))}
+                            style={{ ...buttonStyle, padding: "1px 6px", fontSize: 10 }}
+                          >
+                            {event.is_read ? "Unread" : "Read"}
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  </article>
+                ))}
+              </section>
+            );
+          })}
         </div>
       </section>
     </div>
@@ -209,12 +256,29 @@ const iconButtonStyle: React.CSSProperties = {
   display: "flex",
 };
 
-const unreadPillStyle: React.CSSProperties = {
-  background: "#f38ba8",
-  color: "#11111b",
-  borderRadius: 999,
-  fontSize: 9,
-  fontWeight: 700,
-  padding: "1px 6px",
-  whiteSpace: "nowrap",
+/**
+ * One colour per event kind, so a wall of rows is scannable: a failed gate and
+ * a routine comment should not read the same at a glance.
+ */
+const KIND_COLORS: Record<PrEventKind, string> = {
+  assigned: "#f38ba8",
+  comment: "#89b4fa",
+  vote: "#a6e3a1",
+  policy: "#f9e2af",
+  closed: "#6c7086",
 };
+
+function kindStyle(kind: PrEventKind): React.CSSProperties {
+  const color = KIND_COLORS[kind] ?? "#6c7086";
+  return {
+    color,
+    border: `1px solid ${color}`,
+    borderRadius: 999,
+    fontSize: 9,
+    fontWeight: 700,
+    padding: "0 6px",
+    whiteSpace: "nowrap",
+    minWidth: 64,
+    textAlign: "center",
+  };
+}

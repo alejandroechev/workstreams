@@ -2,7 +2,7 @@
 import { useState, useRef, useEffect } from "react";
 import { listen } from "@tauri-apps/api/event";
 import type { Project, Workstream } from "../domain/types";
-import type { PrInboxRepo } from "../domain/pr-inbox";
+import type { PrInboxRepo, PrWatchMode } from "../domain/pr-inbox";
 import {
   groupByLane,
   laneKey,
@@ -71,7 +71,7 @@ interface Props {
   inboxUnread?: number;
   inboxRepos?: PrInboxRepo[];
   inboxError?: string | null;
-  onConfigureInbox?: (projectId: string, enabled: boolean) => Promise<void>;
+  onConfigureInbox?: (projectId: string, mode: PrWatchMode) => Promise<void>;
   /**
    * Always-on list of in-progress tasks, rendered under the Tasks button.
    * Passed in as a node so the sidebar keeps no backend dependency.

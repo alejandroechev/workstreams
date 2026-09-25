@@ -33,8 +33,9 @@ describe("global inbox snapshot subscription", () => {
     expect(result.current.error).toBe("Database unavailable");
     await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
     expect(result.current.error).toBeNull();
-    await act(async () => { await result.current.configure(project.id, true); });
+    await act(async () => { await result.current.configure(project.id, "both"); });
     expect(result.current.snapshot.repos[0].enabled).toBe(true);
+    expect(result.current.snapshot.repos[0].mode).toBe("both");
     await expect(result.current.setRead("missing", true)).rejects.toThrow("not found");
   });
 

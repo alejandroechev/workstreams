@@ -56,24 +56,44 @@ The repo filter offers:
 
 ## PR inbox
 
-The **PR inbox** in the sidebar collects new direct Azure DevOps review assignments.
-In **Repos**, select an ADO repo and enable **Notify me of new PR review assignments**.
-The checkbox saves immediately, independently of **Save changes**. It is off by default.
-Install Azure CLI and run `az login` with the account that can access the repository.
+The **PR inbox** in the sidebar collects Azure DevOps pull request activity as a
+stream of events, grouped per pull request. In **Repos**, select an ADO repo and
+pick a **PR notifications** mode. The selector saves immediately, independently of
+**Save changes**. Install Azure CLI and run `az login` with the account that can
+access the repository.
+
+| Mode | Watches |
+| --- | --- |
+| Off | Nothing; polling stops for that repo (default) |
+| Reviews assigned to me | PRs that name the signed-in user directly as reviewer |
+| PRs I opened | PRs authored by the signed-in user, including drafts |
+| Both | Either of the above; the author role wins when a PR matches both |
+
+Each watched pull request reports these events:
+
+| Event | Fires when |
+| --- | --- |
+| Assigned | An active, non-draft PR first names the user directly as reviewer |
+| Comment | Someone else posts a human comment; system entries and the user's own are skipped |
+| Vote | A reviewer approves, approves with suggestions, waits for the author, or rejects |
+| Gate | A branch policy settles to approved, rejected or broken; queued and running do not notify |
+| Closed | The PR is completed or abandoned |
 
 | Behavior | Rule |
 | --- | --- |
-| First successful check | Silently baseline existing ready-for-review assignments; no backlog flood |
-| Later checks | Notify when an active, non-draft PR first includes the signed-in user directly as reviewer, even if the PR is old |
-| Drafts | Wait until ready for review |
+| First successful check | Silently baseline the PRs that already match; no backlog flood |
+| Widening the mode | The newly added role gets its own silent baseline, so an old authored backlog is not announced |
+| First read of a PR | Its existing comments, votes and gates are recorded, not reported |
+| Authored PRs | Produce no *assigned* event — the user opened them |
+| Drafts | Excluded from the reviewer role; included for the author role |
 | Teams/groups | Do not notify for group membership alone |
-| Restart | Catch up on still-active assignments using the saved baseline |
-| Read/unread | Persist locally; clicking the PR opens ADO and marks it read |
-| Reassignment | Do not notify twice for the same repo, account and PR |
-| Disable | Stop polling that repo; keep its history and baseline |
+| Depth cap | At most 25 pull requests per repo are followed in detail, newest first |
+| Read/unread | Persist locally, per event; a group can be marked read in one click, and opening the PR reads all of its events |
+| Duplicates | Never report the same comment, vote transition, gate outcome or closure twice |
+| Disable | Stop polling that repo; keep its history and baselines |
 | Archive repo | Keep notifications enabled until explicitly switched off |
 | Connection failure | Show the repo error and keep the last successful snapshot; auth failures include `az login` guidance |
-| Passive signal | Sidebar footer shows an accented unread pill (capped at `99+`) and brightens the row, so no click is needed to notice a new assignment |
+| Passive signal | Sidebar footer shows an accented unread pill (capped at `99+`) and brightens the row, so no click is needed to notice new activity |
 
 ADO polling starts with the application, not with the inbox or a workstream.
 A single native worker checks enabled repos every two minutes after the previous
@@ -81,25 +101,30 @@ pass completes. Enabling a repo schedules its first check within two seconds whe
 the worker is idle. The UI refreshes the local inbox every five seconds; those
 reads do not contact ADO. Closing Workstreams stops polling.
 
-**Limitation:** this is a snapshot-based inbox, not an ADO event feed. Assignments
-added and removed between checks, or PRs completed while Workstreams was closed,
-cannot be recovered. Existing notifications stay in history after a PR closes.
-Each account gets a separate baseline and history; a successful check with a
-different Azure CLI account switches the visible inbox to that account.
+**Limitation:** this is a snapshot-based inbox, not an ADO event feed. Activity
+that appears and disappears between checks cannot be recovered, and a PR beyond
+the depth cap is followed only for assignment and closure. Existing notifications
+stay in history after a PR closes. Each account gets separate baselines and
+history; a successful check with a different Azure CLI account switches the
+visible inbox to that account.
 
 On platforms with the local agent channel, the same controls are available from
 a Workstreams session:
 
 ```sh
-workstreams agent call inbox.configure repo=<id-or-name> enabled=true
+workstreams agent call inbox.configure repo=<id-or-name> mode=both
 workstreams agent call inbox.list
 workstreams agent call inbox.read id=<notification-id> read=true
 workstreams agent call inbox.read id=<notification-id> read=false
-workstreams agent call inbox.configure repo=<id-or-name> enabled=false
+workstreams agent call inbox.configure repo=<id-or-name> mode=off
 ```
 
+`mode` accepts `off`, `reviewer`, `author` or `both`.
+
 `inbox.list` includes notification URLs, read state, per-repo connection errors and
-last successful check timestamps. See [ADR 030](adrs/030-ado-pr-inbox.md).
+`inbox.list` includes each event's kind and summary, notification URLs, read state,
+per-repo connection errors and last successful check timestamps.
+See [ADR 030](adrs/030-ado-pr-inbox.md) and [ADR 031](adrs/031-pr-inbox-event-stream.md).
 
 ## Adaptive tiling
 

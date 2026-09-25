@@ -8,7 +8,9 @@ date: 2026-09-24
 
 ## Status
 
-Accepted (2026-09-24).
+Accepted (2026-09-24). Extended by [ADR 031](031-pr-inbox-event-stream.md),
+which replaces the per-repo opt-in boolean with watch modes and turns the single
+review-assignment notification into a per-pull-request event stream.
 
 ## Context
 
