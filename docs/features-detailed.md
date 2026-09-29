@@ -94,7 +94,7 @@ Each watched pull request reports these events:
 | Disable | Stop polling that repo; keep its history and baselines |
 | Archive repo | Keep notifications enabled until explicitly switched off |
 | Connection failure | Show the repo error and keep the last successful snapshot; auth failures include `az login` guidance |
-| Passive signal | Sidebar footer shows an accented unread pill (capped at `99+`) and brightens the row, so no click is needed to notice new activity |
+| Passive signal | Sidebar footer shows an accented pill counting **pull requests** with at least one unread event (capped at `99+`) and brightens the row, so no click is needed to notice new activity |
 
 ADO polling starts with the application, not with the inbox or a workstream.
 A single native worker checks enabled repos every two minutes after the previous

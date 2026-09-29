@@ -68,6 +68,7 @@ interface Props {
    * without a backend (the board is owned by App, which has one). */
   onOpenTaskBoard?: () => void;
   onOpenInbox?: () => void;
+  /** Pull requests with at least one unread event, not the event count. */
   inboxUnread?: number;
   inboxRepos?: PrInboxRepo[];
   inboxError?: string | null;
@@ -1187,7 +1188,7 @@ export default function WorkstreamSidebar({
           <button
             data-testid="pr-inbox-button"
             onClick={onOpenInbox}
-            title={inboxUnread > 0 ? `${inboxUnread} unread review assignment${inboxUnread === 1 ? "" : "s"}` : "Open the PR inbox"}
+            title={inboxUnread > 0 ? `${inboxUnread} pull request${inboxUnread === 1 ? "" : "s"} with unread activity` : "Open the PR inbox"}
             style={{
               ...footerButtonStyle,
               color: inboxUnread > 0 ? "#cdd6f4" : "#6c7086",
@@ -1201,7 +1202,7 @@ export default function WorkstreamSidebar({
             {inboxUnread > 0 && (
               <span
                 data-testid="pr-inbox-unread"
-                aria-label={`${inboxUnread} unread review assignment${inboxUnread === 1 ? "" : "s"}`}
+                aria-label={`${inboxUnread} pull request${inboxUnread === 1 ? "" : "s"} with unread activity`}
                 style={{
                   background: "#f38ba8",
                   color: "#11111b",

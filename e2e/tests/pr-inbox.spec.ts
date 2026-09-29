@@ -37,7 +37,8 @@ test("repo opt-in, background arrival, read/unread, browser-open action and disa
         discovered_at: new Date().toISOString() },
     ]);
   });
-  await expect(page.getByTestId("pr-inbox-unread")).toHaveText("2", { timeout: 10_000 });
+  // Two unread events on one PR are one thing to look at.
+  await expect(page.getByTestId("pr-inbox-unread")).toHaveText("1", { timeout: 10_000 });
   await page.getByTestId("pr-inbox-button").click();
   // Both events belong to one PR, so they are read under a single group.
   const group = page.getByTestId(/^pr-group-.*-42$/);
@@ -50,6 +51,7 @@ test("repo opt-in, background arrival, read/unread, browser-open action and disa
   await comment.getByRole("button", { name: "Mark read: Dev: this still races on retry" }).click();
   await expect(comment).toHaveCount(0);
   await expect(assigned).toHaveAttribute("data-read", "false");
+  // The PR still has an unread event, so it still counts.
   await expect(page.getByTestId("pr-inbox-unread")).toHaveText("1");
   await group.getByRole("button", { name: "Mark read", exact: true }).click();
   await expect(group).toHaveCount(0);
@@ -59,7 +61,7 @@ test("repo opt-in, background arrival, read/unread, browser-open action and disa
   await expect(group).toHaveAttribute("data-unread", "false");
   await expect(comment).toHaveAttribute("data-read", "true");
   await group.getByRole("button", { name: "Mark unread", exact: true }).click();
-  await expect(page.getByTestId("pr-inbox-unread")).toHaveText("2");
+  await expect(page.getByTestId("pr-inbox-unread")).toHaveText("1");
   // The browser build's opener is a no-op; the unit test verifies the exact ADO URL.
   await group.getByRole("button", { name: "#42 Review the race fix" }).click();
   await expect(assigned).toHaveAttribute("data-read", "true");

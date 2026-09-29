@@ -142,3 +142,13 @@ export function supportsPrInbox(remote: string | null): boolean {
     throw error;
   }
 }
+
+/**
+ * The sidebar badge counts pull requests needing attention, not events: three
+ * comments on one PR are one thing to go look at.
+ */
+export function countUnreadPrs(items: PrInboxItem[]): number {
+  return new Set(
+    items.filter((item) => !item.is_read).map((item) => `${item.project_id}\u0000${item.pr_id}`),
+  ).size;
+}

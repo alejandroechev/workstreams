@@ -61,6 +61,7 @@ import { useBackend } from "./backend/context";
 import { decideUnarchive, type WorkLane } from "./domain/work-lanes";
 import type { Project, Workstream, Tile, TileType } from "./domain/types";
 import type { LoopSummary } from "./domain/loop";
+import { countUnreadPrs } from "./domain/pr-inbox";
 
 // Wire the persistent Workbench store into the cross-tile dispatcher
 // so right-clicks from anywhere persist to the workstream's setting
@@ -2049,7 +2050,7 @@ export default function App() {
       )}
       <WorkstreamSidebar
         onOpenInbox={() => setShowInbox(true)}
-        inboxUnread={inbox.snapshot.items.filter((item) => !item.is_read).length}
+        inboxUnread={countUnreadPrs(inbox.snapshot.items)}
         inboxRepos={inbox.loading ? undefined : inbox.snapshot.repos}
         inboxError={inbox.error}
         onConfigureInbox={inbox.configure}

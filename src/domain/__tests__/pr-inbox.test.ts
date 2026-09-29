@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   supportsPrInbox,
   groupPrInboxItems,
+  countUnreadPrs,
   isPrWatchMode,
   PR_WATCH_MODES,
   type PrInboxItem,
@@ -77,5 +78,27 @@ describe("grouping inbox events by pull request", () => {
     for (const mode of PR_WATCH_MODES) expect(isPrWatchMode(mode)).toBe(true);
     expect(isPrWatchMode("sometimes")).toBe(false);
     expect(PR_WATCH_MODES).toContain("off");
+  });
+});
+
+describe("counting pull requests that need attention", () => {
+  const item = (id: string, project_id: string, pr_id: number, is_read: boolean): PrInboxItem => ({
+    id, project_id, pr_id, is_read, repo_name: "Repo", kind: "comment", title: "T", summary: "S",
+    author: "A", url: "https://dev.azure.com/o/p/_git/r/pullrequest/1", discovered_at: "2026-01-01T00:00:00Z",
+  });
+
+  it("counts a PR once however many unread events it has, and ignores fully read PRs", () => {
+    expect(countUnreadPrs([
+      item("a", "p", 1, false),
+      item("b", "p", 1, false),
+      item("c", "p", 1, true),
+      item("d", "p", 2, true),
+      item("e", "p", 3, false),
+    ])).toBe(2);
+  });
+
+  it("treats the same PR number in two repos as two PRs", () => {
+    expect(countUnreadPrs([item("a", "p", 1, false), item("b", "q", 1, false)])).toBe(2);
+    expect(countUnreadPrs([])).toBe(0);
   });
 });

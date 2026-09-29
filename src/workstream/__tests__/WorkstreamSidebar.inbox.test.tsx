@@ -72,14 +72,14 @@ describe("WorkstreamSidebar PR inbox badge", () => {
     // A pill: accent fill with dark text, so it reads as a count and not as
     // another dim footer label.
     expect(badge).toHaveStyle({ background: "#f38ba8", color: "#11111b" });
-    expect(badge).toHaveAttribute("aria-label", "3 unread review assignments");
+    expect(badge).toHaveAttribute("aria-label", "3 pull requests with unread activity");
   });
 
   it("uses the singular form for one assignment", () => {
     renderSidebar({ inboxUnread: 1 });
     expect(screen.getByTestId("pr-inbox-unread")).toHaveAttribute(
       "aria-label",
-      "1 unread review assignment",
+      "1 pull request with unread activity",
     );
   });
 
