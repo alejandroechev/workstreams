@@ -26,6 +26,7 @@ interface Props {
 export function PrInboxModal({ snapshot, loading, error, onRead, onClose }: Props) {
   const [actionError, setActionError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [showRead, setShowRead] = useState(false);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") { event.stopPropagation(); onClose(); }
@@ -44,6 +45,7 @@ export function PrInboxModal({ snapshot, loading, error, onRead, onClose }: Prop
 
   const total = snapshot.items.length;
   const unread = snapshot.items.filter((item) => !item.is_read).length;
+  const visible = showRead ? snapshot.items : snapshot.items.filter((item) => !item.is_read);
 
   return (
     <div
@@ -81,7 +83,7 @@ export function PrInboxModal({ snapshot, loading, error, onRead, onClose }: Prop
           <div>
             <div style={{ color: "#cdd6f4", fontWeight: 600, fontSize: 13 }}>PR inbox</div>
             <div data-testid="pr-inbox-summary" style={{ color: "#6c7086", fontSize: 11 }}>
-              {unread} unread of {total} assignment{total === 1 ? "" : "s"}
+              {unread} unread of {total} notification{total === 1 ? "" : "s"}
             </div>
           </div>
           <button aria-label="Close inbox" data-testid="pr-inbox-close" onClick={onClose} title="Close" style={iconButtonStyle}>
@@ -89,9 +91,31 @@ export function PrInboxModal({ snapshot, loading, error, onRead, onClose }: Prop
           </button>
         </div>
 
-        <div style={noteStyle}>
-          Direct ADO review assignments. Enable notifications in Repos. Checks every two minutes while
-          Workstreams is open. The first check is silent; drafts appear only when ready for review.
+        <div style={{ ...noteStyle, display: "flex", alignItems: "center", gap: 12 }}>
+          <span style={{ flex: 1 }}>
+            ADO activity on the PRs each repo watches. Choose what to watch in Repos. Checks every two
+            minutes while Workstreams is open; the first check is silent.
+          </span>
+          <div role="group" aria-label="Show notifications" style={{ display: "flex" }}>
+            {([["Unread", false], ["All", true]] as const).map(([label, value], index) => (
+              <button
+                key={label}
+                aria-pressed={showRead === value}
+                data-testid={`pr-inbox-filter-${label.toLowerCase()}`}
+                onClick={() => setShowRead(value)}
+                style={{
+                  ...buttonStyle,
+                  padding: "2px 10px",
+                  borderRadius: index === 0 ? "4px 0 0 4px" : "0 4px 4px 0",
+                  marginLeft: index === 0 ? 0 : -1,
+                  background: showRead === value ? "#313244" : "#181825",
+                  color: showRead === value ? "#cdd6f4" : "#6c7086",
+                }}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
         </div>
 
         <div style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
@@ -100,9 +124,14 @@ export function PrInboxModal({ snapshot, loading, error, onRead, onClose }: Prop
             <p role="alert" style={{ ...emptyStyle, color: "#f38ba8", textAlign: "left" }}>{actionError ?? error}</p>
           )}
           {!loading && !error && total === 0 && <p style={emptyStyle}>No review notifications yet.</p>}
+          {!loading && !error && total > 0 && visible.length === 0 && (
+            <p data-testid="pr-inbox-caught-up" style={emptyStyle}>
+              No unread notifications. {total} read hidden.
+            </p>
+          )}
           {snapshot.repos.map((repo) => {
             const groups = groupPrInboxItems(
-              snapshot.items.filter((item) => item.project_id === repo.project_id),
+              visible.filter((item) => item.project_id === repo.project_id),
             );
             return (
               <section key={repo.project_id} style={{ borderTop: "1px solid #313244", padding: "10px 12px" }}>

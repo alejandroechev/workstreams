@@ -89,6 +89,7 @@ Each watched pull request reports these events:
 | Teams/groups | Do not notify for group membership alone |
 | Depth cap | At most 25 pull requests per repo are followed in detail, newest first |
 | Read/unread | Persist locally, per event; a group can be marked read in one click, and opening the PR reads all of its events |
+| Read filter | The inbox shows only unread events by default and drops PRs with nothing unread; **All** reveals read history. Reopening the inbox returns to **Unread** |
 | Duplicates | Never report the same comment, vote transition, gate outcome or closure twice |
 | Disable | Stop polling that repo; keep its history and baselines |
 | Archive repo | Keep notifications enabled until explicitly switched off |

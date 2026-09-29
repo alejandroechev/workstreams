@@ -49,6 +49,7 @@ describe("PR inbox", () => {
     const onRead = vi.fn().mockRejectedValue(new Error("Write failed"));
     render(<PrInboxModal snapshot={{ ...snapshot, items: [event({ is_read: true })] }}
       error={null} loading={false} onRead={onRead} onClose={() => {}} />);
+    fireEvent.click(screen.getByRole("button", { name: "All" }));
     fireEvent.click(screen.getByRole("button", { name: "Mark unread" }));
     await waitFor(() => expect(screen.getByText("Write failed")).toBeInTheDocument());
     expect(onRead).toHaveBeenCalledWith("n", false);
@@ -91,13 +92,13 @@ describe("PR inbox", () => {
 
     it("summarises unread and total counts in the header subtitle", () => {
       render(<PrInboxModal snapshot={snapshot} error={null} loading={false} onRead={vi.fn()} onClose={vi.fn()} />);
-      expect(screen.getByTestId("pr-inbox-summary")).toHaveTextContent("1 unread of 1 assignment");
+      expect(screen.getByTestId("pr-inbox-summary")).toHaveTextContent("1 unread of 1 notification");
     });
 
     it("pluralises the subtitle and counts only unread items", () => {
       const two = { ...snapshot, items: [event(), event({ id: "n2", pr_id: 43, is_read: true })] };
       render(<PrInboxModal snapshot={two} error={null} loading={false} onRead={vi.fn()} onClose={vi.fn()} />);
-      expect(screen.getByTestId("pr-inbox-summary")).toHaveTextContent("1 unread of 2 assignments");
+      expect(screen.getByTestId("pr-inbox-summary")).toHaveTextContent("1 unread of 2 notifications");
     });
 
     it("names the repo's watch mode alongside its last check", () => {
@@ -124,6 +125,7 @@ describe("PR inbox", () => {
 
     it("collects every event for a PR under one entry, newest first", () => {
       render(<PrInboxModal snapshot={busy} error={null} loading={false} onRead={vi.fn()} onClose={vi.fn()} />);
+      fireEvent.click(screen.getByRole("button", { name: "All" }));
       const group = screen.getByTestId("pr-group-p-42");
       const rows = within(group).getAllByRole("listitem");
       expect(rows.map((row) => row.getAttribute("data-testid"))).toEqual([
@@ -168,6 +170,45 @@ describe("PR inbox", () => {
       fireEvent.click(within(group).getByRole("button", { name: "#42 Fix race" }));
       await waitFor(() => expect(onRead).toHaveBeenCalledTimes(2));
       expect(onRead.mock.calls.every(([, read]) => read === true)).toBe(true);
+    });
+  });
+  /**
+   * Read notifications are history. Leaving them in the default view buried
+   * the one new comment under every PR already dealt with.
+   */
+  describe("hiding read notifications", () => {
+    const mixed: PrInboxSnapshot = {
+      repos: snapshot.repos,
+      items: [
+        event({ id: "old", kind: "assigned", is_read: true }),
+        event({ id: "new", kind: "comment", summary: "Dev: needs a test" }),
+        event({ id: "done", pr_id: 7, title: "Settled PR", kind: "vote", summary: "Dev approved", is_read: true }),
+      ],
+    };
+
+    it("shows only unread events by default and drops PRs with nothing unread", () => {
+      render(<PrInboxModal snapshot={mixed} error={null} loading={false} onRead={vi.fn()} onClose={vi.fn()} />);
+      expect(screen.getByRole("button", { name: "Unread" })).toHaveAttribute("aria-pressed", "true");
+      expect(screen.getByTestId("pr-notification-new")).toBeInTheDocument();
+      expect(screen.queryByTestId("pr-notification-old")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("pr-group-p-7")).not.toBeInTheDocument();
+    });
+
+    it("reveals read notifications when switched to All, and hides them again", () => {
+      render(<PrInboxModal snapshot={mixed} error={null} loading={false} onRead={vi.fn()} onClose={vi.fn()} />);
+      fireEvent.click(screen.getByRole("button", { name: "All" }));
+      expect(screen.getByRole("button", { name: "All" })).toHaveAttribute("aria-pressed", "true");
+      expect(screen.getByTestId("pr-notification-old")).toBeInTheDocument();
+      expect(screen.getByTestId("pr-group-p-7")).toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "Unread" }));
+      expect(screen.queryByTestId("pr-group-p-7")).not.toBeInTheDocument();
+    });
+
+    it("says the inbox is caught up rather than empty when everything is read", () => {
+      const read = { ...mixed, items: mixed.items.map((item) => ({ ...item, is_read: true })) };
+      render(<PrInboxModal snapshot={read} error={null} loading={false} onRead={vi.fn()} onClose={vi.fn()} />);
+      expect(screen.getByTestId("pr-inbox-caught-up")).toHaveTextContent("No unread notifications. 3 read hidden.");
+      expect(screen.queryByText("No review notifications yet.")).not.toBeInTheDocument();
     });
   });
 });

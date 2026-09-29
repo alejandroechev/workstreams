@@ -45,13 +45,19 @@ test("repo opt-in, background arrival, read/unread, browser-open action and disa
   const assigned = page.getByTestId("pr-notification-review-42");
   const comment = page.getByTestId("pr-notification-comment-42");
   await expect(comment).toContainText("Dev: this still races on retry");
+  // Read notifications are hidden by default; "All" brings them back.
+  await expect(page.getByTestId("pr-inbox-filter-unread")).toHaveAttribute("aria-pressed", "true");
   await comment.getByRole("button", { name: "Mark read: Dev: this still races on retry" }).click();
-  await expect(comment).toHaveAttribute("data-read", "true");
+  await expect(comment).toHaveCount(0);
   await expect(assigned).toHaveAttribute("data-read", "false");
   await expect(page.getByTestId("pr-inbox-unread")).toHaveText("1");
   await group.getByRole("button", { name: "Mark read", exact: true }).click();
-  await expect(group).toHaveAttribute("data-unread", "false");
+  await expect(group).toHaveCount(0);
+  await expect(page.getByTestId("pr-inbox-caught-up")).toHaveText("No unread notifications. 2 read hidden.");
   await expect(page.getByTestId("pr-inbox-unread")).toHaveCount(0);
+  await page.getByTestId("pr-inbox-filter-all").click();
+  await expect(group).toHaveAttribute("data-unread", "false");
+  await expect(comment).toHaveAttribute("data-read", "true");
   await group.getByRole("button", { name: "Mark unread", exact: true }).click();
   await expect(page.getByTestId("pr-inbox-unread")).toHaveText("2");
   // The browser build's opener is a no-op; the unit test verifies the exact ADO URL.
@@ -67,6 +73,9 @@ test("repo opt-in, background arrival, read/unread, browser-open action and disa
   await expect(option).toBeDisabled();
   await page.getByTestId("repo-manager-close").click();
   await page.getByTestId("pr-inbox-button").click();
+  // Reopening resets to the unread-only view.
+  await expect(assigned).toHaveCount(0);
+  await page.getByTestId("pr-inbox-filter-all").click();
   await expect(assigned).toHaveAttribute("data-read", "true");
   await expect(page.getByText("Notifications off")).toBeVisible();
 });
