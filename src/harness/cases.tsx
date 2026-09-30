@@ -322,6 +322,50 @@ const DiffCommentZoneCase: FC = () => {
   );
 };
 
+/**
+ * Case: Repo Explorer "Comments only" diff filter over real Monaco. One long
+ * file has a comment at line 30 and an uncommented change at line 5; a second,
+ * deeply nested file has no comments at all.
+ */
+const DIFF_FILTER_LINES = Array.from({ length: 60 }, (_, i) => `const line${i + 1} = ${i + 1};`);
+const DiffCommentsOnlyCase: FC = () => {
+  const backend = useMemo(() => {
+    const instance = new MemoryBackend();
+    instance.seedBoundSession("ws-1", "sess-1");
+    instance.gitListBranches = async () => ["main"];
+    instance.gitDiffFilesWithStatus = async () => [
+      { path: "src/features/deeply/nested/folder/uncommented.ts", status: "M" as const },
+      { path: "src/commented.ts", status: "M" as const },
+    ];
+    instance.gitDiffFileSides = async (_root, file) => {
+      const before = DIFF_FILTER_LINES.join("\n") + "\n";
+      const after = DIFF_FILTER_LINES
+        .map((line, i) => (i === 4 ? "const line5 = 500; // far-change" : i === 29 ? "const line30 = 3000; // near-comment" : line))
+        .join("\n") + "\n";
+      return file === "src/commented.ts" ? { before, after } : { before: "a\n", after: "b\n" };
+    };
+    return instance;
+  }, []);
+  const [ready, setReady] = useState(false);
+  const seededRef = useRef(false);
+  useEffect(() => {
+    if (seededRef.current) return;
+    seededRef.current = true;
+    void backend
+      .addSessionFileComment("ws-1", "src/commented.ts", 30, 30, null, "Why 3000?")
+      .then(() => setReady(true));
+  }, [backend]);
+
+  if (!ready) return <div data-testid="harness-loading">seeding…</div>;
+  return (
+    <div data-testid="harness-case" data-case="diff-comments-only" style={full}>
+      <BackendProvider backend={backend}>
+        <RepoExplorerTile tileId="t1" isFocused rootDir="C:/repo" workstreamId="ws-1" />
+      </BackendProvider>
+    </div>
+  );
+};
+
 const TerminalRevealCase: FC = () => {
   const [visible, setVisible] = useState(true);
   const [focusToken, setFocusToken] = useState(0);
@@ -750,6 +794,10 @@ export const harnessCases: Record<string, HarnessCase> = {
   "diff-comment-zone": {
     title: "Repo Explorer Unstaged diff file-comment zone",
     Component: DiffCommentZoneCase,
+  },
+  "diff-comments-only": {
+    title: "Repo Explorer diff: comments-only filter",
+    Component: DiffCommentsOnlyCase,
   },
   "terminal-reveal": {
     title: "Persisted terminal workstream reveal",

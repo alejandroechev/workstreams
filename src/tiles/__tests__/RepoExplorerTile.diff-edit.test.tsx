@@ -321,7 +321,7 @@ describe("Repo Explorer diff editing", () => {
     fireEvent.click(await screen.findByTestId("add-comment-floating"));
     expect(screen.getByTestId("comment-composer")).toBeTruthy();
 
-    fireEvent.click(screen.getByText("src/b.ts"));
+    fireEvent.click(screen.getByTitle("src/b.ts"));
 
     await waitFor(() => expect(screen.queryByTestId("comment-composer")).toBeNull());
   });

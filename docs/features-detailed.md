@@ -206,6 +206,14 @@ Multi-tab repo browser (Files / Diff / Log / Hooks / Search):
   Unstaged edits save with `Cmd+S` on macOS or `Ctrl+S` elsewhere. Comment
   composers show a Saving state and inline write errors; successful writes
   close the composer and stale list responses cannot erase the new thread.
+  File rows read `name - directory`, with the directory truncated, so the
+  file is identifiable without scrolling sideways.
+  **Comments only** narrows the file list to changed files with comment
+  threads (with a thread count per file; it follows the hide-resolved toggle)
+  and, where comments are drawn, collapses the diff to the commented lines plus
+  three lines either side. While it is on the diff is shown unified and the
+  old-line-number column is hidden: Monaco cannot collapse that column in step
+  without the diff's line mapping.
 - **Log** tab: ahead / behind counts against `origin/<current-branch>`, with
   an `origin/<branch>` badge + accent border on the matching commit
 - **Hooks** tab: lists active git hooks; the selected hook opens in a Monaco
