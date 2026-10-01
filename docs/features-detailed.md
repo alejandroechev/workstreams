@@ -217,6 +217,26 @@ Multi-tab repo browser (Files / Diff / Log / Hooks / Search):
   known syntax never match. When nothing matches, the diff pane says so instead
   of showing an unfiltered file. While it is on the diff is shown unified and
   the old-line-number column is hidden.
+  **Reading order**: ask the workstream's Copilot agent to "order my diff" and
+  it saves a recommended order through the agent channel (the `diff-order`
+  skill). The diff then opens sorted by it, each row numbered, with a
+  **Recommended / Name** toggle (Name = full path). The choice is not
+  remembered: every diff load starts on Recommended when an order exists.
+  Orders are kept per workstream and diff mode (Custom branch per target),
+  latest only. The app rejects an order that is not exactly the changed files
+  and fingerprints the diff on save, so it can tell later: content edited since
+  (order still used, small pencil marker) or files added/removed (order
+  degraded — survivors keep their order, new files follow by path — under an
+  amber **stale** chip). With no order, the toolbar names the prompt to use.
+  The Code comments filter keeps positions instead of renumbering. Saving needs
+  the agent channel, so it works on macOS and Linux only. See
+  [ADR 032](adrs/032-diff-reading-order.md).
+
+  ```sh
+  workstreams agent call diff.order.get mode=unstaged
+  workstreams agent call diff.order.set mode=unstaged paths=src/a.ts,src/a.test.ts,README.md
+  workstreams agent call diff.order.set mode=custom_branch target=main paths=...
+  ```
 - **Log** tab: ahead / behind counts against `origin/<current-branch>`, with
   an `origin/<branch>` badge + accent border on the matching commit
 - **Hooks** tab: lists active git hooks; the selected hook opens in a Monaco

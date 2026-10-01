@@ -40,6 +40,7 @@ graph TB
             DevlogRS["devlog.rs<br/>write + commit + push<br/>refuses to clobber hand-written pages"]
             AgentSocketRS["agent_socket.rs<br/>Unix socket in $TMPDIR, 0600<br/>newline-JSON frames<br/>connect-then-unlink stale reclaim"]
             AgentRegistryRS["agent_registry.rs<br/>named commands + app-issued tokens<br/>scope via created_by_session<br/>command_log (actor = what app can prove)"]
+            DiffOrderRS["diff_order.rs (ADR 032)<br/>exact-file-set check<br/>file-set + content fingerprints<br/>freshness: current / content / files"]
             WorkLanesRS["work_lanes + lane_id<br/>named folders for related workstreams<br/>unique names, ON DELETE SET NULL"]
             PullRequestsRS["pull_requests.rs<br/>ADO PR URL parsing<br/>canonical identity for dedup<br/>link storage only, no network"]
             PrInboxRS["pr_inbox.rs<br/>one app-lifetime polling worker, 120s<br/>az token + strict ADO HTTP targets<br/>reviewer/author search + deep poll (cap 25)<br/>diff engine: comments, votes, gates, closure"]
@@ -50,7 +51,7 @@ graph TB
     end
 
     subgraph Storage["Persistence"]
-        AppDB["workstreams.db<br/>(SQLite — workstreams, tiles, layouts, scrollback<br/>+ command_log audit/telemetry<br/>+ workstream_pull_requests N:M links<br/>+ work_lanes)"]
+        AppDB["workstreams.db<br/>(SQLite — workstreams, tiles, layouts, scrollback<br/>+ command_log audit/telemetry<br/>+ workstream_pull_requests N:M links<br/>+ work_lanes<br/>+ diff_orders)"]
         PrInboxDB["workstreams.db inbox state<br/>pr_inbox_config / baselines / seen / events<br/>role-scoped baselines + per-PR sub-state<br/>account-scoped dedup + durable read state"]
         LoopDB["workstreams.db loop ledger<br/>specs / runs / tasks / verifications<br/>evaluations / human approvals / events"]
         LoopYAML["bound session-state/files/loops/*.loop.yaml<br/>loop definition authority"]
@@ -83,6 +84,9 @@ graph TB
     Sidebar --> PrInboxUI
     PrInboxUI -- "Tauri: configure / snapshot / read state" --> PrInboxRS
     AgentRegistryRS -- "inbox.configure / list / read" --> PrInboxRS
+    AgentRegistryRS -- "diff.order.set / get" --> DiffOrderRS
+    RepoExplorer -- "get_diff_order (sort + drift markers)" --> DiffOrderRS
+    DiffOrderRS -- "diff_orders table" --> AppDB
     PrInboxRS --> AzureCli
     PrInboxRS -- "bounded HTTPS; redirects refused" --> AdoAPI
     PrInboxRS --> PrInboxDB

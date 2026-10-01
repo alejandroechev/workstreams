@@ -63,6 +63,10 @@ instead of buried behind tabs.
 - **Agents that can drive the app** — a session can create and update its own
   workstreams through a local CLI, so the agent does not stop at the edge of the
   worktree. It acts only on what it owns, and asks before destroying anything.
+- **Diffs in a reading order** — ask the workstream's agent to "order my diff"
+  and the Repo Explorer diff sorts by its recommendation, numbered, with a
+  Recommended / Name toggle. The app checks the order covers every changed file
+  and flags it when the diff has moved on since (macOS and Linux).
 - **ADO PR inbox** — opt in per repo to follow reviews assigned to you, PRs you opened, or both, with per-PR comment, vote, build-gate and closure events.
   Uses your `az login` account, checks every two minutes while the app is open,
   and keeps read/unread state across restarts. The first check is silent. An

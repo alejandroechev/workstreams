@@ -44,6 +44,7 @@ whatever replaced it — the history is the point.
 | [029](029-persisted-loaded-workstreams.md) | The loaded set survives a restart; the tiles mount lazily | Accepted |
 | [030](030-ado-pr-inbox.md) | ADO reviewer inbox with per-repo opt-in and app-lifetime polling | Accepted |
 | [031](031-pr-inbox-event-stream.md) | PR inbox as a per-pull-request event stream — watch modes, comment/vote/gate/closure events | Accepted |
+| [032](032-diff-reading-order.md) | Agent-recommended reading order for Repo Explorer diffs — app-validated, fingerprinted, degrades instead of discarding | Accepted |
 
 ## Writing a new ADR
 
