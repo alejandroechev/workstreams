@@ -38,6 +38,8 @@ import {
   TableCellsIcon,
   MagnifyingGlassIcon,
   FunnelIcon,
+  ExclamationTriangleIcon,
+  PencilSquareIcon,
 } from "@heroicons/react/24/outline";
 import { SqliteTableView, fileSqliteOps } from "../ui/components/SqliteTableView";
 import { FileContextMenu } from "../ui/components/FileContextMenu";
@@ -47,6 +49,14 @@ import { GITHUB_DARK_DIFF_THEME, defineGithubDiffTheme } from "../ui/monaco-diff
 import { openPath } from "@tauri-apps/plugin-opener";
 import { useFileComments } from "../files/useFileComments";
 import { hideResolvedComments } from "../files/comments-layer";
+import {
+  READING_ORDER_PROMPT,
+  defaultDiffSort,
+  driftDescription,
+  sortDiffFiles,
+  type DiffOrderView,
+  type DiffSort,
+} from "../domain/diff-reading-order";
 import {
   changedCommentLines,
   diffFileLabel,
@@ -243,6 +253,11 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
   const [diffCommentsOnly, setDiffCommentsOnly] = useState(false);
   // Changed comment lines per file; null while the changed files are scanned.
   const [codeCommentCounts, setCodeCommentCounts] = useState<Map<string, number> | null>(null);
+  // Agent-recommended reading order for the current diff (ADR 032), and the
+  // chosen sort. The sort is deliberately not persisted: every load applies
+  // the default, so a remembered "Name" can never hide a new order.
+  const [diffOrder, setDiffOrder] = useState<DiffOrderView | null>(null);
+  const [diffSort, setDiffSort] = useState<DiffSort>("name");
   const [diffOriginalEditor, setDiffOriginalEditor] =
     useState<MonacoNs.editor.ICodeEditor | null>(null);
   const diffAfterRef = useRef("");
@@ -870,11 +885,15 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
     () => (diffCommentsOnly && diffFilePath ? changedCommentLines(diffFilePath, diffBefore, diffAfter) : []),
     [diffCommentsOnly, diffFilePath, diffBefore, diffAfter],
   );
-  const shownDiffFiles = useMemo(() => {
-    if (!diffCommentsOnly) return diffFiles;
+  // Sort first, filter second: positions number the whole order, so the
+  // Code comments filter hides rows without renumbering the ones it keeps.
+  const shownDiffRows = useMemo(() => {
+    const rows = sortDiffFiles(diffFiles, diffOrder, diffSort);
+    if (!diffCommentsOnly) return rows;
     if (!codeCommentCounts) return [];
-    return diffFiles.filter((file) => (codeCommentCounts.get(file.path) ?? 0) > 0);
-  }, [diffCommentsOnly, diffFiles, codeCommentCounts]);
+    return rows.filter((row) => (codeCommentCounts.get(row.file.path) ?? 0) > 0);
+  }, [diffCommentsOnly, diffFiles, codeCommentCounts, diffOrder, diffSort]);
+  const shownDiffFiles = useMemo(() => shownDiffRows.map((row) => row.file), [shownDiffRows]);
   const codeCommentsEmpty = diffCommentsOnly && codeCommentCounts !== null && shownDiffFiles.length === 0;
   const toggleDiffCommentsOnly = useCallback(() => setDiffCommentsOnly((on) => !on), []);
   // Scan every changed file once per filter activation or diff refresh; the
@@ -1030,13 +1049,20 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
     setDiffError(null);
     try {
       const files = await backend.gitDiffFilesWithStatus(gitRoot, diffMode, baseRef);
+      // A failed read only costs the recommendation; the diff still shows.
+      const order = workstreamId
+        ? await backend.getDiffOrder(workstreamId, gitRoot, diffMode, baseRef).catch(() => null)
+        : null;
       if (requestEpoch !== diffRequestEpochRef.current) return;
       setDiffFiles(files);
+      setDiffOrder(order);
+      const sort = defaultDiffSort(order);
+      setDiffSort(sort);
       // If the previously-selected file is still in the new mode's list,
-      // keep it; otherwise drop to the first.
+      // keep it; otherwise start at the top of the list as it will be shown.
       const keep = diffFilePath && files.some((f) => f.path === diffFilePath)
         ? diffFilePath
-        : files[0]?.path ?? "";
+        : sortDiffFiles(files, order, sort)[0]?.file.path ?? "";
       setDiffFilePath(keep);
       if (keep) {
         await loadDiffSides(keep, diffMode, baseRef, requestEpoch);
@@ -1050,7 +1076,7 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
     } finally {
       if (requestEpoch === diffRequestEpochRef.current) setDiffLoading(false);
     }
-  }, [backend, customDiffBranch, gitRoot, diffFilePath, loadDiffSides]);
+  }, [backend, customDiffBranch, gitRoot, diffFilePath, loadDiffSides, workstreamId]);
 
   const selectDiffFile = useCallback(async (file: string) => {
     if (!activeDiffMode) return;
@@ -1076,9 +1102,32 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
     void selectDiffFile(shownDiffFiles[0].path);
   }, [diffCommentsOnly, shownDiffFiles, diffFilePath, selectDiffFile]);
 
+  // An agent saving an order while the diff is open takes effect at once.
+  useEffect(() => {
+    if (!activeDiffMode || !workstreamId) return;
+    const baseRef = activeDiffMode === "custom_branch" ? customDiffBranch : null;
+    let cancelled = false;
+    const unlisten = listen<{ entity?: string; id?: string }>("state-changed", (event) => {
+      if (event.payload?.entity !== "diff_order" || event.payload.id !== workstreamId) return;
+      void backend
+        .getDiffOrder(workstreamId, gitRoot, activeDiffMode, baseRef)
+        .catch(() => null)
+        .then((order) => {
+          if (cancelled) return;
+          setDiffOrder(order);
+          setDiffSort(defaultDiffSort(order));
+        });
+    });
+    return () => {
+      cancelled = true;
+      void unlisten.then((stop) => stop());
+    };
+  }, [activeDiffMode, customDiffBranch, workstreamId, backend, gitRoot]);
+
   const exitDiffMode = useCallback(() => {
     diffRequestEpochRef.current += 1;
     setDiffCommentsOnly(false);
+    setDiffOrder(null);
     setActiveDiffMode(null);
     setDiffBefore("");
     setDiffAfter("");
@@ -1584,6 +1633,81 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
       )}
       {activeDiffMode && (
         <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
+          {diffOrder ? (
+            driftDescription(diffOrder.freshness) && (
+              diffOrder.freshness === "files_changed" ? (
+                <span
+                  data-testid="diff-order-stale"
+                  title={driftDescription(diffOrder.freshness) ?? undefined}
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 3,
+                    fontSize: 10,
+                    padding: "1px 6px",
+                    borderRadius: 3,
+                    color: "#11111b",
+                    background: "#f9e2af",
+                  }}
+                >
+                  <ExclamationTriangleIcon style={{ width: 11, height: 11 }} />
+                  stale
+                </span>
+              ) : (
+                <span
+                  data-testid="diff-order-edited"
+                  title={driftDescription(diffOrder.freshness) ?? undefined}
+                  style={{ display: "inline-flex", alignItems: "center", color: "#6c7086" }}
+                >
+                  <PencilSquareIcon style={{ width: 12, height: 12 }} />
+                </span>
+              )
+            )
+          ) : (
+            <span
+              data-testid="diff-order-hint"
+              title="Ask the workstream's Copilot agent for a recommended reading order"
+              style={{ fontSize: 10, color: "#6c7086", whiteSpace: "nowrap" }}
+            >
+              Ask the agent: “{READING_ORDER_PROMPT}”
+            </span>
+          )}
+          <div
+            role="group"
+            aria-label="Sort files"
+            style={{ display: "flex", gap: 2, border: "1px solid #313244", borderRadius: 3, padding: 1 }}
+          >
+            {(["recommended", "name"] as const).map((sort) => {
+              const unavailable = sort === "recommended" && !diffOrder;
+              return (
+                <button
+                  key={sort}
+                  onClick={() => setDiffSort(sort)}
+                  disabled={unavailable}
+                  aria-pressed={diffSort === sort}
+                  title={
+                    sort === "name"
+                      ? "Sort by full path"
+                      : unavailable
+                        ? `No recommended order yet. Ask the agent: "${READING_ORDER_PROMPT}"`
+                        : "Sort in the agent's recommended reading order"
+                  }
+                  data-testid={`diff-sort-${sort}`}
+                  style={{
+                    ...toolbarButtonStyle,
+                    fontSize: 10,
+                    padding: "2px 6px",
+                    borderRadius: 2,
+                    background: diffSort === sort ? "#45475a" : "transparent",
+                    color: unavailable ? "#585b70" : diffSort === sort ? "#cdd6f4" : "#89b4fa",
+                    cursor: unavailable ? "not-allowed" : "pointer",
+                  }}
+                >
+                  {sort === "recommended" ? "Recommended" : "Name"}
+                </button>
+              );
+            })}
+          </div>
           <button
             onClick={toggleDiffCommentsOnly}
             aria-pressed={diffCommentsOnly}
@@ -1677,7 +1801,7 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
             {codeCommentsEmpty && diffFiles.length > 0 && (
               <div style={{ padding: "6px 8px", color: "#585b70", fontSize: 11 }}>No changed code comments</div>
             )}
-            {shownDiffFiles.map((f) => {
+            {shownDiffRows.map(({ file: f, position }) => {
               const label = diffFileLabel(f.path);
               const threads = diffCommentsOnly
                 ? (f.path === diffFilePath ? currentCodeCommentLines.length : codeCommentCounts?.get(f.path))
@@ -1706,6 +1830,15 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
                   onMouseEnter={(e) => { if (f.path !== diffFilePath) (e.currentTarget as HTMLElement).style.background = "#1e1e2e"; }}
                   onMouseLeave={(e) => { if (f.path !== diffFilePath) (e.currentTarget as HTMLElement).style.background = "transparent"; }}
                 >
+                  {position !== null && (
+                    <span
+                      data-testid="diff-file-position"
+                      title={`Position ${position} in the recommended reading order`}
+                      style={{ flexShrink: 0, minWidth: 14, textAlign: "right", color: "#6c7086", fontSize: 10 }}
+                    >
+                      {position}
+                    </span>
+                  )}
                   <span style={{ color: badgeColor, fontWeight: 600, flexShrink: 0, width: 12, textAlign: "center" }}>{f.status}</span>
                   <span data-testid="diff-file-name" style={{ flexShrink: 0, fontWeight: 600 }}>{label.name}</span>
                   {label.dir && (

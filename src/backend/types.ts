@@ -1,4 +1,5 @@
 // @test-skip: Type-only interface; behaviour covered by MemoryBackend + TauriBackend tests.
+import type { DiffOrderView } from "../domain/diff-reading-order";
 import type { WorkLane } from "../domain/work-lanes";
 import type { PrInboxSnapshot, PrWatchMode } from "../domain/pr-inbox";
 import type { Project, Workstream, Tile, TileType, WorkstreamLayout, CopilotConfigItem } from "../domain/types";
@@ -156,6 +157,8 @@ export interface Backend {
   gitDiffFile(directory: string, filePath: string, mode: string, baseRef?: string | null): Promise<string>;
   gitDiffFilesWithStatus(directory: string, mode: string, baseRef?: string | null): Promise<Array<{ path: string; status: "A" | "M" | "D" | "R" }>>;
   gitDiffFileSides(directory: string, filePath: string, mode: string, baseRef?: string | null): Promise<{ before: string; after: string }>;
+  /** The saved reading order for a diff and its freshness, or null (ADR 032). */
+  getDiffOrder(workstreamId: string, directory: string, mode: string, baseRef?: string | null): Promise<DiffOrderView | null>;
   // Git log & branch
   gitLog(directory: string, limit?: number): Promise<Array<{ hash: string; short_hash: string; message: string; author: string; date: string }>>;
   gitShowCommit(directory: string, hash: string): Promise<string>;

@@ -451,6 +451,24 @@ pub const COMMANDS: &[Command] = &[
         handler: pr_list,
     },
     Command {
+        id: "diff.order.set",
+        log_params: &["mode", "target"],
+        summary: "Save a recommended reading order for this workstream's diff (params: mode, target, paths=a,b,c)",
+        requires_identity: true,
+        // Replaces only the previous order for the same diff, which the agent
+        // can regenerate at any time.
+        destructive: false,
+        handler: diff_order_set,
+    },
+    Command {
+        id: "diff.order.get",
+        log_params: &["mode", "target"],
+        summary: "Read this workstream's saved reading order and whether it still matches (params: mode, target)",
+        requires_identity: true,
+        destructive: false,
+        handler: diff_order_get,
+    },
+    Command {
         id: "ws.update",
         log_params: &["id"],
         summary: "Rename or re-describe a workstream (params: id, name, description)",
@@ -1242,6 +1260,165 @@ fn ws_lanes(
         .map_err(db_error)?;
     names.sort_by_key(|name| name.to_lowercase());
     Ok(CommandOutcome::read(serde_json::json!({ "lanes": names })))
+}
+
+/// The diff a `diff.order.*` call is about, and where it lives on disk.
+///
+/// The workstream always comes from the caller's own identity (A2): there is
+/// no `ws=` override, so one session cannot order another's diff.
+fn own_diff(
+    context: &CommandContext,
+    params: &serde_json::Value,
+) -> Result<(crate::diff_order::DiffKey, String), AgentError> {
+    let caller = context.caller()?;
+    let workstream_id = caller.workstream_id().ok_or_else(|| {
+        AgentError::new(
+            "NO_WORKSTREAM",
+            "Only a session tile of a workstream can order that workstream's diff",
+            "Run this from the workstream's Copilot session.",
+        )
+    })?;
+    if let Some(named) = optional_str(params, "ws") {
+        if named != workstream_id {
+            return Err(AgentError::new(
+                "FOREIGN_WORKSTREAM",
+                format!("A session can only order its own workstream's diff, not {named}"),
+                "Drop ws=, or run this from that workstream's session.",
+            ));
+        }
+    }
+    let key = crate::diff_order::DiffKey::new(
+        workstream_id,
+        &required_str(params, "mode")?,
+        optional_str(params, "target").as_deref(),
+    )
+    .map_err(|e| AgentError::new("BAD_DIFF", e, "Use mode=unstaged|last_commit|branch_vs_master, or mode=custom_branch target=<branch>."))?;
+    let directory: Option<String> = context
+        .db
+        .query_row(
+            "SELECT directory FROM workstreams WHERE id = ?1",
+            [workstream_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(db_error)?
+        .flatten();
+    let directory = directory.filter(|d| !d.trim().is_empty()).ok_or_else(|| {
+        AgentError::new(
+            "NO_DIRECTORY",
+            "This workstream has no directory, so it has no diff",
+            "Attach the workstream to a repo first.",
+        )
+    })?;
+    Ok((key, directory))
+}
+
+fn diff_error(error: String) -> AgentError {
+    AgentError::new(
+        "DIFF_ERROR",
+        error,
+        "Check that the workstream directory is a git repo and the mode/target exist.",
+    )
+}
+
+/// Accepts `paths=a.ts,b.ts` from the CLI and a JSON array on the wire.
+fn order_paths(params: &serde_json::Value) -> Result<Vec<String>, AgentError> {
+    let paths: Vec<String> = match params.get("paths") {
+        Some(serde_json::Value::Array(items)) => items
+            .iter()
+            .filter_map(|item| item.as_str())
+            .map(|path| path.trim().to_string())
+            .collect(),
+        Some(serde_json::Value::String(list)) => list
+            .split(',')
+            .map(|path| path.trim().to_string())
+            .collect(),
+        _ => Vec::new(),
+    };
+    let paths: Vec<String> = paths.into_iter().filter(|path| !path.is_empty()).collect();
+    if paths.is_empty() {
+        return Err(AgentError::new(
+            "MISSING_PARAM",
+            "Missing required parameter: paths",
+            "Add paths=<file1>,<file2>,... listing every changed file in reading order.",
+        ));
+    }
+    Ok(paths)
+}
+
+fn diff_order_set(
+    context: &CommandContext,
+    params: &serde_json::Value,
+) -> Result<CommandOutcome, AgentError> {
+    let (key, directory) = own_diff(context, params)?;
+    let paths = order_paths(params)?;
+    // The fingerprint is always the app's own (C3); anything the caller sent
+    // under that name is ignored.
+    let snapshot = crate::diff_order::snapshot(&directory, &key).map_err(diff_error)?;
+    if let Err(mismatch) = crate::diff_order::check_paths(&snapshot, &paths) {
+        let mut parts = Vec::new();
+        for (label, list) in [
+            ("unknown", &mismatch.unknown),
+            ("missing", &mismatch.missing),
+            ("duplicated", &mismatch.duplicates),
+        ] {
+            if !list.is_empty() {
+                parts.push(format!("{label}: {}", list.join(", ")));
+            }
+        }
+        return Err(AgentError::new(
+            "ORDER_MISMATCH",
+            format!(
+                "The order must list every changed file exactly once ({})",
+                parts.join("; ")
+            ),
+            format!(
+                "Run diff.order.get mode={} for the exact changed_files, then list each once.",
+                key.mode
+            ),
+        ));
+    }
+    crate::diff_order::save(context.db, &key, &paths, &snapshot).map_err(diff_error)?;
+    Ok(CommandOutcome::changed(
+        serde_json::json!({
+            "mode": key.mode,
+            "target": key.target,
+            "count": paths.len(),
+        }),
+        StateChange::new("diff_order", key.workstream_id.clone(), "saved"),
+    ))
+}
+
+fn diff_order_get(
+    context: &CommandContext,
+    params: &serde_json::Value,
+) -> Result<CommandOutcome, AgentError> {
+    let (key, directory) = own_diff(context, params)?;
+    let current = crate::diff_order::snapshot(&directory, &key).map_err(diff_error)?;
+    // The changed files are always returned: they are exactly the set
+    // diff.order.set will validate against, which the agent needs before it
+    // has ever saved an order.
+    let order = crate::diff_order::load(context.db, &key)
+        .map_err(diff_error)?
+        .map(|stored| {
+            serde_json::json!({
+                "paths": stored.paths,
+                "saved_at": stored.saved_at,
+                "file_set_fingerprint": stored.file_set_fingerprint,
+                "content_fingerprint": stored.content_fingerprint,
+                "freshness": crate::diff_order::freshness(&stored, &current),
+            })
+        });
+    Ok(CommandOutcome::read(serde_json::json!({
+        "mode": key.mode,
+        "target": key.target,
+        "changed_files": current
+            .files
+            .iter()
+            .map(|(path, status)| serde_json::json!({"path": path, "status": status}))
+            .collect::<Vec<_>>(),
+        "order": order,
+    })))
 }
 
 fn db_error(error: rusqlite::Error) -> AgentError {
@@ -2840,6 +3017,192 @@ mod tests {
                 !command.summary.trim().is_empty(),
                 "{} needs a summary: it is what an agent reads when lost",
                 command.id
+            );
+        }
+    }
+
+    // ── diff.order.* ──────────────────────────────────────────────────────
+
+    /// A workstream whose directory is a real repo with an Unstaged diff of
+    /// `a.ts`, `b.ts` and `c.ts`.
+    fn diff_order_fixture() -> (Connection, crate::diff_order::test_repo::Repo) {
+        let repo = crate::diff_order::test_repo::Repo::new();
+        repo.write("a.ts", "a1\n");
+        repo.write("b.ts", "b1\n");
+        repo.commit_all("init");
+        repo.write("a.ts", "a2\n");
+        repo.write("b.ts", "b2\n");
+        repo.write("c.ts", "c\n");
+        let db = memory_db();
+        seed_workstream(&db, "w1", None);
+        seed_workstream(&db, "w2", None);
+        db.execute(
+            "UPDATE workstreams SET directory = ?1 WHERE id IN ('w1', 'w2')",
+            [repo.dir()],
+        )
+        .unwrap();
+        (db, repo)
+    }
+
+    #[test]
+    fn diff_order_set_stores_an_exact_order_with_app_computed_fingerprints() {
+        let (db, _repo) = diff_order_fixture();
+        let me = agent("tile-1", "w1");
+        let saved = call(
+            &db,
+            &me,
+            "diff.order.set",
+            serde_json::json!({"mode":"unstaged","paths":"c.ts, a.ts,b.ts","fingerprint":"deadbeef"}),
+        )
+        .unwrap();
+        assert_eq!(saved.data["count"], 3);
+        assert!(saved.change.is_some(), "the UI must hear about it");
+        let read = call(
+            &db,
+            &me,
+            "diff.order.get",
+            serde_json::json!({"mode":"unstaged"}),
+        )
+        .unwrap();
+        assert_eq!(
+            read.data["order"]["paths"],
+            serde_json::json!(["c.ts", "a.ts", "b.ts"])
+        );
+        assert_eq!(read.data["order"]["freshness"], "current");
+        assert_ne!(read.data["order"]["file_set_fingerprint"], "deadbeef");
+        assert_eq!(
+            read.data["order"]["file_set_fingerprint"]
+                .as_str()
+                .unwrap()
+                .len(),
+            64
+        );
+    }
+
+    #[test]
+    fn diff_order_set_accepts_a_json_array_of_paths_on_the_wire() {
+        let (db, _repo) = diff_order_fixture();
+        call(
+            &db,
+            &agent("tile-1", "w1"),
+            "diff.order.set",
+            serde_json::json!({"mode":"unstaged","paths":["b.ts","c.ts","a.ts"]}),
+        )
+        .unwrap();
+    }
+
+    /// C4: a partial or padded order must never be stored, and the agent must
+    /// be told exactly what to fix.
+    #[test]
+    fn diff_order_set_rejects_unknown_and_missing_paths_by_name() {
+        let (db, _repo) = diff_order_fixture();
+        let me = agent("tile-1", "w1");
+        let err = call(
+            &db,
+            &me,
+            "diff.order.set",
+            serde_json::json!({"mode":"unstaged","paths":"a.ts,b.ts,z.ts"}),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "ORDER_MISMATCH");
+        assert!(err.message.contains("unknown: z.ts"), "{}", err.message);
+        assert!(err.message.contains("missing: c.ts"), "{}", err.message);
+        let read = call(
+            &db,
+            &me,
+            "diff.order.get",
+            serde_json::json!({"mode":"unstaged"}),
+        )
+        .unwrap();
+        assert_eq!(read.data["order"], serde_json::Value::Null);
+        // The exact set to order is always available, before any save.
+        assert_eq!(
+            read.data["changed_files"],
+            serde_json::json!([
+                {"path":"a.ts","status":"M"},
+                {"path":"b.ts","status":"M"},
+                {"path":"c.ts","status":"A"},
+            ])
+        );
+    }
+
+    /// A2: only the workstream's own session. There is no `ws=` override, and
+    /// a caller with no workstream (the CLI outside a session) is refused.
+    #[test]
+    fn diff_order_set_only_acts_on_the_callers_own_workstream() {
+        let (db, _repo) = diff_order_fixture();
+        let other = agent("tile-2", "w2");
+        let err = call(
+            &db,
+            &other,
+            "diff.order.set",
+            serde_json::json!({"ws":"w1","mode":"unstaged","paths":"a.ts,b.ts,c.ts"}),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "FOREIGN_WORKSTREAM");
+        let err = call(
+            &db,
+            &Caller::Human,
+            "diff.order.set",
+            serde_json::json!({"mode":"unstaged","paths":"a.ts,b.ts,c.ts"}),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "NO_WORKSTREAM");
+        let read = call(
+            &db,
+            &agent("tile-1", "w1"),
+            "diff.order.get",
+            serde_json::json!({"mode":"unstaged"}),
+        )
+        .unwrap();
+        assert_eq!(read.data["order"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn diff_order_get_reports_drift_after_the_diff_moves_on() {
+        let (db, repo) = diff_order_fixture();
+        let me = agent("tile-1", "w1");
+        call(
+            &db,
+            &me,
+            "diff.order.set",
+            serde_json::json!({"mode":"unstaged","paths":"a.ts,b.ts,c.ts"}),
+        )
+        .unwrap();
+        repo.write("a.ts", "a3\n");
+        let read = call(
+            &db,
+            &me,
+            "diff.order.get",
+            serde_json::json!({"mode":"unstaged"}),
+        )
+        .unwrap();
+        assert_eq!(read.data["order"]["freshness"], "content_changed");
+        repo.write("d.ts", "d\n");
+        let read = call(
+            &db,
+            &me,
+            "diff.order.get",
+            serde_json::json!({"mode":"unstaged"}),
+        )
+        .unwrap();
+        assert_eq!(read.data["order"]["freshness"], "files_changed");
+    }
+
+    #[test]
+    fn diff_order_set_validates_the_mode_and_target() {
+        let (db, _repo) = diff_order_fixture();
+        let me = agent("tile-1", "w1");
+        for params in [
+            serde_json::json!({"mode":"staged","paths":"a.ts"}),
+            serde_json::json!({"mode":"custom_branch","paths":"a.ts"}),
+            serde_json::json!({"mode":"unstaged"}),
+        ] {
+            let err = call(&db, &me, "diff.order.set", params.clone()).unwrap_err();
+            assert!(
+                ["BAD_DIFF", "MISSING_PARAM"].contains(&err.code.as_str()),
+                "{params}: {}",
+                err.code
             );
         }
     }

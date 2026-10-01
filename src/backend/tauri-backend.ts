@@ -1,3 +1,4 @@
+import type { DiffOrderView } from "../domain/diff-reading-order";
 import { invoke } from "@tauri-apps/api/core";
 import type { WorkLane } from "../domain/work-lanes";
 import type { PrInboxSnapshot, PrWatchMode } from "../domain/pr-inbox";
@@ -414,6 +415,10 @@ export class TauriBackend implements Backend {
   async gitDiffFileSides(directory: string, filePath: string, mode: string, baseRef?: string | null): Promise<{ before: string; after: string }> {
     const [before, after] = await invoke<[string, string]>("git_diff_file_sides", { directory, filePath, mode, baseRef: baseRef ?? null });
     return { before, after };
+  }
+
+  async getDiffOrder(workstreamId: string, directory: string, mode: string, baseRef?: string | null): Promise<DiffOrderView | null> {
+    return invoke<DiffOrderView | null>("get_diff_order", { workstreamId, directory, mode, baseRef: baseRef ?? null });
   }
 
   async gitLog(directory: string, limit?: number): Promise<Array<{ hash: string; short_hash: string; message: string; author: string; date: string }>> {

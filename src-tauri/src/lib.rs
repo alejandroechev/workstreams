@@ -13,6 +13,7 @@ pub mod agent_socket;
 mod code_review;
 pub mod db;
 mod devlog;
+pub mod diff_order;
 mod file_io;
 mod fs_watcher;
 mod loop_agent;
@@ -275,6 +276,25 @@ pub(crate) fn git_command() -> std::process::Command {
 fn get_pr_inbox(state: State<'_, AppState>) -> Result<pr_inbox::InboxSnapshot, String> {
     let db = state.db.lock().map_err(|e| e.to_string())?;
     pr_inbox::snapshot(&db)
+}
+
+/// The saved reading order for a diff, for the Repo Explorer (ADR 032). The
+/// DB lock is released before git runs, so a large diff never stalls other
+/// commands.
+#[tauri::command]
+fn get_diff_order(
+    state: State<'_, AppState>,
+    workstream_id: String,
+    directory: String,
+    mode: String,
+    base_ref: Option<String>,
+) -> Result<Option<diff_order::OrderView>, String> {
+    let key = diff_order::DiffKey::new(&workstream_id, &mode, base_ref.as_deref())?;
+    let stored = {
+        let db = state.db.lock().map_err(|e| e.to_string())?;
+        diff_order::load(&db, &key)?
+    };
+    diff_order::view(stored, &directory, &key)
 }
 
 #[tauri::command]
@@ -6045,6 +6065,7 @@ pub fn run() {
             git_diff_file,
             git_diff_files_with_status,
             git_diff_file_sides,
+            get_diff_order,
             // Copilot config
             discover_copilot_config,
             // Session files & todos & DB

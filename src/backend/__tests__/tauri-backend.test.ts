@@ -531,6 +531,19 @@ describe("TauriBackend", () => {
     const sides = await backend.gitDiffFileSides("/", "f.ts", "custom_branch", "release/1.0");
     expect(invoke).toHaveBeenCalledWith("git_diff_file_sides", { directory: "/", filePath: "f.ts", mode: "custom_branch", baseRef: "release/1.0" });
     expect(sides).toEqual({ before: "before-text", after: "after-text" });
+    invoke.mockResolvedValueOnce({ paths: ["b.ts", "a.ts"], freshness: "content_changed" });
+    expect(await backend.getDiffOrder("ws-1", "/repo", "custom_branch", "main")).toEqual({
+      paths: ["b.ts", "a.ts"],
+      freshness: "content_changed",
+    });
+    expect(invoke).toHaveBeenCalledWith("get_diff_order", {
+      workstreamId: "ws-1",
+      directory: "/repo",
+      mode: "custom_branch",
+      baseRef: "main",
+    });
+    invoke.mockResolvedValueOnce(null);
+    expect(await backend.getDiffOrder("ws-1", "/repo", "unstaged")).toBeNull();
     await backend.gitShowCommit("/", "abc");
     expect(invoke).toHaveBeenCalledWith("git_show_commit", { directory: "/", hash: "abc" });
     await backend.gitCurrentBranch("/");

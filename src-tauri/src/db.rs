@@ -312,6 +312,24 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
         CREATE INDEX IF NOT EXISTS workstream_pull_requests_identity_idx
             ON workstream_pull_requests (identity);
 
+        -- An agent-recommended reading order for one diff of a workstream
+        -- (ADR 032). Latest only: one row per (workstream, mode, target).
+        -- `target` is the Custom branch target, or '' for the other modes.
+        -- The fingerprints are computed by the app at save time, never taken
+        -- from the agent, so they always describe the diff git really showed.
+        CREATE TABLE IF NOT EXISTS diff_orders (
+            workstream_id TEXT NOT NULL REFERENCES workstreams(id) ON DELETE CASCADE,
+            mode TEXT NOT NULL,
+            target TEXT NOT NULL DEFAULT '',
+            paths_json TEXT NOT NULL,
+            -- Sorted (path, status) pairs: changes when a file joins or leaves.
+            file_set_fingerprint TEXT NOT NULL,
+            -- Both sides of every file: changes on any edit.
+            content_fingerprint TEXT NOT NULL,
+            saved_at TEXT NOT NULL,
+            PRIMARY KEY (workstream_id, mode, target)
+        );
+
         CREATE TABLE IF NOT EXISTS pr_inbox_config (
             project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
             enabled INTEGER NOT NULL DEFAULT 0,
@@ -532,6 +550,7 @@ mod tests {
             "loop_events",
             "workstream_pull_requests",
             "work_lanes",
+            "diff_orders",
         ];
         for table in &expected {
             let count: i64 = conn
@@ -543,6 +562,47 @@ mod tests {
                 .unwrap();
             assert_eq!(count, 1, "table {table} missing");
         }
+    }
+
+    /// B3: latest only. A second order for the same diff must replace the
+    /// first, not sit beside it where a reader could pick the stale one.
+    #[test]
+    fn diff_orders_keep_one_row_per_workstream_mode_and_target() {
+        let conn = open_in_memory();
+        conn.execute(
+            "INSERT INTO workstreams (id, name, created_at, updated_at) VALUES ('w', 'W', 'x', 'x')",
+            [],
+        )
+        .unwrap();
+        let upsert = |paths: &str, target: &str| {
+            conn.execute(
+                "INSERT INTO diff_orders
+                   (workstream_id, mode, target, paths_json, file_set_fingerprint,
+                    content_fingerprint, saved_at)
+                 VALUES ('w', 'custom_branch', ?2, ?1, 'f', 'c', 'now')
+                 ON CONFLICT (workstream_id, mode, target) DO UPDATE SET
+                   paths_json = excluded.paths_json",
+                rusqlite::params![paths, target],
+            )
+            .unwrap();
+        };
+        upsert("[\"a\"]", "main");
+        upsert("[\"b\"]", "main");
+        upsert("[\"c\"]", "release");
+        let rows: Vec<(String, String)> = conn
+            .prepare("SELECT target, paths_json FROM diff_orders ORDER BY target")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(
+            rows,
+            vec![
+                ("main".to_string(), "[\"b\"]".to_string()),
+                ("release".to_string(), "[\"c\"]".to_string()),
+            ]
+        );
     }
 
     #[test]

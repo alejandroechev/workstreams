@@ -100,11 +100,12 @@ describe("Repo Explorer diff file list", () => {
 
   it("leads each row with the file name and follows it with the directory", async () => {
     await setup();
-    const first = rows()[0];
+    const row = (path: string) => rows().find((item) => item.getAttribute("title") === path)!;
+    const first = row("src/tiles/deep/a.ts");
     expect(within(first).getByTestId("diff-file-name")).toHaveTextContent("a.ts");
     expect(within(first).getByTestId("diff-file-dir")).toHaveTextContent("- src/tiles/deep");
     expect(first).toHaveAttribute("title", "src/tiles/deep/a.ts");
-    const root = rows()[1];
+    const root = row("README.md");
     expect(within(root).getByTestId("diff-file-name")).toHaveTextContent("README.md");
     expect(within(root).queryByTestId("diff-file-dir")).not.toBeInTheDocument();
   });

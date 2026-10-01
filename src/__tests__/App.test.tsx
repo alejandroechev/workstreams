@@ -276,6 +276,7 @@ function createBackend(): Backend {
     gitDiffFile: vi.fn(),
     gitDiffFilesWithStatus: vi.fn(async () => []),
     gitDiffFileSides: vi.fn(async () => ({ before: "", after: "" })),
+    getDiffOrder: vi.fn(async () => null),
     gitLog: vi.fn(),
     gitShowCommit: vi.fn(),
     gitCurrentBranch: vi.fn(),

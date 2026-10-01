@@ -1,3 +1,4 @@
+import type { DiffOrderView } from "../domain/diff-reading-order";
 import type { WorkLane } from "../domain/work-lanes";
 import { supportsPrInbox, type PrInboxItem, type PrInboxSnapshot, type PrWatchMode } from "../domain/pr-inbox";
 import type { Project, Workstream, Tile, TileType, WorkstreamLayout, CopilotConfigItem } from "../domain/types";
@@ -1298,6 +1299,25 @@ export class MemoryBackend implements Backend {
 
   async gitDiffFileSides(_directory: string, _filePath: string, _mode: string, _baseRef?: string | null): Promise<{ before: string; after: string }> {
     return { before: "", after: "" };
+  }
+
+  // Diff reading orders, keyed like the real table: workstream, mode, target.
+  private diffOrders = new Map<string, DiffOrderView>();
+
+  private diffOrderKey(workstreamId: string, mode: string, target: string | null | undefined): string {
+    return JSON.stringify([workstreamId, mode, target ?? ""]);
+  }
+
+  /** Test/harness helper: set (or with `null`, clear) the order for a diff. */
+  seedDiffOrder(workstreamId: string, mode: string, target: string | null, view: DiffOrderView | null): void {
+    const key = this.diffOrderKey(workstreamId, mode, target);
+    if (view) this.diffOrders.set(key, structuredClone(view));
+    else this.diffOrders.delete(key);
+  }
+
+  async getDiffOrder(workstreamId: string, _directory: string, mode: string, baseRef?: string | null): Promise<DiffOrderView | null> {
+    const view = this.diffOrders.get(this.diffOrderKey(workstreamId, mode, baseRef));
+    return view ? structuredClone(view) : null;
   }
 
   async gitLog(_directory: string, _limit?: number): Promise<Array<{ hash: string; short_hash: string; message: string; author: string; date: string }>> {

@@ -551,6 +551,168 @@ fn inbox_configuration_and_read_state_survive_cli_connections() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+/// A diff reading order end to end: real CLI, real socket, real git repo and
+/// a persistent database, with two sessions that must not cross over.
+#[test]
+fn diff_reading_orders_are_validated_owned_and_kept_per_mode() {
+    let dir = scratch_dir("dorder");
+    let repo = dir.join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    let git = |args: &[&str]| {
+        let out = Command::new("git")
+            .args(args)
+            .current_dir(&repo)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "git {args:?}");
+    };
+    git(&["init", "-q"]);
+    git(&["config", "user.email", "t@t"]);
+    git(&["config", "user.name", "t"]);
+    std::fs::write(repo.join("a.ts"), "a1\n").unwrap();
+    std::fs::write(repo.join("b.ts"), "b1\n").unwrap();
+    git(&["add", "-A"]);
+    git(&["commit", "-q", "-m", "one"]);
+    std::fs::write(repo.join("b.ts"), "b2\n").unwrap();
+    git(&["commit", "-q", "-am", "two"]);
+    std::fs::write(repo.join("a.ts"), "a2\n").unwrap();
+    std::fs::write(repo.join("c.ts"), "c\n").unwrap();
+
+    let path = socket_path_in(&dir, 11);
+    let db_path = dir.join("ws.db");
+    let db = workstreams_lib::db::open_db(&db_path).unwrap();
+    for id in ["w1", "w2"] {
+        db.execute(
+            "INSERT INTO workstreams (id, name, directory, created_at, updated_at)
+             VALUES (?1, ?1, ?2, 't', 't')",
+            rusqlite::params![id, repo.to_string_lossy()],
+        )
+        .unwrap();
+    }
+    drop(db);
+    let identities = std::sync::Arc::new(IdentityRegistry::new());
+    let mine = identities.issue("tile-1", "w1");
+    let theirs = identities.issue("tile-2", "w2");
+    let server =
+        AgentSocketServer::start(path.clone(), serve_with_db(identities, db_path.clone())).unwrap();
+    let run = |token: Option<&str>, args: &[&str]| {
+        let mut command = cli();
+        command
+            .args(args)
+            .env(SOCKET_ENV_VAR, &path)
+            .env_remove(TOKEN_ENV_VAR);
+        if let Some(token) = token {
+            command.env(TOKEN_ENV_VAR, token);
+        }
+        let output = command.output().unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        (output.status.success(), json)
+    };
+
+    // A padded, incomplete order is refused, naming exactly what is wrong.
+    let (ok, refused) = run(
+        Some(&mine),
+        &[
+            "agent",
+            "call",
+            "diff.order.set",
+            "mode=unstaged",
+            "paths=a.ts,z.ts",
+        ],
+    );
+    assert!(!ok);
+    assert_eq!(refused["code"], "ORDER_MISMATCH");
+    let message = refused["message"].as_str().unwrap();
+    assert!(
+        message.contains("unknown: z.ts") && message.contains("missing: c.ts"),
+        "{message}"
+    );
+    let (_, nothing) = run(
+        Some(&mine),
+        &["agent", "call", "diff.order.get", "mode=unstaged"],
+    );
+    assert_eq!(nothing["data"]["order"], serde_json::Value::Null);
+    assert_eq!(
+        nothing["data"]["changed_files"].as_array().unwrap().len(),
+        2
+    );
+
+    // Another workstream's session and a shell with no identity are refused.
+    let (ok, foreign) = run(
+        Some(&theirs),
+        &[
+            "agent",
+            "call",
+            "diff.order.set",
+            "ws=w1",
+            "mode=unstaged",
+            "paths=a.ts,c.ts",
+        ],
+    );
+    assert!(!ok);
+    assert_eq!(foreign["code"], "FOREIGN_WORKSTREAM");
+    let (ok, anonymous) = run(
+        None,
+        &[
+            "agent",
+            "call",
+            "diff.order.set",
+            "mode=unstaged",
+            "paths=a.ts,c.ts",
+        ],
+    );
+    assert!(!ok);
+    assert_eq!(anonymous["code"], "NO_IDENTITY");
+
+    // Orders are kept per mode, and saving again replaces.
+    let set = |mode: &str, paths: &str| {
+        let (ok, json) = run(
+            Some(&mine),
+            &[
+                "agent",
+                "call",
+                "diff.order.set",
+                &format!("mode={mode}"),
+                &format!("paths={paths}"),
+            ],
+        );
+        assert!(ok, "{json}");
+    };
+    set("unstaged", "a.ts,c.ts");
+    // Last Commit is HEAD~1 against the working tree, exactly as the view
+    // shows it, so the uncommitted a.ts belongs to it too.
+    set("last_commit", "b.ts,a.ts");
+    set("unstaged", "c.ts,a.ts");
+    let (_, unstaged) = run(
+        Some(&mine),
+        &["agent", "call", "diff.order.get", "mode=unstaged"],
+    );
+    assert_eq!(
+        unstaged["data"]["order"]["paths"],
+        serde_json::json!(["c.ts", "a.ts"])
+    );
+    assert_eq!(unstaged["data"]["order"]["freshness"], "current");
+    let (_, last) = run(
+        Some(&mine),
+        &["agent", "call", "diff.order.get", "mode=last_commit"],
+    );
+    assert_eq!(
+        last["data"]["order"]["paths"],
+        serde_json::json!(["b.ts", "a.ts"])
+    );
+
+    // The diff moving on is reported, not hidden.
+    std::fs::write(repo.join("a.ts"), "a3\n").unwrap();
+    let (_, edited) = run(
+        Some(&mine),
+        &["agent", "call", "diff.order.get", "mode=unstaged"],
+    );
+    assert_eq!(edited["data"]["order"]["freshness"], "content_changed");
+
+    drop(server);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 //
 // The skill lives in ~/.copilot/skills/ and the CLI ships in this binary, so
 // they version separately and will drift. A renamed flag or a retired command
