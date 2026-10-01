@@ -13,6 +13,7 @@ const h = vi.hoisted(() => ({
   lineCount: 100,
   originalOptions: [] as Array<{ lineNumbers?: string }>,
   listeners: new Map<string, (event: { payload: unknown }) => void>(),
+  lastModified: null as string | null,
 }));
 
 // Monaco stand-in: records options and the hidden line ranges the tile asks for.
@@ -21,7 +22,9 @@ vi.mock("@monaco-editor/react", () => ({
   DiffEditor: (props: {
     onMount?: (editor: unknown, monaco: unknown) => void;
     options?: { renderSideBySide?: boolean };
+    modified?: string;
   }) => {
+    h.lastModified = props.modified ?? null;
     const modifiedRef = useRef<Record<string, unknown> | null>(null);
     const mountedRef = useRef(false);
     h.lastOptions = props.options ?? null;
@@ -62,7 +65,10 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(async () => null) }));
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn(async (name: string, handler: (event: { payload: unknown }) => void) => {
     h.listeners.set(name, handler);
-    return () => h.listeners.delete(name);
+    // Remove only this subscription: a re-subscribe may already have replaced it.
+    return () => {
+      if (h.listeners.get(name) === handler) h.listeners.delete(name);
+    };
   }),
 }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
@@ -211,4 +217,58 @@ describe("Repo Explorer diff: recommended reading order", () => {
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(rowPaths()).toEqual(newest);
   });
+
+  // Review r2-f1: a save arriving while a mode switch is loading must not
+  // leave the selected file with an empty editor.
+  it("defers a save event that arrives mid-activation, then applies it", async () => {
+    const backend = await setup(null);
+    const sides = vi.spyOn(backend, "gitDiffFileSides");
+    let releaseActivation!: () => void;
+    const realGetOrder = backend.getDiffOrder.bind(backend);
+    let blocked = false;
+    // Hold only the activation's own order read; later reads go straight through.
+    backend.getDiffOrder = vi.fn(async (...args: Parameters<typeof backend.getDiffOrder>) => {
+      if (args[2] === "last_commit" && !blocked) {
+        blocked = true;
+        await new Promise<void>((resolve) => { releaseActivation = resolve; });
+      }
+      return realGetOrder(...args);
+    });
+    fireEvent.click(screen.getByText("Last Commit"));
+    await waitFor(() => expect(releaseActivation).toBeTypeOf("function"));
+    backend.seedDiffOrder("ws-1", "last_commit", null, { paths: RECOMMENDED, freshness: "current" });
+    h.listeners.get("state-changed")?.({ payload: { entity: "diff_order", id: "ws-1" } });
+    // Let the event's own refresh finish before the activation resumes.
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    releaseActivation();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(rowPaths()).toEqual(RECOMMENDED);
+    expect(sides.mock.calls.some(([, , mode]) => mode === "last_commit")).toBe(true);
+    // The symptom the review reproduced: a selected file with a blank editor.
+    expect(h.lastModified).toBe("y\n");
+  });
+
+  // Review r2-f2: an activation failing after a save event must not leave the
+  // list empty; the deferred refresh runs after it.
+  it("recovers the list when an activation fails around a save event", async () => {
+    const backend = await setup(null);
+    let rejectActivation!: (error: Error) => void;
+    const realFiles = backend.gitDiffFilesWithStatus.bind(backend);
+    let calls = 0;
+    backend.gitDiffFilesWithStatus = vi.fn((...args: Parameters<typeof backend.gitDiffFilesWithStatus>) => {
+      calls += 1;
+      if (calls === 1) {
+        return new Promise<Awaited<ReturnType<typeof realFiles>>>((_, reject) => { rejectActivation = reject; });
+      }
+      return realFiles(...args);
+    });
+    fireEvent.click(screen.getByText("Last Commit"));
+    await waitFor(() => expect(rejectActivation).toBeTypeOf("function"));
+    h.listeners.get("state-changed")?.({ payload: { entity: "diff_order", id: "ws-1" } });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    rejectActivation(new Error("transient git failure"));
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(screen.getAllByTestId("diff-file-item")).toHaveLength(FILES.length);
+  });
 });
+

@@ -264,6 +264,14 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
   // newer one.
   const diffListingGenRef = useRef(0);
   const diffFilePathRef = useRef("");
+  // A save event never runs alongside a diff activation: one arriving
+  // mid-activation is deferred until it finishes. Racing them let the event
+  // cancel the activation's side load (blank editor) or an older activation's
+  // error wipe the newer list.
+  const activationInFlightRef = useRef<number | null>(null);
+  const activationIdRef = useRef(0);
+  const pendingListingRefreshRef = useRef(false);
+  const runListingRefreshRef = useRef<(() => void) | null>(null);
   const [diffOriginalEditor, setDiffOriginalEditor] =
     useState<MonacoNs.editor.ICodeEditor | null>(null);
   const diffAfterRef = useRef("");
@@ -1048,7 +1056,10 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
       return;
     }
     const requestEpoch = ++diffRequestEpochRef.current;
-    const listingGen = ++diffListingGenRef.current;
+    const activationId = ++activationIdRef.current;
+    activationInFlightRef.current = activationId;
+    // Invalidates any event refresh already in flight; this read is newer.
+    ++diffListingGenRef.current;
     setActiveDiffMode(diffMode);
     setDiffLoading(true);
     setDiffBefore("");
@@ -1060,7 +1071,7 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
       const order = workstreamId
         ? await backend.getDiffOrder(workstreamId, gitRoot, diffMode, baseRef).catch(() => null)
         : null;
-      if (requestEpoch !== diffRequestEpochRef.current || listingGen !== diffListingGenRef.current) return;
+      if (requestEpoch !== diffRequestEpochRef.current) return;
       setDiffFiles(files);
       setDiffOrder(order);
       const sort = defaultDiffSort(order);
@@ -1082,6 +1093,13 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
       setDiffError(e instanceof Error ? e.message : String(e));
     } finally {
       if (requestEpoch === diffRequestEpochRef.current) setDiffLoading(false);
+      if (activationInFlightRef.current === activationId) {
+        activationInFlightRef.current = null;
+        if (pendingListingRefreshRef.current) {
+          pendingListingRefreshRef.current = false;
+          runListingRefreshRef.current?.();
+        }
+      }
     }
   }, [backend, customDiffBranch, gitRoot, diffFilePath, loadDiffSides, workstreamId]);
 
@@ -1139,12 +1157,21 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
         }
       }
     };
+    const request = () => {
+      if (activationInFlightRef.current !== null) {
+        pendingListingRefreshRef.current = true;
+        return;
+      }
+      void refresh();
+    };
+    runListingRefreshRef.current = request;
     const unlisten = listen<{ entity?: string; id?: string }>("state-changed", (event) => {
       if (event.payload?.entity !== "diff_order" || event.payload.id !== workstreamId) return;
-      void refresh();
+      request();
     });
     return () => {
       cancelled = true;
+      if (runListingRefreshRef.current === request) runListingRefreshRef.current = null;
       void unlisten.then((stop) => stop());
     };
   }, [activeDiffMode, customDiffBranch, workstreamId, backend, gitRoot, selectDiffFile]);
