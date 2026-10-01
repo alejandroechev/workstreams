@@ -356,6 +356,46 @@ const DiffCommentsOnlyCase: FC = () => {
   );
 };
 
+/**
+ * Case: Repo Explorer diff with an agent-recommended reading order. The order
+ * state comes from `?order=current|content_changed|files_changed|none`
+ * (default `current`). Five files; only the 2nd and 4th in the recommended
+ * order add a code comment, for the positions-under-filter check.
+ */
+const READING_ORDER = ["src/domain/model.ts", "src/domain/__tests__/model.test.ts", "src/ui/View.tsx", "src/ui/__tests__/View.test.tsx", "README.md"];
+const DiffReadingOrderCase: FC = () => {
+  const backend = useMemo(() => {
+    const state = new URLSearchParams(window.location.search).get("order") ?? "current";
+    const instance = new MemoryBackend();
+    instance.gitListBranches = async () => ["main"];
+    const files = state === "files_changed"
+      ? [...READING_ORDER.filter((path) => path !== "src/ui/View.tsx"), "src/ui/0-added.tsx"]
+      : READING_ORDER;
+    instance.gitDiffFilesWithStatus = async (_root, mode) =>
+      (mode === "unstaged" ? files : ["src/domain/model.ts"]).map((path) => ({ path, status: "M" as const }));
+    instance.gitDiffFileSides = async (_root, file) => ({
+      before: "export const x = 1;\n",
+      after: file === "src/domain/__tests__/model.test.ts" || file === "src/ui/__tests__/View.test.tsx"
+        ? "// Explains the case.\nexport const x = 2;\n"
+        : "export const x = 2;\n",
+    });
+    if (state !== "none") {
+      instance.seedDiffOrder("ws-1", "unstaged", null, {
+        paths: READING_ORDER,
+        freshness: state as "current" | "content_changed" | "files_changed",
+      });
+    }
+    return instance;
+  }, []);
+  return (
+    <div data-testid="harness-case" data-case="diff-reading-order" style={full}>
+      <BackendProvider backend={backend}>
+        <RepoExplorerTile tileId="t1" isFocused rootDir="C:/repo" workstreamId="ws-1" />
+      </BackendProvider>
+    </div>
+  );
+};
+
 const TerminalRevealCase: FC = () => {
   const [visible, setVisible] = useState(true);
   const [focusToken, setFocusToken] = useState(0);
@@ -788,6 +828,10 @@ export const harnessCases: Record<string, HarnessCase> = {
   "diff-comments-only": {
     title: "Repo Explorer diff: code-comments filter",
     Component: DiffCommentsOnlyCase,
+  },
+  "diff-reading-order": {
+    title: "Repo Explorer diff: recommended reading order",
+    Component: DiffReadingOrderCase,
   },
   "terminal-reveal": {
     title: "Persisted terminal workstream reveal",
