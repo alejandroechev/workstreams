@@ -48,9 +48,9 @@ import { openPath } from "@tauri-apps/plugin-opener";
 import { useFileComments } from "../files/useFileComments";
 import { hideResolvedComments } from "../files/comments-layer";
 import {
-  commentOnlyHiddenRanges,
-  commentThreadCountsByFile,
+  changedCommentLines,
   diffFileLabel,
+  hiddenRangesShowing,
   type LineRange,
 } from "../domain/diff-comment-filter";
 import { useAllFileComments } from "../files/useAllFileComments";
@@ -238,9 +238,11 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
   const [diffCommentEditor, setDiffCommentEditor] =
     useState<MonacoNs.editor.ICodeEditor | null>(null);
   const [diffEditorReadyToken, setDiffEditorReadyToken] = useState(0);
-  // "Comments only": narrow the file list to files with comment threads and
-  // collapse uncommented code in the diff pane.
+  // "Code comments": narrow the file list to files whose changes touch a code
+  // comment, and collapse each diff to just those comment lines.
   const [diffCommentsOnly, setDiffCommentsOnly] = useState(false);
+  // Changed comment lines per file; null while the changed files are scanned.
+  const [codeCommentCounts, setCodeCommentCounts] = useState<Map<string, number> | null>(null);
   const [diffOriginalEditor, setDiffOriginalEditor] =
     useState<MonacoNs.editor.ICodeEditor | null>(null);
   const diffAfterRef = useRef("");
@@ -864,26 +866,44 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
     () => hideResolvedComments(diffFileComments.comments, hideResolved),
     [diffFileComments.comments, hideResolved],
   );
-  const diffCommentCounts = useMemo(
-    () => commentThreadCountsByFile(hideResolvedComments(allComments.comments, hideResolved)),
-    [allComments.comments, hideResolved],
+  const currentCodeCommentLines = useMemo(
+    () => (diffCommentsOnly && diffFilePath ? changedCommentLines(diffFilePath, diffBefore, diffAfter) : []),
+    [diffCommentsOnly, diffFilePath, diffBefore, diffAfter],
   );
-  const shownDiffFiles = useMemo(
-    () => (diffCommentsOnly ? diffFiles.filter((file) => diffCommentCounts.has(file.path)) : diffFiles),
-    [diffCommentsOnly, diffFiles, diffCommentCounts],
-  );
-  const toggleDiffCommentsOnly = useCallback(() => {
-    const next = !diffCommentsOnly;
-    setDiffCommentsOnly(next);
-    // Collapsing code around comments that are not drawn would just hide code.
-    if (next && !commentsEnabled) toggleCommentsVisible();
-  }, [diffCommentsOnly, commentsEnabled, toggleCommentsVisible]);
-  // Counts come from the workstream-wide list, so refresh it when the filter
-  // turns on and whenever a comment is added or changed in the diff pane.
+  const shownDiffFiles = useMemo(() => {
+    if (!diffCommentsOnly) return diffFiles;
+    if (!codeCommentCounts) return [];
+    return diffFiles.filter((file) => (codeCommentCounts.get(file.path) ?? 0) > 0);
+  }, [diffCommentsOnly, diffFiles, codeCommentCounts]);
+  const codeCommentsEmpty = diffCommentsOnly && codeCommentCounts !== null && shownDiffFiles.length === 0;
+  const toggleDiffCommentsOnly = useCallback(() => setDiffCommentsOnly((on) => !on), []);
+  // Scan every changed file once per filter activation or diff refresh; the
+  // file list cannot be narrowed without both sides of each file.
   useEffect(() => {
-    if (diffCommentsOnly) void allComments.reload();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [diffCommentsOnly, diffFileComments.comments]);
+    if (!diffCommentsOnly || !activeDiffMode) {
+      setCodeCommentCounts(null);
+      return;
+    }
+    let cancelled = false;
+    setCodeCommentCounts(null);
+    const baseRef = activeDiffMode === "custom_branch" ? customDiffBranch : null;
+    const queue = diffFiles.filter((file) => file.status !== "D").map((file) => file.path);
+    const counts = new Map<string, number>();
+    const worker = async () => {
+      for (let path = queue.shift(); path !== undefined; path = queue.shift()) {
+        try {
+          const { before, after } = await backend.gitDiffFileSides(gitRoot, path, activeDiffMode, baseRef);
+          counts.set(path, changedCommentLines(path, before, after).length);
+        } catch {
+          counts.set(path, 0);
+        }
+      }
+    };
+    void Promise.all(Array.from({ length: CODE_COMMENT_SCAN_CONCURRENCY }, worker)).then(() => {
+      if (!cancelled) setCodeCommentCounts(counts);
+    });
+    return () => { cancelled = true; };
+  }, [diffCommentsOnly, activeDiffMode, customDiffBranch, diffFiles, backend, gitRoot]);
   useEffect(() => { diffEditableRef.current = diffEditable; }, [diffEditable]);
   useEffect(() => { diffAfterRef.current = diffAfter; setDiffDirty(false); }, [diffAfter]);
   useEffect(() => {
@@ -892,10 +912,10 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
     // it with a different source, and Monaco unions the sources.
     const modified = diffCommentEditor as unknown as HiddenAreasEditor | null;
     const setModifiedHidden = modified?.setHiddenAreas?.bind(modified);
-    if (!modified || !setModifiedHidden || !diffCommentsOnly || !diffCommentsEnabled) return;
+    if (!modified || !setModifiedHidden || !diffCommentsOnly) return;
     const modifiedLines = modified.getModel()?.getLineCount() ?? 0;
     setModifiedHidden(
-      commentOnlyHiddenRanges(modifiedLines, visibleDiffComments, DIFF_COMMENT_CONTEXT_LINES),
+      hiddenRangesShowing(modifiedLines, currentCodeCommentLines),
       DIFF_COMMENTS_ONLY_SOURCE,
     );
     // A unified diff still renders the original editor, as a column of old
@@ -911,9 +931,7 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
     diffOriginalEditor,
     diffEditorReadyToken,
     diffCommentsOnly,
-    diffCommentsEnabled,
-    visibleDiffComments,
-    diffAfter,
+    currentCodeCommentLines,
   ]);
 
   /**
@@ -1568,16 +1586,13 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
         <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
           <button
             onClick={toggleDiffCommentsOnly}
-            disabled={!commentsAvailable}
             aria-pressed={diffCommentsOnly}
             title={
-              !commentsAvailable
-                ? "Open a Copilot session in this workstream to filter by comments"
-                : diffCommentsOnly
-                  ? "Showing commented files and code only — click to show everything"
-                  : "Show only files with comments, and only the code around them"
+              diffCommentsOnly
+                ? "Showing only changed code comments — click to show the whole diff"
+                : "Review only the code comments this diff adds or changes"
             }
-            data-testid="repo-explorer-diff-comments-only"
+            data-testid="repo-explorer-diff-code-comments"
             style={{
               ...toolbarButtonStyle,
               display: "inline-flex",
@@ -1587,12 +1602,12 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
               padding: "2px 6px",
               borderRadius: 3,
               background: diffCommentsOnly ? "#313244" : "transparent",
-              color: !commentsAvailable ? "#585b70" : diffCommentsOnly ? "#a6e3a1" : "#89b4fa",
-              cursor: commentsAvailable ? "pointer" : "not-allowed",
+              color: diffCommentsOnly ? "#a6e3a1" : "#89b4fa",
+              cursor: "pointer",
             }}
           >
             <FunnelIcon style={{ width: 12, height: 12 }} />
-            Comments only
+            Code comments
           </button>
           <span style={{ fontSize: 10, color: "#6c7086" }} data-testid="diff-file-count">
             {diffFiles.length} file{diffFiles.length !== 1 ? "s" : ""} changed
@@ -1656,12 +1671,17 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
             {!diffLoading && diffFiles.length === 0 && (
               <div style={{ padding: "6px 8px", color: "#585b70", fontSize: 11 }}>No changes</div>
             )}
-            {diffCommentsOnly && diffFiles.length > 0 && shownDiffFiles.length === 0 && (
-              <div style={{ padding: "6px 8px", color: "#585b70", fontSize: 11 }}>No changed files have comments</div>
+            {diffCommentsOnly && diffFiles.length > 0 && codeCommentCounts === null && (
+              <div style={{ padding: "6px 8px", color: "#585b70", fontSize: 11 }}>Scanning for comments…</div>
+            )}
+            {codeCommentsEmpty && diffFiles.length > 0 && (
+              <div style={{ padding: "6px 8px", color: "#585b70", fontSize: 11 }}>No changed code comments</div>
             )}
             {shownDiffFiles.map((f) => {
               const label = diffFileLabel(f.path);
-              const threads = diffCommentsOnly ? diffCommentCounts.get(f.path) : undefined;
+              const threads = diffCommentsOnly
+                ? (f.path === diffFilePath ? currentCodeCommentLines.length : codeCommentCounts?.get(f.path))
+                : undefined;
               const badgeColor = f.status === "A" ? "#a6e3a1" : f.status === "D" ? "#f38ba8" : f.status === "R" ? "#cba6f7" : "#f9e2af";
               return (
                 <div
@@ -1699,7 +1719,7 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
                   {threads !== undefined && (
                     <span
                       data-testid="diff-file-comment-count"
-                      title={`${threads} comment thread${threads === 1 ? "" : "s"}`}
+                      title={`${threads} changed comment line${threads === 1 ? "" : "s"}`}
                       style={{ marginLeft: "auto", flexShrink: 0, color: "#a6e3a1", fontSize: 10 }}
                     >
                       {threads}
@@ -1713,7 +1733,14 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
             className={diffCommentsEnabled ? INTERACTIVE_ZONES_CLASS : undefined}
             style={{ flex: 1, position: "relative", minWidth: 0 }}
           >
-            {diffFilePath ? (
+            {codeCommentsEmpty ? (
+              <div
+                data-testid="diff-code-comments-empty"
+                style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", color: "#585b70" }}
+              >
+                Nothing to review: no change in this diff touches a code comment.
+              </div>
+            ) : diffFilePath ? (
               <DiffEditor
                 height="100%"
                 language={detectLanguage(diffFilePath)}
@@ -2827,7 +2854,7 @@ const searchResultItemStyle: React.CSSProperties = {
   color: "#cdd6f4",
 };
 
-const DIFF_COMMENT_CONTEXT_LINES = 3;
+const CODE_COMMENT_SCAN_CONCURRENCY = 6;
 const DIFF_COMMENTS_ONLY_SOURCE = "workstreams.diff-comments-only";
 interface HiddenAreasEditor {
   setHiddenAreas?: (ranges: LineRange[], source?: unknown) => void;

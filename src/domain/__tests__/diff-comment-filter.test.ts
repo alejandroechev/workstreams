@@ -1,28 +1,12 @@
 import { describe, it, expect } from "vitest";
 import {
   diffFileLabel,
-  commentThreadCountsByFile,
-  commentOnlyHiddenRanges,
+  commentSyntaxFor,
+  commentLineMask,
+  changedLineNumbers,
+  changedCommentLines,
+  hiddenRangesShowing,
 } from "../diff-comment-filter";
-import type { SessionFileComment } from "../file-comments";
-
-function comment(over: Partial<SessionFileComment> = {}): SessionFileComment {
-  return {
-    id: "c",
-    workstream_id: "ws",
-    file: "src/a.ts",
-    anchor_line_start: 10,
-    anchor_line_end: 10,
-    anchor_text: null,
-    body: "b",
-    author: "reviewer",
-    parent_id: null,
-    status: "open",
-    created_at: "2026-01-01T00:00:00Z",
-    updated_at: "2026-01-01T00:00:00Z",
-    ...over,
-  };
-}
 
 describe("diff file list labels", () => {
   it("puts the file name first and its directory after", () => {
@@ -41,64 +25,118 @@ describe("diff file list labels", () => {
   });
 });
 
-describe("counting comment threads per file", () => {
-  it("counts threads, not replies", () => {
-    const counts = commentThreadCountsByFile([
-      comment({ id: "a" }),
-      comment({ id: "r", parent_id: "a" }),
-      comment({ id: "b", anchor_line_start: 20, anchor_line_end: 20 }),
-      comment({ id: "c", file: "src/b.ts" }),
-    ]);
-    expect(counts.get("src/a.ts")).toBe(2);
-    expect(counts.get("src/b.ts")).toBe(1);
-    expect(counts.get("src/none.ts")).toBeUndefined();
+const mask = (path: string, text: string) => commentLineMask(text, commentSyntaxFor(path)!);
+
+describe("finding code comments", () => {
+  it("marks doc, line and trailing comments in Rust, not code", () => {
+    expect(mask("a.rs", [
+      "/// Docs.",
+      "#[cfg(unix)]",
+      "const X: &str = \"en_US\"; // why",
+      "fn f() {}",
+      "    // indented",
+    ].join("\n"))).toEqual([true, false, true, false, true]);
+  });
+
+  it("marks every line of a block comment, including its blank lines", () => {
+    expect(mask("a.ts", [
+      "/**",
+      " * Explains.",
+      "",
+      " */",
+      "const x = 1; /* inline */ const y = 2;",
+      "const z = 3;",
+    ].join("\n"))).toEqual([true, true, true, true, true, false]);
+  });
+
+  // A URL in a string is the classic false positive.
+  it("ignores comment markers inside strings", () => {
+    expect(mask("a.ts", [
+      'const url = "https://example.com";',
+      "const s = 'a // b';",
+      "const t = `/* not */`;",
+      'const e = "quote \\" // still string";',
+    ].join("\n"))).toEqual([false, false, false, false]);
+  });
+
+  // Rust lifetimes would otherwise open a string that swallows the comment.
+  it("does not treat a Rust lifetime as a string", () => {
+    expect(mask("a.rs", "fn f<'a>(x: &'a str) {} // note")).toEqual([true]);
+  });
+
+  it("knows hash, dash and markup comment styles", () => {
+    expect(mask("run.py", "x = 1  # why\ny = '#not'")).toEqual([true, false]);
+    expect(mask("deploy.sh", "# setup\necho hi")).toEqual([true, false]);
+    expect(mask("q.sql", "-- pick\nSELECT 1")).toEqual([true, false]);
+    expect(mask("README.md", "<!-- hidden\nstill -->\ntext")).toEqual([true, true, false]);
+    expect(mask("Dockerfile", "# base\nFROM x")).toEqual([true, false]);
+  });
+
+  it("has no syntax for files it cannot reason about", () => {
+    expect(commentSyntaxFor("image.png")).toBeNull();
+    expect(commentSyntaxFor("data.json")).toBeNull();
   });
 });
 
-describe("hiding code that has no comments", () => {
-  it("keeps a few lines of context around each comment and hides the rest", () => {
-    expect(commentOnlyHiddenRanges(100, [comment({ anchor_line_start: 40, anchor_line_end: 42 })], 3))
-      .toEqual([
-        { startLineNumber: 1, endLineNumber: 36 },
-        { startLineNumber: 46, endLineNumber: 100 },
-      ]);
+describe("finding changed lines", () => {
+  it("reports added and modified lines on the new side, 1-based", () => {
+    expect(changedLineNumbers("a\nb\nc\n", "a\nB\nc\nd\n")).toEqual([2, 4]);
   });
 
-  it("merges comments whose context windows touch or overlap", () => {
-    expect(commentOnlyHiddenRanges(100, [
-      comment({ id: "a", anchor_line_start: 10, anchor_line_end: 10 }),
-      comment({ id: "b", anchor_line_start: 17, anchor_line_end: 17 }),
-    ], 3)).toEqual([
-      { startLineNumber: 1, endLineNumber: 6 },
-      { startLineNumber: 21, endLineNumber: 100 },
+  it("does not report lines that only moved because of an insertion above", () => {
+    expect(changedLineNumbers("a\nb\nc", "new\na\nb\nc")).toEqual([1]);
+  });
+
+  it("reports every line of a new file and none of an unchanged one", () => {
+    expect(changedLineNumbers("", "x\ny")).toEqual([1, 2]);
+    expect(changedLineNumbers("x\ny", "x\ny")).toEqual([]);
+  });
+});
+
+describe("changed code comments", () => {
+  const before = [
+    "#[cfg(unix)]",
+    "fn old() {}",
+  ].join("\n");
+  const after = [
+    "#[cfg(unix)]",
+    "fn old() {}",
+    "",
+    "/// The locale advertised to a spawned shell.",
+    "///",
+    "#[cfg(unix)]",
+    'const DEFAULT_LOCALE: &str = "en_US.UTF-8";',
+    "let x = 1; // trailing",
+  ].join("\n");
+
+  it("keeps only comment lines that the diff changed", () => {
+    expect(changedCommentLines("pty.rs", before, after)).toEqual([4, 5, 8]);
+  });
+
+  it("ignores comments that were already there", () => {
+    expect(changedCommentLines("a.rs", "// old\nfn f() {}", "// old\nfn g() {}")).toEqual([]);
+  });
+
+  it("finds nothing in files with no known comment syntax", () => {
+    expect(changedCommentLines("a.json", "", "// x")).toEqual([]);
+  });
+});
+
+describe("hiding everything but chosen lines", () => {
+  it("hides the gaps around the visible lines", () => {
+    expect(hiddenRangesShowing(10, [3, 4, 8])).toEqual([
+      { startLineNumber: 1, endLineNumber: 2 },
+      { startLineNumber: 5, endLineNumber: 7 },
+      { startLineNumber: 9, endLineNumber: 10 },
     ]);
   });
 
-  it("does not hide past either end of the file", () => {
-    expect(commentOnlyHiddenRanges(10, [
-      comment({ id: "a", anchor_line_start: 1, anchor_line_end: 1 }),
-      comment({ id: "b", anchor_line_start: 10, anchor_line_end: 10 }),
-    ], 3)).toEqual([{ startLineNumber: 5, endLineNumber: 6 }]);
-  });
-
-  it("clamps anchors that drifted past the end of a shorter file", () => {
-    expect(commentOnlyHiddenRanges(20, [comment({ anchor_line_start: 50, anchor_line_end: 55 })], 3))
-      .toEqual([{ startLineNumber: 1, endLineNumber: 16 }]);
-  });
-
-  it("anchors replies by their thread, so a reply never widens what is shown", () => {
-    expect(commentOnlyHiddenRanges(100, [
-      comment({ id: "a", anchor_line_start: 50, anchor_line_end: 50 }),
-      comment({ id: "r", parent_id: "a", anchor_line_start: 90, anchor_line_end: 90 }),
-    ], 0)).toEqual([
-      { startLineNumber: 1, endLineNumber: 49 },
-      { startLineNumber: 51, endLineNumber: 100 },
-    ]);
+  it("does not hide past either end", () => {
+    expect(hiddenRangesShowing(3, [1, 3])).toEqual([{ startLineNumber: 2, endLineNumber: 2 }]);
   });
 
   // Hiding every line would leave an empty pane with no way back to the code.
-  it("hides nothing when the file has no comments", () => {
-    expect(commentOnlyHiddenRanges(100, [], 3)).toEqual([]);
-    expect(commentOnlyHiddenRanges(0, [comment()], 3)).toEqual([]);
+  it("hides nothing when there is nothing to show", () => {
+    expect(hiddenRangesShowing(10, [])).toEqual([]);
   });
 });

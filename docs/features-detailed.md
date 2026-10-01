@@ -208,12 +208,15 @@ Multi-tab repo browser (Files / Diff / Log / Hooks / Search):
   close the composer and stale list responses cannot erase the new thread.
   File rows read `name - directory`, with the directory truncated, so the
   file is identifiable without scrolling sideways.
-  **Comments only** narrows the file list to changed files with comment
-  threads (with a thread count per file; it follows the hide-resolved toggle)
-  and, where comments are drawn, collapses the diff to the commented lines plus
-  three lines either side. While it is on the diff is shown unified and the
-  old-line-number column is hidden: Monaco cannot collapse that column in step
-  without the diff's line mapping.
+  **Code comments** is a focused review of the comments a diff introduces:
+  it narrows the file list to files whose added or changed lines contain a
+  code comment (whole-line, trailing, or inside a block comment; markers in
+  strings are ignored), shows how many such lines each file has, and collapses
+  each diff to just those lines. Comment syntax is chosen per language from the
+  file name (C-like `//` + `/* */`, `#`, `--`, `<!-- -->`, `;`); files with no
+  known syntax never match. When nothing matches, the diff pane says so instead
+  of showing an unfiltered file. While it is on the diff is shown unified and
+  the old-line-number column is hidden.
 - **Log** tab: ahead / behind counts against `origin/<current-branch>`, with
   an `origin/<branch>` badge + accent border on the matching commit
 - **Hooks** tab: lists active git hooks; the selected hook opens in a Monaco

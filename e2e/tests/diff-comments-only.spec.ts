@@ -1,9 +1,9 @@
 /**
- * Repo Explorer diff "Comments only" filter over real Monaco.
+ * Repo Explorer diff "Code comments" filter over real Monaco.
  *
- * The line ranges are a pure function with unit tests. Only a real browser can
- * show that Monaco actually collapses the uncommented code while the comment's
- * own view zone survives, that the old-line column is hidden meanwhile, and
+ * Comment detection and line ranges are pure functions with unit tests. Only a
+ * real browser can show that Monaco actually collapses everything but the
+ * changed comment lines, that the old-line column is hidden meanwhile, and
  * that it all comes back when the filter is switched off.
  */
 import { test, expect, type Page } from "@playwright/test";
@@ -20,7 +20,9 @@ async function openCase(page: Page) {
 }
 
 const renderedLine = (page: Page, text: string) =>
-  page.locator(".monaco-diff-editor .view-line", { hasText: text });
+  // The modified side only: in a unified diff the original editor still keeps
+  // its (clipped) text in the DOM.
+  page.locator(".monaco-diff-editor .modified-in-monaco-diff-editor .view-line", { hasText: text });
 
 test("file rows lead with a fully visible file name", async ({ page }) => {
   await openCase(page);
@@ -36,33 +38,33 @@ test("file rows lead with a fully visible file name", async ({ page }) => {
   expect(scrolls).toBe(false);
 });
 
-test("comments only narrows the files and collapses uncommented code, then restores it", async ({ page }) => {
+test("code comments narrows the files and collapses the diff to them, then restores it", async ({ page }) => {
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(e.message));
   await openCase(page);
 
   await page.getByTestId("diff-file-item").filter({ hasText: "commented.ts" }).last().click();
-  await expect(renderedLine(page, "far-change")).toBeVisible();
+  await expect(renderedLine(page, "farChange")).toBeVisible();
 
-  await page.getByTestId("repo-explorer-diff-comments-only").click();
+  await page.getByTestId("repo-explorer-diff-code-comments").click();
 
   await expect(page.getByTestId("diff-file-item")).toHaveCount(1);
   await expect(page.getByTestId("diff-file-name")).toHaveText("commented.ts");
   await expect(page.getByTestId("diff-file-comment-count")).toHaveText("1");
-  await expect(page.locator('[data-testid^="comment-zone-"]')).toContainText("Why 3000?");
-  await expect(renderedLine(page, "near-comment")).toBeVisible();
-  // The uncommented change is collapsed away.
-  await expect(renderedLine(page, "far-change")).toHaveCount(0);
+  await expect(renderedLine(page, "Explains why line 30 exists")).toBeVisible();
+  // Code changes and unchanged code are collapsed away.
+  await expect(renderedLine(page, "farChange")).toHaveCount(0);
+  await expect(renderedLine(page, "const line29 = 29;")).toHaveCount(0);
+  await expect(renderedLine(page, "const line31 = 31;")).toHaveCount(0);
   // The old-line column cannot collapse in step with it, so it is hidden.
   const oldNumbers = page.locator(".monaco-diff-editor .original-in-monaco-diff-editor .line-numbers");
   await expect(oldNumbers).toHaveCount(0);
-  await page.screenshot({ path: "test-results/diff-comments-only-on.png" });
+  await page.screenshot({ path: "test-results/diff-code-comments-on.png" });
 
-  await page.getByTestId("repo-explorer-diff-comments-only").click();
+  await page.getByTestId("repo-explorer-diff-code-comments").click();
   await expect(page.getByTestId("diff-file-item")).toHaveCount(2);
-  await expect(renderedLine(page, "far-change")).toBeVisible();
+  await expect(renderedLine(page, "farChange")).toBeVisible();
   await expect(oldNumbers.first()).toBeVisible();
-  await page.screenshot({ path: "test-results/diff-comments-only-off.png" });
 
   expect(errors).toEqual([]);
 });
