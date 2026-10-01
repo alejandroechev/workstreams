@@ -43,7 +43,7 @@ test("code comments narrows the files and collapses the diff to them, then resto
   page.on("pageerror", (e) => errors.push(e.message));
   await openCase(page);
 
-  await page.getByTestId("diff-file-item").filter({ hasText: "commented.ts" }).last().click();
+  await page.locator(`[data-testid="diff-file-item"][title="src/commented.ts"]`).click();
   await expect(renderedLine(page, "farChange")).toBeVisible();
 
   await page.getByTestId("repo-explorer-diff-code-comments").click();
