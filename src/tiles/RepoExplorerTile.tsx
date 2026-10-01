@@ -1881,9 +1881,13 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
                     fontSize: 11,
                     color: f.path === diffFilePath ? "#cdd6f4" : "#a6adc8",
                     background: f.path === diffFilePath ? "#313244" : "transparent",
-                    // Name first, directory truncated after it: the row says
-                    // which file it is without scrolling; the title has the path.
-                    minWidth: 0,
+                    // Name first, so the row says which file it is without
+                    // scrolling. The row grows to its full content width so the
+                    // whole directory stays reachable by scrolling the list
+                    // sideways, while still filling the panel for short paths.
+                    width: "max-content",
+                    minWidth: "100%",
+                    boxSizing: "border-box",
                     whiteSpace: "nowrap",
                   }}
                   onMouseEnter={(e) => { if (f.path !== diffFilePath) (e.currentTarget as HTMLElement).style.background = "#1e1e2e"; }}
@@ -1903,7 +1907,7 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
                   {label.dir && (
                     <span
                       data-testid="diff-file-dir"
-                      style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", color: "#6c7086" }}
+                      style={{ color: "#6c7086" }}
                     >
                       - {label.dir}
                     </span>

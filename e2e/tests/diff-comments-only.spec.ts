@@ -24,18 +24,25 @@ const renderedLine = (page: Page, text: string) =>
   // its (clipped) text in the DOM.
   page.locator(".monaco-diff-editor .modified-in-monaco-diff-editor .view-line", { hasText: text });
 
-test("file rows lead with a fully visible file name", async ({ page }) => {
+test("file rows lead with the name and keep the full directory reachable by scrolling", async ({ page }) => {
   await openCase(page);
   const panel = page.getByTestId("diff-file-list");
   const row = page.getByTestId("diff-file-item").filter({ hasText: "uncommented.ts" });
+  const dir = row.getByTestId("diff-file-dir");
   await expect(row.getByTestId("diff-file-name")).toHaveText("uncommented.ts");
-  await expect(row.getByTestId("diff-file-dir")).toHaveText("- src/features/deeply/nested/folder");
+  await expect(dir).toHaveText("- src/features/deeply/nested/folder");
+  // The name is readable without scrolling the list sideways.
   const name = await row.getByTestId("diff-file-name").boundingBox();
   const box = await panel.boundingBox();
-  // The name must be readable without scrolling the list sideways.
   expect(name!.x + name!.width).toBeLessThanOrEqual(box!.x + box!.width);
-  const scrolls = await panel.evaluate((el) => el.scrollWidth > el.clientWidth);
-  expect(scrolls).toBe(false);
+  // The directory is never cut short: it overflows the panel instead, and
+  // scrolling the list sideways brings its end into view.
+  expect(await dir.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
+  expect(await panel.evaluate((el) => el.scrollWidth > el.clientWidth)).toBe(true);
+  await panel.evaluate((el) => { el.scrollLeft = el.scrollWidth; });
+  const end = await dir.boundingBox();
+  const scrolled = await panel.boundingBox();
+  expect(end!.x + end!.width).toBeLessThanOrEqual(scrolled!.x + scrolled!.width + 1);
 });
 
 test("code comments narrows the files and collapses the diff to them, then restores it", async ({ page }) => {

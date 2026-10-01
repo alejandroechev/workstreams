@@ -206,8 +206,8 @@ Multi-tab repo browser (Files / Diff / Log / Hooks / Search):
   Unstaged edits save with `Cmd+S` on macOS or `Ctrl+S` elsewhere. Comment
   composers show a Saving state and inline write errors; successful writes
   close the composer and stale list responses cannot erase the new thread.
-  File rows read `name - directory`, with the directory truncated, so the
-  file is identifiable without scrolling sideways.
+  File rows read `name - directory`, so the file is identifiable without
+  scrolling; the full directory stays reachable by scrolling the list sideways.
   **Code comments** is a focused review of the comments a diff introduces:
   it narrows the file list to files whose added or changed lines contain a
   code comment (whole-line, trailing, or inside a block comment; markers in
