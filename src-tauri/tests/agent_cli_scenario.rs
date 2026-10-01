@@ -719,13 +719,18 @@ fn diff_reading_orders_are_validated_owned_and_kept_per_mode() {
 // would leave an agent following instructions that no longer work, with no
 // signal until it failed in the field.
 
-/// Every command the skill names must still exist.
+/// Every command any CLI skill names must still exist.
 #[test]
 fn the_skill_only_documents_commands_that_exist() {
-    let skill = read_skill().expect("skill must be installed; see the test above");
+    let skills = read_cli_skills();
+    assert!(
+        !skills.is_empty(),
+        "skill must be installed; see the test above"
+    );
 
-    let documented: std::collections::BTreeSet<String> = skill
-        .lines()
+    let documented: std::collections::BTreeSet<String> = skills
+        .iter()
+        .flat_map(|(_, body)| body.lines())
         .filter_map(|line| line.trim().strip_prefix("workstreams agent call "))
         .filter_map(|rest| rest.split_whitespace().next())
         .filter(|name| name.contains('.'))
@@ -744,11 +749,20 @@ fn the_skill_only_documents_commands_that_exist() {
     }
 }
 
-/// Every error code the skill teaches must be one the code can actually
+/// Every error code a CLI skill teaches must be one the code can actually
 /// produce, or an agent is being told to expect something it will never see.
 #[test]
 fn the_skill_only_documents_error_codes_that_are_reachable() {
-    let skill = read_skill().expect("skill must be installed; see the discoverability test");
+    let skills = read_cli_skills();
+    assert!(
+        !skills.is_empty(),
+        "skill must be installed; see the discoverability test"
+    );
+    let skill = skills
+        .iter()
+        .map(|(_, body)| body.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
 
     // Derived from the source, not a hand-kept list: the previous hardcoded
     // array was itself a drift risk, and this test exists to catch drift.
@@ -831,18 +845,63 @@ fn error_codes_in_source() -> std::collections::BTreeSet<String> {
     codes
 }
 
+/// Every installed skill that drives the CLI, as `(name, body)`.
+///
+/// Several skills use it (`ws`, `diff-order`), and directory order is
+/// arbitrary, so checks that apply to all of them iterate this list.
+fn read_cli_skills() -> Vec<(String, String)> {
+    let Some(home) = std::env::var("HOME").ok() else {
+        return Vec::new();
+    };
+    let root = std::path::PathBuf::from(home).join(".copilot/skills");
+    let mut skills: Vec<(String, String)> = std::fs::read_dir(root)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|entry| {
+            let body = std::fs::read_to_string(entry.path().join("SKILL.md")).ok()?;
+            body.contains("workstreams agent call").then(|| {
+                let name = body
+                    .lines()
+                    .find_map(|line| line.strip_prefix("name:"))
+                    .map(|name| name.trim().to_string())
+                    .unwrap_or_default();
+                (name, body)
+            })
+        })
+        .collect();
+    skills.sort();
+    skills
+}
+
+/// The `ws` skill specifically: the destructive-command rule and the
+/// environment gate live there.
 fn read_skill() -> Option<String> {
-    let root = std::path::PathBuf::from(std::env::var("HOME").ok()?).join(".copilot/skills");
-    for entry in std::fs::read_dir(root).ok()?.flatten() {
-        let candidate = entry.path().join("SKILL.md");
-        let Ok(body) = std::fs::read_to_string(&candidate) else {
-            continue;
-        };
-        if body.contains("workstreams agent call") {
-            return Some(body);
-        }
+    read_cli_skills()
+        .into_iter()
+        .find(|(name, _)| name == "ws")
+        .map(|(_, body)| body)
+}
+
+/// The diff-order skill must teach the two commands it exists for, so a
+/// rename of either breaks here rather than in an agent's terminal.
+#[test]
+fn the_diff_order_skill_documents_its_commands() {
+    let skills = read_cli_skills();
+    let (_, body) = skills
+        .iter()
+        .find(|(name, _)| name == "diff-order")
+        .expect("~/.copilot/skills/diff-order/SKILL.md must be installed");
+    for command in ["diff.order.get", "diff.order.set"] {
+        assert!(
+            body.contains(&format!("workstreams agent call {command}")),
+            "the diff-order skill must show `{command}`"
+        );
     }
-    None
+    assert!(
+        body.contains("$WORKSTREAMS_SOCKET"),
+        "it must gate on the socket variable"
+    );
 }
 
 /// Fails when the skill cannot be found at all.
