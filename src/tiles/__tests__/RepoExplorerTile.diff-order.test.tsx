@@ -178,4 +178,37 @@ describe("Repo Explorer diff: recommended reading order", () => {
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(sortButton("Name")).toHaveAttribute("aria-pressed", "true");
   });
+
+  // Review r1-f1: the agent usually changes files and then saves; the list
+  // must pick up both, or the new file silently drops out of the order.
+  it("reloads the changed files with the order when the agent saves", async () => {
+    const backend = await setup(null);
+    const sides = vi.spyOn(backend, "gitDiffFileSides");
+    const callsBefore = sides.mock.calls.length;
+    backend.gitDiffFilesWithStatus = async () =>
+      [...FILES, "src/new.ts"].map((path) => ({ path, status: "M" as const }));
+    backend.seedDiffOrder("ws-1", "unstaged", null, { paths: ["src/new.ts", ...RECOMMENDED], freshness: "current" });
+    h.listeners.get("state-changed")?.({ payload: { entity: "diff_order", id: "ws-1" } });
+    await waitFor(() => expect(rowPaths()).toEqual(["src/new.ts", ...RECOMMENDED]));
+    // The open file is not reloaded: that would discard unsaved edits.
+    expect(sides.mock.calls.length).toBe(callsBefore);
+  });
+
+  // Review r1-f2: an older read finishing last must not win.
+  it("applies only the newest order when reads overlap", async () => {
+    const backend = await setup(null);
+    const pending: Array<(value: { paths: string[]; freshness: "current" }) => void> = [];
+    backend.getDiffOrder = () => new Promise((resolve) => pending.push(resolve));
+    const fire = () => h.listeners.get("state-changed")?.({ payload: { entity: "diff_order", id: "ws-1" } });
+    fire();
+    await waitFor(() => expect(pending).toHaveLength(1));
+    fire();
+    await waitFor(() => expect(pending).toHaveLength(2));
+    const newest = ["src/a/z.ts", "src/b/a.ts", "src/c.ts", "README.md"];
+    pending[1]({ paths: newest, freshness: "current" });
+    await waitFor(() => expect(rowPaths()).toEqual(newest));
+    pending[0]({ paths: RECOMMENDED, freshness: "current" });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(rowPaths()).toEqual(newest);
+  });
 });

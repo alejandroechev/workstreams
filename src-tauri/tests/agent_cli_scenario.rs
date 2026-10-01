@@ -701,6 +701,27 @@ fn diff_reading_orders_are_validated_owned_and_kept_per_mode() {
         serde_json::json!(["b.ts", "a.ts"])
     );
 
+    // A name with a comma survives the CLI through paths_json.
+    std::fs::write(repo.join("odd, name.ts"), "x\n").unwrap();
+    let (ok, json) = run(
+        Some(&mine),
+        &[
+            "agent",
+            "call",
+            "diff.order.set",
+            "mode=unstaged",
+            r#"paths_json=["odd, name.ts","c.ts","a.ts"]"#,
+        ],
+    );
+    assert!(ok, "{json}");
+    let (_, odd) = run(
+        Some(&mine),
+        &["agent", "call", "diff.order.get", "mode=unstaged"],
+    );
+    assert_eq!(odd["data"]["order"]["paths"][0], "odd, name.ts");
+    std::fs::remove_file(repo.join("odd, name.ts")).unwrap();
+    set("unstaged", "c.ts,a.ts");
+
     // The diff moving on is reported, not hidden.
     std::fs::write(repo.join("a.ts"), "a3\n").unwrap();
     let (_, edited) = run(

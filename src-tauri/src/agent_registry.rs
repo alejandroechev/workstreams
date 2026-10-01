@@ -1321,8 +1321,32 @@ fn diff_error(error: String) -> AgentError {
     )
 }
 
-/// Accepts `paths=a.ts,b.ts` from the CLI and a JSON array on the wire.
+/// Accepts `paths=a.ts,b.ts` from the CLI, a JSON array on the wire, or
+/// `paths_json=["a.ts","b, odd.ts"]` for names a comma split would break.
 fn order_paths(params: &serde_json::Value) -> Result<Vec<String>, AgentError> {
+    let bad = |message: &str| {
+        AgentError::new(
+            "BAD_PARAM",
+            message.to_string(),
+            "Pass paths_json as a JSON array of strings, e.g. paths_json='[\"a.ts\",\"b.ts\"]'.",
+        )
+    };
+    if let Some(raw) = params.get("paths_json") {
+        if params.get("paths").is_some() {
+            return Err(bad("Pass either paths or paths_json, not both"));
+        }
+        let raw = raw
+            .as_str()
+            .ok_or_else(|| bad("paths_json must be a JSON array of strings"))?;
+        let parsed: Vec<String> = serde_json::from_str(raw)
+            .map_err(|_| bad("paths_json must be a JSON array of strings"))?;
+        // Exact names: no trimming, so a name with significant spaces survives.
+        return if parsed.is_empty() {
+            Err(bad("paths_json is empty; list every changed file"))
+        } else {
+            Ok(parsed)
+        };
+    }
     let paths: Vec<String> = match params.get("paths") {
         Some(serde_json::Value::Array(items)) => items
             .iter()
@@ -3205,5 +3229,48 @@ mod tests {
                 err.code
             );
         }
+    }
+
+    /// Review r1-f3: `paths=` splits on commas, so a file whose name holds one
+    /// needs a lossless form the CLI can pass as a single string.
+    #[test]
+    fn diff_order_set_takes_a_lossless_json_list_for_awkward_names() {
+        let (db, repo) = diff_order_fixture();
+        repo.write("odd, name.ts", "x\n");
+        let me = agent("tile-1", "w1");
+        call(
+            &db,
+            &me,
+            "diff.order.set",
+            serde_json::json!({"mode":"unstaged","paths_json":"[\"odd, name.ts\",\"a.ts\",\"b.ts\",\"c.ts\"]"}),
+        )
+        .unwrap();
+        let read = call(
+            &db,
+            &me,
+            "diff.order.get",
+            serde_json::json!({"mode":"unstaged"}),
+        )
+        .unwrap();
+        assert_eq!(read.data["order"]["paths"][0], "odd, name.ts");
+
+        for bad in ["not json", "[1, 2]", "{\"a\":1}"] {
+            let err = call(
+                &db,
+                &me,
+                "diff.order.set",
+                serde_json::json!({"mode":"unstaged","paths_json": bad}),
+            )
+            .unwrap_err();
+            assert_eq!(err.code, "BAD_PARAM", "{bad}");
+        }
+        let err = call(
+            &db,
+            &me,
+            "diff.order.set",
+            serde_json::json!({"mode":"unstaged","paths":"a.ts","paths_json":"[\"a.ts\"]"}),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "BAD_PARAM", "both forms at once are ambiguous");
     }
 }

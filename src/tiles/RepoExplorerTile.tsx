@@ -258,6 +258,12 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
   // the default, so a remembered "Name" can never hide a new order.
   const [diffOrder, setDiffOrder] = useState<DiffOrderView | null>(null);
   const [diffSort, setDiffSort] = useState<DiffSort>("name");
+  // Generation of the latest file-list + order read. Separate from
+  // diffRequestEpochRef (which file selection also bumps) so picking a file
+  // never cancels an order refresh, while an older read can never overwrite a
+  // newer one.
+  const diffListingGenRef = useRef(0);
+  const diffFilePathRef = useRef("");
   const [diffOriginalEditor, setDiffOriginalEditor] =
     useState<MonacoNs.editor.ICodeEditor | null>(null);
   const diffAfterRef = useRef("");
@@ -1042,6 +1048,7 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
       return;
     }
     const requestEpoch = ++diffRequestEpochRef.current;
+    const listingGen = ++diffListingGenRef.current;
     setActiveDiffMode(diffMode);
     setDiffLoading(true);
     setDiffBefore("");
@@ -1053,7 +1060,7 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
       const order = workstreamId
         ? await backend.getDiffOrder(workstreamId, gitRoot, diffMode, baseRef).catch(() => null)
         : null;
-      if (requestEpoch !== diffRequestEpochRef.current) return;
+      if (requestEpoch !== diffRequestEpochRef.current || listingGen !== diffListingGenRef.current) return;
       setDiffFiles(files);
       setDiffOrder(order);
       const sort = defaultDiffSort(order);
@@ -1102,27 +1109,45 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
     void selectDiffFile(shownDiffFiles[0].path);
   }, [diffCommentsOnly, shownDiffFiles, diffFilePath, selectDiffFile]);
 
+  useEffect(() => { diffFilePathRef.current = diffFilePath; }, [diffFilePath]);
   // An agent saving an order while the diff is open takes effect at once.
   useEffect(() => {
     if (!activeDiffMode || !workstreamId) return;
     const baseRef = activeDiffMode === "custom_branch" ? customDiffBranch : null;
     let cancelled = false;
+    // The agent usually edits files and then saves, so the file list is
+    // re-read with the order. The open file's sides are left alone: reloading
+    // them would throw away unsaved edits in the Unstaged diff.
+    const refresh = async () => {
+      const listingGen = ++diffListingGenRef.current;
+      try {
+        const files = await backend.gitDiffFilesWithStatus(gitRoot, activeDiffMode, baseRef);
+        const order = await backend.getDiffOrder(workstreamId, gitRoot, activeDiffMode, baseRef).catch(() => null);
+        if (cancelled || listingGen !== diffListingGenRef.current) return;
+        const sort = defaultDiffSort(order);
+        setDiffFiles(files);
+        setDiffOrder(order);
+        setDiffSort(sort);
+        if (!files.some((file) => file.path === diffFilePathRef.current)) {
+          const first = sortDiffFiles(files, order, sort)[0]?.file.path;
+          if (first) void selectDiffFile(first);
+          else setDiffFilePath("");
+        }
+      } catch (error) {
+        if (!cancelled && listingGen === diffListingGenRef.current) {
+          setDiffError(error instanceof Error ? error.message : String(error));
+        }
+      }
+    };
     const unlisten = listen<{ entity?: string; id?: string }>("state-changed", (event) => {
       if (event.payload?.entity !== "diff_order" || event.payload.id !== workstreamId) return;
-      void backend
-        .getDiffOrder(workstreamId, gitRoot, activeDiffMode, baseRef)
-        .catch(() => null)
-        .then((order) => {
-          if (cancelled) return;
-          setDiffOrder(order);
-          setDiffSort(defaultDiffSort(order));
-        });
+      void refresh();
     });
     return () => {
       cancelled = true;
       void unlisten.then((stop) => stop());
     };
-  }, [activeDiffMode, customDiffBranch, workstreamId, backend, gitRoot]);
+  }, [activeDiffMode, customDiffBranch, workstreamId, backend, gitRoot, selectDiffFile]);
 
   const exitDiffMode = useCallback(() => {
     diffRequestEpochRef.current += 1;
