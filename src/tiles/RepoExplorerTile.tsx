@@ -231,7 +231,14 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
   const [diffFiles, setDiffFiles] = useState<Array<{ path: string; status: "A" | "M" | "D" | "R" }>>([]);
   const [diffBefore, setDiffBefore] = useState<string>("");
   const [diffAfter, setDiffAfter] = useState<string>("");
-  const [diffFilePath, setDiffFilePath] = useState<string>("");
+  const [diffFilePath, setDiffFilePathState] = useState<string>("");
+  // Mirrors the selection synchronously, so an async refresh that lands before
+  // React re-renders still sees what is (or is no longer) selected.
+  const diffFilePathRef = useRef("");
+  const setDiffFilePath = useCallback((path: string) => {
+    diffFilePathRef.current = path;
+    setDiffFilePathState(path);
+  }, []);
   const [diffLoading, setDiffLoading] = useState(false);
   const [diffError, setDiffError] = useState<string | null>(null);
   const [diffBranches, setDiffBranches] = useState<string[]>([]);
@@ -263,7 +270,6 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
   // never cancels an order refresh, while an older read can never overwrite a
   // newer one.
   const diffListingGenRef = useRef(0);
-  const diffFilePathRef = useRef("");
   // A save event never runs alongside a diff activation: one arriving
   // mid-activation is deferred until it finishes. Racing them let the event
   // cancel the activation's side load (blank editor) or an older activation's
@@ -1101,7 +1107,7 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
         }
       }
     }
-  }, [backend, customDiffBranch, gitRoot, diffFilePath, loadDiffSides, workstreamId]);
+  }, [backend, customDiffBranch, gitRoot, diffFilePath, loadDiffSides, workstreamId, setDiffFilePath]);
 
   const selectDiffFile = useCallback(async (file: string) => {
     if (!activeDiffMode) return;
@@ -1118,7 +1124,7 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
     } finally {
       if (requestEpoch === diffRequestEpochRef.current) setDiffLoading(false);
     }
-  }, [activeDiffMode, customDiffBranch, loadDiffSides]);
+  }, [activeDiffMode, customDiffBranch, loadDiffSides, setDiffFilePath]);
 
   // Keep the diff pane on a file the filtered list actually shows.
   useEffect(() => {
@@ -1127,7 +1133,6 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
     void selectDiffFile(shownDiffFiles[0].path);
   }, [diffCommentsOnly, shownDiffFiles, diffFilePath, selectDiffFile]);
 
-  useEffect(() => { diffFilePathRef.current = diffFilePath; }, [diffFilePath]);
   // An agent saving an order while the diff is open takes effect at once.
   useEffect(() => {
     if (!activeDiffMode || !workstreamId) return;
@@ -1146,6 +1151,8 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
         setDiffFiles(files);
         setDiffOrder(order);
         setDiffSort(sort);
+        // A successful re-read supersedes any listing error shown before it.
+        setDiffError(null);
         if (!files.some((file) => file.path === diffFilePathRef.current)) {
           const first = sortDiffFiles(files, order, sort)[0]?.file.path;
           if (first) void selectDiffFile(first);
@@ -1174,7 +1181,7 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
       if (runListingRefreshRef.current === request) runListingRefreshRef.current = null;
       void unlisten.then((stop) => stop());
     };
-  }, [activeDiffMode, customDiffBranch, workstreamId, backend, gitRoot, selectDiffFile]);
+  }, [activeDiffMode, customDiffBranch, workstreamId, backend, gitRoot, selectDiffFile, setDiffFilePath]);
 
   const exitDiffMode = useCallback(() => {
     diffRequestEpochRef.current += 1;
@@ -1186,7 +1193,7 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
     setDiffFiles([]);
     setDiffFilePath("");
     setDiffError(null);
-  }, []);
+  }, [setDiffFilePath]);
 
   // Git log handlers
   const openGitLog = useCallback(async () => {
@@ -1329,7 +1336,7 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
         setMode("search");
         break;
     }
-  }, [activeTab, activateDiffMode, openGitLog, openGitHooks, allComments]);
+  }, [activeTab, activateDiffMode, openGitLog, openGitHooks, allComments, setDiffFilePath]);
 
   const hydratedRef = useRef(false);
   // Captures persisted markdown mode/slide for the hydrated file so the

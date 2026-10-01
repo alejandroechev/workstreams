@@ -269,6 +269,9 @@ describe("Repo Explorer diff: recommended reading order", () => {
     rejectActivation(new Error("transient git failure"));
     await new Promise((resolve) => setTimeout(resolve, 30));
     expect(screen.getAllByTestId("diff-file-item")).toHaveLength(FILES.length);
+    // Review r3-f1: recovery must reopen a file and clear the stale error.
+    await waitFor(() => expect(screen.getByTestId("diff-editor-stub")).toBeInTheDocument());
+    expect(screen.queryByText("transient git failure")).not.toBeInTheDocument();
   });
 });
 
