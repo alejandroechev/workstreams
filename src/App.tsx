@@ -62,6 +62,8 @@ import { decideUnarchive, type WorkLane } from "./domain/work-lanes";
 import type { Project, Workstream, Tile, TileType } from "./domain/types";
 import type { LoopSummary } from "./domain/loop";
 import { countUnreadPrs } from "./domain/pr-inbox";
+import { useCompanionService } from "./companion/useCompanionService";
+import { homeDir } from "@tauri-apps/api/path";
 
 // Wire the persistent Workbench store into the cross-tile dispatcher
 // so right-clicks from anywhere persist to the workstream's setting
@@ -725,98 +727,120 @@ export default function App() {
   // Load tiles + layout for a workstream on first visit. After loading,
   // the state lives in wsStates and persists across switches. Components
   // stay mounted (just hidden via CSS) so xterm/PTY state stays coherent.
+  const wsStatesRef = useRef(wsStates);
+  useEffect(() => { wsStatesRef.current = wsStates; }, [wsStates]);
+  const mountingRef = useRef(new Map<string, Promise<void>>());
+
+  /**
+   * Loads a workstream's tiles and spawns its terminals and sessions. Runs on
+   * first visit, and from the phone companion, which loads a workstream in
+   * the background without changing the one on screen (ADR 033). Idempotent:
+   * a mounted or mounting workstream is never mounted twice.
+   */
+  const mountWorkstream = useCallback(
+    (wsId: string): Promise<void> => {
+      if (wsStatesRef.current.has(wsId)) return Promise.resolve();
+      const inFlight = mountingRef.current.get(wsId);
+      if (inFlight) return inFlight;
+
+      // Remember that this workstream is open, so it comes back loaded next
+      // launch. Recorded on mount rather than on selection because this is the
+      // point where it genuinely becomes loaded; selecting a workstream that is
+      // already mounted changes nothing worth persisting.
+      void backend.setWorkstreamLoaded(wsId, true).catch(() => {});
+      setRestoredLoadedIds((prev) => {
+        if (prev.has(wsId)) return prev;
+        const next = new Set(prev);
+        next.add(wsId);
+        return next;
+      });
+
+      const mounted = Promise.all([
+        backend.listTiles(wsId),
+        backend.getLayout(wsId),
+      ]).then(([t, layout]) => {
+        const order: string[] = JSON.parse(layout.tile_order_json || "[]");
+        setWsStates((prev) => {
+          if (prev.has(wsId)) return prev;
+          const next = new Map(prev);
+          next.set(wsId, {
+            tiles: t,
+            tileOrder: order,
+            focusedIndex: 0,
+            // Fullscreen is runtime-only: starts at null on every workstream
+            // load even if the prior session persisted a value. The DB column
+            // is left in place for backwards compatibility but no longer read.
+            fullscreenTileId: null,
+            selectedForSideBySide: new Set(),
+            sideBySideTileIds: null,
+            sbsSelectionMode: false,
+          });
+          return next;
+        });
+
+        // Spawn terminal/copilot tiles only if not already spawned.
+        for (const tile of t) {
+          if (!spawnedPtys.current.has(tile.id)) {
+            if (tile.tile_type === "terminal") {
+              const config = JSON.parse(tile.config_json || "{}");
+              const cwd = config.cwd || defaultRootDir();
+              spawnedPtys.current.add(tile.id);
+              backend
+                .spawnTerminal(
+                  tile.id,
+                  cwd,
+                  config.command || undefined,
+                  undefined,
+                  30,
+                  120,
+                )
+                .catch(() => {
+                  spawnedPtys.current.delete(tile.id);
+                });
+            } else if (tile.tile_type === "copilot_session") {
+              const config = JSON.parse(tile.config_json || "{}");
+              const cwd = config.cwd || defaultRootDir();
+              spawnedPtys.current.add(tile.id);
+              const sessionId =
+                config.copilot_session_id || config.resume_by_id || null;
+              backend
+                .spawnCopilotSession(
+                  tile.id,
+                  cwd,
+                  sessionId,
+                  30,
+                  120,
+                  commandForWsId(tile.workstream_id),
+                )
+                .catch(() => {
+                  spawnedPtys.current.delete(tile.id);
+                });
+            }
+          }
+        }
+
+        // Re-sync linked Copilot session names: a session may have been
+        // renamed since it was first linked. Read its current summary from
+        // the session store and update the tile's name if it changed. Runs
+        // in the background so it never blocks the workstream from rendering.
+        void syncLinkedSessionNames(wsId, t);
+      }).finally(() => {
+        mountingRef.current.delete(wsId);
+      });
+      mountingRef.current.set(wsId, mounted);
+      return mounted;
+    },
+    [backend, commandForWsId, syncLinkedSessionNames],
+  );
+
   useEffect(() => {
     if (!activeWsId) return;
 
     // Always bump focus token on switch so per-tile effects re-focus.
     setFocusToken((n) => n + 1);
 
-    // If already loaded, nothing to do — the existing mounted tree just
-    // becomes visible.
-    if (wsStates.has(activeWsId)) return;
-
-    // Remember that this workstream is open, so it comes back loaded next
-    // launch. Recorded on mount rather than on selection because this is the
-    // point where it genuinely becomes loaded; selecting a workstream that is
-    // already mounted changes nothing worth persisting.
-    void backend.setWorkstreamLoaded(activeWsId, true).catch(() => {});
-    setRestoredLoadedIds((prev) => {
-      if (prev.has(activeWsId)) return prev;
-      const next = new Set(prev);
-      next.add(activeWsId);
-      return next;
-    });
-
-    Promise.all([
-      backend.listTiles(activeWsId),
-      backend.getLayout(activeWsId),
-    ]).then(([t, layout]) => {
-      const order: string[] = JSON.parse(layout.tile_order_json || "[]");
-      setWsStates((prev) => {
-        if (prev.has(activeWsId)) return prev;
-        const next = new Map(prev);
-        next.set(activeWsId, {
-          tiles: t,
-          tileOrder: order,
-          focusedIndex: 0,
-          // Fullscreen is runtime-only: starts at null on every workstream
-          // load even if the prior session persisted a value. The DB column
-          // is left in place for backwards compatibility but no longer read.
-          fullscreenTileId: null,
-          selectedForSideBySide: new Set(),
-          sideBySideTileIds: null,
-          sbsSelectionMode: false,
-        });
-        return next;
-      });
-
-      // Spawn terminal/copilot tiles only if not already spawned.
-      for (const tile of t) {
-        if (!spawnedPtys.current.has(tile.id)) {
-          if (tile.tile_type === "terminal") {
-            const config = JSON.parse(tile.config_json || "{}");
-            const cwd = config.cwd || defaultRootDir();
-            spawnedPtys.current.add(tile.id);
-            backend
-              .spawnTerminal(
-                tile.id,
-                cwd,
-                config.command || undefined,
-                undefined,
-                30,
-                120,
-              )
-              .catch(() => {
-                spawnedPtys.current.delete(tile.id);
-              });
-          } else if (tile.tile_type === "copilot_session") {
-            const config = JSON.parse(tile.config_json || "{}");
-            const cwd = config.cwd || defaultRootDir();
-            spawnedPtys.current.add(tile.id);
-            const sessionId =
-              config.copilot_session_id || config.resume_by_id || null;
-            backend
-              .spawnCopilotSession(
-                tile.id,
-                cwd,
-                sessionId,
-                30,
-                120,
-                commandForWsId(tile.workstream_id),
-              )
-              .catch(() => {
-                spawnedPtys.current.delete(tile.id);
-              });
-          }
-        }
-      }
-
-      // Re-sync linked Copilot session names: a session may have been
-      // renamed since it was first linked. Read its current summary from
-      // the session store and update the tile's name if it changed. Runs
-      // in the background so it never blocks the workstream from rendering.
-      void syncLinkedSessionNames(activeWsId, t);
-    });
+    // Already mounted: the existing tree just becomes visible.
+    void mountWorkstream(activeWsId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeWsId]);
 
@@ -1916,6 +1940,64 @@ export default function App() {
     () => visiblyLoadedIds(restoredLoadedIds, wsStates.keys()),
     [restoredLoadedIds, wsStates],
   );
+
+  // ── Phone companion (ADR 033) ──────────────────────────────────────────
+  // Running Copilot sessions per mounted workstream; an unmounted one has none.
+  const companionSessionCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const [id, state] of wsStates) {
+      counts.set(id, state.tiles.filter((t) => t.tile_type === "copilot_session").length);
+    }
+    return counts;
+  }, [wsStates]);
+
+  const createWorkstreamForCompanion = useCallback(
+    async (name: string, directory: string): Promise<string> => {
+      const ws = await backend.createWorkstream(name, directory, { workstreamType: "standalone" });
+      // The same request's next action reads this before React re-renders.
+      workstreamsRef.current = [ws, ...workstreamsRef.current];
+      setWorkstreams((prev) => [ws, ...prev]);
+      return ws.id;
+    },
+    [backend],
+  );
+
+  /**
+   * Appends a Copilot session tile to a workstream that may not be the active
+   * one, and starts it on the phone's prompt. Tiles and layout are read from
+   * the backend because a background mount may not have rendered yet.
+   */
+  const startSessionForCompanion = useCallback(
+    async (wsId: string, command: string, prompt: string): Promise<void> => {
+      await mountWorkstream(wsId);
+      const ws = workstreamsRef.current.find((w) => w.id === wsId);
+      const cwd = ws?.directory || defaultRootDir();
+      const [existing, layout] = await Promise.all([backend.listTiles(wsId), backend.getLayout(wsId)]);
+      const count = existing.filter((t) => t.tile_type === "copilot_session").length;
+      const title = `${ws?.name || "ws"}/${count + 1}`;
+      const tile = await backend.createTile(wsId, "copilot_session", title, createCopilotSessionConfig(title, cwd));
+      const order: string[] = JSON.parse(layout.tile_order_json || "[]");
+      await backend.updateLayout(wsId, { tile_order_json: JSON.stringify([...order, tile.id]) });
+      upsertTileLocally(tile);
+      spawnedPtys.current.add(tile.id);
+      await backend.spawnCopilotSession(tile.id, cwd, null, 30, 120, command, prompt);
+    },
+    [backend, mountWorkstream, upsertTileLocally],
+  );
+
+  useCompanionService({
+    workstreams,
+    lanes: workLanes,
+    loadedIds: loadedWsIds,
+    sessionCounts: companionSessionCounts,
+    commandFor: commandForWs,
+    globalCommand: resolveCopilotCommand(null),
+    loadInBackground: mountWorkstream,
+    createWorkstreamAt: createWorkstreamForCompanion,
+    startSession: startSessionForCompanion,
+    createDirectory: (path) => backend.createDirectory(path),
+    homeDir: () => homeDir(),
+  });
 
   // Keyboard shortcuts
   useEffect(() => {

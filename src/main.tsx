@@ -40,6 +40,35 @@ if (isE2E && typeof window !== "undefined") {
   if (typeof forced === "boolean") _setFeatureFlagOverrideForTests(forced);
 }
 
+// E2E seam for the phone companion (ADR 033). A spec sets
+// __WS_COMPANION_E2E__ (settings entries) in an init script; the app then
+// talks to an in-memory hub instead of the sync server, and the page exposes
+// a phone peer and the request signer so the spec can act as the phone.
+if (isE2E && typeof window !== "undefined") {
+  const seam = window as unknown as {
+    __WS_COMPANION_E2E__?: Record<string, string>;
+    __WS_COMPANION_PHONE__?: unknown;
+    __WS_COMPANION_SIGN__?: unknown;
+  };
+  if (seam.__WS_COMPANION_E2E__) {
+    const [{ createInMemoryHub }, { createMemorySettingsStore }, { signRequest }, { _setCompanionServiceDepsForTests }] =
+      await Promise.all([
+        import("./companion/doc"),
+        import("./companion/settings"),
+        import("./companion/protocol"),
+        import("./companion/useCompanionService"),
+      ]);
+    const hub = createInMemoryHub();
+    seam.__WS_COMPANION_PHONE__ = hub.peer();
+    seam.__WS_COMPANION_SIGN__ = signRequest;
+    _setCompanionServiceDepsForTests({
+      store: createMemorySettingsStore(seam.__WS_COMPANION_E2E__),
+      connect: async () => hub.peer(),
+      devBuild: false,
+    });
+  }
+}
+
 // Dev/E2E-only component harness: `?harness=<caseId>` mounts a single component
 // under test in isolation (real Monaco) for fast, reliable UI-bug repro. The
 // dynamic import keeps harness code out of the production static graph.

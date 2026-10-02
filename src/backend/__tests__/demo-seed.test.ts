@@ -9,6 +9,11 @@ describe("applyDemoSeed", () => {
     await applyDemoSeed(backend, { projects: [{ name: "ADO", directory: "/ado", git_remote: "https://dev.azure.com/o/p/_git/r" }] });
     expect((await backend.listProjects())[0].git_remote).toBe("https://dev.azure.com/o/p/_git/r");
   });
+  it("can seed a repo's own Copilot command", async () => {
+    const backend = new MemoryBackend();
+    await applyDemoSeed(backend, { projects: [{ name: "R", directory: "/r", copilot_command: "copilot --yolo" }] });
+    expect((await backend.listProjects())[0].copilot_command).toBe("copilot --yolo");
+  });
   it("creates synthetic projects, workstreams, tiles, layouts, and files", async () => {
     const backend = new MemoryBackend();
     const seed: DemoMemorySeed = {

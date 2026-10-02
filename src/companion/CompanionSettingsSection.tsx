@@ -70,26 +70,32 @@ export function CompanionSettingsSection({
   const [busy, setBusy] = useState(false);
   const [confirmRepair, setConfirmRepair] = useState(false);
   const [folderRoot, setFolderRoot] = useState("");
-  const [qrSvg, setQrSvg] = useState<string | null>(null);
+  const [qr, setQr] = useState<{ code: string; svg: string } | null>(null);
 
-  const reload = useCallback(async () => {
-    const loaded = await loadCompanionSettings(store);
+  const apply = useCallback((loaded: CompanionSettings) => {
     setSettings(loaded);
     setServerUrl(loaded.serverUrl);
     setFolderRoot(loaded.folderRoot);
-  }, [store]);
-  useEffect(() => { void reload(); }, [reload]);
+  }, []);
+  const reload = useCallback(async () => apply(await loadCompanionSettings(store)), [apply, store]);
+  useEffect(() => {
+    let cancelled = false;
+    void loadCompanionSettings(store).then((loaded) => { if (!cancelled) apply(loaded); });
+    return () => { cancelled = true; };
+  }, [apply, store]);
 
   const pairingCode = settings?.enabled && settings.docUrl && settings.secret
     ? encodePairing({ doc: settings.docUrl, secret: settings.secret })
     : null;
   useEffect(() => {
-    if (!pairingCode) { setQrSvg(null); return; }
+    if (!pairingCode) return;
     let cancelled = false;
     void QRCode.toString(pairingCode, { type: "svg", margin: 1, color: { dark: "#11111b", light: "#cdd6f4" } })
-      .then((svg) => { if (!cancelled) setQrSvg(svg); });
+      .then((svg) => { if (!cancelled) setQr({ code: pairingCode, svg }); });
     return () => { cancelled = true; };
   }, [pairingCode]);
+  // Never show a QR code for a pairing code that is no longer current.
+  const qrSvg = qr && qr.code === pairingCode ? qr.svg : null;
 
   const enable = async () => {
     setBusy(true);

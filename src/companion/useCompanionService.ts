@@ -51,6 +51,29 @@ export interface CompanionServiceDeps {
   devBuild?: boolean;
 }
 
+let depsOverride: CompanionServiceDeps | null = null;
+
+/**
+ * E2E seam (set from main.tsx only when VITE_E2E is on): an in-memory hub in
+ * place of the sync server, so browser tests can act as the phone.
+ */
+export function _setCompanionServiceDepsForTests(deps: CompanionServiceDeps | null): void {
+  depsOverride = deps;
+}
+
+let currentStatus: CompanionStatus = { state: "off" };
+const statusListeners = new Set<(status: CompanionStatus) => void>();
+
+/** The running service's status, for the Settings section. */
+export function getCompanionStatus(): CompanionStatus {
+  return currentStatus;
+}
+
+export function onCompanionStatus(listener: (status: CompanionStatus) => void): () => void {
+  statusListeners.add(listener);
+  return () => statusListeners.delete(listener);
+}
+
 async function connectAutomerge(settings: CompanionSettings): Promise<CompanionDoc> {
   const { ws } = syncServerUrls(settings.serverUrl, settings.token || null);
   const { doc } = await openAutomergeDoc({ docUrl: settings.docUrl, wsUrl: ws, storage: true });
@@ -62,7 +85,8 @@ async function connectAutomerge(settings: CompanionSettings): Promise<CompanionD
  * broadcasts presence, publishes the workstream list, and executes the paired
  * phone's requests through the app's own operations.
  */
-export function useCompanionService(bindings: CompanionBindings, deps: CompanionServiceDeps = {}): CompanionStatus {
+export function useCompanionService(bindings: CompanionBindings, explicitDeps?: CompanionServiceDeps): CompanionStatus {
+  const deps = explicitDeps ?? depsOverride ?? {};
   // Configuration, not state: held in refs so a caller passing fresh objects
   // on every render does not reconnect on every render.
   const storeRef = useRef(deps.store ?? tauriSettingsStore);
@@ -70,11 +94,12 @@ export function useCompanionService(bindings: CompanionBindings, deps: Companion
   const devBuild = deps.devBuild ?? import.meta.env.DEV;
 
   const bindingsRef = useRef(bindings);
-  bindingsRef.current = bindings;
+  useEffect(() => { bindingsRef.current = bindings; });
 
   const [settings, setSettings] = useState<CompanionSettings | null>(null);
   const [doc, setDoc] = useState<CompanionDoc | null>(null);
-  const [status, setStatus] = useState<CompanionStatus>({ state: "off" });
+  // Only what a live connection reports; "off" and "dev-disabled" are derived.
+  const [connectionStatus, setStatus] = useState<CompanionStatus>({ state: "connecting" });
 
   useEffect(() => {
     let cancelled = false;
@@ -88,18 +113,10 @@ export function useCompanionService(bindings: CompanionBindings, deps: Companion
     ? JSON.stringify([settings.serverUrl, settings.token, settings.docUrl, settings.secret, settings.folderRoot])
     : null;
   useEffect(() => {
-    if (!settings || !connection) {
-      setStatus({ state: "off" });
-      return;
-    }
-    if (devBuild) {
-      setStatus({ state: "dev-disabled" });
-      return;
-    }
+    if (!settings || !connection || devBuild) return;
     let cancelled = false;
     let opened: CompanionDoc | null = null;
     const stops: Array<() => void> = [];
-    setStatus({ state: "connecting" });
 
     const ops: CompanionOps = {
       world: () => {
@@ -118,7 +135,7 @@ export function useCompanionService(bindings: CompanionBindings, deps: Companion
       loadInBackground: (id) => bindingsRef.current.loadInBackground(id),
       async createWorkstream(name, folderSlug) {
         const b = bindingsRef.current;
-        const root = expandHome(settings.folderRoot, await b.homeDir());
+        const root = expandHome(settings.folderRoot, settings.folderRoot.trim().startsWith("~") ? await b.homeDir() : "");
         const directory = await createUniqueFolder(root, folderSlug, b.createDirectory);
         return b.createWorkstreamAt(name, directory);
       },
@@ -154,10 +171,18 @@ export function useCompanionService(bindings: CompanionBindings, deps: Companion
       for (const stop of stops.splice(0)) stop();
       opened?.close();
       setDoc(null);
+      setStatus({ state: "connecting" });
     };
     // `settings` is captured through `connection`, which holds every field used.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connection, devBuild]);
+
+  const status: CompanionStatus = !connection ? { state: "off" } : devBuild ? { state: "dev-disabled" } : connectionStatus;
+  const statusKey = JSON.stringify(status);
+  useEffect(() => {
+    currentStatus = JSON.parse(statusKey) as CompanionStatus;
+    for (const listener of statusListeners) listener(currentStatus);
+  }, [statusKey]);
 
   // Publish whenever what the phone would see changes.
   const laptopState = useMemo(
