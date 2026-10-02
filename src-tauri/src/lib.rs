@@ -1421,6 +1421,36 @@ fn spawn_terminal(
     )
 }
 
+/// Program and argv for a Copilot session tile.
+///
+/// The command template is whitespace-split (it is a setting, not user text).
+/// An initial prompt is appended as `-i <prompt>`, a single argv entry, so it
+/// never passes through a shell or gets split.
+fn copilot_launch(
+    command: Option<&str>,
+    resume_session_id: Option<&str>,
+    initial_prompt: Option<&str>,
+) -> Result<(String, Vec<String>), String> {
+    let template = command
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("agency copilot --yolo");
+    let mut parts = template.split_whitespace();
+    let program = parts
+        .next()
+        .ok_or("empty copilot command template")?
+        .to_string();
+    let mut args: Vec<String> = parts.map(|s| s.to_string()).collect();
+    if let Some(sid) = resume_session_id {
+        args.push(format!("--resume={sid}"));
+    }
+    if let Some(prompt) = initial_prompt.filter(|p| !p.trim().is_empty()) {
+        args.push("-i".to_string());
+        args.push(prompt.to_string());
+    }
+    Ok((program, args))
+}
+
 /// Spawn a copilot session CLI and register a pending PID-based
 /// correlation with the poller so it can find the resulting
 /// `~/.copilot/session-state/<id>` directory by scanning `inuse.<pid>.lock`.
@@ -1431,6 +1461,7 @@ fn spawn_terminal(
 /// existing callers keep working unchanged.
 ///
 /// If `resume_session_id` is Some, the CLI is invoked with `--resume=<id>`.
+/// `initial_prompt` (phone companion, ADR 033) is passed as `-i <prompt>`.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 fn spawn_copilot_session(
@@ -1442,21 +1473,13 @@ fn spawn_copilot_session(
     rows: Option<u16>,
     cols: Option<u16>,
     command: Option<String>,
+    initial_prompt: Option<String>,
 ) -> Result<Option<u32>, String> {
-    let template = command
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .unwrap_or("agency copilot --yolo");
-    let mut parts = template.split_whitespace();
-    let program = parts
-        .next()
-        .ok_or("empty copilot command template")?
-        .to_string();
-    let mut args: Vec<String> = parts.map(|s| s.to_string()).collect();
-    if let Some(sid) = &resume_session_id {
-        args.push(format!("--resume={sid}"));
-    }
+    let (program, args) = copilot_launch(
+        command.as_deref(),
+        resume_session_id.as_deref(),
+        initial_prompt.as_deref(),
+    )?;
     let env = build_workstream_env(&state, &tile_id);
     let pid = state.pty.spawn(
         &app,
@@ -6161,6 +6184,38 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
+    /// A prompt from the phone companion (ADR 033) reaches Copilot as one
+    /// argv entry after `-i`, never through a shell and never split, so
+    /// quotes, newlines or `$(...)` in it are just text.
+    #[test]
+    fn copilot_launch_passes_an_initial_prompt_as_a_single_argument() {
+        let prompt = "Fix it\nthen \"say\" $(whoami) done";
+        let (program, args) =
+            copilot_launch(Some("agency copilot --yolo"), None, Some(prompt)).unwrap();
+        assert_eq!(program, "agency");
+        assert_eq!(args, vec!["copilot", "--yolo", "-i", prompt]);
+    }
+
+    #[test]
+    fn copilot_launch_keeps_resume_and_default_behaviour() {
+        assert_eq!(
+            copilot_launch(None, Some("abc"), None).unwrap(),
+            (
+                "agency".to_string(),
+                vec![
+                    "copilot".to_string(),
+                    "--yolo".to_string(),
+                    "--resume=abc".to_string()
+                ]
+            )
+        );
+        assert_eq!(
+            copilot_launch(Some("  copilot  "), None, Some("   ")).unwrap(),
+            ("copilot".to_string(), Vec::<String>::new()),
+            "a blank prompt adds nothing"
+        );
+    }
+
     use super::*;
     use std::io::Write;
 

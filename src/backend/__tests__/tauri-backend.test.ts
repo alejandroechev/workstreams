@@ -393,7 +393,16 @@ describe("TauriBackend", () => {
       rows: 24,
       cols: 80,
       command: null,
+      initialPrompt: null,
     });
+  });
+
+  it("spawnCopilotSession forwards an initial prompt for the phone companion", async () => {
+    invoke.mockResolvedValueOnce(7);
+    await backend.spawnCopilotSession("t1", "/cwd", null, 30, 120, "copilot --yolo", "List the files\nhere");
+    expect(invoke).toHaveBeenCalledWith("spawn_copilot_session", expect.objectContaining({
+      initialPrompt: "List the files\nhere",
+    }));
   });
 
   it("spawnCopilotSession forwards a custom command template", async () => {

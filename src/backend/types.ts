@@ -114,7 +114,8 @@ export interface Backend {
    *
    * Returns the child PID (or null on memory backend).
    */
-  spawnCopilotSession(tileId: string, cwd: string, resumeSessionId?: string | null, rows?: number, cols?: number, command?: string | null): Promise<number | null>;
+  /** `initialPrompt` (phone companion, ADR 033) starts the session on that prompt via `-i`. */
+  spawnCopilotSession(tileId: string, cwd: string, resumeSessionId?: string | null, rows?: number, cols?: number, command?: string | null, initialPrompt?: string | null): Promise<number | null>;
   writeToTerminal(tileId: string, data: string): Promise<void>;
   resizeTerminal(tileId: string, rows: number, cols: number): Promise<void>;
   closeTerminal(tileId: string): Promise<void>;
