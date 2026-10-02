@@ -18,7 +18,8 @@
         "minWidth": 800,
         "minHeight": 500,
         "maximized": true,
-        "dragDropEnabled": false
+        "dragDropEnabled": false,
+        "backgroundThrottling": "disabled"
       }
     ],
     "security": {
