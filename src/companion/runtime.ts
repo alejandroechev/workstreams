@@ -40,6 +40,8 @@ export function startCompanionRuntime(options: {
   secret: string;
   ops: CompanionOps;
   now?: () => number;
+  /** Called whenever the status changes. */
+  onStatus?: (status: RuntimeStatus) => void;
 }) {
   const { doc, secret, ops } = options;
   const now = options.now ?? Date.now;
@@ -47,6 +49,11 @@ export function startCompanionRuntime(options: {
   let queued = false;
   let chain: Promise<void> = Promise.resolve();
   let status: RuntimeStatus = { state: "ok" };
+  const setStatus = (next: RuntimeStatus) => {
+    if (JSON.stringify(next) === JSON.stringify(status)) return;
+    status = next;
+    options.onStatus?.(next);
+  };
 
   const setOutcome = (id: string, outcome: RequestOutcome) => {
     // Automerge rejects `undefined` values, so optional fields are only set when present.
@@ -77,10 +84,10 @@ export function startCompanionRuntime(options: {
     const snapshot = doc.read();
     if (!isKnownSchema(snapshot)) {
       // Never write to a document from a newer version: its shape may differ.
-      status = { state: "update-needed" };
+      setStatus({ state: "update-needed" });
       return;
     }
-    status = { state: "ok" };
+    setStatus({ state: "ok" });
 
     for (const request of interruptedRequests(snapshot)) {
       setOutcome(request.id, { status: "failed", at: now(), error: "Interrupted: Workstreams stopped before finishing this request." });
@@ -115,7 +122,7 @@ export function startCompanionRuntime(options: {
         if (!stopped) await pass();
       })
       .catch((error: unknown) => {
-        status = { state: "error", error: error instanceof Error ? error.message : String(error) };
+        setStatus({ state: "error", error: error instanceof Error ? error.message : String(error) });
       });
   };
 
