@@ -17,6 +17,7 @@ import {
   type AppSettings,
 } from "../domain/app-settings";
 import { debounce } from "../domain/debounce";
+import { CompanionSettingsSection } from "../companion/CompanionSettingsSection";
 
 interface Props {
   open: boolean;
@@ -333,6 +334,10 @@ export default function SettingsModal({ open, onClose }: Props) {
             When off, the window closes immediately. Unsaved file changes
             always trigger a separate prompt regardless of this setting.
           </div>
+
+          <div style={{ height: 1, background: "#313244", margin: "18px 0 14px" }} />
+
+          <CompanionSettingsSection />
 
           <div style={{ marginTop: 14, textAlign: "right" }}>
             <button
