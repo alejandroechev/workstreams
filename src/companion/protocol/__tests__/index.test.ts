@@ -149,6 +149,10 @@ describe("lane colours", () => {
     expect(colors.size).toBeGreaterThan(3);
   });
 
+  it("are grey for a workstream with no lane", () => {
+    expect(laneColor(null)).toBe("#45475a");
+  });
+
   it("match the shared fixture, so both apps colour a lane the same", () => {
     for (const [id, color] of Object.entries(fixtures.laneColors)) expect(laneColor(id)).toBe(color);
   });

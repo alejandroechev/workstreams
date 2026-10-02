@@ -1,5 +1,5 @@
 {
-  "$comment": "Shared with workstreams-companion. Generated independently of protocol/index.ts (Node crypto + the ADR 033 canonical form); do not regenerate with the module under test.",
+  "$comment": "Shared with workstreams-companion. Signatures generated with Node's crypto from the ADR 033 canonical form, and lane colours with an independent re-implementation of the sidebar hash; never regenerate either with the module under test.",
   "secret": "dGVzdC1zZWNyZXQtZm9yLWNvbXBhbmlvbi1maXh0dXI",
   "vectors": [
     {
@@ -50,9 +50,9 @@
     }
   ],
   "laneColors": {
-    "lane-a": "#cba6f7",
-    "lane-b": "#f38ba8",
-    "f3b0c2d4-1111-4a2b-9c3d-0123456789ab": "#fab387",
-    "Ünïcødé lane": "#94e2d5"
+    "lane-a": "#fab387",
+    "lane-b": "#cba6f7",
+    "f3b0c2d4-1111-4a2b-9c3d-0123456789ab": "#89b4fa",
+    "Ünïcødé lane": "#a6e3a1"
   }
 }

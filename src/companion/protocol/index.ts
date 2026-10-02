@@ -243,20 +243,23 @@ export function isLaptopOnline(lastPresenceAt: number | null, now: number): bool
 
 // ── Lane colours (derived, never stored) ───────────────────────────────
 
-/** Catppuccin Mocha accents, as in the Workstreams UI. */
-export const LANE_COLORS = [
-  "#89b4fa", "#a6e3a1", "#f9e2af", "#fab387",
-  "#f38ba8", "#cba6f7", "#94e2d5", "#f5c2e7",
-] as const;
+/**
+ * The Workstreams sidebar's lane palette and hash, copied exactly
+ * (`src/domain/work-lanes.ts`), so a lane is the same colour on both screens.
+ * A test in the Workstreams repo pins the two together.
+ */
+export const LANE_COLORS = ["#89b4fa", "#a6e3a1", "#f9e2af", "#cba6f7", "#fab387", "#f38ba8"] as const;
+/** Colour for a workstream with no lane. */
+export const NO_LANE_COLOR = "#45475a";
 
-/** FNV-1a over the lane id, so every app colours a lane the same way. */
-export function laneColor(laneId: string): string {
-  let hash = 0x811c9dc5;
-  for (let i = 0; i < laneId.length; i += 1) {
-    hash ^= laneId.charCodeAt(i);
-    hash = Math.imul(hash, 0x01000193) >>> 0;
+export function laneColor(laneId: string | null | undefined): string {
+  if (!laneId) return NO_LANE_COLOR;
+  let hash = 0;
+  for (let index = 0; index < laneId.length; index += 1) {
+    hash = (hash << 5) - hash + laneId.charCodeAt(index);
+    hash |= 0;
   }
-  return LANE_COLORS[hash % LANE_COLORS.length];
+  return LANE_COLORS[Math.abs(hash) % LANE_COLORS.length];
 }
 
 // ── Pairing ────────────────────────────────────────────────────────────
