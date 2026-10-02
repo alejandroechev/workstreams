@@ -315,6 +315,56 @@ Status-bar gear opens a Settings modal:
 
 Persisted in the SQLite settings table.
 
+## Phone companion
+
+An Android app drives this laptop from your phone. It is **off until you enable
+it** in **Settings → Phone companion**. Design: [ADR 033](adrs/033-phone-companion.md).
+
+**Enable and pair.**
+
+1. Enter your SyncEngine server (default `https://sync.stormlab.app`) and, the
+   first time, its registration key. The key enrols the laptop and is not
+   stored.
+2. Click **Enable phone companion**. Workstreams creates the shared document and
+   a random 32-byte pairing secret, and shows a QR code. A pairing code you can
+   paste sits under it — treat it like a password, because whoever holds it can
+   start agents on this laptop.
+3. In the companion app, scan the QR code or paste the code.
+
+**Pair a new phone…** issues a new secret: the current phone stops working until it scans
+the new code. **Turn off** disconnects. The status line under the heading says
+whether the companion is connected, connecting, or why it is not.
+
+**What the phone can do.**
+
+| Phone action | What happens on the laptop |
+| --- | --- |
+| See the list | Every non-archived workstream, in sidebar order, with lane, loaded state and session count. Updates as you change things here. |
+| Swipe a not-loaded row → **Load** | Loads it in the background. The workstream you are looking at stays on screen. |
+| **+** → name (and optional prompt) | Creates a standalone workstream (no repo, no worktree) in a new empty folder under the folder root (default `~/Workstreams`, configurable), loads it, and with a prompt adds a Copilot session running it. |
+| Tap a row → prompt → **Start session** | Loads the workstream if needed, then appends a Copilot session tile running the repo's Copilot command (or the global one) with `-i <prompt>`. |
+
+The phone shows *Laptop online* while it hears this laptop's presence (every 10
+seconds), and *Offline · last seen HH:MM* otherwise; offline, it sends nothing.
+Each request shows a spinner, then a success or error toast, and *Laptop didn't
+respond* if nothing answered within five minutes.
+
+**Security model.**
+
+- Every request is signed with HMAC-SHA256 over its kind, arguments and
+  creation time. Unsigned, wrongly signed, expired (older than five minutes) and
+  future-dated requests are refused and marked failed with the reason.
+- A request is claimed before it runs and is never run twice; one interrupted
+  by a crash is marked failed, not retried.
+- The phone cannot run arbitrary commands: only load, create and start a
+  session, and the command a session runs is the laptop's own setting.
+- A document written by a newer version is left untouched, and the status line
+  reads *Update Workstreams*.
+- Development builds never connect, so a dev instance can't run your phone's
+  requests.
+- The window keeps running while minimised (`backgroundThrottling` is
+  disabled), so requests are answered with the window in the background.
+
 ## Session persistence
 
 Workstreams, tile layouts, terminal scrollback, and per-tile view state all

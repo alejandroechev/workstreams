@@ -21,6 +21,7 @@ graph TB
             QuickNote["WorkstreamQuickNote (still shipped)<br/>log a note to this workstream's task<br/>the part that survived; seeds the future per-workstream log"]
             DevlogRender["devlog-render.ts<br/>renders the daily page (pure)"]
             StatusBar["StatusBar<br/>Shortcuts + metadata"]
+            Companion["Phone companion (ADR 033)<br/>src/companion: publisher + executor + runtime<br/>HMAC-checked requests, run at most once<br/>off by default; never in dev builds"]
             subgraph Files["Files"]
                 FileBuffers["FileBufferRegistry<br/>Editable file buffers + dirty state"]
                 Monaco["Monaco<br/>Lazy-loaded editor"]
@@ -73,6 +74,12 @@ graph TB
         FileSystem["Filesystem"]
     end
 
+    subgraph SyncCloud["User's SyncEngine server"]
+        CompanionDoc["Companion Automerge document<br/>laptop: workstreams, lanes, lastSeenAt<br/>requests: signed load / create / session<br/>+ ephemeral presence every 10s"]
+    end
+
+    PhoneApp["workstreams-companion<br/>(Android, Tauri 2 + React)<br/>signs requests with the pairing secret"]
+
     subgraph Providers["External-integration boundary"]
         RemoteProv["RemoteRepoProvider trait<br/>GhCli / InMemory impls"]
         DiffRunner["DiffCommandRunner trait<br/>Real (git/gh) / Fake impls"]
@@ -80,6 +87,11 @@ graph TB
     end
 
     App --> Sidebar
+    App --> Companion
+    Companion -- "publish list + presence<br/>write outcomes" --> CompanionDoc
+    CompanionDoc -- "requests" --> Companion
+    Companion -- "mountWorkstream / create / spawn_copilot_session(-i prompt)" --> LibRS
+    PhoneApp -- "Automerge sync over WebSocket" --> CompanionDoc
     App --> PrInboxUI
     Sidebar --> PrInboxUI
     PrInboxUI -- "Tauri: configure / snapshot / read state" --> PrInboxRS

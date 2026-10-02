@@ -71,6 +71,13 @@ instead of buried behind tabs.
   Uses your `az login` account, checks every two minutes while the app is open,
   and keeps read/unread state across restarts. The first check is silent. An
   unread pill in the sidebar footer flags new assignments without opening it.
+- **Phone companion** *(opt-in)* — pair the
+  [Android companion](https://github.com/alejandroechev/workstreams-companion)
+  by QR code to see your workstreams from your phone, load one in the
+  background, create one, or start a Copilot session with a prompt. Requests
+  travel through your own SyncEngine server, are signed with a secret only the
+  laptop and the phone hold, expire after five minutes and run at most once
+  ([ADR 033](docs/adrs/033-phone-companion.md)).
 - **Everything persists** — workstreams, tile layouts, terminal scrollback,
   open files and per-tile view state all survive a restart.
 - **Keyboard-driven** — `Alt+<letter>` opens any tile type, `Alt+Arrows` moves
