@@ -74,4 +74,19 @@ describe("Phone companion settings", () => {
     await waitFor(async () => expect((await loadCompanionSettings(store)).enabled).toBe(false));
     expect(await screen.findByTestId("companion-enable")).toBeInTheDocument();
   });
+
+  it.each([
+    [{ state: "on" }, /connected/i],
+    [{ state: "connecting" }, /connecting/i],
+    [{ state: "dev-disabled" }, /development build/i],
+    [{ state: "update-needed" }, /update Workstreams/i],
+    [{ state: "error", error: "401 Unauthorized" }, /401 Unauthorized/],
+  ] as const)("shows the service status %j while enabled", async (status, text) => {
+    const store = createMemorySettingsStore({
+      "companion.enabled": "1", "companion.doc_url": "automerge:2CNt9qhcehE1jm8fNB88b6PzuuWh", "companion.secret": "s".repeat(43),
+    });
+    render(<CompanionSettingsSection store={store} deps={deps()} status={status} />);
+    expect(await screen.findByTestId("companion-status")).toHaveTextContent(text);
+  });
 });
+

@@ -15,6 +15,27 @@ import {
 import { encodePairing, generateSecret } from "./protocol";
 import { registerSyncDevice, syncAuthRequired, syncServerUrls } from "./sync-server";
 import { openAutomergeDoc } from "./automerge-doc";
+import { getCompanionStatus, onCompanionStatus, type CompanionStatus } from "./useCompanionService";
+
+const STATUS_COLOR: Record<CompanionStatus["state"], string> = {
+  off: "#6c7086",
+  "dev-disabled": "#f9e2af",
+  connecting: "#6c7086",
+  on: "#a6e3a1",
+  "update-needed": "#f9e2af",
+  error: "#f38ba8",
+};
+
+function statusText(status: CompanionStatus): string {
+  switch (status.state) {
+    case "on": return "Connected. Your phone can see this laptop.";
+    case "connecting": return "Connecting to the sync server…";
+    case "off": return "Off.";
+    case "dev-disabled": return "Not available in development builds, so a dev instance never runs the phone's requests.";
+    case "update-needed": return "The phone uses a newer format. Update Workstreams to keep using it.";
+    case "error": return `Not connected: ${status.error}`;
+  }
+}
 
 /** The real dependencies: the SyncEngine server and Automerge. */
 export const realEnableDeps: EnableDeps = {
@@ -58,10 +79,16 @@ const helpStyle: React.CSSProperties = { marginTop: 4, fontSize: 11, color: "#6c
 export function CompanionSettingsSection({
   store = tauriSettingsStore,
   deps = realEnableDeps,
+  status: statusOverride,
 }: {
   store?: SettingsStore;
   deps?: EnableDeps;
+  /** For tests; otherwise the running service's status. */
+  status?: CompanionStatus;
 }) {
+  const [liveStatus, setLiveStatus] = useState<CompanionStatus>(getCompanionStatus);
+  useEffect(() => onCompanionStatus(setLiveStatus), []);
+  const status = statusOverride ?? liveStatus;
   const [settings, setSettings] = useState<CompanionSettings | null>(null);
   const [serverUrl, setServerUrl] = useState("");
   const [registrationKey, setRegistrationKey] = useState("");
@@ -163,6 +190,9 @@ export function CompanionSettingsSection({
         </>
       ) : (
         <>
+          <div data-testid="companion-status" style={{ marginBottom: 10, fontSize: 12, color: STATUS_COLOR[status.state] }}>
+            {statusText(status)}
+          </div>
           <div style={{ display: "flex", gap: 14, alignItems: "flex-start" }}>
             <div
               data-testid="companion-qr"
