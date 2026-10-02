@@ -42,6 +42,9 @@
     "loop:cli": "cargo run --quiet --manifest-path src-tauri/Cargo.toml --bin workstreams -- loop"
   },
   "dependencies": {
+    "@automerge/automerge-repo": "^2.5.6",
+    "@automerge/automerge-repo-network-websocket": "^2.5.6",
+    "@automerge/automerge-repo-storage-indexeddb": "^2.5.6",
     "@heroicons/react": "^2.2.0",
     "@monaco-editor/react": "^4.7.0",
     "@tauri-apps/api": "^2",
@@ -64,6 +67,7 @@
     "better-sqlite3": "^12.10.0"
   },
   "devDependencies": {
+    "@automerge/automerge-repo-network-messagechannel": "^2.5.6",
     "@eslint/js": "^10.0.1",
     "@playwright/test": "^1.60.0",
     "@tauri-apps/cli": "^2",
