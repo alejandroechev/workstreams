@@ -104,7 +104,8 @@ export function parseRequest(raw: unknown): ParseResult {
   if (!raw || typeof raw !== "object") return fail("not an object");
   const r = raw as Record<string, unknown>;
   if (typeof r.id !== "string" || r.id.length === 0 || r.id.length > 100) return fail("bad id");
-  if (typeof r.kind !== "string" || !(r.kind in ALLOWED_ARGS)) return fail("unknown kind");
+  // Own properties only: `"constructor" in ALLOWED_ARGS` is true.
+  if (typeof r.kind !== "string" || !Object.prototype.hasOwnProperty.call(ALLOWED_ARGS, r.kind)) return fail("unknown kind");
   if (typeof r.createdAt !== "number" || !Number.isFinite(r.createdAt)) return fail("bad createdAt");
   if (!r.args || typeof r.args !== "object" || Array.isArray(r.args)) return fail("bad args");
   const kind = r.kind as RequestKind;

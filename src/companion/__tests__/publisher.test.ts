@@ -95,4 +95,29 @@ describe("presence", () => {
     vi.advanceTimersByTime(PRESENCE_INTERVAL_MS * 10);
     expect(heard.length).toBe(4 + LAST_SEEN_WRITE_MS / PRESENCE_INTERVAL_MS);
   });
+
+  it("stops writing lastSeenAt once the document belongs to a newer version", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000_000);
+    const hub = createInMemoryHub();
+    const laptop = hub.peer();
+    const phone = hub.peer();
+    const stop = startPresence(laptop);
+    phone.change((d) => { d.schemaVersion = 2; });
+    const writes = vi.fn();
+    phone.subscribe(writes);
+    vi.advanceTimersByTime(LAST_SEEN_WRITE_MS * 2);
+    expect(writes).not.toHaveBeenCalled();
+    expect(laptop.read().laptop.lastSeenAt).toBe(1_000_000);
+    stop();
+  });
+
+  it("never publishes into a document from a newer version", () => {
+    const hub = createInMemoryHub();
+    const laptop = hub.peer();
+    laptop.change((d) => { d.schemaVersion = 2; });
+    expect(publishLaptopState(laptop, { workstreams: [{ id: "a", name: "A", laneId: null, loaded: false, sessionCount: 0 }], lanes: [] })).toBe(false);
+    expect(laptop.read().laptop.workstreams).toEqual([]);
+  });
 });
+

@@ -19,7 +19,8 @@ test.beforeEach(async ({ page }) => {
         projects: [{ name: "Repo", directory: "/repo", copilot_command: "repo-copilot --yolo" }],
         workstreams: [
           { name: "Alpha", directory: "/repo/alpha", project: "Repo" },
-          { name: "Beta", directory: "/beta" },
+          // Saved sessions on a workstream that is not mounted at startup.
+          { name: "Beta", directory: "/beta", tiles: [{ type: "copilot_session", title: "Beta/1" }, { type: "copilot_session", title: "Beta/2" }] },
           { name: "Gamma", directory: "/repo/gamma", project: "Repo" },
         ],
       },
@@ -38,14 +39,17 @@ test.beforeEach(async ({ page }) => {
 type PhoneWindow = {
   __WS_COMPANION_PHONE__: {
     read(): {
-      laptop: { workstreams: Array<{ id: string; name: string; loaded: boolean }>; lastSeenAt: number | null };
+      laptop: { workstreams: Array<{ id: string; name: string; loaded: boolean; sessionCount: number }>; lastSeenAt: number | null };
       requests: Record<string, { outcome?: { status: string; error?: string; workstreamId?: string } }>;
     };
     change(fn: (d: { requests: Record<string, unknown> }) => void): void;
   };
   __WS_COMPANION_SIGN__: (secret: string, request: unknown) => Promise<string>;
   __WS_INVOKE_LOG__?: Array<{ cmd: string; args: Record<string, unknown> }>;
-  __WS_BACKEND__: { listWorkstreams(): Promise<Array<{ id: string; name: string; directory: string | null; project_id: string | null }>> };
+  __WS_BACKEND__: {
+    listWorkstreams(): Promise<Array<{ id: string; name: string; directory: string | null; project_id: string | null }>>;
+    listTiles(id: string): Promise<Array<{ tile_type: string }>>;
+  };
 };
 
 const phone = (page: Page) => page.evaluate(() => (window as unknown as PhoneWindow).__WS_COMPANION_PHONE__.read());
@@ -79,6 +83,19 @@ test("AT-3: publishes the non-archived workstreams in sidebar order, and presenc
   const sidebarIds = await page.getByTestId("workstream-item").evaluateAll((rows) => rows.map((r) => r.getAttribute("data-workstream-id")));
   expect((await phone(page)).laptop.workstreams.map((w) => w.id)).toEqual(sidebarIds);
   expect((await phone(page)).laptop.lastSeenAt).not.toBeNull();
+});
+
+test("publishes saved session counts for workstreams that are not mounted", async ({ page }) => {
+  const saved = await page.evaluate(async () => {
+    const backend = (window as unknown as PhoneWindow).__WS_BACKEND__;
+    const counts: Record<string, number> = {};
+    for (const w of await backend.listWorkstreams()) {
+      counts[w.id] = (await backend.listTiles(w.id)).filter((t) => t.tile_type === "copilot_session").length;
+    }
+    return counts;
+  });
+  expect(Object.values(saved)).toContain(2);
+  await expect.poll(async () => Object.fromEntries((await phone(page)).laptop.workstreams.map((w) => [w.id, w.sessionCount]))).toEqual(saved);
 });
 
 test("AT-5: loads a workstream in the background without changing the one on screen", async ({ page }) => {

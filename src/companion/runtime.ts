@@ -1,14 +1,16 @@
 import type { CompanionDoc } from "./doc";
 import {
   CREATED,
+  garbageEntries,
   interruptedRequests,
-  pendingRequests,
+  pendingEntries,
   planRequest,
   requestsToPrune,
   type Action,
   type ExecutorWorld,
 } from "./executor";
-import { isKnownSchema, type RequestOutcome } from "./protocol";
+import type { ConsumedLedger } from "./ledger";
+import { isKnownSchema, parseRequest, rejectMessage, type CompanionRequest, type RequestOutcome } from "./protocol";
 
 /** What the runtime may ask the app to do; implemented by App (ADR 033). */
 export interface CompanionOps {
@@ -31,9 +33,14 @@ export type RuntimeStatus =
  * The laptop side of the companion: watches the document and executes the
  * phone's requests one at a time, in order (ADR 033).
  *
- * Every request ends with exactly one outcome. It is claimed (`running`) in
- * the document before anything is done, so a crash mid-action leaves a
- * request that the next start fails instead of re-running.
+ * Every request ends with exactly one outcome. Its id is first recorded in
+ * the laptop's own ledger, the authority on "already run": the document is
+ * writable by anyone holding its URL, so an outcome there can be deleted.
+ * Then it is claimed (`running`) in the document, so a crash mid-action
+ * leaves a request that the next start fails instead of re-running.
+ *
+ * A document from a newer version is never written to; the schema is checked
+ * again after every await, since it may change while a request is verified.
  */
 export function startCompanionRuntime(options: {
   doc: CompanionDoc;
@@ -42,8 +49,11 @@ export function startCompanionRuntime(options: {
   now?: () => number;
   /** Called whenever the status changes. */
   onStatus?: (status: RuntimeStatus) => void;
+  /** Durable record of executed request ids; in-memory by default (tests). */
+  ledger?: ConsumedLedger;
 }) {
   const { doc, secret, ops } = options;
+  const ledger = options.ledger ?? memoryLedger();
   const now = options.now ?? Date.now;
   let stopped = false;
   let queued = false;
@@ -61,9 +71,12 @@ export function startCompanionRuntime(options: {
     if (outcome.error !== undefined) clean.error = outcome.error;
     if (outcome.workstreamId !== undefined) clean.workstreamId = outcome.workstreamId;
     doc.change((draft) => {
-      if (draft.requests[id]) draft.requests[id].outcome = clean;
+      if (!isKnownSchema(draft)) return;
+      const target = draft.requests[id];
+      if (target && typeof target === "object") target.outcome = clean;
     });
   };
+  const known = () => isKnownSchema(doc.read());
 
   const run = async (actions: Action[]): Promise<string | undefined> => {
     let created: string | undefined;
@@ -80,6 +93,50 @@ export function startCompanionRuntime(options: {
     return created;
   };
 
+  /** Handles one inbox entry. Returns false when the pass must stop. */
+  const handle = async (key: string, request: CompanionRequest): Promise<boolean> => {
+    // The signature covers the id, not the map key: an entry filed under
+    // another key could otherwise never be claimed, and would run forever.
+    if (request.id !== key || !parseRequest(request).ok) {
+      setOutcome(key, { status: "failed", at: now(), error: rejectMessage("invalid") });
+      return true;
+    }
+    if (ledger.has(key)) {
+      setOutcome(key, { status: "failed", at: now(), error: rejectMessage("already-handled") });
+      return true;
+    }
+    const plan = await planRequest(request, ops.world(), { secret, now: now(), schemaVersion: doc.read().schemaVersion });
+    if (!known()) {
+      setStatus({ state: "update-needed" });
+      return false;
+    }
+    const current = doc.read().requests[key];
+    if (!current || current.outcome || current.signature !== request.signature) return true;
+    if (!plan.ok) {
+      setOutcome(key, { status: "failed", at: now(), error: plan.error });
+      return true;
+    }
+    try {
+      await ledger.consume(key, request.createdAt);
+    } catch (error) {
+      setOutcome(key, { status: "failed", at: now(), error: `Could not record the request, so it was not run: ${error instanceof Error ? error.message : String(error)}` });
+      return true;
+    }
+    if (!known()) {
+      setStatus({ state: "update-needed" });
+      return false;
+    }
+    setOutcome(key, { status: "running", at: now() });
+    if (doc.read().requests[key]?.outcome?.status !== "running") return true;
+    try {
+      const created = await run(plan.actions);
+      setOutcome(key, { status: "done", at: now(), workstreamId: created });
+    } catch (error) {
+      setOutcome(key, { status: "failed", at: now(), error: error instanceof Error ? error.message : String(error) });
+    }
+    return true;
+  };
+
   const pass = async () => {
     const snapshot = doc.read();
     if (!isKnownSchema(snapshot)) {
@@ -89,27 +146,21 @@ export function startCompanionRuntime(options: {
     }
     setStatus({ state: "ok" });
 
-    for (const request of interruptedRequests(snapshot)) {
-      setOutcome(request.id, { status: "failed", at: now(), error: "Interrupted: Workstreams stopped before finishing this request." });
-    }
+    const garbage = garbageEntries(snapshot);
     const prune = requestsToPrune(snapshot, now());
-    if (prune.length > 0) doc.change((draft) => { for (const id of prune) delete draft.requests[id]; });
+    if (garbage.length + prune.length > 0) {
+      doc.change((draft) => {
+        if (!isKnownSchema(draft)) return;
+        for (const id of [...garbage, ...prune]) delete draft.requests[id];
+      });
+    }
+    for (const key of interruptedRequests(snapshot)) {
+      setOutcome(key, { status: "failed", at: now(), error: "Interrupted: Workstreams stopped before finishing this request." });
+    }
 
-    for (const request of pendingRequests(doc.read())) {
+    for (const [key, request] of pendingEntries(doc.read())) {
       if (stopped) return;
-      const plan = await planRequest(request, ops.world(), { secret, now: now(), schemaVersion: snapshot.schemaVersion });
-      if (doc.read().requests[request.id]?.outcome) continue;
-      if (!plan.ok) {
-        setOutcome(request.id, { status: "failed", at: now(), error: plan.error });
-        continue;
-      }
-      setOutcome(request.id, { status: "running", at: now() });
-      try {
-        const created = await run(plan.actions);
-        setOutcome(request.id, { status: "done", at: now(), workstreamId: created });
-      } catch (error) {
-        setOutcome(request.id, { status: "failed", at: now(), error: error instanceof Error ? error.message : String(error) });
-      }
+      if (!(await handle(key, request))) return;
     }
   };
 
@@ -143,5 +194,13 @@ export function startCompanionRuntime(options: {
       stopped = true;
       unsubscribe();
     },
+  };
+}
+
+function memoryLedger(): ConsumedLedger {
+  const ids = new Set<string>();
+  return {
+    has: (id) => ids.has(id),
+    consume: async (id) => { ids.add(id); },
   };
 }

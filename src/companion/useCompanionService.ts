@@ -3,6 +3,7 @@ import type { CompanionDoc } from "./doc";
 import { openAutomergeDoc } from "./automerge-doc";
 import { buildLaptopState, publishLaptopState, startPresence } from "./publisher";
 import { startCompanionRuntime, type CompanionOps } from "./runtime";
+import { createConsumedLedger } from "./ledger";
 import { createUniqueFolder, expandHome } from "./folders";
 import {
   loadCompanionSettings,
@@ -18,6 +19,12 @@ import type { WorkLane } from "../domain/work-lanes";
 
 /** What the app provides to the companion; read fresh on every use. */
 export interface CompanionBindings {
+  /**
+   * The app has loaded its workstreams and settings. Until then nothing is
+   * published or executed: an empty list would be published, and a valid
+   * request would be failed for naming a workstream not loaded yet.
+   */
+  ready: boolean;
   workstreams: Workstream[];
   lanes: WorkLane[];
   loadedIds: ReadonlySet<string>;
@@ -113,7 +120,7 @@ export function useCompanionService(bindings: CompanionBindings, explicitDeps?: 
     ? JSON.stringify([settings.serverUrl, settings.token, settings.docUrl, settings.secret, settings.folderRoot])
     : null;
   useEffect(() => {
-    if (!settings || !connection || devBuild) return;
+    if (!settings || !connection || devBuild || !bindings.ready) return;
     let cancelled = false;
     let opened: CompanionDoc | null = null;
     const stops: Array<() => void> = [];
@@ -151,16 +158,20 @@ export function useCompanionService(bindings: CompanionBindings, explicitDeps?: 
           setStatus({ state: "update-needed" });
           return;
         }
-        stops.push(startPresence(connected));
-        const runtime = startCompanionRuntime({
-          doc: connected,
-          secret: settings.secret,
-          ops,
-          onStatus: (runtimeStatus) => setStatus(runtimeStatus.state === "ok" ? { state: "on" } : runtimeStatus),
+        return createConsumedLedger(storeRef.current).then((ledger) => {
+          if (cancelled) return;
+          stops.push(startPresence(connected));
+          const runtime = startCompanionRuntime({
+            doc: connected,
+            secret: settings.secret,
+            ops,
+            ledger,
+            onStatus: (runtimeStatus) => setStatus(runtimeStatus.state === "ok" ? { state: "on" } : runtimeStatus),
+          });
+          stops.push(() => runtime.stop());
+          setStatus({ state: "on" });
+          setDoc(connected);
         });
-        stops.push(() => runtime.stop());
-        setStatus({ state: "on" });
-        setDoc(connected);
       })
       .catch((error: unknown) => {
         if (!cancelled) setStatus({ state: "error", error: error instanceof Error ? error.message : String(error) });
@@ -175,7 +186,7 @@ export function useCompanionService(bindings: CompanionBindings, explicitDeps?: 
     };
     // `settings` is captured through `connection`, which holds every field used.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [connection, devBuild]);
+  }, [connection, devBuild, bindings.ready]);
 
   const status: CompanionStatus = !connection ? { state: "off" } : devBuild ? { state: "dev-disabled" } : connectionStatus;
   const statusKey = JSON.stringify(status);

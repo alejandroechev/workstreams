@@ -18,6 +18,7 @@ const ws = (id: string, name: string, over: Partial<Workstream> = {}): Workstrea
 
 function bindings(over: Partial<CompanionBindings> = {}): CompanionBindings {
   return {
+    ready: true,
     workstreams: [ws("a", "Alpha"), ws("b", "Beta")],
     lanes: [],
     loadedIds: new Set(["a"]),
@@ -59,6 +60,36 @@ describe("the companion service in the app", () => {
     const { result } = renderHook(() => useCompanionService(bindings(), { store: enabledStore(), connect, devBuild: true }));
     await waitFor(() => expect(result.current.state).toBe("dev-disabled"));
     expect(connect).not.toHaveBeenCalled();
+  });
+
+  it("waits until the app has loaded before connecting, publishing or executing", async () => {
+    const hub = createInMemoryHub();
+    const phone = hub.peer();
+    await phoneSends(phone, {});
+    const connect = vi.fn(async () => hub.peer());
+    let b = bindings({ ready: false, workstreams: [] });
+    const { result, rerender, unmount } = renderHook(() => useCompanionService(b, { store: enabledStore(), connect, devBuild: false }));
+    await act(async () => { await new Promise((r) => setTimeout(r, 30)); });
+    expect(connect).not.toHaveBeenCalled();
+    expect(phone.read().requests.r1.outcome).toBeUndefined();
+    b = bindings();
+    rerender();
+    await waitFor(() => expect(result.current.state).toBe("on"));
+    await waitFor(() => expect(phone.read().requests.r1.outcome?.status).toBe("done"));
+    expect(b.loadInBackground).toHaveBeenCalledWith("b");
+    unmount();
+  });
+
+  it("records executed requests in the laptop's own settings", async () => {
+    const hub = createInMemoryHub();
+    const phone = hub.peer();
+    const store = enabledStore();
+    const { result, unmount } = renderHook(() => useCompanionService(bindings(), { store, connect: async () => hub.peer(), devBuild: false }));
+    await waitFor(() => expect(result.current.state).toBe("on"));
+    await act(async () => { await phoneSends(phone, {}); });
+    await waitFor(() => expect(phone.read().requests.r1.outcome?.status).toBe("done"));
+    expect(Object.keys(JSON.parse((await store.get("companion.consumed")) ?? "{}"))).toEqual(["r1"]);
+    unmount();
   });
 
   it("publishes the workstreams and executes the paired phone's requests", async () => {

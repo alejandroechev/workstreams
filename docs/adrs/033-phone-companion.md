@@ -79,10 +79,24 @@ apps derive them from the lane id with the shared `laneColor()`.
   `now − createdAt ≤ 5 min` and `createdAt − now ≤ 1 min` (clock skew). A
   suspended or sleeping laptop runs its backlog the moment it wakes (measured:
   39 minutes late), so this check is load-bearing, not defensive.
-- **Once only.** Workstreams writes `outcome.status = "running"` *before*
-  acting. A request that already has any outcome is never executed again. A
+- **Once only.** Before acting, Workstreams records the request id in a
+  ledger in its own SQLite settings (`companion.consumed`), then writes
+  `outcome.status = "running"`. The ledger, not the document, is the authority:
+  anyone who can write to the document can delete an outcome and replay a
+  still-fresh signed request, and the ledger refuses it. Ids are kept for the
+  freshness window plus a margin; older requests fail the freshness check
+  anyway. A request that already has an outcome is never executed again. A
   request found `running` at start-up (the app died mid-action) is marked
   `failed: interrupted`, not retried.
+- **Untrusted inbox.** An entry must be filed under its own signed `id`;
+  anything else, or anything malformed, is failed as invalid. Entries that are
+  not even objects are deleted. One bad entry never stops the others.
+- **No writes to a newer document.** The schema version is re-checked after
+  every await, before claiming, before each outcome and on every presence
+  tick.
+- **Not before the app is ready.** Nothing is published or executed until the
+  app has loaded its workstreams and settings, so a request is never failed
+  for naming a workstream that has not loaded yet.
 - Rejected requests are marked `failed` with a reason, never silently dropped,
   so the phone can show what happened.
 - Completed requests older than a few days are pruned to bound history.

@@ -42,10 +42,17 @@ export async function openAutomergeDoc(options: OpenOptions): Promise<{ doc: Com
   }
 
   const repo = new Repo({ network, storage });
-  const handle = options.docUrl
-    ? await repo.find<CompanionDocument>(options.docUrl as Parameters<typeof repo.find>[0])
-    : repo.create<CompanionDocument>(emptyDocument());
-  await handle.whenReady();
+  let handle;
+  try {
+    handle = options.docUrl
+      ? await repo.find<CompanionDocument>(options.docUrl as Parameters<typeof repo.find>[0])
+      : repo.create<CompanionDocument>(emptyDocument());
+    await handle.whenReady();
+  } catch (error) {
+    // Nobody gets a handle to close, so the repo (and its socket) is closed here.
+    await repo.shutdown().catch(() => {});
+    throw error;
+  }
 
   const offs: Array<() => void> = [];
   const doc: CompanionDoc = {

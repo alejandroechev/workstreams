@@ -78,6 +78,7 @@ export default function App() {
   const [workLanes, setWorkLanes] = useState<WorkLane[]>([]);
   const [workstreams, setWorkstreams] = useState<Workstream[]>([]);
   const [loopSummaries, setLoopSummaries] = useState<LoopSummary[]>([]);
+  const [companionReady, setCompanionReady] = useState(false);
   // Latest projects/workstreams held in refs so spawn helpers invoked from
   // effects/event handlers resolve the CURRENT per-project Copilot command
   // (like getAppSettings() reads the live global) without stale closures.
@@ -572,6 +573,9 @@ export default function App() {
         setProjects(p);
         setWorkLanes(lanes);
         setWorkstreams(ws);
+        // The phone companion acts only once workstreams and the Copilot
+        // command settings are known (ADR 033).
+        void hydrateAppSettings().then(() => setCompanionReady(true));
         // Mark the workstreams that were open when the app last closed. This
         // restores the *set*, not the tiles: each one mounts on first visit,
         // exactly as if it had just been opened. See domain/loaded-workstreams.
@@ -1942,14 +1946,27 @@ export default function App() {
   );
 
   // ── Phone companion (ADR 033) ──────────────────────────────────────────
-  // Running Copilot sessions per mounted workstream; an unmounted one has none.
+  // Copilot session tiles per workstream: live for mounted ones, from the
+  // saved tiles for the rest (read once per workstream, without mounting).
+  const [savedSessionCounts, setSavedSessionCounts] = useState<ReadonlyMap<string, number>>(new Map());
+  const companionWorkstreamIds = workstreams.filter((w) => w.status !== "archived").map((w) => w.id).join(",");
+  useEffect(() => {
+    if (!companionReady) return;
+    let cancelled = false;
+    const ids = companionWorkstreamIds ? companionWorkstreamIds.split(",") : [];
+    void Promise.all(ids.map(async (id) => {
+      const tiles = await backend.listTiles(id).catch(() => []);
+      return [id, tiles.filter((t) => t.tile_type === "copilot_session").length] as const;
+    })).then((entries) => { if (!cancelled) setSavedSessionCounts(new Map(entries)); });
+    return () => { cancelled = true; };
+  }, [backend, companionReady, companionWorkstreamIds]);
   const companionSessionCounts = useMemo(() => {
-    const counts = new Map<string, number>();
+    const counts = new Map(savedSessionCounts);
     for (const [id, state] of wsStates) {
       counts.set(id, state.tiles.filter((t) => t.tile_type === "copilot_session").length);
     }
     return counts;
-  }, [wsStates]);
+  }, [savedSessionCounts, wsStates]);
 
   const createWorkstreamForCompanion = useCallback(
     async (name: string, directory: string): Promise<string> => {
@@ -1986,6 +2003,7 @@ export default function App() {
   );
 
   useCompanionService({
+    ready: companionReady,
     workstreams,
     lanes: workLanes,
     loadedIds: loadedWsIds,

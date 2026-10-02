@@ -1,5 +1,5 @@
 import type { CompanionDoc } from "./doc";
-import { PRESENCE_INTERVAL_MS, type PublishedLane, type PublishedWorkstream } from "./protocol";
+import { isKnownSchema, PRESENCE_INTERVAL_MS, type PublishedLane, type PublishedWorkstream } from "./protocol";
 import { compareNames, groupByLane, type WorkLane } from "../domain/work-lanes";
 import type { Workstream } from "../domain/types";
 
@@ -43,7 +43,10 @@ export function buildLaptopState(input: {
 
 /** Writes the state if it differs from what is published. Returns whether it wrote. */
 export function publishLaptopState(doc: CompanionDoc, state: LaptopState): boolean {
-  const current = doc.read().laptop;
+  const snapshot = doc.read();
+  // A newer version's document gets no writes at all (ADR 033).
+  if (!isKnownSchema(snapshot)) return false;
+  const current = snapshot.laptop;
   if (JSON.stringify(current.workstreams) === JSON.stringify(state.workstreams)
     && JSON.stringify(current.lanes) === JSON.stringify(state.lanes)) {
     return false;
@@ -64,9 +67,12 @@ export function startPresence(doc: CompanionDoc): () => void {
   const tick = () => {
     const now = Date.now();
     doc.broadcast({ kind: "presence", sentAt: now });
-    if (lastWrite === 0 || now - lastWrite >= LAST_SEEN_WRITE_MS) {
+    if ((lastWrite === 0 || now - lastWrite >= LAST_SEEN_WRITE_MS) && isKnownSchema(doc.read())) {
       lastWrite = now;
-      doc.change((draft) => { draft.laptop.lastSeenAt = now; });
+      doc.change((draft) => {
+        // Checked inside the change: the document may have been upgraded since.
+        if (isKnownSchema(draft)) draft.laptop.lastSeenAt = now;
+      });
     }
   };
   tick();

@@ -4,6 +4,7 @@ import { createInMemoryHub } from "../doc";
 import { emptyDocument, signRequest, type CompanionDocument, type UnsignedRequest } from "../protocol";
 import type { ExecutorWorld } from "../executor";
 import fixtures from "../protocol/fixtures.json";
+import { createConsumedLedger } from "../ledger";
 
 const SECRET = fixtures.secret;
 const NOW = 1_790_000_000_000;
@@ -172,5 +173,101 @@ describe("the companion runtime on the laptop", () => {
     await phoneRequest(hub.peer(), {});
     await runtime.idle();
     expect(calls).toEqual([]);
+  });
+
+  describe("against a hostile document writer (no secret)", () => {
+    const memoryStore = () => {
+      const data: Record<string, string> = {};
+      return { get: async (k: string) => data[k] ?? null, set: async (k: string, v: string) => { data[k] = v; } };
+    };
+
+    it("never re-runs a request whose outcome was deleted, even across a restart", async () => {
+      const hub = createInMemoryHub();
+      const laptop = hub.peer();
+      const phone = hub.peer();
+      const { ops, calls } = fakeOps();
+      const store = memoryStore();
+      let runtime = startCompanionRuntime({ doc: laptop, secret: SECRET, ops, now: () => NOW, ledger: await createConsumedLedger(store, () => NOW) });
+      await phoneRequest(phone, {});
+      await runtime.idle();
+      phone.change((d) => { delete d.requests.r1.outcome; });
+      await runtime.idle();
+      runtime.stop();
+      runtime = startCompanionRuntime({ doc: laptop, secret: SECRET, ops, now: () => NOW, ledger: await createConsumedLedger(store, () => NOW) });
+      await runtime.idle();
+      expect(calls).toEqual(["load:idle"]);
+      expect(phone.read().requests.r1.outcome).toMatchObject({ status: "failed", error: "The request was already handled." });
+      runtime.stop();
+    });
+
+    it("refuses a signed request stored under a key other than its id", async () => {
+      const hub = createInMemoryHub();
+      const laptop = hub.peer();
+      const phone = hub.peer();
+      const { ops, calls } = fakeOps();
+      await phoneRequest(phone, {});
+      phone.change((d) => { d.requests.alias = { ...d.requests.r1 }; delete d.requests.r1; });
+      const runtime = startCompanionRuntime({ doc: laptop, secret: SECRET, ops, now: () => NOW });
+      await runtime.idle();
+      expect(calls).toEqual([]);
+      expect(phone.read().requests.alias.outcome).toMatchObject({ status: "failed", error: "The request was malformed." });
+      runtime.stop();
+    });
+
+    it("skips malformed entries and still runs the valid request", async () => {
+      const hub = createInMemoryHub();
+      const laptop = hub.peer();
+      const phone = hub.peer();
+      const { ops, calls } = fakeOps();
+      phone.change((d) => {
+        (d.requests as Record<string, unknown>).poison = null;
+        (d.requests as Record<string, unknown>).ctor = { id: "ctor", kind: "constructor", args: {}, createdAt: NOW, signature: "x" };
+        (d.requests as Record<string, unknown>).text = "hello";
+      });
+      await phoneRequest(phone, {});
+      const runtime = startCompanionRuntime({ doc: laptop, secret: SECRET, ops, now: () => NOW });
+      await runtime.idle();
+      expect(calls).toEqual(["load:idle"]);
+      const requests = phone.read().requests as Record<string, unknown>;
+      expect(requests.poison).toBeUndefined();
+      expect(requests.text).toBeUndefined();
+      expect(phone.read().requests.ctor.outcome).toMatchObject({ status: "failed", error: "The request was malformed." });
+      expect(runtime.status()).toEqual({ state: "ok" });
+      runtime.stop();
+    });
+
+    it("does nothing and writes nothing if the schema changes while a request is being verified", async () => {
+      const hub = createInMemoryHub();
+      const laptop = hub.peer();
+      const phone = hub.peer();
+      const { ops, calls } = fakeOps({
+        world: () => {
+          // The first read happens after verification starts: upgrade the document now.
+          phone.change((d) => { d.schemaVersion = 2; });
+          return { workstreams: [{ id: "idle", name: "Idle", archived: false, loaded: false, copilotCommand: "c" }], globalCopilotCommand: "c" };
+        },
+      });
+      await phoneRequest(phone, {});
+      const runtime = startCompanionRuntime({ doc: laptop, secret: SECRET, ops, now: () => NOW });
+      await runtime.idle();
+      expect(calls).toEqual([]);
+      expect(phone.read().requests.r1.outcome).toBeUndefined();
+      expect(runtime.status()).toEqual({ state: "update-needed" });
+      runtime.stop();
+    });
+
+    it("fails the request instead of acting when the ledger cannot be saved", async () => {
+      const hub = createInMemoryHub();
+      const laptop = hub.peer();
+      const phone = hub.peer();
+      const { ops, calls } = fakeOps();
+      const ledger = { has: () => false, consume: async () => { throw new Error("disk full"); } };
+      await phoneRequest(phone, {});
+      const runtime = startCompanionRuntime({ doc: laptop, secret: SECRET, ops, now: () => NOW, ledger });
+      await runtime.idle();
+      expect(calls).toEqual([]);
+      expect(phone.read().requests.r1.outcome).toMatchObject({ status: "failed" });
+      runtime.stop();
+    });
   });
 });

@@ -133,7 +133,7 @@ describe("choosing what to process", () => {
       r: { id: "r", kind: "load", args: { workstreamId: "x" }, createdAt: 1, signature: "s", outcome: { status: "running", at: 1 } },
       d: { id: "d", kind: "load", args: { workstreams: "x" } as never, createdAt: 1, signature: "s", outcome: { status: "done", at: 1 } },
     };
-    expect(interruptedRequests(doc).map((r) => r.id)).toEqual(["r"]);
+    expect(interruptedRequests(doc)).toEqual(["r"]);
   });
 
   it("prunes finished requests after a few days, never pending or running ones", () => {

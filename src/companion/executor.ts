@@ -92,26 +92,46 @@ export async function planRequest(
   }
 }
 
+const isEntry = (value: unknown): value is CompanionRequest =>
+  !!value && typeof value === "object" && !Array.isArray(value);
+
+/**
+ * Keys of inbox entries that are not even objects. Anyone with the document
+ * URL can write them; they carry no request and cannot hold an outcome.
+ */
+export function garbageEntries(doc: CompanionDocument): string[] {
+  return Object.entries(doc.requests ?? {}).filter(([, value]) => !isEntry(value)).map(([key]) => key);
+}
+
+/** Inbox entries nobody has handled yet, oldest first, with their map keys. */
+export function pendingEntries(doc: CompanionDocument): Array<[string, CompanionRequest]> {
+  const createdAt = (request: CompanionRequest) => (typeof request.createdAt === "number" ? request.createdAt : 0);
+  return Object.entries(doc.requests ?? {})
+    .filter((entry): entry is [string, CompanionRequest] => isEntry(entry[1]) && !entry[1].outcome)
+    .sort(([, a], [, b]) => createdAt(a) - createdAt(b));
+}
+
 /** Requests nobody has handled yet, oldest first. */
 export function pendingRequests(doc: CompanionDocument): CompanionRequest[] {
-  return Object.values(doc.requests)
-    .filter((request) => !request.outcome)
-    .sort((a, b) => a.createdAt - b.createdAt);
+  return pendingEntries(doc).map(([, request]) => request);
 }
 
 /**
  * Requests a previous run marked `running` and never finished: the app died
  * mid-action. They are failed, never retried, because the action may have
- * happened.
+ * happened. Returned as map keys.
  */
-export function interruptedRequests(doc: CompanionDocument): CompanionRequest[] {
-  return Object.values(doc.requests).filter((request) => request.outcome?.status === "running");
+export function interruptedRequests(doc: CompanionDocument): string[] {
+  return Object.entries(doc.requests ?? {})
+    .filter(([, request]) => isEntry(request) && request.outcome?.status === "running")
+    .map(([key]) => key);
 }
 
 export function requestsToPrune(doc: CompanionDocument, now: number): string[] {
-  return Object.values(doc.requests)
-    .filter((request) => request.outcome && request.outcome.status !== "running" && now - request.outcome.at > PRUNE_AFTER_MS)
-    .map((request) => request.id);
+  return Object.entries(doc.requests ?? {})
+    .filter(([, request]) => isEntry(request) && request.outcome && request.outcome.status !== "running"
+      && typeof request.outcome.at === "number" && now - request.outcome.at > PRUNE_AFTER_MS)
+    .map(([key]) => key);
 }
 
 /**

@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { MessageChannelNetworkAdapter } from "@automerge/automerge-repo-network-messagechannel";
 import { openAutomergeDoc } from "../automerge-doc";
 import { emptyDocument, type CompanionDocument } from "../protocol";
@@ -65,4 +65,14 @@ describe("Automerge companion document", () => {
     expect(doc.read().laptop.lanes).toEqual([]);
     doc.close();
   });
+
+  it("shuts its repo down when the document cannot be opened, so nothing keeps reconnecting", async () => {
+    const { port1 } = new MessageChannel();
+    const adapter = new MessageChannelNetworkAdapter(port1);
+    const disconnect = vi.spyOn(adapter, "disconnect");
+    await expect(openAutomergeDoc({ docUrl: "automerge:notavalidurl0OIl", network: [adapter], storage: false })).rejects.toThrow();
+    expect(disconnect).toHaveBeenCalled();
+    port1.close();
+  });
 });
+
