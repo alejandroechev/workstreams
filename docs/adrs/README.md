@@ -45,6 +45,7 @@ whatever replaced it — the history is the point.
 | [030](030-ado-pr-inbox.md) | ADO reviewer inbox with per-repo opt-in and app-lifetime polling | Accepted |
 | [031](031-pr-inbox-event-stream.md) | PR inbox as a per-pull-request event stream — watch modes, comment/vote/gate/closure events | Accepted |
 | [032](032-diff-reading-order.md) | Agent-recommended reading order for Repo Explorer diffs — app-validated, fingerprinted, degrades instead of discarding | Accepted |
+| [033](033-phone-companion.md) | Phone companion driving Workstreams through a shared Automerge document — signed, fresh, once-only requests | Accepted |
 
 ## Writing a new ADR
 

@@ -1,0 +1,58 @@
+{
+  "$comment": "Shared with workstreams-companion. Generated independently of protocol/index.ts (Node crypto + the ADR 033 canonical form); do not regenerate with the module under test.",
+  "secret": "dGVzdC1zZWNyZXQtZm9yLWNvbXBhbmlvbi1maXh0dXI",
+  "vectors": [
+    {
+      "request": {
+        "id": "fx-load",
+        "kind": "load",
+        "args": {
+          "workstreamId": "ws-1"
+        },
+        "createdAt": 1790000000000,
+        "signature": "74def2363c9cc78b7b380914352f2a8fe2e41ed67edd9cc0f8e16d9ec3e28ee5"
+      }
+    },
+    {
+      "request": {
+        "id": "fx-create",
+        "kind": "create",
+        "args": {
+          "name": "Phone idea"
+        },
+        "createdAt": 1790000000001,
+        "signature": "93e71abe56085620e947174e251d056b1bbb1e97b4bb4097eded6e6b32602a2e"
+      }
+    },
+    {
+      "request": {
+        "id": "fx-create-prompt",
+        "kind": "create",
+        "args": {
+          "prompt": "List the files here",
+          "name": "Fix the docs"
+        },
+        "createdAt": 1790000000002,
+        "signature": "9ddf4a9e16ce4ffe14d9df6dc0b500b7de7281d2a1c6f3be45457fbd737393e8"
+      }
+    },
+    {
+      "request": {
+        "id": "fx-session",
+        "kind": "session",
+        "args": {
+          "workstreamId": "ws-2",
+          "prompt": "Line one\nLine two — ünïcødé ✓"
+        },
+        "createdAt": 1790000000003,
+        "signature": "23f05f30594ca6213806b4c18d1674a85299bb9712e7ebb5774a61cb7ef7f35c"
+      }
+    }
+  ],
+  "laneColors": {
+    "lane-a": "#cba6f7",
+    "lane-b": "#f38ba8",
+    "f3b0c2d4-1111-4a2b-9c3d-0123456789ab": "#fab387",
+    "Ünïcødé lane": "#94e2d5"
+  }
+}

@@ -1,13 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import prodConfig from "../../src-tauri/tauri.conf.json";
+import devConfig from "../../src-tauri/tauri.conf.dev.json";
 
 type WindowConfig = { title?: string; backgroundThrottling?: string };
-
-function windows(file: string): WindowConfig[] {
-  const config = JSON.parse(readFileSync(resolve(__dirname, "../../src-tauri", file), "utf8"));
-  return config.app?.windows ?? [];
-}
 
 /**
  * The phone companion (ADR 033) relies on the main window's page staying live
@@ -17,10 +12,13 @@ function windows(file: string): WindowConfig[] {
  * (workstreams-companion spike, 2026-10-02).
  */
 describe("main window background throttling", () => {
-  it.each(["tauri.conf.json", "tauri.conf.dev.json"])("is disabled in %s", (file) => {
-    const configured = windows(file);
-    expect(configured.length).toBeGreaterThan(0);
-    for (const window of configured) {
+  it.each([
+    ["tauri.conf.json", prodConfig],
+    ["tauri.conf.dev.json", devConfig],
+  ])("is disabled in %s", (_file, config) => {
+    const windows = (config.app?.windows ?? []) as WindowConfig[];
+    expect(windows.length).toBeGreaterThan(0);
+    for (const window of windows) {
       expect(window.backgroundThrottling, window.title).toBe("disabled");
     }
   });
