@@ -19,6 +19,18 @@ import {
 import { debounce } from "../domain/debounce";
 import { CompanionSettingsSection } from "../companion/CompanionSettingsSection";
 
+const SETTINGS_TABS = [
+  { id: "fonts", label: "Fonts" },
+  { id: "terminal", label: "Terminal" },
+  { id: "copilot", label: "Copilot CLI" },
+  { id: "devlog", label: "Devlog export" },
+  { id: "rendering", label: "Rendering" },
+  { id: "app", label: "App behavior" },
+  { id: "companion", label: "Phone companion" },
+] as const;
+
+type SettingsTab = (typeof SETTINGS_TABS)[number]["id"];
+
 interface Props {
   open: boolean;
   onClose: () => void;
@@ -35,6 +47,7 @@ export default function SettingsModal({ open, onClose }: Props) {
   // the global commit.
   const [localValues, setLocalValues] = useState<AppSettings>(() => getAppSettings());
   const [confirmCloseEnabled, setConfirmCloseEnabled] = useState(true);
+  const [tab, setTab] = useState<SettingsTab>("fonts");
 
   useEffect(() => {
     if (!open) return;
@@ -99,8 +112,12 @@ export default function SettingsModal({ open, onClose }: Props) {
           color: "#cdd6f4",
           border: "1px solid #313244",
           borderRadius: 6,
-          minWidth: 460,
-          maxWidth: 560,
+          width: 720,
+          maxWidth: "calc(100vw - 32px)",
+          height: 560,
+          maxHeight: "calc(100vh - 32px)",
+          display: "flex",
+          flexDirection: "column",
           padding: 0,
           fontFamily: "monospace",
           fontSize: 12,
@@ -131,215 +148,251 @@ export default function SettingsModal({ open, onClose }: Props) {
           </button>
         </div>
 
-        <div style={{ padding: 14 }}>
-          {/* Fonts section */}
-          <div style={{ fontSize: 11, color: "#89b4fa", marginBottom: 8, textTransform: "uppercase", letterSpacing: 0.5 }}>
-            Fonts
-          </div>
-
-          <FontInput
-            label="Code editor font size"
-            testid="settings-font-text"
-            min={TEXT_FONT_SIZE_MIN}
-            max={TEXT_FONT_SIZE_MAX}
-            value={localValues.textFontSize}
-            committed={settings.textFontSize}
-            onChange={(v) => update({ textFontSize: v })}
-            help="Applies to Monaco editors in Repo Explorer, Workbench, and Session Meta when viewing source / text files."
-          />
-
-          <FontInput
-            label="Markdown font size"
-            testid="settings-font-markdown"
-            min={MARKDOWN_FONT_SIZE_MIN}
-            max={MARKDOWN_FONT_SIZE_MAX}
-            value={localValues.markdownFontSize}
-            committed={settings.markdownFontSize}
-            onChange={(v) => update({ markdownFontSize: v })}
-            help="Applies to rendered markdown previews (README, .md files, plan tile, comments)."
-          />
-
-          <FontInput
-            label="Terminal font size"
-            testid="settings-font-terminal"
-            min={TERMINAL_FONT_SIZE_MIN}
-            max={TERMINAL_FONT_SIZE_MAX}
-            value={localValues.terminalFontSize}
-            committed={settings.terminalFontSize}
-            onChange={(v) => update({ terminalFontSize: v })}
-            help="Applies to xterm cell grid in Terminal and Copilot session tiles."
-          />
-
-          <div style={{ height: 1, background: "#313244", margin: "18px 0 14px" }} />
-
-          <div style={{ fontSize: 11, color: "#89b4fa", marginBottom: 8, textTransform: "uppercase", letterSpacing: 0.5 }}>
-            Terminal
-          </div>
-
-          {/* Terminal scroll speed */}
-          <label htmlFor="scroll-speed" style={{ display: "block", marginBottom: 6 }}>
-            Terminal scroll speed:{" "}
-            <span style={{ color: "#a6e3a1" }}>
-              {localValues.terminalScrollSpeed.toFixed(2)}×
-            </span>
-          </label>
-          <input
-            id="scroll-speed"
-            data-testid="settings-scroll-speed"
-            type="range"
-            min={SCROLL_SPEED_MIN}
-            max={SCROLL_SPEED_MAX}
-            step={0.05}
-            value={localValues.terminalScrollSpeed}
-            onChange={(e) => update({ terminalScrollSpeed: parseFloat(e.target.value) })}
-            style={{ width: "100%" }}
-          />
+        <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
           <div
-            style={{
-              display: "flex",
-              justifyContent: "space-between",
-              fontSize: 10,
-              color: "#6c7086",
-              marginTop: 2,
-            }}
+            role="tablist"
+            aria-label="Settings sections"
+            aria-orientation="vertical"
+            style={{ display: "flex", flexDirection: "column", gap: 2, padding: 8, borderRight: "1px solid #313244", minWidth: 150, flexShrink: 0 }}
           >
-            <span>{SCROLL_SPEED_MIN}× (slow)</span>
-            <span>1× (legacy)</span>
-            <span>{SCROLL_SPEED_MAX}× (fast)</span>
+            {SETTINGS_TABS.map(({ id, label }) => (
+              <button
+                key={id}
+                id={`settings-tab-${id}`}
+                role="tab"
+                data-testid={`settings-tab-${id}`}
+                aria-selected={tab === id}
+                aria-controls="settings-tabpanel"
+                tabIndex={tab === id ? 0 : -1}
+                onClick={() => setTab(id)}
+                onKeyDown={(e) => {
+                  const step = e.key === "ArrowDown" ? 1 : e.key === "ArrowUp" ? -1 : 0;
+                  if (!step) return;
+                  e.preventDefault();
+                  const index = SETTINGS_TABS.findIndex((t) => t.id === tab);
+                  const next = SETTINGS_TABS[(index + step + SETTINGS_TABS.length) % SETTINGS_TABS.length].id;
+                  setTab(next);
+                  document.getElementById(`settings-tab-${next}`)?.focus();
+                }}
+                style={{
+                  textAlign: "left",
+                  background: tab === id ? "#313244" : "transparent",
+                  color: tab === id ? "#89b4fa" : "#cdd6f4",
+                  border: "none",
+                  borderRadius: 4,
+                  padding: "6px 10px",
+                  cursor: "pointer",
+                  fontFamily: "monospace",
+                  fontSize: 12,
+                }}
+              >
+                {label}
+              </button>
+            ))}
           </div>
-          <div style={{ marginTop: 6, fontSize: 11, color: "#6c7086" }}>
-            Controls how many lines a single mouse-wheel tick scrolls in
-            terminal and Copilot session tiles.
+          <div
+            id="settings-tabpanel"
+            role="tabpanel"
+            aria-labelledby={`settings-tab-${tab}`}
+            data-testid="settings-tabpanel"
+            style={{ flex: 1, minWidth: 0, padding: 14, overflowY: "auto" }}
+          >
+            {tab === "fonts" && (
+              <>
+
+              <FontInput
+                label="Code editor font size"
+                testid="settings-font-text"
+                min={TEXT_FONT_SIZE_MIN}
+                max={TEXT_FONT_SIZE_MAX}
+                value={localValues.textFontSize}
+                committed={settings.textFontSize}
+                onChange={(v) => update({ textFontSize: v })}
+                help="Applies to Monaco editors in Repo Explorer, Workbench, and Session Meta when viewing source / text files."
+              />
+
+              <FontInput
+                label="Markdown font size"
+                testid="settings-font-markdown"
+                min={MARKDOWN_FONT_SIZE_MIN}
+                max={MARKDOWN_FONT_SIZE_MAX}
+                value={localValues.markdownFontSize}
+                committed={settings.markdownFontSize}
+                onChange={(v) => update({ markdownFontSize: v })}
+                help="Applies to rendered markdown previews (README, .md files, plan tile, comments)."
+              />
+
+              <FontInput
+                label="Terminal font size"
+                testid="settings-font-terminal"
+                min={TERMINAL_FONT_SIZE_MIN}
+                max={TERMINAL_FONT_SIZE_MAX}
+                value={localValues.terminalFontSize}
+                committed={settings.terminalFontSize}
+                onChange={(v) => update({ terminalFontSize: v })}
+                help="Applies to xterm cell grid in Terminal and Copilot session tiles."
+              />
+              </>
+            )}
+            {tab === "terminal" && (
+              <>
+
+              {/* Terminal scroll speed */}
+              <label htmlFor="scroll-speed" style={{ display: "block", marginBottom: 6 }}>
+                Terminal scroll speed:{" "}
+                <span style={{ color: "#a6e3a1" }}>
+                  {localValues.terminalScrollSpeed.toFixed(2)}×
+                </span>
+              </label>
+              <input
+                id="scroll-speed"
+                data-testid="settings-scroll-speed"
+                type="range"
+                min={SCROLL_SPEED_MIN}
+                max={SCROLL_SPEED_MAX}
+                step={0.05}
+                value={localValues.terminalScrollSpeed}
+                onChange={(e) => update({ terminalScrollSpeed: parseFloat(e.target.value) })}
+                style={{ width: "100%" }}
+              />
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  fontSize: 10,
+                  color: "#6c7086",
+                  marginTop: 2,
+                }}
+              >
+                <span>{SCROLL_SPEED_MIN}× (slow)</span>
+                <span>1× (legacy)</span>
+                <span>{SCROLL_SPEED_MAX}× (fast)</span>
+              </div>
+              <div style={{ marginTop: 6, fontSize: 11, color: "#6c7086" }}>
+                Controls how many lines a single mouse-wheel tick scrolls in
+                terminal and Copilot session tiles.
+              </div>
+              </>
+            )}
+            {tab === "copilot" && (
+              <>
+              <label htmlFor="copilot-command" style={{ display: "block", marginBottom: 4 }}>
+                Copilot command
+                {localValues.copilotCommand !== settings.copilotCommand ? (
+                  <span style={{ color: "#f9e2af", marginLeft: 6, fontSize: 11 }}>(pending…)</span>
+                ) : null}
+              </label>
+              <input
+                id="copilot-command"
+                data-testid="settings-copilot-command"
+                type="text"
+                value={localValues.copilotCommand}
+                onChange={(e) => update({ copilotCommand: e.target.value })}
+                spellCheck={false}
+                style={{
+                  width: "100%",
+                  background: "#11111b",
+                  color: "#cdd6f4",
+                  border: "1px solid #313244",
+                  borderRadius: 3,
+                  padding: "4px 6px",
+                  fontFamily: "monospace",
+                  fontSize: 12,
+                  boxSizing: "border-box",
+                }}
+              />
+              <div style={{ marginTop: 4, fontSize: 11, color: "#6c7086" }}>
+                Command line spawned for new Copilot session tiles. Set to
+                <code> copilot --yolo</code> to use the public GitHub Copilot
+                CLI, or any compatible drop-in. The <code>--resume=&lt;id&gt;</code>
+                flag is appended automatically when resuming. Takes effect on
+                the next session tile you spawn.
+              </div>
+              </>
+            )}
+            {tab === "devlog" && (
+              <>
+              <label htmlFor="devlog-directory" style={{ display: "block", marginBottom: 4 }}>
+                Devlog folder
+                {localValues.devlogDirectory !== settings.devlogDirectory ? (
+                  <span style={{ color: "#f9e2af", marginLeft: 6, fontSize: 11 }}>(pending…)</span>
+                ) : null}
+              </label>
+              <input
+                id="devlog-directory"
+                data-testid="settings-devlog-directory"
+                type="text"
+                value={localValues.devlogDirectory}
+                onChange={(e) => update({ devlogDirectory: e.target.value })}
+                spellCheck={false}
+                placeholder="e.g. /Users/you/Wiki/work-wiki/devlog/fy2027"
+                style={{
+                  width: "100%",
+                  background: "#11111b",
+                  color: "#cdd6f4",
+                  border: "1px solid #313244",
+                  borderRadius: 3,
+                  padding: "4px 6px",
+                  fontFamily: "monospace",
+                  fontSize: 12,
+                  boxSizing: "border-box",
+                }}
+              />
+              <div style={{ marginTop: 4, fontSize: 11, color: "#6c7086" }}>
+                Where the task board writes its generated daily page. Export is
+                one-way and never overwrites a file it did not generate: a page
+                without a <code>generated_by: workstreams</code> front-matter key
+                is left untouched and the export is written alongside it. Leave
+                empty to disable export entirely.
+              </div>
+              </>
+            )}
+            {tab === "rendering" && (
+              <>
+              <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                <input
+                  type="checkbox"
+                  data-testid="settings-disable-webgl"
+                  checked={localValues.disableWebglRenderer}
+                  onChange={(e) => update({ disableWebglRenderer: e.target.checked })}
+                />
+                <span>Disable GPU (WebGL) rendering for terminals</span>
+              </label>
+              <div style={{ marginTop: 4, fontSize: 11, color: "#6c7086" }}>
+                Terminal and Copilot session tiles render on the GPU (WebGL) for
+                speed. If a terminal goes <strong>black</strong> and won't recover,
+                turn this on to force the slower DOM renderer, which never blanks.
+                Applies to open tiles immediately.
+              </div>
+              </>
+            )}
+            {tab === "app" && (
+              <>
+              <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                <input
+                  type="checkbox"
+                  data-testid="settings-confirm-close"
+                  checked={confirmCloseEnabled}
+                  onChange={async (e) => {
+                    const next = e.target.checked;
+                    setConfirmCloseEnabled(next);
+                    try {
+                      await invoke("set_setting", { key: "app.confirm-close-disabled", value: next ? "0" : "1" });
+                    } catch { /* swallow */ }
+                  }}
+                />
+                <span>Ask for confirmation before closing the app</span>
+              </label>
+              <div style={{ marginTop: 4, fontSize: 11, color: "#6c7086" }}>
+                When off, the window closes immediately. Unsaved file changes
+                always trigger a separate prompt regardless of this setting.
+              </div>
+              </>
+            )}
+            {tab === "companion" && <CompanionSettingsSection />}
           </div>
-
-          <div style={{ height: 1, background: "#313244", margin: "18px 0 14px" }} />
-
-          <div style={{ fontSize: 11, color: "#89b4fa", marginBottom: 8, textTransform: "uppercase", letterSpacing: 0.5 }}>
-            Copilot CLI
-          </div>
-          <label htmlFor="copilot-command" style={{ display: "block", marginBottom: 4 }}>
-            Copilot command
-            {localValues.copilotCommand !== settings.copilotCommand ? (
-              <span style={{ color: "#f9e2af", marginLeft: 6, fontSize: 11 }}>(pending…)</span>
-            ) : null}
-          </label>
-          <input
-            id="copilot-command"
-            data-testid="settings-copilot-command"
-            type="text"
-            value={localValues.copilotCommand}
-            onChange={(e) => update({ copilotCommand: e.target.value })}
-            spellCheck={false}
-            style={{
-              width: "100%",
-              background: "#11111b",
-              color: "#cdd6f4",
-              border: "1px solid #313244",
-              borderRadius: 3,
-              padding: "4px 6px",
-              fontFamily: "monospace",
-              fontSize: 12,
-              boxSizing: "border-box",
-            }}
-          />
-          <div style={{ marginTop: 4, fontSize: 11, color: "#6c7086" }}>
-            Command line spawned for new Copilot session tiles. Set to
-            <code> copilot --yolo</code> to use the public GitHub Copilot
-            CLI, or any compatible drop-in. The <code>--resume=&lt;id&gt;</code>
-            flag is appended automatically when resuming. Takes effect on
-            the next session tile you spawn.
-          </div>
-
-          <div style={{ height: 1, background: "#313244", margin: "18px 0 14px" }} />
-
-          <div style={{ fontSize: 11, color: "#89b4fa", marginBottom: 8, textTransform: "uppercase", letterSpacing: 0.5 }}>
-            Devlog export
-          </div>
-          <label htmlFor="devlog-directory" style={{ display: "block", marginBottom: 4 }}>
-            Devlog folder
-            {localValues.devlogDirectory !== settings.devlogDirectory ? (
-              <span style={{ color: "#f9e2af", marginLeft: 6, fontSize: 11 }}>(pending…)</span>
-            ) : null}
-          </label>
-          <input
-            id="devlog-directory"
-            data-testid="settings-devlog-directory"
-            type="text"
-            value={localValues.devlogDirectory}
-            onChange={(e) => update({ devlogDirectory: e.target.value })}
-            spellCheck={false}
-            placeholder="e.g. /Users/you/Wiki/work-wiki/devlog/fy2027"
-            style={{
-              width: "100%",
-              background: "#11111b",
-              color: "#cdd6f4",
-              border: "1px solid #313244",
-              borderRadius: 3,
-              padding: "4px 6px",
-              fontFamily: "monospace",
-              fontSize: 12,
-              boxSizing: "border-box",
-            }}
-          />
-          <div style={{ marginTop: 4, fontSize: 11, color: "#6c7086" }}>
-            Where the task board writes its generated daily page. Export is
-            one-way and never overwrites a file it did not generate: a page
-            without a <code>generated_by: workstreams</code> front-matter key
-            is left untouched and the export is written alongside it. Leave
-            empty to disable export entirely.
-          </div>
-
-          <div style={{ height: 1, background: "#313244", margin: "18px 0 14px" }} />
-
-          <div style={{ fontSize: 11, color: "#89b4fa", marginBottom: 8, textTransform: "uppercase", letterSpacing: 0.5 }}>
-            Rendering
-          </div>
-          <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-            <input
-              type="checkbox"
-              data-testid="settings-disable-webgl"
-              checked={localValues.disableWebglRenderer}
-              onChange={(e) => update({ disableWebglRenderer: e.target.checked })}
-            />
-            <span>Disable GPU (WebGL) rendering for terminals</span>
-          </label>
-          <div style={{ marginTop: 4, fontSize: 11, color: "#6c7086" }}>
-            Terminal and Copilot session tiles render on the GPU (WebGL) for
-            speed. If a terminal goes <strong>black</strong> and won't recover,
-            turn this on to force the slower DOM renderer, which never blanks.
-            Applies to open tiles immediately.
-          </div>
-
-          <div style={{ height: 1, background: "#313244", margin: "18px 0 14px" }} />
-
-          <div style={{ fontSize: 11, color: "#89b4fa", marginBottom: 8, textTransform: "uppercase", letterSpacing: 0.5 }}>
-            App behavior
-          </div>
-          <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-            <input
-              type="checkbox"
-              data-testid="settings-confirm-close"
-              checked={confirmCloseEnabled}
-              onChange={async (e) => {
-                const next = e.target.checked;
-                setConfirmCloseEnabled(next);
-                try {
-                  await invoke("set_setting", { key: "app.confirm-close-disabled", value: next ? "0" : "1" });
-                } catch { /* swallow */ }
-              }}
-            />
-            <span>Ask for confirmation before closing the app</span>
-          </label>
-          <div style={{ marginTop: 4, fontSize: 11, color: "#6c7086" }}>
-            When off, the window closes immediately. Unsaved file changes
-            always trigger a separate prompt regardless of this setting.
-          </div>
-
-          <div style={{ height: 1, background: "#313244", margin: "18px 0 14px" }} />
-
-          <CompanionSettingsSection />
-
-          <div style={{ marginTop: 14, textAlign: "right" }}>
+        </div>
+          <div style={{ padding: "8px 14px", borderTop: "1px solid #313244", textAlign: "right" }}>
             <button
               data-testid="settings-reset"
               onClick={() => resetAppSettings()}
@@ -357,7 +410,6 @@ export default function SettingsModal({ open, onClose }: Props) {
               Reset defaults
             </button>
           </div>
-        </div>
       </div>
     </div>
   );

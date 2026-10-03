@@ -300,7 +300,10 @@ in the viewer toolbar.
 
 ## App settings
 
-Status-bar gear opens a Settings modal:
+Status-bar gear opens a Settings modal with one tab per section — Fonts,
+Terminal, Copilot CLI, Devlog export, Rendering, App behavior and Phone
+companion (arrow keys move between tabs). The modal keeps a fixed size within
+the window, and Reset defaults stays at the bottom on every tab:
 
 - Three global font sizes: code editor, markdown body, terminal cell
 - Terminal scroll speed
@@ -318,7 +321,7 @@ Persisted in the SQLite settings table.
 ## Phone companion
 
 An Android app drives this laptop from your phone. It is **off until you enable
-it** in **Settings → Phone companion**. Design: [ADR 033](adrs/033-phone-companion.md).
+it** in the **Phone companion** tab of Settings. Design: [ADR 033](adrs/033-phone-companion.md).
 
 **Enable and pair.**
 

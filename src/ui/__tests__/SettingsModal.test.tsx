@@ -36,6 +36,7 @@ describe("SettingsModal", () => {
 
   it("renders current scroll speed and commits change after debounce", () => {
     render(<SettingsModal open onClose={() => {}} />);
+    fireEvent.click(screen.getByTestId("settings-tab-terminal"));
     const slider = screen.getByTestId("settings-scroll-speed") as HTMLInputElement;
     expect(parseFloat(slider.value)).toBe(getAppSettings().terminalScrollSpeed);
     fireEvent.change(slider, { target: { value: "1.5" } });
@@ -87,6 +88,7 @@ describe("SettingsModal", () => {
     // Defaults to true (DOM renderer). Toggling turns GPU rendering back on.
     expect(getAppSettings().disableWebglRenderer).toBe(true);
     render(<SettingsModal open onClose={() => {}} />);
+    fireEvent.click(screen.getByTestId("settings-tab-rendering"));
     const checkbox = screen.getByTestId("settings-disable-webgl") as HTMLInputElement;
     expect(checkbox.checked).toBe(true);
     fireEvent.click(checkbox);
@@ -102,4 +104,56 @@ describe("SettingsModal", () => {
     fireEvent.click(screen.getByTestId("settings-modal-close"));
     expect(closed).toBe(true);
   });
+
+  describe("tabs", () => {
+    const TABS = [
+      ["fonts", "Fonts", "settings-font-text-range"],
+      ["terminal", "Terminal", "settings-scroll-speed"],
+      ["copilot", "Copilot CLI", "settings-copilot-command"],
+      ["devlog", "Devlog export", "settings-devlog-directory"],
+      ["rendering", "Rendering", "settings-disable-webgl"],
+      ["app", "App behavior", "settings-confirm-close"],
+      ["companion", "Phone companion", "companion-settings"],
+    ] as const;
+
+    it("shows one tab per section, in order, with Fonts selected first", () => {
+      render(<SettingsModal open onClose={() => {}} />);
+      const tabs = screen.getAllByRole("tab");
+      expect(tabs.map((t) => t.textContent)).toEqual(TABS.map(([, label]) => label));
+      expect(screen.getByTestId("settings-tab-fonts").getAttribute("aria-selected")).toBe("true");
+      expect(screen.getByRole("tabpanel").getAttribute("aria-labelledby")).toBe("settings-tab-fonts");
+    });
+
+    it("renders only the selected section", async () => {
+      render(<SettingsModal open onClose={() => {}} />);
+      for (const [id, , control] of TABS) {
+        fireEvent.click(screen.getByTestId(`settings-tab-${id}`));
+        // The companion section loads its settings before rendering.
+        await act(async () => { await Promise.resolve(); });
+        expect(screen.getByTestId(`settings-tab-${id}`).getAttribute("aria-selected")).toBe("true");
+        expect(screen.queryByTestId(control)).not.toBeNull();
+        for (const [, , other] of TABS) {
+          if (other !== control) expect(screen.queryByTestId(other)).toBeNull();
+        }
+      }
+    });
+
+    it("moves between tabs with the arrow keys", () => {
+      render(<SettingsModal open onClose={() => {}} />);
+      fireEvent.keyDown(screen.getByTestId("settings-tab-fonts"), { key: "ArrowDown" });
+      expect(screen.getByTestId("settings-tab-terminal").getAttribute("aria-selected")).toBe("true");
+      fireEvent.keyDown(screen.getByTestId("settings-tab-terminal"), { key: "ArrowUp" });
+      fireEvent.keyDown(screen.getByTestId("settings-tab-fonts"), { key: "ArrowUp" });
+      expect(screen.getByTestId("settings-tab-companion").getAttribute("aria-selected")).toBe("true");
+    });
+
+    it("keeps Reset defaults reachable from every tab", () => {
+      render(<SettingsModal open onClose={() => {}} />);
+      for (const [id] of TABS) {
+        fireEvent.click(screen.getByTestId(`settings-tab-${id}`));
+        expect(screen.queryByTestId("settings-reset")).not.toBeNull();
+      }
+    });
+  });
 });
+
