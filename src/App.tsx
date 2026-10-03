@@ -1985,16 +1985,30 @@ export default function App() {
    * the backend because a background mount may not have rendered yet.
    */
   const startSessionForCompanion = useCallback(
-    async (wsId: string, command: string, prompt: string): Promise<void> => {
+    async (wsId: string, command: string, prompt: string, guard: () => void): Promise<void> => {
+      // `guard` throws once the request may no longer run (stopped, expired,
+      // newer document); it is checked after every wait, and last right
+      // before the agent is launched.
       await mountWorkstream(wsId);
+      guard();
       const ws = workstreamsRef.current.find((w) => w.id === wsId);
       const cwd = ws?.directory || defaultRootDir();
       const [existing, layout] = await Promise.all([backend.listTiles(wsId), backend.getLayout(wsId)]);
+      guard();
       const count = existing.filter((t) => t.tile_type === "copilot_session").length;
       const title = `${ws?.name || "ws"}/${count + 1}`;
       const tile = await backend.createTile(wsId, "copilot_session", title, createCopilotSessionConfig(title, cwd));
       const order: string[] = JSON.parse(layout.tile_order_json || "[]");
       await backend.updateLayout(wsId, { tile_order_json: JSON.stringify([...order, tile.id]) });
+      try {
+        guard();
+      } catch (error) {
+        // Too late to launch: take the unstarted tile back out, so a later
+        // visit doesn't start an agent nobody asked for any more.
+        await backend.updateLayout(wsId, { tile_order_json: JSON.stringify(order) }).catch(() => {});
+        await backend.deleteTile(tile.id).catch(() => {});
+        throw error;
+      }
       upsertTileLocally(tile);
       spawnedPtys.current.add(tile.id);
       await backend.spawnCopilotSession(tile.id, cwd, null, 30, 120, command, prompt);

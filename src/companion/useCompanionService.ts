@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { CompanionDoc } from "./doc";
 import { openAutomergeDoc } from "./automerge-doc";
 import { buildLaptopState, publishLaptopState, startPresence } from "./publisher";
-import { startCompanionRuntime, type CompanionOps } from "./runtime";
+import { startCompanionRuntime, type CompanionOps, type RequestGuard } from "./runtime";
 import { openConsumedLedger } from "./ledger";
 import { createUniqueFolder, expandHome } from "./folders";
 import {
@@ -34,7 +34,8 @@ export interface CompanionBindings {
   globalCommand: string;
   loadInBackground(workstreamId: string): Promise<void>;
   createWorkstreamAt(name: string, directory: string): Promise<string>;
-  startSession(workstreamId: string, command: string, prompt: string): Promise<void>;
+  /** Calls `guard` after each await and right before spawning the session. */
+  startSession(workstreamId: string, command: string, prompt: string, guard: RequestGuard): Promise<void>;
   /** Must fail if the path exists. */
   createDirectory(path: string): Promise<void>;
   homeDir(): Promise<string>;
@@ -140,13 +141,15 @@ export function useCompanionService(bindings: CompanionBindings, explicitDeps?: 
         };
       },
       loadInBackground: (id) => bindingsRef.current.loadInBackground(id),
-      async createWorkstream(name, folderSlug) {
+      async createWorkstream(name, folderSlug, guard) {
         const b = bindingsRef.current;
         const root = expandHome(settings.folderRoot, settings.folderRoot.trim().startsWith("~") ? await b.homeDir() : "");
+        guard();
         const directory = await createUniqueFolder(root, folderSlug, b.createDirectory);
+        guard();
         return b.createWorkstreamAt(name, directory);
       },
-      startSession: (id, command, prompt) => bindingsRef.current.startSession(id, command, prompt),
+      startSession: (id, command, prompt, guard) => bindingsRef.current.startSession(id, command, prompt, guard),
     };
 
     connectRef.current(settings)

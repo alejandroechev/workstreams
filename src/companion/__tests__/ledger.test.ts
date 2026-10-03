@@ -70,11 +70,31 @@ describe("consumed-request ledger", () => {
     expect(await (await openConsumedLedger(store, () => NOW)).reserve("r", NOW)).toBe(true);
   });
 
-  it("can be reset, which is only safe together with a new pairing secret", async () => {
+  it("a reset repairs unreadable storage", async () => {
     const store = memoryStore({ [LEDGER_KEY]: "{nope" });
+    await expect(openConsumedLedger(store)).rejects.toThrow();
     await resetConsumedLedger(store);
     const ledger = await openConsumedLedger(store, () => NOW);
     expect(await ledger.reserve("r1", NOW)).toBe(true);
+  });
+
+  it("a reset never forgets ids of a ledger that is open, even with writes in flight", async () => {
+    const data: Record<string, string> = {};
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    let slow = true;
+    const store: SettingsStore = {
+      get: async (k) => data[k] ?? null,
+      set: async (k, v) => { if (slow) { slow = false; await gate; } data[k] = v; },
+    };
+    const ledger = await openConsumedLedger(store, () => NOW);
+    const old = ledger.reserve("old", NOW);
+    const reset = resetConsumedLedger(store);
+    const fresh = (await openConsumedLedger(store, () => NOW)).reserve("new", NOW);
+    release();
+    await Promise.all([old, reset, fresh]);
+    expect(Object.keys(JSON.parse(data[LEDGER_KEY])).sort()).toEqual(["new", "old"]);
+    expect(await (await openConsumedLedger(store, () => NOW)).reserve("new", NOW)).toBe(false);
   });
 
   it("reports a reservation it could not save, and still refuses the id afterwards", async () => {

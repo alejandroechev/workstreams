@@ -323,5 +323,61 @@ describe("the companion runtime on the laptop", () => {
       expect(phone.read().requests.r1.outcome).toMatchObject({ status: "failed" });
       runtime.stop();
     });
+
+    it("stops before the session when the document is upgraded during the load", async () => {
+      const hub = createInMemoryHub();
+      const laptop = hub.peer();
+      const phone = hub.peer();
+      const { ops, calls } = fakeOps({
+        loadInBackground: vi.fn(async () => { phone.change((d) => { d.schemaVersion = 2; }); }),
+      });
+      await phoneRequest(phone, { kind: "session", args: { workstreamId: "idle", prompt: "go" } });
+      const runtime = startCompanionRuntime({ doc: laptop, secret: SECRET, ops, now: () => NOW });
+      await runtime.idle();
+      expect(calls.some((c) => c.startsWith("session:"))).toBe(false);
+      expect(runtime.status()).toEqual({ state: "update-needed" });
+      runtime.stop();
+    });
+
+    it("hands operations a guard that refuses once the request expires mid-operation", async () => {
+      const hub = createInMemoryHub();
+      const laptop = hub.peer();
+      const phone = hub.peer();
+      let clock = NOW;
+      const launched = vi.fn();
+      const { ops } = fakeOps({
+        startSession: vi.fn(async (_id: string, _command: string, _prompt: string, guard: () => void) => {
+          clock = NOW + 5 * 60_000 + 1_000;
+          guard();
+          launched();
+        }),
+      });
+      await phoneRequest(phone, { kind: "session", args: { workstreamId: "busy", prompt: "go" } });
+      const runtime = startCompanionRuntime({ doc: laptop, secret: SECRET, ops, now: () => clock });
+      await runtime.idle();
+      expect(launched).not.toHaveBeenCalled();
+      expect(phone.read().requests.r1.outcome).toMatchObject({ status: "failed", error: "The request is too old; Workstreams was not reachable in time." });
+      runtime.stop();
+    });
+
+    it("the guard also refuses once the runtime is stopped", async () => {
+      const hub = createInMemoryHub();
+      const laptop = hub.peer();
+      const phone = hub.peer();
+      const launched = vi.fn();
+      let runtime: ReturnType<typeof startCompanionRuntime> | null = null;
+      const { ops } = fakeOps({
+        startSession: vi.fn(async (_id: string, _command: string, _prompt: string, guard: () => void) => {
+          runtime?.stop();
+          guard();
+          launched();
+        }),
+      });
+      await phoneRequest(phone, { kind: "session", args: { workstreamId: "busy", prompt: "go" } });
+      runtime = startCompanionRuntime({ doc: laptop, secret: SECRET, ops, now: () => NOW });
+      await runtime.idle();
+      expect(launched).not.toHaveBeenCalled();
+    });
   });
 });
+

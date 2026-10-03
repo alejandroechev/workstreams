@@ -86,17 +86,21 @@ apps derive them from the lane id with the shared `laneColor()`.
   document, is the authority: anyone who can write to the document can delete
   an outcome and replay a still-fresh signed request, and the ledger refuses
   it. There is one ledger per process, shared by every generation of the
-  service (turning the companion off and on, a new secret), and its writes are
-  serialised, so no two generations can both reserve an id or overwrite each
-  other's. It fails closed: an unreadable ledger stops the companion. **Pair a
-  new phone** resets it, which is safe because the new secret invalidates every
-  signature an old id could replay. Ids are kept for the freshness window plus
-  a margin. A request found `running` at start-up (the app died mid-action) is
+  service (turning the companion off and on, a new secret). Its map is never
+  replaced or cleared, and its writes are serialised, so no two generations can
+  both reserve an id or overwrite each other's. It fails closed: an unreadable
+  ledger stops the companion. **Pair a new phone** repairs unreadable storage
+  (a ledger that loaded fine is left alone) before rotating the secret, which
+  voids every signature the lost ids could replay. Ids are kept for the
+  freshness window plus a margin. A request found `running` at start-up (the app died mid-action) is
   marked `failed: interrupted`, not retried.
 - **Re-checked after every wait.** A stopped runtime acts on nothing and writes
-  nothing. Freshness is checked again after the reservation and before each
-  action of a request, so a laptop that stalls mid-request never starts an
-  agent on an expired request.
+  nothing. Freshness is checked again after the reservation, and a guard
+  (stopped, newer document, expired) runs before each action and is handed to
+  the create and session operations, which call it after each of their own
+  waits and last right before the agent is launched. A laptop that stalls
+  mid-request never starts an agent on a request it may no longer run; a
+  session tile created just before such a refusal is removed again.
 - **Untrusted inbox.** An entry must be filed under its own signed `id`;
   anything else, or anything malformed, is failed as invalid. Entries that are
   not even objects are deleted. One bad entry never stops the others.

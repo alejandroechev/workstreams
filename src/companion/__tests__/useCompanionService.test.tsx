@@ -119,7 +119,7 @@ describe("the companion service in the app", () => {
     expect(b.createDirectory).toHaveBeenCalledWith("/Users/me/Phone/phone-idea");
     expect(b.createWorkstreamAt).toHaveBeenCalledWith("Phone idea", "/Users/me/Phone/phone-idea");
     expect(b.loadInBackground).toHaveBeenCalledWith("new-id");
-    expect(b.startSession).toHaveBeenCalledWith("new-id", "agency copilot --yolo", "Go");
+    expect(b.startSession).toHaveBeenCalledWith("new-id", "agency copilot --yolo", "Go", expect.any(Function));
     unmount();
   });
 

@@ -12,6 +12,13 @@ import {
 import type { ConsumedLedger } from "./ledger";
 import { isFresh, isKnownSchema, parseRequest, rejectMessage, type CompanionRequest, type RequestOutcome } from "./protocol";
 
+/**
+ * Throws if the request must not go on: the runtime stopped, the document
+ * became a newer version, or the request expired. Operations call it after
+ * every await of their own and immediately before each side effect.
+ */
+export type RequestGuard = () => void;
+
 /** What the runtime may ask the app to do; implemented by App (ADR 033). */
 export interface CompanionOps {
   /** The app's current state, as the executor needs it. */
@@ -19,9 +26,9 @@ export interface CompanionOps {
   /** Mounts the workstream and its tiles without changing the active one. */
   loadInBackground(workstreamId: string): Promise<void>;
   /** Creates a standalone workstream in a new folder; returns its id. */
-  createWorkstream(name: string, folderSlug: string): Promise<string>;
+  createWorkstream(name: string, folderSlug: string, guard: RequestGuard): Promise<string>;
   /** Appends a Copilot session tile running `command` with `-i prompt`. */
-  startSession(workstreamId: string, command: string, prompt: string): Promise<void>;
+  startSession(workstreamId: string, command: string, prompt: string, guard: RequestGuard): Promise<void>;
 }
 
 export type RuntimeStatus =
@@ -81,7 +88,7 @@ export function startCompanionRuntime(options: {
   };
   const known = () => isKnownSchema(doc.read());
 
-  /** Stops between actions too: a request must not outlive its runtime or its lifetime. */
+  /** Stops between actions too: a request must not outlive its runtime, its document version or its lifetime. */
   const run = async (request: CompanionRequest, actions: Action[]): Promise<string | undefined> => {
     let created: string | undefined;
     const resolve = (id: string) => {
@@ -89,12 +96,19 @@ export function startCompanionRuntime(options: {
       if (!created) throw new Error("Nothing was created to act on.");
       return created;
     };
-    for (const action of actions) {
+    const guard: RequestGuard = () => {
       if (stopped) throw new Error("Stopped: the companion was turned off before this request finished.");
+      if (!known()) {
+        setStatus({ state: "update-needed" });
+        throw new Error("The document belongs to a newer version.");
+      }
       if (!isFresh(request.createdAt, now())) throw new Error(rejectMessage("expired"));
-      if (action.type === "create") created = await ops.createWorkstream(action.name, action.folderSlug);
+    };
+    for (const action of actions) {
+      guard();
+      if (action.type === "create") created = await ops.createWorkstream(action.name, action.folderSlug, guard);
       else if (action.type === "load") await ops.loadInBackground(resolve(action.workstreamId));
-      else await ops.startSession(resolve(action.workstreamId), action.command, action.prompt);
+      else await ops.startSession(resolve(action.workstreamId), action.command, action.prompt, guard);
     }
     return created;
   };

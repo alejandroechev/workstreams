@@ -138,7 +138,8 @@ export async function disableCompanion(store: SettingsStore): Promise<void> {
 
 /** A new secret: the previously paired phone can no longer make the laptop act. */
 export async function repairPhone(store: SettingsStore, generateSecret: () => string): Promise<void> {
-  await saveCompanionSettings(store, { secret: generateSecret() });
-  // A new secret invalidates every old signature, so the old ids can go too.
+  // Repair an unreadable ledger first: the new secret starts the service again,
+  // and it must find a readable ledger. The new secret voids old signatures.
   await resetConsumedLedger(store);
+  await saveCompanionSettings(store, { secret: generateSecret() });
 }
