@@ -1,3 +1,4 @@
+import { resetConsumedLedger } from "./ledger";
 import { invoke } from "@tauri-apps/api/core";
 
 /**
@@ -138,4 +139,6 @@ export async function disableCompanion(store: SettingsStore): Promise<void> {
 /** A new secret: the previously paired phone can no longer make the laptop act. */
 export async function repairPhone(store: SettingsStore, generateSecret: () => string): Promise<void> {
   await saveCompanionSettings(store, { secret: generateSecret() });
+  // A new secret invalidates every old signature, so the old ids can go too.
+  await resetConsumedLedger(store);
 }

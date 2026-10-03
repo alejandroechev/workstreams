@@ -4,7 +4,7 @@ import { createInMemoryHub } from "../doc";
 import { emptyDocument, signRequest, type CompanionDocument, type UnsignedRequest } from "../protocol";
 import type { ExecutorWorld } from "../executor";
 import fixtures from "../protocol/fixtures.json";
-import { createConsumedLedger } from "../ledger";
+import { openConsumedLedger } from "../ledger";
 
 const SECRET = fixtures.secret;
 const NOW = 1_790_000_000_000;
@@ -187,13 +187,13 @@ describe("the companion runtime on the laptop", () => {
       const phone = hub.peer();
       const { ops, calls } = fakeOps();
       const store = memoryStore();
-      let runtime = startCompanionRuntime({ doc: laptop, secret: SECRET, ops, now: () => NOW, ledger: await createConsumedLedger(store, () => NOW) });
+      let runtime = startCompanionRuntime({ doc: laptop, secret: SECRET, ops, now: () => NOW, ledger: await openConsumedLedger(store, () => NOW) });
       await phoneRequest(phone, {});
       await runtime.idle();
       phone.change((d) => { delete d.requests.r1.outcome; });
       await runtime.idle();
       runtime.stop();
-      runtime = startCompanionRuntime({ doc: laptop, secret: SECRET, ops, now: () => NOW, ledger: await createConsumedLedger(store, () => NOW) });
+      runtime = startCompanionRuntime({ doc: laptop, secret: SECRET, ops, now: () => NOW, ledger: await openConsumedLedger(store, () => NOW) });
       await runtime.idle();
       expect(calls).toEqual(["load:idle"]);
       expect(phone.read().requests.r1.outcome).toMatchObject({ status: "failed", error: "The request was already handled." });
@@ -261,11 +261,65 @@ describe("the companion runtime on the laptop", () => {
       const laptop = hub.peer();
       const phone = hub.peer();
       const { ops, calls } = fakeOps();
-      const ledger = { has: () => false, consume: async () => { throw new Error("disk full"); } };
+      const ledger = { reserve: async () => { throw new Error("disk full"); } };
       await phoneRequest(phone, {});
       const runtime = startCompanionRuntime({ doc: laptop, secret: SECRET, ops, now: () => NOW, ledger });
       await runtime.idle();
       expect(calls).toEqual([]);
+      expect(phone.read().requests.r1.outcome).toMatchObject({ status: "failed" });
+      runtime.stop();
+    });
+
+    it("a runtime stopped mid-request never acts, and its replacement runs the request once", async () => {
+      const hub = createInMemoryHub();
+      const laptop = hub.peer();
+      const phone = hub.peer();
+      const { ops, calls } = fakeOps();
+      const store = memoryStore();
+      const shared = await openConsumedLedger(store, () => NOW);
+      let release!: () => void;
+      const gate = new Promise<void>((r) => { release = r; });
+      const held = { reserve: async (id: string, at: number) => { await gate; return shared.reserve(id, at); } };
+      const old = startCompanionRuntime({ doc: laptop, secret: SECRET, ops, now: () => NOW, ledger: held });
+      await phoneRequest(phone, { kind: "create", args: { name: "Once" } });
+      await new Promise((r) => setTimeout(r, 10));
+      old.stop();
+      const next = startCompanionRuntime({ doc: laptop, secret: SECRET, ops, now: () => NOW, ledger: await openConsumedLedger(store, () => NOW) });
+      await next.idle();
+      release();
+      await old.idle();
+      expect(calls.filter((c) => c.startsWith("create:"))).toHaveLength(1);
+      expect(phone.read().requests.r1.outcome?.status).toBe("done");
+      next.stop();
+    });
+
+    it("does not start a request that expired while it was being recorded", async () => {
+      const hub = createInMemoryHub();
+      const laptop = hub.peer();
+      const phone = hub.peer();
+      const { ops, calls } = fakeOps();
+      let clock = NOW;
+      const ledger = { reserve: async () => { clock = NOW + 5 * 60_000 + 1_000; return true; } };
+      await phoneRequest(phone, {});
+      const runtime = startCompanionRuntime({ doc: laptop, secret: SECRET, ops, now: () => clock, ledger });
+      await runtime.idle();
+      expect(calls).toEqual([]);
+      expect(phone.read().requests.r1.outcome).toMatchObject({ status: "failed", error: "The request is too old; Workstreams was not reachable in time." });
+      runtime.stop();
+    });
+
+    it("stops between the actions of a request once it expires", async () => {
+      const hub = createInMemoryHub();
+      const laptop = hub.peer();
+      const phone = hub.peer();
+      let clock = NOW;
+      const { ops, calls } = fakeOps({
+        createWorkstream: vi.fn(async () => { clock = NOW + 5 * 60_000 + 1_000; return "new-ws"; }),
+      });
+      await phoneRequest(phone, { kind: "create", args: { name: "Slow", prompt: "go" } });
+      const runtime = startCompanionRuntime({ doc: laptop, secret: SECRET, ops, now: () => clock });
+      await runtime.idle();
+      expect(calls.some((c) => c.startsWith("session:"))).toBe(false);
       expect(phone.read().requests.r1.outcome).toMatchObject({ status: "failed" });
       runtime.stop();
     });

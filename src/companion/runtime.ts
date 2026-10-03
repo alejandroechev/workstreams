@@ -10,7 +10,7 @@ import {
   type ExecutorWorld,
 } from "./executor";
 import type { ConsumedLedger } from "./ledger";
-import { isKnownSchema, parseRequest, rejectMessage, type CompanionRequest, type RequestOutcome } from "./protocol";
+import { isFresh, isKnownSchema, parseRequest, rejectMessage, type CompanionRequest, type RequestOutcome } from "./protocol";
 
 /** What the runtime may ask the app to do; implemented by App (ADR 033). */
 export interface CompanionOps {
@@ -66,6 +66,9 @@ export function startCompanionRuntime(options: {
   };
 
   const setOutcome = (id: string, outcome: RequestOutcome) => {
+    // A stopped runtime writes nothing; a request it left `running` is
+    // failed as interrupted by the next one.
+    if (stopped) return;
     // Automerge rejects `undefined` values, so optional fields are only set when present.
     const clean: RequestOutcome = { status: outcome.status, at: outcome.at };
     if (outcome.error !== undefined) clean.error = outcome.error;
@@ -78,7 +81,8 @@ export function startCompanionRuntime(options: {
   };
   const known = () => isKnownSchema(doc.read());
 
-  const run = async (actions: Action[]): Promise<string | undefined> => {
+  /** Stops between actions too: a request must not outlive its runtime or its lifetime. */
+  const run = async (request: CompanionRequest, actions: Action[]): Promise<string | undefined> => {
     let created: string | undefined;
     const resolve = (id: string) => {
       if (id !== CREATED) return id;
@@ -86,11 +90,27 @@ export function startCompanionRuntime(options: {
       return created;
     };
     for (const action of actions) {
+      if (stopped) throw new Error("Stopped: the companion was turned off before this request finished.");
+      if (!isFresh(request.createdAt, now())) throw new Error(rejectMessage("expired"));
       if (action.type === "create") created = await ops.createWorkstream(action.name, action.folderSlug);
       else if (action.type === "load") await ops.loadInBackground(resolve(action.workstreamId));
       else await ops.startSession(resolve(action.workstreamId), action.command, action.prompt);
     }
     return created;
+  };
+
+  /**
+   * Whether it is still safe to go on after an await: not stopped, the
+   * document still a known version, and the entry unchanged and unhandled.
+   */
+  const stillValid = (key: string, request: CompanionRequest): boolean => {
+    if (stopped) return false;
+    if (!known()) {
+      setStatus({ state: "update-needed" });
+      return false;
+    }
+    const current = doc.read().requests[key];
+    return !!current && !current.outcome && current.signature === request.signature;
   };
 
   /** Handles one inbox entry. Returns false when the pass must stop. */
@@ -101,35 +121,33 @@ export function startCompanionRuntime(options: {
       setOutcome(key, { status: "failed", at: now(), error: rejectMessage("invalid") });
       return true;
     }
-    if (ledger.has(key)) {
-      setOutcome(key, { status: "failed", at: now(), error: rejectMessage("already-handled") });
-      return true;
-    }
     const plan = await planRequest(request, ops.world(), { secret, now: now(), schemaVersion: doc.read().schemaVersion });
-    if (!known()) {
-      setStatus({ state: "update-needed" });
-      return false;
-    }
-    const current = doc.read().requests[key];
-    if (!current || current.outcome || current.signature !== request.signature) return true;
+    if (!stillValid(key, request)) return !stopped && known();
     if (!plan.ok) {
       setOutcome(key, { status: "failed", at: now(), error: plan.error });
       return true;
     }
+    let reserved: boolean;
     try {
-      await ledger.consume(key, request.createdAt);
+      reserved = await ledger.reserve(key, request.createdAt);
     } catch (error) {
       setOutcome(key, { status: "failed", at: now(), error: `Could not record the request, so it was not run: ${error instanceof Error ? error.message : String(error)}` });
       return true;
     }
-    if (!known()) {
-      setStatus({ state: "update-needed" });
-      return false;
+    if (!reserved) {
+      setOutcome(key, { status: "failed", at: now(), error: rejectMessage("already-handled") });
+      return true;
+    }
+    // From here the id is spent: whatever happens, this request never runs again.
+    if (!stillValid(key, request)) return !stopped && known();
+    if (!isFresh(request.createdAt, now())) {
+      setOutcome(key, { status: "failed", at: now(), error: rejectMessage("expired") });
+      return true;
     }
     setOutcome(key, { status: "running", at: now() });
     if (doc.read().requests[key]?.outcome?.status !== "running") return true;
     try {
-      const created = await run(plan.actions);
+      const created = await run(request, plan.actions);
       setOutcome(key, { status: "done", at: now(), workstreamId: created });
     } catch (error) {
       setOutcome(key, { status: "failed", at: now(), error: error instanceof Error ? error.message : String(error) });
@@ -200,7 +218,10 @@ export function startCompanionRuntime(options: {
 function memoryLedger(): ConsumedLedger {
   const ids = new Set<string>();
   return {
-    has: (id) => ids.has(id),
-    consume: async (id) => { ids.add(id); },
+    reserve: async (id) => {
+      if (ids.has(id)) return false;
+      ids.add(id);
+      return true;
+    },
   };
 }

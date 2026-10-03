@@ -82,6 +82,14 @@ describe("pairing a new phone", () => {
     await repairPhone(store, () => "n".repeat(43));
     expect((await loadCompanionSettings(store)).secret).toBe("n".repeat(43));
   });
+
+  it("resets the record of handled requests, which the new secret makes safe", async () => {
+    const store = createMemorySettingsStore();
+    await enableCompanion(store, deps(), { registrationKey: "key" });
+    await store.set("companion.consumed", "{corrupt");
+    await repairPhone(store, () => "n".repeat(43));
+    expect(await store.get("companion.consumed")).toBe("{}");
+  });
 });
 
 describe("disabling", () => {

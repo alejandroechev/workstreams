@@ -154,4 +154,18 @@ describe("the companion service in the app", () => {
     }));
     await waitFor(() => expect(result.current).toEqual({ state: "error", error: "401 Unauthorized" }));
   });
+
+  it("refuses to run anything when its record of handled requests is unreadable", async () => {
+    const hub = createInMemoryHub();
+    const phone = hub.peer();
+    await phoneSends(phone, {});
+    const store = enabledStore();
+    await store.set("companion.consumed", "{corrupt");
+    const { result, unmount } = renderHook(() => useCompanionService(bindings(), { store, connect: async () => hub.peer(), devBuild: false }));
+    await waitFor(() => expect(result.current.state).toBe("error"));
+    expect(result.current).toMatchObject({ error: expect.stringContaining("Pair a new phone") });
+    expect(phone.read().requests.r1.outcome).toBeUndefined();
+    unmount();
+  });
 });
+

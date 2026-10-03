@@ -3,7 +3,7 @@ import type { CompanionDoc } from "./doc";
 import { openAutomergeDoc } from "./automerge-doc";
 import { buildLaptopState, publishLaptopState, startPresence } from "./publisher";
 import { startCompanionRuntime, type CompanionOps } from "./runtime";
-import { createConsumedLedger } from "./ledger";
+import { openConsumedLedger } from "./ledger";
 import { createUniqueFolder, expandHome } from "./folders";
 import {
   loadCompanionSettings,
@@ -158,7 +158,7 @@ export function useCompanionService(bindings: CompanionBindings, explicitDeps?: 
           setStatus({ state: "update-needed" });
           return;
         }
-        return createConsumedLedger(storeRef.current).then((ledger) => {
+        return openConsumedLedger(storeRef.current).then((ledger) => {
           if (cancelled) return;
           stops.push(startPresence(connected));
           const runtime = startCompanionRuntime({
