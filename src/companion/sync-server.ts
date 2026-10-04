@@ -40,9 +40,13 @@ export async function registerSyncDevice(
   if (response instanceof Error) {
     throw new Error(`Could not reach the sync server at ${http}: ${response.message}`);
   }
-  const body = (await response.json().catch(() => ({}))) as { token?: string; deviceId?: string; error?: string };
-  if (!response.ok || !body.token) {
+  // SyncEngine answers 201 with `{ jwt, deviceId }` (server/src/auth.ts).
+  const body = (await response.json().catch(() => ({}))) as { jwt?: string; deviceId?: string; error?: string };
+  if (!response.ok) {
     throw new Error(body.error ?? `The sync server at ${http} refused registration (${response.status})`);
   }
-  return { token: body.token, deviceId: body.deviceId ?? "" };
+  if (typeof body.jwt !== "string" || body.jwt === "") {
+    throw new Error(`The sync server at ${http} accepted the registration but returned no token`);
+  }
+  return { token: body.jwt, deviceId: body.deviceId ?? "" };
 }
