@@ -23,13 +23,13 @@ describe("Phone companion settings", () => {
     expect(await screen.findByTestId("companion-enable")).toBeInTheDocument();
     expect(screen.queryByTestId("companion-qr")).not.toBeInTheDocument();
     expect(d.createDocument).not.toHaveBeenCalled();
-    expect(d.authRequired).not.toHaveBeenCalled();
+    expect(d.register).not.toHaveBeenCalled();
   });
 
   it("asks for the registration key, then shows a QR code carrying the pairing secret", async () => {
     const store = createMemorySettingsStore();
     render(<CompanionSettingsSection store={store} deps={deps()} />);
-    fireEvent.click(await screen.findByTestId("companion-enable"));
+    // The server is asked up front, so the key field is there before the first click.
     const key = await screen.findByTestId("companion-registration-key");
     fireEvent.change(key, { target: { value: "key" } });
     fireEvent.click(screen.getByTestId("companion-enable"));
@@ -39,6 +39,42 @@ describe("Phone companion settings", () => {
     const code = screen.getByTestId("companion-pairing-code") as HTMLInputElement;
     expect(decodePairing(code.value)).toEqual({ doc: "automerge:2CNt9qhcehE1jm8fNB88b6PzuuWh", secret: "s".repeat(43) });
     expect((await loadCompanionSettings(store)).enabled).toBe(true);
+  });
+
+  it("enables in one click, with no key field, on a server without auth", async () => {
+    const store = createMemorySettingsStore();
+    const d = deps({ authRequired: vi.fn(async () => false) });
+    render(<CompanionSettingsSection store={store} deps={d} />);
+    await waitFor(() => expect(d.authRequired).toHaveBeenCalled());
+    expect(screen.queryByTestId("companion-registration-key")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("companion-enable"));
+    expect(await screen.findByTestId("companion-qr")).toBeInTheDocument();
+  });
+
+  it("hides the key field once this laptop is registered with that server", async () => {
+    const store = createMemorySettingsStore({ "companion.token": "jwt" });
+    const d = deps();
+    render(<CompanionSettingsSection store={store} deps={d} />);
+    expect(await screen.findByTestId("companion-enable")).toBeInTheDocument();
+    expect(screen.queryByTestId("companion-registration-key")).not.toBeInTheDocument();
+    expect(d.authRequired).not.toHaveBeenCalled();
+  });
+
+  it("asks again when the server address changes", async () => {
+    const d = deps({ authRequired: vi.fn(async (url: string) => url.includes("locked")) });
+    render(<CompanionSettingsSection store={createMemorySettingsStore()} deps={d} />);
+    await waitFor(() => expect(d.authRequired).toHaveBeenCalled());
+    expect(screen.queryByTestId("companion-registration-key")).not.toBeInTheDocument();
+    fireEvent.change(screen.getByTestId("companion-server"), { target: { value: "https://locked.example" } });
+    expect(await screen.findByTestId("companion-registration-key")).toBeInTheDocument();
+  });
+
+  it("disables Enable until the key is typed when one is needed", async () => {
+    render(<CompanionSettingsSection store={createMemorySettingsStore()} deps={deps()} />);
+    await screen.findByTestId("companion-registration-key");
+    expect(screen.getByTestId("companion-enable")).toBeDisabled();
+    fireEvent.change(screen.getByTestId("companion-registration-key"), { target: { value: "k" } });
+    expect(screen.getByTestId("companion-enable")).toBeEnabled();
   });
 
   it("shows the server's reason when enabling fails", async () => {

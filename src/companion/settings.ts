@@ -120,6 +120,9 @@ export async function enableCompanion(
         return { ok: false, needsRegistrationKey: true, error: "This sync server needs its registration key once." };
       }
       token = (await deps.register(serverUrl, deps.deviceName, key)).token;
+      // Kept at once: a device registers only once, whatever fails next.
+      // A document belongs to its server: switching servers drops the old one.
+      await saveCompanionSettings(store, { serverUrl, token, ...(serverUrl !== current.serverUrl ? { docUrl: "" } : {}) });
     }
     const docUrl = serverUrl === current.serverUrl && current.docUrl
       ? current.docUrl

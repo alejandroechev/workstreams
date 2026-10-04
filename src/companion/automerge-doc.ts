@@ -11,6 +11,23 @@ export interface OpenOptions {
   network?: NetworkAdapterInterface[];
   /** Persist locally in IndexedDB so the document survives offline restarts. */
   storage: boolean;
+  /**
+   * Wait this long for a connection to the server before resolving, and fail
+   * if there is none. Used when creating the document, so a wrong address or
+   * token is reported at once instead of on the next start.
+   */
+  waitForNetworkMs?: number;
+}
+
+/** Shuts a repo down without ever throwing: adapters may assert on state. */
+async function shutdownQuietly(repo: { flush(): Promise<void>; shutdown(): Promise<void> }): Promise<void> {
+  await repo.flush().catch(() => {});
+  try {
+    await repo.shutdown();
+  } catch {
+    // The WebSocket adapter asserts it has a socket in disconnect(), which it
+    // only has once it has connected; there is nothing left to close then.
+  }
 }
 
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
@@ -22,7 +39,7 @@ const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
  * ~5 MB of Automerge only reaches users who enable the companion, and Vite
  * needs no wasm plugin.
  */
-export async function openAutomergeDoc(options: OpenOptions): Promise<{ doc: CompanionDoc; url: string }> {
+export async function openAutomergeDoc(options: OpenOptions): Promise<{ doc: CompanionDoc; url: string; flush(): Promise<void> }> {
   const [{ Repo, initializeBase64Wasm }, { automergeWasmBase64 }] = await Promise.all([
     import("@automerge/automerge-repo/slim"),
     import("@automerge/automerge/automerge.wasm.base64"),
@@ -48,9 +65,20 @@ export async function openAutomergeDoc(options: OpenOptions): Promise<{ doc: Com
       ? await repo.find<CompanionDocument>(options.docUrl as Parameters<typeof repo.find>[0])
       : repo.create<CompanionDocument>(emptyDocument());
     await handle.whenReady();
+    if (options.waitForNetworkMs !== undefined) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const timeout = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error("Could not connect to the sync server. Check its address and that this device is registered.")), options.waitForNetworkMs);
+      });
+      try {
+        await Promise.race([repo.networkSubsystem.whenReady(), timeout]);
+      } finally {
+        clearTimeout(timer);
+      }
+    }
   } catch (error) {
     // Nobody gets a handle to close, so the repo (and its socket) is closed here.
-    await repo.shutdown().catch(() => {});
+    await shutdownQuietly(repo);
     throw error;
   }
 
@@ -79,8 +107,8 @@ export async function openAutomergeDoc(options: OpenOptions): Promise<{ doc: Com
     },
     close() {
       for (const off of offs.splice(0)) off();
-      void repo.shutdown();
+      void shutdownQuietly(repo);
     },
   };
-  return { doc, url: handle.url };
+  return { doc, url: handle.url, flush: () => repo.flush() };
 }

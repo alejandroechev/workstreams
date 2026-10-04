@@ -42,7 +42,15 @@ export const realEnableDeps: EnableDeps = {
   authRequired: (serverUrl) => syncAuthRequired(syncServerUrls(serverUrl, null).http),
   register: (serverUrl, deviceName, key) => registerSyncDevice(syncServerUrls(serverUrl, null).http, deviceName, key),
   async createDocument({ serverUrl, token }) {
-    const { doc, url } = await openAutomergeDoc({ docUrl: null, wsUrl: syncServerUrls(serverUrl, token || null).ws, storage: true });
+    // Waits for the server, so a bad address or token fails here, visibly;
+    // the document is saved locally and the service syncs it up from there.
+    const { doc, url, flush } = await openAutomergeDoc({
+      docUrl: null,
+      wsUrl: syncServerUrls(serverUrl, token || null).ws,
+      storage: true,
+      waitForNetworkMs: 15_000,
+    });
+    await flush();
     doc.close();
     return url;
   },
@@ -124,6 +132,26 @@ export function CompanionSettingsSection({
   // Never show a QR code for a pairing code that is no longer current.
   const qrSvg = qr && qr.code === pairingCode ? qr.svg : null;
 
+  // Ask the server up front whether it needs a registration key, so the field
+  // is there before the first click. Only a health check: no document, no
+  // registration, nothing that connects the companion.
+  const enabled = settings?.enabled ?? true;
+  const registered = Boolean(settings?.token) && serverUrl.trim() === settings?.serverUrl;
+  useEffect(() => {
+    if (enabled || registered) return;
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      void deps.authRequired(serverUrl.trim()).then(
+        (required) => { if (!cancelled) setNeedsKey(required); },
+        // Unreachable or not a URL: Enable reports why.
+        () => { if (!cancelled) setNeedsKey(false); },
+      );
+    }, 250);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [deps, enabled, registered, serverUrl]);
+
+  const showKey = needsKey && !registered;
+
   const enable = async () => {
     setBusy(true);
     setError(null);
@@ -165,7 +193,7 @@ export function CompanionSettingsSection({
             spellCheck={false}
             style={inputStyle}
           />
-          {needsKey && (
+          {showKey && (
             <>
               <label htmlFor="companion-key" style={{ display: "block", margin: "8px 0 4px" }}>Registration key</label>
               <input
@@ -176,12 +204,12 @@ export function CompanionSettingsSection({
                 onChange={(e) => setRegistrationKey(e.target.value)}
                 style={inputStyle}
               />
-              <div style={helpStyle}>Needed once, to enrol this laptop with the sync server. It is not stored.</div>
+              <div style={helpStyle}>This server needs its registration key once, to enrol this laptop. The key is not stored.</div>
             </>
           )}
           <button
             data-testid="companion-enable"
-            disabled={busy}
+            disabled={busy || (showKey && registrationKey.trim() === "")}
             onClick={() => void enable()}
             style={{ ...buttonStyle, marginTop: 10 }}
           >

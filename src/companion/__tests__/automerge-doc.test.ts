@@ -74,5 +74,33 @@ describe("Automerge companion document", () => {
     expect(disconnect).toHaveBeenCalled();
     port1.close();
   });
+
+  it("closes without throwing even when an adapter never connected", async () => {
+    const { port1 } = new MessageChannel();
+    const adapter = new MessageChannelNetworkAdapter(port1);
+    // The WebSocket adapter asserts it has a socket in disconnect(); the
+    // socket only exists once it has connected.
+    vi.spyOn(adapter, "disconnect").mockImplementation(() => { throw new Error("Assertion failed"); });
+    const { doc } = await openAutomergeDoc({ docUrl: null, network: [adapter], storage: false });
+    expect(() => doc.close()).not.toThrow();
+    port1.close();
+  });
+
+  it("can wait for the server, and says so when it is unreachable", async () => {
+    const { port1 } = new MessageChannel();
+    const adapter = new MessageChannelNetworkAdapter(port1);
+    await expect(openAutomergeDoc({ docUrl: null, network: [adapter], storage: false, waitForNetworkMs: 50 }))
+      .rejects.toThrow("Could not connect to the sync server");
+    port1.close();
+  });
+
+  it("waiting for the server succeeds once a peer is there", async () => {
+    const [a, b] = pair();
+    const other = await openAutomergeDoc({ docUrl: null, network: [b], storage: false });
+    const { doc } = await openAutomergeDoc({ docUrl: null, network: [a], storage: false, waitForNetworkMs: 2000 });
+    expect(doc.read().schemaVersion).toBe(1);
+    doc.close();
+    other.doc.close();
+  });
 });
 

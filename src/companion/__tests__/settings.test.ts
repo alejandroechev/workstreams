@@ -67,6 +67,28 @@ describe("enabling the companion", () => {
     expect(again.generateSecret).not.toHaveBeenCalled();
   });
 
+  it("keeps the token and the server once registered, even if creating the document fails", async () => {
+    const store = createMemorySettingsStore();
+    const d = deps({ createDocument: vi.fn(async () => { throw new Error("offline"); }) });
+    const result = await enableCompanion(store, d, { serverUrl: "https://other.example", registrationKey: "key" });
+    expect(result).toEqual({ ok: false, error: "offline" });
+    const saved = await loadCompanionSettings(store);
+    expect(saved).toMatchObject({ enabled: false, serverUrl: "https://other.example", token: "jwt" });
+    const again = deps();
+    expect((await enableCompanion(store, again, { serverUrl: "https://other.example" })).ok).toBe(true);
+    expect(again.register).not.toHaveBeenCalled();
+  });
+
+  it("never reuses another server's document after switching servers", async () => {
+    const store = createMemorySettingsStore();
+    await enableCompanion(store, deps(), { registrationKey: "key" });
+    const failing = deps({ createDocument: vi.fn(async () => { throw new Error("offline"); }) });
+    await enableCompanion(store, failing, { serverUrl: "https://other.example", registrationKey: "key" });
+    const retry = deps({ createDocument: vi.fn(async () => "automerge:OtherDoc") });
+    expect((await enableCompanion(store, retry, { serverUrl: "https://other.example" })).ok).toBe(true);
+    expect((await loadCompanionSettings(store)).docUrl).toBe("automerge:OtherDoc");
+  });
+
   it("stays off and reports the reason when the server rejects the key", async () => {
     const store = createMemorySettingsStore();
     const d = deps({ register: vi.fn(async () => { throw new Error("Invalid registration key"); }) });
