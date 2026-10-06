@@ -63,7 +63,7 @@ pub fn run(args: Vec<String>) -> Result<(), String> {
             let Some((name, pairs)) = rest.split_first() else {
                 return Err(USAGE.to_string());
             };
-            let params = parse_params(pairs)?;
+            let params = parse_params_with(pairs, &mut std::io::stdin().lock())?;
             dispatch_and_report(AgentRequest {
                 cmd: name.clone(),
                 params,
@@ -79,8 +79,21 @@ pub fn run(args: Vec<String>) -> Result<(), String> {
 /// Flags rather than a JSON blob on argv: shell quoting is a real failure mode
 /// for an agent composing a command line, and nested JSON invites it on every
 /// call. JSON stays the wire format, where no shell is involved.
+#[cfg(test)]
 fn parse_params(pairs: &[String]) -> Result<serde_json::Value, String> {
+    parse_params_with(pairs, &mut std::io::empty())
+}
+
+/// As `parse_params`, where a value of exactly `@-` is read from `stdin`.
+///
+/// Long or multi-line text (a markdown result for the phone) cannot survive
+/// shell quoting reliably; a heredoc on stdin carries it byte for byte.
+fn parse_params_with(
+    pairs: &[String],
+    stdin: &mut dyn std::io::Read,
+) -> Result<serde_json::Value, String> {
     let mut map = serde_json::Map::new();
+    let mut stdin_used = false;
     for pair in pairs {
         let Some((key, value)) = pair.split_once('=') else {
             return Err(format!(
@@ -95,8 +108,20 @@ fn parse_params(pairs: &[String]) -> Result<serde_json::Value, String> {
         // as a missing name, with no way to quote around it because the shell
         // has already removed the quotes. A command that wants a number can
         // parse one; a command that wants a name cannot recover a mangled one.
-        let parsed = serde_json::Value::String(value.to_string());
-        map.insert(key.to_string(), parsed);
+        let value = if value == "@-" {
+            if stdin_used {
+                return Err("Only one parameter can be read from stdin (=@-)".to_string());
+            }
+            stdin_used = true;
+            let mut text = String::new();
+            stdin
+                .read_to_string(&mut text)
+                .map_err(|e| format!("Could not read {key} from stdin: {e}"))?;
+            text
+        } else {
+            value.to_string()
+        };
+        map.insert(key.to_string(), serde_json::Value::String(value));
     }
     Ok(serde_json::Value::Object(map))
 }
@@ -238,5 +263,27 @@ mod tests {
     fn usage_states_the_destructive_command_rule() {
         assert!(USAGE.contains("Destructive"));
         assert!(USAGE.contains("Ask before"));
+    }
+
+    #[test]
+    fn a_value_of_at_dash_is_read_from_stdin_verbatim() {
+        let mut input = std::io::Cursor::new("# Result\n\n- it's \"quoted\" $HOME\n".as_bytes());
+        let params = parse_params_with(
+            &["kind=result".to_string(), "text=@-".to_string()],
+            &mut input,
+        )
+        .expect("parse");
+        assert_eq!(params["text"], "# Result\n\n- it's \"quoted\" $HOME\n");
+        assert_eq!(params["kind"], "result");
+    }
+
+    #[test]
+    fn only_one_value_can_come_from_stdin() {
+        let error = parse_params_with(
+            &["a=@-".to_string(), "b=@-".to_string()],
+            &mut std::io::Cursor::new(b"x".to_vec()),
+        )
+        .expect_err("should fail");
+        assert!(error.contains("Only one"));
     }
 }

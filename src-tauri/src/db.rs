@@ -330,6 +330,26 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
             PRIMARY KEY (workstream_id, mode, target)
         );
 
+        -- Copilot sessions the phone companion started (ADR 033), keyed by tile.
+        -- Only these may send messages to the phone. Times are ms epoch.
+        CREATE TABLE IF NOT EXISTS companion_sessions (
+            tile_id TEXT PRIMARY KEY,
+            workstream_id TEXT NOT NULL REFERENCES workstreams(id) ON DELETE CASCADE,
+            request_id TEXT NOT NULL,
+            prompt TEXT NOT NULL,
+            created_at INTEGER NOT NULL
+        );
+        -- What their agents sent back. `seq` keeps send order within a millisecond.
+        CREATE TABLE IF NOT EXISTS companion_messages (
+            seq INTEGER PRIMARY KEY AUTOINCREMENT,
+            id TEXT NOT NULL UNIQUE,
+            tile_id TEXT NOT NULL REFERENCES companion_sessions(tile_id) ON DELETE CASCADE,
+            kind TEXT NOT NULL,
+            text TEXT NOT NULL,
+            at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS companion_messages_tile_idx ON companion_messages (tile_id, at);
+
         CREATE TABLE IF NOT EXISTS pr_inbox_config (
             project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
             enabled INTEGER NOT NULL DEFAULT 0,
@@ -551,6 +571,8 @@ mod tests {
             "workstream_pull_requests",
             "work_lanes",
             "diff_orders",
+            "companion_sessions",
+            "companion_messages",
         ];
         for table in &expected {
             let count: i64 = conn

@@ -469,6 +469,15 @@ pub const COMMANDS: &[Command] = &[
         handler: diff_order_get,
     },
     Command {
+        id: "companion.send",
+        // Never the text: it can be long, and it is the user's business.
+        log_params: &["kind"],
+        summary: "Send a message to the phone that started this session (params: kind=progress|result, text; text=@- reads stdin)",
+        requires_identity: true,
+        destructive: false,
+        handler: companion_send,
+    },
+    Command {
         id: "ws.update",
         log_params: &["id"],
         summary: "Rename or re-describe a workstream (params: id, name, description)",
@@ -1370,6 +1379,72 @@ fn order_paths(params: &serde_json::Value) -> Result<Vec<String>, AgentError> {
     Ok(paths)
 }
 
+/// Sends a message from a phone-started session to the phone (ADR 033).
+///
+/// The session is always the caller's own tile, resolved from the token the
+/// app issued: there is no parameter naming a session.
+fn companion_store_error(error: String) -> AgentError {
+    AgentError::new(
+        "STORE_ERROR",
+        error,
+        "Try again; if it keeps failing, give your result in the terminal.",
+    )
+}
+
+fn companion_send(
+    context: &CommandContext,
+    params: &serde_json::Value,
+) -> Result<CommandOutcome, AgentError> {
+    const FALLBACK: &str = "Give your result in the terminal instead.";
+    let Caller::Agent { tile_id, .. } = context.caller()? else {
+        return Err(AgentError::new(
+            "NOT_A_SESSION",
+            "Only a Copilot session can send to the phone",
+            FALLBACK,
+        ));
+    };
+    if !crate::companion_messages::companion_enabled(context.db).map_err(companion_store_error)? {
+        return Err(AgentError::new(
+            "COMPANION_OFF",
+            "The phone companion is off, so nothing was sent",
+            FALLBACK,
+        ));
+    }
+    if !crate::companion_messages::is_phone_session(context.db, tile_id)
+        .map_err(companion_store_error)?
+    {
+        return Err(AgentError::new(
+            "NOT_A_PHONE_SESSION",
+            "This session was not started from your phone, so it cannot send to it",
+            FALLBACK,
+        ));
+    }
+    let kind = required_str(params, "kind")?;
+    let text = params
+        .get("text")
+        .and_then(|value| value.as_str())
+        .unwrap_or_default()
+        .to_string();
+    crate::companion_messages::check_message(&kind, &text).map_err(|error| {
+        AgentError::new(
+            "BAD_MESSAGE",
+            error,
+            "Send kind=progress or kind=result with a non-empty text of at most 20000 characters.",
+        )
+    })?;
+    let id = uuid::Uuid::new_v4().to_string();
+    let at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or_default();
+    crate::companion_messages::add_message(context.db, tile_id, &id, &kind, &text, at)
+        .map_err(companion_store_error)?;
+    Ok(CommandOutcome::changed(
+        serde_json::json!({ "id": id, "kind": kind, "sent": true }),
+        StateChange::new("companion_message", tile_id.clone(), "added"),
+    ))
+}
+
 fn diff_order_set(
     context: &CommandContext,
     params: &serde_json::Value,
@@ -1692,6 +1767,131 @@ mod tests {
             tile_id: tile.to_string(),
             workstream_id: workstream.to_string(),
         }
+    }
+
+    fn phone_session_db(enabled: bool) -> Connection {
+        let db = Connection::open_in_memory().unwrap();
+        crate::db::init_db(&db).unwrap();
+        db.execute(
+            "INSERT INTO workstreams (id, name, created_at, updated_at) VALUES ('w1', 'W', 'x', 'x')",
+            [],
+        )
+        .unwrap();
+        db.execute(
+            "INSERT INTO settings (key, value) VALUES ('companion.enabled', ?1)",
+            [if enabled { "1" } else { "0" }],
+        )
+        .unwrap();
+        crate::companion_messages::record_session(&db, "phone-tile", "w1", "r1", "Do x", 1)
+            .unwrap();
+        db
+    }
+
+    #[test]
+    fn companion_send_stores_a_message_for_the_calling_phone_session() {
+        let db = phone_session_db(true);
+        let sent = call(
+            &db,
+            &agent("phone-tile", "w1"),
+            "companion.send",
+            serde_json::json!({"kind":"result","text":"# Done\n- a"}),
+        )
+        .unwrap();
+        assert_eq!(sent.data["sent"], true);
+        assert_eq!(
+            sent.change,
+            Some(StateChange::new("companion_message", "phone-tile", "added"))
+        );
+        let sessions = crate::companion_messages::list(&db).unwrap();
+        assert_eq!(sessions[0].messages[0].text, "# Done\n- a");
+        assert_eq!(sessions[0].messages[0].kind, "result");
+    }
+
+    #[test]
+    fn companion_send_refuses_sessions_the_phone_did_not_start() {
+        let db = phone_session_db(true);
+        let error = call(
+            &db,
+            &agent("laptop-tile", "w1"),
+            "companion.send",
+            serde_json::json!({"kind":"result","text":"x"}),
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "NOT_A_PHONE_SESSION");
+        assert!(error.message.contains("not started from your phone"));
+        assert!(crate::companion_messages::list(&db).unwrap()[0]
+            .messages
+            .is_empty());
+    }
+
+    #[test]
+    fn companion_send_refuses_while_the_companion_is_off_and_queues_nothing() {
+        let db = phone_session_db(false);
+        let error = call(
+            &db,
+            &agent("phone-tile", "w1"),
+            "companion.send",
+            serde_json::json!({"kind":"result","text":"x"}),
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "COMPANION_OFF");
+        assert!(error.message.contains("phone companion is off"));
+        db.execute(
+            "UPDATE settings SET value = '1' WHERE key = 'companion.enabled'",
+            [],
+        )
+        .unwrap();
+        assert!(crate::companion_messages::list(&db).unwrap()[0]
+            .messages
+            .is_empty());
+    }
+
+    #[test]
+    fn companion_send_refuses_bad_kinds_and_sizes() {
+        let db = phone_session_db(true);
+        let me = agent("phone-tile", "w1");
+        for params in [
+            serde_json::json!({"kind":"question","text":"x"}),
+            serde_json::json!({"kind":"result","text":"x".repeat(20_001)}),
+            serde_json::json!({"kind":"result"}),
+        ] {
+            assert_eq!(
+                call(&db, &me, "companion.send", params).unwrap_err().code,
+                "BAD_MESSAGE"
+            );
+        }
+        assert_eq!(
+            call(&db, &me, "companion.send", serde_json::json!({"text":"x"}))
+                .unwrap_err()
+                .code,
+            "MISSING_PARAM"
+        );
+        call(
+            &db,
+            &me,
+            "companion.send",
+            serde_json::json!({"kind":"progress","text":"x".repeat(20_000)}),
+        )
+        .unwrap();
+        assert_eq!(
+            crate::companion_messages::list(&db).unwrap()[0]
+                .messages
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn companion_send_ignores_any_session_named_in_the_request() {
+        let db = phone_session_db(true);
+        let error = call(
+            &db,
+            &agent("laptop-tile", "w1"),
+            "companion.send",
+            serde_json::json!({"kind":"result","text":"x","tile":"phone-tile","session":"phone-tile"}),
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "NOT_A_PHONE_SESSION");
     }
 
     #[test]

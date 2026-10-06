@@ -11,6 +11,7 @@ pub mod pull_requests;
 #[cfg(unix)]
 pub mod agent_socket;
 mod code_review;
+pub mod companion_messages;
 pub mod db;
 mod devlog;
 pub mod diff_order;
@@ -281,6 +282,47 @@ fn get_pr_inbox(state: State<'_, AppState>) -> Result<pr_inbox::InboxSnapshot, S
 /// The saved reading order for a diff, for the Repo Explorer (ADR 032). The
 /// DB lock is released before git runs, so a large diff never stalls other
 /// commands.
+/// Records that the phone companion started this Copilot tile (ADR 033).
+#[tauri::command]
+fn companion_record_session(
+    state: State<'_, AppState>,
+    tile_id: String,
+    workstream_id: String,
+    request_id: String,
+    prompt: String,
+    created_at: i64,
+) -> Result<(), String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    companion_messages::record_session(
+        &db,
+        &tile_id,
+        &workstream_id,
+        &request_id,
+        &prompt,
+        created_at,
+    )
+}
+
+/// Every phone session with its messages, for the companion publisher.
+#[tauri::command]
+fn companion_list_sessions(
+    state: State<'_, AppState>,
+) -> Result<Vec<companion_messages::StoredSession>, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    companion_messages::list(&db)
+}
+
+/// Drops phone sessions with no activity for `retention_ms`; returns how many.
+#[tauri::command]
+fn companion_prune_sessions(
+    state: State<'_, AppState>,
+    now: i64,
+    retention_ms: i64,
+) -> Result<usize, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    companion_messages::prune(&db, now, retention_ms)
+}
+
 #[tauri::command]
 fn get_diff_order(
     state: State<'_, AppState>,
@@ -6089,6 +6131,9 @@ pub fn run() {
             git_diff_files_with_status,
             git_diff_file_sides,
             get_diff_order,
+            companion_record_session,
+            companion_list_sessions,
+            companion_prune_sessions,
             // Copilot config
             discover_copilot_config,
             // Session files & todos & DB
