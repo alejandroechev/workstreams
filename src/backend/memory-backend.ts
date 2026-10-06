@@ -487,12 +487,30 @@ export class MemoryBackend implements Backend {
       updated_at: now(),
     };
     this.tiles.set(tile.id, tile);
+    // As insert_tile in lib.rs: a new tile is appended to the layout order.
+    const order = this.layoutOrder(workstreamId);
+    if (!order.includes(tile.id)) await this.updateLayout(workstreamId, { tile_order_json: JSON.stringify([...order, tile.id]) });
     return tile;
   }
 
+  private layoutOrder(workstreamId: string): string[] {
+    try {
+      const order = JSON.parse(this.layouts.get(workstreamId)?.tile_order_json || "[]") as unknown;
+      return Array.isArray(order) ? order.filter((id): id is string => typeof id === "string") : [];
+    } catch {
+      return [];
+    }
+  }
+
   async deleteTile(id: string): Promise<void> {
+    const tile = this.tiles.get(id);
     this.tiles.delete(id);
     this.terminals.delete(id);
+    // As delete_tile in lib.rs: the tile also leaves its layout order.
+    if (tile) {
+      const order = this.layoutOrder(tile.workstream_id);
+      if (order.includes(id)) await this.updateLayout(tile.workstream_id, { tile_order_json: JSON.stringify(order.filter((t) => t !== id)) });
+    }
   }
 
   async updateTileConfig(id: string, configJson: string, title?: string): Promise<void> {

@@ -724,4 +724,15 @@ describe("MemoryBackend loaded workstreams", () => {
     const after = (await backend.listWorkstreams()).find((w) => w.id === ws.id)!.updated_at;
     expect(after).toBe(before);
   });
+
+  it("keeps the layout in step with tiles, as the Rust backend does", async () => {
+    const backend = new MemoryBackend();
+    const ws = await backend.createWorkstream("W", "/w");
+    const a = await backend.createTile(ws.id, "terminal", "A", "{}");
+    const b = await backend.createTile(ws.id, "terminal", "B", "{}");
+    expect(JSON.parse((await backend.getLayout(ws.id)).tile_order_json)).toEqual([a.id, b.id]);
+    await backend.deleteTile(a.id);
+    expect(JSON.parse((await backend.getLayout(ws.id)).tile_order_json)).toEqual([b.id]);
+  });
 });
+

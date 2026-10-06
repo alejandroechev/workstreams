@@ -4,7 +4,7 @@ import { createCopilotSessionConfig } from "../domain/tile-config";
 import type { RequestGuard } from "./runtime";
 
 export interface StartSessionDeps {
-  backend: Pick<Backend, "listTiles" | "getLayout" | "createTile" | "updateLayout" | "deleteTile" | "companionRecordSession" | "companionDeleteSession">;
+  backend: Pick<Backend, "listTiles" | "createTile" | "deleteTile" | "companionRecordSession" | "companionDeleteSession">;
   /** Mounts the workstream in the background (never changes the active one). */
   mount(workstreamId: string): Promise<void>;
   workstream(workstreamId: string): Workstream | undefined;
@@ -41,17 +41,18 @@ export async function startPhoneSession(
   guard();
   const ws = deps.workstream(workstreamId);
   const cwd = ws?.directory || deps.defaultCwd();
-  const [existing, layout] = await Promise.all([backend.listTiles(workstreamId), backend.getLayout(workstreamId)]);
+  const existing = await backend.listTiles(workstreamId);
   guard();
   const count = existing.filter((t) => t.tile_type === "copilot_session").length;
   const title = `${ws?.name || "ws"}/${count + 1}`;
+  // createTile appends the tile to the layout and deleteTile takes it out:
+  // the layout is never rewritten here, so tiles the user adds or reorders
+  // meanwhile are left alone.
   const tile = await backend.createTile(workstreamId, "copilot_session", title, createCopilotSessionConfig(title, cwd));
-  const order: string[] = JSON.parse(layout.tile_order_json || "[]");
   let recorded = false;
   let shown = false;
   let marked = false;
   try {
-    await backend.updateLayout(workstreamId, { tile_order_json: JSON.stringify([...order, tile.id]) });
     guard();
     // Recorded before the agent starts, so its first message finds it.
     await backend.companionRecordSession({
@@ -70,7 +71,6 @@ export async function startPhoneSession(
     // start an agent nobody asked for any more.
     if (marked) deps.unmarkSpawned(tile.id);
     if (recorded) await backend.companionDeleteSession(tile.id).catch(() => {});
-    await backend.updateLayout(workstreamId, { tile_order_json: JSON.stringify(order) }).catch(() => {});
     await backend.deleteTile(tile.id).catch(() => {});
     if (shown) deps.onTileRemoved(tile.id);
     throw error;

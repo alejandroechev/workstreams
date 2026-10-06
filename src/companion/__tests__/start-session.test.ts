@@ -77,5 +77,16 @@ describe("starting a phone session", () => {
     expect(events.filter((e) => e === "recorded")).toHaveLength(0);
     expect(events.some((e) => e.startsWith("removed:"))).toBe(true);
   });
+
+  it("never rewrites the layout: a tile the user adds while the launch is pending survives its failure", async () => {
+    const { backend, ws, deps, guard } = await setup();
+    let userTileId = "";
+    deps.spawn = vi.fn(async () => {
+      userTileId = (await backend.createTile(ws.id, "terminal", "Mine", "{}")).id;
+      throw new Error("copilot: command not found");
+    });
+    await expect(startPhoneSession(deps, { workstreamId: ws.id, command: "c", prompt: "p", guard, requestId: "r", now: 1 })).rejects.toThrow();
+    expect(JSON.parse((await backend.getLayout(ws.id)).tile_order_json)).toEqual([userTileId]);
+  });
 });
 
