@@ -9,6 +9,7 @@ import { parseTraceFile, type TraceFile } from "../domain/trace-format";
 import type {
   Backend,
   CodeTrace,
+  CompanionStoredSession,
   TraceStaleness,
   TaskUpdate,
   DevlogExportResult,
@@ -416,6 +417,18 @@ export class TauriBackend implements Backend {
   async gitDiffFileSides(directory: string, filePath: string, mode: string, baseRef?: string | null): Promise<{ before: string; after: string }> {
     const [before, after] = await invoke<[string, string]>("git_diff_file_sides", { directory, filePath, mode, baseRef: baseRef ?? null });
     return { before, after };
+  }
+
+  async companionRecordSession(session: Omit<CompanionStoredSession, "messages">): Promise<void> {
+    await invoke("companion_record_session", { ...session });
+  }
+
+  async companionListSessions(): Promise<CompanionStoredSession[]> {
+    return invoke<CompanionStoredSession[]>("companion_list_sessions");
+  }
+
+  async companionPruneSessions(now: number, retentionMs: number): Promise<number> {
+    return invoke<number>("companion_prune_sessions", { now, retentionMs });
   }
 
   async getDiffOrder(workstreamId: string, directory: string, mode: string, baseRef?: string | null): Promise<DiffOrderView | null> {

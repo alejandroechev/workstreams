@@ -41,6 +41,7 @@ type PhoneWindow = {
     read(): {
       laptop: { workstreams: Array<{ id: string; name: string; loaded: boolean; sessionCount: number }>; lastSeenAt: number | null };
       requests: Record<string, { outcome?: { status: string; error?: string; workstreamId?: string } }>;
+      sessions?: Record<string, { title: string; workstreamName: string; requestId: string; messages: Array<{ kind: string; text: string }> }>;
     };
     change(fn: (d: { requests: Record<string, unknown> }) => void): void;
   };
@@ -48,7 +49,9 @@ type PhoneWindow = {
   __WS_INVOKE_LOG__?: Array<{ cmd: string; args: Record<string, unknown> }>;
   __WS_BACKEND__: {
     listWorkstreams(): Promise<Array<{ id: string; name: string; directory: string | null; project_id: string | null }>>;
-    listTiles(id: string): Promise<Array<{ tile_type: string }>>;
+    listTiles(id: string): Promise<Array<{ id: string; tile_type: string }>>;
+    companionListSessions(): Promise<Array<{ tileId: string; workstreamId: string; requestId: string; prompt: string }>>;
+    companionSendForTests(tileId: string, kind: "progress" | "result", text: string): void;
   };
 };
 
@@ -159,4 +162,53 @@ test("AT-13: unsigned and stale requests are refused and do nothing", async ({ p
   const names = (await page.evaluate(() => (window as unknown as PhoneWindow).__WS_BACKEND__.listWorkstreams())).map((w) => w.name);
   expect(names).not.toContain("Unsigned");
   expect(names).not.toContain("Stale");
+});
+
+test("AT-2/AT-4: a phone session is recorded, published, and its agent's messages reach the document", async ({ page }) => {
+  const gamma = await workstreamId(page, "Gamma");
+  await send(page, { id: "ask", kind: "session", args: { workstreamId: gamma, prompt: "Summarise the open PRs\nThen list risks" } });
+  expect(await outcome(page, "ask")).toMatchObject({ status: "done" });
+
+  const recorded = await page.evaluate(() => (window as unknown as PhoneWindow).__WS_BACKEND__.companionListSessions());
+  expect(recorded).toHaveLength(1);
+  const tileId = recorded[0].tileId;
+  const tiles = await page.evaluate((id) => (window as unknown as PhoneWindow).__WS_BACKEND__.listTiles(id), gamma);
+  expect(tiles.filter((t) => t.tile_type === "copilot_session").map((t) => t.id)).toContain(tileId);
+  expect(recorded[0]).toMatchObject({ workstreamId: gamma, requestId: "ask" });
+
+  await expect.poll(async () => (await phone(page)).sessions?.[tileId]).toMatchObject({
+    title: "Summarise the open PRs", workstreamName: "Gamma", requestId: "ask", messages: [],
+  });
+
+  // What the agent's `companion.send` does, then the event it raises.
+  await page.evaluate((id) => {
+    const w = window as unknown as PhoneWindow & { __WS_EMIT__: (e: string, p: unknown) => void };
+    w.__WS_BACKEND__.companionSendForTests(id, "progress", "Looking…");
+    w.__WS_BACKEND__.companionSendForTests(id, "result", "# PRs\n- one");
+    w.__WS_EMIT__("state-changed", { entity: "companion_message", id, action: "added" });
+  }, tileId);
+  await expect.poll(async () => (await phone(page)).sessions?.[tileId]?.messages.map((m) => [m.kind, m.text])).toEqual([
+    ["progress", "Looking…"],
+    ["result", "# PRs\n- one"],
+  ]);
+});
+
+test("AT-3: sessions opened on the laptop are never recorded as phone sessions", async ({ page }) => {
+  const alpha = await workstreamId(page, "Alpha");
+  await row(page, alpha).click();
+  await expect(row(page, alpha)).toHaveAttribute("data-active", "true");
+  // A Copilot session that did not come from the phone (as an agent or the
+  // laptop UI creates one), announced the way the app learns of new tiles.
+  await page.evaluate(async (id) => {
+    const w = window as unknown as PhoneWindow & { __WS_EMIT__: (e: string, p: unknown) => void };
+    const tile = await (w.__WS_BACKEND__ as unknown as { createTile(ws: string, t: string, title: string, cfg: string): Promise<unknown> })
+      .createTile(id, "copilot_session", "Alpha/1", "{}");
+    w.__WS_EMIT__("tile-created", tile);
+  }, alpha);
+  await expect.poll(async () => (await page.evaluate((id) => (window as unknown as PhoneWindow).__WS_BACKEND__.listTiles(id), alpha))
+    .filter((t) => t.tile_type === "copilot_session").length).toBeGreaterThan(0);
+  await send(page, { id: "load-only", kind: "load", args: { workstreamId: await workstreamId(page, "Beta") } });
+  expect(await outcome(page, "load-only")).toMatchObject({ status: "done" });
+  expect(await page.evaluate(() => (window as unknown as PhoneWindow).__WS_BACKEND__.companionListSessions())).toEqual([]);
+  expect((await phone(page)).sessions ?? {}).toEqual({});
 });

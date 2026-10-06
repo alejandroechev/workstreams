@@ -79,6 +79,8 @@ export default function App() {
   const [workstreams, setWorkstreams] = useState<Workstream[]>([]);
   const [loopSummaries, setLoopSummaries] = useState<LoopSummary[]>([]);
   const [companionReady, setCompanionReady] = useState(false);
+  // Bumped whenever phone sessions or their messages change (ADR 033).
+  const [companionSessionsVersion, setCompanionSessionsVersion] = useState(0);
   // Latest projects/workstreams held in refs so spawn helpers invoked from
   // effects/event handlers resolve the CURRENT per-project Copilot command
   // (like getAppSettings() reads the live global) without stale closures.
@@ -431,6 +433,11 @@ export default function App() {
    */
   useEffect(() => {
     const unlisten = listen<{ entity?: string }>("state-changed", (event) => {
+      // An agent's companion.send: republish its message to the phone.
+      if (event.payload?.entity === "companion_message") {
+        setCompanionSessionsVersion((v) => v + 1);
+        return;
+      }
       if (event.payload?.entity !== "workstream") return;
       backend
         .listWorkstreams()
@@ -1985,7 +1992,7 @@ export default function App() {
    * the backend because a background mount may not have rendered yet.
    */
   const startSessionForCompanion = useCallback(
-    async (wsId: string, command: string, prompt: string, guard: () => void): Promise<void> => {
+    async (wsId: string, command: string, prompt: string, guard: () => void, requestId: string): Promise<void> => {
       // `guard` throws once the request may no longer run (stopped, expired,
       // newer document); it is checked after every wait, and last right
       // before the agent is launched.
@@ -2009,6 +2016,9 @@ export default function App() {
         await backend.deleteTile(tile.id).catch(() => {});
         throw error;
       }
+      // Recorded before the agent starts, so its first message finds it.
+      await backend.companionRecordSession({ tileId: tile.id, workstreamId: wsId, requestId, prompt, createdAt: Date.now() });
+      setCompanionSessionsVersion((v) => v + 1);
       upsertTileLocally(tile);
       spawnedPtys.current.add(tile.id);
       await backend.spawnCopilotSession(tile.id, cwd, null, 30, 120, command, prompt);
@@ -2018,6 +2028,9 @@ export default function App() {
 
   useCompanionService({
     ready: companionReady,
+    sessionsVersion: companionSessionsVersion,
+    listSessions: () => backend.companionListSessions(),
+    pruneSessions: (now, retentionMs) => backend.companionPruneSessions(now, retentionMs),
     workstreams,
     lanes: workLanes,
     loadedIds: loadedWsIds,

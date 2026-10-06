@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { buildLaptopState, publishLaptopState, startPresence, LAST_SEEN_WRITE_MS } from "../publisher";
+import { buildLaptopState, publishLaptopState, startPresence, LAST_SEEN_WRITE_MS, buildSessions, publishSessions } from "../publisher";
+import type { CompanionStoredSession } from "../../backend/types";
 import { createInMemoryHub } from "../doc";
 import { PRESENCE_INTERVAL_MS } from "../protocol";
 import type { Workstream } from "../../domain/types";
@@ -121,3 +122,80 @@ describe("presence", () => {
   });
 });
 
+
+describe("publishing phone sessions", () => {
+  const stored = (over: Partial<CompanionStoredSession> = {}): CompanionStoredSession => ({
+    tileId: "t1", workstreamId: "a", requestId: "r1", prompt: "List the files\nand more", createdAt: 1000, messages: [], ...over,
+  });
+  const names = new Map([["a", "Alpha"]]);
+
+  it("builds the published sessions from the laptop's records", () => {
+    const sessions = buildSessions([stored({ messages: [{ id: "m1", kind: "result", text: "# x", at: 2000 }] })], names);
+    expect(sessions).toEqual({
+      t1: {
+        id: "t1", workstreamId: "a", workstreamName: "Alpha", requestId: "r1", title: "List the files", createdAt: 1000,
+        messages: [{ id: "m1", kind: "result", text: "# x", at: 2000 }],
+      },
+    });
+    expect(buildSessions([stored({ workstreamId: "gone" })], names).t1.workstreamName).toBe("Unknown workstream");
+  });
+
+  it("writes sessions, then only appends new messages, and removes pruned sessions", () => {
+    const hub = createInMemoryHub();
+    const laptop = hub.peer();
+    const phone = hub.peer();
+    const writes = vi.fn();
+    phone.subscribe(writes);
+    const first = buildSessions([stored({ messages: [{ id: "m1", kind: "progress", text: "a", at: 1 }] })], names);
+    expect(publishSessions(laptop, first)).toBe(true);
+    expect(publishSessions(laptop, first)).toBe(false);
+    expect(writes).toHaveBeenCalledTimes(1);
+
+    const second = buildSessions([stored({ messages: [
+      { id: "m1", kind: "progress", text: "a", at: 1 },
+      { id: "m2", kind: "result", text: "b", at: 2 },
+    ] })], names);
+    publishSessions(laptop, second);
+    expect(phone.read().sessions).toEqual(second);
+
+    publishSessions(laptop, {});
+    expect(phone.read().sessions).toEqual({});
+  });
+
+  it("follows the laptop's cap when older messages are dropped", () => {
+    const hub = createInMemoryHub();
+    const laptop = hub.peer();
+    const msg = (i: number) => ({ id: `m${i}`, kind: "progress" as const, text: `${i}`, at: i });
+    publishSessions(laptop, buildSessions([stored({ messages: [msg(1), msg(2)] })], names));
+    const capped = buildSessions([stored({ messages: [msg(2), msg(3)] })], names);
+    publishSessions(laptop, capped);
+    expect(laptop.read().sessions).toEqual(capped);
+  });
+
+  it("never writes sessions into a document from a newer version", () => {
+    const hub = createInMemoryHub();
+    const laptop = hub.peer();
+    laptop.change((d) => { d.schemaVersion = 2; });
+    expect(publishSessions(laptop, buildSessions([stored()], names))).toBe(false);
+    expect(laptop.read().sessions).toBeUndefined();
+  });
+});
+
+describe("publishing phone sessions into a real Automerge document", () => {
+  it("appends, trims and removes in place", async () => {
+    const { openAutomergeDoc } = await import("../automerge-doc");
+    const { doc } = await openAutomergeDoc({ docUrl: null, network: [], storage: false });
+    const names = new Map([["a", "Alpha"]]);
+    const msg = (i: number) => ({ id: `m${i}`, kind: "progress" as const, text: `${i}`, at: i });
+    const at = (messages: ReturnType<typeof msg>[]) =>
+      buildSessions([{ tileId: "t1", workstreamId: "a", requestId: "r1", prompt: "p", createdAt: 1, messages }], names);
+    publishSessions(doc, at([msg(1)]));
+    publishSessions(doc, at([msg(1), msg(2), msg(3)]));
+    expect(doc.read().sessions).toEqual(at([msg(1), msg(2), msg(3)]));
+    publishSessions(doc, at([msg(3), msg(4)]));
+    expect(doc.read().sessions).toEqual(at([msg(3), msg(4)]));
+    publishSessions(doc, {});
+    expect(doc.read().sessions).toEqual({});
+    doc.close();
+  });
+});

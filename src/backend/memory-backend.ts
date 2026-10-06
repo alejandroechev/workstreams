@@ -9,6 +9,7 @@ import { compareByCreatedAt } from "../domain/comment-order";
 import type {
   Backend,
   CodeTrace,
+  CompanionStoredSession,
   TraceStaleness,
   TaskUpdate,
   DevlogExportResult,
@@ -1306,6 +1307,42 @@ export class MemoryBackend implements Backend {
 
   private diffOrderKey(workstreamId: string, mode: string, target: string | null | undefined): string {
     return JSON.stringify([workstreamId, mode, target ?? ""]);
+  }
+
+  private companionSessions = new Map<string, CompanionStoredSession>();
+
+  async companionRecordSession(session: Omit<CompanionStoredSession, "messages">): Promise<void> {
+    if (this.companionSessions.has(session.tileId)) return;
+    this.companionSessions.set(session.tileId, { ...session, messages: [] });
+  }
+
+  async companionListSessions(): Promise<CompanionStoredSession[]> {
+    return [...this.companionSessions.values()]
+      .sort((a, b) => b.createdAt - a.createdAt)
+      .map((session) => structuredClone(session));
+  }
+
+  async companionPruneSessions(now: number, retentionMs: number): Promise<number> {
+    let removed = 0;
+    for (const [id, session] of this.companionSessions) {
+      const last = Math.max(session.createdAt, ...session.messages.map((m) => m.at));
+      if (last < now - retentionMs) {
+        this.companionSessions.delete(id);
+        removed += 1;
+      }
+    }
+    return removed;
+  }
+
+  /**
+   * Test/harness helper: what `companion.send` does for an agent in `tileId`
+   * (the real command is Rust; see companion_messages.rs).
+   */
+  companionSendForTests(tileId: string, kind: "progress" | "result", text: string, at = Date.now()): void {
+    const session = this.companionSessions.get(tileId);
+    if (!session) throw new Error("This session was not started from your phone.");
+    session.messages.push({ id: `m-${session.messages.length}-${at}`, kind, text, at });
+    if (session.messages.length > 50) session.messages.splice(0, session.messages.length - 50);
   }
 
   /** Test/harness helper: set (or with `null`, clear) the order for a diff. */

@@ -277,6 +277,9 @@ function createBackend(): Backend {
     gitDiffFilesWithStatus: vi.fn(async () => []),
     gitDiffFileSides: vi.fn(async () => ({ before: "", after: "" })),
     getDiffOrder: vi.fn(async () => null),
+    companionRecordSession: vi.fn(async () => {}),
+    companionListSessions: vi.fn(async () => []),
+    companionPruneSessions: vi.fn(async () => 0),
     gitLog: vi.fn(),
     gitShowCommit: vi.fn(),
     gitCurrentBranch: vi.fn(),
@@ -764,6 +767,17 @@ describe("state-changed from an agent", () => {
       await Promise.resolve();
     });
     expect(vi.mocked(backend.listWorkstreams).mock.calls.length).toBeGreaterThan(before);
+  });
+
+  it("does not reload the sidebar for an agent's message to the phone", async () => {
+    const backend = createBackend();
+    await renderApp(backend);
+    const before = vi.mocked(backend.listWorkstreams).mock.calls.length;
+    await act(async () => {
+      mocks.emitStateChanged({ entity: "companion_message", id: "tile-1", action: "added" });
+      await Promise.resolve();
+    });
+    expect(vi.mocked(backend.listWorkstreams).mock.calls.length).toBe(before);
   });
 
   it("ignores changes to entities the sidebar does not show", async () => {

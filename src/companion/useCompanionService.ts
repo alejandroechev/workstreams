@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { CompanionDoc } from "./doc";
 import { openAutomergeDoc } from "./automerge-doc";
-import { buildLaptopState, publishLaptopState, startPresence } from "./publisher";
+import { buildLaptopState, buildSessions, publishLaptopState, publishSessions, startPresence } from "./publisher";
+import type { CompanionStoredSession } from "../backend/types";
 import { startCompanionRuntime, type CompanionOps, type RequestGuard } from "./runtime";
 import { openConsumedLedger } from "./ledger";
 import { createUniqueFolder, expandHome } from "./folders";
@@ -13,7 +14,7 @@ import {
   type SettingsStore,
 } from "./settings";
 import { syncServerUrls } from "./sync-server";
-import { isKnownSchema } from "./protocol";
+import { isKnownSchema, SESSION_RETENTION_MS } from "./protocol";
 import type { Workstream } from "../domain/types";
 import type { WorkLane } from "../domain/work-lanes";
 
@@ -25,6 +26,10 @@ export interface CompanionBindings {
    * request would be failed for naming a workstream not loaded yet.
    */
   ready: boolean;
+  /** Changes whenever phone sessions or their messages change; triggers a republish. */
+  sessionsVersion: number;
+  listSessions(): Promise<CompanionStoredSession[]>;
+  pruneSessions(now: number, retentionMs: number): Promise<number>;
   workstreams: Workstream[];
   lanes: WorkLane[];
   loadedIds: ReadonlySet<string>;
@@ -35,7 +40,7 @@ export interface CompanionBindings {
   loadInBackground(workstreamId: string): Promise<void>;
   createWorkstreamAt(name: string, directory: string): Promise<string>;
   /** Calls `guard` after each await and right before spawning the session. */
-  startSession(workstreamId: string, command: string, prompt: string, guard: RequestGuard): Promise<void>;
+  startSession(workstreamId: string, command: string, prompt: string, guard: RequestGuard, requestId: string): Promise<void>;
   /** Must fail if the path exists. */
   createDirectory(path: string): Promise<void>;
   homeDir(): Promise<string>;
@@ -149,7 +154,7 @@ export function useCompanionService(bindings: CompanionBindings, explicitDeps?: 
         guard();
         return b.createWorkstreamAt(name, directory);
       },
-      startSession: (id, command, prompt, guard) => bindingsRef.current.startSession(id, command, prompt, guard),
+      startSession: (id, command, prompt, guard, requestId) => bindingsRef.current.startSession(id, command, prompt, guard, requestId),
     };
 
     connectRef.current(settings)
@@ -197,6 +202,32 @@ export function useCompanionService(bindings: CompanionBindings, explicitDeps?: 
     currentStatus = JSON.parse(statusKey) as CompanionStatus;
     for (const listener of statusListeners) listener(currentStatus);
   }, [statusKey]);
+
+  // Phone sessions: pruned when connected and then hourly, and republished
+  // whenever they change. Only the latest read is published, so a slow,
+  // older read can never overwrite a newer one.
+  const [pruned, setPruned] = useState(0);
+  useEffect(() => {
+    if (!doc) return;
+    const prune = () => {
+      void bindingsRef.current.pruneSessions(Date.now(), SESSION_RETENTION_MS)
+        .then((removed) => { if (removed > 0) setPruned((n) => n + 1); })
+        .catch((error: unknown) => console.error("Could not prune phone sessions:", error));
+    };
+    prune();
+    const timer = setInterval(prune, 60 * 60_000);
+    return () => clearInterval(timer);
+  }, [doc]);
+  const workstreamNames = JSON.stringify(bindings.workstreams.map((w) => [w.id, w.name]));
+  const publishSeq = useRef(0);
+  useEffect(() => {
+    if (!doc) return;
+    const seq = ++publishSeq.current;
+    const names = new Map(JSON.parse(workstreamNames) as Array<[string, string]>);
+    void bindingsRef.current.listSessions()
+      .then((stored) => { if (seq === publishSeq.current) publishSessions(doc, buildSessions(stored, names)); })
+      .catch((error: unknown) => console.error("Could not publish phone sessions:", error));
+  }, [doc, bindings.sessionsVersion, pruned, workstreamNames]);
 
   // Publish whenever what the phone would see changes.
   const laptopState = useMemo(

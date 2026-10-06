@@ -1,5 +1,13 @@
 import type { CompanionDoc } from "./doc";
-import { isKnownSchema, PRESENCE_INTERVAL_MS, type PublishedLane, type PublishedWorkstream } from "./protocol";
+import {
+  isKnownSchema,
+  PRESENCE_INTERVAL_MS,
+  sessionTitle,
+  type PhoneSession,
+  type PublishedLane,
+  type PublishedWorkstream,
+} from "./protocol";
+import type { CompanionStoredSession } from "../backend/types";
 import { compareNames, groupByLane, type WorkLane } from "../domain/work-lanes";
 import type { Workstream } from "../domain/types";
 
@@ -78,4 +86,65 @@ export function startPresence(doc: CompanionDoc): () => void {
   tick();
   const timer = setInterval(tick, PRESENCE_INTERVAL_MS);
   return () => clearInterval(timer);
+}
+
+/** The published form of the laptop's phone-session records (ADR 033). */
+export function buildSessions(
+  stored: CompanionStoredSession[],
+  workstreamNames: ReadonlyMap<string, string>,
+): Record<string, PhoneSession> {
+  const sessions: Record<string, PhoneSession> = {};
+  for (const session of stored) {
+    sessions[session.tileId] = {
+      id: session.tileId,
+      workstreamId: session.workstreamId,
+      workstreamName: workstreamNames.get(session.workstreamId) ?? "Unknown workstream",
+      requestId: session.requestId,
+      title: sessionTitle(session.prompt),
+      createdAt: session.createdAt,
+      messages: session.messages.map((m) => ({ id: m.id, kind: m.kind, text: m.text, at: m.at })),
+    };
+  }
+  return sessions;
+}
+
+const canonical = (sessions: Record<string, PhoneSession> | undefined) =>
+  JSON.stringify(Object.keys(sessions ?? {}).sort().map((id) => sessions![id]));
+
+const header = (session: PhoneSession) =>
+  JSON.stringify([session.id, session.workstreamId, session.workstreamName, session.requestId, session.title, session.createdAt]);
+
+/**
+ * Writes the sessions if they differ from what is published. Changes are made
+ * in place — new messages appended, dropped ones removed — so the document's
+ * history grows by what changed, not by every session each time.
+ * Returns whether it wrote.
+ */
+export function publishSessions(doc: CompanionDoc, sessions: Record<string, PhoneSession>): boolean {
+  const snapshot = doc.read();
+  if (!isKnownSchema(snapshot)) return false;
+  if (canonical(snapshot.sessions) === canonical(sessions)) return false;
+  doc.change((draft) => {
+    if (!isKnownSchema(draft)) return;
+    if (!draft.sessions || typeof draft.sessions !== "object") draft.sessions = {};
+    const published = draft.sessions;
+    for (const id of Object.keys(published)) if (!(id in sessions)) delete published[id];
+    for (const [id, session] of Object.entries(sessions)) {
+      const existing = published[id];
+      if (!existing || !Array.isArray(existing.messages) || header(existing) !== header(session)) {
+        published[id] = JSON.parse(JSON.stringify(session)) as PhoneSession;
+        continue;
+      }
+      const wanted = new Set(session.messages.map((m) => m.id));
+      for (let i = existing.messages.length - 1; i >= 0; i -= 1) {
+        if (!wanted.has(existing.messages[i]?.id)) existing.messages.splice(i, 1);
+      }
+      const have = new Set(existing.messages.map((m) => m.id));
+      for (const message of session.messages) if (!have.has(message.id)) existing.messages.push({ ...message });
+      if (JSON.stringify(existing.messages) !== JSON.stringify(session.messages)) {
+        existing.messages.splice(0, existing.messages.length, ...session.messages.map((m) => ({ ...m })));
+      }
+    }
+  });
+  return true;
 }

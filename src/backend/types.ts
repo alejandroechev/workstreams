@@ -48,6 +48,17 @@ export interface ContentSearchOptions {
   regex?: boolean;
 }
 
+/** A Copilot session the phone companion started, with what its agent sent (ADR 033). */
+export interface CompanionStoredSession {
+  tileId: string;
+  workstreamId: string;
+  requestId: string;
+  prompt: string;
+  /** ms epoch. */
+  createdAt: number;
+  messages: Array<{ id: string; kind: "progress" | "result"; text: string; at: number }>;
+}
+
 export interface Backend {
   getPrInbox(): Promise<PrInboxSnapshot>;
   configurePrInbox(projectId: string, mode: PrWatchMode): Promise<void>;
@@ -158,6 +169,13 @@ export interface Backend {
   gitDiffFile(directory: string, filePath: string, mode: string, baseRef?: string | null): Promise<string>;
   gitDiffFilesWithStatus(directory: string, mode: string, baseRef?: string | null): Promise<Array<{ path: string; status: "A" | "M" | "D" | "R" }>>;
   gitDiffFileSides(directory: string, filePath: string, mode: string, baseRef?: string | null): Promise<{ before: string; after: string }>;
+  // Phone companion sessions (ADR 033)
+  /** Records that the phone started this Copilot tile; a second record is ignored. */
+  companionRecordSession(session: Omit<CompanionStoredSession, "messages">): Promise<void>;
+  /** Every phone session with its messages, newest session first. */
+  companionListSessions(): Promise<CompanionStoredSession[]>;
+  /** Drops sessions with no activity for `retentionMs`; returns how many. */
+  companionPruneSessions(now: number, retentionMs: number): Promise<number>;
   /** The saved reading order for a diff and its freshness, or null (ADR 032). */
   getDiffOrder(workstreamId: string, directory: string, mode: string, baseRef?: string | null): Promise<DiffOrderView | null>;
   // Git log & branch

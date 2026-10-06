@@ -54,4 +54,26 @@ describe("companion-cli", () => {
     expect(result.status).toBe(2);
     expect(result.stderr).toMatch(/usage/i);
   });
+
+  it("runs the messages scenario: a phone session is recorded, and only it can message the phone", () => {
+    const report = JSON.parse(run("messages"));
+    expect(report.prompt).toBe("Count the files" + fixtures.resultSuffix);
+    expect(report.recorded).toEqual([{ tileId: "tile-1", workstreamId: "alpha", requestId: "ask" }]);
+    expect(report.sends).toEqual([
+      { from: "tile-1", kind: "progress", ok: true },
+      { from: "tile-1", kind: "result", ok: true },
+      { from: "laptop-tile", kind: "result", ok: false, error: "This session was not started from your phone." },
+      { from: "tile-1", kind: "question", ok: false, error: 'The kind must be "progress" or "result".' },
+    ]);
+    expect(report.published["tile-1"]).toMatchObject({
+      title: "Count the files",
+      workstreamName: "Alpha",
+      requestId: "ask",
+      messages: [
+        { kind: "progress", text: "Counting…" },
+        { kind: "result", text: "# 3 files" },
+      ],
+    });
+  });
 });
+

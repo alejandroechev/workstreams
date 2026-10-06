@@ -379,5 +379,23 @@ describe("the companion runtime on the laptop", () => {
       expect(launched).not.toHaveBeenCalled();
     });
   });
+
+  it("tells the app which phone request started each session, so it can record it", async () => {
+    const hub = createInMemoryHub();
+    const laptop = hub.peer();
+    const phone = hub.peer();
+    const origins: string[] = [];
+    const { ops } = fakeOps({
+      startSession: vi.fn(async (id: string, _command: string, _prompt: string, _guard: () => void, requestId: string) => {
+        origins.push(`${id}:${requestId}`);
+      }),
+    });
+    await phoneRequest(phone, { id: "s1", kind: "session", args: { workstreamId: "busy", prompt: "go" } });
+    await phoneRequest(phone, { id: "c1", kind: "create", args: { name: "New", prompt: "go" }, createdAt: NOW + 1 });
+    const runtime = startCompanionRuntime({ doc: laptop, secret: SECRET, ops, now: () => NOW });
+    await runtime.idle();
+    expect(origins).toEqual(["busy:s1", "new-ws:c1"]);
+    runtime.stop();
+  });
 });
 

@@ -1,3 +1,5 @@
+import type { CompanionStoredSession } from "../../backend/types";
+import { SESSION_RETENTION_MS } from "../protocol";
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { renderHook, waitFor, act, cleanup } from "@testing-library/react";
 import { useCompanionService, type CompanionBindings } from "../useCompanionService";
@@ -19,6 +21,9 @@ const ws = (id: string, name: string, over: Partial<Workstream> = {}): Workstrea
 function bindings(over: Partial<CompanionBindings> = {}): CompanionBindings {
   return {
     ready: true,
+    sessionsVersion: 0,
+    listSessions: vi.fn(async () => []),
+    pruneSessions: vi.fn(async () => 0),
     workstreams: [ws("a", "Alpha"), ws("b", "Beta")],
     lanes: [],
     loadedIds: new Set(["a"]),
@@ -119,7 +124,7 @@ describe("the companion service in the app", () => {
     expect(b.createDirectory).toHaveBeenCalledWith("/Users/me/Phone/phone-idea");
     expect(b.createWorkstreamAt).toHaveBeenCalledWith("Phone idea", "/Users/me/Phone/phone-idea");
     expect(b.loadInBackground).toHaveBeenCalledWith("new-id");
-    expect(b.startSession).toHaveBeenCalledWith("new-id", "agency copilot --yolo", "Go", expect.any(Function));
+    expect(b.startSession).toHaveBeenCalledWith("new-id", "agency copilot --yolo", "Go", expect.any(Function), "c1");
     unmount();
   });
 
@@ -165,6 +170,30 @@ describe("the companion service in the app", () => {
     await waitFor(() => expect(result.current.state).toBe("error"));
     expect(result.current).toMatchObject({ error: expect.stringContaining("Pair a new phone") });
     expect(phone.read().requests.r1.outcome).toBeUndefined();
+    unmount();
+  });
+
+  it("publishes phone sessions, and republishes when they change", async () => {
+    const hub = createInMemoryHub();
+    const phone = hub.peer();
+    const stored: CompanionStoredSession[] = [{ tileId: "t1", workstreamId: "a", requestId: "r1", prompt: "Do x\nmore", createdAt: 5, messages: [] }];
+    let b = bindings({ listSessions: vi.fn(async () => structuredClone(stored)) });
+    const { result, rerender, unmount } = renderHook(() => useCompanionService(b, { store: enabledStore(), connect: async () => hub.peer(), devBuild: false }));
+    await waitFor(() => expect(result.current.state).toBe("on"));
+    await waitFor(() => expect(phone.read().sessions?.t1).toMatchObject({ title: "Do x", workstreamName: "Alpha", messages: [] }));
+    stored[0].messages.push({ id: "m1", kind: "result", text: "done", at: 6 });
+    b = { ...b, sessionsVersion: 1 };
+    rerender();
+    await waitFor(() => expect(phone.read().sessions?.t1.messages).toEqual([{ id: "m1", kind: "result", text: "done", at: 6 }]));
+    unmount();
+  });
+
+  it("prunes old phone sessions when it connects", async () => {
+    const hub = createInMemoryHub();
+    const b = bindings();
+    const { result, unmount } = renderHook(() => useCompanionService(b, { store: enabledStore(), connect: async () => hub.peer(), devBuild: false }));
+    await waitFor(() => expect(result.current.state).toBe("on"));
+    await waitFor(() => expect(b.pruneSessions).toHaveBeenCalledWith(expect.any(Number), SESSION_RETENTION_MS));
     unmount();
   });
 });

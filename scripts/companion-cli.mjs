@@ -13,6 +13,9 @@
 //   sign      HMAC signature the paired phone would attach to a request
 //   check     whether the laptop would execute a request now, and why not
 //   pairing   the payload the Settings QR code carries
+//   messages  a phone session asking for its result: the laptop records it,
+//             its agent sends progress and a result, another session and a
+//             bad kind are refused, and the published sessions are printed
 //   scenario  a laptop run against an in-memory document: signed, unsigned,
 //             stale and replayed requests, a create with a prompt, a session;
 //             prints each request's outcome and what the app was asked to do
@@ -23,11 +26,12 @@ import { build } from "esbuild";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
-const USAGE = `Usage: node scripts/companion-cli.mjs <sign|check|pairing|scenario> [options]
+const USAGE = `Usage: node scripts/companion-cli.mjs <sign|check|pairing|scenario|messages> [options]
   sign      --secret <s> --request '<json>'
   check     --secret <s> --request '<json>' [--now <ms>]
   pairing   --doc <automerge:url> --secret <s>
-  scenario`;
+  scenario
+  messages`;
 
 async function loadCompanion() {
   const result = await build({
@@ -37,6 +41,7 @@ async function loadCompanion() {
         'export { createInMemoryHub } from "./src/companion/doc";',
         'export { startCompanionRuntime } from "./src/companion/runtime";',
         'export { createUniqueFolder } from "./src/companion/folders";',
+        'export { buildSessions, publishSessions } from "./src/companion/publisher";',
       ].join("\n"),
       resolveDir: ROOT,
       loader: "ts",
@@ -132,9 +137,68 @@ async function scenario(companion) {
   return { outcomes, errors, appActions };
 }
 
+async function messages(companion) {
+  const { createInMemoryHub, startCompanionRuntime, signRequest, withResultRequest, checkMessage, buildSessions, publishSessions } = companion;
+  const secret = "dGVzdC1zZWNyZXQtZm9yLWNvbXBhbmlvbi1maXh0dXI";
+  const NOW = 1_790_000_000_000;
+  const hub = createInMemoryHub();
+  const laptop = hub.peer();
+  const phone = hub.peer();
+
+  // The laptop's SQLite records, as companion_messages.rs keeps them.
+  const store = new Map();
+  const world = {
+    workstreams: [{ id: "alpha", name: "Alpha", archived: false, loaded: true, copilotCommand: "copilot --yolo" }],
+    globalCopilotCommand: "copilot --yolo",
+  };
+  let tiles = 0;
+  let prompt = "";
+  const ops = {
+    world: () => world,
+    async loadInBackground() {},
+    async createWorkstream() { throw new Error("not used"); },
+    async startSession(workstreamId, _command, sentPrompt, guard, requestId) {
+      guard();
+      prompt = sentPrompt;
+      const tileId = `tile-${++tiles}`;
+      store.set(tileId, { tileId, workstreamId, requestId, prompt: sentPrompt, createdAt: NOW, messages: [] });
+    },
+  };
+  // What `workstreams agent call companion.send` does for a tile.
+  const sends = [];
+  const send = (from, kind, text) => {
+    const check = checkMessage(kind, text);
+    const session = store.get(from);
+    const error = !session ? "This session was not started from your phone." : check.ok ? undefined : check.error;
+    if (!error) session.messages.push({ id: `m${session.messages.length + 1}`, kind, text, at: NOW + session.messages.length + 1 });
+    sends.push(error ? { from, kind, ok: false, error } : { from, kind, ok: true });
+  };
+
+  const request = { id: "ask", kind: "session", args: { workstreamId: "alpha", prompt: withResultRequest("Count the files", true) }, createdAt: NOW - 1000 };
+  phone.change((d) => { d.requests.ask = { ...request, signature: "" }; });
+  const signature = await signRequest(secret, request);
+  phone.change((d) => { d.requests.ask.signature = signature; });
+  const runtime = startCompanionRuntime({ doc: laptop, secret, ops, now: () => NOW });
+  await runtime.idle();
+  runtime.stop();
+
+  send("tile-1", "progress", "Counting…");
+  send("tile-1", "result", "# 3 files");
+  send("laptop-tile", "result", "not mine to send");
+  send("tile-1", "question", "?");
+
+  publishSessions(laptop, buildSessions([...store.values()], new Map([["alpha", "Alpha"]])));
+  return {
+    prompt,
+    recorded: [...store.values()].map(({ tileId, workstreamId, requestId }) => ({ tileId, workstreamId, requestId })),
+    sends,
+    published: phone.read().sessions,
+  };
+}
+
 async function main() {
   const [command, ...args] = process.argv.slice(2);
-  if (!["sign", "check", "pairing", "scenario"].includes(command)) fail(command ? `Unknown command: ${command}` : "No command given");
+  if (!["sign", "check", "pairing", "scenario", "messages"].includes(command)) fail(command ? `Unknown command: ${command}` : "No command given");
   const companion = await loadCompanion();
 
   if (command === "sign") {
@@ -146,6 +210,8 @@ async function main() {
     process.stdout.write(`${JSON.stringify(await companion.checkRequest(request, { secret: required(args, "secret"), now }))}\n`);
   } else if (command === "pairing") {
     process.stdout.write(`${companion.encodePairing({ doc: required(args, "doc"), secret: required(args, "secret") })}\n`);
+  } else if (command === "messages") {
+    process.stdout.write(`${JSON.stringify(await messages(companion), null, 2)}\n`);
   } else {
     process.stdout.write(`${JSON.stringify(await scenario(companion), null, 2)}\n`);
   }
