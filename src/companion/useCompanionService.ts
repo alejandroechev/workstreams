@@ -219,15 +219,17 @@ export function useCompanionService(bindings: CompanionBindings, explicitDeps?: 
     return () => clearInterval(timer);
   }, [doc]);
   const workstreamNames = JSON.stringify(bindings.workstreams.map((w) => [w.id, w.name]));
+  const secret = settings?.secret ?? "";
   const publishSeq = useRef(0);
   useEffect(() => {
     if (!doc) return;
     const seq = ++publishSeq.current;
     const names = new Map(JSON.parse(workstreamNames) as Array<[string, string]>);
     void bindingsRef.current.listSessions()
-      .then((stored) => { if (seq === publishSeq.current) publishSessions(doc, buildSessions(stored, names)); })
+      .then((stored) => buildSessions(stored, names, secret))
+      .then((sessions) => { if (seq === publishSeq.current) publishSessions(doc, sessions); })
       .catch((error: unknown) => console.error("Could not publish phone sessions:", error));
-  }, [doc, bindings.sessionsVersion, pruned, workstreamNames]);
+  }, [doc, bindings.sessionsVersion, pruned, workstreamNames, secret]);
 
   // Publish whenever what the phone would see changes.
   const laptopState = useMemo(

@@ -1310,6 +1310,16 @@ export class MemoryBackend implements Backend {
   }
 
   private companionSessions = new Map<string, CompanionStoredSession>();
+  private companionRevoked = new Set<string>();
+
+  async companionRevokeSession(tileId: string): Promise<void> {
+    if (this.companionSessions.has(tileId)) this.companionRevoked.add(tileId);
+  }
+
+  async companionDeleteSession(tileId: string): Promise<void> {
+    this.companionSessions.delete(tileId);
+    this.companionRevoked.delete(tileId);
+  }
 
   async companionRecordSession(session: Omit<CompanionStoredSession, "messages">): Promise<void> {
     if (this.companionSessions.has(session.tileId)) return;
@@ -1340,7 +1350,7 @@ export class MemoryBackend implements Backend {
    */
   companionSendForTests(tileId: string, kind: "progress" | "result", text: string, at = Date.now()): void {
     const session = this.companionSessions.get(tileId);
-    if (!session) throw new Error("This session was not started from your phone.");
+    if (!session || this.companionRevoked.has(tileId)) throw new Error("This session was not started from your phone.");
     session.messages.push({ id: `m-${session.messages.length}-${at}`, kind, text, at });
     if (session.messages.length > 50) session.messages.splice(0, session.messages.length - 50);
   }

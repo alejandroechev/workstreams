@@ -46,3 +46,21 @@ describe("MemoryBackend phone sessions", () => {
     expect((await backend.companionListSessions()).map((s) => s.tileId)).toEqual(["busy"]);
   });
 });
+
+describe("MemoryBackend phone session permissions", () => {
+  it("a revoked tile keeps its messages but can no longer send", async () => {
+    const backend = new MemoryBackend();
+    await backend.companionRecordSession({ tileId: "t", workstreamId: "w", requestId: "r", prompt: "p", createdAt: 0 });
+    backend.companionSendForTests("t", "result", "kept", 1);
+    await backend.companionRevokeSession("t");
+    expect(() => backend.companionSendForTests("t", "result", "x", 2)).toThrow("not started from your phone");
+    expect((await backend.companionListSessions())[0].messages).toHaveLength(1);
+  });
+
+  it("forgets a session whose launch was refused", async () => {
+    const backend = new MemoryBackend();
+    await backend.companionRecordSession({ tileId: "t", workstreamId: "w", requestId: "r", prompt: "p", createdAt: 0 });
+    await backend.companionDeleteSession("t");
+    expect(await backend.companionListSessions()).toEqual([]);
+  });
+});

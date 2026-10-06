@@ -1882,6 +1882,20 @@ mod tests {
     }
 
     #[test]
+    fn companion_send_refuses_a_tile_relinked_to_another_session() {
+        let db = phone_session_db(true);
+        crate::companion_messages::revoke(&db, "phone-tile").unwrap();
+        let error = call(
+            &db,
+            &agent("phone-tile", "w1"),
+            "companion.send",
+            serde_json::json!({"kind":"result","text":"x"}),
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "NOT_A_PHONE_SESSION");
+    }
+
+    #[test]
     fn companion_send_ignores_any_session_named_in_the_request() {
         let db = phone_session_db(true);
         let error = call(

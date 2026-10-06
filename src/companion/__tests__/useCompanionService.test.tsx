@@ -1,5 +1,5 @@
 import type { CompanionStoredSession } from "../../backend/types";
-import { SESSION_RETENTION_MS } from "../protocol";
+import { SESSION_RETENTION_MS, readSessions, verifySessions } from "../protocol";
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { renderHook, waitFor, act, cleanup } from "@testing-library/react";
 import { useCompanionService, type CompanionBindings } from "../useCompanionService";
@@ -184,7 +184,8 @@ describe("the companion service in the app", () => {
     stored[0].messages.push({ id: "m1", kind: "result", text: "done", at: 6 });
     b = { ...b, sessionsVersion: 1 };
     rerender();
-    await waitFor(() => expect(phone.read().sessions?.t1.messages).toEqual([{ id: "m1", kind: "result", text: "done", at: 6 }]));
+    await waitFor(() => expect(phone.read().sessions?.t1.messages).toEqual([{ id: "m1", kind: "result", text: "done", at: 6, signature: expect.stringMatching(/^[0-9a-f]{64}$/) }]));
+    expect(await verifySessions(readSessions(phone.read()), SECRET)).toHaveLength(1);
     unmount();
   });
 

@@ -63,6 +63,7 @@ import type { Project, Workstream, Tile, TileType } from "./domain/types";
 import type { LoopSummary } from "./domain/loop";
 import { countUnreadPrs } from "./domain/pr-inbox";
 import { useCompanionService } from "./companion/useCompanionService";
+import { startPhoneSession } from "./companion/start-session";
 import { homeDir } from "@tauri-apps/api/path";
 
 // Wire the persistent Workbench store into the cross-tile dispatcher
@@ -1992,37 +1993,20 @@ export default function App() {
    * the backend because a background mount may not have rendered yet.
    */
   const startSessionForCompanion = useCallback(
-    async (wsId: string, command: string, prompt: string, guard: () => void, requestId: string): Promise<void> => {
-      // `guard` throws once the request may no longer run (stopped, expired,
-      // newer document); it is checked after every wait, and last right
-      // before the agent is launched.
-      await mountWorkstream(wsId);
-      guard();
-      const ws = workstreamsRef.current.find((w) => w.id === wsId);
-      const cwd = ws?.directory || defaultRootDir();
-      const [existing, layout] = await Promise.all([backend.listTiles(wsId), backend.getLayout(wsId)]);
-      guard();
-      const count = existing.filter((t) => t.tile_type === "copilot_session").length;
-      const title = `${ws?.name || "ws"}/${count + 1}`;
-      const tile = await backend.createTile(wsId, "copilot_session", title, createCopilotSessionConfig(title, cwd));
-      const order: string[] = JSON.parse(layout.tile_order_json || "[]");
-      await backend.updateLayout(wsId, { tile_order_json: JSON.stringify([...order, tile.id]) });
-      try {
-        guard();
-      } catch (error) {
-        // Too late to launch: take the unstarted tile back out, so a later
-        // visit doesn't start an agent nobody asked for any more.
-        await backend.updateLayout(wsId, { tile_order_json: JSON.stringify(order) }).catch(() => {});
-        await backend.deleteTile(tile.id).catch(() => {});
-        throw error;
-      }
-      // Recorded before the agent starts, so its first message finds it.
-      await backend.companionRecordSession({ tileId: tile.id, workstreamId: wsId, requestId, prompt, createdAt: Date.now() });
-      setCompanionSessionsVersion((v) => v + 1);
-      upsertTileLocally(tile);
-      spawnedPtys.current.add(tile.id);
-      await backend.spawnCopilotSession(tile.id, cwd, null, 30, 120, command, prompt);
-    },
+    (wsId: string, command: string, prompt: string, guard: () => void, requestId: string): Promise<void> =>
+      startPhoneSession(
+        {
+          backend,
+          mount: mountWorkstream,
+          workstream: (id) => workstreamsRef.current.find((w) => w.id === id),
+          defaultCwd: defaultRootDir,
+          onTileCreated: upsertTileLocally,
+          onRecorded: () => setCompanionSessionsVersion((v) => v + 1),
+          markSpawned: (tileId) => { spawnedPtys.current.add(tileId); },
+          spawn: async (tileId, cwd, cmd, text) => { await backend.spawnCopilotSession(tileId, cwd, null, 30, 120, cmd, text); },
+        },
+        { workstreamId: wsId, command, prompt, guard, requestId, now: Date.now() },
+      ),
     [backend, mountWorkstream, upsertTileLocally],
   );
 
@@ -2557,6 +2541,10 @@ export default function App() {
               // Link session to existing tile — update config and persist to DB
               const tile = tiles.find((t) => t.id === linkingTileId);
               if (tile) {
+                // A tile the phone started now runs a session the phone did
+                // not start: it must not keep the right to message the phone.
+                void backend.companionRevokeSession(linkingTileId).catch((error) =>
+                  console.error("Could not revoke the phone session:", error));
                 const cfg = JSON.parse(tile.config_json || "{}");
                 cfg.copilot_session_id = session.session_id;
                 cfg.resume_by_id = session.session_id;

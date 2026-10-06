@@ -21,6 +21,10 @@ import {
 import {
   RESULT_SUFFIX,
   emptyDocument,
+  canonicalSession,
+  canonicalMessage,
+  signSession,
+  verifySessions,
   withResultRequest,
   sessionTitle,
   readSessions,
@@ -207,9 +211,25 @@ describe("phone sessions and messages", () => {
     for (const [prompt, title] of fixtures.titles) expect(sessionTitle(prompt)).toBe(title);
   });
 
-  it("reads published sessions defensively, newest first", () => {
+  it("reads published sessions by shape only, newest first, signatures included", () => {
     const doc = { ...emptyDocument(), sessions: fixtures.sessions.document } as unknown as CompanionDocument;
-    expect(readSessions(doc)).toEqual(fixtures.sessions.expected);
+    expect(readSessions(doc).map((s) => s.id)).toEqual(fixtures.sessions.structural);
+  });
+
+  it("signs sessions and messages exactly like the fixtures", async () => {
+    const { session, message } = fixtures.sessions.vectors;
+    const [, old] = fixtures.sessions.expected as PhoneSession[];
+    expect(canonicalSession(old)).toBe(session.canonical);
+    expect(canonicalMessage("tile-old", old.messages[1])).toBe(message.canonical);
+    const { signature: _s, messages, ...header } = old;
+    const signed = await signSession(SECRET, { ...header, messages: messages.map(({ signature: _m, ...m }) => m) });
+    expect(signed).toEqual(old);
+  });
+
+  it("keeps only what the paired laptop signed", async () => {
+    const doc = { ...emptyDocument(), sessions: fixtures.sessions.document } as unknown as CompanionDocument;
+    expect(await verifySessions(readSessions(doc), SECRET)).toEqual(fixtures.sessions.expected);
+    expect(await verifySessions(readSessions(doc), "A".repeat(43))).toEqual([]);
   });
 
   it("reads nothing from a document without sessions, or from another version", () => {
@@ -220,7 +240,7 @@ describe("phone sessions and messages", () => {
   });
 
   it("a session is done once it has a result", () => {
-    const [newer, older] = fixtures.sessions.expected as PhoneSession[];
+    const [newer, older] = fixtures.sessions.expected as unknown as PhoneSession[];
     expect(sessionIsDone(older)).toBe(true);
     expect(sessionIsDone(newer)).toBe(false);
   });

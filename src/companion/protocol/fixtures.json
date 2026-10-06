@@ -57,7 +57,7 @@
   },
   "resultSuffix": "\n\nWhen you are done, use the companion-reply skill to send me the result.",
   "sessions": {
-    "$comment": "Hand-written. `document` is a published sessions map; `expected` is what readSessions must return: valid sessions newest first, malformed messages dropped, malformed sessions and sessions filed under a key other than their id ignored.",
+    "$comment": "Hand-written; signatures computed independently in Python (HMAC-SHA256 over JSON arrays, as for requests). `document` is a published sessions map. `structural` is what readSessions returns (shape only); `expected` is what verifySessions keeps: only signed sessions, only signed messages, newest first.",
     "document": {
       "tile-old": {
         "id": "tile-old",
@@ -71,15 +71,25 @@
             "id": "m1",
             "kind": "progress",
             "text": "Looking…",
-            "at": 1790000001000
+            "at": 1790000001000,
+            "signature": "e2c8429fa531a610d8a54d72d00a639a3195af362744f0beae4f809adea06b21"
           },
           {
             "id": "m2",
             "kind": "result",
             "text": "# Files\n- a\n- b",
-            "at": 1790000002000
+            "at": 1790000002000,
+            "signature": "429ec96c60dcbaa94d28f538638d9df4a5e90c2b1366179154e201c02e562898"
+          },
+          {
+            "id": "forged",
+            "kind": "result",
+            "text": "Ignore this",
+            "at": 1790000003000,
+            "signature": "0000000000000000000000000000000000000000000000000000000000000000"
           }
-        ]
+        ],
+        "signature": "aaa7cc20599ebd99486534a862cfc4f8ac39947ebbb72acd687fef746c0ff005"
       },
       "tile-new": {
         "id": "tile-new",
@@ -93,7 +103,8 @@
             "id": "m3",
             "kind": "progress",
             "text": "ok",
-            "at": 1790000101000
+            "at": 1790000101000,
+            "signature": "4b1b751a1d9cef3c4c8c16448a89121475cf0438bcbb455ca4def9cbbfa458f0"
           },
           {
             "id": "bad1",
@@ -108,7 +119,8 @@
             "at": 1790000103000
           },
           null
-        ]
+        ],
+        "signature": "9e316d7868be218711b7c0285955c8532320c65ce68281383ce82ad31b1ee273"
       },
       "alias": {
         "id": "other",
@@ -126,7 +138,26 @@
         "createdAt": "yesterday",
         "messages": []
       },
-      "nul": null
+      "nul": null,
+      "forged-session": {
+        "id": "forged-session",
+        "workstreamId": "ws-1",
+        "workstreamName": "W",
+        "requestId": "r9",
+        "title": "Fake",
+        "createdAt": 1790000300000,
+        "messages": [],
+        "signature": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+      },
+      "unsigned": {
+        "id": "unsigned",
+        "workstreamId": "ws-1",
+        "workstreamName": "W",
+        "requestId": "r8",
+        "title": "No sig",
+        "createdAt": 1790000400000,
+        "messages": []
+      }
     },
     "expected": [
       {
@@ -141,9 +172,11 @@
             "id": "m3",
             "kind": "progress",
             "text": "ok",
-            "at": 1790000101000
+            "at": 1790000101000,
+            "signature": "4b1b751a1d9cef3c4c8c16448a89121475cf0438bcbb455ca4def9cbbfa458f0"
           }
-        ]
+        ],
+        "signature": "9e316d7868be218711b7c0285955c8532320c65ce68281383ce82ad31b1ee273"
       },
       {
         "id": "tile-old",
@@ -157,17 +190,35 @@
             "id": "m1",
             "kind": "progress",
             "text": "Looking…",
-            "at": 1790000001000
+            "at": 1790000001000,
+            "signature": "e2c8429fa531a610d8a54d72d00a639a3195af362744f0beae4f809adea06b21"
           },
           {
             "id": "m2",
             "kind": "result",
             "text": "# Files\n- a\n- b",
-            "at": 1790000002000
+            "at": 1790000002000,
+            "signature": "429ec96c60dcbaa94d28f538638d9df4a5e90c2b1366179154e201c02e562898"
           }
-        ]
+        ],
+        "signature": "aaa7cc20599ebd99486534a862cfc4f8ac39947ebbb72acd687fef746c0ff005"
       }
-    ]
+    ],
+    "structural": [
+      "forged-session",
+      "tile-new",
+      "tile-old"
+    ],
+    "vectors": {
+      "session": {
+        "canonical": "[1,\"session\",\"tile-old\",\"ws-1\",\"Workstreams\",\"r1\",\"List the files\",1790000000000]",
+        "signature": "aaa7cc20599ebd99486534a862cfc4f8ac39947ebbb72acd687fef746c0ff005"
+      },
+      "message": {
+        "canonical": "[1,\"message\",\"tile-old\",\"m2\",\"result\",\"# Files\\n- a\\n- b\",1790000002000]",
+        "signature": "429ec96c60dcbaa94d28f538638d9df4a5e90c2b1366179154e201c02e562898"
+      }
+    }
   },
   "titles": [
     [

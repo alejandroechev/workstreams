@@ -50,9 +50,10 @@ pub fn record_session(
     Ok(())
 }
 
+/// Whether this tile is a phone session that may still send.
 pub fn is_phone_session(conn: &Connection, tile_id: &str) -> Result<bool, String> {
     conn.query_row(
-        "SELECT 1 FROM companion_sessions WHERE tile_id = ?1",
+        "SELECT 1 FROM companion_sessions WHERE tile_id = ?1 AND can_send = 1",
         [tile_id],
         |_| Ok(()),
     )
@@ -105,7 +106,7 @@ pub fn add_message(
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
     let exists: Option<i64> = tx
         .query_row(
-            "SELECT 1 FROM companion_sessions WHERE tile_id = ?1",
+            "SELECT 1 FROM companion_sessions WHERE tile_id = ?1 AND can_send = 1",
             [tile_id],
             |row| row.get(0),
         )
@@ -126,6 +127,27 @@ pub fn add_message(
     )
     .map_err(|e| e.to_string())?;
     tx.commit().map_err(|e| e.to_string())
+}
+
+/// Stops a tile from messaging the phone, keeping what it already sent: the
+/// tile now runs a session the phone did not start.
+pub fn revoke(conn: &Connection, tile_id: &str) -> Result<(), String> {
+    conn.execute(
+        "UPDATE companion_sessions SET can_send = 0 WHERE tile_id = ?1",
+        [tile_id],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Forgets a phone session that never started (its launch was refused).
+pub fn delete(conn: &Connection, tile_id: &str) -> Result<(), String> {
+    conn.execute(
+        "DELETE FROM companion_sessions WHERE tile_id = ?1",
+        [tile_id],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 /// Every phone session with its messages, oldest message first.
@@ -307,6 +329,31 @@ mod tests {
             )
             .unwrap();
         assert_eq!(orphans, 0);
+    }
+
+    #[test]
+    fn a_revoked_tile_keeps_its_history_but_can_no_longer_send() {
+        let conn = db();
+        record_session(&conn, "t1", "w", "r1", "Do x", 1000).unwrap();
+        add_message(&conn, "t1", "m1", "result", "kept", 2000).unwrap();
+        revoke(&conn, "t1").unwrap();
+        assert!(!is_phone_session(&conn, "t1").unwrap());
+        assert_eq!(
+            add_message(&conn, "t1", "m2", "result", "x", 3000).unwrap_err(),
+            "This session was not started from your phone."
+        );
+        assert_eq!(list(&conn).unwrap()[0].messages.len(), 1);
+        // Re-recording the same tile does not restore the permission.
+        record_session(&conn, "t1", "w", "r1", "Do x", 1000).unwrap();
+        assert!(!is_phone_session(&conn, "t1").unwrap());
+    }
+
+    #[test]
+    fn a_session_that_never_started_can_be_forgotten() {
+        let conn = db();
+        record_session(&conn, "t1", "w", "r1", "Do x", 1000).unwrap();
+        delete(&conn, "t1").unwrap();
+        assert!(list(&conn).unwrap().is_empty());
     }
 
     #[test]

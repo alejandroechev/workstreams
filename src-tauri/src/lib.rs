@@ -303,6 +303,20 @@ fn companion_record_session(
     )
 }
 
+/// Stops a tile from messaging the phone: it was re-linked to another session.
+#[tauri::command]
+fn companion_revoke_session(state: State<'_, AppState>, tile_id: String) -> Result<(), String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    companion_messages::revoke(&db, &tile_id)
+}
+
+/// Forgets a phone session whose launch was refused before the agent started.
+#[tauri::command]
+fn companion_delete_session(state: State<'_, AppState>, tile_id: String) -> Result<(), String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    companion_messages::delete(&db, &tile_id)
+}
+
 /// Every phone session with its messages, for the companion publisher.
 #[tauri::command]
 fn companion_list_sessions(
@@ -6133,6 +6147,8 @@ pub fn run() {
             get_diff_order,
             companion_record_session,
             companion_list_sessions,
+            companion_revoke_session,
+            companion_delete_session,
             companion_prune_sessions,
             // Copilot config
             discover_copilot_config,

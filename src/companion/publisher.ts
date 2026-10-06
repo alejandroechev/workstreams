@@ -3,6 +3,7 @@ import {
   isKnownSchema,
   PRESENCE_INTERVAL_MS,
   sessionTitle,
+  signSession,
   type PhoneSession,
   type PublishedLane,
   type PublishedWorkstream,
@@ -88,14 +89,19 @@ export function startPresence(doc: CompanionDoc): () => void {
   return () => clearInterval(timer);
 }
 
-/** The published form of the laptop's phone-session records (ADR 033). */
-export function buildSessions(
+/**
+ * The published form of the laptop's phone-session records (ADR 033), signed
+ * with the pairing secret so the phone can tell them from anything else a
+ * document writer put there.
+ */
+export async function buildSessions(
   stored: CompanionStoredSession[],
   workstreamNames: ReadonlyMap<string, string>,
-): Record<string, PhoneSession> {
+  secret: string,
+): Promise<Record<string, PhoneSession>> {
   const sessions: Record<string, PhoneSession> = {};
   for (const session of stored) {
-    sessions[session.tileId] = {
+    sessions[session.tileId] = await signSession(secret, {
       id: session.tileId,
       workstreamId: session.workstreamId,
       workstreamName: workstreamNames.get(session.workstreamId) ?? "Unknown workstream",
@@ -103,7 +109,7 @@ export function buildSessions(
       title: sessionTitle(session.prompt),
       createdAt: session.createdAt,
       messages: session.messages.map((m) => ({ id: m.id, kind: m.kind, text: m.text, at: m.at })),
-    };
+    });
   }
   return sessions;
 }
@@ -112,7 +118,7 @@ const canonical = (sessions: Record<string, PhoneSession> | undefined) =>
   JSON.stringify(Object.keys(sessions ?? {}).sort().map((id) => sessions![id]));
 
 const header = (session: PhoneSession) =>
-  JSON.stringify([session.id, session.workstreamId, session.workstreamName, session.requestId, session.title, session.createdAt]);
+  JSON.stringify([session.id, session.workstreamId, session.workstreamName, session.requestId, session.title, session.createdAt, session.signature]);
 
 /**
  * Writes the sessions if they differ from what is published. Changes are made

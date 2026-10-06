@@ -145,6 +145,15 @@ phone; the phone cannot reply.
   map (keyed by tile id, title = the prompt's first line). It is additive at `schemaVersion` 1: older
   phones never read it. As everywhere else, the laptop is its only writer and writes nothing into a
   document from a newer version.
+- **Authenticity.** Anyone holding the document URL could write a well-formed session, so the laptop
+  signs each session header and each message with the pairing secret (HMAC-SHA256 over
+  `[1, "session", id, workstreamId, workstreamName, requestId, title, createdAt]` and
+  `[1, "message", sessionId, id, kind, text, at]`). The phone shows only what verifies. Pairing a new
+  phone re-signs everything with the new secret.
+- **Re-linking.** A tile's permission to send is revoked (its history kept) when the user links it to
+  another Copilot session: that session was not started from the phone.
+- **Launching.** The session is recorded before the agent starts, and the request's guard is checked
+  again after recording; a refusal removes the tile, its layout entry and the record.
 - **Retention.** A session is pruned 3 days after its last message (or its start), and keeps at most its
   latest 50 messages; pruning runs in SQLite and the published copy follows.
 - **On the phone.** A Messages view lists the sessions newest first, with unread counts; read state lives

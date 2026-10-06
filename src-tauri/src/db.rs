@@ -440,6 +440,10 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
         // of destroying them -- reorganising should never lose work.
         "ALTER TABLE workstreams ADD COLUMN lane_id TEXT REFERENCES work_lanes(id) ON DELETE SET NULL",
         "ALTER TABLE tasks ADD COLUMN notes TEXT NOT NULL DEFAULT ''",
+        // Whether a phone session's tile may still message the phone (ADR 033).
+        // Cleared when the tile is re-linked to another Copilot session, which
+        // must not inherit the phone's permission; its history stays.
+        "ALTER TABLE companion_sessions ADD COLUMN can_send INTEGER NOT NULL DEFAULT 1",
         // Defence in depth for the 1:1 task↔workstream relation. Partial, so
         // the many tasks with no workstream are unaffected. On a database that
         // already contains duplicates this create fails and is ignored (as all

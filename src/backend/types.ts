@@ -172,6 +172,10 @@ export interface Backend {
   // Phone companion sessions (ADR 033)
   /** Records that the phone started this Copilot tile; a second record is ignored. */
   companionRecordSession(session: Omit<CompanionStoredSession, "messages">): Promise<void>;
+  /** Stops a tile messaging the phone (it now runs another session); keeps its history. */
+  companionRevokeSession(tileId: string): Promise<void>;
+  /** Forgets a phone session whose launch was refused. */
+  companionDeleteSession(tileId: string): Promise<void>;
   /** Every phone session with its messages, newest session first. */
   companionListSessions(): Promise<CompanionStoredSession[]>;
   /** Drops sessions with no activity for `retentionMs`; returns how many. */

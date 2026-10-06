@@ -187,7 +187,7 @@ async function messages(companion) {
   send("laptop-tile", "result", "not mine to send");
   send("tile-1", "question", "?");
 
-  publishSessions(laptop, buildSessions([...store.values()], new Map([["alpha", "Alpha"]])));
+  publishSessions(laptop, await buildSessions([...store.values()], new Map([["alpha", "Alpha"]]), secret));
   return {
     prompt,
     recorded: [...store.values()].map(({ tileId, workstreamId, requestId }) => ({ tileId, workstreamId, requestId })),

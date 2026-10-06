@@ -311,6 +311,8 @@ export interface SessionMessage {
   text: string;
   /** ms epoch, laptop clock. */
   at: number;
+  /** HMAC-SHA256 hex of `canonicalMessage`, by the laptop with the pairing secret. */
+  signature: string;
 }
 
 /** A Copilot session started from the phone, keyed by its tile id. */
@@ -322,6 +324,8 @@ export interface PhoneSession {
   title: string;
   createdAt: number;
   messages: SessionMessage[];
+  /** HMAC-SHA256 hex of `canonicalSession`, by the laptop with the pairing secret. */
+  signature: string;
 }
 
 /** Appended to a prompt when the phone asks for the result. */
@@ -342,27 +346,29 @@ const isTime = (value: unknown): value is number => typeof value === "number" &&
 function parseMessage(raw: unknown): SessionMessage | null {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
   const m = raw as Record<string, unknown>;
-  if (!isString(m.id) || (m.kind !== "progress" && m.kind !== "result") || !isString(m.text) || !isTime(m.at)) return null;
+  if (!isString(m.id) || (m.kind !== "progress" && m.kind !== "result") || !isString(m.text) || !isTime(m.at) || !isString(m.signature)) return null;
   if (m.text.length > MAX_MESSAGE_LENGTH) return null;
-  return { id: m.id, kind: m.kind, text: m.text, at: m.at };
+  return { id: m.id, kind: m.kind, text: m.text, at: m.at, signature: m.signature };
 }
 
 function parseSession(raw: unknown, key: string): PhoneSession | null {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
   const s = raw as Record<string, unknown>;
   if (s.id !== key || !isString(s.workstreamId) || !isString(s.workstreamName) || !isString(s.requestId)
-    || !isString(s.title) || !isTime(s.createdAt) || !Array.isArray(s.messages)) return null;
+    || !isString(s.title) || !isTime(s.createdAt) || !Array.isArray(s.messages) || !isString(s.signature)) return null;
   const messages = s.messages.map(parseMessage).filter((m): m is SessionMessage => m !== null);
   return {
     id: key, workstreamId: s.workstreamId, workstreamName: s.workstreamName, requestId: s.requestId,
-    title: s.title, createdAt: s.createdAt, messages,
+    title: s.title, createdAt: s.createdAt, messages, signature: s.signature,
   };
 }
 
 /**
- * The published sessions, newest first. Nothing in the document is trusted:
- * malformed sessions and messages are dropped, and a document from another
- * version yields nothing.
+ * The published sessions, newest first, by shape only. Nothing in the
+ * document is trusted: malformed sessions and messages are dropped, and a
+ * document from another version yields nothing. Pass the result through
+ * `verifySessions` before showing it: anyone holding the document URL can
+ * write a well-formed session.
  */
 export function readSessions(doc: CompanionDocument): PhoneSession[] {
   if (!isKnownSchema(doc)) return [];
@@ -386,4 +392,50 @@ export function checkMessage(kind: string, text: string): MessageCheck {
   if (text.trim() === "") return { ok: false, error: "The message is empty." };
   if (text.length > MAX_MESSAGE_LENGTH) return { ok: false, error: `The message is longer than ${MAX_MESSAGE_LENGTH} characters.` };
   return { ok: true };
+}
+
+// ── Authenticity of what the laptop publishes ──────────────────────────
+
+/** The exact bytes signed for a session's header. */
+export function canonicalSession(session: Pick<PhoneSession, "id" | "workstreamId" | "workstreamName" | "requestId" | "title" | "createdAt">): string {
+  return JSON.stringify([SCHEMA_VERSION, "session", session.id, session.workstreamId, session.workstreamName, session.requestId, session.title, session.createdAt]);
+}
+
+/** The exact bytes signed for one message, bound to its session. */
+export function canonicalMessage(sessionId: string, message: Pick<SessionMessage, "id" | "kind" | "text" | "at">): string {
+  return JSON.stringify([SCHEMA_VERSION, "message", sessionId, message.id, message.kind, message.text, message.at]);
+}
+
+type Unsigned<T> = Omit<T, "signature">;
+
+/** Signs a session and its messages with the pairing secret (laptop side). */
+export async function signSession(
+  secret: string,
+  session: Unsigned<Omit<PhoneSession, "messages">> & { messages: Unsigned<SessionMessage>[] },
+): Promise<PhoneSession> {
+  const key = await hmacKey(secret);
+  const sign = async (text: string) => hex(await globalThis.crypto.subtle.sign("HMAC", key, new TextEncoder().encode(text)));
+  const messages = await Promise.all(session.messages.map(async (m) => ({ ...m, signature: await sign(canonicalMessage(session.id, m)) })));
+  return { ...session, messages, signature: await sign(canonicalSession(session)) };
+}
+
+/**
+ * Keeps only what the paired laptop signed: sessions whose header verifies,
+ * and within them, messages that verify. A document writer without the secret
+ * can neither invent a session nor slip a message into a real one.
+ */
+export async function verifySessions(sessions: PhoneSession[], secret: string): Promise<PhoneSession[]> {
+  if (!secret) return [];
+  const key = await hmacKey(secret);
+  const expected = async (text: string) => hex(await globalThis.crypto.subtle.sign("HMAC", key, new TextEncoder().encode(text)));
+  const verified: PhoneSession[] = [];
+  for (const session of sessions) {
+    if (!constantTimeEqual(await expected(canonicalSession(session)), session.signature)) continue;
+    const messages: SessionMessage[] = [];
+    for (const message of session.messages) {
+      if (constantTimeEqual(await expected(canonicalMessage(session.id, message)), message.signature)) messages.push(message);
+    }
+    verified.push({ ...session, messages });
+  }
+  return verified;
 }
