@@ -21,7 +21,7 @@ graph TB
             QuickNote["WorkstreamQuickNote (still shipped)<br/>log a note to this workstream's task<br/>the part that survived; seeds the future per-workstream log"]
             DevlogRender["devlog-render.ts<br/>renders the daily page (pure)"]
             StatusBar["StatusBar<br/>Shortcuts + metadata"]
-            Companion["Phone companion (ADR 033)<br/>src/companion: publisher + executor + runtime<br/>HMAC-checked requests, run at most once<br/>off by default; never in dev builds"]
+            Companion["Phone companion (ADR 033)<br/>src/companion: publisher + executor + runtime<br/>HMAC-checked requests, run at most once<br/>publishes phone sessions + their messages<br/>off by default; never in dev builds"]
             subgraph Files["Files"]
                 FileBuffers["FileBufferRegistry<br/>Editable file buffers + dirty state"]
                 Monaco["Monaco<br/>Lazy-loaded editor"]
@@ -41,6 +41,7 @@ graph TB
             DevlogRS["devlog.rs<br/>write + commit + push<br/>refuses to clobber hand-written pages"]
             AgentSocketRS["agent_socket.rs<br/>Unix socket in $TMPDIR, 0600<br/>newline-JSON frames<br/>connect-then-unlink stale reclaim"]
             AgentRegistryRS["agent_registry.rs<br/>named commands + app-issued tokens<br/>scope via created_by_session<br/>command_log (actor = what app can prove)"]
+            CompanionMsgRS["companion_messages.rs (ADR 033)<br/>phone sessions + agent messages<br/>50 per session, pruned after 3 days"]
             DiffOrderRS["diff_order.rs (ADR 032)<br/>exact-file-set check<br/>file-set + content fingerprints<br/>freshness: current / content / files"]
             WorkLanesRS["work_lanes + lane_id<br/>named folders for related workstreams<br/>unique names, ON DELETE SET NULL"]
             PullRequestsRS["pull_requests.rs<br/>ADO PR URL parsing<br/>canonical identity for dedup<br/>link storage only, no network"]
@@ -75,10 +76,10 @@ graph TB
     end
 
     subgraph SyncCloud["User's SyncEngine server"]
-        CompanionDoc["Companion Automerge document<br/>laptop: workstreams, lanes, lastSeenAt<br/>requests: signed load / create / session<br/>+ ephemeral presence every 10s"]
+        CompanionDoc["Companion Automerge document<br/>laptop: workstreams, lanes, lastSeenAt<br/>requests: signed load / create / session<br/>sessions: phone-started sessions + agent messages<br/>+ ephemeral presence every 10s"]
     end
 
-    PhoneApp["workstreams-companion<br/>(Android, Tauri 2 + React)<br/>signs requests with the pairing secret"]
+    PhoneApp["workstreams-companion<br/>(Android, Tauri 2 + React)<br/>signs requests with the pairing secret<br/>Messages: reads agent replies"]
 
     subgraph Providers["External-integration boundary"]
         RemoteProv["RemoteRepoProvider trait<br/>GhCli / InMemory impls"]
@@ -97,6 +98,8 @@ graph TB
     PrInboxUI -- "Tauri: configure / snapshot / read state" --> PrInboxRS
     AgentRegistryRS -- "inbox.configure / list / read" --> PrInboxRS
     AgentRegistryRS -- "diff.order.set / get" --> DiffOrderRS
+    AgentRegistryRS -- "companion.send (phone sessions only)" --> CompanionMsgRS
+    CompanionMsgRS -- "companion_sessions / companion_messages" --> AppDB
     RepoExplorer -- "get_diff_order (sort + drift markers)" --> DiffOrderRS
     DiffOrderRS -- "diff_orders table" --> AppDB
     PrInboxRS --> AzureCli

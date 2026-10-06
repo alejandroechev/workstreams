@@ -352,6 +352,30 @@ seconds), and *Offline · last seen HH:MM* otherwise; offline, it sends nothing.
 Each request shows a spinner, then a success or error toast, and *Laptop didn't
 respond* if nothing answered within five minutes.
 
+**Messages back to the phone.** The prompt and create sheets on the phone have
+a **Send me the result** toggle, on by default. It adds a fixed line to the
+prompt asking the agent to use the `companion-reply` skill. Workstreams records
+every Copilot session the phone starts; only those sessions can message the
+phone. The agent sends a `progress` update or its final `result` with:
+
+```sh
+workstreams agent call companion.send kind=result text=@- <<'END'
+## Done
+- …
+END
+```
+
+`text=@-` reads the message from stdin, so markdown and quotes survive the
+shell. The app knows which session is calling, so the agent needs no
+session id, URL or secret. It refuses, and queues nothing, when the session
+wasn't started from the phone, when the companion is off, for any kind but
+`progress` or `result`, and for empty text or more than 20 000 characters; the
+skill then tells the agent to answer in the terminal. On the phone, **Messages**
+lists those sessions newest first with unread counts; a session with a result
+shows **Done**. Sessions and messages are pruned 3 days after the last message,
+and each keeps its latest 50 messages. Install the skill with
+`npm run install-skills` (it copies `skills/` into `~/.copilot/skills/`).
+
 **Security model.**
 
 - Every request is signed with HMAC-SHA256 over its kind, arguments and

@@ -77,7 +77,9 @@ instead of buried behind tabs.
   background, create one, or start a Copilot session with a prompt. Requests
   travel through your own SyncEngine server, are signed with a secret only the
   laptop and the phone hold, expire after five minutes and run at most once
-  ([ADR 033](docs/adrs/033-phone-companion.md)).
+  ([ADR 033](docs/adrs/033-phone-companion.md)). Ask for the result and the
+  agent sends it back to the phone's **Messages** with the `companion-reply`
+  skill (`npm run install-skills`).
 - **Everything persists** — workstreams, tile layouts, terminal scrollback,
   open files and per-tile view state all survive a restart.
 - **Keyboard-driven** — `Alt+<letter>` opens any tile type, `Alt+Arrows` moves
