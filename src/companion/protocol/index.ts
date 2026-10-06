@@ -432,10 +432,32 @@ export async function verifySessions(sessions: PhoneSession[], secret: string): 
   for (const session of sessions) {
     if (!constantTimeEqual(await expected(canonicalSession(session)), session.signature)) continue;
     const messages: SessionMessage[] = [];
+    const seen = new Set<string>();
     for (const message of session.messages) {
-      if (constantTimeEqual(await expected(canonicalMessage(session.id, message)), message.signature)) messages.push(message);
+      // A genuine message replayed (duplicated) by a document writer counts once.
+      if (seen.has(message.id)) continue;
+      if (constantTimeEqual(await expected(canonicalMessage(session.id, message)), message.signature)) {
+        seen.add(message.id);
+        messages.push(message);
+      }
     }
-    verified.push({ ...session, messages });
+    // The laptop never publishes more than the latest MAX_MESSAGES_PER_SESSION.
+    messages.sort((a, b) => a.at - b.at);
+    verified.push({ ...session, messages: messages.slice(-MAX_MESSAGES_PER_SESSION) });
   }
   return verified;
+}
+
+/** When a session last changed: its latest message, or its start. Signed, so trustworthy once verified. */
+export function lastActivity(session: PhoneSession): number {
+  return session.messages.reduce((latest, m) => Math.max(latest, m.at), session.createdAt);
+}
+
+/**
+ * Drops sessions past retention. The laptop prunes them too, but a document
+ * writer could put a genuine old session back; checking against the clock on
+ * every read keeps the 3-day rule even then.
+ */
+export function freshSessions(sessions: PhoneSession[], now: number): PhoneSession[] {
+  return sessions.filter((session) => now - lastActivity(session) <= SESSION_RETENTION_MS);
 }

@@ -9,12 +9,15 @@ export interface StartSessionDeps {
   mount(workstreamId: string): Promise<void>;
   workstream(workstreamId: string): Workstream | undefined;
   defaultCwd(): string;
-  /** Shows the new tile; called only once the session will start. */
+  /** Shows the new tile; called just before the agent is launched. */
   onTileCreated(tile: Tile): void;
+  /** Takes back a tile shown by onTileCreated whose agent failed to launch; republishes. */
+  onTileRemoved(tileId: string): void;
   /** The phone sessions changed: republish them. */
   onRecorded(): void;
   /** Marks the PTY as spawned by us, before spawning. */
   markSpawned(tileId: string): void;
+  unmarkSpawned(tileId: string): void;
   spawn(tileId: string, cwd: string, command: string, prompt: string): Promise<void>;
 }
 
@@ -45,6 +48,8 @@ export async function startPhoneSession(
   const tile = await backend.createTile(workstreamId, "copilot_session", title, createCopilotSessionConfig(title, cwd));
   const order: string[] = JSON.parse(layout.tile_order_json || "[]");
   let recorded = false;
+  let shown = false;
+  let marked = false;
   try {
     await backend.updateLayout(workstreamId, { tile_order_json: JSON.stringify([...order, tile.id]) });
     guard();
@@ -54,16 +59,21 @@ export async function startPhoneSession(
     });
     recorded = true;
     guard();
+    deps.onTileCreated(tile);
+    shown = true;
+    deps.markSpawned(tile.id);
+    marked = true;
+    await deps.spawn(tile.id, cwd, request.command, request.prompt);
   } catch (error) {
-    // Too late to launch: take everything back out, so a later visit doesn't
+    // Refused, or the agent could not start: take everything back out, so
+    // nothing is left with the phone's permission and a later visit doesn't
     // start an agent nobody asked for any more.
+    if (marked) deps.unmarkSpawned(tile.id);
     if (recorded) await backend.companionDeleteSession(tile.id).catch(() => {});
     await backend.updateLayout(workstreamId, { tile_order_json: JSON.stringify(order) }).catch(() => {});
     await backend.deleteTile(tile.id).catch(() => {});
+    if (shown) deps.onTileRemoved(tile.id);
     throw error;
   }
   deps.onRecorded();
-  deps.onTileCreated(tile);
-  deps.markSpawned(tile.id);
-  await deps.spawn(tile.id, cwd, request.command, request.prompt);
 }

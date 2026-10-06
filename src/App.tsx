@@ -64,6 +64,7 @@ import type { LoopSummary } from "./domain/loop";
 import { countUnreadPrs } from "./domain/pr-inbox";
 import { useCompanionService } from "./companion/useCompanionService";
 import { startPhoneSession } from "./companion/start-session";
+import { revokeBeforeRelink } from "./companion/relink";
 import { homeDir } from "@tauri-apps/api/path";
 
 // Wire the persistent Workbench store into the cross-tile dispatcher
@@ -318,6 +319,23 @@ export default function App() {
         : [...current.tileOrder, tile.id];
       next.set(wsId, { ...current, tiles, tileOrder });
       return next;
+    });
+  }, []);
+  /** Takes a tile back out of a loaded workstream's local state. */
+  const removeTileLocally = useCallback((tileId: string) => {
+    setWsStates((prev) => {
+      let changed = false;
+      const next = new Map(prev);
+      for (const [wsId, state] of prev) {
+        if (!state.tiles.some((t) => t.id === tileId)) continue;
+        changed = true;
+        next.set(wsId, {
+          ...state,
+          tiles: state.tiles.filter((t) => t.id !== tileId),
+          tileOrder: state.tileOrder.filter((id) => id !== tileId),
+        });
+      }
+      return changed ? next : prev;
     });
   }, []);
   const [showSessionPicker, setShowSessionPicker] = useState(false);
@@ -2001,13 +2019,18 @@ export default function App() {
           workstream: (id) => workstreamsRef.current.find((w) => w.id === id),
           defaultCwd: defaultRootDir,
           onTileCreated: upsertTileLocally,
+          onTileRemoved: (tileId) => {
+            removeTileLocally(tileId);
+            setCompanionSessionsVersion((v) => v + 1);
+          },
           onRecorded: () => setCompanionSessionsVersion((v) => v + 1),
           markSpawned: (tileId) => { spawnedPtys.current.add(tileId); },
+          unmarkSpawned: (tileId) => { spawnedPtys.current.delete(tileId); },
           spawn: async (tileId, cwd, cmd, text) => { await backend.spawnCopilotSession(tileId, cwd, null, 30, 120, cmd, text); },
         },
         { workstreamId: wsId, command, prompt, guard, requestId, now: Date.now() },
       ),
-    [backend, mountWorkstream, upsertTileLocally],
+    [backend, mountWorkstream, upsertTileLocally, removeTileLocally],
   );
 
   useCompanionService({
@@ -2542,9 +2565,9 @@ export default function App() {
               const tile = tiles.find((t) => t.id === linkingTileId);
               if (tile) {
                 // A tile the phone started now runs a session the phone did
-                // not start: it must not keep the right to message the phone.
-                void backend.companionRevokeSession(linkingTileId).catch((error) =>
-                  console.error("Could not revoke the phone session:", error));
+                // not start: it must lose the right to message the phone
+                // before anything else changes, or not change at all.
+                if (!(await revokeBeforeRelink(backend, linkingTileId, (message) => window.alert(message)))) return;
                 const cfg = JSON.parse(tile.config_json || "{}");
                 cfg.copilot_session_id = session.session_id;
                 cfg.resume_by_id = session.session_id;

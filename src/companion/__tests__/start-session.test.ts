@@ -13,8 +13,10 @@ async function setup(guardFailsAt: "never" | "after-record" | "before-record" = 
     workstream: (id) => (id === ws.id ? ws : undefined),
     defaultCwd: () => "/home",
     onTileCreated: (tile) => events.push(`tile:${tile.id}`),
+    onTileRemoved: (tileId) => events.push(`removed:${tileId}`),
     onRecorded: () => events.push("recorded"),
     markSpawned: (id) => spawned.push(id),
+    unmarkSpawned: (id) => { spawned.splice(spawned.indexOf(id), 1); events.push(`unmarked:${id}`); },
     spawn: vi.fn(async () => {}),
   };
   let recorded = false;
@@ -36,7 +38,7 @@ describe("starting a phone session", () => {
     expect(JSON.parse((await backend.getLayout(ws.id)).tile_order_json)).toContain(tile.id);
     expect(deps.spawn).toHaveBeenCalledWith(tile.id, "/repo/alpha", "copilot", "Do x");
     expect(spawned).toEqual([tile.id]);
-    expect(events).toEqual(["recorded", `tile:${tile.id}`]);
+    expect(events).toEqual([`tile:${tile.id}`, "recorded"]);
   });
 
   it("checks the guard after recording: a refused launch leaves no tile, no layout entry and no phone session", async () => {
@@ -63,4 +65,17 @@ describe("starting a phone session", () => {
     expect((await backend.listTiles(ws.id)).filter((t) => t.tile_type === "copilot_session")).toEqual([]);
     expect(await backend.companionListSessions()).toEqual([]);
   });
+
+  it("cleans up everything when the agent fails to launch, and republishes the removal", async () => {
+    const { backend, ws, deps, guard, spawned, events } = await setup();
+    deps.spawn = vi.fn(async () => { throw new Error("copilot: command not found"); });
+    await expect(startPhoneSession(deps, { workstreamId: ws.id, command: "c", prompt: "p", guard, requestId: "r", now: 1 })).rejects.toThrow("command not found");
+    expect((await backend.listTiles(ws.id)).filter((t) => t.tile_type === "copilot_session")).toEqual([]);
+    expect(JSON.parse((await backend.getLayout(ws.id)).tile_order_json || "[]")).toEqual([]);
+    expect(await backend.companionListSessions()).toEqual([]);
+    expect(spawned).toEqual([]);
+    expect(events.filter((e) => e === "recorded")).toHaveLength(0);
+    expect(events.some((e) => e.startsWith("removed:"))).toBe(true);
+  });
 });
+

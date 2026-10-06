@@ -25,6 +25,8 @@ import {
   canonicalMessage,
   signSession,
   verifySessions,
+  freshSessions,
+  lastActivity,
   withResultRequest,
   sessionTitle,
   readSessions,
@@ -257,4 +259,26 @@ describe("phone sessions and messages", () => {
     expect(SESSION_RETENTION_MS).toBe(3 * 24 * 60 * 60_000);
     expect(MAX_MESSAGES_PER_SESSION).toBe(50);
   });
+
+  it("drops replayed duplicates and keeps at most the latest messages of a session", async () => {
+    const messages = Array.from({ length: MAX_MESSAGES_PER_SESSION + 5 }, (_, i) => ({ id: `m${i}`, kind: "progress" as const, text: `${i}`, at: 1000 + i }));
+    const signed = await signSession(SECRET, { id: "t", workstreamId: "w", workstreamName: "W", requestId: "r", title: "T", createdAt: 1, messages });
+    const replayed = { ...signed, messages: [...signed.messages, signed.messages[54], signed.messages[54], signed.messages[0]] };
+    const [verified] = await verifySessions([replayed], SECRET);
+    expect(verified.messages).toHaveLength(MAX_MESSAGES_PER_SESSION);
+    expect(verified.messages[0].id).toBe("m5");
+    expect(verified.messages[verified.messages.length - 1].id).toBe(`m${MAX_MESSAGES_PER_SESSION + 4}`);
+    expect(new Set(verified.messages.map((m) => m.id)).size).toBe(MAX_MESSAGES_PER_SESSION);
+  });
+
+  it("treats a session as gone once its signed last activity is past retention", async () => {
+    const at = 1_800_000_000_000;
+    const quiet = await signSession(SECRET, { id: "q", workstreamId: "w", workstreamName: "W", requestId: "r", title: "Q", createdAt: at, messages: [] });
+    const busy = await signSession(SECRET, { id: "b", workstreamId: "w", workstreamName: "W", requestId: "r", title: "B", createdAt: at, messages: [{ id: "m", kind: "result", text: "x", at: at + 60_000 }] });
+    expect(lastActivity(busy)).toBe(at + 60_000);
+    expect(freshSessions([quiet, busy], at + SESSION_RETENTION_MS).map((s) => s.id)).toEqual(["q", "b"]);
+    expect(freshSessions([quiet, busy], at + SESSION_RETENTION_MS + 1).map((s) => s.id)).toEqual(["b"]);
+    expect(freshSessions([quiet, busy], at + 60_000 + SESSION_RETENTION_MS + 1)).toEqual([]);
+  });
 });
+
