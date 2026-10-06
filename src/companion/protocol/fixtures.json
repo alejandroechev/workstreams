@@ -54,5 +54,137 @@
     "lane-b": "#cba6f7",
     "f3b0c2d4-1111-4a2b-9c3d-0123456789ab": "#89b4fa",
     "Ünïcødé lane": "#a6e3a1"
-  }
+  },
+  "resultSuffix": "\n\nWhen you are done, use the companion-reply skill to send me the result.",
+  "sessions": {
+    "$comment": "Hand-written. `document` is a published sessions map; `expected` is what readSessions must return: valid sessions newest first, malformed messages dropped, malformed sessions and sessions filed under a key other than their id ignored.",
+    "document": {
+      "tile-old": {
+        "id": "tile-old",
+        "workstreamId": "ws-1",
+        "workstreamName": "Workstreams",
+        "requestId": "r1",
+        "title": "List the files",
+        "createdAt": 1790000000000,
+        "messages": [
+          {
+            "id": "m1",
+            "kind": "progress",
+            "text": "Looking…",
+            "at": 1790000001000
+          },
+          {
+            "id": "m2",
+            "kind": "result",
+            "text": "# Files\n- a\n- b",
+            "at": 1790000002000
+          }
+        ]
+      },
+      "tile-new": {
+        "id": "tile-new",
+        "workstreamId": "ws-2",
+        "workstreamName": "Scratch",
+        "requestId": "r2",
+        "title": "Summarise the PRs",
+        "createdAt": 1790000100000,
+        "messages": [
+          {
+            "id": "m3",
+            "kind": "progress",
+            "text": "ok",
+            "at": 1790000101000
+          },
+          {
+            "id": "bad1",
+            "kind": "question",
+            "text": "?",
+            "at": 1790000102000
+          },
+          {
+            "id": "bad2",
+            "kind": "result",
+            "text": 5,
+            "at": 1790000103000
+          },
+          null
+        ]
+      },
+      "alias": {
+        "id": "other",
+        "workstreamId": "ws-1",
+        "workstreamName": "W",
+        "requestId": "r3",
+        "title": "x",
+        "createdAt": 1790000200000,
+        "messages": []
+      },
+      "broken": {
+        "id": "broken",
+        "workstreamId": "ws-1",
+        "title": "x",
+        "createdAt": "yesterday",
+        "messages": []
+      },
+      "nul": null
+    },
+    "expected": [
+      {
+        "id": "tile-new",
+        "workstreamId": "ws-2",
+        "workstreamName": "Scratch",
+        "requestId": "r2",
+        "title": "Summarise the PRs",
+        "createdAt": 1790000100000,
+        "messages": [
+          {
+            "id": "m3",
+            "kind": "progress",
+            "text": "ok",
+            "at": 1790000101000
+          }
+        ]
+      },
+      {
+        "id": "tile-old",
+        "workstreamId": "ws-1",
+        "workstreamName": "Workstreams",
+        "requestId": "r1",
+        "title": "List the files",
+        "createdAt": 1790000000000,
+        "messages": [
+          {
+            "id": "m1",
+            "kind": "progress",
+            "text": "Looking…",
+            "at": 1790000001000
+          },
+          {
+            "id": "m2",
+            "kind": "result",
+            "text": "# Files\n- a\n- b",
+            "at": 1790000002000
+          }
+        ]
+      }
+    ]
+  },
+  "titles": [
+    [
+      "Summarise the open PRs\nThen list risks",
+      "Summarise the open PRs"
+    ],
+    [
+      "\n\n   Fix the docs  \nmore",
+      "Fix the docs"
+    ],
+    [
+      "   ",
+      "Untitled session"
+    ],
+    [
+      "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    ]
+  ]
 }

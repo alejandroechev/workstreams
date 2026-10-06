@@ -71,6 +71,12 @@ export interface CompanionDocument {
     lastSeenAt: number | null;
   };
   requests: Record<string, CompanionRequest>;
+  /**
+   * Sessions the phone started, with what their agents sent back. Optional
+   * and additive at schema version 1: older phones ignore it. Written only
+   * by the laptop.
+   */
+  sessions?: Record<string, PhoneSession>;
 }
 
 /** Ephemeral presence message (never stored in the document). */
@@ -286,4 +292,98 @@ export function decodePairing(text: string): Pairing | null {
   } catch {
     return null;
   }
+}
+
+// ── Phone sessions and messages ────────────────────────────────────────
+
+export const MAX_MESSAGE_LENGTH = 20_000;
+export const MAX_MESSAGES_PER_SESSION = 50;
+/** A session goes this long after its last message (or its start) before it is pruned. */
+export const SESSION_RETENTION_MS = 3 * 24 * 60 * 60_000;
+const MAX_TITLE_LENGTH = 120;
+
+export type MessageKind = "progress" | "result";
+
+export interface SessionMessage {
+  id: string;
+  kind: MessageKind;
+  /** Markdown. Render it as text: never as HTML. */
+  text: string;
+  /** ms epoch, laptop clock. */
+  at: number;
+}
+
+/** A Copilot session started from the phone, keyed by its tile id. */
+export interface PhoneSession {
+  id: string;
+  workstreamId: string;
+  workstreamName: string;
+  requestId: string;
+  title: string;
+  createdAt: number;
+  messages: SessionMessage[];
+}
+
+/** Appended to a prompt when the phone asks for the result. */
+export const RESULT_SUFFIX = "\n\nWhen you are done, use the companion-reply skill to send me the result.";
+
+export function withResultRequest(prompt: string, askForResult: boolean): string {
+  return askForResult ? prompt.trimEnd() + RESULT_SUFFIX : prompt;
+}
+
+export function sessionTitle(prompt: string): string {
+  const line = prompt.split("\n").map((l) => l.trim()).find((l) => l !== "");
+  return line ? line.slice(0, MAX_TITLE_LENGTH) : "Untitled session";
+}
+
+const isString = (value: unknown): value is string => typeof value === "string";
+const isTime = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
+
+function parseMessage(raw: unknown): SessionMessage | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const m = raw as Record<string, unknown>;
+  if (!isString(m.id) || (m.kind !== "progress" && m.kind !== "result") || !isString(m.text) || !isTime(m.at)) return null;
+  if (m.text.length > MAX_MESSAGE_LENGTH) return null;
+  return { id: m.id, kind: m.kind, text: m.text, at: m.at };
+}
+
+function parseSession(raw: unknown, key: string): PhoneSession | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const s = raw as Record<string, unknown>;
+  if (s.id !== key || !isString(s.workstreamId) || !isString(s.workstreamName) || !isString(s.requestId)
+    || !isString(s.title) || !isTime(s.createdAt) || !Array.isArray(s.messages)) return null;
+  const messages = s.messages.map(parseMessage).filter((m): m is SessionMessage => m !== null);
+  return {
+    id: key, workstreamId: s.workstreamId, workstreamName: s.workstreamName, requestId: s.requestId,
+    title: s.title, createdAt: s.createdAt, messages,
+  };
+}
+
+/**
+ * The published sessions, newest first. Nothing in the document is trusted:
+ * malformed sessions and messages are dropped, and a document from another
+ * version yields nothing.
+ */
+export function readSessions(doc: CompanionDocument): PhoneSession[] {
+  if (!isKnownSchema(doc)) return [];
+  const raw = doc.sessions;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return [];
+  return Object.entries(raw)
+    .map(([key, value]) => parseSession(value, key))
+    .filter((s): s is PhoneSession => s !== null)
+    .sort((a, b) => b.createdAt - a.createdAt);
+}
+
+export function sessionIsDone(session: PhoneSession): boolean {
+  return session.messages.some((m) => m.kind === "result");
+}
+
+export type MessageCheck = { ok: true } | { ok: false; error: string };
+
+/** What the laptop checks before storing a message an agent sent. */
+export function checkMessage(kind: string, text: string): MessageCheck {
+  if (kind !== "progress" && kind !== "result") return { ok: false, error: 'The kind must be "progress" or "result".' };
+  if (text.trim() === "") return { ok: false, error: "The message is empty." };
+  if (text.length > MAX_MESSAGE_LENGTH) return { ok: false, error: `The message is longer than ${MAX_MESSAGE_LENGTH} characters.` };
+  return { ok: true };
 }

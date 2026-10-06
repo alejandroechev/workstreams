@@ -125,6 +125,31 @@ apps derive them from the lane id with the shared `laneColor()`.
   tile running `resolveCopilotCommand(project)` (the repo's command if set,
   else the global setting) with `-i <prompt>`.
 
+### Messages from phone-started sessions
+
+An agent running in a session the phone started can send messages back to the phone. One-way, agent →
+phone; the phone cannot reply.
+
+- **Asking for a result.** The phone's prompt and create sheets have a "Send me the result" toggle, on by
+  default. It appends the fixed `RESULT_SUFFIX` from the shared protocol, which names the
+  `companion-reply` skill. The laptop never rewrites prompts.
+- **Phone sessions.** When the executor creates a Copilot tile for a phone request (a session, or a
+  create with a prompt), Workstreams records `{ tileId, workstreamId, requestId, prompt, createdAt }` in
+  SQLite (`companion_sessions`). Only these tiles may send. Nothing else records one.
+- **Sending.** The agent runs `workstreams agent call companion.send kind=<progress|result> text=…` over
+  the existing local agent channel. The app knows the calling tile from the channel's token; the agent
+  never names its session and holds no document URL, token or secret. Workstreams refuses (and queues
+  nothing) when the tile is not a phone session, when the companion is off, for an unknown kind, an empty
+  text or more than 20 000 characters. Accepted messages are stored in SQLite (`companion_messages`).
+- **Publishing.** The laptop publishes sessions and their messages into an optional top-level `sessions`
+  map (keyed by tile id, title = the prompt's first line). It is additive at `schemaVersion` 1: older
+  phones never read it. As everywhere else, the laptop is its only writer and writes nothing into a
+  document from a newer version.
+- **Retention.** A session is pruned 3 days after its last message (or its start), and keeps at most its
+  latest 50 messages; pruning runs in SQLite and the published copy follows.
+- **On the phone.** A Messages view lists the sessions newest first, with unread counts; read state lives
+  only on the phone. Message text is markdown rendered as text, never as HTML.
+
 ### Presence
 
 Workstreams broadcasts an ephemeral `{ kind: "presence", sentAt }` every ~10 s.

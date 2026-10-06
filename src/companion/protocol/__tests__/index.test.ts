@@ -18,6 +18,20 @@ import {
   PRESENCE_TIMEOUT_MS,
   type CompanionRequest,
 } from "../index";
+import {
+  RESULT_SUFFIX,
+  emptyDocument,
+  withResultRequest,
+  sessionTitle,
+  readSessions,
+  sessionIsDone,
+  checkMessage,
+  MAX_MESSAGE_LENGTH,
+  MAX_MESSAGES_PER_SESSION,
+  SESSION_RETENTION_MS,
+  type CompanionDocument,
+  type PhoneSession,
+} from "..";
 import fixtures from "../fixtures.json";
 
 const SECRET = fixtures.secret;
@@ -178,5 +192,49 @@ describe("pairing", () => {
     ]) {
       expect(decodePairing(bad)).toBeNull();
     }
+  });
+});
+
+describe("phone sessions and messages", () => {
+  it("appends the fixed result request only when asked", () => {
+    expect(RESULT_SUFFIX).toBe(fixtures.resultSuffix);
+    expect(withResultRequest("Do x", true)).toBe("Do x" + fixtures.resultSuffix);
+    expect(withResultRequest("Do x", false)).toBe("Do x");
+    expect(withResultRequest("Do x  \n\n", true)).toBe("Do x" + fixtures.resultSuffix);
+  });
+
+  it("titles a session with the first non-empty line of its prompt", () => {
+    for (const [prompt, title] of fixtures.titles) expect(sessionTitle(prompt)).toBe(title);
+  });
+
+  it("reads published sessions defensively, newest first", () => {
+    const doc = { ...emptyDocument(), sessions: fixtures.sessions.document } as unknown as CompanionDocument;
+    expect(readSessions(doc)).toEqual(fixtures.sessions.expected);
+  });
+
+  it("reads nothing from a document without sessions, or from another version", () => {
+    expect(readSessions(emptyDocument())).toEqual([]);
+    const doc = { ...emptyDocument(), schemaVersion: 2, sessions: fixtures.sessions.document } as unknown as CompanionDocument;
+    expect(readSessions(doc)).toEqual([]);
+    expect(readSessions({ ...emptyDocument(), sessions: "nope" } as unknown as CompanionDocument)).toEqual([]);
+  });
+
+  it("a session is done once it has a result", () => {
+    const [newer, older] = fixtures.sessions.expected as PhoneSession[];
+    expect(sessionIsDone(older)).toBe(true);
+    expect(sessionIsDone(newer)).toBe(false);
+  });
+
+  it("validates a message an agent wants to send", () => {
+    expect(checkMessage("result", "fine")).toEqual({ ok: true });
+    expect(checkMessage("progress", "x".repeat(MAX_MESSAGE_LENGTH))).toEqual({ ok: true });
+    expect(checkMessage("progress", "x".repeat(MAX_MESSAGE_LENGTH + 1))).toEqual({ ok: false, error: `The message is longer than ${MAX_MESSAGE_LENGTH} characters.` });
+    expect(checkMessage("question", "x")).toEqual({ ok: false, error: 'The kind must be "progress" or "result".' });
+    expect(checkMessage("result", "   ")).toEqual({ ok: false, error: "The message is empty." });
+  });
+
+  it("states the retention rules", () => {
+    expect(SESSION_RETENTION_MS).toBe(3 * 24 * 60 * 60_000);
+    expect(MAX_MESSAGES_PER_SESSION).toBe(50);
   });
 });
