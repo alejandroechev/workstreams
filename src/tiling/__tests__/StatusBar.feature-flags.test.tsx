@@ -36,17 +36,18 @@ function openAddTileMenu() {
 }
 
 describe("StatusBar feature-flag gating", () => {
-  it("hides the Plan menu entry when its flag is off", () => {
+  it("hides flag-gated entries when the flags are off, but always offers Plan", () => {
     _setFeatureFlagOverrideForTests(false);
     render(<StatusBar {...commonProps()} />);
     openAddTileMenu();
-    expect(screen.queryByTestId("add-tile-item-plan")).toBeNull();
+    // Plan graduated from its flag: the Grill tab is the way grills are answered.
+    expect(screen.getByTestId("add-tile-item-plan")).toBeTruthy();
     // Sanity: other entries still render.
     expect(screen.getByTestId("add-tile-item-explorer")).toBeTruthy();
     expect(screen.getByTestId("add-tile-item-session")).toBeTruthy();
     // Code Review is not flag-gated.
     expect(screen.getByTestId("add-tile-item-code-review")).toBeTruthy();
-    // The walkthrough ships disabled, like Plan.
+    // The walkthrough still ships disabled.
     expect(screen.queryByTestId("add-tile-item-walkthrough")).toBeNull();
   });
 
@@ -57,7 +58,7 @@ describe("StatusBar feature-flag gating", () => {
     expect(screen.getByTestId("add-tile-item-walkthrough")).toBeTruthy();
   });
 
-  it("shows the Plan menu entry when the flag is on", () => {
+  it("shows the Plan menu entry with every flag on too", () => {
     _setFeatureFlagOverrideForTests(true);
     render(<StatusBar {...commonProps()} />);
     openAddTileMenu();

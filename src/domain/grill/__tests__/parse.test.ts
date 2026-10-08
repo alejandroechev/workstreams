@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseGrill, editableRound, type GrillQuestion } from "../parse";
+import { parseGrill, editableRound, writableRounds, type GrillQuestion } from "../parse";
 import newFormat from "./fixtures/new-format.md?raw";
 import oldFormat from "./fixtures/old-format.md?raw";
 import twoRounds from "./fixtures/two-rounds.md?raw";
@@ -57,6 +57,11 @@ describe("parsing a grill", () => {
 
   it("edits only the latest round that still has unanswered questions", () => {
     expect(editableRound(grill)).toBe(2);
+    // Round 1 still has a blank, so it stays writable; a fully answered round would not.
+    expect(writableRounds(grill)).toEqual([1, 2]);
+    const round1Done = newFormat.replace("easy to diff.\n\n**Answer:**\n", "easy to diff.\n\n**Answer:** x\n");
+    expect(writableRounds(parseGrill(round1Done))).toEqual([2]);
+    expect(writableRounds(parseGrill(`${round1Done}\n## Round 3\n\n### A1. Later\n\n**Answer:**\n`))).toEqual([2, 3]);
     expect(editableRound(parseGrill(newFormat.replace(/\*\*Answer:\*\*\n\n---\n\n### A3/, "**Answer:** x\n\n---\n\n### A3")))).toBe(2);
   });
 });

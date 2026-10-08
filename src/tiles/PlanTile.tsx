@@ -7,6 +7,7 @@ import { MermaidDiagram } from "../ui/MermaidDiagram";
 import { FileEditorView, type MarkdownViewState } from "../files/FileEditorView";
 import type { BufferSnapshot } from "../files/FileBufferRegistry";
 import { MarkdownModeSelector } from "../ui/components/MarkdownModeSelector";
+import { GrillAnswerView } from "./grill/GrillAnswerView";
 import { useBackend } from "../backend/context";
 import { buildTodoDepsMermaid } from "../domain/todo-deps-mermaid";
 import { parseViewState } from "../domain/tile-view-state";
@@ -338,6 +339,8 @@ export default function PlanTile({ linkedSessionIds, configJson, onConfigChange,
   const [planMd, setPlanMd] = useState<string | null>(null);
   const [editorSnapshot, setEditorSnapshot] = useState<BufferSnapshot | null>(null);
   const [editorViewState, setEditorViewState] = useState<MarkdownViewState | null>(null);
+  // The Grill tab opens in Answer mode (ADR 034); Edit/Preview/Slides are the file itself.
+  const [grillAnswering, setGrillAnswering] = useState(true);
   const [todos, setTodos] = useState<SessionTodo[]>([]);
   const [acceptanceTests, setAcceptanceTests] = useState<AcceptanceTest[]>([]);
   /** The plan whose tests are loaded, so a refresh does not need `selected`,
@@ -677,10 +680,19 @@ export default function PlanTile({ linkedSessionIds, configJson, onConfigChange,
                             grill-me.md{editorSnapshot?.dirty ? "*" : ""}
                           </span>
                           {editorViewState && (
-                            <MarkdownModeSelector viewState={editorViewState} testIdPrefix="grill" />
+                            <MarkdownModeSelector
+                              viewState={editorViewState}
+                              testIdPrefix="grill"
+                              answer={{ active: grillAnswering, setActive: setGrillAnswering }}
+                            />
                           )}
                         </div>
-                        <div style={{ flex: 1, minHeight: 0 }}>
+                        {grillAnswering && (
+                          <div style={{ flex: 1, minHeight: 0 }}>
+                            <GrillAnswerView key={selected.grillMePath} path={selected.grillMePath} />
+                          </div>
+                        )}
+                        <div style={{ flex: 1, minHeight: 0, display: grillAnswering ? "none" : undefined }}>
                           <FileEditorView
                             key={selected.grillMePath}
                             path={selected.grillMePath}

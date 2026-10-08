@@ -31,7 +31,7 @@ combos are typed with Option.
 | `Alt+R` | Add a Repo Explorer tile to browse and open project files | `addTile (file_explorer)` |
 | `Alt+M` | Add a session metadata tile showing details of the active session | `addTile (session_meta)` |
 | `Alt+B` | Add a workbench tile for scratch notes and quick actions | `addTile (workbench)` |
-| `Alt+P` | Add a plan tile to track the steps of the current piece of work _(feature-flagged: `plan-tile`)_ | `addTile (plan)` |
+| `Alt+P` | Add a plan tile to track the steps of the current piece of work | `addTile (plan)` |
 | `Alt+A` | Add a code review tile to inspect pending changes | `addTile (code_review)` |
 | `Alt+D` | Add a debug walkthrough tile to step through a recorded trace _(feature-flagged: `debug-walkthrough`)_ | `addTile (debug_walkthrough)` |
 | `Alt+L` | Add a loop control tile to drive an automated agent loop | `addTile (loop_control)` |

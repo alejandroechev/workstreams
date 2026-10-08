@@ -18,10 +18,9 @@
  * we keep one source of truth.
  */
 
-export type FeatureId = "plan-tile" | "debug-walkthrough" | "tasks";
+export type FeatureId = "debug-walkthrough" | "tasks";
 
 export const FEATURE_IDS: readonly FeatureId[] = [
-  "plan-tile",
   "debug-walkthrough",
   "tasks",
 ] as const;
@@ -45,19 +44,13 @@ interface FeatureDescriptor {
 }
 
 const FEATURES: Record<FeatureId, FeatureDescriptor> = {
-  "plan-tile": {
-    id: "plan-tile",
-    label: "Plan",
-    requires:
-      "Requires the Copilot CLI plan/todo subsystem with the discipline-guardian extension. Not enabled in this build.",
-  },
   "debug-walkthrough": {
     id: "debug-walkthrough",
     label: "Code Walkthrough",
     requires:
       "Requires a recorded Rust test trace. Recording uses lldb-dap on macOS/Linux or CodeLLDB on Windows. Experimental; not enabled in this build.",
   },
-  // Unlike the two above, this one is not hidden because it needs something
+  // Unlike the one above, this one is not hidden because it needs something
   // the build lacks -- it works. It is hidden because tracking work in it made
   // work harder to track, and the free-form text file won. Flagged off rather
   // than deleted: `task_events.task_id` is ON DELETE CASCADE, so removing the

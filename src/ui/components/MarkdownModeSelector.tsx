@@ -1,4 +1,4 @@
-import { PencilSquareIcon, EyeIcon, PresentationChartBarIcon } from "@heroicons/react/24/outline";
+import { PencilSquareIcon, EyeIcon, PresentationChartBarIcon, ChatBubbleLeftRightIcon } from "@heroicons/react/24/outline";
 import type { CSSProperties } from "react";
 import type { MarkdownViewState, ViewMode } from "../../files/FileEditorView";
 
@@ -8,20 +8,27 @@ import type { MarkdownViewState, ViewMode } from "../../files/FileEditorView";
  * buttons so a user can jump straight to any mode in one click. The Slides
  * segment is only shown when the file can be presented (markdown).
  *
- * Rendered by the three markdown-hosting tiles (Repo Explorer, Workbench,
- * Session Meta); `testIdPrefix` keeps their data-testids unique.
+ * Rendered by the markdown-hosting tiles (Repo Explorer, Workbench,
+ * Session Meta, Plan); `testIdPrefix` keeps their data-testids unique.
+ * `answer` adds a leading Answer segment (the Plan tile's grill, ADR 034);
+ * while it is active none of the file's own modes is.
  */
 export function MarkdownModeSelector({
   viewState,
   testIdPrefix,
+  answer,
 }: {
   viewState: MarkdownViewState;
   testIdPrefix: string;
+  answer?: { active: boolean; setActive(active: boolean): void };
 }) {
-  const segments: { id: ViewMode; label: string; icon: typeof PencilSquareIcon; title: string }[] = [
+  const segments: { id: ViewMode | "answer"; label: string; icon: typeof PencilSquareIcon; title: string }[] = [
     { id: "edit", label: "Edit", icon: PencilSquareIcon, title: "Edit (raw source)" },
     { id: "preview", label: "Preview", icon: EyeIcon, title: "Preview (rendered)" },
   ];
+  if (answer) {
+    segments.unshift({ id: "answer", label: "Answer", icon: ChatBubbleLeftRightIcon, title: "Answer the questions one at a time" });
+  }
   if (viewState.canPresent) {
     segments.push({ id: "present", label: "Slides", icon: PresentationChartBarIcon, title: "Present as slides" });
   }
@@ -34,7 +41,7 @@ export function MarkdownModeSelector({
       style={groupStyle}
     >
       {segments.map(({ id, label, icon: Icon, title }) => {
-        const active = viewState.mode === id;
+        const active = id === "answer" ? !!answer?.active : !answer?.active && viewState.mode === id;
         // Map the present segment to the legacy testid suffix so existing
         // callers/tests keep working; edit/preview get explicit suffixes.
         const suffix = id === "present" ? "present-toggle" : `mode-${id}`;
@@ -45,7 +52,11 @@ export function MarkdownModeSelector({
             role="radio"
             aria-checked={active}
             data-testid={`${testIdPrefix}-${suffix}`}
-            onClick={() => viewState.setMode(id)}
+            onClick={() => {
+              if (id === "answer") { answer?.setActive(true); return; }
+              answer?.setActive(false);
+              viewState.setMode(id);
+            }}
             title={title}
             style={{
               ...segmentStyle,

@@ -227,7 +227,6 @@ export const APP_KEY_BINDINGS: readonly KeyBinding[] = [
     action: { type: "addTile", tileType: "plan" },
     tileCreation: true,
     menuKey: "plan",
-    featureFlag: "plan-tile",
   },
   {
     key: "a",

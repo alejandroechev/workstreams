@@ -49,4 +49,22 @@ describe("MarkdownModeSelector", () => {
     expect(screen.getByTestId("t-present-toggle")).toHaveAttribute("aria-checked", "true");
     expect(screen.getByTestId("t-mode-preview")).toHaveAttribute("aria-checked", "false");
   });
+
+  it("leads with an Answer segment that takes over from the file's modes", () => {
+    const vs = makeViewState({ mode: "preview" });
+    const answer = { active: true, setActive: vi.fn() };
+    const { rerender } = render(<MarkdownModeSelector viewState={vs} testIdPrefix="t" answer={answer} />);
+    const labels = [...screen.getByTestId("t-mode-selector").querySelectorAll("button")].map((b) => b.textContent);
+    expect(labels).toEqual(["Answer", "Edit", "Preview", "Slides"]);
+    expect(screen.getByTestId("t-mode-answer")).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByTestId("t-mode-preview")).toHaveAttribute("aria-checked", "false");
+    fireEvent.click(screen.getByTestId("t-mode-edit"));
+    expect(answer.setActive).toHaveBeenCalledWith(false);
+    expect(vs.setMode).toHaveBeenCalledWith("edit");
+    rerender(<MarkdownModeSelector viewState={vs} testIdPrefix="t" answer={{ ...answer, active: false }} />);
+    expect(screen.getByTestId("t-mode-preview")).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(screen.getByTestId("t-mode-answer"));
+    expect(answer.setActive).toHaveBeenCalledWith(true);
+    expect(vs.setMode).toHaveBeenCalledTimes(1);
+  });
 });

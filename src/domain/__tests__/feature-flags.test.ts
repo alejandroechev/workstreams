@@ -11,7 +11,8 @@ afterEach(() => _setFeatureFlagOverrideForTests(null));
 
 describe("feature-flags", () => {
   it("exposes a stable id list", () => {
-    expect(FEATURE_IDS).toContain("plan-tile");
+    expect(FEATURE_IDS).not.toContain("plan-tile");
+    expect(FEATURE_IDS).toContain("debug-walkthrough");
   });
 
   it("returns a stable boolean for every optional flag at module load", () => {
@@ -29,12 +30,12 @@ describe("feature-flags", () => {
 
   it("test override flips every flag to true", () => {
     _setFeatureFlagOverrideForTests(true);
-    expect(isFeatureEnabled("plan-tile")).toBe(true);
+    expect(isFeatureEnabled("debug-walkthrough")).toBe(true);
   });
 
   it("test override flips every flag to false explicitly", () => {
     _setFeatureFlagOverrideForTests(false);
-    expect(isFeatureEnabled("plan-tile")).toBe(false);
+    expect(isFeatureEnabled("debug-walkthrough")).toBe(false);
   });
 
   it("featureDescriptor returns label + requires for every id", () => {
@@ -74,7 +75,7 @@ describe("tasks sunset flag", () => {
   it("is not governed by the master toggle", () => {
     _setFeatureFlagOverrideForTests(null);
     expect(isSunsetFeature("tasks")).toBe(true);
-    expect(isSunsetFeature("plan-tile")).toBe(false);
+    expect(isSunsetFeature("debug-walkthrough")).toBe(false);
   });
 
   it("still honours the test override, so suites can exercise the board", () => {

@@ -212,7 +212,17 @@ function collect(lines: string[], start: number, end: number, label: RegExp): st
   return [first, ...lines.slice(start + 1, end)].join("\n").trim();
 }
 
-/** The round the UI may write to: the latest one with an unanswered question, else the latest. */
+/**
+ * The rounds that may still be written: every round with an unanswered
+ * question, and the latest round. A finished earlier round is read-only.
+ */
+export function writableRounds(grill: Grill): number[] {
+  const open = new Set(grill.questions.filter((q) => q.answer === "" && q.lines.answer !== null).map((q) => q.round));
+  if (grill.rounds.length > 0) open.add(Math.max(...grill.rounds.map((r) => r.number)));
+  return [...open].sort((a, b) => a - b);
+}
+
+/** The round the UI opens on: the latest one with an unanswered question, else the latest. */
 export function editableRound(grill: Grill): number {
   const open = grill.questions.filter((q) => q.answer === "" && q.lines.answer !== null).map((q) => q.round);
   if (open.length > 0) return Math.max(...open);

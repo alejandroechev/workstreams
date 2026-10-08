@@ -1,4 +1,4 @@
-import { editableRound, parseGrill, type Grill, type GrillQuestion, type Importance } from "./parse";
+import { editableRound, parseGrill, writableRounds, type Grill, type GrillQuestion, type Importance } from "./parse";
 
 /**
  * Writers for grill-me.md (ADR 034). Each one changes exactly one slot of one
@@ -17,8 +17,7 @@ function lines(text: string): string[] {
 }
 
 function locate(grill: Grill, round: number, id: string): { ok: true; question: GrillQuestion } | { ok: false; error: string } {
-  const current = editableRound(grill);
-  if (round !== current) return { ok: false, error: `Only the current round (Round ${current}) can be answered.` };
+  if (!writableRounds(grill).includes(round)) return { ok: false, error: `Round ${round} is finished and read-only.` };
   const matches = grill.questions.filter((q) => q.round === round && q.id === id);
   if (matches.length === 0) return { ok: false, error: `Question ${id} is not in Round ${round}.` };
   if (matches.length > 1) return { ok: false, error: `Round ${round} has more than one ${id}; edit the file directly.` };
@@ -72,13 +71,14 @@ export type FinishResult =
   | { ok: false; error: string; blocking?: string[] };
 
 /**
- * Ends the round being answered: every unanswered question records that it
+ * Ends a round (by default the one being answered): every unanswered question records that it
  * takes the recommendation by default. Refused while a Blocking question is
  * unanswered. With `preview`, returns the summary without changing the text.
  */
-export function finishRound(text: string, options: { preview?: boolean } = {}): FinishResult {
+export function finishRound(text: string, options: { preview?: boolean; round?: number } = {}): FinishResult {
   const grill = parseGrill(text);
-  const round = editableRound(grill);
+  const round = options.round ?? editableRound(grill);
+  if (!writableRounds(grill).includes(round)) return { ok: false, error: `Round ${round} is finished and read-only.` };
   const open = grill.questions.filter((q) => q.round === round && q.answer === "" && q.lines.answer !== null);
   const blocking = open.filter((q) => q.importance === "Blocking").map((q) => q.id);
   if (blocking.length > 0) return { ok: false, error: `Answer the Blocking questions first: ${blocking.join(", ")}.`, blocking };

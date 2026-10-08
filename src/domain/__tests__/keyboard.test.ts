@@ -368,12 +368,12 @@ describe("APP_KEY_BINDINGS registry", () => {
     }
   });
 
-  it("records the feature flags gating the Alt+P and Alt+D menu entries", () => {
+  it("records the feature flag gating the Alt+D menu entry, and none for Alt+P", () => {
     const byCombo = new Map(APP_KEY_BINDINGS.map((b) => [b.combo, b]));
-    expect(byCombo.get("Alt+P")?.featureFlag).toBe("plan-tile");
+    expect(byCombo.get("Alt+P")?.featureFlag).toBeUndefined();
     expect(byCombo.get("Alt+D")?.featureFlag).toBe("debug-walkthrough");
     for (const binding of APP_KEY_BINDINGS) {
-      if (binding.combo !== "Alt+P" && binding.combo !== "Alt+D") {
+      if (binding.combo !== "Alt+D") {
         expect(binding.featureFlag).toBeUndefined();
       }
     }

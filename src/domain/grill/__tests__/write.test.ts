@@ -40,9 +40,19 @@ describe("writing an answer", () => {
     expect(ok(setAnswer(filled, 2, "A1", ""))).toBe(newFormat);
   });
 
-  it("refuses to touch a round that is not the one being answered", () => {
-    expect(setAnswer(newFormat, 1, "A2", "x")).toEqual({ ok: false, error: "Only the current round (Round 2) can be answered." });
+  it("refuses to touch a finished earlier round", () => {
+    const finished = ok(setAnswer(newFormat, 1, "A2", "x"));
+    expect(setAnswer(finished, 1, "A1", "y")).toEqual({ ok: false, error: "Round 1 is finished and read-only." });
+    expect(finishRound(finished, { round: 1 })).toEqual({ ok: false, error: "Round 1 is finished and read-only." });
     expect(setAnswer(newFormat, 2, "Q9", "x")).toEqual({ ok: false, error: "Question Q9 is not in Round 2." });
+  });
+
+  it("keeps an open round writable after the agent appends another", () => {
+    const appended = `${newFormat}\n## Round 3\n\n### A1. Later\n\n**Answer:**\n`;
+    const after = ok(setAnswer(appended, 2, "A2", "still mine"));
+    expect(answerOf(after, 2, "A2")).toBe("still mine");
+    expect(after.endsWith("## Round 3\n\n### A1. Later\n\n**Answer:**\n")).toBe(true);
+    expect(finishRound(appended, { round: 3, preview: true })).toEqual({ ok: true, text: appended, defaulted: ["A1"] });
   });
 
   it("refuses reco on a Blocking question", () => {

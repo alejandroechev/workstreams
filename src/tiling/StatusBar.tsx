@@ -89,7 +89,7 @@ export default function StatusBar({
     { key: "explorer", label: "Repo Explorer", icon: "folder", shortcut: shortcutForMenuKey("explorer"), onSelect: onAddExplorer },
     { key: "meta", label: "Session Meta", icon: "info", shortcut: shortcutForMenuKey("meta"), onSelect: onAddSessionMeta },
     { key: "workbench", label: "Workbench", icon: "beaker", shortcut: shortcutForMenuKey("workbench"), onSelect: onAddWorkbench },
-    { key: "plan", label: "Plan", icon: "plan", shortcut: shortcutForMenuKey("plan"), onSelect: onAddPlan, gated: !isFeatureEnabled("plan-tile") },
+    { key: "plan", label: "Plan", icon: "plan", shortcut: shortcutForMenuKey("plan"), onSelect: onAddPlan },
     { key: "code-review", label: "Code Review", icon: "code", shortcut: shortcutForMenuKey("code-review"), onSelect: onAddCodeReview },
     { key: "walkthrough", label: "Code Walkthrough", icon: "code", shortcut: shortcutForMenuKey("walkthrough"), onSelect: onAddWalkthrough, gated: !isFeatureEnabled("debug-walkthrough") },
     { key: "loop", label: "Goal Loop", icon: "loop", shortcut: shortcutForMenuKey("loop"), onSelect: onAddLoop },

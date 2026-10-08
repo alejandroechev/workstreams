@@ -14,22 +14,31 @@ vi.mock("../../ui/MarkdownView", () => ({
   MarkdownView: ({ children }: { children: string }) => <div data-testid="md">{children}</div>,
 }));
 const fileEditorMock = vi.hoisted(() => vi.fn());
-vi.mock("../../files/FileEditorView", () => ({
+vi.mock("../../files/FileEditorView", async () => {
+  const React = await vi.importActual<typeof import("react")>("react");
+  return {
   // Stub the real Monaco-backed editor: capture props + render the markdown
   // preview so the grill tab is exercisable in jsdom. Save UX (Ctrl+S/autosave)
   // is FileEditorView's own concern, covered by its tests.
   FileEditorView: (props: {
     path: string;
     renderMarkdownPreview?: (content: string) => React.ReactNode;
+    onViewStateChange?: (state: unknown) => void;
   }) => {
     fileEditorMock(props);
+    const [mode, setMode] = React.useState("preview");
+    const { onViewStateChange } = props;
+    React.useEffect(() => {
+      onViewStateChange?.({ mode, setMode, canPresent: true });
+    }, [mode, onViewStateChange]);
     return (
-      <div data-testid="file-editor-view" data-path={props.path}>
+      <div data-testid="file-editor-view" data-path={props.path} data-mode={mode}>
         {props.renderMarkdownPreview?.("# grill preview")}
       </div>
     );
   },
-}));
+  };
+});
 
 function feat(name: string, overrides: Partial<FeatureSummary> = {}): FeatureSummary {
   return {
@@ -206,6 +215,31 @@ describe("PlanTile shell", () => {
     expect(screen.queryByTestId("grill-edit")).toBeNull();
     expect(screen.queryByTestId("grill-save")).toBeNull();
     expect(screen.queryByTestId("grill-editor")).toBeNull();
+  });
+
+  it("opens the Grill tab in Answer mode, with Edit/Preview/Slides one click away", async () => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    vi.mocked(invoke).mockImplementation(async (cmd: string) =>
+      cmd === "read_text_file"
+        ? { content: "### A1. Pick one\n\n**Answer:**\n", hash_hex: "h", line_ending: "lf", has_trailing_newline: true }
+        : "# plan body");
+    setup({ features: [feat("alpha")], currentPlanId: "alpha-plan" });
+    await waitFor(() => expect(screen.getByTestId("plan-tab-grill")).toBeTruthy());
+    fireEvent.click(screen.getByTestId("plan-tab-grill"));
+    await waitFor(() => expect(screen.getByTestId("grill-answer-view")).toBeTruthy());
+    const segments = screen.getByTestId("grill-mode-selector").querySelectorAll("button");
+    expect([...segments].map((b) => b.textContent)).toEqual(["Answer", "Edit", "Preview", "Slides"]);
+    expect(screen.getByTestId("grill-mode-answer").getAttribute("aria-checked")).toBe("true");
+    expect(screen.getByTestId("grill-mode-preview").getAttribute("aria-checked")).toBe("false");
+    expect((screen.getByTestId("file-editor-view").parentElement as HTMLElement).style.display).toBe("none");
+
+    fireEvent.click(screen.getByTestId("grill-mode-edit"));
+    expect(screen.queryByTestId("grill-answer-view")).toBeNull();
+    expect(screen.getByTestId("file-editor-view").getAttribute("data-mode")).toBe("edit");
+    expect((screen.getByTestId("file-editor-view").parentElement as HTMLElement).style.display).toBe("");
+
+    fireEvent.click(screen.getByTestId("grill-mode-answer"));
+    await waitFor(() => expect(screen.getByTestId("grill-answer-view")).toBeTruthy());
   });
 
   it("shows a placeholder when the feature has no grill-me.md", async () => {

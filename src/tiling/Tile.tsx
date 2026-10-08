@@ -274,10 +274,7 @@ function TileWrapperImpl({
       );
       break;
     case "plan":
-      if (!isFeatureEnabled("plan-tile")) {
-        const d = featureDescriptor("plan-tile");
-        content = <DisabledFeaturePlaceholder label={d.label} requires={d.requires} />;
-      } else {
+      {
         content = (
           <PlanTile
             tileId={tile.id}
