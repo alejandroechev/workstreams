@@ -16,9 +16,9 @@
  * Generated content is written between sentinel markers, so any hand-written
  * prose outside them survives regeneration.
  *
- * Feature-flagged bindings (Alt+P behind `plan-tile`, Alt+D behind
- * `debug-walkthrough`) are rendered with their flag name rather than omitted or
- * advertised as unconditionally available, per ADR 010.
+ * Feature-flagged bindings (Alt+D behind `debug-walkthrough`) are rendered
+ * with their flag name rather than omitted or advertised as unconditionally
+ * available, per ADR 010.
  *
  * Usage:
  *   node scripts/gen-keymaps.mjs           # write docs/keymaps.md

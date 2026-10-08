@@ -4,8 +4,6 @@
  * Seeds features and acceptance tests through `window.__WS_BACKEND__`, the
  * existing E2E seam on `MemoryBackend`, so each spec brings its own fixture
  * rather than sharing one baked into `main.tsx`.
- *
- * The Plan tile is flag-gated, so the run also flips `__WS_FEATURE_FLAGS__`.
  */
 import { test, expect, type Page } from "@playwright/test";
 
@@ -19,7 +17,6 @@ type SeedBackend = {
 
 async function configure(page: Page) {
   await page.addInitScript(() => {
-    (window as unknown as { __WS_FEATURE_FLAGS__?: boolean }).__WS_FEATURE_FLAGS__ = true;
     // A workstream whose session tile is already linked: the Plan tile reads
     // its session id from that config, so an unlinked workstream renders
     // nothing to assert on.

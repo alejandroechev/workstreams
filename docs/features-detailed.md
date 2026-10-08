@@ -291,6 +291,40 @@ Inspects the linked Copilot session via three tabs:
   Monaco / image / audio viewer
 - **DB** — read-only SQLite table browser scoped to the session DB
 
+## Plan tile
+
+`Alt+P`, or **Plan** in the `+ Add tile` menu. Follows the linked Copilot
+session's features (`session-state/<id>/files/features/<name>/`): a feature
+list, then per feature an Overview, its Acceptance tests and todo Graph, and
+its **Grill**.
+
+The Grill tab opens in **Answer mode**, a focused way to answer a `grill-me.md`
+([ADR 034](adrs/034-grill-answer-mode.md)):
+
+- **One question per screen.** `←` / `→` / `Enter` move, number keys pick an
+  option, and the strip of markers jumps anywhere. Markers are coloured by
+  importance (Low grey, Medium blue, High yellow, Blocking red) and filled once
+  answered.
+- **Filter** to "High and up" or "Blocking only", and to unanswered questions.
+  Change a question's importance; the file records it as `(you)`.
+- **Answers save as you go** into that question's `**Answer:**` slot only —
+  options as `b` or `b — <note>`, or free text. A round the agent appends
+  meanwhile is kept. Finished earlier rounds are read-only.
+- **The recommendation is hidden** until you press *Show recommendation*; then
+  *Accept recommendation* writes `reco` (never offered on Blocking questions).
+  *Always show recommendations* turns hiding off for every grill.
+- **Visuals**: mermaid diagrams in the question, images, and HTML prototypes
+  from `grill-assets/<id>/`, per option with *Compare options side by side*.
+  Prototypes run sandboxed: scripts work, but no network, no access to the app,
+  no navigation. *Show me this* asks the agent for a visual on its next review.
+- **Finish round** says how many unanswered questions will take the
+  recommendation, then writes `reco (default — not reviewed)` into them. It
+  refuses while a Blocking question is unanswered. Nothing is sent to the
+  session — type `review` there.
+
+Edit / Preview / Slides show the file itself. The same operations are available
+without the UI: `node scripts/grill-cli.mjs parse|answer|finish <grill-me.md>`.
+
 ## Workbench tile
 
 A per-workstream scratch list of files you're actively working on. Right-click
@@ -877,12 +911,12 @@ what the app actually does. Do not restate those tables here.
 
 Behaviour the generated table does not capture:
 
-- **Feature-flagged tiles.** `Alt+P` (plan tile) and `Alt+D` (code walkthrough
-  tile) sit behind the `plan-tile` and `debug-walkthrough` flags. The key
-  handler stays registered either way — the flag gates whether the tile can be
-  created, not whether the key is parsed — per
-  [ADR 010](adrs/010-feature-flags.md). The generated reference marks both rows
-  with their flag name rather than hiding them.
+- **Feature-flagged tiles.** `Alt+D` (code walkthrough tile) sits behind the
+  `debug-walkthrough` flag. The key handler stays registered either way — the
+  flag gates whether the tile can be created, not whether the key is parsed —
+  per [ADR 010](adrs/010-feature-flags.md). The generated reference marks the
+  row with its flag name rather than hiding it. (`Alt+P`, the Plan tile, is no
+  longer flagged — [ADR 034](adrs/034-grill-answer-mode.md).)
 - **Editor guard.** Tile-creation shortcuts are suppressed while a Monaco
   editor has text focus, so typing `w` in a file never spawns a terminal tile.
 - **The `+ Add tile` menu is the in-app cheat sheet.** Each tile type displays

@@ -65,11 +65,11 @@ describe("generated keymaps document", () => {
     }
   });
 
-  it("marks the flagged plan and walkthrough bindings with their flag names", () => {
+  it("marks the flagged walkthrough binding with its flag name, and the unflagged plan one without", () => {
     const planRow = fresh.split("\n").find((l) => l.includes("`Alt+P`"));
     const debugRow = fresh.split("\n").find((l) => l.includes("`Alt+D`"));
-    expect(planRow).toContain("plan-tile");
-    expect(planRow).toMatch(/feature-flagged/i);
+    expect(planRow).toBeDefined();
+    expect(planRow).not.toMatch(/feature-flagged/i);
     expect(debugRow).toContain("debug-walkthrough");
     expect(debugRow).toMatch(/feature-flagged/i);
   });
@@ -177,9 +177,7 @@ describe("docs link to the generated reference instead of restating it", () => {
 
   it("still explains the feature-flagged behaviour the table cannot show", () => {
     const section = detailed.split("## Keyboard and mouse reference")[1].split("\n## ")[0];
-    expect(section).toContain("Alt+P");
     expect(section).toContain("Alt+D");
-    expect(section).toContain("plan-tile");
     expect(section).toContain("debug-walkthrough");
     expect(section).toContain("ADR 010");
     expect(section).toMatch(/Monaco/);

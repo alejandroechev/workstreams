@@ -80,6 +80,12 @@ instead of buried behind tabs.
   ([ADR 033](docs/adrs/033-phone-companion.md)). Ask for the result and the
   agent sends it back to the phone's **Messages** with the `companion-reply`
   skill (`npm run install-skills`).
+- **Answer grills one question at a time** — the Plan tile's Grill tab turns a
+  `grill-me.md` into a focused view: importance-coloured questions you can
+  filter to what matters, option buttons, the recommendation hidden until you
+  ask, and mermaid diagrams or sandboxed HTML prototypes per option. Answers
+  save straight into the file
+  ([ADR 034](docs/adrs/034-grill-answer-mode.md)).
 - **Everything persists** — workstreams, tile layouts, terminal scrollback,
   open files and per-tile view state all survive a restart.
 - **Keyboard-driven** — `Alt+<letter>` opens any tile type, `Alt+Arrows` moves

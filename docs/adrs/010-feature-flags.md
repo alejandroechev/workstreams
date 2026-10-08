@@ -10,7 +10,9 @@ date: 2026-06-08
 
 Accepted (2026-06-08). **Updated 2026-07-08:** the `diff-review` flag was
 removed when the Diff Review tile was retired (ADR 007). `plan-tile` is now the
-only flag. References to Diff Review below are historical.
+only flag. References to Diff Review below are historical. **Updated 2026-10-05:**
+the `plan-tile` flag was removed as well ([ADR 034](034-grill-answer-mode.md));
+the Plan tile ships to everyone, so references to it below are historical too.
 
 ## Context
 
