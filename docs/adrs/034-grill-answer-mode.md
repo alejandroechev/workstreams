@@ -152,5 +152,14 @@ the agent:
   (even behind a commented-out `<head>`), `window.parent` access, top
   navigation, self-navigation, a meta refresh and a `../` image are all
   blocked.
+- **Known gap, accepted (2026-10-05): WebRTC.** A prototype script can open an
+  `RTCPeerConnection` to a STUN/TURN server and reach the network; neither CSP
+  nor the sandbox governs WebRTC, and the webviews offer no clean switch to turn
+  it off (none on macOS). The owner accepted this rather than drop scripted
+  prototypes: prototypes are written by the owner's own agent, which already
+  has shell and network access, and the sandbox's essential job — keeping a
+  prototype away from the app (`invoke`, its DOM and storage) — holds. "No
+  network" therefore means no ordinary loads (fetch, images, scripts, frames,
+  navigation), not resistance to a deliberately hostile prototype.
 - The Plan tile no longer depends on a flag. Without a linked session that has
   plans, it shows its existing empty state.
