@@ -3,6 +3,10 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- Frames may only show the app's own documents (grill prototypes via
+         srcdoc, PDFs via blob:). This is what stops a sandboxed prototype from
+         navigating itself to the network (ADR 034); it governs frames only. -->
+    <meta http-equiv="Content-Security-Policy" content="frame-src 'self' blob: data:" />
     <title>Copilot Desktop</title>
   </head>
   <body>

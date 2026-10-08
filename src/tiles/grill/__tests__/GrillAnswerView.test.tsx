@@ -293,11 +293,59 @@ describe("the grill Answer view", () => {
     await waitFor(() => expect(screen.getByTestId("grill-question").textContent).toContain("Sync, renamed"));
   });
 
-  it("shows save errors", async () => {
+  it("keeps an answer that failed to save, and saves it on retry", async () => {
     const io = await open();
     io.write.mockRejectedValueOnce(new Error("disk full"));
-    fireEvent.click(screen.getByTestId("grill-option-a"));
+    fireEvent.change(screen.getByTestId("grill-answer"), { target: { value: "precious words" } });
     await waitFor(() => expect(screen.getByTestId("grill-save-status").textContent).toContain("disk full"));
+    expect((screen.getByTestId("grill-answer") as HTMLTextAreaElement).value).toBe("precious words");
+    expect(io.text).not.toContain("precious words");
+    fireEvent.click(screen.getByTestId("grill-save-retry"));
+    await waitFor(() => expect(io.text).toContain("**Answer:** precious words"));
+    await waitFor(() => expect(screen.queryByTestId("grill-save-retry")).toBeNull());
+  });
+
+  it("keeps an answer the file can't take as a draft, saying why", async () => {
+    const io = await open();
+    fireEvent.change(screen.getByTestId("grill-answer"), { target: { value: "Example:\n```js\nconst x = 1;" } });
+    await waitFor(() => expect(screen.getByTestId("grill-save-status").textContent).toContain("unclosed"));
+    expect(io.text).toBe(GRILL);
+    fireEvent.change(screen.getByTestId("grill-answer"), { target: { value: "Example:\n```js\nconst x = 1;\n```" } });
+    await waitFor(() => expect(io.text).toContain("**Answer:** Example:\n```js\nconst x = 1;\n```\n"));
+    expect(io.text).toContain("### A2. Sync");
+  });
+
+  it("keeps drafts apart for questions with the same id in different rounds", async () => {
+    const twoOpen = GRILL.replace("**Recommendation:** (a)\n\n**Answer:** a\n", "**Recommendation:** (a)\n\n**Answer:**\n");
+    const io = await open(twoOpen);
+    fireEvent.change(screen.getByTestId("grill-answer"), { target: { value: "round two" } });
+    fireEvent.change(screen.getByTestId("grill-round"), { target: { value: "1" } });
+    expect((screen.getByTestId("grill-answer") as HTMLTextAreaElement).value).toBe("");
+    fireEvent.change(screen.getByTestId("grill-answer"), { target: { value: "round one" } });
+    await waitFor(() => {
+      const grill = io.text;
+      expect(grill).toContain("**Recommendation:** (a)\n\n**Answer:** round one\n");
+      expect(grill).toContain("because simple\n\n**Answer:** round two\n");
+    });
+  });
+
+  it("never lets a reload that started before a save show the older file", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const io = await open();
+    let releaseRead: (() => void) | null = null;
+    const realRead = io.read.getMockImplementation()!;
+    io.read.mockImplementationOnce(async (path: string) => {
+      const before = await realRead(path);
+      await new Promise<void>((resolve) => { releaseRead = resolve; });
+      return before;
+    });
+    await act(async () => { vi.advanceTimersByTime(2100); });
+    await waitFor(() => expect(releaseRead).not.toBeNull());
+    fireEvent.click(screen.getByTestId("grill-option-b"));
+    await waitFor(() => expect(io.text).toContain("**Answer:** b\n"));
+    await act(async () => { releaseRead!(); });
+    await act(async () => { await Promise.resolve(); });
+    expect(screen.getByTestId("grill-option-b").getAttribute("aria-checked")).toBe("true");
   });
 
   it("explains an empty or unreadable grill", async () => {

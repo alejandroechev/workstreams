@@ -66,6 +66,18 @@ describe("parsing a grill", () => {
   });
 });
 
+describe("fenced code", () => {
+  it("only closes a fence with a bare delimiter at least as long as the opener", () => {
+    const text = [
+      "### A1. Real", "", "````markdown", "```", "### B1. Fake", "", "**Answer:** fake", "```", "````", "",
+      "~~~", "```", "### B2. Also fake", "~~~ not a close", "~~~", "", "**Answer:** real", "",
+    ].join("\n");
+    const grill = parseGrill(text);
+    expect(grill.questions.map((q) => q.id)).toEqual(["A1"]);
+    expect(grill.questions[0].answer).toBe("real");
+  });
+});
+
 describe("existing grills", () => {
   it("opens an old grill: every question Medium, options where (a)/(b) lines exist, otherwise none", () => {
     const grill = parseGrill(oldFormat);

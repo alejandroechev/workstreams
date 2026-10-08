@@ -76,6 +76,14 @@ describe("the app's file access", () => {
     });
   });
 
+  it("refuses to write a file with mixed line endings rather than normalise it", async () => {
+    invokeMock.mockResolvedValueOnce({ content: "a\r\nb\n", hash_hex: "h1", line_ending: "mixed", has_trailing_newline: true });
+    await tauriGrillIo.read("/mixed.md");
+    invokeMock.mockClear();
+    await expect(tauriGrillIo.write("/mixed.md", "x\n", "h1")).rejects.toThrow("mixes CRLF and LF");
+    expect(invokeMock).not.toHaveBeenCalled();
+  });
+
   it("writes an unread file as LF with a trailing newline", async () => {
     invokeMock.mockResolvedValueOnce({});
     await tauriGrillIo.write("/new.md", "x", "h");

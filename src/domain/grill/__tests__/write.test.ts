@@ -55,6 +55,20 @@ describe("writing an answer", () => {
     expect(finishRound(appended, { round: 3, preview: true })).toEqual({ ok: true, text: appended, defaulted: ["A1"] });
   });
 
+  it("refuses an answer that would change the file's structure, writing nothing", () => {
+    const error = "That answer would change the grill's structure (an unclosed ``` fence, a --- line or a heading). Close the fence or reword it; it is kept unsaved.";
+    for (const unsafe of ["Example:\n```js\nconst x = 1;", "first\n---\nsecond", "x\n### B9. Smuggled", "x\n## Round 9"]) {
+      expect(setAnswer(newFormat, 2, "A2", unsafe)).toEqual({ ok: false, error });
+    }
+  });
+
+  it("accepts a closed fence in an answer, round-tripping it", () => {
+    const fenced = "Like this:\n```md\n### not a question\n---\n```\nok";
+    const after = ok(setAnswer(newFormat, 2, "A2", fenced));
+    expect(answerOf(after, 2, "A2")).toBe(fenced);
+    expect(parseGrill(after).questions.map((q) => `${q.round}:${q.id}`)).toEqual(parseGrill(newFormat).questions.map((q) => `${q.round}:${q.id}`));
+  });
+
   it("refuses reco on a Blocking question", () => {
     expect(setAnswer(newFormat, 2, "A1", "reco")).toEqual({ ok: false, error: "A1 is Blocking: it needs your own answer, not the recommendation." });
     expect(setAnswer(newFormat, 2, "A1", " Reco ")).toMatchObject({ ok: false });
@@ -120,6 +134,11 @@ describe("finishing a round", () => {
     expect(answerOf(result.text, 2, "A1")).toBe("b");
     expect(answerOf(result.text, 1, "A2")).toBe("");
     expect(DEFAULT_ANSWER).toBe("reco (default — not reviewed)");
+  });
+
+  it("refuses a round with a repeated question id", () => {
+    const ready = newFormat.replace("**Importance:** Blocking", "**Importance:** High").replace("### A3. Untagged", "### A2. Duplicate");
+    expect(finishRound(ready)).toEqual({ ok: false, error: "Round 2 has more than one A2; edit the file directly." });
   });
 
   it("previews without writing", () => {

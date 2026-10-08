@@ -45,7 +45,8 @@ No new store. `grill-me.md` remains the decision record the agent reads on
 ```
 
 Content before the first `## Round N` is Round 1, and ids repeat per round.
-Fenced code is ignored when looking for markers. A question with no Importance
+Fenced code is ignored when looking for markers; a fence closes only on a bare
+delimiter of the same character at least as long as the opener (CommonMark). A question with no Importance
 line is Medium, so every older grill opens unchanged. The parser and writers
 are `src/domain/grill/`, and `scripts/grill-cli.mjs` gives the same operations
 on the command line (`parse | answer | finish [--preview]`).
@@ -58,9 +59,17 @@ expected hash, and re-applies the edit if the file changed in between. So an
 answer never overwrites a round the agent appended while you typed. Writers
 refuse:
 
-- an id that appears twice in the round;
+- an id that appears twice in the round (Finish round included);
 - `reco` on a Blocking question;
-- a **finished** earlier round.
+- a **finished** earlier round;
+- an answer that would change the file's structure — an unclosed fence, a
+  `---` line or a heading would swallow or split the questions after it. The
+  writer re-parses its own output and refuses unless every question is still
+  there and the answer reads back exactly. The UI keeps such text as an unsaved
+  draft and says why; failed saves of any kind keep the draft, with a Retry;
+- a file with mixed CRLF/LF endings, because the native write normalises every
+  line ending and would touch lines other than the answer's (Edit mode still
+  works).
 
 A round is writable while it still has an unanswered question, and the latest
 round is always writable. This was looser at first ("only the latest open
@@ -105,11 +114,19 @@ whether absolute, `..`, or a URL, is refused. They come in three kinds:
 - **HTML prototypes**: shown in an `<iframe sandbox="allow-scripts" srcdoc=…>`.
 
 A prototype runs in an opaque origin, so it cannot reach the app's DOM, storage
-or `invoke`. Before rendering, a Content-Security-Policy `<meta>` is put first in
-its `<head>`: `default-src 'none'`, with inline scripts and styles allowed and
-images and fonts only as `data:`. Its own images are inlined as data URLs, so
-there is no network at all. A prototype's own CSP can only tighten this. It
-cannot navigate the app (no `allow-top-navigation`).
+or `invoke`. Before rendering, a Content-Security-Policy `<meta>` is put at the very start
+of the document, before any of the prototype's markup (searching for its
+`<head>` was bypassable with a commented-out head): `default-src 'none'`, with
+inline scripts and styles allowed and images and fonts only as `data:`. Its own
+images are inlined as data URLs. A prototype's own CSP can only tighten this.
+It cannot navigate the app (no `allow-top-navigation`).
+
+A frame's own CSP cannot stop the frame navigating **itself** (`location.href`,
+`<meta http-equiv="refresh">`). The app page therefore carries a frame-only
+policy in `index.html`, `frame-src 'self' blob: data:`, which the browser
+checks on every navigation of a child frame. A prototype that tries ends up on
+the browser's error page, not on the network. The policy governs frames only
+(the PDF viewer's `blob:` frames still load).
 
 Visuals tied to an option show with that option, with a side-by-side
 comparison. *Show me this* writes a `**Visual requested:**` marker. On review,
@@ -131,7 +148,9 @@ the agent:
   Answer-mode writes as external changes through its own watcher.
 - The prototype sandbox relies on the webview honouring `sandbox` + `srcdoc` +
   meta CSP. It is covered by Playwright in Chromium (WebView2's engine) and
-  WebKit (WKWebView's engine): a hostile prototype's script runs, but `fetch`,
-  `window.parent` access, top navigation and a `../` image are all blocked.
+  WebKit (WKWebView's engine): a hostile prototype's script runs, but `fetch`
+  (even behind a commented-out `<head>`), `window.parent` access, top
+  navigation, self-navigation, a meta refresh and a `../` image are all
+  blocked.
 - The Plan tile no longer depends on a flag. Without a linked session that has
   plans, it shows its existing empty state.

@@ -24,6 +24,23 @@ function locate(grill: Grill, round: number, id: string): { ok: true; question: 
   return { ok: true, question: matches[0] };
 }
 
+/**
+ * True when `after` has the same questions as `before`, every other question
+ * reads the same, and the edited one reads back exactly `answer` — so an answer
+ * can never swallow or split the questions around it.
+ */
+function sameStructure(before: string, after: string, edited: GrillQuestion, answer: string): boolean {
+  const a = parseGrill(before).questions;
+  const b = parseGrill(after).questions;
+  if (a.length !== b.length) return false;
+  return a.every((q, i) => {
+    const r = b[i];
+    if (q.round !== r.round || q.id !== r.id || q.title !== r.title) return false;
+    if (q.round === edited.round && q.lines.heading === edited.lines.heading) return r.answer === answer;
+    return q.answer === r.answer && q.recommendation === r.recommendation && q.importance === r.importance;
+  });
+}
+
 const isReco = (answer: string) => /^reco\b/i.test(answer.trim());
 
 export function setAnswer(text: string, round: number, id: string, answer: string): WriteResult {
@@ -37,10 +54,15 @@ export function setAnswer(text: string, round: number, id: string, answer: strin
     return { ok: false, error: `${id} has no **Answer:** line; edit the file directly.` };
   }
   const all = lines(text);
-  const [first, ...rest] = answer.trim() === "" ? [""] : answer.replace(/\r\n/g, "\n").split("\n");
+  const normalised = answer.replace(/\r\n/g, "\n");
+  const [first, ...rest] = normalised.trim() === "" ? [""] : normalised.split("\n");
   const replacement = [first ? `**Answer:** ${first}` : "**Answer:**", ...rest];
   all.splice(question.lines.answer, question.lines.answerEnd - question.lines.answer, ...replacement);
-  return { ok: true, text: all.join("\n") };
+  const next = all.join("\n");
+  if (!sameStructure(text, next, question, normalised.trim())) {
+    return { ok: false, error: "That answer would change the grill's structure (an unclosed ``` fence, a --- line or a heading). Close the fence or reword it; it is kept unsaved." };
+  }
+  return { ok: true, text: next };
 }
 
 export function setImportance(text: string, round: number, id: string, level: Importance): WriteResult {
@@ -79,6 +101,9 @@ export function finishRound(text: string, options: { preview?: boolean; round?: 
   const grill = parseGrill(text);
   const round = options.round ?? editableRound(grill);
   if (!writableRounds(grill).includes(round)) return { ok: false, error: `Round ${round} is finished and read-only.` };
+  const ids = grill.questions.filter((q) => q.round === round).map((q) => q.id);
+  const repeated = ids.find((id, i) => ids.indexOf(id) !== i);
+  if (repeated) return { ok: false, error: `Round ${round} has more than one ${repeated}; edit the file directly.` };
   const open = grill.questions.filter((q) => q.round === round && q.answer === "" && q.lines.answer !== null);
   const blocking = open.filter((q) => q.importance === "Blocking").map((q) => q.id);
   if (blocking.length > 0) return { ok: false, error: `Answer the Blocking questions first: ${blocking.join(", ")}.`, blocking };

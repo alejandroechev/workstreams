@@ -108,7 +108,8 @@ const proto = (label: string) =>
   `<html><head><title>${label}</title></head><body><div id="out">static ${label}</div><script>document.getElementById("out").textContent = "script ran in ${label}";</script></body></html>`;
 
 /** Tries everything a prototype must not be able to do, recording what happened. */
-const HOSTILE = `<html><head></head><body>
+const HOSTILE = `<!-- <head> a fake head to capture an injected policy </head> -->
+<html><head></head><body>
 <div id="out">static</div>
 <img id="outside" src="../../secret.png">
 <script>
@@ -116,6 +117,7 @@ document.getElementById("out").textContent = "script ran";
 fetch("https://example.com/").then(() => { document.body.dataset.fetch = "ok"; }, () => { document.body.dataset.fetch = "blocked"; });
 try { document.body.dataset.parent = String(window.parent.document.title); } catch (e) { document.body.dataset.parent = "blocked"; }
 try { top.location = "https://example.com/"; document.body.dataset.top = "attempted"; } catch (e) { document.body.dataset.top = "blocked"; }
+setTimeout(() => { location.href = "https://example.com/self-navigation"; }, 2000);
 </script>
 </body></html>`;
 
@@ -123,6 +125,7 @@ const ASSETS_TEXT: Record<string, string> = {
   "/x/alpha/grill-assets/A1/tabs.html": proto("tabs"),
   "/x/alpha/grill-assets/A1/slides.html": proto("slides"),
   "/x/alpha/grill-assets/A4/hostile.html": HOSTILE,
+  "/x/alpha/grill-assets/A4/refresh.html": `<html><head><meta http-equiv="refresh" content="0; url=https://example.com/refresh"></head><body><div id="out">refresh</div></body></html>`,
 };
 
 type GrillFs = { files: Record<string, string>; versions: Record<string, number>; b64: Record<string, string> };
@@ -390,9 +393,10 @@ test.describe("grill Answer mode", () => {
   });
 
   test("AT-10: prototypes are sandboxed", async ({ page }) => {
+    test.setTimeout(40_000);
     const withHostile = GRILL.replace(
       "**Recommendation:** sandbox everything",
-      '**Visual:** grill-assets/A4/hostile.html "Hostile"\n\n**Recommendation:** sandbox everything',
+      '**Visual:** grill-assets/A4/hostile.html "Hostile"\n**Visual:** grill-assets/A4/refresh.html "Refresh"\n\n**Recommendation:** sandbox everything',
     );
     // The browser may start a request the policy then blocks; what matters is
     // that none reaches a server.
@@ -400,6 +404,7 @@ test.describe("grill Answer mode", () => {
     const reached: string[] = [];
     const blocked: string[] = [];
     page.on("response", (r) => { if (outside(r.url())) reached.push(r.url()); });
+    await page.context().route(/example\.com/, (route) => { reached.push(route.request().url()); return route.fulfill({ body: "<p id=pwned>remote</p>", contentType: "text/html" }); });
     page.on("requestfailed", (r) => { if (outside(r.url())) blocked.push(`${r.url()} ${r.failure()?.errorText}`); });
     await configure(page, withHostile);
     await openGrill(page);
@@ -409,13 +414,18 @@ test.describe("grill Answer mode", () => {
     await expect(frame.locator("#out")).toHaveText("script ran");
     await expect(frame.locator("body")).toHaveAttribute("data-fetch", "blocked");
     await expect(frame.locator("body")).toHaveAttribute("data-parent", "blocked");
+    expect(await frame.locator("#outside").evaluate((img: HTMLImageElement) => img.naturalWidth)).toBe(0);
     await expect(page.locator('[data-testid="grill-prototype"][title="Hostile"]')).toHaveAttribute("sandbox", "allow-scripts");
-    await page.waitForTimeout(500);
+    await page.waitForTimeout(3000);
     expect(page.url()).toBe(appUrl);
+    // The self-navigation and the refresh are refused by the app page's
+    // frame-src: the browser may show its own error page in the frame, but the
+    // remote page never loads.
+    await expect(frame.locator("#pwned")).toHaveCount(0);
+    await expect(page.frameLocator('[data-testid="grill-prototype"][title="Refresh"]').locator("#pwned")).toHaveCount(0);
     await expect(page.locator('[data-testid="grill-answer-view"]')).toBeVisible();
     expect(reached).toEqual([]);
     expect(blocked.every((b) => b.endsWith(" csp"))).toBe(true);
-    expect(await frame.locator("#outside").evaluate((img: HTMLImageElement) => img.naturalWidth)).toBe(0);
   });
 
   test("AT-13: an old grill opens with Medium everywhere, options where they can be read", async ({ page }) => {

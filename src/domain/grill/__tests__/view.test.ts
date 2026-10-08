@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { parseGrill } from "../parse";
-import { navigableQuestions, roundQuestions, IMPORTANCE_COLORS, assetPath, prototypeDocument, optionAnswer, selectedOption } from "../view";
+import { navigableQuestions, roundQuestions, IMPORTANCE_COLORS, assetPath, prototypeDocument, optionAnswer, selectedOption, PROTOTYPE_CSP } from "../view";
 import newFormat from "./fixtures/new-format.md?raw";
 
 const grill = parseGrill(newFormat);
@@ -49,14 +49,16 @@ describe("visual asset paths", () => {
 describe("prototype documents", () => {
   it("adds a policy that forbids the network, and inlines its own images", () => {
     const doc = prototypeDocument('<html><head><title>t</title></head><body><img src="logo.png"><img src="https://evil.example/x.png"><script>fetch("https://x")</script></body></html>', { "logo.png": "data:image/png;base64,AAA" });
-    expect(doc).toMatch(/<head><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; font-src data:">/);
+    expect(doc.startsWith(`<!doctype html><meta http-equiv="Content-Security-Policy" content="${PROTOTYPE_CSP}">`)).toBe(true);
     expect(doc).toContain('src="data:image/png;base64,AAA"');
     expect(doc).toContain('src="https://evil.example/x.png"');
   });
 
-  it("adds a head when the page has none, and refuses to let the page relax the policy first", () => {
+  it("puts the policy before anything the page says, comments included", () => {
     const doc = prototypeDocument("<p>hi</p>", {});
-    expect(doc.startsWith('<!doctype html><html><head><meta http-equiv="Content-Security-Policy"')).toBe(true);
+    expect(doc.startsWith('<!doctype html><meta http-equiv="Content-Security-Policy"')).toBe(true);
+    const commented = prototypeDocument("<!-- <head> fake </head> --><html><head></head><body></body></html>", {});
+    expect(commented.indexOf("default-src 'none'")).toBeLessThan(commented.indexOf("<!--"));
     const sneaky = prototypeDocument('<meta http-equiv="Content-Security-Policy" content="default-src *"><p>x</p>', {});
     expect(sneaky.indexOf("default-src 'none'")).toBeLessThan(sneaky.indexOf("default-src *"));
   });

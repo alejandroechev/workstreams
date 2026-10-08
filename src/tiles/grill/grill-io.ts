@@ -12,16 +12,21 @@ export interface GrillIo {
 
 interface ReadTextFileResult { content: string; hash_hex: string; line_ending: "lf" | "crlf" | "mixed"; has_trailing_newline: boolean }
 
-const endings = new Map<string, { lineEnding: "lf" | "crlf"; trailing: boolean }>();
+const endings = new Map<string, { lineEnding: "lf" | "crlf" | "mixed"; trailing: boolean }>();
 
 export const tauriGrillIo: GrillIo = {
   async read(path) {
     const result = await invoke<ReadTextFileResult>("read_text_file", { path });
-    endings.set(path, { lineEnding: result.line_ending === "crlf" ? "crlf" : "lf", trailing: result.has_trailing_newline });
+    endings.set(path, { lineEnding: result.line_ending, trailing: result.has_trailing_newline });
     return { text: result.content.replace(/\r\n/g, "\n"), hash: result.hash_hex };
   },
   async write(path, text, expectedHash) {
     const ending = endings.get(path) ?? { lineEnding: "lf", trailing: true };
+    // Writing normalises every line ending, which would touch lines other than
+    // the answer's; refuse instead, so the one-slot promise holds.
+    if (ending.lineEnding === "mixed") {
+      throw new Error("this file mixes CRLF and LF line endings; answer it in Edit mode, or save it once there to make them consistent");
+    }
     try {
       await invoke("write_text_file", {
         args: { path, content: text, expected_hash_hex: expectedHash, line_ending: ending.lineEnding, ensure_trailing_newline: ending.trailing },

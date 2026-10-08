@@ -61,7 +61,8 @@ export interface Grill {
 const QUESTION = /^###\s+([A-Z]\d+)\.\s*(.*)$/;
 const SECTION = /^##\s+(?!#)(.*)$/;
 const ROUND = /^##\s+Round\s+(\d+)\b(.*)$/;
-const FENCE = /^\s*(```|~~~)/;
+const FENCE = /^ {0,3}(`{3,}|~{3,})(.*)$/;
+const FENCE_CLOSE = /^ {0,3}(`{3,}|~{3,})\s*$/;
 const IMPORTANCE = /^\*\*Importance:\*\*\s*(Low|Medium|High|Blocking)\s*(\(you\))?\s*$/i;
 const OPTION = /^\s*(?:[-*]\s+)?\(([a-z])\)\s+(.*)$/;
 const VISUAL = /^\*\*Visual:\*\*\s+(\S+)(?:\s+"([^"]*)")?(?:\s+\(([a-z])\))?\s*$/;
@@ -79,14 +80,18 @@ function normaliseImportance(text: string): Importance {
 /** Which lines are inside a fenced code block (where nothing is markup). */
 function fencedLines(lines: string[]): boolean[] {
   const inside: boolean[] = [];
-  let open: string | null = null;
+  let open: { char: string; length: number } | null = null;
   for (const line of lines) {
-    const match = FENCE.exec(line);
     if (open) {
       inside.push(true);
-      if (match && match[1] === open) open = null;
-    } else if (match) {
-      open = match[1];
+      const close = FENCE_CLOSE.exec(line);
+      if (close && close[1][0] === open.char && close[1].length >= open.length) open = null;
+      continue;
+    }
+    const match = FENCE.exec(line);
+    // A backtick fence's info string may not contain a backtick (CommonMark).
+    if (match && !(match[1][0] === "`" && match[2].includes("`"))) {
+      open = { char: match[1][0], length: match[1].length };
       inside.push(true);
     } else {
       inside.push(false);

@@ -55,15 +55,16 @@ export const PROTOTYPE_CSP = "default-src 'none'; script-src 'unsafe-inline'; st
 /**
  * Prepares an agent-written HTML prototype for a sandboxed iframe (`srcdoc`,
  * `sandbox="allow-scripts"`, no same-origin): a Content-Security-Policy is put
- * first in `<head>`, so nothing can load from the network, and images it names
+ * first in the document, so nothing can load from the network, and images it names
  * from its own folder are inlined as data URLs. A policy in the page itself can
  * only add restrictions, never lift ours.
  */
 export function prototypeDocument(html: string, images: Record<string, string>): string {
   const meta = `<meta http-equiv="Content-Security-Policy" content="${PROTOTYPE_CSP}">`;
-  let doc = html.replace(/(\ssrc=)(["'])([^"']+)\2/gi, (whole, attr: string, quote: string, value: string) =>
+  const doc = html.replace(/(\ssrc=)(["'])([^"']+)\2/gi, (whole, attr: string, quote: string, value: string) =>
     Object.prototype.hasOwnProperty.call(images, value) ? `${attr}${quote}${images[value]}${quote}` : whole);
-  if (/<head[^>]*>/i.test(doc)) doc = doc.replace(/<head[^>]*>/i, (head) => `${head}${meta}`);
-  else doc = `<!doctype html><html><head>${meta}</head><body>${doc}</body></html>`;
-  return doc;
+  // First in the document, before any untrusted markup: the parser puts it in
+  // the (implied) head, and the page's own doctype/html/head tags are ignored
+  // or merged, so no comment or stray tag can hide it.
+  return `<!doctype html>${meta}${doc}`;
 }
