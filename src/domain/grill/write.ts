@@ -1,4 +1,4 @@
-import { editableRound, parseGrill, writableRounds, type Grill, type GrillQuestion, type Importance } from "./parse";
+import { editableRound, endsInsideFence, parseGrill, writableRounds, type Grill, type GrillQuestion, type Importance } from "./parse";
 
 /**
  * Writers for grill-me.md (ADR 034). Each one changes exactly one slot of one
@@ -41,6 +41,8 @@ function sameStructure(before: string, after: string, edited: GrillQuestion, ans
   });
 }
 
+const FENCE_START = /^ {0,3}(`{3,}|~{3,})/;
+
 const isReco = (answer: string) => /^reco\b/i.test(answer.trim());
 
 export function setAnswer(text: string, round: number, id: string, answer: string): WriteResult {
@@ -55,11 +57,16 @@ export function setAnswer(text: string, round: number, id: string, answer: strin
   }
   const all = lines(text);
   const normalised = answer.replace(/\r\n/g, "\n");
-  const [first, ...rest] = normalised.trim() === "" ? [""] : normalised.split("\n");
-  const replacement = [first ? `**Answer:** ${first}` : "**Answer:**", ...rest];
+  const answerLines = normalised.trim() === "" ? [] : normalised.split("\n");
+  // A block that must start a line (a code fence) goes below a bare marker.
+  const replacement = answerLines.length === 0
+    ? ["**Answer:**"]
+    : FENCE_START.test(answerLines[0])
+      ? ["**Answer:**", ...answerLines]
+      : [`**Answer:** ${answerLines[0]}`, ...answerLines.slice(1)];
   all.splice(question.lines.answer, question.lines.answerEnd - question.lines.answer, ...replacement);
   const next = all.join("\n");
-  if (!sameStructure(text, next, question, normalised.trim())) {
+  if ((endsInsideFence(next) && !endsInsideFence(text)) || !sameStructure(text, next, question, normalised.trim())) {
     return { ok: false, error: "That answer would change the grill's structure (an unclosed ``` fence, a --- line or a heading). Close the fence or reword it; it is kept unsaved." };
   }
   return { ok: true, text: next };

@@ -56,7 +56,13 @@ const ATTEMPTS = 3;
  */
 export async function updateGrillFile(io: GrillIo, path: string, edit: (text: string) => WriteResult): Promise<WriteResult> {
   for (let attempt = 0; attempt < ATTEMPTS; attempt += 1) {
-    const { text, hash } = await io.read(path);
+    let current: { text: string; hash: string };
+    try {
+      current = await io.read(path);
+    } catch (error) {
+      return { ok: false, error: `Could not save the answer: ${error instanceof Error ? error.message : String(error)}` };
+    }
+    const { text, hash } = current;
     const result = edit(text);
     if (!result.ok || result.text === text) return result;
     try {

@@ -62,6 +62,17 @@ describe("writing an answer", () => {
     }
   });
 
+  it("refuses an unclosed fence even in the last answer of the file", () => {
+    expect(setAnswer("### A1. Only\n**Answer:**\n", 1, "A1", "Example:\n```js\nlet x = 1;")).toMatchObject({ ok: false });
+  });
+
+  it("writes an answer that is only a code block, below the marker", () => {
+    const code = "```js\nlet x = 1;\n```";
+    const after = ok(setAnswer(newFormat, 2, "A2", code));
+    expect(after).toContain("**Answer:**\n```js\nlet x = 1;\n```\n");
+    expect(answerOf(after, 2, "A2")).toBe(code);
+  });
+
   it("accepts a closed fence in an answer, round-tripping it", () => {
     const fenced = "Like this:\n```md\n### not a question\n---\n```\nok";
     const after = ok(setAnswer(newFormat, 2, "A2", fenced));

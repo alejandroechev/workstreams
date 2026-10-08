@@ -58,6 +58,12 @@ describe("updating the grill file", () => {
     expect(result).toEqual({ ok: false, error: "The file kept changing while saving; try again." });
   });
 
+  it("reports a failed read as a failed save", async () => {
+    const io = memoryIo("a");
+    io.read = vi.fn(async () => { throw new Error("read denied"); });
+    expect(await updateGrillFile(io, "/g.md", (text) => ({ ok: true, text }))).toEqual({ ok: false, error: "Could not save the answer: read denied" });
+  });
+
   it("reports other write errors", async () => {
     const io = memoryIo("a");
     io.write = vi.fn(async () => { throw new Error("disk full"); });

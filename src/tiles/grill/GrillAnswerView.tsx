@@ -105,10 +105,17 @@ export function GrillAnswerView({ path, io = tauriGrillIo }: { path: string; io?
     return run;
   }, [io, path]);
 
-  const saveAnswer = useCallback(async (targetRound: number, id: string, answer: string) => {
-    const key = draftKey(targetRound, id);
+  /** Cancels a debounced save that has not run yet. */
+  const cancelPending = (key: string) => {
+    const timer = timers.current.get(key);
+    if (timer) clearTimeout(timer);
     timers.current.delete(key);
     pending.current.delete(key);
+  };
+
+  const saveAnswer = useCallback(async (targetRound: number, id: string, answer: string) => {
+    cancelPending(draftKey(targetRound, id));
+    const key = draftKey(targetRound, id);
     const result = await write((t) => setAnswer(t, targetRound, id, answer));
     // A failed save keeps the draft on screen, so nothing typed is lost.
     if (!result.ok) return;
@@ -124,18 +131,18 @@ export function GrillAnswerView({ path, io = tauriGrillIo }: { path: string; io?
     const key = draftKey(shownRound, id);
     generation.current += 1;
     setDrafts((all) => ({ ...all, [key]: answer }));
-    const existing = timers.current.get(key);
-    if (existing) clearTimeout(existing);
+    cancelPending(key);
     const targetRound = shownRound;
     const flush = () => saveAnswer(targetRound, id, answer);
-    if (immediate) { timers.current.delete(key); void flush(); return; }
+    if (immediate) { void flush(); return; }
     pending.current.set(key, flush);
     timers.current.set(key, setTimeout(() => void flush(), SAVE_DELAY_MS));
   }, [readOnly, saveAnswer, shownRound]);
 
-  /** Saves every draft that is not saved yet (after a failed save). */
+  /** Saves every draft whose save failed (drafts still being typed save themselves). */
   const retry = useCallback(() => {
     for (const [key, answer] of Object.entries(drafts)) {
+      if (timers.current.has(key)) continue;
       const at = key.indexOf(":");
       void saveAnswer(Number(key.slice(0, at)), key.slice(at + 1), answer);
     }
@@ -189,7 +196,13 @@ export function GrillAnswerView({ path, io = tauriGrillIo }: { path: string; io?
 
   const startFinish = async () => {
     await flushAll();
-    const { text: now } = await io.read(path);
+    let now: string;
+    try {
+      now = (await io.read(path)).text;
+    } catch (error) {
+      setFinish({ kind: "refused", message: `Could not read the grill: ${error instanceof Error ? error.message : String(error)}` });
+      return;
+    }
     const preview = finishRound(now, { preview: true, round: shownRound ?? undefined });
     setFinish(preview.ok ? { kind: "confirm", defaulted: preview.defaulted } : { kind: "refused", message: preview.error });
   };

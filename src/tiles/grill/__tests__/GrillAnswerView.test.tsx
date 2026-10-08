@@ -315,6 +315,29 @@ describe("the grill Answer view", () => {
     expect(io.text).toContain("### A2. Sync");
   });
 
+  it("retrying never lets an older debounced answer overwrite a newer one", async () => {
+    const io = await open();
+    io.write.mockRejectedValueOnce(new Error("disk full"));
+    fireEvent.click(screen.getByTestId("grill-option-a"));
+    await waitFor(() => expect(screen.getByTestId("grill-save-retry")).toBeTruthy());
+    fireEvent.click(screen.getAllByTestId("grill-marker")[2]);
+    fireEvent.change(screen.getByTestId("grill-answer"), { target: { value: "old draft" } });
+    fireEvent.click(screen.getByTestId("grill-save-retry"));
+    fireEvent.click(screen.getByTestId("grill-option-b"));
+    await waitFor(() => expect(io.text).toContain("**Recommendation:** (b)\n\n**Answer:** b\n"));
+    await new Promise((r) => setTimeout(r, 700));
+    expect(io.text).toContain("**Recommendation:** (b)\n\n**Answer:** b\n");
+    expect(io.text).not.toContain("old draft");
+    expect(io.text).toContain("because simple\n\n**Answer:** a\n");
+  });
+
+  it("says when Finish round can't read the grill", async () => {
+    const io = await open();
+    io.read.mockRejectedValueOnce(new Error("gone"));
+    fireEvent.click(screen.getByTestId("grill-finish"));
+    await waitFor(() => expect(screen.getByTestId("grill-finish-refused").textContent).toContain("gone"));
+  });
+
   it("keeps drafts apart for questions with the same id in different rounds", async () => {
     const twoOpen = GRILL.replace("**Recommendation:** (a)\n\n**Answer:** a\n", "**Recommendation:** (a)\n\n**Answer:**\n");
     const io = await open(twoOpen);

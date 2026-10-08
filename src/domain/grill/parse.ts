@@ -78,7 +78,16 @@ function normaliseImportance(text: string): Importance {
 }
 
 /** Which lines are inside a fenced code block (where nothing is markup). */
+/** True when a fence is still open at the end of the text. */
+export function endsInsideFence(text: string): boolean {
+  return scanFences(text.replace(/\r\n/g, "\n").split("\n")).openAtEnd;
+}
+
 function fencedLines(lines: string[]): boolean[] {
+  return scanFences(lines).inside;
+}
+
+function scanFences(lines: string[]): { inside: boolean[]; openAtEnd: boolean } {
   const inside: boolean[] = [];
   let open: { char: string; length: number } | null = null;
   for (const line of lines) {
@@ -97,7 +106,7 @@ function fencedLines(lines: string[]): boolean[] {
       inside.push(false);
     }
   }
-  return inside;
+  return { inside, openAtEnd: open !== null };
 }
 
 export function parseGrill(text: string): Grill {
