@@ -1,7 +1,7 @@
 # Workstreams
 
 > A desktop workspace for parallel Copilot CLI agents — tiling, persistent
-> sessions, and verifier-gated goal loops.
+> sessions, and a focused way to answer an agent's questions.
 
 [![CI](https://github.com/alejandroechev/workstreams/actions/workflows/ci.yml/badge.svg)](https://github.com/alejandroechev/workstreams/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/alejandroechev/workstreams?display_name=tag)](https://github.com/alejandroechev/workstreams/releases)
@@ -35,7 +35,8 @@ instead of buried behind tabs.
 - **Copilot sessions, one per workstream** — a linked session with a live
   activity indicator and a bell when it goes idle. The CLI command is
   configurable globally or per repo.
-- **Goal loops that have to prove themselves** — describe an objective in a
+- **Goal loops that have to prove themselves** *(hidden by default;
+  `VITE_ENABLE_GOAL_LOOP=1`, [ADR 035](docs/adrs/035-hiding-unused-tiles.md))* — describe an objective in a
   YAML definition and let a bounded orchestrator→worker pipeline run it to
   completion. Every loop must carry deterministic verification, an independent
   evaluator, human approval, or a mix. Runs pin the definition by hash, show a
@@ -43,7 +44,8 @@ instead of buried behind tabs.
   [Watch a deterministic Goal Loop run](docs/assets/demos/goal-loop.webm)
   ([MP4](docs/assets/demos/goal-loop.mp4) ·
   [poster](docs/assets/demos/goal-loop.png)).
-- **Local code review, no round-trips** — a diff-first, PR-style tile for agent
+- **Local code review, no round-trips** *(hidden by default;
+  `VITE_ENABLE_CODE_REVIEW=1`)* — a diff-first, PR-style tile for agent
   or human code. Comment inline, edit code in place, and the agent replies in
   the same threads. No Azure DevOps, no MCP.
   [Watch a local working-tree review](docs/assets/demos/local-code-review.webm)
@@ -90,7 +92,8 @@ instead of buried behind tabs.
   open files and per-tile view state all survive a restart.
 - **Keyboard-driven** — `Alt+<letter>` opens any tile type, `Alt+Arrows` moves
   focus, `Alt+S` compares two tiles side by side.
-- **Code walkthrough** *(experimental)* — record a Rust test's real execution
+- **Code walkthrough** *(experimental; hidden by default,
+  `VITE_ENABLE_WALKTHROUGH=1`)* — record a Rust test's real execution
   and step through it forwards *and* backwards to understand the code.
 
 ![A four-tile adaptive grid: Copilot session, Repo Explorer, Session Meta and Terminal.](docs/assets/feature-tiling-grid.png)
@@ -137,7 +140,7 @@ startup. See [macOS environment](docs/features-detailed.md#macos-environment).
    work runs in the background, so the app stays responsive.
 2. The workstream opens with an empty canvas. Add tiles from the `+ Add tile`
    menu or with a shortcut — `Alt+C` Copilot session, `Alt+R` Repo Explorer,
-   `Alt+T` Terminal, `Alt+A` Code Review, `Alt+L` Goal Loop.
+   `Alt+T` Terminal, `Alt+P` Plan, `Alt+B` Workbench.
 3. Move between tiles with `Alt+Arrows`, and fullscreen the focused one with
    `Alt+F`.
 4. Open settings (gear icon) to tune font sizes, terminal scroll speed, the

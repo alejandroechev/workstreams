@@ -112,8 +112,8 @@ export interface KeyBinding {
   menuKey?: StatusBarMenuKey;
   /**
    * Feature flag gating the equivalent menu entry. Per ADR 010 the keyboard
-   * handler stays active even when the menu item is hidden, so this is
-   * documentation metadata only — it never suppresses the binding.
+   * key is still parsed when the flag is off, but `addTile` refuses a hidden
+   * tile type, so the shortcut does nothing. Here it documents the gate.
    */
   featureFlag?: string;
 }
@@ -236,6 +236,7 @@ export const APP_KEY_BINDINGS: readonly KeyBinding[] = [
     action: { type: "addTile", tileType: "code_review" },
     tileCreation: true,
     menuKey: "code-review",
+    featureFlag: "code-review",
   },
   {
     key: "d",
@@ -255,6 +256,7 @@ export const APP_KEY_BINDINGS: readonly KeyBinding[] = [
     action: { type: "addTile", tileType: "loop_control" },
     tileCreation: true,
     menuKey: "loop",
+    featureFlag: "goal-loop",
   },
   {
     key: "q",

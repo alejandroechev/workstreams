@@ -45,17 +45,19 @@ describe("StatusBar feature-flag gating", () => {
     // Sanity: other entries still render.
     expect(screen.getByTestId("add-tile-item-explorer")).toBeTruthy();
     expect(screen.getByTestId("add-tile-item-session")).toBeTruthy();
-    // Code Review is not flag-gated.
-    expect(screen.getByTestId("add-tile-item-code-review")).toBeTruthy();
-    // The walkthrough still ships disabled.
+    // Hidden tiles: not in use, so not offered.
+    expect(screen.queryByTestId("add-tile-item-code-review")).toBeNull();
     expect(screen.queryByTestId("add-tile-item-walkthrough")).toBeNull();
+    expect(screen.queryByTestId("add-tile-item-loop")).toBeNull();
   });
 
-  it("shows the Code Walkthrough entry when its flag is on", () => {
+  it("offers Code Review, Code Walkthrough and Goal Loop when their flags are on", () => {
     _setFeatureFlagOverrideForTests(true);
     render(<StatusBar {...commonProps()} />);
     openAddTileMenu();
+    expect(screen.getByTestId("add-tile-item-code-review")).toBeTruthy();
     expect(screen.getByTestId("add-tile-item-walkthrough")).toBeTruthy();
+    expect(screen.getByTestId("add-tile-item-loop")).toBeTruthy();
   });
 
   it("shows the Plan menu entry with every flag on too", () => {
@@ -66,6 +68,7 @@ describe("StatusBar feature-flag gating", () => {
   });
 
   it("shows the platform shortcut for the Goal Loop entry", () => {
+    _setFeatureFlagOverrideForTests(true);
     render(<StatusBar {...commonProps()} />);
     openAddTileMenu();
 

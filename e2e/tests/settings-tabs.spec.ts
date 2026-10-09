@@ -4,7 +4,8 @@
  */
 import { test, expect } from "@playwright/test";
 
-const TABS = ["fonts", "terminal", "copilot", "devlog", "rendering", "app", "companion"];
+// Devlog export is hidden with the task board (both off by default).
+const TABS = ["fonts", "terminal", "copilot", "rendering", "app", "companion"];
 
 test("every settings tab fits inside a small window", async ({ page }) => {
   await page.setViewportSize({ width: 1024, height: 640 });
@@ -23,4 +24,5 @@ test("every settings tab fits inside a small window", async ({ page }) => {
     await expect(page.getByTestId("settings-modal-close")).toBeInViewport();
   }
   await expect(page.getByTestId("companion-settings")).toBeVisible();
+  await expect(page.getByTestId("settings-tab-devlog")).toHaveCount(0);
 });

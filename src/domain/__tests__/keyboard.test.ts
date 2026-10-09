@@ -368,14 +368,10 @@ describe("APP_KEY_BINDINGS registry", () => {
     }
   });
 
-  it("records the feature flag gating the Alt+D menu entry, and none for Alt+P", () => {
-    const byCombo = new Map(APP_KEY_BINDINGS.map((b) => [b.combo, b]));
-    expect(byCombo.get("Alt+P")?.featureFlag).toBeUndefined();
-    expect(byCombo.get("Alt+D")?.featureFlag).toBe("debug-walkthrough");
+  it("records the feature flag gating each hidden tile's shortcut, and none for the rest", () => {
+    const gated: Record<string, string> = { "Alt+A": "code-review", "Alt+D": "debug-walkthrough", "Alt+L": "goal-loop" };
     for (const binding of APP_KEY_BINDINGS) {
-      if (binding.combo !== "Alt+D") {
-        expect(binding.featureFlag).toBeUndefined();
-      }
+      expect(binding.featureFlag).toBe(gated[binding.combo]);
     }
   });
 

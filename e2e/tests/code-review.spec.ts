@@ -14,6 +14,8 @@ import { test, expect, type Page } from "@playwright/test";
 
 async function configureInvokeHandlers(page: Page) {
   await page.addInitScript(() => {
+    // The tile ships hidden (sunset flag); force flags on so it is still exercised.
+    (window as unknown as { __WS_FEATURE_FLAGS__?: boolean }).__WS_FEATURE_FLAGS__ = true;
     type Args = Record<string, unknown>;
     const handlers: Record<string, (a: Args) => unknown> = {
       get_setting: () => null,

@@ -2,6 +2,8 @@ import { describe, it, expect, afterEach } from "vitest";
 import {
   isFeatureEnabled,
   isSunsetFeature,
+  isTileTypeEnabled,
+  tileTypeFeature,
   featureDescriptor,
   FEATURE_IDS,
   _setFeatureFlagOverrideForTests,
@@ -20,12 +22,12 @@ describe("feature-flags", () => {
     // depending on .env.local. What we care about is that the answer is
     // boolean and consistent across the flags the master toggle governs.
     // `tasks` is deliberately excluded -- see the sunset describe below.
-    const governed = FEATURE_IDS.filter((id) => id !== "tasks");
+    const governed = FEATURE_IDS.filter((id) => !isSunsetFeature(id));
     const refs = governed.map((id) => isFeatureEnabled(id));
     for (const v of refs) {
       expect(typeof v).toBe("boolean");
     }
-    expect(new Set(refs).size).toBe(1);
+    expect(new Set(refs).size).toBeLessThanOrEqual(1);
   });
 
   it("test override flips every flag to true", () => {
@@ -75,11 +77,51 @@ describe("tasks sunset flag", () => {
   it("is not governed by the master toggle", () => {
     _setFeatureFlagOverrideForTests(null);
     expect(isSunsetFeature("tasks")).toBe(true);
-    expect(isSunsetFeature("debug-walkthrough")).toBe(false);
   });
 
   it("still honours the test override, so suites can exercise the board", () => {
     _setFeatureFlagOverrideForTests(true);
     expect(isFeatureEnabled("tasks")).toBe(true);
+  });
+});
+
+/**
+ * Tiles the owner does not use: hidden, not deleted. Each is a sunset flag with
+ * its own variable, so the maintainer's VITE_ENABLE_OPTIONAL_FEATURES=1 does
+ * not bring them back.
+ */
+describe("tile sunset flags", () => {
+  const tiles = [
+    ["code_review", "code-review"],
+    ["debug_walkthrough", "debug-walkthrough"],
+    ["loop_control", "goal-loop"],
+  ] as const;
+
+  it.each(tiles)("%s is behind the %s sunset flag, off by default", (tileType, flag) => {
+    _setFeatureFlagOverrideForTests(null);
+    expect(tileTypeFeature(tileType)).toBe(flag);
+    expect(isSunsetFeature(flag)).toBe(true);
+    expect(isFeatureEnabled(flag)).toBe(false);
+    expect(isTileTypeEnabled(tileType)).toBe(false);
+  });
+
+  it("leaves every other tile type alone", () => {
+    _setFeatureFlagOverrideForTests(null);
+    for (const tileType of ["terminal", "copilot_session", "file_explorer", "session_meta", "workbench", "plan"] as const) {
+      expect(tileTypeFeature(tileType)).toBeNull();
+      expect(isTileTypeEnabled(tileType)).toBe(true);
+    }
+  });
+
+  it("follows the test override, so suites can still exercise the tiles", () => {
+    _setFeatureFlagOverrideForTests(true);
+    expect(isTileTypeEnabled("code_review")).toBe(true);
+    expect(isTileTypeEnabled("loop_control")).toBe(true);
+  });
+
+  it("says how to bring each one back", () => {
+    expect(featureDescriptor("code-review").requires).toContain("VITE_ENABLE_CODE_REVIEW=1");
+    expect(featureDescriptor("goal-loop").requires).toContain("VITE_ENABLE_GOAL_LOOP=1");
+    expect(featureDescriptor("debug-walkthrough").requires).toContain("VITE_ENABLE_WALKTHROUGH=1");
   });
 });

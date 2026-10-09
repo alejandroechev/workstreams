@@ -8,6 +8,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 
 import SettingsModal from "../SettingsModal";
+import { _setFeatureFlagOverrideForTests } from "../../domain/feature-flags";
 import {
   _resetAppSettingsCacheForTests,
   getAppSettings,
@@ -106,6 +107,9 @@ describe("SettingsModal", () => {
   });
 
   describe("tabs", () => {
+    // Devlog export belongs to the task board, so it shows only with Tasks on.
+    beforeEach(() => { _setFeatureFlagOverrideForTests(true); });
+    afterEach(() => { _setFeatureFlagOverrideForTests(null); });
     const TABS = [
       ["fonts", "Fonts", "settings-font-text-range"],
       ["terminal", "Terminal", "settings-scroll-speed"],
@@ -115,6 +119,14 @@ describe("SettingsModal", () => {
       ["app", "App behavior", "settings-confirm-close"],
       ["companion", "Phone companion", "companion-settings"],
     ] as const;
+
+    it("hides Devlog export while the task board is off", () => {
+      _setFeatureFlagOverrideForTests(false);
+      render(<SettingsModal open onClose={() => {}} />);
+      const labels = screen.getAllByRole("tab").map((t) => t.textContent);
+      expect(labels).not.toContain("Devlog export");
+      expect(labels).toEqual(TABS.filter(([id]) => id !== "devlog").map(([, label]) => label));
+    });
 
     it("shows one tab per section, in order, with Fonts selected first", () => {
       render(<SettingsModal open onClose={() => {}} />);

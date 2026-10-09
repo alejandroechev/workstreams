@@ -5,7 +5,7 @@ import {
   getAppSettings,
   resolveCopilotCommand,
 } from "./domain/app-settings";
-import { isFeatureEnabled } from "./domain/feature-flags";
+import { isFeatureEnabled, isTileTypeEnabled } from "./domain/feature-flags";
 import { restorableLoadedIds, visiblyLoadedIds } from "./domain/loaded-workstreams";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -1720,6 +1720,9 @@ export default function App() {
   const addTile = useCallback(
     async (tileType: TileType, extraConfig?: Record<string, string>) => {
       if (!activeWsId) return;
+      // Hidden features (sunset flags) cannot be created from any path:
+      // menu, shortcut or programmatic.
+      if (!isTileTypeEnabled(tileType)) return;
       const ws = workstreams.find((w) => w.id === activeWsId);
       const cwd = ws?.directory || defaultRootDir();
       const command =

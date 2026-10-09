@@ -32,9 +32,9 @@ combos are typed with Option.
 | `Alt+M` | Add a session metadata tile showing details of the active session | `addTile (session_meta)` |
 | `Alt+B` | Add a workbench tile for scratch notes and quick actions | `addTile (workbench)` |
 | `Alt+P` | Add a plan tile to track the steps of the current piece of work | `addTile (plan)` |
-| `Alt+A` | Add a code review tile to inspect pending changes | `addTile (code_review)` |
+| `Alt+A` | Add a code review tile to inspect pending changes _(feature-flagged: `code-review`)_ | `addTile (code_review)` |
 | `Alt+D` | Add a debug walkthrough tile to step through a recorded trace _(feature-flagged: `debug-walkthrough`)_ | `addTile (debug_walkthrough)` |
-| `Alt+L` | Add a loop control tile to drive an automated agent loop | `addTile (loop_control)` |
+| `Alt+L` | Add a loop control tile to drive an automated agent loop _(feature-flagged: `goal-loop`)_ | `addTile (loop_control)` |
 | `Alt+Q` | Close the focused tile | `closeTile` |
 | `Alt+F` | Expand the focused tile to fill the workspace, or restore it | `toggleFullscreen` |
 | `Alt+S` | Show the two selected tiles side by side, or restore the layout | `toggleSideBySide` |

@@ -2,7 +2,7 @@
 import type { ReactNode } from "react";
 import { ViewColumnsIcon } from "@heroicons/react/24/outline";
 import AddTileMenu from "./AddTileMenu";
-import { isFeatureEnabled } from "../domain/feature-flags";
+import { isTileTypeEnabled } from "../domain/feature-flags";
 import { supportsWsl, terminalTileLabel, shortcutLabel } from "../domain/platform";
 import { shortcutForMenuKey } from "../domain/keyboard";
 import type { TileIconKey } from "./tile-icons";
@@ -90,9 +90,9 @@ export default function StatusBar({
     { key: "meta", label: "Session Meta", icon: "info", shortcut: shortcutForMenuKey("meta"), onSelect: onAddSessionMeta },
     { key: "workbench", label: "Workbench", icon: "beaker", shortcut: shortcutForMenuKey("workbench"), onSelect: onAddWorkbench },
     { key: "plan", label: "Plan", icon: "plan", shortcut: shortcutForMenuKey("plan"), onSelect: onAddPlan },
-    { key: "code-review", label: "Code Review", icon: "code", shortcut: shortcutForMenuKey("code-review"), onSelect: onAddCodeReview },
-    { key: "walkthrough", label: "Code Walkthrough", icon: "code", shortcut: shortcutForMenuKey("walkthrough"), onSelect: onAddWalkthrough, gated: !isFeatureEnabled("debug-walkthrough") },
-    { key: "loop", label: "Goal Loop", icon: "loop", shortcut: shortcutForMenuKey("loop"), onSelect: onAddLoop },
+    { key: "code-review", label: "Code Review", icon: "code", shortcut: shortcutForMenuKey("code-review"), onSelect: onAddCodeReview, gated: !isTileTypeEnabled("code_review") },
+    { key: "walkthrough", label: "Code Walkthrough", icon: "code", shortcut: shortcutForMenuKey("walkthrough"), onSelect: onAddWalkthrough, gated: !isTileTypeEnabled("debug_walkthrough") },
+    { key: "loop", label: "Goal Loop", icon: "loop", shortcut: shortcutForMenuKey("loop"), onSelect: onAddLoop, gated: !isTileTypeEnabled("loop_control") },
   ];
   const menuItems = rawItems
     .filter((it) => typeof it.onSelect === "function" && !it.gated)

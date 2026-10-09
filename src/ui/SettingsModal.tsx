@@ -18,6 +18,7 @@ import {
 } from "../domain/app-settings";
 import { debounce } from "../domain/debounce";
 import { CompanionSettingsSection } from "../companion/CompanionSettingsSection";
+import { isFeatureEnabled } from "../domain/feature-flags";
 
 const SETTINGS_TABS = [
   { id: "fonts", label: "Fonts" },
@@ -48,6 +49,8 @@ export default function SettingsModal({ open, onClose }: Props) {
   const [localValues, setLocalValues] = useState<AppSettings>(() => getAppSettings());
   const [confirmCloseEnabled, setConfirmCloseEnabled] = useState(true);
   const [tab, setTab] = useState<SettingsTab>("fonts");
+  // Devlog export is part of the task board; hide it with the board.
+  const tabs = SETTINGS_TABS.filter(({ id }) => id !== "devlog" || isFeatureEnabled("tasks"));
 
   useEffect(() => {
     if (!open) return;
@@ -155,7 +158,7 @@ export default function SettingsModal({ open, onClose }: Props) {
             aria-orientation="vertical"
             style={{ display: "flex", flexDirection: "column", gap: 2, padding: 8, borderRight: "1px solid #313244", minWidth: 150, flexShrink: 0 }}
           >
-            {SETTINGS_TABS.map(({ id, label }) => (
+            {tabs.map(({ id, label }) => (
               <button
                 key={id}
                 id={`settings-tab-${id}`}
@@ -169,8 +172,8 @@ export default function SettingsModal({ open, onClose }: Props) {
                   const step = e.key === "ArrowDown" ? 1 : e.key === "ArrowUp" ? -1 : 0;
                   if (!step) return;
                   e.preventDefault();
-                  const index = SETTINGS_TABS.findIndex((t) => t.id === tab);
-                  const next = SETTINGS_TABS[(index + step + SETTINGS_TABS.length) % SETTINGS_TABS.length].id;
+                  const index = tabs.findIndex((t) => t.id === tab);
+                  const next = tabs[(index + step + tabs.length) % tabs.length].id;
                   setTab(next);
                   document.getElementById(`settings-tab-${next}`)?.focus();
                 }}

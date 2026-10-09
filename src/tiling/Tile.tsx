@@ -9,7 +9,7 @@ import PlanTile from "../tiles/PlanTile";
 import CodeReviewTile from "../tiles/CodeReviewTile";
 import DebugWalkthroughTile from "../tiles/DebugWalkthroughTile";
 import LoopControlTile from "../tiles/LoopControlTile";
-import { isFeatureEnabled, featureDescriptor } from "../domain/feature-flags";
+import { featureDescriptor, isTileTypeEnabled, tileTypeFeature } from "../domain/feature-flags";
 import { shortcutLabel, defaultRootDir } from "../domain/platform";
 
 function DisabledFeaturePlaceholder({ label, requires }: { label: string; requires: string }) {
@@ -174,7 +174,13 @@ function TileWrapperImpl({
   };
 
   let content: ReactNode;
-  switch (tile.tile_type) {
+  // A tile whose feature is hidden keeps its place in a saved layout but shows
+  // why it is empty, with a close button, instead of mounting.
+  const hiddenFeature = isTileTypeEnabled(tile.tile_type) ? null : tileTypeFeature(tile.tile_type);
+  if (hiddenFeature) {
+    const d = featureDescriptor(hiddenFeature);
+    content = <DisabledFeaturePlaceholder label={d.label} requires={d.requires} />;
+  } else switch (tile.tile_type) {
     case "terminal":
       content = (
         <TerminalTile
@@ -307,10 +313,7 @@ function TileWrapperImpl({
       break;
     }
     case "debug_walkthrough": {
-      if (!isFeatureEnabled("debug-walkthrough")) {
-        const d = featureDescriptor("debug-walkthrough");
-        content = <DisabledFeaturePlaceholder label={d.label} requires={d.requires} />;
-      } else {
+      {
         const cfg = (() => {
           try { return JSON.parse(tile.config_json || "{}"); } catch { return {}; }
         })();

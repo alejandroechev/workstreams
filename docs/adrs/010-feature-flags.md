@@ -13,6 +13,10 @@ removed when the Diff Review tile was retired (ADR 007). `plan-tile` is now the
 only flag. References to Diff Review below are historical. **Updated 2026-10-05:**
 the `plan-tile` flag was removed as well ([ADR 034](034-grill-answer-mode.md));
 the Plan tile ships to everyone, so references to it below are historical too.
+**Updated 2026-10-09:** `debug-walkthrough` became a sunset flag with its own
+variable, alongside new `code-review` and `goal-loop` flags
+([ADR 035](035-hiding-unused-tiles.md)); no flag is governed by the master
+toggle today.
 
 ## Context
 

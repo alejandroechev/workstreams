@@ -456,6 +456,11 @@ the rest.
 
 ## Goal loops
 
+> **Hidden by default (2026-10-09).** Not offered in the add-tile menu and its
+> shortcut does nothing; a saved tile shows a placeholder. The code and its data
+> are kept — set `VITE_ENABLE_GOAL_LOOP=1` to bring it back
+> ([ADR 035](adrs/035-hiding-unused-tiles.md)).
+
 A goal loop runs a bounded orchestrator → worker pipeline against the repo
 until the goal is met, and it must prove progress: every definition has to
 include deterministic verification, an independent evaluator, human approval,
@@ -543,7 +548,8 @@ MVP1 is manual and local: a loop runs while Workstreams is open. See
 > [ADR 028](adrs/028-sunsetting-the-task-board.md). Tracking work in it made
 > work harder to track, and the free-form text file won. The code and all 26
 > tasks / 213 events are intentionally still there; set `VITE_ENABLE_TASKS=1`
-> to bring it back.
+> to bring it back. The **Devlog export** settings tab is hidden with it
+> ([ADR 035](adrs/035-hiding-unused-tiles.md)).
 >
 > The **quick-note bar** described below is *not* retired. It is the part that
 > survived — 87 manual notes on a near-daily cadence — and its history is meant
@@ -595,6 +601,11 @@ See [ADR 020](adrs/020-task-board-devlog-export.md).
 
 ## Local code review
 
+> **Hidden by default (2026-10-09).** Not offered in the add-tile menu and its
+> shortcut does nothing; a saved tile shows a placeholder. The code and its data
+> are kept — set `VITE_ENABLE_CODE_REVIEW=1` to bring it back
+> ([ADR 035](adrs/035-hiding-unused-tiles.md)).
+
 A diff-first, PR-style review tile for AI-agent *or* human-written code, with
 no Azure DevOps round-trips and no MCP. `Alt+A` opens it.
 
@@ -641,6 +652,11 @@ Threads imported from an external review (for example via the
 being attributed to you, and are read-only.
 
 ## Code walkthrough (experimental)
+
+> **Hidden by default (2026-10-09).** Not offered in the add-tile menu and its
+> shortcut does nothing; a saved tile shows a placeholder. The code and its data
+> are kept — set `VITE_ENABLE_WALKTHROUGH=1` to bring it back
+> ([ADR 035](adrs/035-hiding-unused-tiles.md)).
 
 Step through a Rust test's **real execution** to understand code, not to debug
 it. Because it is a replay, you can also step **backwards**.
@@ -911,11 +927,13 @@ what the app actually does. Do not restate those tables here.
 
 Behaviour the generated table does not capture:
 
-- **Feature-flagged tiles.** `Alt+D` (code walkthrough tile) sits behind the
-  `debug-walkthrough` flag. The key handler stays registered either way — the
-  flag gates whether the tile can be created, not whether the key is parsed —
-  per [ADR 010](adrs/010-feature-flags.md). The generated reference marks the
-  row with its flag name rather than hiding it. (`Alt+P`, the Plan tile, is no
+- **Feature-flagged tiles.** `Alt+A` (code review), `Alt+D` (code walkthrough)
+  and `Alt+L` (goal loop) sit behind the `code-review`, `debug-walkthrough` and
+  `goal-loop` sunset flags, all off by default. The keys are still parsed, but
+  the app refuses to create a hidden tile, so they do nothing
+  ([ADR 010](adrs/010-feature-flags.md), [ADR 035](adrs/035-hiding-unused-tiles.md)).
+  The generated reference marks each row with its flag name rather than hiding
+  it. (`Alt+P`, the Plan tile, is no
   longer flagged — [ADR 034](adrs/034-grill-answer-mode.md).)
 - **Editor guard.** Tile-creation shortcuts are suppressed while a Monaco
   editor has text focus, so typing `w` in a file never spawns a terminal tile.
