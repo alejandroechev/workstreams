@@ -6,7 +6,7 @@ import type { ValidationRound } from "../../domain/acceptance/view";
 export interface AcceptanceIo extends GrillIo {
   listDir(path: string): Promise<string[]>;
   /** Names with modified times, to notice a frame redrawn in place. */
-  listEntries(path: string): Promise<Array<{ name: string; modified: number }>>;
+  listEntries(path: string): Promise<Array<{ name: string; modified: string; size: number }>>;
 }
 
 export const tauriAcceptanceIo: AcceptanceIo = {
@@ -16,8 +16,8 @@ export const tauriAcceptanceIo: AcceptanceIo = {
     return entries.map((entry) => entry.name);
   },
   async listEntries(path) {
-    const entries = await invoke<Array<{ name: string; modified_epoch: number }>>("list_directory", { path });
-    return entries.map((entry) => ({ name: entry.name, modified: entry.modified_epoch }));
+    const entries = await invoke<Array<{ name: string; modified_epoch: number; modified_ns?: string; size: number }>>("list_directory", { path });
+    return entries.map((entry) => ({ name: entry.name, modified: entry.modified_ns ?? String(entry.modified_epoch), size: entry.size }));
   },
 };
 
@@ -25,7 +25,7 @@ export const tauriAcceptanceIo: AcceptanceIo = {
 export async function assetRevision(io: AcceptanceIo, featureDir: string, testId: string): Promise<string> {
   try {
     const entries = await io.listEntries(`${featureDir}/acceptance-assets/${testId}`);
-    return entries.map((e) => `${e.name}:${e.modified}`).sort().join("|");
+    return entries.map((e) => `${e.name}:${e.modified}:${e.size}`).sort().join("|");
   } catch {
     return "";
   }

@@ -1845,6 +1845,10 @@ struct DirEntry {
     name: String,
     is_dir: bool,
     modified_epoch: u64,
+    /// Modification time in nanoseconds, as a string (it exceeds JS's safe
+    /// integers). Whole seconds miss a file rewritten within the same second,
+    /// which is how the acceptance Review mode notices a redrawn frame (ADR 037).
+    modified_ns: String,
     /// Byte size for files; 0 for directories.
     size: u64,
 }
@@ -1858,12 +1862,12 @@ fn list_directory(path: String) -> Result<Vec<DirEntry>, String> {
         if let Some(name) = entry.file_name().to_str() {
             let metadata = entry.metadata().ok();
             let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
-            let modified_epoch = metadata
+            let modified = metadata
                 .as_ref()
                 .and_then(|m| m.modified().ok())
-                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                .map(|d: std::time::Duration| d.as_secs())
-                .unwrap_or(0);
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok());
+            let modified_epoch = modified.map(|d| d.as_secs()).unwrap_or(0);
+            let modified_ns = modified.map(|d| d.as_nanos()).unwrap_or(0).to_string();
             let size = if is_dir {
                 0
             } else {
@@ -1873,6 +1877,7 @@ fn list_directory(path: String) -> Result<Vec<DirEntry>, String> {
                 name: name.to_string(),
                 is_dir,
                 modified_epoch,
+                modified_ns,
                 size,
             };
             if is_dir {
@@ -8632,6 +8637,26 @@ Body here.
         assert!(folders[1].has_grill_me && !folders[1].has_plan);
         assert!(folders[1].plan_path.is_none());
 
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn list_directory_reports_sub_second_modification_times() {
+        let tmp = std::env::temp_dir().join(format!("ws-listdir-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let file = tmp.join("frame.html");
+        std::fs::write(&file, "a").unwrap();
+        let expected = std::fs::metadata(&file)
+            .unwrap()
+            .modified()
+            .unwrap()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+            .to_string();
+        let entries = list_directory(tmp.to_string_lossy().into_owned()).unwrap();
+        assert_eq!(entries[0].modified_ns, expected);
+        assert_eq!(entries[0].size, 1);
         std::fs::remove_dir_all(&tmp).ok();
     }
 

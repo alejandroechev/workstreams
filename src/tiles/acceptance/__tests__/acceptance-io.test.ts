@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { tauriAcceptanceIo, validationRounds, type AcceptanceIo } from "../acceptance-io";
+import { assetRevision, tauriAcceptanceIo, validationRounds, type AcceptanceIo } from "../acceptance-io";
 
 const invokeMock = vi.hoisted(() => vi.fn());
 vi.mock("@tauri-apps/api/core", () => ({ invoke: invokeMock }));
@@ -27,9 +27,16 @@ describe("reading validation rounds", () => {
 });
 
 describe("the app's directory listing", () => {
-  it("returns names with modified times for asset change detection", async () => {
-    invokeMock.mockResolvedValueOnce([{ name: "1.html", is_dir: false, modified_epoch: 42, size: 3 }]);
-    expect(await tauriAcceptanceIo.listEntries("/f/acceptance-assets/AT-1")).toEqual([{ name: "1.html", modified: 42 }]);
+  it("returns names with nanosecond modified times and sizes for asset change detection", async () => {
+    invokeMock.mockResolvedValueOnce([{ name: "1.html", is_dir: false, modified_epoch: 1000, modified_ns: "1000100000000", size: 3 }]);
+    expect(await tauriAcceptanceIo.listEntries("/f/acceptance-assets/AT-1")).toEqual([{ name: "1.html", modified: "1000100000000", size: 3 }]);
+  });
+
+  it("tells apart two rewrites within the same second", async () => {
+    invokeMock.mockResolvedValueOnce([{ name: "1.html", is_dir: false, modified_epoch: 1000, modified_ns: "1000100000000", size: 3 }]);
+    const first = await assetRevision(tauriAcceptanceIo, "/f", "AT-1");
+    invokeMock.mockResolvedValueOnce([{ name: "1.html", is_dir: false, modified_epoch: 1000, modified_ns: "1000900000000", size: 3 }]);
+    expect(await assetRevision(tauriAcceptanceIo, "/f", "AT-1")).not.toBe(first);
   });
 
   it("returns entry names from list_directory", async () => {

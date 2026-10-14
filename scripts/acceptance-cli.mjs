@@ -47,6 +47,9 @@ async function main() {
   const raw = fs.readFileSync(file, "utf8");
   // The writers work on LF text; a CRLF file is written back CRLF, never mixed.
   const crlf = raw.includes("\r\n");
+  if (crlf && command !== "parse" && /(^|[^\r])\n/.test(raw)) {
+    fail("This file mixes CRLF and LF line endings; make them consistent before editing it here.");
+  }
   const text = crlf ? raw.replace(/\r\n/g, "\n") : raw;
   let result;
   if (command === "parse") {

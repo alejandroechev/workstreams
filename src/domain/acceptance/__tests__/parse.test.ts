@@ -68,6 +68,7 @@ describe("parsing an acceptance file", () => {
     expect(status("status: final")).toBe("approved");
     expect(status('status: "draft"')).toBe("draft");
     expect(status("feature: x")).toBe("draft");
+    expect(status("metadata:\n  status: draft\nstatus: approved")).toBe("approved");
   });
 
   it("treats a file without front-matter as a draft", () => {

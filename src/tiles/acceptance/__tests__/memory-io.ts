@@ -26,7 +26,7 @@ export function memoryAcceptanceIo(initial: string, opts: { assets?: Record<stri
     listEntries: vi.fn(async (path: string) => {
       const prefix = `${path}/`;
       const names = Object.keys(assets).filter((p) => p.startsWith(prefix) && !p.slice(prefix.length).includes("/"));
-      return names.map((p) => ({ name: p.slice(prefix.length), modified: modified[p] ?? 0 }));
+      return names.map((p) => ({ name: p.slice(prefix.length), modified: String(modified[p] ?? 0), size: assets[p].length }));
     }),
     externalWrite(next: string) { text = next; version += 1; },
     /** Rewrites an asset in place, as the agent redrawing a frame would. */

@@ -49,6 +49,16 @@ describe("acceptance-cli", () => {
     expect(text.replace(/\r\n/g, "")).not.toContain("\n");
   });
 
+  it("refuses to edit a file with mixed line endings, leaving it untouched", () => {
+    const file = copy();
+    const mixed = fs.readFileSync(fixture, "utf8").replace("\n", "\r\n");
+    fs.writeFileSync(file, mixed);
+    const refused = run("mark", file, "AT-3", "ok");
+    expect(refused.status).toBe(1);
+    expect(refused.stderr).toContain("mixes CRLF and LF");
+    expect(fs.readFileSync(file, "utf8")).toBe(mixed);
+  });
+
   it("refuses to change an approved file, and explains bad usage", () => {
     const refused = run("mark", old, "AT-1", "ok");
     expect(refused.status).toBe(1);

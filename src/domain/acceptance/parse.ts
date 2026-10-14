@@ -87,7 +87,8 @@ const FIELD_NAMES: Record<string, FieldName> = {
 function frontMatterStatus(lines: string[]): AcceptanceStatus {
   if (lines[0]?.trim() !== "---") return "draft";
   for (let i = 1; i < lines.length && lines[i].trim() !== "---"; i += 1) {
-    const match = /^status\s*:\s*(.*)$/i.exec(lines[i].trim());
+    // Top-level keys only: an indented `status:` belongs to a nested map.
+    const match = /^status\s*:\s*(.*)$/i.exec(lines[i].trimEnd());
     if (match) return match[1].trim().replace(/^["']|["']$/g, "").trim().toLowerCase() === "draft" ? "draft" : "approved";
   }
   return "draft";
