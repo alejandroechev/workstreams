@@ -328,6 +328,30 @@ The Grill tab opens in **Answer mode**, a focused way to answer a `grill-me.md`
 Edit / Preview / Slides show the file itself. The same operations are available
 without the UI: `node scripts/grill-cli.mjs parse|answer|finish <grill-me.md>`.
 
+The Acceptance tab opens in **Review** mode, for approving the feature's
+`acceptance.md` before implementation ([ADR 037](adrs/037-acceptance-review-mode.md)).
+**List** keeps the list where results are recorded.
+
+- **One test per screen**, in file order: Validates, the automation tag,
+  Given/When/Then, *Passes when* and both Verify notes. Use `←` / `→` / `Enter`
+  and Previous/Next to move. The strip is coloured by your mark (grey not
+  reviewed, green looks right, yellow needs change), and you can filter by mark.
+- **Mark it:** *Looks right*, *Needs change* with a note, or *Clear mark*. Add
+  a *Missing test* note below the card, or press *Show me this* to ask for a
+  storyboard. Everything is written into the draft file as you go; nothing is
+  sent to the session. Type `review` there to have the agent apply your marks,
+  or `approve`, which it refuses while anything still needs changes.
+- **Storyboards:** UI tests get a filmstrip of low-fi mockups, one or more per
+  Given/When/Then step, from `acceptance-assets/<AT>/`. They are sandboxed like
+  grill prototypes, and clicking a frame's header enlarges it. Once a
+  validation round has saved screenshots
+  (`validation/r<n>/<AT>-<frame>.png`), each appears beside its mockup as
+  *Expected* / *Actual — round n*, read-only.
+- **Once `acceptance.md` is approved, Review mode is read-only and never writes
+  it**, so the validation digest stays meaningful.
+
+CLI parity: `node scripts/acceptance-cli.mjs parse|mark|missing|request <acceptance.md>`.
+
 ## Workbench tile
 
 A per-workstream scratch list of files you're actively working on. Right-click

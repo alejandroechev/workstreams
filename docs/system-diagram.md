@@ -15,6 +15,7 @@ graph TB
             SessionMeta["SessionMetaTile<br/>Session + file detail"]
             Workbench["WorkbenchTile<br/>Workbench file detail"]
             PlanTile["PlanTile (ADR 034)<br/>session features: overview / acceptance / graph<br/>Grill tab: Answer mode (default) + Edit/Preview/Slides"]
+            AcceptanceReview["AcceptanceReviewView (ADR 037)<br/>domain/acceptance: parse + one-line mark writers<br/>storyboards from acceptance-assets/ (sandboxed)<br/>validation screenshots read-only; no writes once approved"]
             GrillAnswer["GrillAnswerView (ADR 034)<br/>domain/grill: parse + one-slot writers<br/>CAS write + 2s poll; sandboxed srcdoc prototypes<br/>assets only from grill-assets/"]
             CodeReview["CodeReviewTile — hidden by default (ADR 035)<br/>diff-first PR-style review (ADR 014)<br/>inline comments + in-place edit<br/>reviewer↔agent via session.db, no MCP<br/>manual Sync (no poll)"]
             LoopControl["LoopControlTile (ADR 021/022/023) — hidden by default (ADR 035)<br/>Definitions: shared YAML editor<br/>Run: catalog + controls/evidence<br/>human Approve/Revise/Reject"]
@@ -116,6 +117,8 @@ graph TB
     TileGrid --> Workbench
     TileGrid --> PlanTile
     PlanTile --> GrillAnswer
+    PlanTile --> AcceptanceReview
+    AcceptanceReview -- "invoke: read_text_file, write_text_file (expected hash),<br/>read_file_base64, list_directory" --> LibRS
     PlanTile -- "Edit/Preview/Slides" --> FileBuffers
     GrillAnswer -- "invoke: read_text_file, write_text_file (expected hash),<br/>read_file_base64, get/set_setting" --> LibRS
     TileGrid --> CodeReview

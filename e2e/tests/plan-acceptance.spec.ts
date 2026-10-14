@@ -119,6 +119,7 @@ test.describe("Plan tile acceptance tab", () => {
     await openPlanTile(page);
 
     await page.locator('[data-testid="plan-tab-acceptance"]').click();
+    await page.locator('[data-testid="acceptance-mode-list"]').click();
     await expect(page.getByText("Lane colours are distinct")).toBeVisible();
     await expect(page.locator('[data-testid="acceptance-automation-AT-1"]')).toHaveText(
       "human-only",
@@ -135,6 +136,7 @@ test.describe("Plan tile acceptance tab", () => {
     await openPlanTile(page);
 
     await page.locator('[data-testid="plan-tab-acceptance"]').click();
+    await page.locator('[data-testid="acceptance-mode-list"]').click();
     await page.locator('[data-testid="acceptance-set-AT-1-pass"]').click();
     await expect(page.locator('[data-testid="acceptance-set-AT-1-pass"]')).toHaveAttribute(
       "aria-pressed",
@@ -143,6 +145,7 @@ test.describe("Plan tile acceptance tab", () => {
 
     await page.locator('[data-testid="plan-tab-overview"]').click();
     await page.locator('[data-testid="plan-tab-acceptance"]').click();
+    await page.locator('[data-testid="acceptance-mode-list"]').click();
     await expect(page.locator('[data-testid="acceptance-set-AT-1-pass"]')).toHaveAttribute(
       "aria-pressed",
       "true",

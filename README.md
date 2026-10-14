@@ -89,7 +89,11 @@ instead of buried behind tabs.
   filter to what matters, option buttons, the recommendation hidden until you
   ask, and mermaid diagrams or sandboxed HTML prototypes per option. Answers
   save straight into the file
-  ([ADR 034](docs/adrs/034-grill-answer-mode.md)).
+  ([ADR 034](docs/adrs/034-grill-answer-mode.md)). The Acceptance tab does the
+  same for approving a feature's acceptance tests: one test per screen, a
+  storyboard of mockups per UI test, Looks right / Needs change marks, and the
+  real screenshots beside the mockups once validation has run
+  ([ADR 037](docs/adrs/037-acceptance-review-mode.md)).
 - **Everything persists** — workstreams, tile layouts, terminal scrollback,
   open files and per-tile view state all survive a restart.
 - **Keyboard-driven** — `Alt+<letter>` opens any tile type, `Alt+Arrows` moves
