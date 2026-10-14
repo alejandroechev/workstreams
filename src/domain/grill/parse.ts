@@ -77,13 +77,13 @@ function normaliseImportance(text: string): Importance {
   return IMPORTANCE_LEVELS.find((level) => level.toLowerCase() === lower) ?? "Medium";
 }
 
-/** Which lines are inside a fenced code block (where nothing is markup). */
 /** True when a fence is still open at the end of the text. */
 export function endsInsideFence(text: string): boolean {
   return scanFences(text.replace(/\r\n/g, "\n").split("\n")).openAtEnd;
 }
 
-function fencedLines(lines: string[]): boolean[] {
+/** Which lines are inside a fenced code block (shared with the acceptance parser). */
+export function fencedLines(lines: string[]): boolean[] {
   return scanFences(lines).inside;
 }
 

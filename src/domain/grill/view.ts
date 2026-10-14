@@ -39,14 +39,15 @@ export function selectedOption(answer: string, options: GrillOption[]): { key: s
 }
 
 /**
- * The absolute path of a visual, only if it lies inside the grill's own
- * `grill-assets/` folder. Anything else (absolute, parent segments, URLs,
+ * The absolute path of a visual, only if it lies inside the document's own
+ * asset folder (`grill-assets/` for grills, `acceptance-assets/` for acceptance
+ * files). Anything else (absolute, parent segments, URLs,
  * backslashes) is refused.
  */
-export function assetPath(grillDir: string, relative: string): string | null {
+export function assetPath(grillDir: string, relative: string, root = "grill-assets"): string | null {
   if (!relative || relative.includes("\\") || relative.startsWith("/") || /^[a-z][a-z0-9+.-]*:/i.test(relative)) return null;
   const parts = relative.split("/");
-  if (parts[0] !== "grill-assets" || parts.length < 2 || parts.some((p) => p === ".." || p === "." || p === "")) return null;
+  if (parts[0] !== root || parts.length < 2 || parts.some((p) => p === ".." || p === "." || p === "")) return null;
   return `${grillDir.replace(/\/+$/, "")}/${relative}`;
 }
 
