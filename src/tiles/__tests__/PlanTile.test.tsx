@@ -297,6 +297,23 @@ describe("PlanTile acceptance tab", () => {
   const withTests = (over: Partial<AcceptanceTest>[] = [{}]) =>
     setup({ features: [feat("alpha")], currentPlanId: null }, over);
 
+  it("opens in Review mode on the feature's acceptance.md, with List one click away", async () => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    vi.mocked(invoke).mockImplementation(async (cmd: string) =>
+      cmd === "read_text_file"
+        ? { content: "## AT-1 — Lane colours are distinct\n**Given** a lane\n", hash_hex: "h", line_ending: "lf", has_trailing_newline: true }
+        : cmd === "list_directory" ? [] : "# plan body");
+    setup({ features: [feat("alpha")], currentPlanId: "alpha-plan" }, [{ at_id: "AT-1", title: "Lane colours are distinct" }]);
+    await waitFor(() => expect(screen.getByTestId("plan-tab-acceptance")).toBeTruthy());
+    fireEvent.click(screen.getByTestId("plan-tab-acceptance"));
+    await waitFor(() => expect(screen.getByTestId("acceptance-review-view")).toBeTruthy());
+    expect(screen.getByTestId("acceptance-mode-review").getAttribute("aria-checked")).toBe("true");
+    expect(vi.mocked(invoke)).toHaveBeenCalledWith("read_text_file", { path: "/x/alpha/acceptance.md" });
+    fireEvent.click(screen.getByTestId("acceptance-mode-list"));
+    expect(screen.queryByTestId("acceptance-review-view")).toBeNull();
+    expect(screen.getByTestId("acceptance-list")).toBeTruthy();
+  });
+
   /** A feature planned before acceptance tests existed has none. */
   it("hides the tab when a feature has no acceptance tests", async () => {
     setup({ features: [feat("alpha")], currentPlanId: null });
@@ -312,6 +329,7 @@ describe("PlanTile acceptance tab", () => {
     await waitFor(() => expect(screen.getByTestId("plan-tab-acceptance")).toBeTruthy());
 
     fireEvent.click(screen.getByTestId("plan-tab-acceptance"));
+    fireEvent.click(screen.getByTestId("acceptance-mode-list"));
     expect(screen.getByText("Lane colours are distinct")).toBeTruthy();
     // How a test is run is the thing you need before deciding to run it.
     expect(screen.getByTestId("acceptance-automation-AT-1").textContent).toBe("human-only");
@@ -322,6 +340,7 @@ describe("PlanTile acceptance tab", () => {
     withTests([{ at_id: "AT-10" }, { at_id: "AT-9" }, { at_id: "AT-2" }]);
     await waitFor(() => expect(screen.getByTestId("plan-tab-acceptance")).toBeTruthy());
     fireEvent.click(screen.getByTestId("plan-tab-acceptance"));
+    fireEvent.click(screen.getByTestId("acceptance-mode-list"));
 
     const ids = Array.from(document.querySelectorAll('[data-testid^="acceptance-test-"]')).map(
       (node) => node.getAttribute("data-testid"),
@@ -337,6 +356,7 @@ describe("PlanTile acceptance tab", () => {
     const backend = withTests([{ id: "t-a", at_id: "AT-1" }]);
     await waitFor(() => expect(screen.getByTestId("plan-tab-acceptance")).toBeTruthy());
     fireEvent.click(screen.getByTestId("plan-tab-acceptance"));
+    fireEvent.click(screen.getByTestId("acceptance-mode-list"));
 
     fireEvent.click(screen.getByTestId("acceptance-set-AT-1-pass"));
     await waitFor(async () => {
@@ -353,6 +373,7 @@ describe("PlanTile acceptance tab", () => {
     ]);
     await waitFor(() => expect(screen.getByTestId("plan-tab-acceptance")).toBeTruthy());
     fireEvent.click(screen.getByTestId("plan-tab-acceptance"));
+    fireEvent.click(screen.getByTestId("acceptance-mode-list"));
 
     fireEvent.click(screen.getByTestId("acceptance-set-AT-1-not_run"));
     await waitFor(async () => {
@@ -371,6 +392,7 @@ describe("PlanTile acceptance tab", () => {
     const backend = withTests([{ id: "t-a", at_id: "AT-1" }]);
     await waitFor(() => expect(screen.getByTestId("plan-tab-acceptance")).toBeTruthy());
     fireEvent.click(screen.getByTestId("plan-tab-acceptance"));
+    fireEvent.click(screen.getByTestId("acceptance-mode-list"));
 
     fireEvent.click(screen.getByTestId("acceptance-set-AT-1-pass_unverified"));
     await waitFor(async () => {

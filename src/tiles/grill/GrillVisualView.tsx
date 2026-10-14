@@ -27,15 +27,23 @@ type Loaded =
  * are ever read; prototypes run with scripts but no network, no access to the
  * app and no way to navigate it.
  */
-export function GrillVisualView({ visual, grillDir, io }: { visual: GrillVisual; grillDir: string; io: GrillIo }) {
+export function GrillVisualView({ visual, grillDir, io, assetRoot = "grill-assets", height = 320 }: {
+  visual: GrillVisual;
+  grillDir: string;
+  io: GrillIo;
+  /** The folder next to the document that visuals must come from (ADR 034, 037). */
+  assetRoot?: string;
+  /** Height of a prototype frame, in pixels. */
+  height?: number;
+}) {
   const [loaded, setLoaded] = useState<Loaded>({ kind: "loading" });
 
   useEffect(() => {
     let cancelled = false;
     const done = (next: Loaded) => { if (!cancelled) setLoaded(next); };
-    const path = assetPath(grillDir, visual.path);
+    const path = assetPath(grillDir, visual.path, assetRoot);
     if (!path) {
-      done({ kind: "error", message: `Not shown: ${visual.path} is outside this grill's grill-assets folder.` });
+      done({ kind: "error", message: `Not shown: ${visual.path} is outside this document's ${assetRoot} folder.` });
       return;
     }
     const ext = extension(visual.path);
@@ -53,7 +61,7 @@ export function GrillVisualView({ visual, grillDir, io }: { visual: GrillVisual;
           for (const match of text.matchAll(/\ssrc=["']([^"']+)["']/gi)) {
             const src = match[1];
             const mime = IMAGE_MIME[extension(src)];
-            const resolved = mime ? assetPath(grillDir, `${folderOf(visual.path)}/${src}`) : null;
+            const resolved = mime ? assetPath(grillDir, `${folderOf(visual.path)}/${src}`, assetRoot) : null;
             if (!resolved || images[src]) continue;
             images[src] = `data:${mime};base64,${await io.readBase64(resolved)}`;
           }
@@ -66,7 +74,7 @@ export function GrillVisualView({ visual, grillDir, io }: { visual: GrillVisual;
       done({ kind: "error", message: `Not shown: ${visual.path} is not an image or an HTML prototype.` });
     }
     return () => { cancelled = true; };
-  }, [grillDir, io, visual.path]);
+  }, [assetRoot, grillDir, io, visual.path]);
 
   return (
     <figure data-testid="grill-visual" data-path={visual.path} style={{ margin: 0, display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
@@ -80,7 +88,7 @@ export function GrillVisualView({ visual, grillDir, io }: { visual: GrillVisual;
           sandbox="allow-scripts"
           referrerPolicy="no-referrer"
           srcDoc={loaded.srcDoc}
-          style={{ width: "100%", height: 320, border: "1px solid #313244", borderRadius: 4, background: "#fff" }}
+          style={{ width: "100%", height, border: "1px solid #313244", borderRadius: 4, background: "#fff" }}
         />
       )}
       {loaded.kind === "loading" && <div style={{ fontSize: 11, color: "#6c7086" }}>Loading {visual.label}…</div>}

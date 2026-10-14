@@ -35,7 +35,7 @@ describe("a grill visual", () => {
   it("refuses files outside the grill's assets", async () => {
     const io = memoryGrillIo("");
     render(<GrillVisualView visual={visual("../other/x.png")} grillDir={DIR} io={io} />);
-    expect((await screen.findByRole("alert")).textContent).toContain("outside this grill's grill-assets folder");
+    expect((await screen.findByRole("alert")).textContent).toContain("outside this document's grill-assets folder");
     expect(io.readBase64).not.toHaveBeenCalled();
   });
 

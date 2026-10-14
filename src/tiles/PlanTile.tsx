@@ -8,6 +8,7 @@ import { FileEditorView, type MarkdownViewState } from "../files/FileEditorView"
 import type { BufferSnapshot } from "../files/FileBufferRegistry";
 import { MarkdownModeSelector } from "../ui/components/MarkdownModeSelector";
 import { GrillAnswerView } from "./grill/GrillAnswerView";
+import { AcceptanceReviewView } from "./acceptance/AcceptanceReviewView";
 import { useBackend } from "../backend/context";
 import { buildTodoDepsMermaid } from "../domain/todo-deps-mermaid";
 import { parseViewState } from "../domain/tile-view-state";
@@ -341,6 +342,8 @@ export default function PlanTile({ linkedSessionIds, configJson, onConfigChange,
   const [editorViewState, setEditorViewState] = useState<MarkdownViewState | null>(null);
   // The Grill tab opens in Answer mode (ADR 034); Edit/Preview/Slides are the file itself.
   const [grillAnswering, setGrillAnswering] = useState(true);
+  // The Acceptance tab opens in Review mode (ADR 037); List records results.
+  const [acceptanceMode, setAcceptanceMode] = useState<"review" | "list">("review");
   const [todos, setTodos] = useState<SessionTodo[]>([]);
   const [acceptanceTests, setAcceptanceTests] = useState<AcceptanceTest[]>([]);
   /** The plan whose tests are loaded, so a refresh does not need `selected`,
@@ -646,18 +649,45 @@ export default function PlanTile({ linkedSessionIds, configJson, onConfigChange,
                     }
                   />
                 )}
-                {shownTab === "acceptance" && (
-                  <AcceptanceTab
-                    tests={acceptanceTests}
-                    onSetStatus={async (testId, status, notes) => {
-                      if (!sessionId) return;
-                      await backend
-                        .setSessionAcceptanceStatus(sessionId, testId, status, notes)
-                        .catch(() => {});
-                      await loadAcceptance();
-                    }}
-                  />
-                )}
+                {shownTab === "acceptance" && (() => {
+                  const folder = (selected.grillMePath ?? selected.planPath)?.split("/").slice(0, -1).join("/");
+                  const acceptancePath = folder ? `${folder}/acceptance.md` : null;
+                  const reviewing = acceptancePath !== null && acceptanceMode === "review";
+                  return (
+                    <div style={{ height: "100%", display: "flex", flexDirection: "column", minHeight: 0 }}>
+                      {acceptancePath && (
+                        <div role="radiogroup" aria-label="Acceptance view mode" data-testid="acceptance-mode-selector"
+                          style={{ display: "flex", gap: 2, padding: "6px 12px", borderBottom: "1px solid #2a2a2a" }}>
+                          {(["review", "list"] as const).map((mode) => (
+                            <button key={mode} type="button" role="radio" aria-checked={acceptanceMode === mode}
+                              data-testid={`acceptance-mode-${mode}`} onClick={() => setAcceptanceMode(mode)}
+                              style={{ border: "none", borderRadius: 3, padding: "2px 10px", fontSize: 11, cursor: "pointer",
+                                background: acceptanceMode === mode ? "#313244" : "transparent",
+                                color: acceptanceMode === mode ? "#cdd6f4" : "#7f849c" }}>
+                              {mode === "review" ? "Review" : "List"}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                      <div style={{ flex: 1, minHeight: 0, overflow: reviewing ? "hidden" : "auto" }}>
+                        {reviewing ? (
+                          <AcceptanceReviewView key={acceptancePath} path={acceptancePath} />
+                        ) : (
+                          <AcceptanceTab
+                            tests={acceptanceTests}
+                            onSetStatus={async (testId, status, notes) => {
+                              if (!sessionId) return;
+                              await backend
+                                .setSessionAcceptanceStatus(sessionId, testId, status, notes)
+                                .catch(() => {});
+                              await loadAcceptance();
+                            }}
+                          />
+                        )}
+                      </div>
+                    </div>
+                  );
+                })()}
                 {shownTab === "graph" && (
                   <div style={{ height: "100%" }}>
                     <MermaidDiagram
