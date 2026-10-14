@@ -79,11 +79,16 @@ const FIELD_NAMES: Record<string, FieldName> = {
   "visual requested": "visualRequested",
 };
 
+/**
+ * Only an explicit `draft` is a draft. Anything else in the status field
+ * (approved, quoted, any casing, an unknown word) counts as approved, so the
+ * writers fail closed rather than edit a file validation may have pinned.
+ */
 function frontMatterStatus(lines: string[]): AcceptanceStatus {
   if (lines[0]?.trim() !== "---") return "draft";
   for (let i = 1; i < lines.length && lines[i].trim() !== "---"; i += 1) {
-    const match = /^status:\s*(\S+)/.exec(lines[i]);
-    if (match) return match[1].toLowerCase() === "approved" ? "approved" : "draft";
+    const match = /^status\s*:\s*(.*)$/i.exec(lines[i].trim());
+    if (match) return match[1].trim().replace(/^["']|["']$/g, "").trim().toLowerCase() === "draft" ? "draft" : "approved";
   }
   return "draft";
 }
@@ -174,7 +179,11 @@ function parseTest(lines: string[], fenced: boolean[], heading: number, end: num
     // A blank line ends a single-paragraph field, except inside Verify (agent),
     // which often holds a code block and several paragraphs.
     if (line.trim() === "" && field && field.name !== "verifyAgent" && field.name !== "verifyHuman") { flush(); field = null; continue; }
-    if (field) field.values.push(line);
+    if (field) {
+      field.values.push(line);
+      // A wrapped header value: a mark must go after its last line, not inside it.
+      if ((field.name === "validates" || field.name === "automation" || field.name === "review") && test.lines.requestAt === end) test.lines.header = Math.max(test.lines.header, i);
+    }
   }
   flush();
   return test;

@@ -4,7 +4,7 @@ import { addMissing, addVisualRequest, setReview } from "../../domain/acceptance
 import { filterByMark, MARK_COLORS, MARK_LABELS, markOf, type MarkFilter, type ValidationRound } from "../../domain/acceptance/view";
 import type { WriteResult } from "../../domain/grill/write";
 import { updateGrillFile } from "../grill/grill-io";
-import { tauriAcceptanceIo, validationRounds, type AcceptanceIo } from "./acceptance-io";
+import { assetRevision, tauriAcceptanceIo, validationRounds, type AcceptanceIo } from "./acceptance-io";
 import { AcceptanceCard } from "./AcceptanceCard";
 
 const POLL_MS = 2000;
@@ -29,6 +29,9 @@ export function AcceptanceReviewView({ path, io = tauriAcceptanceIo }: { path: s
   const [currentId, setCurrentId] = useState<string | null>(null);
   const [status, setStatus] = useState<{ kind: "saving" | "saved" | "error"; message?: string } | null>(null);
   const [missingNote, setMissingNote] = useState("");
+  const [revision, setRevision] = useState("");
+  /** The test on screen, read by the poll to watch its storyboard folder. */
+  const shownId = useRef<string | null>(null);
   const inFlight = useRef(0);
   const queue = useRef<Promise<unknown>>(Promise.resolve());
   const featureDir = path.split("/").slice(0, -1).join("/");
@@ -43,6 +46,10 @@ export function AcceptanceReviewView({ path, io = tauriAcceptanceIo }: { path: s
       setLoadError(`Could not read the acceptance tests: ${error instanceof Error ? error.message : String(error)}`);
     }
     setRounds(await validationRounds(io, featureDir));
+    if (shownId.current) {
+      const next = await assetRevision(io, featureDir, shownId.current);
+      setRevision((previous) => (previous === next ? previous : next));
+    }
   }, [featureDir, io, path]);
 
   useEffect(() => {
@@ -75,6 +82,7 @@ export function AcceptanceReviewView({ path, io = tauriAcceptanceIo }: { path: s
   let index = tests.findIndex((t) => t.id === currentId);
   if (index < 0) index = 0;
   const current = tests[index] ?? null;
+  useEffect(() => { shownId.current = current?.id ?? null; }, [current]);
   const go = (next: number) => {
     const target = tests[Math.max(0, Math.min(next, tests.length - 1))];
     if (target) setCurrentId(target.id);
@@ -137,6 +145,7 @@ export function AcceptanceReviewView({ path, io = tauriAcceptanceIo }: { path: s
             featureDir={featureDir}
             io={io}
             rounds={rounds}
+            assetRevision={revision}
             onMark={(mark: ReviewMark | null) => { if (!readOnly) void write((t) => setReview(t, current.id, mark)); }}
             onRequestVisual={(note) => { if (!readOnly) void write((t) => addVisualRequest(t, current.id, note)); }}
           />

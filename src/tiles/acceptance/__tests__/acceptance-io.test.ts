@@ -27,6 +27,11 @@ describe("reading validation rounds", () => {
 });
 
 describe("the app's directory listing", () => {
+  it("returns names with modified times for asset change detection", async () => {
+    invokeMock.mockResolvedValueOnce([{ name: "1.html", is_dir: false, modified_epoch: 42, size: 3 }]);
+    expect(await tauriAcceptanceIo.listEntries("/f/acceptance-assets/AT-1")).toEqual([{ name: "1.html", modified: 42 }]);
+  });
+
   it("returns entry names from list_directory", async () => {
     invokeMock.mockResolvedValueOnce([{ name: "r1", is_dir: true, modified_epoch: 0, size: 0 }]);
     expect(await tauriAcceptanceIo.listDir("/f/validation")).toEqual(["r1"]);

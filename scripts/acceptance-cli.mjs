@@ -44,7 +44,10 @@ async function main() {
   const [command, file, ...rest] = process.argv.slice(2);
   if (!["parse", "mark", "missing", "request"].includes(command) || !file) fail(USAGE, 2);
   const acceptance = await loadAcceptance();
-  const text = fs.readFileSync(file, "utf8");
+  const raw = fs.readFileSync(file, "utf8");
+  // The writers work on LF text; a CRLF file is written back CRLF, never mixed.
+  const crlf = raw.includes("\r\n");
+  const text = crlf ? raw.replace(/\r\n/g, "\n") : raw;
   let result;
   if (command === "parse") {
     const parsed = acceptance.parseAcceptance(text);
@@ -64,7 +67,7 @@ async function main() {
     result = acceptance.addVisualRequest(text, id, note.join(" "));
   }
   if (!result.ok) fail(result.error);
-  fs.writeFileSync(file, result.text);
+  fs.writeFileSync(file, crlf ? result.text.replace(/\n/g, "\r\n") : result.text);
   process.stdout.write(`${JSON.stringify({ command, written: true })}\n`);
 }
 

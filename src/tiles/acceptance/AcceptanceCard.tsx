@@ -11,6 +11,8 @@ export interface AcceptanceCardProps {
   featureDir: string;
   io: AcceptanceIo;
   rounds: ValidationRound[];
+  /** Changes when a storyboard frame is rewritten in place, so frames reload. */
+  assetRevision?: string;
   onMark(mark: ReviewMark | null): void;
   onRequestVisual(note: string): void;
 }
@@ -25,7 +27,7 @@ function Section({ label, children }: { label: string; children: ReactNode }) {
 }
 
 /** One acceptance test, full focus (ADR 037). */
-export function AcceptanceCard({ test, readOnly, featureDir, io, rounds, onMark, onRequestVisual }: AcceptanceCardProps) {
+export function AcceptanceCard({ test, readOnly, featureDir, io, rounds, assetRevision = "", onMark, onRequestVisual }: AcceptanceCardProps) {
   const [changeNote, setChangeNote] = useState<string | null>(null);
   const [requestNote, setRequestNote] = useState<string | null>(null);
   const mark = markOf(test);
@@ -86,7 +88,7 @@ export function AcceptanceCard({ test, readOnly, featureDir, io, rounds, onMark,
       {test.given && <Section label="Given">{md(test.given)}</Section>}
       {test.when && <Section label="When">{md(test.when)}</Section>}
       {test.then && <Section label="Then">{md(test.then)}</Section>}
-      {test.frames.length > 0 && <Storyboard test={test} featureDir={featureDir} io={io} rounds={rounds} />}
+      {test.frames.length > 0 && <Storyboard test={test} featureDir={featureDir} io={io} rounds={rounds} revision={assetRevision} />}
       {test.passesWhen && (
         <div style={{ borderLeft: "3px solid #a6e3a1", padding: "6px 8px", background: "#181825", fontSize: 13 }}>
           <b>Passes when:</b> {md(test.passesWhen)}

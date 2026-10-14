@@ -60,6 +60,16 @@ describe("parsing an acceptance file", () => {
     expect(old.missing).toEqual([]);
   });
 
+  it("reads approval however the front-matter spells it, and fails closed on anything but draft", () => {
+    const status = (line: string) => parseAcceptance(`---\n${line}\n---\n`).status;
+    expect(status('status: "approved"')).toBe("approved");
+    expect(status("status: 'approved'")).toBe("approved");
+    expect(status("Status: Approved")).toBe("approved");
+    expect(status("status: final")).toBe("approved");
+    expect(status('status: "draft"')).toBe("draft");
+    expect(status("feature: x")).toBe("draft");
+  });
+
   it("treats a file without front-matter as a draft", () => {
     expect(parseAcceptance("## AT-1 — x\n**Given** a\n").status).toBe("draft");
     expect(parseAcceptance("").tests).toEqual([]);

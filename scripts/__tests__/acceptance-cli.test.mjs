@@ -39,6 +39,16 @@ describe("acceptance-cli", () => {
     expect(out.tests[1].visualRequests).toContain("the error state");
   });
 
+  it("keeps a CRLF file CRLF throughout", () => {
+    const file = copy();
+    fs.writeFileSync(file, fs.readFileSync(fixture, "utf8").replace(/\n/g, "\r\n"));
+    expect(run("mark", file, "AT-3", "ok").status).toBe(0);
+    expect(run("missing", file, "x").status).toBe(0);
+    const text = fs.readFileSync(file, "utf8");
+    expect(text).toContain("**Review:** ok\r\n");
+    expect(text.replace(/\r\n/g, "")).not.toContain("\n");
+  });
+
   it("refuses to change an approved file, and explains bad usage", () => {
     const refused = run("mark", old, "AT-1", "ok");
     expect(refused.status).toBe(1);

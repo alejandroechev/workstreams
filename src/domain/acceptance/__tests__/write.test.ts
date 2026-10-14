@@ -33,6 +33,15 @@ describe("marking a test", () => {
     expect(lines[lines.indexOf("**Review:** change: too vague") - 1]).toBe("**Automation:** human-only");
   });
 
+  it("puts a mark after a wrapped header field, not inside it", () => {
+    const wrapped = "## AT-1 — T\n**Validates:** US-1\n**Automation:** agent-partial — UI is automated,\ncheck the colour manually\n**Given** a\n";
+    const after = ok(setReview(wrapped, "AT-1", { kind: "ok" }));
+    const parsed = parseAcceptance(after).tests[0];
+    expect(parsed.review).toEqual({ kind: "ok" });
+    expect(parsed.automation).toBe("agent-partial — UI is automated,\ncheck the colour manually");
+    expect(parsed.given).toBe("a");
+  });
+
   it("replaces an existing mark, and clears one", () => {
     const flipped = ok(setReview(newFormat, "AT-1", { kind: "change", note: "say which toast" }));
     expect(changed(newFormat, flipped)).toEqual(["-**Review:** ok", "+**Review:** change: say which toast"]);

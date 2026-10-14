@@ -26,11 +26,13 @@ function Screenshot({ path, io, label }: { path: string; io: AcceptanceIo; label
  * A test's storyboard: its frames in file order, labelled by step, each with
  * the latest validation round's screenshot beside it when there is one.
  */
-export function Storyboard({ test, featureDir, io, rounds }: { test: AcceptanceTestBlock; featureDir: string; io: AcceptanceIo; rounds: ValidationRound[] }) {
+export function Storyboard({ test, featureDir, io, rounds, revision = "" }: { test: AcceptanceTestBlock; featureDir: string; io: AcceptanceIo; rounds: ValidationRound[]; revision?: string }) {
   const [large, setLarge] = useState<number | null>(null);
   const actuals = actualsFor(test, rounds);
   const visual = (index: number, height: number) => (
     <GrillVisualView
+      // A new revision means a frame was redrawn under the same name: load it again.
+      key={`${test.frames[index].path}@${revision}`}
       visual={{ path: test.frames[index].path, label: test.frames[index].caption, option: null }}
       grillDir={featureDir}
       io={io}

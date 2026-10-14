@@ -198,6 +198,19 @@ describe("acceptance Review mode", () => {
       expect(screen.queryByRole("button", { name: /pass|fail|accept/i })).toBeNull();
     });
 
+    it("reloads a frame the agent redrew in place", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      const io = await open();
+      const frame = () => within(screen.getAllByTestId("acceptance-frame")[0]).getByTestId("grill-prototype");
+      await waitFor(() => expect(frame().getAttribute("srcdoc")).toContain("<p>form</p>"));
+      io.rewriteAsset("/f/acceptance-assets/AT-1/1.html", "<p>form, redrawn</p>");
+      await act(async () => { vi.advanceTimersByTime(2100); });
+      await waitFor(() => expect(frame().getAttribute("srcdoc")).toContain("<p>form, redrawn</p>"));
+      const reads = io.read.mock.calls.filter(([p]) => p === "/f/acceptance-assets/AT-1/1.html").length;
+      await act(async () => { vi.advanceTimersByTime(2100); });
+      expect(io.read.mock.calls.filter(([p]) => p === "/f/acceptance-assets/AT-1/1.html").length).toBe(reads);
+    });
+
     it("says when a screenshot can't be loaded", async () => {
       await open(newFormat, { "/f/validation": ["r3"], "/f/validation/r3": ["AT-1-2.png"] });
       const frames = within(screen.getByTestId("acceptance-storyboard")).getAllByTestId("acceptance-frame");

@@ -5,6 +5,8 @@ import type { ValidationRound } from "../../domain/acceptance/view";
 /** File access for acceptance Review mode: the grill's, plus directory listing for validation rounds. */
 export interface AcceptanceIo extends GrillIo {
   listDir(path: string): Promise<string[]>;
+  /** Names with modified times, to notice a frame redrawn in place. */
+  listEntries(path: string): Promise<Array<{ name: string; modified: number }>>;
 }
 
 export const tauriAcceptanceIo: AcceptanceIo = {
@@ -13,7 +15,21 @@ export const tauriAcceptanceIo: AcceptanceIo = {
     const entries = await invoke<Array<{ name: string }>>("list_directory", { path });
     return entries.map((entry) => entry.name);
   },
+  async listEntries(path) {
+    const entries = await invoke<Array<{ name: string; modified_epoch: number }>>("list_directory", { path });
+    return entries.map((entry) => ({ name: entry.name, modified: entry.modified_epoch }));
+  },
 };
+
+/** A fingerprint of a test's storyboard folder that changes when any frame is rewritten. */
+export async function assetRevision(io: AcceptanceIo, featureDir: string, testId: string): Promise<string> {
+  try {
+    const entries = await io.listEntries(`${featureDir}/acceptance-assets/${testId}`);
+    return entries.map((e) => `${e.name}:${e.modified}`).sort().join("|");
+  } catch {
+    return "";
+  }
+}
 
 /** The rounds under `<feature>/validation/` (`r1`, `r2`, …) and the files each saved. */
 export async function validationRounds(io: AcceptanceIo, featureDir: string): Promise<ValidationRound[]> {
