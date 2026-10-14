@@ -6,7 +6,7 @@ graph TB
         subgraph Frontend["React Frontend (WebView2)"]
             App["App.tsx<br/>Root shell"]
             Sidebar["WorkstreamSidebar<br/>List/create/switch<br/>loaded set restored at startup (ADR 029)<br/>tiles mount lazily on first visit"]
-            PrInboxUI["PR inbox (ADR 030, 031)<br/>per-repo watch mode + unread badge<br/>events grouped per PR<br/>read/unread + open ADO<br/>local snapshot refresh every 5s"]
+            PrInboxUI["PR inbox (ADR 030, 031)<br/>per-repo watch mode + unread badge<br/>events grouped per PR<br/>read/unread + open ADO<br/>global mutes by kind/subject/outcome (ADR 036)<br/>local snapshot refresh every 5s"]
             TileGrid["TileGrid<br/>Adaptive tiling layout"]
             Terminal["TerminalTile<br/>xterm.js + FitAddon + SerializeAddon"]
             CodeView["CodeViewerTile<br/>Monaco Editor (read-only)"]

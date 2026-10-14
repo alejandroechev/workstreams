@@ -32,9 +32,9 @@ test("repo opt-in, background arrival, read/unread, browser-open action and disa
       title: "Review the race fix", author: "Dev", is_read: false, url };
     backend.seedPrInboxItems([
       { ...common, id: "review-42", kind: "assigned", summary: "You were added as a reviewer",
-        discovered_at: new Date(Date.now() - 60_000).toISOString() },
+        discovered_at: new Date(Date.now() - 60_000).toISOString(), subject: "Dev", outcome: "" },
       { ...common, id: "comment-42", kind: "comment", summary: "Dev: this still races on retry",
-        discovered_at: new Date().toISOString() },
+        discovered_at: new Date().toISOString(), subject: "Dev", outcome: "" },
     ]);
   });
   // Two unread events on one PR are one thing to look at.
@@ -98,4 +98,35 @@ test("connection failures are visible in the inbox and sidebar, not an empty suc
   await expect(page.getByLabel("Inbox connection error")).toBeVisible({ timeout: 10_000 });
   await page.getByTestId("pr-inbox-button").click();
   await expect(page.getByRole("alert")).toHaveText("ADO access denied. Run az login.");
+});
+
+test("muting a build gate outcome reads every event like it, and Reset all lifts it", async ({ page }) => {
+  await page.evaluate(async () => {
+    const backend = (window as unknown as { __WS_BACKEND__: MemoryBackend }).__WS_BACKEND__;
+    const repo = (await backend.listProjects()).find((p) => p.name === "ADO repo")!;
+    await backend.configurePrInbox(repo.id, "both");
+    const gate = (id: string, pr: number, outcome: string, summary: string) => ({
+      id, project_id: repo.id, repo_name: repo.name, pr_id: pr, kind: "policy" as const,
+      title: `PR ${pr}`, author: "Dev", is_read: false, url: `https://dev.azure.com/o/p/_git/r/pullrequest/${pr}`,
+      summary, discovered_at: new Date().toISOString(), subject: "Comment requirements", outcome,
+    });
+    backend.seedPrInboxItems([
+      gate("g1", 1, "approved", "Comment requirements passed"),
+      gate("g2", 2, "approved", "Comment requirements passed"),
+      gate("g3", 3, "rejected", "Comment requirements failed"),
+    ]);
+  });
+  await expect(page.getByTestId("pr-inbox-unread")).toHaveText("3", { timeout: 10_000 });
+  await page.getByTestId("pr-inbox-button").click();
+  await page.getByTestId("pr-notification-g1")
+    .getByRole("button", { name: 'Stop tracking: Build gate "Comment requirements" passed' }).click();
+  // Both "passed" events are read now; the failure is a different outcome and stays.
+  await expect(page.getByTestId("pr-notification-g1")).toHaveCount(0);
+  await expect(page.getByTestId("pr-notification-g2")).toHaveCount(0);
+  await expect(page.getByTestId("pr-notification-g3")).toHaveAttribute("data-read", "false");
+  await expect(page.getByTestId("pr-inbox-unread")).toHaveText("1");
+  await page.getByTestId("pr-inbox-muted-toggle").click();
+  await expect(page.getByTestId("pr-inbox-mutes")).toContainText('Build gate "Comment requirements" passed');
+  await page.getByTestId("pr-inbox-mutes").getByRole("button", { name: "Reset all" }).click();
+  await expect(page.getByTestId("pr-inbox-muted-toggle")).toHaveCount(0);
 });

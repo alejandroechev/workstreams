@@ -5,6 +5,7 @@ import {
   countUnreadPrs,
   isPrWatchMode,
   PR_WATCH_MODES,
+  describeMute,
   type PrInboxItem,
 } from "../pr-inbox";
 
@@ -42,6 +43,8 @@ describe("grouping inbox events by pull request", () => {
     summary: "Something happened",
     is_read: false,
     discovered_at: "2026-01-01T00:00:00Z",
+    subject: "S",
+    outcome: "",
     ...over,
   });
 
@@ -85,6 +88,7 @@ describe("counting pull requests that need attention", () => {
   const item = (id: string, project_id: string, pr_id: number, is_read: boolean): PrInboxItem => ({
     id, project_id, pr_id, is_read, repo_name: "Repo", kind: "comment", title: "T", summary: "S",
     author: "A", url: "https://dev.azure.com/o/p/_git/r/pullrequest/1", discovered_at: "2026-01-01T00:00:00Z",
+    subject: "A", outcome: "",
   });
 
   it("counts a PR once however many unread events it has, and ignores fully read PRs", () => {
@@ -100,5 +104,26 @@ describe("counting pull requests that need attention", () => {
   it("treats the same PR number in two repos as two PRs", () => {
     expect(countUnreadPrs([item("a", "p", 1, false), item("b", "q", 1, false)])).toBe(2);
     expect(countUnreadPrs([])).toBe(0);
+  });
+});
+
+describe("describing a mute rule", () => {
+  it("says in words which events stop being tracked", () => {
+    expect(describeMute({ kind: "policy", subject: "Comment requirements", outcome: "approved" })).toBe('Build gate "Comment requirements" passed');
+    expect(describeMute({ kind: "policy", subject: "CI", outcome: "rejected" })).toBe('Build gate "CI" failed');
+    expect(describeMute({ kind: "policy", subject: "CI", outcome: "broken" })).toBe('Build gate "CI" errored');
+    expect(describeMute({ kind: "vote", subject: "Dev", outcome: "10" })).toBe("Dev approved");
+    expect(describeMute({ kind: "vote", subject: "Dev", outcome: "5" })).toBe("Dev approved with suggestions");
+    expect(describeMute({ kind: "vote", subject: "Dev", outcome: "-5" })).toBe("Dev is waiting for the author");
+    expect(describeMute({ kind: "vote", subject: "Dev", outcome: "-10" })).toBe("Dev rejected the changes");
+    expect(describeMute({ kind: "comment", subject: "Pat", outcome: "" })).toBe("Comments by Pat");
+    expect(describeMute({ kind: "assigned", subject: "Bot", outcome: "" })).toBe("Review requests on PRs by Bot");
+    expect(describeMute({ kind: "closed", subject: "Bot", outcome: "completed" })).toBe("PRs by Bot completed");
+    expect(describeMute({ kind: "closed", subject: "Bot", outcome: "abandoned" })).toBe("PRs by Bot abandoned");
+  });
+
+  it("falls back to the raw rule for anything unexpected", () => {
+    expect(describeMute({ kind: "policy", subject: "CI", outcome: "weird" })).toBe('Build gate "CI" weird');
+    expect(describeMute({ kind: "vote", subject: "Dev", outcome: "3" })).toBe("Dev voted 3");
   });
 });

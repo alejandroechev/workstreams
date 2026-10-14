@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { ArrowTopRightOnSquareIcon, XMarkIcon } from "@heroicons/react/24/outline";
+import { ArrowTopRightOnSquareIcon, BellSlashIcon, XMarkIcon } from "@heroicons/react/24/outline";
 import {
+  describeMute,
   groupPrInboxItems,
   PR_EVENT_LABELS,
   PR_WATCH_MODE_LABELS,
@@ -14,6 +15,9 @@ interface Props {
   loading: boolean;
   error: string | null;
   onRead: (id: string, isRead: boolean) => Promise<void>;
+  /** Stop tracking events like this one, in every repo (ADR 036). */
+  onMute?: (id: string) => Promise<void>;
+  onResetMutes?: () => Promise<unknown>;
   onClose: () => void;
 }
 
@@ -23,8 +27,10 @@ interface Props {
  * reached from the same sidebar footer, so a different shell read as a
  * different app.
  */
-export function PrInboxModal({ snapshot, loading, error, onRead, onClose }: Props) {
+export function PrInboxModal({ snapshot, loading, error, onRead, onMute, onResetMutes, onClose }: Props) {
   const [actionError, setActionError] = useState<string | null>(null);
+  const [showMutes, setShowMutes] = useState(false);
+  const mutes = snapshot.mutes ?? [];
   const [busy, setBusy] = useState(false);
   const [showRead, setShowRead] = useState(false);
   useEffect(() => {
@@ -96,6 +102,18 @@ export function PrInboxModal({ snapshot, loading, error, onRead, onClose }: Prop
             ADO activity on the PRs each repo watches. Choose what to watch in Repos. Checks every two
             minutes while Workstreams is open; the first check is silent.
           </span>
+          {onResetMutes && mutes.length > 0 && (
+            <button
+              aria-expanded={showMutes}
+              data-testid="pr-inbox-muted-toggle"
+              onClick={() => setShowMutes(!showMutes)}
+              title="Events you stopped tracking, in every repo"
+              style={{ ...buttonStyle, display: "inline-flex", alignItems: "center", gap: 4 }}
+            >
+              <BellSlashIcon aria-hidden="true" width={12} height={12} />
+              {`Muted (${mutes.length})`}
+            </button>
+          )}
           <div role="group" aria-label="Show notifications" style={{ display: "flex" }}>
             {([["Unread", false], ["All", true]] as const).map(([label, value], index) => (
               <button
@@ -117,6 +135,29 @@ export function PrInboxModal({ snapshot, loading, error, onRead, onClose }: Prop
             ))}
           </div>
         </div>
+
+        {showMutes && onResetMutes && mutes.length > 0 && (
+          <div data-testid="pr-inbox-mutes" style={{ ...noteStyle, display: "flex", flexDirection: "column", gap: 4 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ flex: 1 }}>Not tracked in any repo. New events like these are skipped; existing ones were marked read.</span>
+              <button
+                disabled={busy}
+                onClick={() => void act(async () => { await onResetMutes(); setShowMutes(false); })}
+                style={buttonStyle}
+              >
+                Reset all
+              </button>
+            </div>
+            <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "grid", gap: 2 }}>
+              {mutes.map((rule) => (
+                <li key={`${rule.kind}\u0000${rule.subject}\u0000${rule.outcome}`} style={{ color: "#a6adc8" }}>
+                  <span style={kindStyle(rule.kind)}>{PR_EVENT_LABELS[rule.kind] ?? rule.kind}</span>{" "}
+                  {describeMute(rule)}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
 
         <div style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
           {loading && <p role="status" style={emptyStyle}>Loading inbox...</p>}
@@ -218,6 +259,17 @@ export function PrInboxModal({ snapshot, loading, error, onRead, onClose }: Prop
                           <span style={{ color: "#6c7086", whiteSpace: "nowrap" }}>
                             {new Date(event.discovered_at).toLocaleString()}
                           </span>
+                          {onMute && event.subject && (
+                            <button
+                              disabled={busy}
+                              aria-label={`Stop tracking: ${describeMute(event)}`}
+                              title={`Stop tracking: ${describeMute(event)} (every repo)`}
+                              onClick={() => void act(() => onMute(event.id))}
+                              style={{ ...buttonStyle, padding: "1px 4px", display: "inline-flex", alignItems: "center" }}
+                            >
+                              <BellSlashIcon aria-hidden="true" width={11} height={11} />
+                            </button>
+                          )}
                           <button
                             disabled={busy}
                             aria-label={`${event.is_read ? "Mark unread" : "Mark read"}: ${event.summary}`}

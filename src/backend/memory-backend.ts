@@ -1,6 +1,6 @@
 import type { DiffOrderView } from "../domain/diff-reading-order";
 import type { WorkLane } from "../domain/work-lanes";
-import { supportsPrInbox, type PrInboxItem, type PrInboxSnapshot, type PrWatchMode } from "../domain/pr-inbox";
+import { supportsPrInbox, type PrInboxItem, type PrInboxMute, type PrInboxSnapshot, type PrWatchMode } from "../domain/pr-inbox";
 import type { Project, Workstream, Tile, TileType, WorkstreamLayout, CopilotConfigItem } from "../domain/types";
 import type { SessionFileComment } from "../domain/file-comments";
 import type { Review, ReviewComment, ChangedFile, DiffSides } from "../domain/code-review";
@@ -79,7 +79,7 @@ function pathJoin(parent: string, child: string): string {
  * In-memory Backend implementation for tests and offline development.
  */
 export class MemoryBackend implements Backend {
-  private prInbox: PrInboxSnapshot = { items: [], repos: [] };
+  private prInbox: PrInboxSnapshot = { items: [], repos: [], mutes: [] };
 
   seedPrInboxItems(items: PrInboxItem[]): void {
     this.prInbox.items = structuredClone(items);
@@ -91,6 +91,7 @@ export class MemoryBackend implements Backend {
         .map((item) => ({ ...item, repo_name: this.projects.get(item.project_id)!.name })),
       repos: this.prInbox.repos.filter((repo) => this.projects.has(repo.project_id))
         .map((repo) => ({ ...repo, repo_name: this.projects.get(repo.project_id)!.name })),
+      mutes: this.prInbox.mutes,
     });
   }
 
@@ -113,6 +114,27 @@ export class MemoryBackend implements Backend {
     const item = this.prInbox.items.find((item) => item.id === id && this.projects.has(item.project_id));
     if (!item) throw new Error("Notification not found");
     item.is_read = isRead;
+  }
+
+  async mutePrInboxEvent(id: string): Promise<PrInboxMute> {
+    const item = this.prInbox.items.find((item) => item.id === id && this.projects.has(item.project_id));
+    if (!item) throw new Error("Notification not found");
+    if (!item.subject) throw new Error("This notification cannot be muted");
+    const same = (a: { kind: string; subject: string; outcome: string }) =>
+      a.kind === item.kind && a.subject.toLowerCase() === item.subject.toLowerCase() && a.outcome === item.outcome;
+    let rule = this.prInbox.mutes.find(same);
+    if (!rule) {
+      rule = { kind: item.kind, subject: item.subject, outcome: item.outcome, created_at: new Date().toISOString() };
+      this.prInbox.mutes.unshift(rule);
+    }
+    for (const other of this.prInbox.items) if (same(other)) other.is_read = true;
+    return structuredClone(rule);
+  }
+
+  async resetPrInboxMutes(): Promise<number> {
+    const cleared = this.prInbox.mutes.length;
+    this.prInbox.mutes = [];
+    return cleared;
   }
 
   private projects = new Map<string, Project>();

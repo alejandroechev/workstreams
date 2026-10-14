@@ -23,6 +23,10 @@ describe("TauriBackend", () => {
     expect(invoke).toHaveBeenNthCalledWith(1, "get_pr_inbox");
     expect(invoke).toHaveBeenNthCalledWith(2, "configure_pr_inbox", { projectId: "repo", mode: "both" });
     expect(invoke).toHaveBeenNthCalledWith(3, "set_pr_inbox_read", { id: "notification", isRead: false });
+    await backend.mutePrInboxEvent("notification");
+    await backend.resetPrInboxMutes();
+    expect(invoke).toHaveBeenNthCalledWith(4, "mute_pr_inbox_event", { id: "notification" });
+    expect(invoke).toHaveBeenNthCalledWith(5, "reset_pr_inbox_mutes");
   });
 
   it("maps loop setup and lifecycle commands", async () => {

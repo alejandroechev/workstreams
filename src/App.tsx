@@ -2183,7 +2183,8 @@ export default function App() {
     >
       {showInbox && (
         <PrInboxModal snapshot={inbox.snapshot} error={inbox.error} loading={inbox.loading}
-          onRead={inbox.setRead} onClose={() => setShowInbox(false)} />
+          onRead={inbox.setRead} onMute={inbox.mute} onResetMutes={inbox.resetMutes}
+          onClose={() => setShowInbox(false)} />
       )}
       <WorkstreamSidebar
         onOpenInbox={() => setShowInbox(true)}

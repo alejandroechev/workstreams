@@ -37,18 +37,20 @@ describe("global inbox snapshot subscription", () => {
     expect(result.current.snapshot.repos[0].enabled).toBe(true);
     expect(result.current.snapshot.repos[0].mode).toBe("both");
     await expect(result.current.setRead("missing", true)).rejects.toThrow("not found");
+    await expect(result.current.mute("missing")).rejects.toThrow("not found");
+    await act(async () => { expect(await result.current.resetMutes()).toBe(0); });
   });
 
   it("does not overlap reads or apply a response after unmount", async () => {
     vi.useFakeTimers();
     const backend = new MemoryBackend();
-    let resolve!: (value: { items: []; repos: [] }) => void;
+    let resolve!: (value: { items: []; repos: []; mutes: [] }) => void;
     const read = vi.spyOn(backend, "getPrInbox").mockImplementation(() => new Promise((r) => { resolve = r; }));
     const { unmount } = renderHook(() => usePrInbox(backend));
     await act(async () => { await vi.advanceTimersByTimeAsync(15000); });
     expect(read).toHaveBeenCalledTimes(1);
     unmount();
-    await act(async () => { resolve({ items: [], repos: [] }); });
+    await act(async () => { resolve({ items: [], repos: [], mutes: [] }); });
     expect(vi.getTimerCount()).toBe(0);
   });
 });

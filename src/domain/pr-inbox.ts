@@ -26,6 +26,45 @@ export interface PrInboxItem {
   url: string;
   is_read: boolean;
   discovered_at: string;
+  /** What a mute matches on: gate name, reviewer, comment author, or PR author. */
+  subject: string;
+  /** Gate status, vote value or closure state; "" when the kind has none. */
+  outcome: string;
+}
+
+/**
+ * "Stop tracking events like this", across every repo (ADR 036). Events are
+ * matched by kind, subject and outcome, so muting "CI passed" keeps "CI failed".
+ */
+export interface PrInboxMute {
+  kind: PrEventKind;
+  subject: string;
+  outcome: string;
+  created_at?: string;
+}
+
+const GATE_OUTCOMES: Record<string, string> = { approved: "passed", rejected: "failed", broken: "errored" };
+const VOTE_OUTCOMES: Record<string, string> = {
+  "10": "approved",
+  "5": "approved with suggestions",
+  "-5": "is waiting for the author",
+  "-10": "rejected the changes",
+};
+
+/** A mute rule in the words the inbox uses for the events it silences. */
+export function describeMute(rule: Pick<PrInboxMute, "kind" | "subject" | "outcome">): string {
+  switch (rule.kind) {
+    case "policy":
+      return `Build gate "${rule.subject}" ${GATE_OUTCOMES[rule.outcome] ?? rule.outcome}`;
+    case "vote":
+      return `${rule.subject} ${VOTE_OUTCOMES[rule.outcome] ?? `voted ${rule.outcome}`}`;
+    case "comment":
+      return `Comments by ${rule.subject}`;
+    case "assigned":
+      return `Review requests on PRs by ${rule.subject}`;
+    case "closed":
+      return `PRs by ${rule.subject} ${rule.outcome}`;
+  }
 }
 
 export interface PrInboxRepo {
@@ -111,6 +150,7 @@ export interface PrInboxGroup {
 export interface PrInboxSnapshot {
   items: PrInboxItem[];
   repos: PrInboxRepo[];
+  mutes: PrInboxMute[];
 }
 
 /** UI eligibility only; native code independently validates every HTTP destination. */

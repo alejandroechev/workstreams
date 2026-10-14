@@ -371,6 +371,21 @@ fn set_pr_inbox_read(state: State<'_, AppState>, id: String, is_read: bool) -> R
 }
 
 #[tauri::command]
+fn mute_pr_inbox_event(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<pr_inbox::MuteRule, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    pr_inbox::mute(&db, &id)
+}
+
+#[tauri::command]
+fn reset_pr_inbox_mutes(state: State<'_, AppState>) -> Result<usize, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    pr_inbox::reset_mutes(&db)
+}
+
+#[tauri::command]
 fn create_project(
     state: State<'_, AppState>,
     name: String,
@@ -6064,6 +6079,8 @@ pub fn run() {
             get_pr_inbox,
             configure_pr_inbox,
             set_pr_inbox_read,
+            mute_pr_inbox_event,
+            reset_pr_inbox_mutes,
             // Projects
             create_project,
             list_projects,

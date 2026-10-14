@@ -408,6 +408,16 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
             UNIQUE(project_id, source, identity, pr_id, kind, dedupe_key)
         );
         CREATE INDEX IF NOT EXISTS pr_inbox_events_unread_idx ON pr_inbox_events (is_read);
+        -- Global, not per repo: an event that is noise to the user is noise
+        -- wherever it happens. A rule matches events by kind, subject (gate
+        -- name, reviewer, comment author, or PR author) and outcome.
+        CREATE TABLE IF NOT EXISTS pr_inbox_mutes (
+            kind TEXT NOT NULL,
+            subject TEXT NOT NULL COLLATE NOCASE,
+            outcome TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (kind, subject, outcome)
+        );
 
         CREATE INDEX IF NOT EXISTS command_log_created_idx ON command_log (created_at);
         CREATE INDEX IF NOT EXISTS command_log_command_idx ON command_log (command);
@@ -472,6 +482,9 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
         "ALTER TABLE pr_inbox_seen ADD COLUMN comment_watermark TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE pr_inbox_seen ADD COLUMN votes_json TEXT NOT NULL DEFAULT '{}'",
         "ALTER TABLE pr_inbox_seen ADD COLUMN policies_json TEXT NOT NULL DEFAULT '{}'",
+        // What a mute rule matches an event on (ADR 036).
+        "ALTER TABLE pr_inbox_events ADD COLUMN subject TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE pr_inbox_events ADD COLUMN outcome TEXT NOT NULL DEFAULT ''",
     ];
     for sql in &migrations {
         // SQLite errors if column already exists — ignore that error
@@ -479,6 +492,7 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
     }
 
     migrate_pr_inbox_events(conn)?;
+    crate::pr_inbox::backfill_mute_keys(conn)?;
 
     crate::loops::init_loop_schema(conn)?;
 

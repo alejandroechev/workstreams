@@ -3,7 +3,7 @@ import type { Backend } from "../backend/types";
 import type { PrInboxSnapshot, PrWatchMode } from "../domain/pr-inbox";
 
 export function usePrInbox(backend: Backend) {
-  const [snapshot, setSnapshot] = useState<PrInboxSnapshot>({ items: [], repos: [] });
+  const [snapshot, setSnapshot] = useState<PrInboxSnapshot>({ items: [], repos: [], mutes: [] });
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [revision, setRevision] = useState(0);
@@ -42,5 +42,16 @@ export function usePrInbox(backend: Backend) {
     setRevision((value) => value + 1);
   }, [backend]);
 
-  return { snapshot, error, loading, configure, setRead };
+  const mute = useCallback(async (id: string) => {
+    await backend.mutePrInboxEvent(id);
+    setRevision((value) => value + 1);
+  }, [backend]);
+
+  const resetMutes = useCallback(async () => {
+    const cleared = await backend.resetPrInboxMutes();
+    setRevision((value) => value + 1);
+    return cleared;
+  }, [backend]);
+
+  return { snapshot, error, loading, configure, setRead, mute, resetMutes };
 }

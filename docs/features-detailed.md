@@ -94,6 +94,7 @@ Each watched pull request reports these events:
 | Disable | Stop polling that repo; keep its history and baselines |
 | Archive repo | Keep notifications enabled until explicitly switched off |
 | Connection failure | Show the repo error and keep the last successful snapshot; auth failures include `az login` guidance |
+| Mute | **Stop tracking** (bell icon) on an event stops tracking events like it in **every repo**: same kind, same subject (gate name, reviewer, comment author, or PR author) and same outcome, so muting "Comment requirements passed" keeps "… failed". New matching events are skipped and existing ones are marked read. **Muted (n)** lists the rules; **Reset all** lifts them without replaying what was skipped ([ADR 036](adrs/036-pr-inbox-mutes.md)) |
 | Passive signal | Sidebar footer shows an accented pill counting **pull requests** with at least one unread event (capped at `99+`) and brightens the row, so no click is needed to notice new activity |
 
 ADO polling starts with the application, not with the inbox or a workstream.
@@ -118,13 +119,15 @@ workstreams agent call inbox.list
 workstreams agent call inbox.read id=<notification-id> read=true
 workstreams agent call inbox.read id=<notification-id> read=false
 workstreams agent call inbox.configure repo=<id-or-name> mode=off
+workstreams agent call inbox.mute id=<notification-id>
+workstreams agent call inbox.unmute_all
 ```
 
 `mode` accepts `off`, `reviewer`, `author` or `both`.
 
-`inbox.list` includes notification URLs, read state, per-repo connection errors and
-`inbox.list` includes each event's kind and summary, notification URLs, read state,
-per-repo connection errors and last successful check timestamps.
+`inbox.list` includes each event's kind, summary and mute key (`subject`,
+`outcome`), notification URLs, read state, per-repo connection errors, last
+successful check timestamps and the active `mutes`.
 See [ADR 030](adrs/030-ado-pr-inbox.md) and [ADR 031](adrs/031-pr-inbox-event-stream.md).
 
 ## Adaptive tiling

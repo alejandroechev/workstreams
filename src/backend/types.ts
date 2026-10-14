@@ -1,7 +1,7 @@
 // @test-skip: Type-only interface; behaviour covered by MemoryBackend + TauriBackend tests.
 import type { DiffOrderView } from "../domain/diff-reading-order";
 import type { WorkLane } from "../domain/work-lanes";
-import type { PrInboxSnapshot, PrWatchMode } from "../domain/pr-inbox";
+import type { PrInboxMute, PrInboxSnapshot, PrWatchMode } from "../domain/pr-inbox";
 import type { Project, Workstream, Tile, TileType, WorkstreamLayout, CopilotConfigItem } from "../domain/types";
 import type { SessionFileComment } from "../domain/file-comments";
 import type { TraceFile } from "../domain/trace-format";
@@ -63,6 +63,10 @@ export interface Backend {
   getPrInbox(): Promise<PrInboxSnapshot>;
   configurePrInbox(projectId: string, mode: PrWatchMode): Promise<void>;
   setPrInboxRead(id: string, isRead: boolean): Promise<void>;
+  /** Stops tracking events like this one, in every repo; marks the matching ones read (ADR 036). */
+  mutePrInboxEvent(id: string): Promise<PrInboxMute>;
+  /** Clears every mute; returns how many there were. */
+  resetPrInboxMutes(): Promise<number>;
   // Projects
   listProjects(): Promise<Project[]>;
   createProject(name: string, directory: string, color?: string): Promise<Project>;

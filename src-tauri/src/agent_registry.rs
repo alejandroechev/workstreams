@@ -345,6 +345,22 @@ pub const COMMANDS: &[Command] = &[
         handler: inbox_read,
     },
     Command {
+        id: "inbox.mute",
+        log_params: &["id"],
+        summary: "Stop tracking events like this notification, in every repo; marks existing ones read (params: id)",
+        requires_identity: true,
+        destructive: false,
+        handler: inbox_mute,
+    },
+    Command {
+        id: "inbox.unmute_all",
+        log_params: &[],
+        summary: "Track every kind of PR event again (clears all mutes)",
+        requires_identity: true,
+        destructive: false,
+        handler: inbox_unmute_all,
+    },
+    Command {
         id: "agent.ping",
         log_params: &[],
         summary: "Check that the app is reachable",
@@ -573,6 +589,29 @@ fn inbox_read(
     Ok(CommandOutcome::changed(
         serde_json::json!({"id":id,"is_read":read}),
         StateChange::new("pr_inbox", id, "read"),
+    ))
+}
+
+fn inbox_mute(
+    context: &CommandContext,
+    params: &serde_json::Value,
+) -> Result<CommandOutcome, AgentError> {
+    let id = required_str(params, "id")?;
+    let rule = crate::pr_inbox::mute(context.db, &id).map_err(inbox_error)?;
+    Ok(CommandOutcome::changed(
+        serde_json::json!(rule),
+        StateChange::new("pr_inbox", id, "muted"),
+    ))
+}
+
+fn inbox_unmute_all(
+    context: &CommandContext,
+    _: &serde_json::Value,
+) -> Result<CommandOutcome, AgentError> {
+    let cleared = crate::pr_inbox::reset_mutes(context.db).map_err(inbox_error)?;
+    Ok(CommandOutcome::changed(
+        serde_json::json!({"cleared": cleared}),
+        StateChange::new("pr_inbox", "mutes", "reset"),
     ))
 }
 
@@ -2408,6 +2447,33 @@ mod tests {
         )
         .unwrap();
         assert!(crate::pr_inbox::targets(&db).unwrap().is_empty());
+    }
+
+    #[test]
+    fn inbox_mute_and_unmute_all_round_trip_through_the_agent_channel() {
+        let db = memory_db();
+        seed_repo(&db, "repo-1", "/repo");
+        db.execute(
+            "INSERT INTO pr_inbox_events (id,project_id,source,identity,pr_id,kind,title,author,summary,url,created_at,dedupe_key,subject,outcome)
+            VALUES ('ev','repo-1','s','me',1,'policy','t','a','CI passed','u','t','k','CI','approved')",
+            [],
+        )
+        .unwrap();
+        let caller = agent("tile-1", "ws-own");
+        let muted = call(&db, &caller, "inbox.mute", serde_json::json!({"id":"ev"})).unwrap();
+        assert_eq!(muted.data["subject"], "CI");
+        assert_eq!(muted.data["outcome"], "approved");
+        let listed = call(&db, &caller, "inbox.list", serde_json::Value::Null).unwrap();
+        assert_eq!(listed.data["mutes"].as_array().unwrap().len(), 1);
+        assert!(call(
+            &db,
+            &caller,
+            "inbox.mute",
+            serde_json::json!({"id":"missing"})
+        )
+        .is_err());
+        let reset = call(&db, &caller, "inbox.unmute_all", serde_json::Value::Null).unwrap();
+        assert_eq!(reset.data["cleared"], 1);
     }
 
     #[test]

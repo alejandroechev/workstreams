@@ -226,6 +226,20 @@ pub struct InboxItem {
     pub url: String,
     pub is_read: bool,
     pub discovered_at: String,
+    /// What a mute rule matches on, besides `kind`: the gate name, reviewer,
+    /// comment author, or (for assignments and closures) the PR author.
+    pub subject: String,
+    /// The gate status, vote value or closure state; empty when the kind has none.
+    pub outcome: String,
+}
+
+/// "Stop telling me about events like this", for every repo (ADR 036).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct MuteRule {
+    pub kind: String,
+    pub subject: String,
+    pub outcome: String,
+    pub created_at: String,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -242,6 +256,7 @@ pub struct RepoStatus {
 pub struct InboxSnapshot {
     pub items: Vec<InboxItem>,
     pub repos: Vec<RepoStatus>,
+    pub mutes: Vec<MuteRule>,
 }
 
 pub fn configure(db: &Connection, project_id: &str, mode: WatchMode) -> Result<(), String> {
@@ -339,11 +354,25 @@ fn record_event(
     kind: &str,
     dedupe_key: &str,
     summary: &str,
+    rule: (&str, &str),
 ) -> Result<(), String> {
+    let (subject, outcome) = rule;
+    // A muted event is never recorded. Its PR's watermarks still advance (the
+    // caller does that), so lifting the mute later does not replay a backlog.
+    let muted: bool = tx
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM pr_inbox_mutes WHERE kind=?1 AND subject=?2 AND outcome=?3)",
+            params![kind, subject, outcome],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    if muted {
+        return Ok(());
+    }
     tx.execute(
         "INSERT INTO pr_inbox_events
-        (id,project_id,source,identity,pr_id,kind,title,author,summary,url,created_at,dedupe_key)
-        VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,strftime('%Y-%m-%dT%H:%M:%SZ','now'),?11)
+        (id,project_id,source,identity,pr_id,kind,title,author,summary,url,created_at,dedupe_key,subject,outcome)
+        VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,strftime('%Y-%m-%dT%H:%M:%SZ','now'),?11,?12,?13)
         ON CONFLICT(project_id,source,identity,pr_id,kind,dedupe_key) DO NOTHING",
         params![
             uuid::Uuid::new_v4().to_string(),
@@ -356,7 +385,9 @@ fn record_event(
             pr.author,
             summary,
             url,
-            dedupe_key
+            dedupe_key,
+            subject,
+            outcome
         ],
     )
     .map_err(|e| e.to_string())?;
@@ -450,6 +481,7 @@ pub fn apply_snapshot(
                     "assigned",
                     "",
                     "Assigned to you as reviewer",
+                    (&pr.author, ""),
                 )?;
             }
         } else {
@@ -484,8 +516,18 @@ pub fn apply_snapshot(
             } else {
                 "Pull request abandoned"
             };
+            let outcome = pr.status.to_ascii_lowercase();
             record_event(
-                &tx, target, &source, &identity, pr, &url, "closed", &pr.status, summary,
+                &tx,
+                target,
+                &source,
+                &identity,
+                pr,
+                &url,
+                "closed",
+                &pr.status,
+                summary,
+                (&pr.author, &outcome),
             )?;
         }
 
@@ -530,6 +572,7 @@ pub fn apply_snapshot(
                         "comment",
                         &format!("{}:{}", comment.thread_id, comment.id),
                         &format!("{} commented: {}", comment.author, excerpt(&comment.text)),
+                        (&comment.author, ""),
                     )?;
                 }
             }
@@ -548,6 +591,7 @@ pub fn apply_snapshot(
                     "vote",
                     &format!("{key}:{}", vote.vote),
                     &format!("{} {}", vote.reviewer, vote_label(vote.vote)),
+                    (&vote.reviewer, &vote.vote.to_string()),
                 )?;
             }
             for policy in &detail.policies {
@@ -568,6 +612,7 @@ pub fn apply_snapshot(
                     "policy",
                     &format!("{}:{}", policy.id, policy.status),
                     &format!("{} {}", policy.name, policy_label(&policy.status)),
+                    (&policy.name, &policy.status.to_ascii_lowercase()),
                 )?;
             }
         }
@@ -660,11 +705,115 @@ pub fn set_read(db: &Connection, id: &str, is_read: bool) -> Result<(), String> 
     Ok(())
 }
 
+/// Mutes every event like this one, in every repo, from now on, and marks the
+/// ones already in the inbox read.
+pub fn mute(db: &Connection, event_id: &str) -> Result<MuteRule, String> {
+    let (kind, subject, outcome): (String, String, String) = db
+        .query_row(
+            "SELECT kind,subject,outcome FROM pr_inbox_events WHERE id=?1",
+            [event_id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .map_err(|_| "Notification not found".to_string())?;
+    if subject.is_empty() {
+        return Err(
+            "This notification cannot be muted: it does not say who or what it is about".into(),
+        );
+    }
+    db.execute(
+        "INSERT INTO pr_inbox_mutes(kind,subject,outcome,created_at)
+        VALUES (?1,?2,?3,strftime('%Y-%m-%dT%H:%M:%SZ','now')) ON CONFLICT DO NOTHING",
+        params![kind, subject, outcome],
+    )
+    .map_err(|e| e.to_string())?;
+    db.execute(
+        "UPDATE pr_inbox_events SET is_read=1
+        WHERE kind=?1 AND subject=?2 COLLATE NOCASE AND outcome=?3",
+        params![kind, subject, outcome],
+    )
+    .map_err(|e| e.to_string())?;
+    db.query_row(
+        "SELECT kind,subject,outcome,created_at FROM pr_inbox_mutes WHERE kind=?1 AND subject=?2 AND outcome=?3",
+        params![kind, subject, outcome],
+        |r| Ok(MuteRule { kind: r.get(0)?, subject: r.get(1)?, outcome: r.get(2)?, created_at: r.get(3)? }),
+    )
+    .map_err(|e| e.to_string())
+}
+
+/// Lifts every mute. Returns how many there were.
+pub fn reset_mutes(db: &Connection) -> Result<usize, String> {
+    db.execute("DELETE FROM pr_inbox_mutes", [])
+        .map_err(|e| e.to_string())
+}
+
+/// Fills `subject` and `outcome` for events recorded before muting existed,
+/// from their summaries, which were always written from fixed templates.
+pub fn backfill_mute_keys(db: &Connection) -> rusqlite::Result<()> {
+    let rows: Vec<(String, String, String, String)> = db
+        .prepare("SELECT id,kind,summary,author FROM pr_inbox_events WHERE subject=''")?
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+        .collect::<Result<_, _>>()?;
+    for (id, kind, summary, author) in rows {
+        let Some((subject, outcome)) = legacy_mute_key(&kind, &summary, &author) else {
+            continue;
+        };
+        db.execute(
+            "UPDATE pr_inbox_events SET subject=?2,outcome=?3 WHERE id=?1",
+            params![id, subject, outcome],
+        )?;
+    }
+    Ok(())
+}
+
+fn legacy_mute_key(kind: &str, summary: &str, author: &str) -> Option<(String, String)> {
+    match kind {
+        "policy" => [
+            ("passed", "approved"),
+            ("failed", "rejected"),
+            ("errored", "broken"),
+        ]
+        .iter()
+        .find_map(|(label, status)| {
+            summary
+                .strip_suffix(&format!(" {label}"))
+                .map(|name| (name.to_string(), status.to_string()))
+        }),
+        "vote" => [10, 5, -5, -10, 0]
+            .iter()
+            // Longest labels first, so "approved with suggestions" is not read as "approved".
+            .map(|v| (*v, vote_label(*v)))
+            .collect::<Vec<_>>()
+            .into_iter()
+            .filter_map(|(v, label)| {
+                summary
+                    .strip_suffix(&format!(" {label}"))
+                    .map(|name| (label.len(), name.to_string(), v.to_string()))
+            })
+            .max_by_key(|(len, _, _)| *len)
+            .map(|(_, name, v)| (name, v)),
+        "comment" => summary
+            .split_once(" commented: ")
+            .map(|(name, _)| (name.to_string(), String::new())),
+        "assigned" => Some((author.to_string(), String::new())),
+        "closed" => Some((
+            author.to_string(),
+            if summary.ends_with("abandoned") {
+                "abandoned"
+            } else {
+                "completed"
+            }
+            .to_string(),
+        )),
+        _ => None,
+    }
+    .filter(|(subject, _)| !subject.is_empty())
+}
+
 pub fn snapshot(db: &Connection) -> Result<InboxSnapshot, String> {
     let mut stmt = db
         .prepare(
             "SELECT e.id,e.project_id,p.name,e.pr_id,e.kind,e.title,e.author,e.summary,
-        e.url,e.is_read,e.created_at
+        e.url,e.is_read,e.created_at,e.subject,e.outcome
         FROM pr_inbox_events e JOIN projects p ON p.id=e.project_id
         JOIN pr_inbox_config c ON c.project_id=p.id
         WHERE e.identity=c.current_identity AND e.source=c.current_source
@@ -685,6 +834,8 @@ pub fn snapshot(db: &Connection) -> Result<InboxSnapshot, String> {
                 url: r.get(8)?,
                 is_read: r.get(9)?,
                 discovered_at: r.get(10)?,
+                subject: r.get(11)?,
+                outcome: r.get(12)?,
             })
         })
         .map_err(|e| e.to_string())?
@@ -711,7 +862,20 @@ pub fn snapshot(db: &Connection) -> Result<InboxSnapshot, String> {
         .map_err(|e| e.to_string())?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| e.to_string())?;
-    Ok(InboxSnapshot { items, repos })
+    let mutes = db
+        .prepare("SELECT kind,subject,outcome,created_at FROM pr_inbox_mutes ORDER BY created_at DESC,kind,subject")
+        .map_err(|e| e.to_string())?
+        .query_map([], |r| {
+            Ok(MuteRule { kind: r.get(0)?, subject: r.get(1)?, outcome: r.get(2)?, created_at: r.get(3)? })
+        })
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+    Ok(InboxSnapshot {
+        items,
+        repos,
+        mutes,
+    })
 }
 
 trait JsonTransport {
@@ -2006,6 +2170,264 @@ mod tests {
                 .filter(|i| i.kind == "vote" || i.kind == "policy")
                 .count(),
             2
+        );
+    }
+
+    fn gate(name: &str, status: &str) -> PrDetail {
+        PrDetail {
+            policies: vec![PrPolicy {
+                id: format!("{name}-id"),
+                name: name.into(),
+                status: status.into(),
+            }],
+            ..Default::default()
+        }
+    }
+
+    /// Reads a PR's gate as queued first, so the settled outcome that follows
+    /// is a reported transition rather than part of the silent first read.
+    fn settle_gate(db: &mut Connection, target: &Target, id: u64, name: &str, status: &str) {
+        apply_snapshot(
+            db,
+            target,
+            "me",
+            &[with_detail(pr(id), gate(name, "queued"))],
+        )
+        .unwrap();
+        apply_snapshot(db, target, "me", &[with_detail(pr(id), gate(name, status))]).unwrap();
+    }
+
+    #[test]
+    fn inbox_muting_a_gate_outcome_silences_it_everywhere_and_reads_the_old_ones() {
+        let mut db = db();
+        configure(&db, "p", WatchMode::Reviewer).unwrap();
+        let target = targets(&db).unwrap().remove(0);
+        apply_snapshot(&mut db, &target, "me", &[]).unwrap();
+        settle_gate(&mut db, &target, 1, "Comment requirements", "approved");
+        settle_gate(&mut db, &target, 2, "Comment requirements", "approved");
+        let items = snapshot(&db).unwrap().items;
+        let passed: Vec<_> = items.iter().filter(|i| i.kind == "policy").collect();
+        assert_eq!(passed.len(), 2);
+        assert_eq!(passed[0].subject, "Comment requirements");
+        assert_eq!(passed[0].outcome, "approved");
+
+        let rule = mute(&db, &passed[0].id).unwrap();
+        assert_eq!(
+            (
+                rule.kind.as_str(),
+                rule.subject.as_str(),
+                rule.outcome.as_str()
+            ),
+            ("policy", "Comment requirements", "approved")
+        );
+        let after = snapshot(&db).unwrap();
+        assert_eq!(after.mutes.len(), 1);
+        assert!(
+            after
+                .items
+                .iter()
+                .filter(|i| i.kind == "policy")
+                .all(|i| i.is_read),
+            "every existing event of the muted kind is marked read"
+        );
+        assert!(
+            after
+                .items
+                .iter()
+                .any(|i| i.kind == "assigned" && !i.is_read),
+            "others untouched"
+        );
+
+        // A later PR passing the same gate is not recorded at all.
+        settle_gate(&mut db, &target, 3, "comment REQUIREMENTS", "approved");
+        // The same gate failing is a different outcome, so it still notifies.
+        settle_gate(&mut db, &target, 4, "Comment requirements", "rejected");
+        let gates: Vec<_> = snapshot(&db)
+            .unwrap()
+            .items
+            .into_iter()
+            .filter(|i| i.kind == "policy")
+            .map(|i| (i.pr_id, i.outcome))
+            .collect();
+        assert!(!gates.iter().any(|(id, _)| *id == 3));
+        assert!(gates.contains(&(4, "rejected".into())));
+    }
+
+    #[test]
+    fn inbox_mutes_cover_votes_comments_assignments_and_closures() {
+        let mut db = db();
+        configure(&db, "p", WatchMode::Reviewer).unwrap();
+        let target = targets(&db).unwrap().remove(0);
+        apply_snapshot(&mut db, &target, "me", &[]).unwrap();
+        let bot = |id: u64| WatchedPr {
+            author: "Bot".into(),
+            ..pr(id)
+        };
+        apply_snapshot(&mut db, &target, "me", &[bot(1)]).unwrap();
+        let assigned = snapshot(&db).unwrap().items.remove(0);
+        assert_eq!(
+            (assigned.kind.as_str(), assigned.subject.as_str()),
+            ("assigned", "Bot")
+        );
+        mute(&db, &assigned.id).unwrap();
+        apply_snapshot(&mut db, &target, "me", &[bot(1), bot(2), pr(3)]).unwrap();
+        let assigned: Vec<_> = snapshot(&db)
+            .unwrap()
+            .items
+            .into_iter()
+            .filter(|i| i.kind == "assigned")
+            .map(|i| i.pr_id)
+            .collect();
+        assert_eq!(
+            assigned,
+            vec![3, 1],
+            "Bot's PRs no longer announce assignments"
+        );
+
+        let vote = |v: i64| PrDetail {
+            votes: vec![PrVote {
+                reviewer_id: "dev".into(),
+                reviewer: "Dev".into(),
+                vote: v,
+            }],
+            comments: vec![comment(
+                1,
+                v.unsigned_abs() as i64 + 1,
+                "dev",
+                &format!("2026-01-0{}T00:00:00Z", v.unsigned_abs() % 9 + 1),
+            )],
+            ..Default::default()
+        };
+        apply_snapshot(&mut db, &target, "me", &[with_detail(pr(3), vote(0))]).unwrap();
+        apply_snapshot(&mut db, &target, "me", &[with_detail(pr(3), vote(10))]).unwrap();
+        let items = snapshot(&db).unwrap().items;
+        let approved = items.iter().find(|i| i.kind == "vote").unwrap();
+        assert_eq!(
+            (approved.subject.as_str(), approved.outcome.as_str()),
+            ("Dev", "10")
+        );
+        let said = items.iter().find(|i| i.kind == "comment").unwrap();
+        assert_eq!(
+            (said.subject.as_str(), said.outcome.as_str()),
+            ("dev display", "")
+        );
+        mute(&db, &approved.id).unwrap();
+        mute(&db, &said.id).unwrap();
+        apply_snapshot(&mut db, &target, "me", &[with_detail(pr(3), vote(-5))]).unwrap();
+        apply_snapshot(&mut db, &target, "me", &[with_detail(pr(3), vote(10))]).unwrap();
+        let items = snapshot(&db).unwrap().items;
+        let votes: Vec<_> = items
+            .iter()
+            .filter(|i| i.kind == "vote")
+            .map(|i| i.outcome.clone())
+            .collect();
+        assert_eq!(
+            votes,
+            vec!["-5".to_string(), "10".to_string()],
+            "a muted vote value stays quiet; others notify"
+        );
+        assert_eq!(
+            items.iter().filter(|i| i.kind == "comment").count(),
+            1,
+            "dev's comments stay quiet"
+        );
+
+        let done = WatchedPr {
+            status: "completed".into(),
+            ..pr(3)
+        };
+        apply_snapshot(&mut db, &target, "me", &[done]).unwrap();
+        let closed = snapshot(&db)
+            .unwrap()
+            .items
+            .into_iter()
+            .find(|i| i.kind == "closed")
+            .unwrap();
+        assert_eq!(
+            (closed.subject.as_str(), closed.outcome.as_str()),
+            ("Author", "completed")
+        );
+    }
+
+    #[test]
+    fn inbox_resetting_mutes_tracks_again_without_replaying_what_was_skipped() {
+        let mut db = db();
+        configure(&db, "p", WatchMode::Reviewer).unwrap();
+        let target = targets(&db).unwrap().remove(0);
+        apply_snapshot(&mut db, &target, "me", &[]).unwrap();
+        settle_gate(&mut db, &target, 1, "CI", "approved");
+        let id = snapshot(&db)
+            .unwrap()
+            .items
+            .into_iter()
+            .find(|i| i.kind == "policy")
+            .unwrap()
+            .id;
+        mute(&db, &id).unwrap();
+        settle_gate(&mut db, &target, 2, "CI", "approved");
+        assert_eq!(reset_mutes(&db).unwrap(), 1);
+        assert!(snapshot(&db).unwrap().mutes.is_empty());
+        apply_snapshot(
+            &mut db,
+            &target,
+            "me",
+            &[with_detail(pr(2), gate("CI", "approved"))],
+        )
+        .unwrap();
+        let gates = |db: &Connection| {
+            snapshot(db)
+                .unwrap()
+                .items
+                .into_iter()
+                .filter(|i| i.kind == "policy")
+                .map(|i| i.pr_id)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(gates(&db), vec![1], "the skipped outcome is not replayed");
+        settle_gate(&mut db, &target, 5, "CI", "approved");
+        assert_eq!(gates(&db), vec![5, 1], "new outcomes notify again");
+        assert!(mute(&db, "missing").is_err());
+    }
+
+    #[test]
+    fn inbox_backfills_mute_keys_for_events_recorded_before_muting_existed() {
+        let db = db();
+        let legacy = [
+            ("e1", "policy", "Comment requirements passed", "A"),
+            ("e2", "policy", "Build failed", "A"),
+            ("e3", "vote", "Dev Name approved with suggestions", "A"),
+            ("e4", "vote", "Dev Name is waiting for the author", "A"),
+            ("e5", "comment", "Pat commented: looks good: ship it", "A"),
+            ("e6", "assigned", "Assigned to you as reviewer", "Bot"),
+            ("e7", "closed", "Pull request abandoned", "Bot"),
+        ];
+        for (id, kind, summary, author) in legacy {
+            db.execute(
+                "INSERT INTO pr_inbox_events (id,project_id,source,identity,pr_id,kind,title,author,summary,url,created_at,dedupe_key)
+                VALUES (?1,'p','s','me',1,?2,'t',?4,?3,'u','2026-01-01T00:00:00Z',?1)",
+                params![id, kind, summary, author],
+            ).unwrap();
+        }
+        backfill_mute_keys(&db).unwrap();
+        let keys: Vec<(String, String, String)> = db
+            .prepare("SELECT id,subject,outcome FROM pr_inbox_events ORDER BY id")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        let expect = |a: &str, b: &str, c: &str| (a.to_string(), b.to_string(), c.to_string());
+        assert_eq!(
+            keys,
+            vec![
+                expect("e1", "Comment requirements", "approved"),
+                expect("e2", "Build", "rejected"),
+                expect("e3", "Dev Name", "5"),
+                expect("e4", "Dev Name", "-5"),
+                expect("e5", "Pat", ""),
+                expect("e6", "Bot", ""),
+                expect("e7", "Bot", "abandoned"),
+            ]
         );
     }
 

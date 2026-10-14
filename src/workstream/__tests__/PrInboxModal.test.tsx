@@ -20,6 +20,8 @@ function event(over: Partial<PrInboxItem> = {}): PrInboxItem {
     url: "https://dev.azure.com/o/p/_git/r/pullrequest/42",
     is_read: false,
     discovered_at: "2026-01-01T00:00:00Z",
+    subject: "Author",
+    outcome: "",
     ...over,
   };
 }
@@ -30,6 +32,7 @@ const snapshot: PrInboxSnapshot = {
     project_id: "p", repo_name: "Repo", enabled: true, mode: "both",
     last_checked: null, error: "Run az login",
   }],
+  mutes: [],
 };
 
 describe("PR inbox", () => {
@@ -59,7 +62,7 @@ describe("PR inbox", () => {
   });
 
   it("distinguishes loading, read failure and a genuinely empty inbox", () => {
-    const props = { snapshot: { items: [], repos: [] }, onRead: vi.fn(), onClose: vi.fn() };
+    const props = { snapshot: { items: [], repos: [], mutes: [] }, onRead: vi.fn(), onClose: vi.fn() };
     const { rerender } = render(<PrInboxModal {...props} loading error={null} />);
     expect(screen.getByText("Loading inbox...")).toBeInTheDocument();
     rerender(<PrInboxModal {...props} loading={false} error="Read failed" />);
@@ -115,6 +118,7 @@ describe("PR inbox", () => {
   describe("grouping a PR's events", () => {
     const busy: PrInboxSnapshot = {
       repos: snapshot.repos,
+      mutes: [],
       items: [
         event({ id: "a", kind: "assigned", discovered_at: "2026-01-01T00:00:00Z", is_read: true }),
         event({ id: "b", kind: "comment", summary: "Dev commented: needs a test", discovered_at: "2026-01-03T00:00:00Z" }),
@@ -179,6 +183,7 @@ describe("PR inbox", () => {
   describe("hiding read notifications", () => {
     const mixed: PrInboxSnapshot = {
       repos: snapshot.repos,
+      mutes: [],
       items: [
         event({ id: "old", kind: "assigned", is_read: true }),
         event({ id: "new", kind: "comment", summary: "Dev: needs a test" }),
@@ -209,6 +214,54 @@ describe("PR inbox", () => {
       render(<PrInboxModal snapshot={read} error={null} loading={false} onRead={vi.fn()} onClose={vi.fn()} />);
       expect(screen.getByTestId("pr-inbox-caught-up")).toHaveTextContent("No unread notifications. 3 read hidden.");
       expect(screen.queryByText("No review notifications yet.")).not.toBeInTheDocument();
+    });
+  });
+
+  describe("muting events", () => {
+    const gate = event({ id: "g", kind: "policy", summary: "Comment requirements passed", subject: "Comment requirements", outcome: "approved" });
+
+    it("mutes events like one, saying exactly which", async () => {
+      const onMute = vi.fn().mockResolvedValue(undefined);
+      render(<PrInboxModal snapshot={{ ...snapshot, items: [gate] }} error={null} loading={false}
+        onRead={vi.fn()} onClose={vi.fn()} onMute={onMute} onResetMutes={vi.fn()} />);
+      fireEvent.click(screen.getByRole("button", { name: 'Stop tracking: Build gate "Comment requirements" passed' }));
+      await waitFor(() => expect(onMute).toHaveBeenCalledWith("g"));
+    });
+
+    it("offers no mute for an event that can't be matched", () => {
+      render(<PrInboxModal snapshot={{ ...snapshot, items: [event({ subject: "" })] }} error={null} loading={false}
+        onRead={vi.fn()} onClose={vi.fn()} onMute={vi.fn()} onResetMutes={vi.fn()} />);
+      expect(screen.queryByRole("button", { name: /^Stop tracking/ })).toBeNull();
+    });
+
+    it("lists what is muted and resets it all", async () => {
+      const onResetMutes = vi.fn().mockResolvedValue(2);
+      const mutes = [
+        { kind: "policy" as const, subject: "Comment requirements", outcome: "approved" },
+        { kind: "comment" as const, subject: "Bot", outcome: "" },
+      ];
+      render(<PrInboxModal snapshot={{ ...snapshot, mutes }} error={null} loading={false}
+        onRead={vi.fn()} onClose={vi.fn()} onMute={vi.fn()} onResetMutes={onResetMutes} />);
+      const toggle = screen.getByRole("button", { name: "Muted (2)" });
+      fireEvent.click(toggle);
+      const list = screen.getByTestId("pr-inbox-mutes");
+      expect(within(list).getByText('Build gate "Comment requirements" passed')).toBeInTheDocument();
+      expect(within(list).getByText("Comments by Bot")).toBeInTheDocument();
+      fireEvent.click(within(list).getByRole("button", { name: "Reset all" }));
+      await waitFor(() => expect(onResetMutes).toHaveBeenCalled());
+    });
+
+    it("shows no muted control when nothing is muted", () => {
+      render(<PrInboxModal snapshot={snapshot} error={null} loading={false}
+        onRead={vi.fn()} onClose={vi.fn()} onMute={vi.fn()} onResetMutes={vi.fn()} />);
+      expect(screen.queryByRole("button", { name: /^Muted/ })).toBeNull();
+    });
+
+    it("reports a failed mute", async () => {
+      render(<PrInboxModal snapshot={{ ...snapshot, items: [gate] }} error={null} loading={false}
+        onRead={vi.fn()} onClose={vi.fn()} onMute={vi.fn().mockRejectedValue(new Error("Mute failed"))} onResetMutes={vi.fn()} />);
+      fireEvent.click(screen.getByRole("button", { name: /^Stop tracking/ }));
+      await waitFor(() => expect(screen.getByText("Mute failed")).toBeInTheDocument());
     });
   });
 });
