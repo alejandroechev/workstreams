@@ -34,6 +34,12 @@ export function GrillAnswerView({ path, io = tauriGrillIo }: { path: string; io?
   const [filter, setFilter] = useState<{ threshold: Threshold; unansweredOnly: boolean }>({ threshold: "All", unansweredOnly: false });
   const [currentId, setCurrentId] = useState<string | null>(null);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
+  /**
+   * Drafts already written to the file. They stay on screen after saving, since
+   * the file reads answers back trimmed and showing that would eat the space
+   * you just typed; but they give way once the file's answer really changes.
+   */
+  const [saved, setSaved] = useState<ReadonlySet<string>>(() => new Set());
   const [status, setStatus] = useState<{ kind: "saved" | "saving" | "error"; message?: string } | null>(null);
   const [alwaysShowReco, setAlwaysShowReco] = useState(false);
   const [finish, setFinish] = useState<Finish>({ kind: "idle" });
@@ -42,6 +48,8 @@ export function GrillAnswerView({ path, io = tauriGrillIo }: { path: string; io?
   const queue = useRef<Promise<unknown>>(Promise.resolve());
   /** Writes queued or running; a reload never applies while any are. */
   const inFlight = useRef(0);
+  /** The latest text typed per question, to tell whether a finished save is still current. */
+  const latest = useRef(new Map<string, string>());
   /** Bumped by every edit and write, so a reload that started earlier is discarded. */
   const generation = useRef(0);
   const grillDir = path.split("/").slice(0, -1).join("/");
@@ -117,20 +125,23 @@ export function GrillAnswerView({ path, io = tauriGrillIo }: { path: string; io?
     cancelPending(draftKey(targetRound, id));
     const key = draftKey(targetRound, id);
     const result = await write((t) => setAnswer(t, targetRound, id, answer));
-    // A failed save keeps the draft on screen, so nothing typed is lost.
+    // A failed save keeps the draft unsaved, so nothing typed is lost.
     if (!result.ok) return;
-    setDrafts((all) => {
-      if (all[key] !== answer) return all;
-      const { [key]: _saved, ...rest } = all;
-      return rest;
-    });
+    if (latest.current.get(key) === answer) setSaved((all) => new Set(all).add(key));
   }, [write]);
 
   const onAnswer = useCallback((id: string, answer: string, immediate: boolean) => {
     if (shownRound === null || readOnly) return;
     const key = draftKey(shownRound, id);
     generation.current += 1;
+    latest.current.set(key, answer);
     setDrafts((all) => ({ ...all, [key]: answer }));
+    setSaved((all) => {
+      if (!all.has(key)) return all;
+      const next = new Set(all);
+      next.delete(key);
+      return next;
+    });
     cancelPending(key);
     const targetRound = shownRound;
     const flush = () => saveAnswer(targetRound, id, answer);
@@ -142,11 +153,21 @@ export function GrillAnswerView({ path, io = tauriGrillIo }: { path: string; io?
   /** Saves every draft whose save failed (drafts still being typed save themselves). */
   const retry = useCallback(() => {
     for (const [key, answer] of Object.entries(drafts)) {
-      if (timers.current.has(key)) continue;
+      if (timers.current.has(key) || saved.has(key)) continue;
       const at = key.indexOf(":");
       void saveAnswer(Number(key.slice(0, at)), key.slice(at + 1), answer);
     }
-  }, [drafts, saveAnswer]);
+  }, [drafts, saved, saveAnswer]);
+
+  /** What a question's answer box shows: your text, unless the file has since moved on. */
+  const shownAnswer = (q: { round: number; id: string; answer: string }) => {
+    const key = draftKey(q.round, q.id);
+    const draft = drafts[key];
+    if (draft === undefined) return q.answer;
+    if (saved.has(key) && draft.trim() !== q.answer) return q.answer;
+    return draft;
+  };
+  const unsavedCount = Object.keys(drafts).filter((key) => !saved.has(key)).length;
 
   const flushAll = useCallback(async () => {
     for (const timer of timers.current.values()) clearTimeout(timer);
@@ -188,7 +209,7 @@ export function GrillAnswerView({ path, io = tauriGrillIo }: { path: string; io?
       const option = current.options[Number(event.key) - 1];
       if (option) {
         event.preventDefault();
-        const note = selectedOption(drafts[draftKey(current.round, current.id)] ?? current.answer, current.options)?.note ?? "";
+        const note = selectedOption(shownAnswer(current), current.options)?.note ?? "";
         onAnswer(current.id, optionAnswer(option.key, note), true);
       }
     }
@@ -267,7 +288,7 @@ export function GrillAnswerView({ path, io = tauriGrillIo }: { path: string; io?
             {status.kind === "saving" ? "Saving…" : status.kind === "saved" ? "Saved" : status.message}
           </span>
         )}
-        {status?.kind === "error" && Object.keys(drafts).length > 0 && (
+        {status?.kind === "error" && unsavedCount > 0 && (
           <button type="button" data-testid="grill-save-retry" onClick={retry} style={linkStyle}>Retry</button>
         )}
         {!readOnly && (
@@ -294,7 +315,7 @@ export function GrillAnswerView({ path, io = tauriGrillIo }: { path: string; io?
 
       <nav aria-label="Questions" data-testid="grill-strip" style={stripStyle}>
         {questions.map((q, i) => {
-          const answered = (drafts[draftKey(q.round, q.id)] ?? q.answer) !== "";
+          const answered = shownAnswer(q) !== "";
           const color = IMPORTANCE_COLORS[q.importance];
           return (
             <button
@@ -320,7 +341,7 @@ export function GrillAnswerView({ path, io = tauriGrillIo }: { path: string; io?
           <QuestionCard
             key={`${current.round}-${current.id}`}
             question={current}
-            answer={drafts[draftKey(current.round, current.id)] ?? current.answer}
+            answer={shownAnswer(current)}
             readOnly={readOnly}
             alwaysShowRecommendation={alwaysShowReco}
             grillDir={grillDir}

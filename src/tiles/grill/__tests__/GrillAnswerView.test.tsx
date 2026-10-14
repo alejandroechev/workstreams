@@ -293,6 +293,28 @@ describe("the grill Answer view", () => {
     await waitFor(() => expect(screen.getByTestId("grill-question").textContent).toContain("Sync, renamed"));
   });
 
+  it("keeps the spaces you are typing after the answer saves", async () => {
+    const io = await open();
+    fireEvent.change(screen.getByTestId("grill-answer"), { target: { value: "first word " } });
+    await waitFor(() => expect(io.text).toContain("**Answer:** first word"));
+    await new Promise((r) => setTimeout(r, 50));
+    expect((screen.getByTestId("grill-answer") as HTMLTextAreaElement).value).toBe("first word ");
+    fireEvent.change(screen.getByTestId("grill-answer"), { target: { value: "line one\n" } });
+    await waitFor(() => expect(io.text).toContain("**Answer:** line one\n"));
+    await new Promise((r) => setTimeout(r, 50));
+    expect((screen.getByTestId("grill-answer") as HTMLTextAreaElement).value).toBe("line one\n");
+  });
+
+  it("shows the file's answer once it changes underneath a saved one", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const io = await open();
+    fireEvent.change(screen.getByTestId("grill-answer"), { target: { value: "mine " } });
+    await waitFor(() => expect(io.text).toContain("**Answer:** mine"));
+    io.externalWrite(io.text.replace("**Answer:** mine ", "**Answer:** edited in the file"));
+    await act(async () => { vi.advanceTimersByTime(2100); });
+    await waitFor(() => expect((screen.getByTestId("grill-answer") as HTMLTextAreaElement).value).toBe("edited in the file"));
+  });
+
   it("keeps an answer that failed to save, and saves it on retry", async () => {
     const io = await open();
     io.write.mockRejectedValueOnce(new Error("disk full"));
