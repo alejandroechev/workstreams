@@ -437,6 +437,16 @@ shows **Done**. Sessions and messages are pruned 3 days after the last message,
 and each keeps its latest 50 messages. Install the skill with
 `npm run install-skills` (it copies `skills/` into `~/.copilot/skills/`).
 
+**HTML artifacts.** Both phone prompt sheets also have **Publish HTML artifacts**,
+off by default. If you request HTML with it on, the agent uses `/ws-artifact` to
+publish a self-contained page in
+[`alejandroechev/workstreams-artifacts`](https://github.com/alejandroechev/workstreams-artifacts),
+wait for GitHub Pages deployment, and include the verified public URL in its
+reply. Install the global skill with the same `npm run install-skills` command.
+The toggle does not request an artifact by itself. Never publish confidential
+content or private source material. Reply web links now open in the phone's
+browser; Messages stays open in the companion.
+
 **Security model.**
 
 - Every request is signed with HMAC-SHA256 over its kind, arguments and

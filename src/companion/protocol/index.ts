@@ -335,6 +335,12 @@ export function withResultRequest(prompt: string, askForResult: boolean): string
   return askForResult ? prompt.trimEnd() + RESULT_SUFFIX : prompt;
 }
 
+export const ARTIFACT_SUFFIX = "\n\nUse the ws-artifact skill: if an HTML artifact is requested, follow its instructions to create and publish it in alejandroechev/workstreams-artifacts on GitHub Pages, and include the published link in your reply. Publish only content safe for the public web; never include secrets or private source material.";
+
+export function withArtifactRequest(prompt: string, publishArtifacts: boolean): string {
+  return publishArtifacts && prompt.trim() !== "" ? prompt.trimEnd() + ARTIFACT_SUFFIX : prompt;
+}
+
 export function sessionTitle(prompt: string): string {
   const line = prompt.split("\n").map((l) => l.trim()).find((l) => l !== "");
   return line ? line.slice(0, MAX_TITLE_LENGTH) : "Untitled session";

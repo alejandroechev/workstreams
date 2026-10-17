@@ -11,6 +11,14 @@ const repoSkill = path.resolve(__dirname, "../../skills/companion-reply/SKILL.md
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), "skills-"));
 
 describe("install-skills", () => {
+  it("ships public artifact publishing instructions with deployment verification", () => {
+    expect(skillNames()).toContain("ws-artifact");
+    const text = fs.readFileSync(path.resolve(__dirname, "../../skills/ws-artifact/SKILL.md"), "utf8");
+    for (const needle of ["name: ws-artifact", "alejandroechev/workstreams-artifacts", "https://alejandroechev.github.io/workstreams-artifacts/", "public", "secrets", "gh run watch", "curl", "index.html", "git push"]) {
+      expect(text).toContain(needle);
+    }
+  });
+
   it("ships the companion-reply skill with every instruction it needs", () => {
     expect(skillNames()).toContain("companion-reply");
     const text = fs.readFileSync(repoSkill, "utf8");

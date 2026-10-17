@@ -133,6 +133,15 @@ phone; the phone cannot reply.
 - **Asking for a result.** The phone's prompt and create sheets have a "Send me the result" toggle, on by
   default. It appends the fixed `RESULT_SUFFIX` from the shared protocol, which names the
   `companion-reply` skill. The laptop never rewrites prompts.
+- **Public HTML artifacts (2026-10-17).** Both sheets also expose **Publish HTML
+  artifacts**, off by default. Before signing, the phone appends `ARTIFACT_SUFFIX`
+  from the shared protocol, asking the agent to use the global `ws-artifact`
+  skill only if HTML is requested and return the published link. Workstreams
+  versions that skill in `skills/` and installs it globally. It publishes only
+  public-safe material to `alejandroechev/workstreams-artifacts`, with GitHub
+  Pages hosting; neither phone credentials nor a schema change are needed.
+  Reply HTTP(S) links open in the external browser, with native permissions
+  scoped to those schemes. Raw HTML and images remain disabled.
 - **Phone sessions.** When the executor creates a Copilot tile for a phone request (a session, or a
   create with a prompt), Workstreams records `{ tileId, workstreamId, requestId, prompt, createdAt }` in
   SQLite (`companion_sessions`). Only these tiles may send. Nothing else records one.

@@ -28,6 +28,8 @@ import {
   freshSessions,
   lastActivity,
   withResultRequest,
+  withArtifactRequest,
+  ARTIFACT_SUFFIX,
   sessionTitle,
   readSessions,
   sessionIsDone,
@@ -202,6 +204,16 @@ describe("pairing", () => {
 });
 
 describe("phone sessions and messages", () => {
+  it("adds public HTML artifact instructions only when opted in", () => {
+    expect(withArtifactRequest("Build a chart  \n", false)).toBe("Build a chart  \n");
+    expect(withArtifactRequest("Build a chart  \n", true)).toBe("Build a chart" + ARTIFACT_SUFFIX);
+    expect(ARTIFACT_SUFFIX).toContain("ws-artifact");
+    expect(ARTIFACT_SUFFIX).toContain("if an HTML artifact is requested");
+    expect(ARTIFACT_SUFFIX).toContain("link in your reply");
+    expect(withArtifactRequest(" \n", true)).toBe(" \n");
+    expect(withResultRequest(withArtifactRequest("Chart", true), true)).toBe("Chart" + ARTIFACT_SUFFIX + RESULT_SUFFIX);
+  });
+
   it("appends the fixed result request only when asked", () => {
     expect(RESULT_SUFFIX).toBe(fixtures.resultSuffix);
     expect(withResultRequest("Do x", true)).toBe("Do x" + fixtures.resultSuffix);
@@ -281,4 +293,3 @@ describe("phone sessions and messages", () => {
     expect(freshSessions([quiet, busy], at + 60_000 + SESSION_RETENTION_MS + 1)).toEqual([]);
   });
 });
-

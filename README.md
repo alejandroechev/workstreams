@@ -83,7 +83,11 @@ instead of buried behind tabs.
   laptop and the phone hold, expire after five minutes and run at most once
   ([ADR 033](docs/adrs/033-phone-companion.md)). Ask for the result and the
   agent sends it back to the phone's **Messages** with the `companion-reply`
-  skill (`npm run install-skills`).
+  skill (`npm run install-skills`). The phone's **Publish HTML artifacts**
+  toggle asks agents to use `/ws-artifact` for requested HTML, publish it to
+  the [shared gallery](https://alejandroechev.github.io/workstreams-artifacts/),
+  and return a clickable link. Publishing is public and opt-in; the installer
+  installs both skills globally.
 - **Answer grills one question at a time** — the Plan tile's Grill tab turns a
   `grill-me.md` into a focused view: importance-coloured questions you can
   filter to what matters, option buttons, the recommendation hidden until you

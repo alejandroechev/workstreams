@@ -83,6 +83,11 @@ graph TB
     end
 
     PhoneApp["workstreams-companion<br/>(Android, Tauri 2 + React)<br/>signs requests with the pairing secret<br/>Messages: reads agent replies"]
+    ArtifactPages["workstreams-artifacts (public GitHub repo)<br/>self-contained HTML + gallery<br/>GitHub Actions deploys GitHub Pages"]
+    ArtifactSkill["Global ws-artifact skill<br/>opt-in prompt instructions<br/>publish only public-safe HTML; verify live URL"]
+    PhoneApp -- "Publish HTML artifacts: skill instruction in signed prompt" --> ArtifactSkill
+    ArtifactSkill -- "agent commits + pushes; waits for deployment" --> ArtifactPages
+    ArtifactPages -- "published URL in reply; opens in phone browser" --> PhoneApp
 
     subgraph Providers["External-integration boundary"]
         RemoteProv["RemoteRepoProvider trait<br/>GhCli / InMemory impls"]
