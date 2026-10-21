@@ -8,7 +8,8 @@ date: 2026-10-02
 
 ## Status
 
-Accepted (2026-10-02).
+Accepted (2026-10-02). Amended 2026-10-24: conversations with any session
+(see *Conversations*).
 
 ## Context
 
@@ -124,6 +125,8 @@ apps derive them from the lane id with the shared `laneColor()`.
 - **session** loads the workstream if needed, then appends a Copilot session
   tile running `resolveCopilotCommand(project)` (the repo's command if set,
   else the global setting) with `-i <prompt>`.
+- **message** (2026-10-24) resumes an existing session with a new prompt; see
+  *Conversations*.
 
 ### Messages from phone-started sessions
 
@@ -164,9 +167,42 @@ phone; the phone cannot reply.
 - **Launching.** The session is recorded before the agent starts, and the request's guard is checked
   again after recording; a refusal removes the tile, its layout entry and the record.
 - **Retention.** A session is pruned 3 days after its last message (or its start), and keeps at most its
-  latest 50 messages; pruning runs in SQLite and the published copy follows.
+  latest 200 messages (50 before conversations); pruning runs in SQLite and the published copy follows.
 - **On the phone.** A Messages view lists the sessions newest first, with unread counts; read state lives
   only on the phone. Message text is markdown rendered as text, never as HTML.
+
+### Conversations (2026-10-24)
+
+The phone can send any number of further messages to any Copilot session tile, started on the phone or
+on the laptop. There is no listener inside the agent: each message **exits the session and resumes it**
+with the message as a new interactive prompt, which Copilot CLI supports as
+`<command> --resume=<id> -i <message>`.
+
+- **Published tiles.** The laptop publishes `laptop.tiles`: per Copilot tile its id, workstream, title,
+  the Copilot session's one-line summary, whether it is linked to a Copilot session, a `linkRevision`,
+  last activity and origin (phone/laptop). No transcript. Additive at `schemaVersion` 1.
+- **The `message` request** carries `{workstreamId, tileId, linkRevision, prompt}`, signed and checked
+  exactly like the other kinds (fresh for 5 minutes, executed at most once). An older laptop refuses the
+  unknown kind visibly.
+- **Link revision.** `linkRevision` is the first 16 hex characters of SHA-256 over the tile id and its
+  linked Copilot session id. The laptop recomputes it before touching anything; a tile re-linked to
+  another session since the phone looked fails with "different Copilot session", and an unlinked tile
+  can't be messaged at all. A message never resumes a session the phone didn't see.
+- **Stop, then resume, in the same tile.** If the workstream isn't loaded it is mounted in the
+  background (the active workstream never changes). The laptop writes a notice line,
+  `Resumed from phone: <first line>`, into the tile's terminal, sends Ctrl+C twice 150 ms apart, waits up
+  to 5 s for the process to exit, then closes it regardless, and respawns the tile with
+  `--resume=<id> -i <message>`. A message interrupts any turn in progress. Requests run strictly one at
+  a time, so messages are delivered in the order sent.
+- **The thread.** Messaging a laptop tile claims it as a phone session (so it may reply from then on).
+  The laptop records each prompt — the opening one too — as a signed message of the new kind `prompt`,
+  with the request id as its message id, in the same `companion_messages` store; the phone shows your
+  prompts and the agent's replies as one thread, with a marker per resume. Re-linking still revokes the
+  claim; messaging a revoked tile starts a fresh session record.
+- **Status per turn.** A session is *working* while its latest prompt has no `result` after it, and
+  *idle* otherwise.
+- **Options per message.** Each message chooses its own "Send me the result" and "Publish HTML
+  artifacts" suffixes; the phone remembers the last choice.
 
 ### Presence
 
@@ -218,7 +254,9 @@ the same fixture file.
   the shared fixtures, not by a shared package. This is deliberate: a package
   would tie the phone app's release cycle to this repository's hooks.
 - No session output reaches the phone; that would mean streaming terminal data
-  through a CRDT and is out of scope.
+  through a CRDT and is out of scope. The agent's own replies (`companion.send`) are the only output.
+- **A message always interrupts.** Sending while the agent is mid-turn stops that turn; the phone warns
+  before sending, but nothing queues behind a running turn.
 
 ## References
 

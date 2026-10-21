@@ -24,7 +24,7 @@ graph TB
             QuickNote["WorkstreamQuickNote (still shipped)<br/>log a note to this workstream's task<br/>the part that survived; seeds the future per-workstream log"]
             DevlogRender["devlog-render.ts<br/>renders the daily page (pure)"]
             StatusBar["StatusBar<br/>Shortcuts + metadata"]
-            Companion["Phone companion (ADR 033)<br/>src/companion: publisher + executor + runtime<br/>HMAC-checked requests, run at most once<br/>publishes phone sessions + their messages<br/>off by default; never in dev builds"]
+            Companion["Phone companion (ADR 033)<br/>src/companion: publisher + executor + runtime<br/>HMAC-checked requests, run at most once<br/>publishes phone sessions + their messages<br/>publishes session tiles; message = stop + --resume -i<br/>off by default; never in dev builds"]
             subgraph Files["Files"]
                 FileBuffers["FileBufferRegistry<br/>Editable file buffers + dirty state"]
                 Monaco["Monaco<br/>Lazy-loaded editor"]
@@ -44,7 +44,7 @@ graph TB
             DevlogRS["devlog.rs<br/>write + commit + push<br/>refuses to clobber hand-written pages"]
             AgentSocketRS["agent_socket.rs<br/>Unix socket in $TMPDIR, 0600<br/>newline-JSON frames<br/>connect-then-unlink stale reclaim"]
             AgentRegistryRS["agent_registry.rs<br/>named commands + app-issued tokens<br/>scope via created_by_session<br/>command_log (actor = what app can prove)"]
-            CompanionMsgRS["companion_messages.rs (ADR 033)<br/>phone sessions + agent messages<br/>50 per session, pruned after 3 days"]
+            CompanionMsgRS["companion_messages.rs (ADR 033)<br/>phone sessions + prompts + agent messages<br/>200 per session, pruned after 3 days"]
             DiffOrderRS["diff_order.rs (ADR 032)<br/>exact-file-set check<br/>file-set + content fingerprints<br/>freshness: current / content / files"]
             WorkLanesRS["work_lanes + lane_id<br/>named folders for related workstreams<br/>unique names, ON DELETE SET NULL"]
             PullRequestsRS["pull_requests.rs<br/>ADO PR URL parsing<br/>canonical identity for dedup<br/>link storage only, no network"]
@@ -79,10 +79,10 @@ graph TB
     end
 
     subgraph SyncCloud["User's SyncEngine server"]
-        CompanionDoc["Companion Automerge document<br/>laptop: workstreams, lanes, lastSeenAt<br/>requests: signed load / create / session<br/>sessions: phone-started sessions + agent messages<br/>+ ephemeral presence every 10s"]
+        CompanionDoc["Companion Automerge document<br/>laptop: workstreams, lanes, lastSeenAt<br/>laptop.tiles: session tiles (no transcript)<br/>requests: signed load / create / session / message<br/>sessions: phone-started sessions + agent messages<br/>+ ephemeral presence every 10s"]
     end
 
-    PhoneApp["workstreams-companion<br/>(Android, Tauri 2 + React)<br/>signs requests with the pairing secret<br/>Messages: reads agent replies"]
+    PhoneApp["workstreams-companion<br/>(Android, Tauri 2 + React)<br/>signs requests with the pairing secret<br/>Messages + Sessions: threads, message any session"]
     ArtifactPages["workstreams-artifacts (public GitHub repo)<br/>self-contained HTML + gallery<br/>GitHub Actions deploys GitHub Pages"]
     ArtifactSkill["Global ws-artifact skill<br/>opt-in prompt instructions<br/>publish only public-safe HTML; verify live URL"]
     PhoneApp -- "Publish HTML artifacts: skill instruction in signed prompt" --> ArtifactSkill
@@ -99,7 +99,7 @@ graph TB
     App --> Companion
     Companion -- "publish list + presence<br/>write outcomes" --> CompanionDoc
     CompanionDoc -- "requests" --> Companion
-    Companion -- "mountWorkstream / create / spawn_copilot_session(-i prompt)" --> LibRS
+    Companion -- "mountWorkstream / create / spawn_copilot_session(-i prompt)<br/>message: Ctrl+C, close, respawn --resume=id -i prompt" --> LibRS
     PhoneApp -- "Automerge sync over WebSocket" --> CompanionDoc
     App --> PrInboxUI
     Sidebar --> PrInboxUI

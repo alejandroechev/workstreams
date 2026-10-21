@@ -406,7 +406,8 @@ whether the companion is connected, connecting, or why it is not.
 | See the list | Every non-archived workstream, in sidebar order, with lane, loaded state and session count. Updates as you change things here. |
 | Swipe a not-loaded row → **Load** | Loads it in the background. The workstream you are looking at stays on screen. |
 | **+** → name (and optional prompt) | Creates a standalone workstream (no repo, no worktree) in a new empty folder under the folder root (default `~/Workstreams`, configurable), loads it, and with a prompt adds a Copilot session running it. |
-| Tap a row → prompt → **Start session** | Loads the workstream if needed, then appends a Copilot session tile running the repo's Copilot command (or the global one) with `-i <prompt>`. |
+| Tap a row → prompt → **Start session** | Loads the workstream if needed, then appends a Copilot session tile running the repo's Copilot command (or the global one) with `-i <prompt>`. A workstream with sessions opens its **Sessions** list first; **+** starts a new one. |
+| **Sessions** → a session → message → **Send** | Stops that Copilot session and resumes it in the same tile with `--resume=<id> -i <message>`. Works for sessions started on the laptop too; see *Conversations* below. |
 
 The phone shows *Laptop online* while it hears this laptop's presence (every 10
 seconds), and *Offline · last seen HH:MM* otherwise; offline, it sends nothing.
@@ -434,8 +435,28 @@ wasn't started from the phone, when the companion is off, for any kind but
 skill then tells the agent to answer in the terminal. On the phone, **Messages**
 lists those sessions newest first with unread counts; a session with a result
 shows **Done**. Sessions and messages are pruned 3 days after the last message,
-and each keeps its latest 50 messages. Install the skill with
+and each keeps its latest 200 messages. Install the skill with
 `npm run install-skills` (it copies `skills/` into `~/.copilot/skills/`).
+
+**Conversations.** A workstream's **Sessions** list on the phone shows every
+Copilot tile in it, with its summary line, last activity, a phone/laptop marker
+and *working* / *idle*. Tiles not yet linked to a Copilot session show
+*can't be resumed yet* and can't be messaged. Open one to see the thread: your
+prompts, the agent's progress and results, and a marker for each resume.
+Sending a message:
+
+1. loads the workstream in the background if needed (the one on screen stays);
+2. writes `Resumed from phone: <first line>` into the tile's terminal;
+3. sends Ctrl+C twice, waits up to 5 s for Copilot to exit, then closes it;
+4. respawns the same tile with `--resume=<session id> -i <message>`.
+
+A message interrupts whatever the agent is doing, and messages run in the order
+sent. If the tile was re-linked to another Copilot session after the phone saw
+it, the message fails ("different Copilot session") and nothing is touched.
+Messaging a laptop session makes it a phone session, so it may reply through
+`companion-reply` from then on. Each message picks its own **Send me the
+result** and **Publish HTML artifacts**; the phone remembers the last choice.
+Threads keep their latest 200 messages, prompts included.
 
 **HTML artifacts.** Both phone prompt sheets also have **Publish HTML artifacts**,
 off by default. If you request HTML with it on, the agent uses `/ws-artifact` to

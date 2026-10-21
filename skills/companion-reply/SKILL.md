@@ -1,6 +1,6 @@
 ---
 name: companion-reply
-description: 'Send progress updates and the final result to the user''s phone, from a Copilot session that the Workstreams phone companion started. Uses the `workstreams agent` CLI over a local socket; no MCP, no network setup, no secrets. Only works inside a Workstreams session tile started from the phone, gated on $WORKSTREAMS_SOCKET. Trigger phrases - "send me the result", "use the companion-reply skill", "reply to my phone", "send it to my phone", "/companion-reply".'
+description: 'Send progress updates and the final result to the user''s phone, from a Copilot session that the Workstreams phone companion started or messaged. Uses the `workstreams agent` CLI over a local socket; no MCP, no network setup, no secrets. Only works inside a Workstreams session tile started or messaged from the phone, gated on $WORKSTREAMS_SOCKET. Trigger phrases - "send me the result", "use the companion-reply skill", "reply to my phone", "send it to my phone", "/companion-reply".'
 ---
 
 # Reply to the phone (agent side)
@@ -65,7 +65,7 @@ did not get it.
 
 | Code | Meaning |
 | --- | --- |
-| `NOT_A_PHONE_SESSION` | This session was not started from the phone. Answer in the terminal. |
+| `NOT_A_PHONE_SESSION` | This session was not started or messaged from the phone. Answer in the terminal. |
 | `COMPANION_OFF` | The user turned the phone companion off. Answer in the terminal. |
 | `BAD_MESSAGE` | Wrong kind, empty text, or more than 20000 characters. Fix it and send again. |
 | `MISSING_PARAM` | `kind` was not given. Add `kind=result` or `kind=progress`. |

@@ -78,7 +78,9 @@ instead of buried behind tabs.
 - **Phone companion** *(opt-in)* — pair the
   [Android companion](https://github.com/alejandroechev/workstreams-companion)
   by QR code to see your workstreams from your phone, load one in the
-  background, create one, or start a Copilot session with a prompt. Requests
+  background, create one, start a Copilot session with a prompt, or message
+  any existing session (it is stopped and resumed with your message, any
+  number of turns, in the same tile). Requests
   travel through your own SyncEngine server, are signed with a secret only the
   laptop and the phone hold, expire after five minutes and run at most once
   ([ADR 033](docs/adrs/033-phone-companion.md)). Ask for the result and the
