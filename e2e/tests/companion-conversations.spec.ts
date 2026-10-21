@@ -176,3 +176,21 @@ test("AT-6: an unlinked tile, or one linked elsewhere since, is refused and left
   expect(await log(page, unlinked.tileId)).toEqual([]);
   expect((await phone(page)).sessions ?? {}).toEqual({});
 });
+
+test("closing a workstream keeps publishing its current tiles, not the ones seen at startup", async ({ page }) => {
+  const beta = await workstreamId(page, "Beta");
+  await publishedTiles(page);
+  await page.evaluate((id) => (window as unknown as PhoneWindow & { __WS_BACKEND__: { createTile(w: string, t: string, title: string, c: string): Promise<unknown> } })
+    .__WS_BACKEND__.createTile(id, "copilot_session", "Beta/3", JSON.stringify({ copilot_session_id: "s-beta-3", cwd: "/beta" })), beta);
+  await row(page, beta).click();
+  await expect(row(page, beta)).toHaveAttribute("data-active", "true");
+  await expect.poll(async () => (await phone(page)).laptop.tiles?.map((t) => t.title).sort()).toEqual(["Beta/1", "Beta/2", "Beta/3"]);
+
+  await row(page, beta).hover();
+  await row(page, beta).locator('[data-testid^="ws-actions-"]').click();
+  await page.locator('[data-testid="action-close"]').click();
+  await expect(row(page, beta)).toHaveAttribute("data-active", "false");
+  // Give a stale republish the chance to happen, then check it didn't.
+  await page.waitForTimeout(500);
+  await expect.poll(async () => (await phone(page)).laptop.tiles?.map((t) => t.title).sort()).toEqual(["Beta/1", "Beta/2", "Beta/3"]);
+});

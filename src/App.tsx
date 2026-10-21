@@ -1979,9 +1979,12 @@ export default function App() {
 
   // ── Phone companion (ADR 033) ──────────────────────────────────────────
   // Copilot session tiles per workstream: live for mounted ones, from the
-  // saved tiles for the rest (read once per workstream, without mounting).
+  // saved tiles for the rest (read without mounting). Re-read whenever the
+  // mounted set changes, so closing a workstream publishes its tiles as they
+  // are now, not as they were when last read.
   const [savedTiles, setSavedTiles] = useState<ReadonlyMap<string, Tile[]>>(new Map());
   const companionWorkstreamIds = workstreams.filter((w) => w.status !== "archived").map((w) => w.id).join(",");
+  const mountedWorkstreamIds = [...wsStates.keys()].sort().join(",");
   useEffect(() => {
     if (!companionReady) return;
     let cancelled = false;
@@ -1991,7 +1994,7 @@ export default function App() {
       return [id, tiles] as const;
     })).then((entries) => { if (!cancelled) setSavedTiles(new Map(entries)); });
     return () => { cancelled = true; };
-  }, [backend, companionReady, companionWorkstreamIds]);
+  }, [backend, companionReady, companionWorkstreamIds, mountedWorkstreamIds]);
   // Every workstream's tiles: live for mounted ones, saved for the rest.
   const companionSessionTiles = useMemo(() => {
     const tiles = new Map(savedTiles);

@@ -98,10 +98,11 @@ export async function resumePhoneSession(deps: ResumeSessionDeps, request: Resum
       deps.markIntentionalRestart(tile.id);
       touched = true;
       await deps.stop(tile.id);
-      // Stopping can take seconds: the request may have expired, or the tile been re-linked.
-      guard();
-      await stillLinked();
     }
+    // Recording and stopping take time: the tile may have been re-linked, or the
+    // request expired, meanwhile. Checked last, with nothing awaited before launching.
+    await stillLinked();
+    guard();
     const ws = deps.workstream(request.workstreamId);
     const cwd = (typeof config.cwd === "string" && config.cwd) || ws?.directory || deps.defaultCwd();
     deps.markSpawned(tile.id);

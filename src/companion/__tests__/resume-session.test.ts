@@ -165,4 +165,27 @@ describe("resuming a session with a message from the phone", () => {
     const [session] = await backend.companionListSessions();
     expect(session.canSend).toBe(false);
   });
+
+  it("checks the link right before launching an unspawned tile too, so a re-link while recording isn't resumed with the message", async () => {
+    const { backend, deps, log, request, tile } = await setup({ running: false });
+    const addPrompt = backend.companionAddPrompt.bind(backend);
+    backend.companionAddPrompt = async (...args) => {
+      await addPrompt(...args);
+      await backend.companionRevokeSession(tile.id);
+      await backend.updateTileConfig(tile.id, JSON.stringify({ cwd: "/repo/alpha/sub", copilot_session_id: "session-t" }));
+    };
+    await expect(resumePhoneSession(deps, request())).rejects.toThrow("different Copilot session");
+    expect(log.filter((l) => l.startsWith("spawn"))).toEqual(["spawn:/repo/alpha/sub:copilot --yolo:session-t:null"]);
+  });
+
+  it("checks the guard after the last link check, right before launching", async () => {
+    const { backend, deps, log, request } = await setup();
+    let reads = 0;
+    const listTiles = backend.listTiles.bind(backend);
+    let refuse = false;
+    backend.listTiles = async (id) => { reads += 1; if (reads === 3) refuse = true; return listTiles(id); };
+    const guard = () => { if (refuse) throw new Error("Request expired"); };
+    await expect(resumePhoneSession(deps, request({ guard }))).rejects.toThrow("Request expired");
+    expect(log.filter((l) => l.startsWith("spawn"))).toEqual(["spawn:/repo/alpha/sub:copilot --yolo:session-s:null"]);
+  });
 });
