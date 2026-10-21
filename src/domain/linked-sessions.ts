@@ -14,13 +14,17 @@ import type { Tile } from "./types";
 export function deriveLinkedSessionIds(tiles: Tile[]): string[] {
   return tiles
     .filter((t) => t.tile_type === "copilot_session")
-    .map((t) => {
-      try {
-        const cfg = JSON.parse(t.config_json || "{}");
-        return (cfg.copilot_session_id || cfg.resume_by_id || null) as string | null;
-      } catch {
-        return null;
-      }
-    })
+    .map((t) => linkedSessionId(t.config_json))
     .filter((id): id is string => !!id);
+}
+
+/** The Copilot session a tile's config links it to, or `null`. */
+export function linkedSessionId(configJson: string | undefined): string | null {
+  try {
+    const cfg = JSON.parse(configJson || "{}");
+    const id = cfg.copilot_session_id || cfg.resume_by_id;
+    return typeof id === "string" && id ? id : null;
+  } catch {
+    return null;
+  }
 }

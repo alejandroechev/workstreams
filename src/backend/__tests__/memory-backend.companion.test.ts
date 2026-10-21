@@ -38,15 +38,18 @@ describe("MemoryBackend phone sessions", () => {
 
   it("claims a laptop tile, restarts a revoked one fresh, and records prompts", async () => {
     const backend = new MemoryBackend();
-    await backend.companionClaimSession({ tileId: "lap", workstreamId: "w", requestId: "r1", prompt: "Go", createdAt: 1 });
-    await backend.companionAddPrompt("lap", "r1", "Go", 1);
-    expect(await backend.companionListSessions()).toEqual([{ tileId: "lap", workstreamId: "w", requestId: "r1", prompt: "Go", createdAt: 1, canSend: true, messages: [{ id: "r1", kind: "prompt", text: "Go", at: 1 }] }]);
-    await backend.companionRevokeSession("lap");
+    const ws = await backend.createWorkstream("W", "/w");
+    const lap = (await backend.createTile(ws.id, "copilot_session", "T", JSON.stringify({ copilot_session_id: "s" }))).id;
+    await backend.companionClaimSession({ tileId: lap, workstreamId: "w", requestId: "r1", prompt: "Go", createdAt: 1 }, "s");
+    await backend.companionAddPrompt(lap, "r1", "Go", 1);
+    expect(await backend.companionListSessions()).toEqual([{ tileId: lap, workstreamId: "w", requestId: "r1", prompt: "Go", createdAt: 1, canSend: true, messages: [{ id: "r1", kind: "prompt", text: "Go", at: 1 }] }]);
+    await backend.companionRevokeSession(lap);
     expect((await backend.companionListSessions())[0].canSend).toBe(false);
-    await expect(backend.companionAddPrompt("lap", "x", "y", 2)).rejects.toThrow("not started from your phone");
-    await backend.companionClaimSession({ tileId: "lap", workstreamId: "w", requestId: "r2", prompt: "New", createdAt: 3 });
-    expect(await backend.companionListSessions()).toEqual([{ tileId: "lap", workstreamId: "w", requestId: "r2", prompt: "New", createdAt: 3, canSend: true, messages: [] }]);
-    await expect(backend.companionAddPrompt("lap", "x", " ", 4)).rejects.toThrow("empty");
+    await expect(backend.companionAddPrompt(lap, "x", "y", 2)).rejects.toThrow("not started from your phone");
+    await backend.companionClaimSession({ tileId: lap, workstreamId: "w", requestId: "r2", prompt: "New", createdAt: 3 }, "s");
+    expect(await backend.companionListSessions()).toEqual([{ tileId: lap, workstreamId: "w", requestId: "r2", prompt: "New", createdAt: 3, canSend: true, messages: [] }]);
+    await expect(backend.companionAddPrompt(lap, "x", " ", 4)).rejects.toThrow("empty");
+    await expect(backend.companionClaimSession({ tileId: lap, workstreamId: "w", requestId: "r3", prompt: "x", createdAt: 5 }, "other")).rejects.toThrow("different Copilot session");
   });
 
   it("prunes sessions with no activity for the retention period", async () => {

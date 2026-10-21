@@ -431,8 +431,8 @@ export class TauriBackend implements Backend {
     await invoke("companion_record_session", { ...session });
   }
 
-  async companionClaimSession(session: Omit<CompanionStoredSession, "messages" | "canSend">): Promise<void> {
-    await invoke("companion_claim_session", { ...session });
+  async companionClaimSession(session: Omit<CompanionStoredSession, "messages" | "canSend">, expectedSessionId: string): Promise<void> {
+    await invoke("companion_claim_session", { ...session, expectedSessionId });
   }
 
   async companionAddPrompt(tileId: string, id: string, text: string, at: number): Promise<void> {

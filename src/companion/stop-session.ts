@@ -19,9 +19,9 @@ const CTRL_C = "\u0003";
 export async function stopSession(
   deps: StopDeps,
   tileId: string,
-  options: { graceMs?: number; gapMs?: number } = {},
+  options: { graceMs?: number; gapMs?: number; drainMs?: number } = {},
 ): Promise<{ forced: boolean }> {
-  const { graceMs = 5000, gapMs = 150 } = options;
+  const { graceMs = 5000, gapMs = 150, drainMs = 2000 } = options;
   const watch = await deps.watchExit(tileId);
   try {
     let running = true;
@@ -38,6 +38,11 @@ export async function stopSession(
       deps.delay(graceMs).then(() => false),
     ]);
     await deps.close(tileId).catch(() => {});
+    if (!exited) {
+      // Exit events name the tile, not the process: wait for the killed one's
+      // event now, or it could arrive later and end the resumed session.
+      await Promise.race([watch.exited, deps.delay(drainMs)]);
+    }
     return { forced: !exited };
   } finally {
     watch.dispose();

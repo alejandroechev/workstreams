@@ -63,8 +63,22 @@ pub fn claim_session(
     request_id: &str,
     prompt: &str,
     created_at: i64,
+    expected_session: &str,
 ) -> Result<(), String> {
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    // Checked in the same transaction as the claim, so a laptop re-link can't
+    // slip between the phone's revision check and the claim undoing its revocation.
+    let config: Option<String> = tx
+        .query_row(
+            "SELECT config_json FROM tiles WHERE id = ?1",
+            [tile_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+    if linked_session(config.as_deref()).as_deref() != Some(expected_session) {
+        return Err("This tile now runs a different Copilot session, so the message was not delivered and nothing was restarted.".into());
+    }
     tx.execute(
         "DELETE FROM companion_sessions WHERE tile_id = ?1 AND can_send = 0",
         [tile_id],
@@ -77,6 +91,16 @@ pub fn claim_session(
     )
     .map_err(|e| e.to_string())?;
     tx.commit().map_err(|e| e.to_string())
+}
+
+/// The Copilot session a tile's config links it to, as the app reads it.
+fn linked_session(config_json: Option<&str>) -> Option<String> {
+    let config: serde_json::Value = serde_json::from_str(config_json?).ok()?;
+    ["copilot_session_id", "resume_by_id"]
+        .iter()
+        .filter_map(|key| config.get(*key).and_then(|v| v.as_str()))
+        .find(|v| !v.is_empty())
+        .map(str::to_string)
 }
 
 /// Records what you sent from the phone as a `prompt` message, so the thread
@@ -281,6 +305,34 @@ mod tests {
         conn
     }
 
+    fn tile(conn: &Connection, id: &str, session: &str) {
+        conn.execute(
+            "INSERT OR REPLACE INTO tiles (id, workstream_id, tile_type, config_json, created_at, updated_at)
+             VALUES (?1, 'w', 'copilot_session', ?2, 'x', 'x')",
+            params![id, format!(r#"{{"copilot_session_id":"{session}"}}"#)],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn claiming_checks_the_tile_still_runs_the_session_the_phone_saw() {
+        let conn = db();
+        tile(&conn, "lap", "s-new");
+        let err = claim_session(&conn, "lap", "w", "r1", "Go", 1, "s-old").unwrap_err();
+        assert!(err.contains("different Copilot session"), "{err}");
+        assert!(!is_phone_session(&conn, "lap").unwrap());
+        let err = claim_session(&conn, "gone", "w", "r1", "Go", 1, "s-old").unwrap_err();
+        assert!(err.contains("different Copilot session"), "{err}");
+        // resume_by_id counts as the link too.
+        conn.execute(
+            "UPDATE tiles SET config_json = '{\"resume_by_id\":\"s-old\"}' WHERE id = 'lap'",
+            [],
+        )
+        .unwrap();
+        claim_session(&conn, "lap", "w", "r1", "Go", 1, "s-old").unwrap();
+        assert!(is_phone_session(&conn, "lap").unwrap());
+    }
+
     #[test]
     fn records_a_phone_session_once() {
         let conn = db();
@@ -409,7 +461,8 @@ mod tests {
     #[test]
     fn claiming_a_laptop_tile_makes_it_a_phone_session() {
         let conn = db();
-        claim_session(&conn, "lap", "w", "r9", "Go on", 5000).unwrap();
+        tile(&conn, "lap", "s");
+        claim_session(&conn, "lap", "w", "r9", "Go on", 5000, "s").unwrap();
         assert!(is_phone_session(&conn, "lap").unwrap());
         let sessions = list(&conn).unwrap();
         assert_eq!(
@@ -421,18 +474,19 @@ mod tests {
             ("r9", "Go on", true)
         );
         // A phone session already claimed keeps its first record.
-        claim_session(&conn, "lap", "w", "r10", "Again", 6000).unwrap();
+        claim_session(&conn, "lap", "w", "r10", "Again", 6000, "s").unwrap();
         assert_eq!(list(&conn).unwrap()[0].request_id, "r9");
     }
 
     #[test]
     fn claiming_a_revoked_tile_starts_a_fresh_conversation() {
         let conn = db();
+        tile(&conn, "t1", "s");
         record_session(&conn, "t1", "w", "r1", "Do x", 1000).unwrap();
         add_message(&conn, "t1", "m1", "result", "old session", 2000).unwrap();
         revoke(&conn, "t1").unwrap();
         assert!(!list(&conn).unwrap()[0].can_send);
-        claim_session(&conn, "t1", "w", "r2", "New topic", 3000).unwrap();
+        claim_session(&conn, "t1", "w", "r2", "New topic", 3000, "s").unwrap();
         let sessions = list(&conn).unwrap();
         assert!(sessions[0].can_send);
         assert_eq!(sessions[0].request_id, "r2");

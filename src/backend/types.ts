@@ -178,8 +178,11 @@ export interface Backend {
   // Phone companion sessions (ADR 033)
   /** Records that the phone started this Copilot tile; a second record is ignored. */
   companionRecordSession(session: Omit<CompanionStoredSession, "messages" | "canSend">): Promise<void>;
-  /** Makes a tile the phone messaged a phone session; a revoked one starts afresh. */
-  companionClaimSession(session: Omit<CompanionStoredSession, "messages" | "canSend">): Promise<void>;
+  /**
+   * Makes a tile the phone messaged a phone session; a revoked one starts afresh.
+   * Refuses, atomically, unless the tile is still linked to `expectedSessionId`.
+   */
+  companionClaimSession(session: Omit<CompanionStoredSession, "messages" | "canSend">, expectedSessionId: string): Promise<void>;
   /** Records what the phone sent to a phone session, for its thread. */
   companionAddPrompt(tileId: string, id: string, text: string, at: number): Promise<void>;
   /** Stops a tile messaging the phone (it now runs another session); keeps its history. */

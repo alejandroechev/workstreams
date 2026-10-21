@@ -30,3 +30,15 @@ export function subscribeTileNotices(tileId: string, listener: Listener): () => 
     if (set.size === 0) listeners.delete(tileId);
   };
 }
+
+/**
+ * Text from the phone, made inert for a terminal: every C0 control, DEL and C1
+ * control (U+0080–U+009F, which xterm also treats as escapes, e.g. U+009D OSC)
+ * becomes a space.
+ */
+export function terminalSafe(text: string): string {
+  return Array.from(text, (c) => {
+    const code = c.charCodeAt(0);
+    return code < 0x20 || (code >= 0x7f && code <= 0x9f) ? " " : c;
+  }).join("");
+}

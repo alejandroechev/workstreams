@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { deriveLinkedSessionIds } from "../linked-sessions";
+import { deriveLinkedSessionIds, linkedSessionId } from "../linked-sessions";
 import type { Tile } from "../types";
 
 const now = new Date().toISOString();
@@ -78,5 +78,15 @@ describe("deriveLinkedSessionIds", () => {
     // must match so dependent effects don't re-fire spuriously.
     expect(a).not.toBe(b);
     expect(a.join("|")).toBe(b.join("|"));
+  });
+});
+
+describe("linkedSessionId", () => {
+  it("reads the linked Copilot session from a tile's config, or null", () => {
+    expect(linkedSessionId('{"copilot_session_id":"a","resume_by_id":"b"}')).toBe("a");
+    expect(linkedSessionId('{"resume_by_id":"b"}')).toBe("b");
+    expect(linkedSessionId('{"copilot_session_id":""}')).toBeNull();
+    expect(linkedSessionId("{nope")).toBeNull();
+    expect(linkedSessionId(undefined)).toBeNull();
   });
 });

@@ -1,4 +1,5 @@
 import type { DiffOrderView } from "../domain/diff-reading-order";
+import { linkedSessionId } from "../domain/linked-sessions";
 import type { WorkLane } from "../domain/work-lanes";
 import { MAX_MESSAGES_PER_SESSION } from "../companion/protocol";
 import { supportsPrInbox, type PrInboxItem, type PrInboxMute, type PrInboxSnapshot, type PrWatchMode } from "../domain/pr-inbox";
@@ -1395,7 +1396,10 @@ export class MemoryBackend implements Backend {
     this.companionSessions.set(session.tileId, { ...session, canSend: true, messages: [] });
   }
 
-  async companionClaimSession(session: Omit<CompanionStoredSession, "messages" | "canSend">): Promise<void> {
+  async companionClaimSession(session: Omit<CompanionStoredSession, "messages" | "canSend">, expectedSessionId: string): Promise<void> {
+    if (linkedSessionId(this.tiles.get(session.tileId)?.config_json) !== expectedSessionId) {
+      throw new Error("This tile now runs a different Copilot session, so the message was not delivered and nothing was restarted.");
+    }
     if (this.companionRevoked.has(session.tileId)) {
       this.companionRevoked.delete(session.tileId);
       this.companionSessions.delete(session.tileId);

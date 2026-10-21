@@ -312,6 +312,7 @@ fn companion_claim_session(
     request_id: String,
     prompt: String,
     created_at: i64,
+    expected_session_id: String,
 ) -> Result<(), String> {
     let db = state.db.lock().map_err(|e| e.to_string())?;
     companion_messages::claim_session(
@@ -321,6 +322,7 @@ fn companion_claim_session(
         &request_id,
         &prompt,
         created_at,
+        &expected_session_id,
     )
 }
 

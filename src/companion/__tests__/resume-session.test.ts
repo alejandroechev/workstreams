@@ -123,4 +123,46 @@ describe("resuming a session with a message from the phone", () => {
     await resumePhoneSession(deps, request());
     expect(log[log.length - 1]).toMatch(/^spawn:\/repo\/alpha:/);
   });
+
+  it("doesn't deliver a request cancelled while the session was stopping, and resumes it plainly instead", async () => {
+    const { deps, log, request } = await setup();
+    let refuse = false;
+    deps.stop = vi.fn(async () => { log.push("stop"); refuse = true; return { forced: false }; });
+    const guard = () => { if (refuse) throw new Error("Request expired"); };
+    await expect(resumePhoneSession(deps, request({ guard }))).rejects.toThrow("Request expired");
+    expect(log.filter((l) => l.startsWith("spawn"))).toEqual(["spawn:/repo/alpha/sub:copilot --yolo:session-s:null"]);
+  });
+
+  it("refuses when the tile is re-linked on the laptop while the workstream mounts, without claiming or stopping it", async () => {
+    const { backend, deps, log, request, tile } = await setup();
+    deps.mount = vi.fn(async () => {
+      log.push("mount");
+      await backend.updateTileConfig(tile.id, JSON.stringify({ cwd: "/repo/alpha/sub", copilot_session_id: "session-t" }));
+    });
+    await expect(resumePhoneSession(deps, request())).rejects.toThrow("different Copilot session");
+    expect(log).toEqual(["mount"]);
+    expect(await backend.companionListSessions()).toEqual([]);
+  });
+
+  it("never claims a tile whose link changed after the last check: the claim itself verifies the linked session", async () => {
+    const { backend, tile } = await setup();
+    await backend.updateTileConfig(tile.id, JSON.stringify({ copilot_session_id: "session-t" }));
+    await expect(backend.companionClaimSession({ tileId: tile.id, workstreamId: "w", requestId: "r", prompt: "p", createdAt: 1 }, "session-s"))
+      .rejects.toThrow("different Copilot session");
+    expect(await backend.companionListSessions()).toEqual([]);
+  });
+
+  it("when re-linked while stopping, resumes the newly linked session without the message, and revokes the claim again", async () => {
+    const { backend, deps, log, request, tile } = await setup();
+    deps.stop = vi.fn(async () => {
+      log.push("stop");
+      await backend.companionRevokeSession(tile.id);
+      await backend.updateTileConfig(tile.id, JSON.stringify({ cwd: "/repo/alpha/sub", copilot_session_id: "session-t" }));
+      return { forced: false };
+    });
+    await expect(resumePhoneSession(deps, request())).rejects.toThrow("different Copilot session");
+    expect(log.filter((l) => l.startsWith("spawn"))).toEqual(["spawn:/repo/alpha/sub:copilot --yolo:session-t:null"]);
+    const [session] = await backend.companionListSessions();
+    expect(session.canSend).toBe(false);
+  });
 });
