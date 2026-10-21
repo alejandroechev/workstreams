@@ -439,6 +439,10 @@ export class TauriBackend implements Backend {
     await invoke("companion_add_prompt", { tileId, id, text, at });
   }
 
+  async clearStaleSessionLocks(sessionId: string): Promise<number> {
+    return invoke<number>("clear_stale_session_locks", { sessionId });
+  }
+
   async companionRevokeSession(tileId: string): Promise<void> {
     await invoke("companion_revoke_session", { tileId });
   }

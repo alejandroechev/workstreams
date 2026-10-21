@@ -187,6 +187,11 @@ export interface Backend {
   companionAddPrompt(tileId: string, id: string, text: string, at: number): Promise<void>;
   /** Stops a tile messaging the phone (it now runs another session); keeps its history. */
   companionRevokeSession(tileId: string): Promise<void>;
+  /**
+   * Removes the `inuse.<pid>` lock files a dead Copilot CLI left in a session's
+   * folder, so resuming it doesn't stop to ask about "another CLI". Returns how many.
+   */
+  clearStaleSessionLocks(sessionId: string): Promise<number>;
   /** Forgets a phone session whose launch was refused. */
   companionDeleteSession(tileId: string): Promise<void>;
   /** Every phone session with its messages, newest session first. */

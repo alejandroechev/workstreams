@@ -192,7 +192,10 @@ with the message as a new interactive prompt, which Copilot CLI supports as
   background (the active workstream never changes). The laptop writes a notice line,
   `Resumed from phone: <first line>`, into the tile's terminal, sends Ctrl+C twice 150 ms apart, waits up
   to 5 s for the process to exit, then closes it regardless, and respawns the tile with
-  `--resume=<id> -i <message>`. A message interrupts any turn in progress. Requests run strictly one at
+  `--resume=<id> -i <message>`. Before respawning it deletes the `inuse.<pid>.lock` / `.hold` files that
+  dead CLIs left in `~/.copilot/session-state/<id>` (a live process's lock is kept): a stale lock makes
+  the CLI stop at start and ask whether to take over a session "another CLI" is running, and nobody is
+  there to answer. The CLI has no flag to skip that question. A message interrupts any turn in progress. Requests run strictly one at
   a time, so messages are delivered in the order sent.
 - **The thread.** Messaging a laptop tile claims it as a phone session (so it may reply from then on).
   The laptop records each prompt — the opening one too — as a signed message of the new kind `prompt`,

@@ -448,7 +448,9 @@ Sending a message:
 1. loads the workstream in the background if needed (the one on screen stays);
 2. writes `Resumed from phone: <first line>` into the tile's terminal;
 3. sends Ctrl+C twice, waits up to 5 s for Copilot to exit, then closes it;
-4. respawns the same tile with `--resume=<session id> -i <message>`.
+4. deletes lock files a dead CLI left in the session's folder, so the resumed
+   CLI doesn't stop to ask whether another CLI is running it;
+5. respawns the same tile with `--resume=<session id> -i <message>`.
 
 A message interrupts whatever the agent is doing, and messages run in the order
 sent. If the tile was re-linked to another Copilot session after the phone saw

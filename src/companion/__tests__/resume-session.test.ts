@@ -11,6 +11,7 @@ async function setup(opts: { linked?: string | null; running?: boolean; failAt?:
   const tile = await backend.createTile(ws.id, "copilot_session", "Alpha/1", JSON.stringify(config));
   const log: string[] = [];
   const spawned = new Set<string>(opts.running === false ? [] : [tile.id]);
+  backend.clearStaleSessionLocks = vi.fn(async (id: string) => { log.push(`clear:${id}`); return 1; });
   const deps: ResumeSessionDeps = {
     backend,
     mount: vi.fn(async (id: string) => { log.push(`mount:${id === ws.id ? "ws" : id}:${spawned.has(tile.id) ? "marked" : "unmarked"}`); }),
@@ -46,6 +47,7 @@ describe("resuming a session with a message from the phone", () => {
       "notice:Resumed from phone: Use the palette",
       "intentional",
       "stop",
+      "clear:session-s",
       "spawn:/repo/alpha/sub:copilot --yolo:session-s:Use the palette\nfor every lane",
     ]);
     const [session] = await backend.companionListSessions();
@@ -219,5 +221,24 @@ describe("resuming a session with a message from the phone", () => {
     };
     await expect(resumePhoneSession(deps, request())).rejects.toThrow("different Copilot session");
     expect(log.filter((l) => l.startsWith("spawn"))).toEqual(["spawn:/repo/alpha/sub:copilot --yolo:session-u:null"]);
+  });
+
+  it("clears the stopped session's stale CLI locks before resuming, so the CLI doesn't ask whether to take it over", async () => {
+    const { deps, log, request } = await setup({ running: false });
+    await resumePhoneSession(deps, request());
+    expect(log.slice(-2)).toEqual(["clear:session-s", "spawn:/repo/alpha/sub:copilot --yolo:session-s:Use the palette\\nfor every lane"]);
+  });
+
+  it("still resumes when clearing the locks fails", async () => {
+    const { backend, deps, log, request } = await setup();
+    backend.clearStaleSessionLocks = vi.fn(async () => { throw new Error("no access"); });
+    await resumePhoneSession(deps, request());
+    expect(log[log.length - 1]).toMatch(/^spawn:.*:session-s:Use the palette/);
+  });
+
+  it("clears the locks before a recovery resume too", async () => {
+    const { deps, log, request } = await setup({ failAt: "spawn" });
+    await expect(resumePhoneSession(deps, request())).rejects.toThrow("spawn failed");
+    expect(log.slice(-2)).toEqual(["clear:session-s", "spawn:/repo/alpha/sub:copilot --yolo:session-s:null"]);
   });
 });

@@ -534,6 +534,45 @@ fn check_process_alive(session_dir: &std::path::Path) -> bool {
     false
 }
 
+/// The pid in an `inuse.<pid>.lock` / `inuse.<pid>.hold` file name.
+fn lock_pid(name: &str) -> Option<u32> {
+    let rest = name.strip_prefix("inuse.")?;
+    let pid = rest
+        .strip_suffix(".lock")
+        .or_else(|| rest.strip_suffix(".hold"))?;
+    pid.parse().ok()
+}
+
+/// Removes the `inuse.<pid>.lock` / `.hold` files a dead process left in a
+/// session folder, so resuming it doesn't ask whether another CLI is running
+/// it. A live process's lock is kept. Returns how many files were removed.
+pub fn clear_stale_locks(session_dir: &std::path::Path) -> usize {
+    let Ok(entries) = std::fs::read_dir(session_dir) else {
+        return 0;
+    };
+    entries
+        .flatten()
+        .filter(|entry| {
+            let name = entry.file_name().to_string_lossy().to_string();
+            matches!(lock_pid(&name), Some(pid) if !is_pid_alive(pid))
+        })
+        .filter(|entry| std::fs::remove_file(entry.path()).is_ok())
+        .count()
+}
+
+/// `~/.copilot/session-state/<id>`, refusing ids that could name another folder.
+pub fn session_state_dir(session_id: &str) -> Result<std::path::PathBuf, String> {
+    let valid = !session_id.is_empty()
+        && session_id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+    if !valid {
+        return Err(format!("invalid session id: {session_id:?}"));
+    }
+    let home = dirs::home_dir().ok_or("no home directory")?;
+    Ok(home.join(".copilot").join("session-state").join(session_id))
+}
+
 #[cfg(windows)]
 fn is_pid_alive(pid: u32) -> bool {
     const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
@@ -921,6 +960,49 @@ mod tests {
         std::fs::write(tmp.join("inuse.99999999.lock"), "").ok();
         assert!(!check_process_alive(&tmp));
         std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn clears_only_the_locks_of_dead_processes() {
+        let tmp = std::env::temp_dir().join(format!("ws_lock_stale_{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).ok();
+        let me = std::process::id();
+        for name in [
+            "inuse.99999999.lock".to_string(),
+            "inuse.99999999.hold".to_string(),
+            format!("inuse.{me}.lock"),
+            format!("inuse.{me}.hold"),
+            "inuse.notapid.lock".to_string(),
+            "events.jsonl".to_string(),
+        ] {
+            std::fs::write(tmp.join(name), "").unwrap();
+        }
+        assert_eq!(clear_stale_locks(&tmp), 2);
+        let mut left: Vec<String> = std::fs::read_dir(&tmp)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .collect();
+        left.sort();
+        assert_eq!(
+            left,
+            vec![
+                "events.jsonl".to_string(),
+                format!("inuse.{me}.hold"),
+                format!("inuse.{me}.lock"),
+                "inuse.notapid.lock".to_string(),
+            ]
+        );
+        assert_eq!(clear_stale_locks(&tmp.join("missing")), 0);
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn session_ids_that_could_leave_the_session_folder_are_refused() {
+        assert!(session_state_dir("../etc").is_err());
+        assert!(session_state_dir("a/b").is_err());
+        assert!(session_state_dir("").is_err());
+        assert!(session_state_dir("174fdf77-de9d-4877-b09c-31082f418c58").is_ok());
     }
 
     #[test]

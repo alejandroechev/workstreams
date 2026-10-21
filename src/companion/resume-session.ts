@@ -5,7 +5,7 @@ import { linkRevision } from "./link-revision";
 import type { RequestGuard } from "./runtime";
 
 export interface ResumeSessionDeps {
-  backend: Pick<Backend, "listTiles" | "companionClaimSession" | "companionAddPrompt" | "companionRevokeSession">;
+  backend: Pick<Backend, "listTiles" | "companionClaimSession" | "companionAddPrompt" | "companionRevokeSession" | "clearStaleSessionLocks">;
   /** Mounts the workstream in the background (never changes the active one). */
   mount(workstreamId: string): Promise<void>;
   workstream(workstreamId: string): Workstream | undefined;
@@ -71,6 +71,8 @@ export async function resumePhoneSession(deps: ResumeSessionDeps, request: Resum
     const fresh = (await backend.listTiles(request.workstreamId)).find((t) => t.id === tile.id);
     return fresh ? linkedSessionId(fresh.config_json) : null;
   };
+  /** A killed or crashed CLI leaves its lock behind, and the next one would stop to ask about it. */
+  const clearLocks = () => backend.clearStaleSessionLocks(sessionId).catch(() => 0);
   const stillLinked = async () => {
     if ((await currentSession()) !== sessionId) throw new Error(RELINKED);
   };
@@ -100,6 +102,7 @@ export async function resumePhoneSession(deps: ResumeSessionDeps, request: Resum
       touched = true;
       await deps.stop(tile.id);
     }
+    await clearLocks();
     // Recording and stopping take time: the tile may have been re-linked, or the
     // request expired, meanwhile. Checked last, with nothing awaited before launching.
     await stillLinked();
@@ -114,12 +117,14 @@ export async function resumePhoneSession(deps: ResumeSessionDeps, request: Resum
     if (claimed && (await currentSession().catch(() => null)) !== sessionId) {
       await backend.companionRevokeSession(tile.id).catch(() => {});
     }
+    const relaunch = mounted && (!running || touched);
+    if (relaunch) await clearLocks();
     // Read last, right before relaunching, so recovery never starts a session the tile no longer names.
     const current = await currentSession().catch(() => null);
     if (!running && !mounted) {
       // The mount never ran, so it will start the tile itself when it does.
       deps.unmarkSpawned(tile.id);
-    } else if (!running || touched) {
+    } else if (relaunch) {
       // We kept the mount from starting this tile, or stopped it: leave it running
       // whatever session it is linked to now, without the message.
       const ws = deps.workstream(request.workstreamId);

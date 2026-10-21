@@ -1608,6 +1608,15 @@ fn spawn_copilot_session(
     Ok(pid)
 }
 
+/// Before resuming a Copilot session, removes the lock files a dead CLI left
+/// in its session folder. Otherwise the CLI asks, at start, whether to take
+/// over a session "another CLI" is running, and waits for an answer.
+#[tauri::command]
+fn clear_stale_session_locks(session_id: String) -> Result<usize, String> {
+    let dir = session_poller::session_state_dir(&session_id)?;
+    Ok(session_poller::clear_stale_locks(&dir))
+}
+
 #[tauri::command]
 fn write_to_pty(state: State<'_, AppState>, tile_id: String, data: String) -> Result<(), String> {
     state.pty.write(&tile_id, data.as_bytes())
@@ -6207,6 +6216,7 @@ pub fn run() {
             companion_list_sessions,
             companion_revoke_session,
             companion_claim_session,
+            clear_stale_session_locks,
             companion_add_prompt,
             companion_delete_session,
             companion_prune_sessions,

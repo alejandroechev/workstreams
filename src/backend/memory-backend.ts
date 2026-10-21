@@ -1382,6 +1382,11 @@ export class MemoryBackend implements Backend {
   private companionSessions = new Map<string, CompanionStoredSession>();
   private companionRevoked = new Set<string>();
 
+  /** There are no session folders in memory; nothing to clear. */
+  async clearStaleSessionLocks(_sessionId: string): Promise<number> {
+    return 0;
+  }
+
   async companionRevokeSession(tileId: string): Promise<void> {
     if (this.companionSessions.has(tileId)) this.companionRevoked.add(tileId);
   }

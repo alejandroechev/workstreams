@@ -284,6 +284,7 @@ function createBackend(): Backend {
     companionAddPrompt: vi.fn(async () => {}),
     companionListSessions: vi.fn(async () => []),
     companionRevokeSession: vi.fn(async () => {}),
+    clearStaleSessionLocks: vi.fn(async () => 0),
     companionDeleteSession: vi.fn(async () => {}),
     companionPruneSessions: vi.fn(async () => 0),
     gitLog: vi.fn(),
