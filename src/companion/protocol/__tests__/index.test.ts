@@ -32,7 +32,9 @@ import {
   ARTIFACT_SUFFIX,
   sessionTitle,
   readSessions,
-  sessionIsDone,
+  sessionStatus,
+  splitPrompt,
+  readSessionTiles,
   checkMessage,
   MAX_MESSAGE_LENGTH,
   MAX_MESSAGES_PER_SESSION,
@@ -121,6 +123,18 @@ describe("checking a request before executing it", () => {
 });
 
 describe("request shapes", () => {
+  it("accepts a message to an existing session, with all four arguments", () => {
+    const message = { ...load(), kind: "message", args: { workstreamId: "w", tileId: "t", linkRevision: "abc", prompt: "Go on" } };
+    expect(parseRequest(message).ok).toBe(true);
+    for (const missing of ["workstreamId", "tileId", "linkRevision", "prompt"]) {
+      const args: Record<string, string> = { ...message.args };
+      delete args[missing];
+      expect(parseRequest({ ...message, args }).ok).toBe(false);
+    }
+    expect(parseRequest({ ...message, args: { ...message.args, prompt: "x".repeat(20_001) } }).ok).toBe(false);
+    expect(parseRequest({ ...message, args: { ...message.args, command: "x" } }).ok).toBe(false);
+  });
+
   it("accepts the three kinds with their arguments", () => {
     expect(parseRequest(load()).ok).toBe(true);
     expect(parseRequest({ ...load(), kind: "create", args: { name: "Idea" } }).ok).toBe(true);
@@ -232,7 +246,7 @@ describe("phone sessions and messages", () => {
 
   it("signs sessions and messages exactly like the fixtures", async () => {
     const { session, message } = fixtures.sessions.vectors;
-    const [, old] = fixtures.sessions.expected as PhoneSession[];
+    const old = (fixtures.sessions.expected as PhoneSession[]).find((x) => x.id === "tile-old")!;
     expect(canonicalSession(old)).toBe(session.canonical);
     expect(canonicalMessage("tile-old", old.messages[1])).toBe(message.canonical);
     const { signature: _s, messages, ...header } = old;
@@ -253,10 +267,22 @@ describe("phone sessions and messages", () => {
     expect(readSessions({ ...emptyDocument(), sessions: "nope" } as unknown as CompanionDocument)).toEqual([]);
   });
 
-  it("a session is done once it has a result", () => {
-    const [newer, older] = fixtures.sessions.expected as unknown as PhoneSession[];
-    expect(sessionIsDone(older)).toBe(true);
-    expect(sessionIsDone(newer)).toBe(false);
+  it("is working while the latest prompt has no result after it, per turn", () => {
+    const [chat, newer, older] = fixtures.sessions.expected as unknown as PhoneSession[];
+    expect(chat.id).toBe("tile-chat");
+    expect(sessionStatus(chat)).toBe("working");
+    expect(sessionStatus({ ...chat, messages: chat.messages.slice(0, 2) })).toBe("idle");
+    expect(sessionStatus({ ...chat, messages: [...chat.messages, { id: "x", kind: "progress", text: "on it", at: chat.messages[2].at + 1, signature: "" }] })).toBe("working");
+    // Sessions from before prompts were recorded: done once there is a result.
+    expect(sessionStatus(older)).toBe("idle");
+    expect(sessionStatus(newer)).toBe("working");
+  });
+
+  it("splits the reply and artifact instructions off a recorded prompt", () => {
+    expect(splitPrompt("Do x")).toEqual({ text: "Do x", askedForResult: false, askedForArtifact: false });
+    expect(splitPrompt(withResultRequest("Do x", true))).toEqual({ text: "Do x", askedForResult: true, askedForArtifact: false });
+    expect(splitPrompt(withResultRequest(withArtifactRequest("Do x", true), true))).toEqual({ text: "Do x", askedForResult: true, askedForArtifact: true });
+    expect(splitPrompt(withArtifactRequest("Do x", true))).toEqual({ text: "Do x", askedForResult: false, askedForArtifact: true });
   });
 
   it("validates a message an agent wants to send", () => {
@@ -264,18 +290,21 @@ describe("phone sessions and messages", () => {
     expect(checkMessage("progress", "x".repeat(MAX_MESSAGE_LENGTH))).toEqual({ ok: true });
     expect(checkMessage("progress", "x".repeat(MAX_MESSAGE_LENGTH + 1))).toEqual({ ok: false, error: `The message is longer than ${MAX_MESSAGE_LENGTH} characters.` });
     expect(checkMessage("question", "x")).toEqual({ ok: false, error: 'The kind must be "progress" or "result".' });
+    // Prompts are recorded by the laptop, never sent by an agent.
+    expect(checkMessage("prompt", "x")).toEqual({ ok: false, error: 'The kind must be "progress" or "result".' });
     expect(checkMessage("result", "   ")).toEqual({ ok: false, error: "The message is empty." });
   });
 
   it("states the retention rules", () => {
     expect(SESSION_RETENTION_MS).toBe(3 * 24 * 60 * 60_000);
-    expect(MAX_MESSAGES_PER_SESSION).toBe(50);
+    expect(MAX_MESSAGES_PER_SESSION).toBe(200);
   });
 
   it("drops replayed duplicates and keeps at most the latest messages of a session", async () => {
     const messages = Array.from({ length: MAX_MESSAGES_PER_SESSION + 5 }, (_, i) => ({ id: `m${i}`, kind: "progress" as const, text: `${i}`, at: 1000 + i }));
     const signed = await signSession(SECRET, { id: "t", workstreamId: "w", workstreamName: "W", requestId: "r", title: "T", createdAt: 1, messages });
-    const replayed = { ...signed, messages: [...signed.messages, signed.messages[54], signed.messages[54], signed.messages[0]] };
+    const last = signed.messages[MAX_MESSAGES_PER_SESSION + 4];
+    const replayed = { ...signed, messages: [...signed.messages, last, last, signed.messages[0]] };
     const [verified] = await verifySessions([replayed], SECRET);
     expect(verified.messages).toHaveLength(MAX_MESSAGES_PER_SESSION);
     expect(verified.messages[0].id).toBe("m5");
@@ -291,5 +320,28 @@ describe("phone sessions and messages", () => {
     expect(freshSessions([quiet, busy], at + SESSION_RETENTION_MS).map((s) => s.id)).toEqual(["q", "b"]);
     expect(freshSessions([quiet, busy], at + SESSION_RETENTION_MS + 1).map((s) => s.id)).toEqual(["b"]);
     expect(freshSessions([quiet, busy], at + 60_000 + SESSION_RETENTION_MS + 1)).toEqual([]);
+  });
+});
+
+describe("the laptop's session tiles", () => {
+  const tile = { tileId: "t1", workstreamId: "w", title: "W/1", summary: "Fix the bug", linked: true, linkRevision: "abc", lastActivity: 5, origin: "laptop" };
+
+  it("reads them by shape only, dropping malformed entries", () => {
+    const doc = { ...emptyDocument(), laptop: { ...emptyDocument().laptop, tiles: [
+      tile,
+      { ...tile, tileId: "t2", linked: false, linkRevision: null, summary: null, lastActivity: null, origin: "phone" },
+      { ...tile, tileId: 3 },
+      { ...tile, tileId: "t4", origin: "elsewhere" },
+      { ...tile, tileId: "t5", linked: "yes" },
+      "junk",
+    ] } } as unknown as CompanionDocument;
+    expect(readSessionTiles(doc).map((t) => t.tileId)).toEqual(["t1", "t2"]);
+    expect(readSessionTiles(doc)[1]).toEqual({ tileId: "t2", workstreamId: "w", title: "W/1", summary: null, linked: false, linkRevision: null, lastActivity: null, origin: "phone" });
+  });
+
+  it("is empty for an older laptop or another version", () => {
+    expect(readSessionTiles(emptyDocument())).toEqual([]);
+    const doc = { ...emptyDocument(), schemaVersion: 2, laptop: { ...emptyDocument().laptop, tiles: [tile] } } as unknown as CompanionDocument;
+    expect(readSessionTiles(doc)).toEqual([]);
   });
 });

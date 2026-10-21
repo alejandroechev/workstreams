@@ -33,6 +33,7 @@ function bindings(over: Partial<CompanionBindings> = {}): CompanionBindings {
     loadInBackground: vi.fn(async () => {}),
     createWorkstreamAt: vi.fn(async () => "new-id"),
     startSession: vi.fn(async () => {}),
+    messageSession: vi.fn(async () => {}),
     createDirectory: vi.fn(async () => {}),
     homeDir: async () => "/Users/me",
     ...over,
@@ -176,7 +177,7 @@ describe("the companion service in the app", () => {
   it("publishes phone sessions, and republishes when they change", async () => {
     const hub = createInMemoryHub();
     const phone = hub.peer();
-    const stored: CompanionStoredSession[] = [{ tileId: "t1", workstreamId: "a", requestId: "r1", prompt: "Do x\nmore", createdAt: 5, messages: [] }];
+    const stored: CompanionStoredSession[] = [{ tileId: "t1", workstreamId: "a", requestId: "r1", prompt: "Do x\nmore", createdAt: 5, canSend: true, messages: [] }];
     let b = bindings({ listSessions: vi.fn(async () => structuredClone(stored)) });
     const { result, rerender, unmount } = renderHook(() => useCompanionService(b, { store: enabledStore(), connect: async () => hub.peer(), devBuild: false }));
     await waitFor(() => expect(result.current.state).toBe("on"));

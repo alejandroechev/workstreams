@@ -64,6 +64,9 @@ import type { LoopSummary } from "./domain/loop";
 import { countUnreadPrs } from "./domain/pr-inbox";
 import { useCompanionService } from "./companion/useCompanionService";
 import { startPhoneSession } from "./companion/start-session";
+import { resumePhoneSession } from "./companion/resume-session";
+import { stopSession } from "./companion/stop-session";
+import { postTileNotice } from "./domain/tile-notices";
 import { revokeBeforeRelink } from "./companion/relink";
 import { homeDir } from "@tauri-apps/api/path";
 
@@ -1977,25 +1980,31 @@ export default function App() {
   // ── Phone companion (ADR 033) ──────────────────────────────────────────
   // Copilot session tiles per workstream: live for mounted ones, from the
   // saved tiles for the rest (read once per workstream, without mounting).
-  const [savedSessionCounts, setSavedSessionCounts] = useState<ReadonlyMap<string, number>>(new Map());
+  const [savedTiles, setSavedTiles] = useState<ReadonlyMap<string, Tile[]>>(new Map());
   const companionWorkstreamIds = workstreams.filter((w) => w.status !== "archived").map((w) => w.id).join(",");
   useEffect(() => {
     if (!companionReady) return;
     let cancelled = false;
     const ids = companionWorkstreamIds ? companionWorkstreamIds.split(",") : [];
     void Promise.all(ids.map(async (id) => {
-      const tiles = await backend.listTiles(id).catch(() => []);
-      return [id, tiles.filter((t) => t.tile_type === "copilot_session").length] as const;
-    })).then((entries) => { if (!cancelled) setSavedSessionCounts(new Map(entries)); });
+      const tiles = await backend.listTiles(id).catch(() => [] as Tile[]);
+      return [id, tiles] as const;
+    })).then((entries) => { if (!cancelled) setSavedTiles(new Map(entries)); });
     return () => { cancelled = true; };
   }, [backend, companionReady, companionWorkstreamIds]);
+  // Every workstream's tiles: live for mounted ones, saved for the rest.
+  const companionSessionTiles = useMemo(() => {
+    const tiles = new Map(savedTiles);
+    for (const [id, state] of wsStates) tiles.set(id, state.tiles);
+    return tiles as ReadonlyMap<string, Tile[]>;
+  }, [savedTiles, wsStates]);
   const companionSessionCounts = useMemo(() => {
-    const counts = new Map(savedSessionCounts);
-    for (const [id, state] of wsStates) {
-      counts.set(id, state.tiles.filter((t) => t.tile_type === "copilot_session").length);
+    const counts = new Map<string, number>();
+    for (const [id, tiles] of companionSessionTiles) {
+      counts.set(id, tiles.filter((t) => t.tile_type === "copilot_session").length);
     }
-    return counts;
-  }, [savedSessionCounts, wsStates]);
+    return counts as ReadonlyMap<string, number>;
+  }, [companionSessionTiles]);
 
   const createWorkstreamForCompanion = useCallback(
     async (name: string, directory: string): Promise<string> => {
@@ -2036,6 +2045,52 @@ export default function App() {
     [backend, mountWorkstream, upsertTileLocally, removeTileLocally],
   );
 
+  /**
+   * Delivers a phone message to an existing session tile: stops it and
+   * resumes the same Copilot session there with the message as its prompt.
+   */
+  const messageSessionForCompanion = useCallback(
+    (
+      target: { workstreamId: string; tileId: string; linkRevision: string; prompt: string; command: string },
+      guard: () => void,
+      requestId: string,
+    ): Promise<void> =>
+      resumePhoneSession(
+        {
+          backend,
+          mount: mountWorkstream,
+          workstream: (id) => workstreamsRef.current.find((w) => w.id === id),
+          defaultCwd: defaultRootDir,
+          isSpawned: (tileId) => spawnedPtys.current.has(tileId),
+          markSpawned: (tileId) => { spawnedPtys.current.add(tileId); },
+          unmarkSpawned: (tileId) => { spawnedPtys.current.delete(tileId); },
+          markIntentionalRestart: (tileId) => { intentionalRestartIds.current.add(tileId); },
+          notice: postTileNotice,
+          stop: (tileId) =>
+            stopSession(
+              {
+                async watchExit(id) {
+                  let resolve!: () => void;
+                  const exited = new Promise<void>((r) => { resolve = r; });
+                  const unlisten = await listen(`pty-exit-${id}`, () => resolve());
+                  return { exited, dispose: unlisten };
+                },
+                write: (id, data) => backend.writeToTerminal(id, data),
+                close: (id) => backend.closeTerminal(id),
+                delay: (ms) => new Promise((r) => setTimeout(r, ms)),
+              },
+              tileId,
+            ),
+          spawn: async (tileId, cwd, command, sessionId, prompt) => {
+            await backend.spawnCopilotSession(tileId, cwd, sessionId, 30, 120, command, prompt);
+          },
+          onRecorded: () => setCompanionSessionsVersion((v) => v + 1),
+        },
+        { ...target, guard, requestId, now: Date.now() },
+      ),
+    [backend, mountWorkstream],
+  );
+
   useCompanionService({
     ready: companionReady,
     sessionsVersion: companionSessionsVersion,
@@ -2045,11 +2100,13 @@ export default function App() {
     lanes: workLanes,
     loadedIds: loadedWsIds,
     sessionCounts: companionSessionCounts,
+    sessionTiles: companionSessionTiles,
     commandFor: commandForWs,
     globalCommand: resolveCopilotCommand(null),
     loadInBackground: mountWorkstream,
     createWorkstreamAt: createWorkstreamForCompanion,
     startSession: startSessionForCompanion,
+    messageSession: messageSessionForCompanion,
     createDirectory: (path) => backend.createDirectory(path),
     homeDir: () => homeDir(),
   });

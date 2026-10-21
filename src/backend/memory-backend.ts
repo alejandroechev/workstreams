@@ -1,5 +1,6 @@
 import type { DiffOrderView } from "../domain/diff-reading-order";
 import type { WorkLane } from "../domain/work-lanes";
+import { MAX_MESSAGES_PER_SESSION } from "../companion/protocol";
 import { supportsPrInbox, type PrInboxItem, type PrInboxMute, type PrInboxSnapshot, type PrWatchMode } from "../domain/pr-inbox";
 import type { Project, Workstream, Tile, TileType, WorkstreamLayout, CopilotConfigItem } from "../domain/types";
 import type { SessionFileComment } from "../domain/file-comments";
@@ -626,8 +627,30 @@ export class MemoryBackend implements Backend {
     return null;
   }
 
-  async writeToTerminal(tileId: string, _data: string): Promise<void> {
+  private ctrlCs = new Map<string, number>();
+
+  async writeToTerminal(tileId: string, data: string): Promise<void> {
     if (!this.terminals.has(tileId)) throw new Error(`No terminal: ${tileId}`);
+    if (typeof window === "undefined") return;
+    // E2E seam: writes are logged like the real command, and a session exits
+    // on its second Ctrl+C, as Copilot does, unless a spec lists the tile in
+    // __WS_PTY_IGNORES_CTRL_C__ (a stuck session).
+    const w = window as unknown as {
+      __WS_INVOKE_LOG__?: Array<{ cmd: string; args: Record<string, unknown> }>;
+      __WS_PTY_IGNORES_CTRL_C__?: string[];
+      __WS_EMIT__?: (event: string, payload?: unknown) => void;
+    };
+    if (!w.__WS_INVOKE_LOG__) w.__WS_INVOKE_LOG__ = [];
+    w.__WS_INVOKE_LOG__.push({ cmd: "write_to_pty", args: { tileId, data } });
+    if (data === "\u0003") {
+      const count = (this.ctrlCs.get(tileId) ?? 0) + 1;
+      this.ctrlCs.set(tileId, count);
+      if (count >= 2 && !(w.__WS_PTY_IGNORES_CTRL_C__ ?? []).includes(tileId)) {
+        this.ctrlCs.delete(tileId);
+        this.terminals.delete(tileId);
+        w.__WS_EMIT__?.(`pty-exit-${tileId}`);
+      }
+    }
   }
 
   async resizeTerminal(tileId: string, _rows: number, _cols: number): Promise<void> {
@@ -636,6 +659,12 @@ export class MemoryBackend implements Backend {
 
   async closeTerminal(tileId: string): Promise<void> {
     this.terminals.delete(tileId);
+    this.ctrlCs.delete(tileId);
+    if (typeof window !== "undefined") {
+      const w = window as unknown as { __WS_INVOKE_LOG__?: Array<{ cmd: string; args: Record<string, unknown> }> };
+      if (!w.__WS_INVOKE_LOG__) w.__WS_INVOKE_LOG__ = [];
+      w.__WS_INVOKE_LOG__.push({ cmd: "close_terminal", args: { tileId } });
+    }
   }
 
   async getWorkstreamLoopSnapshot(
@@ -1361,15 +1390,31 @@ export class MemoryBackend implements Backend {
     this.companionRevoked.delete(tileId);
   }
 
-  async companionRecordSession(session: Omit<CompanionStoredSession, "messages">): Promise<void> {
+  async companionRecordSession(session: Omit<CompanionStoredSession, "messages" | "canSend">): Promise<void> {
     if (this.companionSessions.has(session.tileId)) return;
-    this.companionSessions.set(session.tileId, { ...session, messages: [] });
+    this.companionSessions.set(session.tileId, { ...session, canSend: true, messages: [] });
+  }
+
+  async companionClaimSession(session: Omit<CompanionStoredSession, "messages" | "canSend">): Promise<void> {
+    if (this.companionRevoked.has(session.tileId)) {
+      this.companionRevoked.delete(session.tileId);
+      this.companionSessions.delete(session.tileId);
+    }
+    await this.companionRecordSession(session);
+  }
+
+  async companionAddPrompt(tileId: string, id: string, text: string, at: number): Promise<void> {
+    const session = this.companionSessions.get(tileId);
+    if (!session || this.companionRevoked.has(tileId)) throw new Error("This session was not started from your phone.");
+    if (!text.trim()) throw new Error("The message is empty.");
+    session.messages.push({ id, kind: "prompt", text, at });
+    if (session.messages.length > MAX_MESSAGES_PER_SESSION) session.messages.splice(0, session.messages.length - MAX_MESSAGES_PER_SESSION);
   }
 
   async companionListSessions(): Promise<CompanionStoredSession[]> {
     return [...this.companionSessions.values()]
       .sort((a, b) => b.createdAt - a.createdAt)
-      .map((session) => structuredClone(session));
+      .map((session) => ({ ...structuredClone(session), canSend: !this.companionRevoked.has(session.tileId) }));
   }
 
   async companionPruneSessions(now: number, retentionMs: number): Promise<number> {
@@ -1392,7 +1437,7 @@ export class MemoryBackend implements Backend {
     const session = this.companionSessions.get(tileId);
     if (!session || this.companionRevoked.has(tileId)) throw new Error("This session was not started from your phone.");
     session.messages.push({ id: `m-${session.messages.length}-${at}`, kind, text, at });
-    if (session.messages.length > 50) session.messages.splice(0, session.messages.length - 50);
+    if (session.messages.length > MAX_MESSAGES_PER_SESSION) session.messages.splice(0, session.messages.length - MAX_MESSAGES_PER_SESSION);
   }
 
   /** Test/harness helper: set (or with `null`, clear) the order for a diff. */

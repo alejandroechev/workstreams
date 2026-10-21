@@ -303,6 +303,40 @@ fn companion_record_session(
     )
 }
 
+/// Makes a tile the phone messaged a phone session (companion conversations).
+#[tauri::command]
+fn companion_claim_session(
+    state: State<'_, AppState>,
+    tile_id: String,
+    workstream_id: String,
+    request_id: String,
+    prompt: String,
+    created_at: i64,
+) -> Result<(), String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    companion_messages::claim_session(
+        &db,
+        &tile_id,
+        &workstream_id,
+        &request_id,
+        &prompt,
+        created_at,
+    )
+}
+
+/// Records what the phone sent to a session, for its thread.
+#[tauri::command]
+fn companion_add_prompt(
+    state: State<'_, AppState>,
+    tile_id: String,
+    id: String,
+    text: String,
+    at: i64,
+) -> Result<(), String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    companion_messages::add_prompt(&db, &tile_id, &id, &text, at)
+}
+
 /// Stops a tile from messaging the phone: it was re-linked to another session.
 #[tauri::command]
 fn companion_revoke_session(state: State<'_, AppState>, tile_id: String) -> Result<(), String> {
@@ -6170,6 +6204,8 @@ pub fn run() {
             companion_record_session,
             companion_list_sessions,
             companion_revoke_session,
+            companion_claim_session,
+            companion_add_prompt,
             companion_delete_session,
             companion_prune_sessions,
             // Copilot config

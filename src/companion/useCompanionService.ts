@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { CompanionDoc } from "./doc";
 import { openAutomergeDoc } from "./automerge-doc";
-import { buildLaptopState, buildSessions, publishLaptopState, publishSessions, startPresence } from "./publisher";
+import { buildLaptopState, buildSessions, buildSessionTiles, publishLaptopState, publishSessions, publishSessionTiles, startPresence } from "./publisher";
 import type { CompanionStoredSession } from "../backend/types";
 import { startCompanionRuntime, type CompanionOps, type RequestGuard } from "./runtime";
 import { openConsumedLedger } from "./ledger";
@@ -15,7 +15,7 @@ import {
 } from "./settings";
 import { syncServerUrls } from "./sync-server";
 import { isKnownSchema, SESSION_RETENTION_MS } from "./protocol";
-import type { Workstream } from "../domain/types";
+import type { Tile, Workstream } from "../domain/types";
 import type { WorkLane } from "../domain/work-lanes";
 
 /** What the app provides to the companion; read fresh on every use. */
@@ -35,12 +35,16 @@ export interface CompanionBindings {
   loadedIds: ReadonlySet<string>;
   /** Running Copilot session tiles per workstream. */
   sessionCounts: ReadonlyMap<string, number>;
+  /** Every workstream's tiles (live for mounted ones, saved for the rest); the Copilot ones are published. */
+  sessionTiles?: ReadonlyMap<string, Tile[]>;
   commandFor(workstream: Workstream): string;
   globalCommand: string;
   loadInBackground(workstreamId: string): Promise<void>;
   createWorkstreamAt(name: string, directory: string): Promise<string>;
   /** Calls `guard` after each await and right before spawning the session. */
   startSession(workstreamId: string, command: string, prompt: string, guard: RequestGuard, requestId: string): Promise<void>;
+  /** Stops an existing session tile and resumes it with the phone's message (companion conversations). */
+  messageSession: CompanionOps["messageSession"];
   /** Must fail if the path exists. */
   createDirectory(path: string): Promise<void>;
   homeDir(): Promise<string>;
@@ -155,6 +159,7 @@ export function useCompanionService(bindings: CompanionBindings, explicitDeps?: 
         return b.createWorkstreamAt(name, directory);
       },
       startSession: (id, command, prompt, guard, requestId) => bindingsRef.current.startSession(id, command, prompt, guard, requestId),
+      messageSession: (target, guard, requestId) => bindingsRef.current.messageSession(target, guard, requestId),
     };
 
     connectRef.current(settings)
@@ -230,6 +235,19 @@ export function useCompanionService(bindings: CompanionBindings, explicitDeps?: 
       .then((sessions) => { if (seq === publishSeq.current) publishSessions(doc, sessions); })
       .catch((error: unknown) => console.error("Could not publish phone sessions:", error));
   }, [doc, bindings.sessionsVersion, pruned, workstreamNames, secret]);
+
+  // Every Copilot session tile the phone may message, republished when the
+  // tiles or the phone sessions change; again only the latest build is written.
+  const tilesSeq = useRef(0);
+  useEffect(() => {
+    if (!doc) return;
+    const seq = ++tilesSeq.current;
+    const b = bindingsRef.current;
+    void b.listSessions()
+      .then((stored) => buildSessionTiles({ workstreams: b.workstreams, tilesByWorkstream: b.sessionTiles ?? new Map(), stored }))
+      .then((tiles) => { if (seq === tilesSeq.current && isKnownSchema(doc.read())) publishSessionTiles(doc, tiles); })
+      .catch((error: unknown) => console.error("Could not publish session tiles:", error));
+  }, [doc, bindings.sessionTiles, bindings.workstreams, bindings.sessionsVersion]);
 
   // Publish whenever what the phone would see changes.
   const laptopState = useMemo(

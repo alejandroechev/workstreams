@@ -5,12 +5,14 @@ import {
   sessionTitle,
   signSession,
   type PhoneSession,
+  type PublishedSessionTile,
   type PublishedLane,
   type PublishedWorkstream,
 } from "./protocol";
 import type { CompanionStoredSession } from "../backend/types";
 import { compareNames, groupByLane, type WorkLane } from "../domain/work-lanes";
-import type { Workstream } from "../domain/types";
+import type { Tile, Workstream } from "../domain/types";
+import { linkRevision } from "./link-revision";
 
 /** `laptop.lastSeenAt` is persisted this rarely, to keep document history small. */
 export const LAST_SEEN_WRITE_MS = 5 * 60_000;
@@ -151,6 +153,58 @@ export function publishSessions(doc: CompanionDoc, sessions: Record<string, Phon
         existing.messages.splice(0, existing.messages.length, ...session.messages.map((m) => ({ ...m })));
       }
     }
+  });
+  return true;
+}
+
+/**
+ * Every Copilot session tile the phone may message (companion conversations),
+ * in the sidebar's workstream order. Only what identifies a session and says
+ * whether it can be resumed: no transcript, and no Copilot session id — the
+ * phone gets an opaque link revision instead.
+ */
+export async function buildSessionTiles(input: {
+  workstreams: Workstream[];
+  tilesByWorkstream: ReadonlyMap<string, Tile[]>;
+  stored: CompanionStoredSession[];
+}): Promise<PublishedSessionTile[]> {
+  const byTile = new Map(input.stored.map((s) => [s.tileId, s]));
+  const out: PublishedSessionTile[] = [];
+  for (const workstream of input.workstreams) {
+    if (workstream.status === "archived") continue;
+    for (const tile of input.tilesByWorkstream.get(workstream.id) ?? []) {
+      if (tile.tile_type !== "copilot_session") continue;
+      const config = (() => {
+        try { return JSON.parse(tile.config_json || "{}") as Record<string, unknown>; } catch { return {}; }
+      })();
+      const sessionId = (config.copilot_session_id || config.resume_by_id || null) as string | null;
+      const summary = typeof config.session_name === "string" && config.session_name.trim() ? config.session_name : null;
+      const stored = byTile.get(tile.id);
+      const updated = Date.parse(tile.updated_at);
+      const activity = [Number.isFinite(updated) ? updated : null, stored ? Math.max(stored.createdAt, ...stored.messages.map((m) => m.at)) : null]
+        .filter((v): v is number => v !== null);
+      out.push({
+        tileId: tile.id,
+        workstreamId: workstream.id,
+        title: tile.title || "Copilot session",
+        summary,
+        linked: sessionId !== null,
+        linkRevision: sessionId ? await linkRevision(tile.id, sessionId) : null,
+        lastActivity: activity.length > 0 ? Math.max(...activity) : null,
+        origin: stored?.canSend ? "phone" : "laptop",
+      });
+    }
+  }
+  return out;
+}
+
+/** Writes the session tiles if they differ from what is published. Returns whether it wrote. */
+export function publishSessionTiles(doc: CompanionDoc, tiles: PublishedSessionTile[]): boolean {
+  const snapshot = doc.read();
+  if (!isKnownSchema(snapshot)) return false;
+  if (JSON.stringify(snapshot.laptop.tiles ?? null) === JSON.stringify(tiles)) return false;
+  doc.change((draft) => {
+    if (isKnownSchema(draft)) draft.laptop.tiles = JSON.parse(JSON.stringify(tiles)) as PublishedSessionTile[];
   });
   return true;
 }

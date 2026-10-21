@@ -22,13 +22,20 @@ export const PRESENCE_TIMEOUT_MS = 30_000;
 export const MAX_NAME_LENGTH = 120;
 export const MAX_PROMPT_LENGTH = 20_000;
 
-export type RequestKind = "load" | "create" | "session";
+export type RequestKind = "load" | "create" | "session" | "message";
 
 export interface LoadArgs { workstreamId: string }
 export interface CreateArgs { name: string; prompt?: string }
 export interface SessionArgs { workstreamId: string; prompt: string }
+/**
+ * Continue an existing session: the laptop stops it and resumes the same
+ * Copilot session in the same tile with `prompt`. `linkRevision` is the
+ * opaque revision the phone was shown for that tile; a tile linked to another
+ * session since refuses the message.
+ */
+export interface MessageArgs { workstreamId: string; tileId: string; linkRevision: string; prompt: string }
 
-export type RequestArgs = LoadArgs | CreateArgs | SessionArgs;
+export type RequestArgs = LoadArgs | CreateArgs | SessionArgs | MessageArgs;
 
 export interface RequestOutcome {
   status: "running" | "done" | "failed";
@@ -62,6 +69,27 @@ export interface PublishedWorkstream {
 
 export interface PublishedLane { id: string; name: string }
 
+/**
+ * A Copilot session tile on the laptop, phone- or laptop-started, that the
+ * phone may message. No transcript: what it is, whether it can be resumed,
+ * and when it last changed.
+ */
+export interface PublishedSessionTile {
+  tileId: string;
+  workstreamId: string;
+  title: string;
+  /** The Copilot session's one-line summary, when known. */
+  summary: string | null;
+  /** Linked to a Copilot session, so it can be resumed. */
+  linked: boolean;
+  /** Opaque; changes when the tile is linked to another session. Null when unlinked. */
+  linkRevision: string | null;
+  /** ms epoch, laptop clock. */
+  lastActivity: number | null;
+  /** Who started it. A laptop session becomes "phone" once the phone messages it. */
+  origin: "phone" | "laptop";
+}
+
 export interface CompanionDocument {
   schemaVersion: number;
   laptop: {
@@ -69,6 +97,8 @@ export interface CompanionDocument {
     lanes: PublishedLane[];
     /** ms epoch; written every few minutes for the "last seen" text. */
     lastSeenAt: number | null;
+    /** Copilot session tiles the phone may message. Optional and additive at schema version 1. */
+    tiles?: PublishedSessionTile[];
   };
   requests: Record<string, CompanionRequest>;
   /**
@@ -100,6 +130,7 @@ const ALLOWED_ARGS: Record<RequestKind, { required: string[]; optional: string[]
   load: { required: ["workstreamId"], optional: [] },
   create: { required: ["name"], optional: ["prompt"] },
   session: { required: ["workstreamId", "prompt"], optional: [] },
+  message: { required: ["workstreamId", "tileId", "linkRevision", "prompt"], optional: [] },
 };
 
 export type ParseResult = { ok: true; request: UnsignedRequest } | { ok: false; reason: string };
@@ -297,12 +328,16 @@ export function decodePairing(text: string): Pairing | null {
 // ── Phone sessions and messages ────────────────────────────────────────
 
 export const MAX_MESSAGE_LENGTH = 20_000;
-export const MAX_MESSAGES_PER_SESSION = 50;
+export const MAX_MESSAGES_PER_SESSION = 200;
 /** A session goes this long after its last message (or its start) before it is pruned. */
 export const SESSION_RETENTION_MS = 3 * 24 * 60 * 60_000;
 const MAX_TITLE_LENGTH = 120;
 
-export type MessageKind = "progress" | "result";
+/**
+ * `progress` and `result` come from the session's agent; `prompt` is what you
+ * sent from the phone, recorded and signed by the laptop.
+ */
+export type MessageKind = "progress" | "result" | "prompt";
 
 export interface SessionMessage {
   id: string;
@@ -352,7 +387,7 @@ const isTime = (value: unknown): value is number => typeof value === "number" &&
 function parseMessage(raw: unknown): SessionMessage | null {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
   const m = raw as Record<string, unknown>;
-  if (!isString(m.id) || (m.kind !== "progress" && m.kind !== "result") || !isString(m.text) || !isTime(m.at) || !isString(m.signature)) return null;
+  if (!isString(m.id) || (m.kind !== "progress" && m.kind !== "result" && m.kind !== "prompt") || !isString(m.text) || !isTime(m.at) || !isString(m.signature)) return null;
   if (m.text.length > MAX_MESSAGE_LENGTH) return null;
   return { id: m.id, kind: m.kind, text: m.text, at: m.at, signature: m.signature };
 }
@@ -386,8 +421,47 @@ export function readSessions(doc: CompanionDocument): PhoneSession[] {
     .sort((a, b) => b.createdAt - a.createdAt);
 }
 
-export function sessionIsDone(session: PhoneSession): boolean {
-  return session.messages.some((m) => m.kind === "result");
+/**
+ * Per turn: working while your latest prompt has no result after it. A
+ * session with no recorded prompt, which predates prompt recording, is idle
+ * once it has any result.
+ */
+export function sessionStatus(session: PhoneSession): "working" | "idle" {
+  let lastPrompt = -1;
+  session.messages.forEach((m, i) => { if (m.kind === "prompt") lastPrompt = i; });
+  const after = lastPrompt < 0 ? session.messages : session.messages.slice(lastPrompt + 1);
+  return after.some((m) => m.kind === "result") ? "idle" : "working";
+}
+
+/** A recorded prompt without the instructions the reply and artifact toggles appended. */
+export function splitPrompt(prompt: string): { text: string; askedForResult: boolean; askedForArtifact: boolean } {
+  let text = prompt;
+  const askedForResult = text.endsWith(RESULT_SUFFIX);
+  if (askedForResult) text = text.slice(0, -RESULT_SUFFIX.length);
+  const askedForArtifact = text.endsWith(ARTIFACT_SUFFIX);
+  if (askedForArtifact) text = text.slice(0, -ARTIFACT_SUFFIX.length);
+  return { text, askedForResult, askedForArtifact };
+}
+
+function parseSessionTile(raw: unknown): PublishedSessionTile | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const t = raw as Record<string, unknown>;
+  const optionalString = (v: unknown) => v === null || isString(v);
+  if (!isString(t.tileId) || !isString(t.workstreamId) || !isString(t.title) || typeof t.linked !== "boolean"
+    || !optionalString(t.summary) || !optionalString(t.linkRevision)
+    || !(t.lastActivity === null || isTime(t.lastActivity)) || (t.origin !== "phone" && t.origin !== "laptop")) return null;
+  return {
+    tileId: t.tileId, workstreamId: t.workstreamId, title: t.title, summary: t.summary as string | null,
+    linked: t.linked, linkRevision: t.linkRevision as string | null, lastActivity: t.lastActivity as number | null, origin: t.origin,
+  };
+}
+
+/** The laptop's session tiles, by shape only. Empty for an older laptop or another version. */
+export function readSessionTiles(doc: CompanionDocument): PublishedSessionTile[] {
+  if (!isKnownSchema(doc)) return [];
+  const raw = doc.laptop?.tiles;
+  if (!Array.isArray(raw)) return [];
+  return raw.map(parseSessionTile).filter((t): t is PublishedSessionTile => t !== null);
 }
 
 export type MessageCheck = { ok: true } | { ok: false; error: string };

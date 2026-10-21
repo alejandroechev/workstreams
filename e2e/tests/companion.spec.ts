@@ -177,7 +177,9 @@ test("AT-2/AT-4: a phone session is recorded, published, and its agent's message
   expect(recorded[0]).toMatchObject({ workstreamId: gamma, requestId: "ask" });
 
   await expect.poll(async () => (await phone(page)).sessions?.[tileId]).toMatchObject({
-    title: "Summarise the open PRs", workstreamName: "Gamma", requestId: "ask", messages: [],
+    title: "Summarise the open PRs", workstreamName: "Gamma", requestId: "ask",
+    // The opening prompt starts the thread (companion conversations).
+    messages: [{ kind: "prompt", text: "Summarise the open PRs\nThen list risks" }],
   });
 
   // What the agent's `companion.send` does, then the event it raises.
@@ -188,6 +190,7 @@ test("AT-2/AT-4: a phone session is recorded, published, and its agent's message
     w.__WS_EMIT__("state-changed", { entity: "companion_message", id, action: "added" });
   }, tileId);
   await expect.poll(async () => (await phone(page)).sessions?.[tileId]?.messages.map((m) => [m.kind, m.text])).toEqual([
+    ["prompt", "Summarise the open PRs\nThen list risks"],
     ["progress", "Looking…"],
     ["result", "# PRs\n- one"],
   ]);

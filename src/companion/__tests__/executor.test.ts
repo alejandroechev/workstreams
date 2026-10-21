@@ -93,6 +93,22 @@ describe("planning a session", () => {
   });
 });
 
+describe("planning a message to an existing session", () => {
+  const args = { workstreamId: "idle", tileId: "t7", linkRevision: "rev", prompt: "Go on" };
+
+  it("resumes the tile with the workstream's command; loading is the resume's job", async () => {
+    expect(await plan(await req({ kind: "message", args }))).toEqual({
+      ok: true,
+      actions: [{ type: "message", workstreamId: "idle", tileId: "t7", linkRevision: "rev", prompt: "Go on", command: "agency copilot --yolo" }],
+    });
+  });
+
+  it.each([["missing"], ["old"]])("refuses %s (unknown or archived)", async (id) => {
+    const result = await plan(await req({ kind: "message", args: { ...args, workstreamId: id } }));
+    expect(result).toEqual({ ok: false, error: expect.stringMatching(/not found|archived/i) });
+  });
+});
+
 describe("the security gate comes first", () => {
   it("refuses unsigned, foreign-signed and stale requests without planning anything", async () => {
     const unsigned = { ...(await req({})), signature: "" };

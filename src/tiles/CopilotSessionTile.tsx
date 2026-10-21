@@ -1,6 +1,7 @@
 // @test-skip: xterm.js + copilot session wrapper, validated end-to-end via CDP
 import { useEffect, useRef, useCallback, useState } from "react";
 import { Terminal } from "@xterm/xterm";
+import { subscribeTileNotices } from "../domain/tile-notices";
 import { FitAddon } from "@xterm/addon-fit";
 import { SerializeAddon } from "@xterm/addon-serialize";
 import { WebglAddon } from "@xterm/addon-webgl";
@@ -249,6 +250,16 @@ export default function CopilotSessionTile({
       term.write(event.payload);
     });
 
+    // App-written lines, e.g. "Resumed from phone: …" before a phone message
+    // restarts the session (companion conversations). Also kept on the
+    // container for E2E checks.
+    const unsubscribeNotices = subscribeTileNotices(tileId, (text) => {
+      // Control characters from the phone's text must never reach the terminal as escapes.
+      const safe = Array.from(text, (c) => (c.charCodeAt(0) < 32 || c.charCodeAt(0) === 127 ? " " : c)).join("");
+      term.write(`\r\n\x1b[36m${safe}\x1b[0m\r\n`);
+      containerRef.current?.setAttribute("data-last-notice", text);
+    });
+
     const unlistenExit = listen(`pty-exit-${tileId}`, () => {
       const intentional = (window as unknown as { __wsIntentionalRestartIds?: Set<string> })
         .__wsIntentionalRestartIds?.has(tileId) ?? false;
@@ -362,6 +373,7 @@ export default function CopilotSessionTile({
       webglRef.current = null;
       unlistenOutput.then((u) => u());
       unlistenExit.then((u) => u());
+      unsubscribeNotices();
       unlistenStats.then((u) => u());
       oscDisposable?.dispose?.();
       term.dispose();

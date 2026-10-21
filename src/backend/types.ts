@@ -56,7 +56,9 @@ export interface CompanionStoredSession {
   prompt: string;
   /** ms epoch. */
   createdAt: number;
-  messages: Array<{ id: string; kind: "progress" | "result"; text: string; at: number }>;
+  /** False once the tile was re-linked to a session the phone did not start. */
+  canSend: boolean;
+  messages: Array<{ id: string; kind: "progress" | "result" | "prompt"; text: string; at: number }>;
 }
 
 export interface Backend {
@@ -175,7 +177,11 @@ export interface Backend {
   gitDiffFileSides(directory: string, filePath: string, mode: string, baseRef?: string | null): Promise<{ before: string; after: string }>;
   // Phone companion sessions (ADR 033)
   /** Records that the phone started this Copilot tile; a second record is ignored. */
-  companionRecordSession(session: Omit<CompanionStoredSession, "messages">): Promise<void>;
+  companionRecordSession(session: Omit<CompanionStoredSession, "messages" | "canSend">): Promise<void>;
+  /** Makes a tile the phone messaged a phone session; a revoked one starts afresh. */
+  companionClaimSession(session: Omit<CompanionStoredSession, "messages" | "canSend">): Promise<void>;
+  /** Records what the phone sent to a phone session, for its thread. */
+  companionAddPrompt(tileId: string, id: string, text: string, at: number): Promise<void>;
   /** Stops a tile messaging the phone (it now runs another session); keeps its history. */
   companionRevokeSession(tileId: string): Promise<void>;
   /** Forgets a phone session whose launch was refused. */

@@ -47,6 +47,20 @@
         "createdAt": 1790000000003,
         "signature": "23f05f30594ca6213806b4c18d1674a85299bb9712e7ebb5774a61cb7ef7f35c"
       }
+    },
+    {
+      "request": {
+        "id": "fx-message",
+        "kind": "message",
+        "args": {
+          "linkRevision": "9f2c41d07ab35e18",
+          "prompt": "Also add a test for CRLF files",
+          "tileId": "tile-7",
+          "workstreamId": "ws-1"
+        },
+        "createdAt": 1790000000000,
+        "signature": "fe162f675db7cbbd3558d48683a27efc174d32ff084806363d685cea6e48595d"
+      }
     }
   ],
   "laneColors": {
@@ -57,7 +71,7 @@
   },
   "resultSuffix": "\n\nWhen you are done, use the companion-reply skill to send me the result.",
   "sessions": {
-    "$comment": "Hand-written; signatures computed independently in Python (HMAC-SHA256 over JSON arrays, as for requests). `document` is a published sessions map. `structural` is what readSessions returns (shape only); `expected` is what verifySessions keeps: only signed sessions, only signed messages, newest first.",
+    "$comment": "Hand-written; signatures computed independently in Python (HMAC-SHA256 over JSON arrays, as for requests). `document` is a published sessions map. `structural` is what readSessions returns (shape only); `expected` is what verifySessions keeps: only signed sessions, only signed messages, newest first. `tile-chat` holds `prompt` messages (a conversation: prompt, result, prompt), so it is working.",
     "document": {
       "tile-old": {
         "id": "tile-old",
@@ -157,9 +171,73 @@
         "title": "No sig",
         "createdAt": 1790000400000,
         "messages": []
+      },
+      "tile-chat": {
+        "id": "tile-chat",
+        "workstreamId": "ws-1",
+        "workstreamName": "Workstreams",
+        "requestId": "r3",
+        "title": "Fix the bug",
+        "createdAt": 1790000200000,
+        "messages": [
+          {
+            "id": "p1",
+            "kind": "prompt",
+            "text": "Fix the bug\n\nWhen you are done, use the companion-reply skill to send me the result.",
+            "at": 1790000201000,
+            "signature": "10a4c8fc0972a4c04c002a445e9559854e5a1d46a3e659c5f118dcf5206f38d8"
+          },
+          {
+            "id": "m5",
+            "kind": "result",
+            "text": "Fixed.",
+            "at": 1790000202000,
+            "signature": "4bf878c8960b9d00f6537123df9ec38ac8c67bbe721badf50f257cd76c417dcd"
+          },
+          {
+            "id": "p2",
+            "kind": "prompt",
+            "text": "Add a test",
+            "at": 1790000203000,
+            "signature": "06b0e9b47b90ff60036ef62a5096bcf634ff4891c8af8ac008b5391e767a5b61"
+          }
+        ],
+        "signature": "a5bde37533ace05faee4467f3001da77595e65b521ffba37e9ac7408d8a0acf5"
       }
     },
     "expected": [
+      {
+        "id": "tile-chat",
+        "workstreamId": "ws-1",
+        "workstreamName": "Workstreams",
+        "requestId": "r3",
+        "title": "Fix the bug",
+        "createdAt": 1790000200000,
+        "messages": [
+          {
+            "id": "p1",
+            "kind": "prompt",
+            "text": "Fix the bug\n\nWhen you are done, use the companion-reply skill to send me the result.",
+            "at": 1790000201000,
+            "signature": "10a4c8fc0972a4c04c002a445e9559854e5a1d46a3e659c5f118dcf5206f38d8"
+          },
+          {
+            "id": "m5",
+            "kind": "result",
+            "text": "Fixed.",
+            "at": 1790000202000,
+            "signature": "4bf878c8960b9d00f6537123df9ec38ac8c67bbe721badf50f257cd76c417dcd"
+          },
+          {
+            "id": "p2",
+            "kind": "prompt",
+            "text": "Add a test",
+            "at": 1790000203000,
+            "signature": "06b0e9b47b90ff60036ef62a5096bcf634ff4891c8af8ac008b5391e767a5b61"
+          }
+        ],
+        "signature": "a5bde37533ace05faee4467f3001da77595e65b521ffba37e9ac7408d8a0acf5"
+      },
       {
         "id": "tile-new",
         "workstreamId": "ws-2",
@@ -206,6 +284,7 @@
     ],
     "structural": [
       "forged-session",
+      "tile-chat",
       "tile-new",
       "tile-old"
     ],

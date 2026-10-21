@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { buildLaptopState, publishLaptopState, startPresence, LAST_SEEN_WRITE_MS, buildSessions, publishSessions } from "../publisher";
+import { buildLaptopState, publishLaptopState, startPresence, LAST_SEEN_WRITE_MS, buildSessions, publishSessions, buildSessionTiles, publishSessionTiles } from "../publisher";
+import { linkRevision } from "../link-revision";
+import type { Tile } from "../../domain/types";
 import type { CompanionStoredSession } from "../../backend/types";
 import { verifySessions } from "../protocol";
 import fixtures from "../protocol/fixtures.json";
@@ -129,7 +131,7 @@ describe("presence", () => {
 
 describe("publishing phone sessions", () => {
   const stored = (over: Partial<CompanionStoredSession> = {}): CompanionStoredSession => ({
-    tileId: "t1", workstreamId: "a", requestId: "r1", prompt: "List the files\nand more", createdAt: 1000, messages: [], ...over,
+    tileId: "t1", workstreamId: "a", requestId: "r1", prompt: "List the files\nand more", createdAt: 1000, canSend: true, messages: [], ...over,
   });
   const names = new Map([["a", "Alpha"]]);
 
@@ -194,7 +196,7 @@ describe("publishing phone sessions into a real Automerge document", () => {
     const names = new Map([["a", "Alpha"]]);
     const msg = (i: number) => ({ id: `m${i}`, kind: "progress" as const, text: `${i}`, at: i });
     const at = async (messages: ReturnType<typeof msg>[]) =>
-      buildSessions([{ tileId: "t1", workstreamId: "a", requestId: "r1", prompt: "p", createdAt: 1, messages }], names, SECRET);
+      buildSessions([{ tileId: "t1", workstreamId: "a", requestId: "r1", prompt: "p", createdAt: 1, canSend: true, messages }], names, SECRET);
     publishSessions(doc, await at([msg(1)]));
     publishSessions(doc, await at([msg(1), msg(2), msg(3)]));
     expect(doc.read().sessions).toEqual(await at([msg(1), msg(2), msg(3)]));
@@ -203,5 +205,48 @@ describe("publishing phone sessions into a real Automerge document", () => {
     publishSessions(doc, {});
     expect(doc.read().sessions).toEqual({});
     doc.close();
+  });
+});
+
+
+describe("publishing the laptop's session tiles", () => {
+  const tile = (id: string, workstreamId: string, config: Record<string, unknown>, over: Partial<Tile> = {}): Tile => ({
+    id, workstream_id: workstreamId, tile_type: "copilot_session", title: `T ${id}`,
+    config_json: JSON.stringify(config), created_at: "2026-10-20T10:00:00Z", updated_at: "2026-10-20T11:00:00Z", ...over,
+  });
+
+  it("lists every Copilot tile of non-archived workstreams in order, with link, summary, activity and origin", async () => {
+    const tiles = new Map<string, Tile[]>([
+      ["a", [
+        tile("t1", "a", { copilot_session_id: "s1", session_name: "Fix the bug" }),
+        tile("t2", "a", {}),
+        { ...tile("x", "a", {}), tile_type: "terminal" },
+      ]],
+      ["b", [tile("t3", "b", { resume_by_id: "s3" }, { title: null })]],
+      ["gone", [tile("t4", "gone", { copilot_session_id: "s4" })]],
+    ]);
+    const stored = [
+      { tileId: "t1", workstreamId: "a", requestId: "r", prompt: "p", createdAt: 1, canSend: true, messages: [{ id: "m", kind: "result" as const, text: "x", at: Date.parse("2026-10-21T00:00:00Z") }] },
+      { tileId: "t3", workstreamId: "b", requestId: "r", prompt: "p", createdAt: 1, canSend: false, messages: [] },
+    ];
+    const published = await buildSessionTiles({ workstreams: [ws("a", "A"), ws("b", "B"), ws("old", "Old", { status: "archived" })], tilesByWorkstream: tiles, stored });
+    expect(published).toEqual([
+      { tileId: "t1", workstreamId: "a", title: "T t1", summary: "Fix the bug", linked: true, linkRevision: await linkRevision("t1", "s1"), lastActivity: Date.parse("2026-10-21T00:00:00Z"), origin: "phone" },
+      { tileId: "t2", workstreamId: "a", title: "T t2", summary: null, linked: false, linkRevision: null, lastActivity: Date.parse("2026-10-20T11:00:00Z"), origin: "laptop" },
+      { tileId: "t3", workstreamId: "b", title: "Copilot session", summary: null, linked: true, linkRevision: await linkRevision("t3", "s3"), lastActivity: Date.parse("2026-10-20T11:00:00Z"), origin: "laptop" },
+    ]);
+    // No transcript or session id leaves the laptop.
+    expect(JSON.stringify(published)).not.toContain("s1");
+  });
+
+  it("writes them only when they changed, and never into a newer document", () => {
+    const hub = createInMemoryHub();
+    const laptop = hub.peer();
+    const t = [{ tileId: "t", workstreamId: "a", title: "T", summary: null, linked: false, linkRevision: null, lastActivity: null, origin: "laptop" as const }];
+    expect(publishSessionTiles(laptop, t)).toBe(true);
+    expect(publishSessionTiles(laptop, t)).toBe(false);
+    expect(hub.peer().read().laptop.tiles).toEqual(t);
+    laptop.change((d) => { d.schemaVersion = 2; });
+    expect(publishSessionTiles(laptop, [])).toBe(false);
   });
 });

@@ -35,6 +35,8 @@ describe("starting a phone session", () => {
     await startPhoneSession(deps, { workstreamId: ws.id, command: "copilot", prompt: "Do x", guard, requestId: "r1", now: 5 });
     const [tile] = (await backend.listTiles(ws.id)).filter((t) => t.tile_type === "copilot_session");
     expect(await backend.companionListSessions()).toMatchObject([{ tileId: tile.id, workstreamId: ws.id, requestId: "r1", prompt: "Do x", createdAt: 5 }]);
+    // The opening prompt is the first message of the thread.
+    expect((await backend.companionListSessions())[0].messages).toEqual([{ id: "r1", kind: "prompt", text: "Do x", at: 5 }]);
     expect(JSON.parse((await backend.getLayout(ws.id)).tile_order_json)).toContain(tile.id);
     expect(deps.spawn).toHaveBeenCalledWith(tile.id, "/repo/alpha", "copilot", "Do x");
     expect(spawned).toEqual([tile.id]);

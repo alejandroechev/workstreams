@@ -26,14 +26,27 @@ describe("MemoryBackend phone sessions", () => {
     expect((await backend.companionListSessions())[0].messages).toEqual([]);
   });
 
-  it("refuses to send from a tile the phone did not start, and keeps the latest 50", async () => {
+  it("refuses to send from a tile the phone did not start, and keeps the latest 200", async () => {
     const backend = new MemoryBackend();
     expect(() => backend.companionSendForTests("nope", "result", "x")).toThrow("not started from your phone");
     await backend.companionRecordSession({ tileId: "t", workstreamId: "w", requestId: "r", prompt: "p", createdAt: 0 });
-    for (let i = 0; i <= 50; i += 1) backend.companionSendForTests("t", "progress", `m${i}`, i);
+    for (let i = 0; i <= 200; i += 1) backend.companionSendForTests("t", "progress", `m${i}`, i);
     const [session] = await backend.companionListSessions();
-    expect(session.messages).toHaveLength(50);
+    expect(session.messages).toHaveLength(200);
     expect(session.messages[0].text).toBe("m1");
+  });
+
+  it("claims a laptop tile, restarts a revoked one fresh, and records prompts", async () => {
+    const backend = new MemoryBackend();
+    await backend.companionClaimSession({ tileId: "lap", workstreamId: "w", requestId: "r1", prompt: "Go", createdAt: 1 });
+    await backend.companionAddPrompt("lap", "r1", "Go", 1);
+    expect(await backend.companionListSessions()).toEqual([{ tileId: "lap", workstreamId: "w", requestId: "r1", prompt: "Go", createdAt: 1, canSend: true, messages: [{ id: "r1", kind: "prompt", text: "Go", at: 1 }] }]);
+    await backend.companionRevokeSession("lap");
+    expect((await backend.companionListSessions())[0].canSend).toBe(false);
+    await expect(backend.companionAddPrompt("lap", "x", "y", 2)).rejects.toThrow("not started from your phone");
+    await backend.companionClaimSession({ tileId: "lap", workstreamId: "w", requestId: "r2", prompt: "New", createdAt: 3 });
+    expect(await backend.companionListSessions()).toEqual([{ tileId: "lap", workstreamId: "w", requestId: "r2", prompt: "New", createdAt: 3, canSend: true, messages: [] }]);
+    await expect(backend.companionAddPrompt("lap", "x", " ", 4)).rejects.toThrow("empty");
   });
 
   it("prunes sessions with no activity for the retention period", async () => {
@@ -62,5 +75,24 @@ describe("MemoryBackend phone session permissions", () => {
     await backend.companionRecordSession({ tileId: "t", workstreamId: "w", requestId: "r", prompt: "p", createdAt: 0 });
     await backend.companionDeleteSession("t");
     expect(await backend.companionListSessions()).toEqual([]);
+  });
+
+  it("logs terminal writes and closes, and exits a session on its second Ctrl+C unless told it is stuck", async () => {
+    const backend = new MemoryBackend();
+    const emitted: string[] = [];
+    const w = window as unknown as { __WS_INVOKE_LOG__?: unknown[]; __WS_EMIT__?: (e: string) => void; __WS_PTY_IGNORES_CTRL_C__?: string[] };
+    w.__WS_INVOKE_LOG__ = [];
+    w.__WS_EMIT__ = (e) => emitted.push(e);
+    w.__WS_PTY_IGNORES_CTRL_C__ = ["stuck"];
+    await backend.spawnCopilotSession("ok", "/", null);
+    await backend.spawnCopilotSession("stuck", "/", null);
+    for (const id of ["ok", "stuck"]) { await backend.writeToTerminal(id, "\u0003"); await backend.writeToTerminal(id, "\u0003"); }
+    expect(emitted).toEqual(["pty-exit-ok"]);
+    await expect(backend.writeToTerminal("ok", "x")).rejects.toThrow("No terminal");
+    await backend.closeTerminal("stuck");
+    expect(w.__WS_INVOKE_LOG__.filter((e) => (e as { cmd: string }).cmd !== "spawn_copilot_session").map((e) => (e as { cmd: string }).cmd))
+      .toEqual(["write_to_pty", "write_to_pty", "write_to_pty", "write_to_pty", "close_terminal"]);
+    delete w.__WS_EMIT__;
+    delete w.__WS_PTY_IGNORES_CTRL_C__;
   });
 });

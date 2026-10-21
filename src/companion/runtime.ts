@@ -27,13 +27,23 @@ export interface CompanionOps {
   loadInBackground(workstreamId: string): Promise<void>;
   /** Creates a standalone workstream in a new folder; returns its id. */
   createWorkstream(name: string, folderSlug: string, guard: RequestGuard): Promise<string>;
-  /** Appends a Copilot session tile running `command` with `-i prompt`. */
   /**
    * Appends a Copilot session tile running `command` with `-i prompt`.
    * `requestId` is the phone request that asked for it: the app records the
    * tile as a phone session, the only kind that may message the phone.
    */
   startSession(workstreamId: string, command: string, prompt: string, guard: RequestGuard, requestId: string): Promise<void>;
+  /**
+   * Stops an existing session tile and resumes the same Copilot session in it
+   * with `prompt`, mounting its workstream in the background if needed. Throws
+   * (and touches nothing) when the tile is gone, unlinked, or linked to a
+   * session other than the one the phone saw.
+   */
+  messageSession(
+    target: { workstreamId: string; tileId: string; linkRevision: string; prompt: string; command: string },
+    guard: RequestGuard,
+    requestId: string,
+  ): Promise<void>;
 }
 
 export type RuntimeStatus =
@@ -113,7 +123,10 @@ export function startCompanionRuntime(options: {
       guard();
       if (action.type === "create") created = await ops.createWorkstream(action.name, action.folderSlug, guard);
       else if (action.type === "load") await ops.loadInBackground(resolve(action.workstreamId));
-      else await ops.startSession(resolve(action.workstreamId), action.command, action.prompt, guard, request.id);
+      else if (action.type === "message") {
+        const { workstreamId, tileId, linkRevision, prompt, command } = action;
+        await ops.messageSession({ workstreamId, tileId, linkRevision, prompt, command }, guard, request.id);
+      } else await ops.startSession(resolve(action.workstreamId), action.command, action.prompt, guard, request.id);
     }
     return created;
   };

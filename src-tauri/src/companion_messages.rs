@@ -9,7 +9,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 
 pub const MAX_MESSAGE_LENGTH: usize = 20_000;
-pub const MAX_MESSAGES_PER_SESSION: i64 = 50;
+pub const MAX_MESSAGES_PER_SESSION: i64 = 200;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -28,6 +28,8 @@ pub struct StoredSession {
     pub request_id: String,
     pub prompt: String,
     pub created_at: i64,
+    /// False once the tile was re-linked to a session the phone did not start.
+    pub can_send: bool,
     pub messages: Vec<StoredMessage>,
 }
 
@@ -48,6 +50,46 @@ pub fn record_session(
     )
     .map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// Makes a tile the phone just messaged a phone session (companion
+/// conversations). An existing phone session is left as it is. A tile whose
+/// permission was revoked (it was re-linked to another session) starts a fresh
+/// conversation: the old one belonged to a different Copilot session.
+pub fn claim_session(
+    conn: &Connection,
+    tile_id: &str,
+    workstream_id: &str,
+    request_id: &str,
+    prompt: &str,
+    created_at: i64,
+) -> Result<(), String> {
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    tx.execute(
+        "DELETE FROM companion_sessions WHERE tile_id = ?1 AND can_send = 0",
+        [tile_id],
+    )
+    .map_err(|e| e.to_string())?;
+    tx.execute(
+        "INSERT OR IGNORE INTO companion_sessions (tile_id, workstream_id, request_id, prompt, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![tile_id, workstream_id, request_id, prompt, created_at],
+    )
+    .map_err(|e| e.to_string())?;
+    tx.commit().map_err(|e| e.to_string())
+}
+
+/// Records what you sent from the phone as a `prompt` message, so the thread
+/// shows both sides. Counts towards the cap and the retention like any message.
+pub fn add_prompt(
+    conn: &Connection,
+    tile_id: &str,
+    id: &str,
+    text: &str,
+    at: i64,
+) -> Result<(), String> {
+    check_text(text)?;
+    insert_message(conn, tile_id, id, "prompt", text, at)
 }
 
 /// Whether this tile is a phone session that may still send.
@@ -80,6 +122,10 @@ pub fn check_message(kind: &str, text: &str) -> Result<(), String> {
     if kind != "progress" && kind != "result" {
         return Err("The kind must be \"progress\" or \"result\".".into());
     }
+    check_text(text)
+}
+
+fn check_text(text: &str) -> Result<(), String> {
     if text.trim().is_empty() {
         return Err("The message is empty.".into());
     }
@@ -103,6 +149,17 @@ pub fn add_message(
     at: i64,
 ) -> Result<(), String> {
     check_message(kind, text)?;
+    insert_message(conn, tile_id, id, kind, text, at)
+}
+
+fn insert_message(
+    conn: &Connection,
+    tile_id: &str,
+    id: &str,
+    kind: &str,
+    text: &str,
+    at: i64,
+) -> Result<(), String> {
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
     let exists: Option<i64> = tx
         .query_row(
@@ -154,7 +211,7 @@ pub fn delete(conn: &Connection, tile_id: &str) -> Result<(), String> {
 pub fn list(conn: &Connection) -> Result<Vec<StoredSession>, String> {
     let mut sessions = conn
         .prepare(
-            "SELECT tile_id, workstream_id, request_id, prompt, created_at
+            "SELECT tile_id, workstream_id, request_id, prompt, created_at, can_send
              FROM companion_sessions ORDER BY created_at DESC, tile_id",
         )
         .map_err(|e| e.to_string())?
@@ -165,6 +222,7 @@ pub fn list(conn: &Connection) -> Result<Vec<StoredSession>, String> {
                 request_id: row.get(2)?,
                 prompt: row.get(3)?,
                 created_at: row.get(4)?,
+                can_send: row.get(5)?,
                 messages: Vec::new(),
             })
         })
@@ -346,6 +404,83 @@ mod tests {
         // Re-recording the same tile does not restore the permission.
         record_session(&conn, "t1", "w", "r1", "Do x", 1000).unwrap();
         assert!(!is_phone_session(&conn, "t1").unwrap());
+    }
+
+    #[test]
+    fn claiming_a_laptop_tile_makes_it_a_phone_session() {
+        let conn = db();
+        claim_session(&conn, "lap", "w", "r9", "Go on", 5000).unwrap();
+        assert!(is_phone_session(&conn, "lap").unwrap());
+        let sessions = list(&conn).unwrap();
+        assert_eq!(
+            (
+                sessions[0].request_id.as_str(),
+                sessions[0].prompt.as_str(),
+                sessions[0].can_send
+            ),
+            ("r9", "Go on", true)
+        );
+        // A phone session already claimed keeps its first record.
+        claim_session(&conn, "lap", "w", "r10", "Again", 6000).unwrap();
+        assert_eq!(list(&conn).unwrap()[0].request_id, "r9");
+    }
+
+    #[test]
+    fn claiming_a_revoked_tile_starts_a_fresh_conversation() {
+        let conn = db();
+        record_session(&conn, "t1", "w", "r1", "Do x", 1000).unwrap();
+        add_message(&conn, "t1", "m1", "result", "old session", 2000).unwrap();
+        revoke(&conn, "t1").unwrap();
+        assert!(!list(&conn).unwrap()[0].can_send);
+        claim_session(&conn, "t1", "w", "r2", "New topic", 3000).unwrap();
+        let sessions = list(&conn).unwrap();
+        assert!(sessions[0].can_send);
+        assert_eq!(sessions[0].request_id, "r2");
+        assert_eq!(sessions[0].created_at, 3000);
+        assert!(sessions[0].messages.is_empty());
+    }
+
+    #[test]
+    fn records_prompts_for_phone_sessions_and_counts_them_towards_the_cap() {
+        let conn = db();
+        record_session(&conn, "t1", "w", "r1", "Do x", 0).unwrap();
+        add_prompt(&conn, "t1", "p1", "Do x", 1).unwrap();
+        add_message(&conn, "t1", "m1", "result", "done", 2).unwrap();
+        add_prompt(&conn, "t1", "p2", "And y", 3).unwrap();
+        let kinds: Vec<_> = list(&conn).unwrap()[0]
+            .messages
+            .iter()
+            .map(|m| m.kind.clone())
+            .collect();
+        assert_eq!(kinds, vec!["prompt", "result", "prompt"]);
+        assert_eq!(
+            add_prompt(&conn, "elsewhere", "p3", "x", 4).unwrap_err(),
+            "This session was not started from your phone."
+        );
+        assert!(add_prompt(&conn, "t1", "p4", " ", 4)
+            .unwrap_err()
+            .contains("empty"));
+        let long = "x".repeat(MAX_MESSAGE_LENGTH + 1);
+        assert!(add_prompt(&conn, "t1", "p5", &long, 4)
+            .unwrap_err()
+            .contains("20000"));
+        for i in 0..MAX_MESSAGES_PER_SESSION {
+            add_prompt(&conn, "t1", &format!("q{i}"), "x", 10 + i).unwrap();
+        }
+        let messages = &list(&conn).unwrap()[0].messages;
+        assert_eq!(messages.len() as i64, MAX_MESSAGES_PER_SESSION);
+        assert_eq!(MAX_MESSAGES_PER_SESSION, 200);
+        assert_eq!(messages[0].id, "q0");
+    }
+
+    #[test]
+    fn a_prompt_counts_as_activity_for_retention() {
+        let conn = db();
+        let now = 10 * DAY;
+        record_session(&conn, "t1", "w", "r1", "a", now - 5 * DAY).unwrap();
+        add_prompt(&conn, "t1", "p1", "b", now - 3 * DAY + 60_000).unwrap();
+        assert_eq!(prune(&conn, now, 3 * DAY).unwrap(), 0);
+        assert_eq!(prune(&conn, now + 120_000, 3 * DAY).unwrap(), 1);
     }
 
     #[test]

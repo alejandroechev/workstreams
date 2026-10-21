@@ -280,6 +280,8 @@ function createBackend(): Backend {
     gitDiffFileSides: vi.fn(async () => ({ before: "", after: "" })),
     getDiffOrder: vi.fn(async () => null),
     companionRecordSession: vi.fn(async () => {}),
+    companionClaimSession: vi.fn(async () => {}),
+    companionAddPrompt: vi.fn(async () => {}),
     companionListSessions: vi.fn(async () => []),
     companionRevokeSession: vi.fn(async () => {}),
     companionDeleteSession: vi.fn(async () => {}),

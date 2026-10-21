@@ -6,6 +6,7 @@ import {
   type CompanionRequest,
   type CreateArgs,
   type LoadArgs,
+  type MessageArgs,
   type SessionArgs,
 } from "./protocol";
 
@@ -36,7 +37,9 @@ export const CREATED = "$created";
 export type Action =
   | { type: "create"; name: string; folderSlug: string }
   | { type: "load"; workstreamId: string }
-  | { type: "session"; workstreamId: string; command: string; prompt: string };
+  | { type: "session"; workstreamId: string; command: string; prompt: string }
+  /** Stop the tile's session and resume it with `prompt`. The resume mounts the workstream itself. */
+  | { type: "message"; workstreamId: string; tileId: string; linkRevision: string; prompt: string; command: string };
 
 export type Plan = { ok: true; actions: Action[] } | { ok: false; error: string };
 
@@ -88,6 +91,15 @@ export async function planRequest(
       const actions: Action[] = target.workstream.loaded ? [] : [{ type: "load", workstreamId }];
       actions.push({ type: "session", workstreamId, command: target.workstream.copilotCommand, prompt });
       return { ok: true, actions };
+    }
+    case "message": {
+      const { workstreamId, tileId, linkRevision, prompt } = request.args as MessageArgs;
+      const target = usable(workstreamId);
+      if (!target.ok) return { ok: false, error: target.error };
+      return {
+        ok: true,
+        actions: [{ type: "message", workstreamId, tileId, linkRevision, prompt, command: target.workstream.copilotCommand }],
+      };
     }
   }
 }

@@ -33,6 +33,9 @@ function fakeOps(over: Partial<CompanionOps> = {}) {
     startSession: vi.fn(async (id: string, command: string, prompt: string) => {
       calls.push(`session:${id}:${command}:${prompt}`);
     }),
+    messageSession: vi.fn(async (target: { workstreamId: string; tileId: string; linkRevision: string; prompt: string; command: string }, _guard: () => void, requestId: string) => {
+      calls.push(`message:${target.workstreamId}:${target.tileId}:${target.linkRevision}:${target.command}:${target.prompt}:${requestId}`);
+    }),
     ...over,
   };
   return { ops, calls };
@@ -55,6 +58,49 @@ describe("the companion runtime on the laptop", () => {
     await runtime.idle();
     expect(calls).toEqual(["load:idle"]);
     expect(phone.read().requests.r1.outcome).toEqual({ status: "done", at: NOW });
+    runtime.stop();
+  });
+
+  it("delivers messages to a session one at a time, in the order they were sent", async () => {
+    const hub = createInMemoryHub();
+    const laptop = hub.peer();
+    const phone = hub.peer();
+    const order: string[] = [];
+    let release!: () => void;
+    const first = new Promise<void>((resolve) => { release = resolve; });
+    const { ops } = fakeOps({
+      messageSession: vi.fn(async (target: { prompt: string }) => {
+        order.push(`start:${target.prompt}`);
+        if (target.prompt === "one") await first;
+        order.push(`end:${target.prompt}`);
+      }),
+    });
+    const runtime = startCompanionRuntime({ doc: laptop, secret: SECRET, ops, now: () => NOW });
+    const args = { workstreamId: "busy", tileId: "t1", linkRevision: "rev" };
+    await phoneRequest(phone, { id: "m1", kind: "message", args: { ...args, prompt: "one" }, createdAt: NOW });
+    await phoneRequest(phone, { id: "m2", kind: "message", args: { ...args, prompt: "two" }, createdAt: NOW + 1 });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(order).toEqual(["start:one"]);
+    release();
+    await runtime.idle();
+    expect(order).toEqual(["start:one", "end:one", "start:two", "end:two"]);
+    expect(laptop.read().requests.m1.outcome?.status).toBe("done");
+    expect(laptop.read().requests.m2.outcome?.status).toBe("done");
+    runtime.stop();
+  });
+
+  it("passes a message's target, command and request id to the app, and fails it with the app's reason", async () => {
+    const hub = createInMemoryHub();
+    const laptop = hub.peer();
+    const { ops, calls } = fakeOps();
+    const runtime = startCompanionRuntime({ doc: laptop, secret: SECRET, ops, now: () => NOW });
+    await phoneRequest(hub.peer(), { id: "m1", kind: "message", args: { workstreamId: "busy", tileId: "t1", linkRevision: "rev", prompt: "Go" } });
+    await runtime.idle();
+    expect(calls).toEqual(["message:busy:t1:rev:repo-copilot --yolo:Go:m1"]);
+    (ops.messageSession as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("This tile now runs a different Copilot session."));
+    await phoneRequest(hub.peer(), { id: "m2", kind: "message", args: { workstreamId: "busy", tileId: "t1", linkRevision: "old", prompt: "Go" } });
+    await runtime.idle();
+    expect(laptop.read().requests.m2.outcome).toEqual({ status: "failed", at: NOW, error: "This tile now runs a different Copilot session." });
     runtime.stop();
   });
 

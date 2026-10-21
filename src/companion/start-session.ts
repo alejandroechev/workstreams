@@ -4,7 +4,7 @@ import { createCopilotSessionConfig } from "../domain/tile-config";
 import type { RequestGuard } from "./runtime";
 
 export interface StartSessionDeps {
-  backend: Pick<Backend, "listTiles" | "createTile" | "deleteTile" | "companionRecordSession" | "companionDeleteSession">;
+  backend: Pick<Backend, "listTiles" | "createTile" | "deleteTile" | "companionRecordSession" | "companionAddPrompt" | "companionDeleteSession">;
   /** Mounts the workstream in the background (never changes the active one). */
   mount(workstreamId: string): Promise<void>;
   workstream(workstreamId: string): Workstream | undefined;
@@ -59,6 +59,8 @@ export async function startPhoneSession(
       tileId: tile.id, workstreamId, requestId: request.requestId, prompt: request.prompt, createdAt: request.now,
     });
     recorded = true;
+    // The opening prompt starts the session's thread (companion conversations).
+    await backend.companionAddPrompt(tile.id, request.requestId, request.prompt, request.now);
     guard();
     deps.onTileCreated(tile);
     shown = true;
