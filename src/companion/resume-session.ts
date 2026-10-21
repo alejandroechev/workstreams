@@ -92,6 +92,7 @@ export async function resumePhoneSession(deps: ResumeSessionDeps, request: Resum
     claimed = true;
     await backend.companionAddPrompt(tile.id, request.requestId, request.prompt, request.now);
     deps.onRecorded();
+    await stillLinked();
     guard();
     deps.notice(tile.id, `Resumed from phone: ${firstLine(request.prompt)}`);
     if (running) {
@@ -109,9 +110,12 @@ export async function resumePhoneSession(deps: ResumeSessionDeps, request: Resum
     touched = true;
     await deps.spawn(tile.id, cwd, request.command, sessionId, request.prompt);
   } catch (error) {
-    const current = await currentSession().catch(() => sessionId);
     // A claim made for a session the tile no longer runs must not let that tile message the phone.
-    if (claimed && current !== sessionId) await backend.companionRevokeSession(tile.id).catch(() => {});
+    if (claimed && (await currentSession().catch(() => null)) !== sessionId) {
+      await backend.companionRevokeSession(tile.id).catch(() => {});
+    }
+    // Read last, right before relaunching, so recovery never starts a session the tile no longer names.
+    const current = await currentSession().catch(() => null);
     if (!running && !mounted) {
       // The mount never ran, so it will start the tile itself when it does.
       deps.unmarkSpawned(tile.id);

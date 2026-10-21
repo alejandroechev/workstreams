@@ -180,12 +180,44 @@ describe("resuming a session with a message from the phone", () => {
 
   it("checks the guard after the last link check, right before launching", async () => {
     const { backend, deps, log, request } = await setup();
-    let reads = 0;
     const listTiles = backend.listTiles.bind(backend);
+    let stopped = false;
     let refuse = false;
-    backend.listTiles = async (id) => { reads += 1; if (reads === 3) refuse = true; return listTiles(id); };
+    deps.stop = vi.fn(async () => { log.push("stop"); stopped = true; return { forced: false }; });
+    // The request expires during the link check that follows the stop.
+    backend.listTiles = async (id) => { if (stopped) refuse = true; return listTiles(id); };
     const guard = () => { if (refuse) throw new Error("Request expired"); };
     await expect(resumePhoneSession(deps, request({ guard }))).rejects.toThrow("Request expired");
     expect(log.filter((l) => l.startsWith("spawn"))).toEqual(["spawn:/repo/alpha/sub:copilot --yolo:session-s:null"]);
+  });
+
+  it("doesn't stop a tile re-linked while the prompt was being recorded", async () => {
+    const { backend, deps, log, request, tile } = await setup();
+    const addPrompt = backend.companionAddPrompt.bind(backend);
+    backend.companionAddPrompt = async (...args) => {
+      await addPrompt(...args);
+      await backend.updateTileConfig(tile.id, JSON.stringify({ cwd: "/repo/alpha/sub", copilot_session_id: "session-t" }));
+    };
+    await expect(resumePhoneSession(deps, request())).rejects.toThrow("different Copilot session");
+    expect(log).not.toContain("stop");
+    expect(log.filter((l) => l.startsWith("spawn") || l.startsWith("notice"))).toEqual([]);
+    const [session] = await backend.companionListSessions();
+    expect(session.canSend).toBe(false);
+  });
+
+  it("recovery resumes the session the tile is linked to after revoking, not one read before", async () => {
+    const { backend, deps, log, request, tile } = await setup();
+    deps.stop = vi.fn(async () => {
+      log.push("stop");
+      await backend.updateTileConfig(tile.id, JSON.stringify({ cwd: "/repo/alpha/sub", copilot_session_id: "session-t" }));
+      return { forced: false };
+    });
+    const revoke = backend.companionRevokeSession.bind(backend);
+    backend.companionRevokeSession = async (id) => {
+      await revoke(id);
+      await backend.updateTileConfig(tile.id, JSON.stringify({ cwd: "/repo/alpha/sub", copilot_session_id: "session-u" }));
+    };
+    await expect(resumePhoneSession(deps, request())).rejects.toThrow("different Copilot session");
+    expect(log.filter((l) => l.startsWith("spawn"))).toEqual(["spawn:/repo/alpha/sub:copilot --yolo:session-u:null"]);
   });
 });
