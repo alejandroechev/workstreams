@@ -399,3 +399,35 @@ describe("assigning lanes by drag", () => {
     expect(onAssignLane).toHaveBeenCalledWith("a", "l1");
   });
 });
+
+describe("collapse all / expand all lanes", () => {
+  const lanes = [{ id: "l1", name: "Media Store" }, { id: "l2", name: "Tooling" }];
+  const rows = () => screen.queryAllByTestId("workstream-item").map((n) => n.getAttribute("data-workstream-id"));
+  const renderTwoLanes = () =>
+    renderSidebar([mkWs("a", { lane_id: "l1" }), mkWs("b", { lane_id: "l2" }), mkWs("c")], { lanes });
+
+  it("collapses every lane with one click, then expands them all again, and remembers it", () => {
+    renderTwoLanes();
+    const toggle = screen.getByTestId("ws-lanes-toggle-all");
+    expect(toggle).toHaveAttribute("title", "Collapse all lanes");
+    expect(rows().sort()).toEqual(["a", "b", "c"]);
+
+    fireEvent.click(toggle);
+    expect(rows()).toEqual([]);
+    expect(toggle).toHaveAttribute("title", "Expand all lanes");
+    expect(JSON.parse(localStorage.getItem("ws-sidebar-collapsed-sections")!)).toMatchObject({ l1: true, l2: true, __no_lane__: true });
+
+    fireEvent.click(toggle);
+    expect(rows().sort()).toEqual(["a", "b", "c"]);
+    expect(toggle).toHaveAttribute("title", "Collapse all lanes");
+  });
+
+  it("collapses the rest when only some lanes are collapsed", () => {
+    renderTwoLanes();
+    fireEvent.click(screen.getByTestId("ws-lane-toggle-l1"));
+    const toggle = screen.getByTestId("ws-lanes-toggle-all");
+    expect(toggle).toHaveAttribute("title", "Collapse all lanes");
+    fireEvent.click(toggle);
+    expect(rows()).toEqual([]);
+  });
+});

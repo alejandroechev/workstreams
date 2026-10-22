@@ -57,7 +57,7 @@ instead of buried behind tabs.
 - **Search that never freezes the app** — `.gitignore`-aware content search
   across the repo, off the UI thread, with regex and case toggles.
 - **One list, grouped into lanes** — related workstreams share a collapsible
-  folder, filtered by Loaded / Not archived / All, or by typing (`Alt+K`) to
+  folder (one button collapses or expands them all), filtered by Loaded / Not archived / All, or by typing (`Alt+K`) to
   match on name or repo. Drag a workstream between lanes; archived ones sit
   inline, dimmed, one click from coming back. The set you had open comes back
   open on the next launch, without respawning everything in it: tiles mount when

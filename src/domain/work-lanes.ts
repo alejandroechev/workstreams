@@ -246,3 +246,22 @@ export function laneColor(laneId: string | null | undefined): string {
   }
   return LANE_COLORS[Math.abs(hash) % LANE_COLORS.length];
 }
+
+/** Collapsed state per lane key, as the sidebar remembers it. */
+export type LaneCollapseState = Readonly<Record<string, boolean | undefined>>;
+
+/** Whether every lane in `keys` is collapsed (false when there are none). */
+export function allLanesCollapsed(state: LaneCollapseState, keys: readonly string[]): boolean {
+  return keys.length > 0 && keys.every((key) => state[key] === true);
+}
+
+/** Collapses or expands every lane in `keys`, leaving other remembered lanes as they are. */
+export function withAllLanes(
+  state: LaneCollapseState,
+  keys: readonly string[],
+  collapsed: boolean,
+): Record<string, boolean | undefined> {
+  const next: Record<string, boolean | undefined> = { ...state };
+  for (const key of keys) next[key] = collapsed;
+  return next;
+}

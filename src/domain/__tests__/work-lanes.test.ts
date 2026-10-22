@@ -10,6 +10,8 @@ import {
   groupByLane,
   laneKey,
   laneLabel,
+  allLanesCollapsed,
+  withAllLanes,
   NO_LANE_ID,
   NO_LANE_LABEL,
   type WorkLane,
@@ -268,5 +270,18 @@ describe("laneColor", () => {
     for (let index = 0; index < 50; index += 1) {
       expect(laneColor(`lane-${index}`)).toMatch(/^#[0-9a-f]{6}$/);
     }
+  });
+});
+
+describe("collapsing every lane at once", () => {
+  it("is all collapsed only when every shown lane is", () => {
+    expect(allLanesCollapsed({ a: true, b: true, gone: false }, ["a", "b"])).toBe(true);
+    expect(allLanesCollapsed({ a: true }, ["a", "b"])).toBe(false);
+    expect(allLanesCollapsed({}, [])).toBe(false);
+  });
+
+  it("sets every shown lane, keeping what it remembers about others", () => {
+    expect(withAllLanes({ a: false, other: true }, ["a", "b"], true)).toEqual({ a: true, b: true, other: true });
+    expect(withAllLanes({ a: true, b: true }, ["a", "b"], false)).toEqual({ a: false, b: false });
   });
 });

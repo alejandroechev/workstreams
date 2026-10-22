@@ -94,6 +94,31 @@ test.describe("workstream lanes", () => {
     ).toHaveCount(0);
   });
 
+  test("one button collapses every lane, and expands them all again", async ({ page }) => {
+    await createWorkstream(page, "Read chunks");
+    await createWorkstream(page, "Loose end");
+    await addLane(page, "Media Store");
+    await page.locator('[data-testid="workstream-item"]', { hasText: "Read chunks" })
+      .dragTo(page.locator('[data-testid="ws-lane-lane-1"]'));
+    const rows = page.locator('[data-testid="workstream-item"]');
+    await expect(rows).toHaveCount(2);
+
+    const toggle = page.locator('[data-testid="ws-lanes-toggle-all"]');
+    await expect(toggle).toHaveAttribute("title", "Collapse all lanes");
+    await toggle.click();
+    await expect(rows).toHaveCount(0);
+    await expect(toggle).toHaveAttribute("title", "Expand all lanes");
+
+    // Remembered like a single lane's state (the in-memory backend forgets
+    // the workstreams themselves on reload, so this reads what is stored).
+    const stored = await page.evaluate(() => JSON.parse(localStorage.getItem("ws-sidebar-collapsed-sections") ?? "{}"));
+    expect(stored).toMatchObject({ "lane-1": true, __no_lane__: true });
+
+    await toggle.click();
+    await expect(rows).toHaveCount(2);
+    await expect(toggle).toHaveAttribute("title", "Collapse all lanes");
+  });
+
   test("the filter selection sticks and keeps open work visible", async ({ page }) => {
     await createWorkstream(page, "Open one");
 

@@ -6,6 +6,8 @@ import type { PrInboxRepo, PrWatchMode } from "../domain/pr-inbox";
 import {
   groupByLane,
   laneKey,
+  allLanesCollapsed,
+  withAllLanes,
   laneLabel,
   laneColor,
   matchesFilter,
@@ -30,6 +32,8 @@ import {
   PlusIcon,
   ChevronDownIcon,
   ChevronRightIcon,
+  ChevronDoubleDownIcon,
+  ChevronDoubleUpIcon,
   FolderIcon,
   ClipboardDocumentListIcon,
   ArrowPathRoundedSquareIcon,
@@ -250,15 +254,16 @@ export default function WorkstreamSidebar({
     },
   );
   /** Lanes default to expanded; a collapsed one is remembered by lane id. */
-  const toggleLane = (key: string) => {
+  const updateCollapsed = (change: (prev: Record<string, boolean | undefined>) => Record<string, boolean | undefined>) => {
     setCollapsedSections((prev) => {
-      const next = { ...prev, [key]: !prev[key] };
+      const next = change(prev);
       try {
         localStorage.setItem("ws-sidebar-collapsed-sections", JSON.stringify(next));
       } catch { /* persistence is best-effort */ }
       return next;
     });
   };
+  const toggleLane = (key: string) => updateCollapsed((prev) => ({ ...prev, [key]: !prev[key] }));
 
   const [listFilter, setListFilter] = useState<ListFilter>(() => {
     try {
@@ -405,6 +410,8 @@ export default function WorkstreamSidebar({
   const laneGroups = groupByLane(visibleWorkstreams, lanes).filter((group) =>
     laneVisibleWhileSearching(group.workstreams.length, searching),
   );
+  const laneKeys = laneGroups.map(laneKey);
+  const everyLaneCollapsed = allLanesCollapsed(collapsedSections, laneKeys);
   /**
    * Per lane, how many rows the current *stop* is hiding.
    *
@@ -837,6 +844,21 @@ export default function WorkstreamSidebar({
           >
             {pendingApprovalCount} {pendingApprovalCount === 1 ? "approval" : "approvals"}
           </span>
+        )}
+        {!workstreamsCollapsed && laneGroups.length > 0 && (
+          <button
+            data-testid="ws-lanes-toggle-all"
+            onClick={() => updateCollapsed((prev) => withAllLanes(prev, laneKeys, !everyLaneCollapsed))}
+            style={{ ...addButtonStyle, marginLeft: runningLoopCount > 0 || pendingApprovalCount > 0 ? 0 : "auto" }}
+            onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "#313244"; (e.currentTarget as HTMLElement).style.color = "#cdd6f4"; }}
+            onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "transparent"; (e.currentTarget as HTMLElement).style.color = "#a6adc8"; }}
+            title={everyLaneCollapsed ? "Expand all lanes" : "Collapse all lanes"}
+            aria-label={everyLaneCollapsed ? "Expand all lanes" : "Collapse all lanes"}
+          >
+            {everyLaneCollapsed
+              ? <ChevronDoubleDownIcon style={{ width: 14, height: 14 }} />
+              : <ChevronDoubleUpIcon style={{ width: 14, height: 14 }} />}
+          </button>
         )}
         <button
           data-testid="new-workstream-button"

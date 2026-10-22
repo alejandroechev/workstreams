@@ -854,6 +854,10 @@ for related work. A lane holds any number of workstreams, a workstream sits in
 at most one, and a lane is independent of the repository: `project_id` already
 carries that, so a lane can span several repos or split one.
 
+The double-chevron button in the Workstreams header collapses every lane at
+once, or expands them all when they're all collapsed; like a single lane's
+state, it's remembered.
+
 Drag a workstream onto a lane to file it, or onto **No lane** to take it out.
 "No lane" is always visible, even when empty, because it is what you drag onto
 to remove a workstream from a lane. Dropping onto a row joins that row's lane.
