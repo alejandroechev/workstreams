@@ -120,7 +120,7 @@ export default function App() {
   >({});
   const [activeWsId, setActiveWsId] = useState<string | null>(null);
   const activeWsIdRef = useRef(activeWsId);
-  activeWsIdRef.current = activeWsId;
+  useEffect(() => { activeWsIdRef.current = activeWsId; }, [activeWsId]);
   /**
    * Worktree workstreams created here that open once provisioned, each with
    * the workstream that was active when it was created (ADR 011, amended).
