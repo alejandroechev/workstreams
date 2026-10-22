@@ -52,6 +52,7 @@ import {
   applyWorktreeEvent,
   initialCreatingState,
   initialArchivingState,
+  openWhenProvisioned,
   type ProvisioningState,
   type WorktreeProgressEvent,
 } from "./domain/worktree-provisioning";
@@ -118,6 +119,13 @@ export default function App() {
     Record<string, string | undefined>
   >({});
   const [activeWsId, setActiveWsId] = useState<string | null>(null);
+  const activeWsIdRef = useRef(activeWsId);
+  activeWsIdRef.current = activeWsId;
+  /**
+   * Worktree workstreams created here that open once provisioned, each with
+   * the workstream that was active when it was created (ADR 011, amended).
+   */
+  const openWhenReadyRef = useRef(new Map<string, string | null>());
   // Per-workstream state lives in a single map keyed by wsId. This is the
   // ONLY source of truth so each visited workstream has a stable position
   // in the React tree and its xterm.js Terminal instances are never
@@ -976,6 +984,16 @@ export default function App() {
     [activeWsId, workstreams, confirmDiscardDirtyFileBuffers, unarchiveAndOpen],
   );
 
+  // A worktree workstream created here opens once it's provisioned, like a
+  // base-repo one does at once (ADR 011, amended).
+  useEffect(() => {
+    if (openWhenReadyRef.current.size === 0) return;
+    const plan = openWhenProvisioned(openWhenReadyRef.current, workstreams, activeWsId);
+    for (const id of plan.done) openWhenReadyRef.current.delete(id);
+    for (const id of plan.mount) void mountWorkstream(id);
+    if (plan.select) selectWorkstream(plan.select);
+  }, [workstreams, activeWsId, mountWorkstream, selectWorkstream]);
+
   // Workstream commands stored per-workstream for terminal spawning
   const wsCommands = useRef<Map<string, string>>(new Map());
 
@@ -1257,9 +1275,10 @@ export default function App() {
 
       if (needsWorktree) {
         // Seed provisioning state and kick off the non-blocking worktree add.
-        // Do NOT auto-select or spawn — the row stays in `creating` until the
-        // background thread emits a terminal event (handled by the global
-        // worktree-progress listener).
+        // Not selected or spawned yet: the row stays in `creating` until the
+        // background thread emits a terminal event (the global
+        // worktree-progress listener), then it opens (openWhenReadyRef).
+        openWhenReadyRef.current.set(ws.id, activeWsIdRef.current);
         fireCreateWorktree(ws.id, {
           projectDirectory: payload.directory,
           branchName: payload.worktreeBranch!,
@@ -1632,10 +1651,11 @@ export default function App() {
         );
       }
 
-      // Insert the forked ws in the sidebar (creating). Do NOT auto-select or
-      // spawn — it provisions in the background like a normal worktree create.
+      // Insert the forked ws in the sidebar (creating). It provisions in the
+      // background like a normal worktree create, and opens once ready.
       setWorkstreams((prev) => [newWs, ...prev]);
       setShowForkWs({ show: false });
+      openWhenReadyRef.current.set(newWs.id, activeWsIdRef.current);
       fireCreateWorktree(newWs.id, {
         projectDirectory: sourceWs.directory,
         branchName: opts.branchName,

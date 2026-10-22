@@ -951,7 +951,10 @@ from running ones. See [ADR 019](adrs/019-sidebar-status-sections.md).
 Creating or archiving a workstream runs its git work (pull, worktree
 add/remove) on a background thread, so the UI never freezes. The sidebar row
 itself shows live provisioning / archiving progress, and failures surface
-inline with Retry / Discard.
+inline with Retry / Discard. A new (or forked) worktree workstream opens by
+itself once it's ready, like a base-repo one: it's selected if you're still on
+the workstream you created it from, and otherwise only loaded in the
+background, so you aren't pulled away from wherever you went meanwhile.
 
 See [ADR 011](adrs/011-nonblocking-worktree-ops.md).
 

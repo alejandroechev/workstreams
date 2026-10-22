@@ -124,7 +124,7 @@ test.describe("Workstream creation flow", () => {
     expect(branch).toBe("alejandroe/feature-c");
   });
 
-  test("new worktree submit invokes create_worktree and provisions in the background", async ({ page }) => {
+  test("new worktree submit invokes create_worktree, provisions in the background, then opens", async ({ page }) => {
     await openWsCreateForm(page);
     await page.locator('[data-testid="ws-create-name"]').fill("Feature D");
     await page.locator('[data-testid="ws-create-repo-worktree"] input').click();
@@ -137,12 +137,16 @@ test.describe("Workstream creation flow", () => {
     expect(call!.args.projectDirectory).toBe("C:\\repos\\demo");
     expect(call!.args.branchName).toBe("alejandroe/feature-d");
     // The workstream appears in the sidebar (provisioning happens in the
-    // background; the shim emits a terminal event so it becomes selectable).
+    // background; the shim emits a terminal event so it becomes ready).
     const item = page.locator('[data-testid="workstream-item"]', { hasText: "Feature D" });
     await expect(item).toBeVisible();
-    // Selecting the now-ready workstream shows its pinned session tile.
-    await item.click();
+    // Once ready it opens by itself, like a base-repo workstream: selected,
+    // loaded, and its pinned session tile on screen. No click.
+    await expect(item).toHaveAttribute("data-active", "true");
+    await expect(item.locator('[data-testid="ws-indicator-stopped"]')).toHaveCount(0);
     await expect(page.locator('[data-testid^="tile-pinned-"]')).toBeVisible();
+    const spawns = (await readInvokeLog(page)).filter((e) => e.cmd === "spawn_copilot_session");
+    expect(spawns.length).toBeGreaterThan(0);
   });
 
   test("pinned tile cannot be closed (X hidden)", async ({ page }) => {

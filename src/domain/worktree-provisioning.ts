@@ -82,3 +82,41 @@ export function applyWorktreeEvent(
   }
   return { ...state, status: "create_failed", phase: null, error: event.detail };
 }
+
+/** What to do with worktrees created here once they finish provisioning. */
+export interface ProvisionedPlan {
+  /** Show this one: you're still on the workstream you created it from. */
+  select: string | null;
+  /** Load these in the background: you moved on meanwhile. */
+  mount: string[];
+  /** Stop waiting for these. */
+  done: string[];
+}
+
+/**
+ * A worktree workstream you created opens once it's ready, like a base-repo
+ * one does immediately. `pending` maps each one to the workstream that was
+ * active when you created it; if that's still the active one, the new
+ * workstream is selected, otherwise it is only loaded, so a slow provision
+ * never pulls you away from what you switched to. A failed one is kept, as a
+ * retry may still finish it; one that is gone or archived is forgotten.
+ */
+export function openWhenProvisioned(
+  pending: ReadonlyMap<string, string | null>,
+  workstreams: ReadonlyArray<{ id: string; status: string }>,
+  activeWsId: string | null,
+): ProvisionedPlan {
+  const plan: ProvisionedPlan = { select: null, mount: [], done: [] };
+  for (const [id, createdFrom] of pending) {
+    const ws = workstreams.find((w) => w.id === id);
+    if (!ws || ws.status === "archived" || ws.status === "archiving") {
+      plan.done.push(id);
+      continue;
+    }
+    if (ws.status !== "active") continue;
+    plan.done.push(id);
+    if (plan.select === null && createdFrom === activeWsId) plan.select = id;
+    else plan.mount.push(id);
+  }
+  return plan;
+}

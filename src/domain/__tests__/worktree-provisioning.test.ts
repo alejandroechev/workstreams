@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   initialCreatingState,
+  openWhenProvisioned,
   initialArchivingState,
   applyWorktreeEvent,
   type WorktreeProgressEvent,
@@ -80,5 +81,25 @@ describe("worktree provisioning reducer", () => {
     expect(after.error).toBeNull();
     const after2 = applyWorktreeEvent(after, ev({ status: "done", op: "create" }));
     expect(after2.status).toBe("active");
+  });
+});
+
+describe("openWhenProvisioned", () => {
+  const ws = (id: string, status: string) => ({ id, status });
+  it("selects a ready worktree if you're still where you created it, else loads it in the background", () => {
+    const pending = new Map<string, string | null>([["a", "home"], ["b", "home"], ["c", null]]);
+    const plan = openWhenProvisioned(pending, [ws("a", "active"), ws("b", "active"), ws("c", "active")], "home");
+    expect(plan).toEqual({ select: "a", mount: ["b", "c"], done: ["a", "b", "c"] });
+  });
+
+  it("waits while creating or failed (a retry may still succeed), and forgets one that is gone or archived", () => {
+    const pending = new Map<string, string | null>([["a", null], ["b", null], ["c", null], ["d", null]]);
+    const plan = openWhenProvisioned(pending, [ws("a", "creating"), ws("b", "create_failed"), ws("d", "archived")], null);
+    expect(plan).toEqual({ select: null, mount: [], done: ["c", "d"] });
+  });
+
+  it("selects nothing once you moved to another workstream", () => {
+    const plan = openWhenProvisioned(new Map([["a", "home"]]), [ws("a", "active")], "elsewhere");
+    expect(plan).toEqual({ select: null, mount: ["a"], done: ["a"] });
   });
 });

@@ -62,7 +62,12 @@ from id-keyed Tauri events. The sidebar row itself is the progress UI.**
 ### The row is the UI
 
 - A `creating` row shows a spinner + current phase and is **not selectable**
-  (click is a no-op); there is **no auto-select** when it becomes ready.
+  (click is a no-op). *Amended 2026-10-22:* a worktree workstream created or
+  forked in this app **opens once it is ready**, like a base-repo one does at
+  once — selected if you are still on the workstream you created it from,
+  otherwise only loaded in the background, so a slow provision never pulls you
+  away from where you went meanwhile. A failed create opens when a retry
+  succeeds. (Originally there was no auto-select.)
 - A `create_failed` row stays in the active list with inline Retry / Discard.
 - An `archiving` row lives in the archived list with a spinner; a failed
   worktree delete shows a warning + Retry.
