@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import type { Backend } from "../backend/types";
 import type { PrInboxSnapshot, PrWatchMode } from "../domain/pr-inbox";
+import type { PipelineMode } from "../domain/pipeline-inbox";
 
 export function usePrInbox(backend: Backend) {
   const [snapshot, setSnapshot] = useState<PrInboxSnapshot>({ items: [], repos: [], mutes: [] });
@@ -53,5 +54,22 @@ export function usePrInbox(backend: Backend) {
     return cleared;
   }, [backend]);
 
-  return { snapshot, error, loading, configure, setRead, mute, resetMutes };
+  // Pipelines (ADR 038). Adding asks ADO, so it can take a moment and can fail.
+  const addPipeline = useCallback(async (url: string, mode?: PipelineMode) => {
+    const added = await backend.addPipelineWatch(url, mode);
+    setRevision((value) => value + 1);
+    return added;
+  }, [backend]);
+
+  const setPipelineMode = useCallback(async (id: string, mode: PipelineMode) => {
+    await backend.setPipelineWatchMode(id, mode);
+    setRevision((value) => value + 1);
+  }, [backend]);
+
+  const removePipeline = useCallback(async (id: string) => {
+    await backend.removePipelineWatch(id);
+    setRevision((value) => value + 1);
+  }, [backend]);
+
+  return { snapshot, error, loading, configure, setRead, mute, resetMutes, addPipeline, setPipelineMode, removePipeline };
 }

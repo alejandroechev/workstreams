@@ -1,3 +1,4 @@
+import type { PipelineItem, PipelineStatus } from "./pipeline-inbox";
 /** Which pull requests a repo is watched for. Mirrors the native `WatchMode`. */
 export type PrWatchMode = "off" | "reviewer" | "author" | "both";
 
@@ -151,6 +152,9 @@ export interface PrInboxSnapshot {
   items: PrInboxItem[];
   repos: PrInboxRepo[];
   mutes: PrInboxMute[];
+  /** Watched pipelines and their run notifications (ADR 038). */
+  pipelines?: PipelineStatus[];
+  pipeline_items?: PipelineItem[];
 }
 
 /** UI eligibility only; native code independently validates every HTTP destination. */

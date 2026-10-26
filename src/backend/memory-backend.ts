@@ -3,6 +3,23 @@ import { linkedSessionId } from "../domain/linked-sessions";
 import type { WorkLane } from "../domain/work-lanes";
 import { MAX_MESSAGES_PER_SESSION } from "../companion/protocol";
 import { supportsPrInbox, type PrInboxItem, type PrInboxMute, type PrInboxSnapshot, type PrWatchMode } from "../domain/pr-inbox";
+import {
+  parsePipelineLink,
+  pipelineModeWatches,
+  type PipelineItem,
+  type PipelineMode,
+  type PipelineStatus,
+} from "../domain/pipeline-inbox";
+
+/** A run as the in-memory ADO knows it, for pipeline fixtures (ADR 038). */
+export interface MemoryPipelineRun {
+  id: number;
+  number: string;
+  result: string;
+  finished_at: string;
+  branch?: string;
+  trigger?: string;
+}
 import type { Project, Workstream, Tile, TileType, WorkstreamLayout, CopilotConfigItem } from "../domain/types";
 import type { SessionFileComment } from "../domain/file-comments";
 import type { Review, ReviewComment, ChangedFile, DiffSides } from "../domain/code-review";
@@ -94,7 +111,116 @@ export class MemoryBackend implements Backend {
       repos: this.prInbox.repos.filter((repo) => this.projects.has(repo.project_id))
         .map((repo) => ({ ...repo, repo_name: this.projects.get(repo.project_id)!.name })),
       mutes: this.prInbox.mutes,
+      pipelines: this.pipelineWatches.map((watch) => ({ ...watch.status })),
+      pipeline_items: [...this.pipelineItems].sort((a, b) =>
+        b.finished_at.localeCompare(a.finished_at) || b.run_id - a.run_id),
     });
+  }
+
+  // ── Pipelines (ADR 038) ──
+  private pipelineDefinitions: Array<{ organization: string; project: string; definition_id: number; name: string; runs: MemoryPipelineRun[] }> = [];
+  private pipelineWatches: Array<{ status: PipelineStatus; notifyAfter: string }> = [];
+  private pipelineItems: PipelineItem[] = [];
+  private pipelineAuthError = false;
+
+  /** A pipeline the in-memory ADO can resolve, with its finished runs (newest last or any order). */
+  seedPipelineDefinition(definition: { organization: string; project: string; definition_id: number; name: string; runs?: MemoryPipelineRun[] }): void {
+    this.pipelineDefinitions.push({ ...definition, runs: [...(definition.runs ?? [])] });
+  }
+
+  /** Makes adding fail the way a missing `az login` does. */
+  setPipelineAuthError(on: boolean): void {
+    this.pipelineAuthError = on;
+  }
+
+  async addPipelineWatch(url: string, mode: PipelineMode = "failures"): Promise<PipelineStatus> {
+    const link = parsePipelineLink(url);
+    if (!link) {
+      throw new Error("That isn't an Azure DevOps pipeline or run link. Paste a link to a pipeline (…/_build?definitionId=…) or one of its runs (…/_build/results?buildId=…).");
+    }
+    if (this.pipelineAuthError) {
+      throw new Error("Azure CLI authentication failed. Install az and run az login for your ADO account.");
+    }
+    const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
+    const definition = this.pipelineDefinitions.find((d) => same(d.organization, link.organization) && same(d.project, link.project)
+      && (link.target.kind === "definition" ? d.definition_id === link.target.id : d.runs.some((r) => r.id === link.target.id)));
+    if (!definition) throw new Error("That pipeline or run wasn't found, or your Azure CLI account can't see it.");
+    const existing = this.pipelineWatches.find((w) => same(w.status.organization, definition.organization)
+      && same(w.status.project, definition.project) && w.status.definition_id === definition.definition_id);
+    if (existing) throw new Error(`Already watching “${existing.status.name}”.`);
+    const base = `https://dev.azure.com/${encodeURIComponent(definition.organization)}/${encodeURIComponent(definition.project)}/_build`;
+    const last = [...definition.runs].sort((a, b) => b.finished_at.localeCompare(a.finished_at))[0];
+    const status: PipelineStatus = {
+      id: crypto.randomUUID(),
+      organization: definition.organization,
+      project: definition.project,
+      definition_id: definition.definition_id,
+      name: definition.name,
+      url: `${base}?definitionId=${definition.definition_id}`,
+      mode,
+      last_result: last?.result ?? null,
+      last_run_number: last?.number ?? null,
+      last_run_url: last ? `${base}/results?buildId=${last.id}` : null,
+      last_finished_at: last?.finished_at ?? null,
+      last_checked: new Date().toISOString(),
+      error: null,
+    };
+    this.pipelineWatches.push({ status, notifyAfter: new Date().toISOString() });
+    this.pipelineWatches.sort((a, b) => a.status.name.localeCompare(b.status.name));
+    return { ...status };
+  }
+
+  async setPipelineWatchMode(id: string, mode: PipelineMode): Promise<void> {
+    const watch = this.pipelineWatches.find((w) => w.status.id === id);
+    if (!watch) throw new Error("That pipeline isn't watched");
+    watch.status.mode = mode;
+    watch.notifyAfter = new Date().toISOString();
+  }
+
+  async removePipelineWatch(id: string): Promise<void> {
+    const before = this.pipelineWatches.length;
+    this.pipelineWatches = this.pipelineWatches.filter((w) => w.status.id !== id);
+    if (this.pipelineWatches.length === before) throw new Error("That pipeline isn't watched");
+    this.pipelineItems = this.pipelineItems.filter((item) => item.pipeline_id !== id);
+  }
+
+  /**
+   * What the native poller does when it sees a finished run: update the last
+   * result, and notify once per (run, result) if the mode watches it. Runs that
+   * finished before the pipeline was added (or its mode last changed) stay quiet.
+   */
+  finishPipelineRun(id: string, run: MemoryPipelineRun): void {
+    const watch = this.pipelineWatches.find((w) => w.status.id === id);
+    if (!watch) throw new Error(`No watched pipeline ${id}`);
+    const { status } = watch;
+    const base = `https://dev.azure.com/${encodeURIComponent(status.organization)}/${encodeURIComponent(status.project)}/_build`;
+    if (!status.last_finished_at || run.finished_at >= status.last_finished_at) {
+      Object.assign(status, { last_result: run.result, last_run_number: run.number, last_run_url: `${base}/results?buildId=${run.id}`, last_finished_at: run.finished_at });
+    }
+    status.last_checked = new Date().toISOString();
+    if (!pipelineModeWatches(status.mode, run.result) || run.finished_at <= watch.notifyAfter) return;
+    if (this.pipelineItems.some((i) => i.pipeline_id === id && i.run_id === run.id && i.result === run.result)) return;
+    this.pipelineItems.push({
+      id: crypto.randomUUID(),
+      pipeline_id: id,
+      pipeline_name: status.name,
+      project: status.project,
+      run_id: run.id,
+      run_number: run.number,
+      result: run.result,
+      branch: run.branch ?? "main",
+      trigger: run.trigger ?? "Scheduled",
+      finished_at: run.finished_at,
+      url: `${base}/results?buildId=${run.id}`,
+      is_read: false,
+      discovered_at: new Date().toISOString(),
+    });
+  }
+
+  /** Records a failed check on one pipeline, as the poller does. */
+  failPipelineCheck(id: string, error: string): void {
+    const watch = this.pipelineWatches.find((w) => w.status.id === id);
+    if (watch) watch.status.error = error;
   }
 
   async configurePrInbox(projectId: string, mode: PrWatchMode): Promise<void> {
@@ -113,6 +239,11 @@ export class MemoryBackend implements Backend {
   }
 
   async setPrInboxRead(id: string, isRead: boolean): Promise<void> {
+    const run = this.pipelineItems.find((item) => item.id === id);
+    if (run) {
+      run.is_read = isRead;
+      return;
+    }
     const item = this.prInbox.items.find((item) => item.id === id && this.projects.has(item.project_id));
     if (!item) throw new Error("Notification not found");
     item.is_read = isRead;

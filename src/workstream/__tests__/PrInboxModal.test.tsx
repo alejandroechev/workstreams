@@ -4,6 +4,7 @@ import { describe, it, expect, vi } from "vitest";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { PrInboxModal } from "../PrInboxModal";
 import type { PrInboxItem, PrInboxSnapshot } from "../../domain/pr-inbox";
+import type { PipelineItem } from "../../domain/pipeline-inbox";
 
 vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: vi.fn().mockResolvedValue(undefined) }));
 
@@ -35,7 +36,7 @@ const snapshot: PrInboxSnapshot = {
   mutes: [],
 };
 
-describe("PR inbox", () => {
+describe("Inbox, pull requests", () => {
   it("shows assignments and connection errors, opens ADO and marks read", async () => {
     const onRead = vi.fn().mockResolvedValue(undefined);
     const onClose = vi.fn();
@@ -52,7 +53,7 @@ describe("PR inbox", () => {
     const onRead = vi.fn().mockRejectedValue(new Error("Write failed"));
     render(<PrInboxModal snapshot={{ ...snapshot, items: [event({ is_read: true })] }}
       error={null} loading={false} onRead={onRead} onClose={() => {}} />);
-    fireEvent.click(screen.getByRole("button", { name: "All" }));
+    fireEvent.click(screen.getByRole("button", { name: "With read" }));
     fireEvent.click(screen.getByRole("button", { name: "Mark unread" }));
     await waitFor(() => expect(screen.getByText("Write failed")).toBeInTheDocument());
     expect(onRead).toHaveBeenCalledWith("n", false);
@@ -67,9 +68,9 @@ describe("PR inbox", () => {
     expect(screen.getByText("Loading inbox...")).toBeInTheDocument();
     rerender(<PrInboxModal {...props} loading={false} error="Read failed" />);
     expect(screen.getByText("Read failed")).toBeInTheDocument();
-    expect(screen.queryByText("No review notifications yet.")).not.toBeInTheDocument();
+    expect(screen.queryByText("No notifications yet.")).not.toBeInTheDocument();
     rerender(<PrInboxModal {...props} loading={false} error={null} />);
-    expect(screen.getByText("No review notifications yet.")).toBeInTheDocument();
+    expect(screen.getByText("No notifications yet.")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Close inbox" }));
     expect(props.onClose).toHaveBeenCalled();
   });
@@ -129,7 +130,7 @@ describe("PR inbox", () => {
 
     it("collects every event for a PR under one entry, newest first", () => {
       render(<PrInboxModal snapshot={busy} error={null} loading={false} onRead={vi.fn()} onClose={vi.fn()} />);
-      fireEvent.click(screen.getByRole("button", { name: "All" }));
+      fireEvent.click(screen.getByRole("button", { name: "With read" }));
       const group = screen.getByTestId("pr-group-p-42");
       const rows = within(group).getAllByRole("listitem");
       expect(rows.map((row) => row.getAttribute("data-testid"))).toEqual([
@@ -201,8 +202,8 @@ describe("PR inbox", () => {
 
     it("reveals read notifications when switched to All, and hides them again", () => {
       render(<PrInboxModal snapshot={mixed} error={null} loading={false} onRead={vi.fn()} onClose={vi.fn()} />);
-      fireEvent.click(screen.getByRole("button", { name: "All" }));
-      expect(screen.getByRole("button", { name: "All" })).toHaveAttribute("aria-pressed", "true");
+      fireEvent.click(screen.getByRole("button", { name: "With read" }));
+      expect(screen.getByRole("button", { name: "With read" })).toHaveAttribute("aria-pressed", "true");
       expect(screen.getByTestId("pr-notification-old")).toBeInTheDocument();
       expect(screen.getByTestId("pr-group-p-7")).toBeInTheDocument();
       fireEvent.click(screen.getByRole("button", { name: "Unread" }));
@@ -213,7 +214,7 @@ describe("PR inbox", () => {
       const read = { ...mixed, items: mixed.items.map((item) => ({ ...item, is_read: true })) };
       render(<PrInboxModal snapshot={read} error={null} loading={false} onRead={vi.fn()} onClose={vi.fn()} />);
       expect(screen.getByTestId("pr-inbox-caught-up")).toHaveTextContent("No unread notifications. 3 read hidden.");
-      expect(screen.queryByText("No review notifications yet.")).not.toBeInTheDocument();
+      expect(screen.queryByText("No notifications yet.")).not.toBeInTheDocument();
     });
   });
 
@@ -265,3 +266,86 @@ describe("PR inbox", () => {
     });
   });
 });
+
+describe("Inbox, pipelines (ADR 038)", () => {
+  const run = (over: Partial<PipelineItem>): PipelineItem => ({
+    id: "r", pipeline_id: "w", pipeline_name: "agency_pipeline_watchdog", project: "SCC", run_id: 81746328,
+    run_number: "81746328", result: "failed", branch: "main", trigger: "Scheduled",
+    finished_at: "2026-10-26T19:08:00Z", url: "https://dev.azure.com/skype/SCC/_build/results?buildId=81746328",
+    is_read: false, discovered_at: "2026-10-26T19:09:00Z", ...over,
+  });
+  const both: PrInboxSnapshot = {
+    ...snapshot,
+    pipelines: [],
+    pipeline_items: [
+      run({ id: "r2" }),
+      run({ id: "r1", run_id: 81723251, run_number: "81723251", finished_at: "2026-10-26T07:06:00Z" }),
+      run({ id: "n1", pipeline_id: "n", pipeline_name: "Agency NgcServer Update", run_id: 1, run_number: "20261026.1", result: "succeeded",
+        branch: "master", trigger: "Manual · Ana", finished_at: "2026-10-26T08:10:00Z" }),
+    ],
+  };
+  const renderInbox = (over: Partial<React.ComponentProps<typeof PrInboxModal>> = {}) => {
+    const onRead = vi.fn().mockResolvedValue(undefined);
+    const onOpenPipelines = vi.fn();
+    render(<PrInboxModal snapshot={both} error={null} loading={false} onRead={onRead} onOpenPipelines={onOpenPipelines} onClose={vi.fn()} {...over} />);
+    return { onRead, onOpenPipelines };
+  };
+
+  it("is the Inbox: pull requests and pipelines in their own sections", () => {
+    renderInbox();
+    expect(screen.getByRole("dialog", { name: "Inbox" })).toBeInTheDocument();
+    expect(screen.queryByText(/PR inbox/)).not.toBeInTheDocument();
+    expect(screen.getByTestId("inbox-section-prs")).toHaveTextContent("Pull requests");
+    const pipelines = screen.getByTestId("inbox-section-pipelines");
+    expect(pipelines).toHaveTextContent("Pipelines");
+    // Grouped by pipeline, the one with the newest run first, its runs newest first.
+    const groups = within(pipelines).getAllByTestId(/^pipeline-group-/).map((g) => g.getAttribute("data-testid"));
+    expect(groups).toEqual(["pipeline-group-w", "pipeline-group-n"]);
+    const runs = within(screen.getByTestId("pipeline-group-w")).getAllByTestId(/^pipeline-notification-/).map((r) => r.getAttribute("data-testid"));
+    expect(runs).toEqual(["pipeline-notification-r2", "pipeline-notification-r1"]);
+    const row = screen.getByTestId("pipeline-notification-n1");
+    for (const text of ["Succeeded", "#20261026.1", "master", "Manual · Ana"]) expect(row).toHaveTextContent(text);
+    expect(screen.getByTestId("pr-inbox-summary")).toHaveTextContent("4 unread of 4 notifications");
+  });
+
+  it("filters by kind and by read state", () => {
+    renderInbox({ snapshot: { ...both, pipeline_items: [...both.pipeline_items!, run({ id: "old", is_read: true, run_id: 5, finished_at: "2026-10-20T00:00:00Z" })] } });
+    fireEvent.click(screen.getByRole("button", { name: "Pipelines" }));
+    expect(screen.queryByTestId("inbox-section-prs")).not.toBeInTheDocument();
+    expect(screen.getByTestId("inbox-section-pipelines")).toBeInTheDocument();
+    expect(screen.queryByTestId("pipeline-notification-old")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "With read" }));
+    expect(screen.getByTestId("pipeline-notification-old")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Pull requests" }));
+    expect(screen.queryByTestId("inbox-section-pipelines")).not.toBeInTheDocument();
+    expect(screen.getByTestId("inbox-section-prs")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "All" }));
+    expect(screen.getByTestId("inbox-section-pipelines")).toBeInTheDocument();
+  });
+
+  it("opens a run in ADO and marks it read; marks read and unread without opening", async () => {
+    const { onRead } = renderInbox();
+    fireEvent.click(screen.getByTestId("pipeline-open-r2"));
+    await waitFor(() => expect(openUrl).toHaveBeenCalledWith("https://dev.azure.com/skype/SCC/_build/results?buildId=81746328"));
+    await waitFor(() => expect(onRead).toHaveBeenCalledWith("r2", true));
+    fireEvent.click(screen.getByRole("button", { name: /^Read: agency_pipeline_watchdog #81723251/ }));
+    await waitFor(() => expect(onRead).toHaveBeenCalledWith("r1", true));
+  });
+
+  it("opens the Pipelines manager, and explains an empty Pipelines section", () => {
+    const { onOpenPipelines } = renderInbox({ snapshot: { ...snapshot, pipelines: [], pipeline_items: [] } });
+    fireEvent.click(screen.getByTestId("inbox-pipelines-open"));
+    expect(onOpenPipelines).toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Pipelines" }));
+    expect(screen.getByTestId("inbox-pipelines-empty")).toHaveTextContent("No pipeline notifications");
+  });
+
+  it("shows a pipeline whose check failed", () => {
+    renderInbox({ snapshot: { ...both, pipelines: [{
+      id: "w", organization: "skype", project: "SCC", definition_id: 1, name: "agency_pipeline_watchdog", url: "u", mode: "failures",
+      last_result: null, last_run_number: null, last_run_url: null, last_finished_at: null, last_checked: null, error: "ADO access denied.",
+    }] } });
+    expect(screen.getByTestId("pipeline-check-error-w")).toHaveTextContent("agency_pipeline_watchdog: ADO access denied.");
+  });
+});
+

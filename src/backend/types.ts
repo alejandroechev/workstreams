@@ -2,6 +2,7 @@
 import type { DiffOrderView } from "../domain/diff-reading-order";
 import type { WorkLane } from "../domain/work-lanes";
 import type { PrInboxMute, PrInboxSnapshot, PrWatchMode } from "../domain/pr-inbox";
+import type { PipelineMode, PipelineStatus } from "../domain/pipeline-inbox";
 import type { Project, Workstream, Tile, TileType, WorkstreamLayout, CopilotConfigItem } from "../domain/types";
 import type { SessionFileComment } from "../domain/file-comments";
 import type { TraceFile } from "../domain/trace-format";
@@ -69,6 +70,12 @@ export interface Backend {
   mutePrInboxEvent(id: string): Promise<PrInboxMute>;
   /** Clears every mute; returns how many there were. */
   resetPrInboxMutes(): Promise<number>;
+  /** Watches the ADO pipeline a pipeline or run link points at (ADR 038). Default mode: failures. */
+  addPipelineWatch(url: string, mode?: PipelineMode): Promise<PipelineStatus>;
+  /** Changes what a watched pipeline notifies; runs that finished before never replay. */
+  setPipelineWatchMode(id: string, mode: PipelineMode): Promise<void>;
+  /** Stops watching a pipeline and drops its notifications. */
+  removePipelineWatch(id: string): Promise<void>;
   // Projects
   listProjects(): Promise<Project[]>;
   createProject(name: string, directory: string, color?: string): Promise<Project>;

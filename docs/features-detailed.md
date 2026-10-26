@@ -54,9 +54,51 @@ The repo filter offers:
 - **Non-dormant** — repos with at least one active workstream.
 - **All** — includes archived repos so they can be restored.
 
-## PR inbox
+## Inbox: pull requests and pipelines
 
-The **PR inbox** in the sidebar collects Azure DevOps pull request activity as a
+The **Inbox** in the sidebar has two sections, **Pull requests** and
+**Pipelines**, with All / Pull requests / Pipelines filters, an Unread / With
+read toggle, and one unread badge (unread PRs plus unread pipeline runs).
+
+### Pipelines
+
+Open **Pipelines** (in the sidebar, or **Pipelines…** in the Inbox) and paste a
+link to an Azure DevOps pipeline (`…/_build?definitionId=N`) or to one of its runs
+(`…/_build/results?buildId=N`); `dev.azure.com/<org>/…` and
+`<org>.visualstudio.com/…` both work. The pipeline is listed with its ADO
+project, its mode and its last result. It doesn't need to belong to a repo in
+Workstreams.
+
+| Mode | Notifies |
+| --- | --- |
+| Off | Nothing; the pipeline stays listed with its last result |
+| Failures (default) | Runs that finish `failed` |
+| Successes | Runs that finish `succeeded` |
+| Both | Either |
+
+Partially succeeded and canceled runs never notify. Every run counts, whatever
+its branch or trigger. Only runs that finish after you add a pipeline (or change
+its mode) notify. A retried run that changes to a watched result notifies once
+more. Pipelines are checked with the PRs, every two minutes while Workstreams is
+open, with your Azure CLI login. A pipeline whose check fails shows the error
+on its row, and on the sidebar's Pipelines entry. Each run in the Inbox shows
+its result, run number, branch, trigger and finish time; clicking it opens the
+run in ADO and marks it read. See
+[ADR 038](adrs/038-pipeline-notifications.md).
+
+```sh
+workstreams agent call inbox.pipeline_add url='https://dev.azure.com/<org>/<project>/_build/results?buildId=<n>' mode=failures
+workstreams agent call inbox.pipelines
+workstreams agent call inbox.pipeline_mode id=<pipeline-id> mode=both
+workstreams agent call inbox.pipeline_remove id=<pipeline-id>
+```
+
+`inbox.list` returns `pipelines` and `pipeline_items` next to the PR events,
+and `inbox.read id=<notification-id> read=true` works for both kinds.
+
+### Pull requests
+
+The PR part of the Inbox collects Azure DevOps pull request activity as a
 stream of events, grouped per pull request. In **Repos**, select an ADO repo and
 pick a **PR notifications** mode. The selector saves immediately, independently of
 **Save changes**. Install Azure CLI and run `az login` with the account that can

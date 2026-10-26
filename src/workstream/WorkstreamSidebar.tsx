@@ -42,6 +42,7 @@ import {
   MagnifyingGlassIcon,
   XMarkIcon,
   InboxIcon,
+  RocketLaunchIcon,
 } from "@heroicons/react/20/solid";
 import { getAppSettings } from "../domain/app-settings";
 import { selectableRepositories } from "../domain/repository-visibility";
@@ -72,6 +73,10 @@ interface Props {
    * without a backend (the board is owned by App, which has one). */
   onOpenTaskBoard?: () => void;
   onOpenInbox?: () => void;
+  /** Opens the Pipelines manager (ADR 038). */
+  onOpenPipelines?: () => void;
+  /** A watched pipeline's last check failed. */
+  pipelinesError?: boolean;
   /** Pull requests with at least one unread event, not the event count. */
   inboxUnread?: number;
   inboxRepos?: PrInboxRepo[];
@@ -201,6 +206,8 @@ export default function WorkstreamSidebar({
   onSelectWorkstream,
   onOpenTaskBoard,
   onOpenInbox,
+  onOpenPipelines,
+  pipelinesError = false,
   inboxUnread = 0,
   inboxRepos,
   inboxError,
@@ -1210,7 +1217,7 @@ export default function WorkstreamSidebar({
           <button
             data-testid="pr-inbox-button"
             onClick={onOpenInbox}
-            title={inboxUnread > 0 ? `${inboxUnread} pull request${inboxUnread === 1 ? "" : "s"} with unread activity` : "Open the PR inbox"}
+            title={inboxUnread > 0 ? `${inboxUnread} unread in the Inbox` : "Open the Inbox: pull request activity and pipeline runs"}
             style={{
               ...footerButtonStyle,
               color: inboxUnread > 0 ? "#cdd6f4" : "#6c7086",
@@ -1220,11 +1227,11 @@ export default function WorkstreamSidebar({
             onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "transparent"; }}
           >
             <InboxIcon style={{ width: 14, height: 14, color: inboxUnread > 0 ? "#f38ba8" : "inherit" }} />
-            <span style={{ flex: 1, textAlign: "left" }}>PR inbox</span>
+            <span style={{ flex: 1, textAlign: "left" }}>Inbox</span>
             {inboxUnread > 0 && (
               <span
                 data-testid="pr-inbox-unread"
-                aria-label={`${inboxUnread} pull request${inboxUnread === 1 ? "" : "s"} with unread activity`}
+                aria-label={`${inboxUnread} unread in the Inbox`}
                 style={{
                   background: "#f38ba8",
                   color: "#11111b",
@@ -1242,6 +1249,22 @@ export default function WorkstreamSidebar({
             )}
             {(inboxError || inboxRepos?.some((repo) => repo.enabled && repo.error)) && (
               <ExclamationTriangleIcon aria-label="Inbox connection error" style={{ width: 14, height: 14, color: "#f9e2af" }} />
+            )}
+          </button>
+        )}
+        {onOpenPipelines && (
+          <button
+            data-testid="pipelines-button"
+            onClick={onOpenPipelines}
+            title="Choose which Azure DevOps pipelines notify the Inbox"
+            style={{ ...footerButtonStyle, color: "#6c7086" }}
+            onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "#1e1e2e"; }}
+            onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "transparent"; }}
+          >
+            <RocketLaunchIcon style={{ width: 14, height: 14 }} />
+            <span style={{ flex: 1, textAlign: "left" }}>Pipelines</span>
+            {pipelinesError && (
+              <ExclamationTriangleIcon aria-label="A pipeline check failed" style={{ width: 14, height: 14, color: "#f9e2af" }} />
             )}
           </button>
         )}

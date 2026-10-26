@@ -9,6 +9,10 @@ import {
   type PrEventKind,
   type PrInboxSnapshot,
 } from "../domain/pr-inbox";
+import { groupPipelineItems, resultLabel, type PipelineItem } from "../domain/pipeline-inbox";
+import { resultColor } from "./pipeline-result";
+
+type Kind = "all" | "prs" | "pipelines";
 
 interface Props {
   snapshot: PrInboxSnapshot;
@@ -18,16 +22,22 @@ interface Props {
   /** Stop tracking events like this one, in every repo (ADR 036). */
   onMute?: (id: string) => Promise<void>;
   onResetMutes?: () => Promise<unknown>;
+  /** Opens the Pipelines manager (ADR 038). */
+  onOpenPipelines?: () => void;
   onClose: () => void;
 }
 
 /**
+ * The Inbox: pull request activity (ADR 030/031) and pipeline runs (ADR 038),
+ * each in its own section, with one unread count.
+ *
  * Chrome deliberately mirrors `RepoManagerModal`: same backdrop, panel border,
  * header/subtitle pair, toolbar note and 12/11px type scale. The inbox is
  * reached from the same sidebar footer, so a different shell read as a
  * different app.
  */
-export function PrInboxModal({ snapshot, loading, error, onRead, onMute, onResetMutes, onClose }: Props) {
+export function PrInboxModal({ snapshot, loading, error, onRead, onMute, onResetMutes, onOpenPipelines, onClose }: Props) {
+  const [kind, setKind] = useState<Kind>("all");
   const [actionError, setActionError] = useState<string | null>(null);
   const [showMutes, setShowMutes] = useState(false);
   const mutes = snapshot.mutes ?? [];
@@ -49,9 +59,17 @@ export function PrInboxModal({ snapshot, loading, error, onRead, onMute, onReset
     finally { setBusy(false); }
   };
 
-  const total = snapshot.items.length;
-  const unread = snapshot.items.filter((item) => !item.is_read).length;
+  const runs = snapshot.pipeline_items ?? [];
+  const total = snapshot.items.length + runs.length;
+  const unread = snapshot.items.filter((item) => !item.is_read).length + runs.filter((item) => !item.is_read).length;
   const visible = showRead ? snapshot.items : snapshot.items.filter((item) => !item.is_read);
+  const visibleRuns = showRead ? runs : runs.filter((item) => !item.is_read);
+  const pipelineGroups = groupPipelineItems(visibleRuns);
+  const failedChecks = (snapshot.pipelines ?? []).filter((pipeline) => pipeline.error);
+  const openRun = (run: PipelineItem) => act(async () => {
+    await openUrl(run.url);
+    if (!run.is_read) await onRead(run.id, true);
+  });
 
   return (
     <div
@@ -70,7 +88,7 @@ export function PrInboxModal({ snapshot, loading, error, onRead, onMute, onReset
       <section
         role="dialog"
         aria-modal="true"
-        aria-label="PR inbox"
+        aria-label="Inbox"
         data-testid="pr-inbox-panel"
         onClick={(event) => event.stopPropagation()}
         style={{
@@ -87,11 +105,17 @@ export function PrInboxModal({ snapshot, loading, error, onRead, onMute, onReset
       >
         <div style={headerStyle}>
           <div>
-            <div style={{ color: "#cdd6f4", fontWeight: 600, fontSize: 13 }}>PR inbox</div>
+            <div style={{ color: "#cdd6f4", fontWeight: 600, fontSize: 13 }}>Inbox</div>
             <div data-testid="pr-inbox-summary" style={{ color: "#6c7086", fontSize: 11 }}>
               {unread} unread of {total} notification{total === 1 ? "" : "s"}
             </div>
           </div>
+          <span style={{ flex: 1 }} />
+          {onOpenPipelines && (
+            <button data-testid="inbox-pipelines-open" onClick={onOpenPipelines} title="Choose which pipelines notify" style={{ ...buttonStyle, marginRight: 8 }}>
+              Pipelines…
+            </button>
+          )}
           <button aria-label="Close inbox" data-testid="pr-inbox-close" onClick={onClose} title="Close" style={iconButtonStyle}>
             <XMarkIcon style={{ width: 16, height: 16 }} />
           </button>
@@ -99,9 +123,30 @@ export function PrInboxModal({ snapshot, loading, error, onRead, onMute, onReset
 
         <div style={{ ...noteStyle, display: "flex", alignItems: "center", gap: 12 }}>
           <span style={{ flex: 1 }}>
-            ADO activity on the PRs each repo watches. Choose what to watch in Repos. Checks every two
-            minutes while Workstreams is open; the first check is silent.
+            ADO activity on the PRs each repo watches (choose in Repos) and runs of the pipelines you
+            watch (choose in Pipelines). Checks every two minutes while Workstreams is open; nothing that
+            happened before you started watching is reported.
           </span>
+          <div role="group" aria-label="Show kind" style={{ display: "flex" }}>
+            {([["All", "all"], ["Pull requests", "prs"], ["Pipelines", "pipelines"]] as const).map(([label, value], index, all) => (
+              <button
+                key={value}
+                aria-pressed={kind === value}
+                data-testid={`inbox-kind-${value}`}
+                onClick={() => setKind(value)}
+                style={{
+                  ...buttonStyle,
+                  padding: "2px 10px",
+                  borderRadius: index === 0 ? "4px 0 0 4px" : index === all.length - 1 ? "0 4px 4px 0" : 0,
+                  marginLeft: index === 0 ? 0 : -1,
+                  background: kind === value ? "#313244" : "#181825",
+                  color: kind === value ? "#cdd6f4" : "#6c7086",
+                }}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
           {onResetMutes && mutes.length > 0 && (
             <button
               aria-expanded={showMutes}
@@ -115,11 +160,11 @@ export function PrInboxModal({ snapshot, loading, error, onRead, onMute, onReset
             </button>
           )}
           <div role="group" aria-label="Show notifications" style={{ display: "flex" }}>
-            {([["Unread", false], ["All", true]] as const).map(([label, value], index) => (
+            {([["Unread", false], ["With read", true]] as const).map(([label, value], index) => (
               <button
                 key={label}
                 aria-pressed={showRead === value}
-                data-testid={`pr-inbox-filter-${label.toLowerCase()}`}
+                data-testid={`pr-inbox-filter-${value ? "all" : "unread"}`}
                 onClick={() => setShowRead(value)}
                 style={{
                   ...buttonStyle,
@@ -164,12 +209,15 @@ export function PrInboxModal({ snapshot, loading, error, onRead, onMute, onReset
           {(error || actionError) && (
             <p role="alert" style={{ ...emptyStyle, color: "#f38ba8", textAlign: "left" }}>{actionError ?? error}</p>
           )}
-          {!loading && !error && total === 0 && <p style={emptyStyle}>No review notifications yet.</p>}
+          {!loading && !error && total === 0 && <p style={emptyStyle}>No notifications yet.</p>}
           {!loading && !error && total > 0 && visible.length === 0 && (
             <p data-testid="pr-inbox-caught-up" style={emptyStyle}>
               No unread notifications. {total} read hidden.
             </p>
           )}
+          {kind !== "pipelines" && (
+          <section data-testid="inbox-section-prs">
+          {kind === "all" && <h2 style={sectionHeadingStyle}>Pull requests</h2>}
           {snapshot.repos.map((repo) => {
             const groups = groupPrInboxItems(
               visible.filter((item) => item.project_id === repo.project_id),
@@ -286,10 +334,106 @@ export function PrInboxModal({ snapshot, loading, error, onRead, onMute, onReset
               </section>
             );
           })}
+          </section>
+          )}
+          {kind !== "prs" && (
+            <section data-testid="inbox-section-pipelines">
+              {kind === "all" && <h2 style={sectionHeadingStyle}>Pipelines</h2>}
+              {failedChecks.map((pipeline) => (
+                <p key={pipeline.id} role="alert" data-testid={`pipeline-check-error-${pipeline.id}`} style={{ color: "#f38ba8", fontSize: 11, margin: "6px 12px 0" }}>
+                  {pipeline.name}: {pipeline.error}
+                </p>
+              ))}
+              {kind === "pipelines" && pipelineGroups.length === 0 && (
+                <p data-testid="inbox-pipelines-empty" style={emptyStyle}>
+                  No pipeline notifications{runs.length > 0 ? " unread" : ""}. Choose what notifies in Pipelines.
+                </p>
+              )}
+              {pipelineGroups.map((group) => (
+                <article
+                  key={group.pipeline_id}
+                  data-testid={`pipeline-group-${group.pipeline_id}`}
+                  data-unread={group.unread}
+                  style={{
+                    border: "1px solid #313244",
+                    borderLeft: `2px solid ${group.unread ? "#f38ba8" : "#45475a"}`,
+                    borderRadius: 4,
+                    padding: "8px 10px",
+                    margin: "8px 12px 0",
+                    background: "#181825",
+                  }}
+                >
+                  <div style={{ fontSize: 12, fontWeight: group.unread ? 600 : 400, color: "#cdd6f4" }}>
+                    {group.pipeline_name} <span style={{ color: "#6c7086", fontWeight: 400, fontSize: 11 }}>{group.project}</span>
+                  </div>
+                  <ul style={{ listStyle: "none", margin: "8px 0 0", padding: 0, display: "grid", gap: 4 }}>
+                    {group.items.map((run) => (
+                      <li
+                        key={run.id}
+                        data-testid={`pipeline-notification-${run.id}`}
+                        data-read={run.is_read}
+                        style={{ display: "flex", gap: 8, alignItems: "baseline", fontSize: 11 }}
+                      >
+                        <span style={resultStyle(run.result)}>{resultLabel(run.result)}</span>
+                        <button
+                          data-testid={`pipeline-open-${run.id}`}
+                          disabled={busy}
+                          onClick={() => void openRun(run)}
+                          title="Open the run in Azure DevOps"
+                          style={{
+                            flex: 1, minWidth: 0, background: "none", border: "none", padding: 0, textAlign: "left",
+                            cursor: "pointer", fontFamily: "inherit", fontSize: 11, overflowWrap: "anywhere",
+                            color: run.is_read ? "#6c7086" : "#cdd6f4",
+                          }}
+                        >
+                          #{run.run_number} · {run.branch} · {run.trigger}
+                          <ArrowTopRightOnSquareIcon aria-hidden="true" width={11} height={11} style={{ display: "inline", marginLeft: 6 }} />
+                        </button>
+                        <span style={{ color: "#6c7086", whiteSpace: "nowrap" }}>{new Date(run.finished_at).toLocaleString()}</span>
+                        <button
+                          disabled={busy}
+                          aria-label={`${run.is_read ? "Mark unread" : "Read"}: ${group.pipeline_name} #${run.run_number}`}
+                          onClick={() => void act(() => onRead(run.id, !run.is_read))}
+                          style={{ ...buttonStyle, padding: "1px 6px", fontSize: 10 }}
+                        >
+                          {run.is_read ? "Unread" : "Read"}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </article>
+              ))}
+              <div style={{ height: 10 }} />
+            </section>
+          )}
         </div>
       </section>
     </div>
   );
+}
+
+const sectionHeadingStyle: React.CSSProperties = {
+  margin: "10px 12px 0",
+  fontSize: 10,
+  fontWeight: 600,
+  color: "#6c7086",
+  textTransform: "uppercase",
+  letterSpacing: 1,
+};
+
+function resultStyle(result: string): React.CSSProperties {
+  const color = resultColor(result);
+  return {
+    color,
+    border: `1px solid ${color}`,
+    borderRadius: 999,
+    fontSize: 9,
+    fontWeight: 700,
+    padding: "0 6px",
+    whiteSpace: "nowrap",
+    minWidth: 64,
+    textAlign: "center",
+  };
 }
 
 const headerStyle: React.CSSProperties = {

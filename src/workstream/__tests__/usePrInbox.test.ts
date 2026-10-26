@@ -54,3 +54,19 @@ describe("global inbox snapshot subscription", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 });
+
+describe("pipelines through the inbox hook", () => {
+  it("adds, re-modes and removes pipelines, refreshing the snapshot each time", async () => {
+    const backend = new MemoryBackend();
+    backend.seedPipelineDefinition({ organization: "o", project: "P", definition_id: 1, name: "Nightly" });
+    const { result } = renderHook(() => usePrInbox(backend));
+    await act(async () => {});
+    let id = "";
+    await act(async () => { id = (await result.current.addPipeline("https://dev.azure.com/o/P/_build?definitionId=1")).id; });
+    expect(result.current.snapshot.pipelines).toEqual([expect.objectContaining({ id, name: "Nightly", mode: "failures" })]);
+    await act(async () => { await result.current.setPipelineMode(id, "both"); });
+    expect(result.current.snapshot.pipelines![0].mode).toBe("both");
+    await act(async () => { await result.current.removePipeline(id); });
+    expect(result.current.snapshot.pipelines).toEqual([]);
+  });
+});

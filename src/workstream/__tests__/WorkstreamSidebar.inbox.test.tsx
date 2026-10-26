@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, it, expect, vi } from "vitest";
 
 import WorkstreamSidebar from "../WorkstreamSidebar";
@@ -72,14 +72,14 @@ describe("WorkstreamSidebar PR inbox badge", () => {
     // A pill: accent fill with dark text, so it reads as a count and not as
     // another dim footer label.
     expect(badge).toHaveStyle({ background: "#f38ba8", color: "#11111b" });
-    expect(badge).toHaveAttribute("aria-label", "3 pull requests with unread activity");
+    expect(badge).toHaveAttribute("aria-label", "3 unread in the Inbox");
   });
 
   it("uses the singular form for one assignment", () => {
     renderSidebar({ inboxUnread: 1 });
     expect(screen.getByTestId("pr-inbox-unread")).toHaveAttribute(
       "aria-label",
-      "1 pull request with unread activity",
+      "1 unread in the Inbox",
     );
   });
 
@@ -114,5 +114,21 @@ describe("WorkstreamSidebar PR inbox badge", () => {
   it("omits the badge when nothing is unread", () => {
     renderSidebar({ inboxUnread: 0 });
     expect(screen.queryByTestId("pr-inbox-unread")).not.toBeInTheDocument();
+  });
+});
+
+describe("WorkstreamSidebar Inbox and Pipelines entries", () => {
+  it("names the Inbox, and opens the Pipelines manager from its own entry", () => {
+    const onOpenPipelines = vi.fn();
+    renderSidebar({ inboxUnread: 0, onOpenPipelines });
+    expect(screen.getByTestId("pr-inbox-button")).toHaveTextContent("Inbox");
+    expect(screen.getByTestId("pr-inbox-button")).not.toHaveTextContent("PR inbox");
+    fireEvent.click(screen.getByTestId("pipelines-button"));
+    expect(onOpenPipelines).toHaveBeenCalled();
+  });
+
+  it("flags a pipeline whose last check failed", () => {
+    renderSidebar({ onOpenPipelines: vi.fn(), pipelinesError: true });
+    expect(screen.getByLabelText("A pipeline check failed")).toBeInTheDocument();
   });
 });

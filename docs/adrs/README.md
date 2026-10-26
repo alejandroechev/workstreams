@@ -50,6 +50,7 @@ whatever replaced it — the history is the point.
 | [035](035-hiding-unused-tiles.md) | Hiding the Code Review, Code Walkthrough and Goal Loop tiles behind per-tile sunset flags; Devlog settings follow Tasks | Accepted |
 | [036](036-pr-inbox-mutes.md) | Muting kinds of PR inbox events globally by kind, subject and outcome; muted events are skipped, matching ones read | Accepted |
 | [037](037-acceptance-review-mode.md) | Reviewing acceptance tests in the Plan tile: one test per screen, marks in the draft file, storyboards, read-only screenshots, no writes after approval | Accepted |
+| [038](038-pipeline-notifications.md) | Pipeline notifications in the Inbox: watch pipelines added by link, per-pipeline mode, no replay, checked in the PR inbox poller | Accepted |
 
 ## Writing a new ADR
 

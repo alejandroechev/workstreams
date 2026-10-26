@@ -2,6 +2,7 @@ import type { DiffOrderView } from "../domain/diff-reading-order";
 import { invoke } from "@tauri-apps/api/core";
 import type { WorkLane } from "../domain/work-lanes";
 import type { PrInboxSnapshot, PrWatchMode, PrInboxMute } from "../domain/pr-inbox";
+import type { PipelineMode, PipelineStatus } from "../domain/pipeline-inbox";
 import type { Project, Workstream, Tile, TileType, WorkstreamLayout, CopilotConfigItem } from "../domain/types";
 import type { SessionFileComment } from "../domain/file-comments";
 import type { Review, ReviewComment, ChangedFile, DiffSides } from "../domain/code-review";
@@ -57,6 +58,18 @@ export class TauriBackend implements Backend {
 
   async setPrInboxRead(id: string, isRead: boolean): Promise<void> {
     await invoke("set_pr_inbox_read", { id, isRead });
+  }
+
+  async addPipelineWatch(url: string, mode?: PipelineMode): Promise<PipelineStatus> {
+    return invoke<PipelineStatus>("add_pipeline_watch", { url, mode: mode ?? null });
+  }
+
+  async setPipelineWatchMode(id: string, mode: PipelineMode): Promise<void> {
+    await invoke("set_pipeline_watch_mode", { id, mode });
+  }
+
+  async removePipelineWatch(id: string): Promise<void> {
+    await invoke("remove_pipeline_watch", { id });
   }
 
   async mutePrInboxEvent(id: string): Promise<PrInboxMute> {

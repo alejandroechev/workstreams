@@ -1132,4 +1132,54 @@ mod tests {
             .unwrap_or("")
             .contains("az login")));
     }
+
+    /// Against real Azure DevOps with your `az login`; run with
+    /// `cargo test --lib real_ado -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn real_ado_resolves_and_reads_the_two_example_pipelines() {
+        let http = crate::pr_inbox::AdoTransport::connect().expect("az login");
+        for (link, definition, name) in [
+            (
+                "https://dev.azure.com/skype/SCC/_build/results?buildId=81724709&view=logs",
+                33995,
+                "Agency NgcServer Update",
+            ),
+            (
+                "https://skype.visualstudio.com/SCC/_build/results?buildId=81723251&view=logs",
+                33770,
+                "agency_pipeline_watchdog",
+            ),
+        ] {
+            let resolved = resolve(&http, &parse_link(link).unwrap()).unwrap();
+            assert_eq!(
+                (
+                    resolved.definition_id,
+                    resolved.name.as_str(),
+                    resolved.project_name.as_str()
+                ),
+                (definition, name, "SCC")
+            );
+            let conn = db();
+            add(&conn, &resolved, None).unwrap();
+            let target = targets(&conn).unwrap().remove(0);
+            let runs = fetch_runs(&http, &target).unwrap();
+            assert!(!runs.is_empty());
+            apply_runs(&conn, &target, &runs).unwrap();
+            let row = &list(&conn).unwrap()[0];
+            println!(
+                "{name}: {} runs; last {:?} #{:?} ({:?}); newest trigger {:?}; notifications {}",
+                runs.len(),
+                row.last_result,
+                row.last_run_number,
+                row.last_finished_at,
+                runs[0].trigger,
+                items(&conn).unwrap().len()
+            );
+            assert!(
+                items(&conn).unwrap().is_empty(),
+                "adding never replays history"
+            );
+        }
+    }
 }

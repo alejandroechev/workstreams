@@ -13,6 +13,7 @@ import { fileBufferRegistry } from "./files/FileBufferRegistry";
 import WorkstreamSidebar from "./workstream/WorkstreamSidebar";
 import { usePrInbox } from "./workstream/usePrInbox";
 import { PrInboxModal } from "./workstream/PrInboxModal";
+import { PipelinesModal } from "./workstream/PipelinesModal";
 import { TaskBoard } from "./tasks/TaskBoard";
 import { WorkstreamQuickNote } from "./tasks/WorkstreamQuickNote";
 import { InProgressTaskList } from "./tasks/InProgressTaskList";
@@ -62,7 +63,7 @@ import { useBackend } from "./backend/context";
 import { decideUnarchive, type WorkLane } from "./domain/work-lanes";
 import type { Project, Workstream, Tile, TileType } from "./domain/types";
 import type { LoopSummary } from "./domain/loop";
-import { countUnreadPrs } from "./domain/pr-inbox";
+import { countUnreadInbox } from "./domain/pipeline-inbox";
 import { useCompanionService } from "./companion/useCompanionService";
 import { startPhoneSession } from "./companion/start-session";
 import { resumePhoneSession } from "./companion/resume-session";
@@ -80,6 +81,7 @@ export default function App() {
   const backend = useBackend();
   const inbox = usePrInbox(backend);
   const [showInbox, setShowInbox] = useState(false);
+  const [showPipelines, setShowPipelines] = useState(false);
   const [projects, setProjects] = useState<Project[]>([]);
   const [workLanes, setWorkLanes] = useState<WorkLane[]>([]);
   const [workstreams, setWorkstreams] = useState<Workstream[]>([]);
@@ -2264,11 +2266,19 @@ export default function App() {
       {showInbox && (
         <PrInboxModal snapshot={inbox.snapshot} error={inbox.error} loading={inbox.loading}
           onRead={inbox.setRead} onMute={inbox.mute} onResetMutes={inbox.resetMutes}
+          onOpenPipelines={() => setShowPipelines(true)}
           onClose={() => setShowInbox(false)} />
+      )}
+      {showPipelines && (
+        <PipelinesModal pipelines={inbox.snapshot.pipelines ?? []}
+          onAdd={inbox.addPipeline} onSetMode={inbox.setPipelineMode} onRemove={inbox.removePipeline}
+          onClose={() => setShowPipelines(false)} />
       )}
       <WorkstreamSidebar
         onOpenInbox={() => setShowInbox(true)}
-        inboxUnread={countUnreadPrs(inbox.snapshot.items)}
+        inboxUnread={countUnreadInbox(inbox.snapshot)}
+        onOpenPipelines={() => setShowPipelines(true)}
+        pipelinesError={(inbox.snapshot.pipelines ?? []).some((pipeline) => !!pipeline.error)}
         inboxRepos={inbox.loading ? undefined : inbox.snapshot.repos}
         inboxError={inbox.error}
         onConfigureInbox={inbox.configure}

@@ -5,7 +5,7 @@ describe("PR inbox offline backend", () => {
   it("opts in only ADO repos, keeps read state, and reports missing notifications", async () => {
     const backend = new MemoryBackend();
     const repo = await backend.createProject("Repo", "/repo");
-    expect(await backend.getPrInbox()).toEqual({ items: [], repos: [], mutes: [] });
+    expect(await backend.getPrInbox()).toEqual({ items: [], repos: [], mutes: [], pipelines: [], pipeline_items: [] });
     await expect(backend.configurePrInbox(repo.id, "reviewer")).rejects.toThrow("Azure DevOps");
     await backend.updateProject(repo.id, { git_remote: "https://dev.azure.com/org/proj/_git/repo" });
     await backend.configurePrInbox(repo.id, "both");
@@ -25,7 +25,7 @@ describe("PR inbox offline backend", () => {
     await expect(backend.setPrInboxRead("missing", true)).rejects.toThrow("not found");
     await expect(backend.configurePrInbox("missing", "off")).rejects.toThrow("not found");
     await backend.deleteProject(repo.id);
-    expect(await backend.getPrInbox()).toEqual({ items: [], repos: [], mutes: [] });
+    expect(await backend.getPrInbox()).toEqual({ items: [], repos: [], mutes: [], pipelines: [], pipeline_items: [] });
   });
 
   it("mutes events like one notification, reading the matching ones, and resets", async () => {

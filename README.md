@@ -69,7 +69,7 @@ instead of buried behind tabs.
   and the Repo Explorer diff sorts by its recommendation, numbered, with a
   Recommended / Name toggle. The app checks the order covers every changed file
   and flags it when the diff has moved on since (macOS and Linux).
-- **ADO PR inbox** — opt in per repo to follow reviews assigned to you, PRs you opened, or both, with per-PR comment, vote, build-gate and closure events.
+- **ADO Inbox** — opt in per repo to follow reviews assigned to you, PRs you opened, or both, with per-PR comment, vote, build-gate and closure events. Paste a link to any ADO pipeline (or one of its runs) to be told when its runs fail, succeed or both ([ADR 038](docs/adrs/038-pipeline-notifications.md)).
   Uses your `az login` account, checks every two minutes while the app is open,
   and keeps read/unread state across restarts. The first check is silent. An
   unread pill in the sidebar footer flags new assignments without opening it.
