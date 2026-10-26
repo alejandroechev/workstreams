@@ -22,6 +22,7 @@ mod loop_cli;
 mod loop_definition;
 mod loop_verifier;
 mod loops;
+mod pipeline_inbox;
 mod pty;
 mod repo_create;
 mod session_poller;
@@ -413,6 +414,46 @@ fn mute_pr_inbox_event(
 ) -> Result<pr_inbox::MuteRule, String> {
     let db = state.db.lock().map_err(|e| e.to_string())?;
     pr_inbox::mute(&db, &id)
+}
+
+/// Starts watching the pipeline a pasted link points at (ADR 038). Resolving
+/// the link asks ADO, so it runs off the IPC thread and without the DB lock.
+#[tauri::command]
+async fn add_pipeline_watch(
+    state: State<'_, AppState>,
+    url: String,
+    mode: Option<String>,
+) -> Result<pipeline_inbox::PipelineStatus, String> {
+    use pipeline_inbox::PipelineResolver;
+    let mode = mode
+        .as_deref()
+        .map(pipeline_inbox::PipelineMode::parse)
+        .transpose()?;
+    let db = Arc::clone(&state.db);
+    tauri::async_runtime::spawn_blocking(move || {
+        let resolved = pipeline_inbox::AdoResolver.resolve(&url)?;
+        let db = db.lock().map_err(|e| e.to_string())?;
+        pipeline_inbox::add(&db, &resolved, mode)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+fn set_pipeline_watch_mode(
+    state: State<'_, AppState>,
+    id: String,
+    mode: String,
+) -> Result<(), String> {
+    let mode = pipeline_inbox::PipelineMode::parse(&mode)?;
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    pipeline_inbox::set_mode(&db, &id, mode)
+}
+
+#[tauri::command]
+fn remove_pipeline_watch(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    pipeline_inbox::remove(&db, &id)
 }
 
 #[tauri::command]
@@ -1427,6 +1468,7 @@ fn serve_agent_request(
             db: &conn,
             caller: caller.as_ref(),
             provisioner: Some(&AppProvisioner { app: app.clone() }),
+            pipelines: Some(&pipeline_inbox::AdoResolver),
         },
     );
     agent_registry::log_command(
@@ -6128,6 +6170,9 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_pr_inbox,
             configure_pr_inbox,
+            add_pipeline_watch,
+            set_pipeline_watch_mode,
+            remove_pipeline_watch,
             set_pr_inbox_read,
             mute_pr_inbox_event,
             reset_pr_inbox_mutes,

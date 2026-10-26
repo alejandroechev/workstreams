@@ -418,6 +418,45 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
             created_at TEXT NOT NULL,
             PRIMARY KEY (kind, subject, outcome)
         );
+        -- Pipelines watched for notifications (ADR 038). Not tied to a repo:
+        -- identified by organization, ADO project id and definition id.
+        -- `notify_after` moves to the current time on add and on every mode change, so
+        -- neither ever replays runs that finished before it.
+        CREATE TABLE IF NOT EXISTS pipeline_watches (
+            id TEXT PRIMARY KEY,
+            organization TEXT NOT NULL,
+            project_id TEXT NOT NULL,
+            project_name TEXT NOT NULL,
+            definition_id INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            mode TEXT NOT NULL DEFAULT 'failures',
+            revision INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            notify_after TEXT NOT NULL,
+            last_run_id INTEGER,
+            last_run_number TEXT,
+            last_result TEXT,
+            last_finished_at TEXT,
+            last_checked TEXT,
+            error TEXT,
+            UNIQUE(organization COLLATE NOCASE, project_id COLLATE NOCASE, definition_id)
+        );
+        -- One row per notification: a run reaching a result the mode watches.
+        -- Unique on (pipeline, run, result), so a retried run that changes
+        -- result notifies once more and never twice.
+        CREATE TABLE IF NOT EXISTS pipeline_events (
+            id TEXT PRIMARY KEY,
+            watch_id TEXT NOT NULL REFERENCES pipeline_watches(id) ON DELETE CASCADE,
+            run_id INTEGER NOT NULL,
+            run_number TEXT NOT NULL,
+            result TEXT NOT NULL,
+            branch TEXT NOT NULL,
+            trigger_label TEXT NOT NULL,
+            finished_at TEXT NOT NULL,
+            is_read INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            UNIQUE(watch_id, run_id, result)
+        );
 
         CREATE INDEX IF NOT EXISTS command_log_created_idx ON command_log (created_at);
         CREATE INDEX IF NOT EXISTS command_log_command_idx ON command_log (command);

@@ -211,6 +211,9 @@ pub struct CommandContext<'a> {
     pub caller: Option<&'a Caller>,
     /// `None` in tests that exercise no provisioning command.
     pub provisioner: Option<&'a dyn Provisioner>,
+    /// Resolves pasted pipeline links (ADR 038). Asks ADO, so like
+    /// worktree creation it runs while the request holds the DB lock.
+    pub pipelines: Option<&'a dyn crate::pipeline_inbox::PipelineResolver>,
 }
 
 impl CommandContext<'_> {
@@ -359,6 +362,38 @@ pub const COMMANDS: &[Command] = &[
         requires_identity: true,
         destructive: false,
         handler: inbox_unmute_all,
+    },
+    Command {
+        id: "inbox.pipelines",
+        log_params: &[],
+        summary: "List watched ADO pipelines, their mode, last result and error",
+        requires_identity: true,
+        destructive: false,
+        handler: inbox_pipelines,
+    },
+    Command {
+        id: "inbox.pipeline_add",
+        log_params: &["mode"],
+        summary: "Watch the ADO pipeline a link points at (params: url = a pipeline or run link, mode=off|failures|successes|both, default failures)",
+        requires_identity: true,
+        destructive: false,
+        handler: inbox_pipeline_add,
+    },
+    Command {
+        id: "inbox.pipeline_mode",
+        log_params: &["id", "mode"],
+        summary: "Change what a watched pipeline notifies (params: id, mode=off|failures|successes|both)",
+        requires_identity: true,
+        destructive: false,
+        handler: inbox_pipeline_mode,
+    },
+    Command {
+        id: "inbox.pipeline_remove",
+        log_params: &["id"],
+        summary: "Stop watching a pipeline and drop its notifications (params: id)",
+        requires_identity: true,
+        destructive: true,
+        handler: inbox_pipeline_remove,
     },
     Command {
         id: "agent.ping",
@@ -576,6 +611,85 @@ fn inbox_configure(
     Ok(CommandOutcome::changed(
         serde_json::json!({"project_id":id,"mode":mode}),
         StateChange::new("pr_inbox", id, "configured"),
+    ))
+}
+
+fn pipeline_mode_param(
+    params: &serde_json::Value,
+) -> Result<Option<crate::pipeline_inbox::PipelineMode>, AgentError> {
+    params
+        .get("mode")
+        .and_then(|value| value.as_str())
+        .map(|mode| {
+            crate::pipeline_inbox::PipelineMode::parse(mode).map_err(|e| {
+                AgentError::new(
+                    "INVALID_PARAM",
+                    e,
+                    "Pass mode=off, mode=failures, mode=successes or mode=both.",
+                )
+            })
+        })
+        .transpose()
+}
+
+fn inbox_pipelines(
+    context: &CommandContext,
+    _: &serde_json::Value,
+) -> Result<CommandOutcome, AgentError> {
+    let rows = crate::pipeline_inbox::list(context.db).map_err(inbox_error)?;
+    Ok(CommandOutcome::read(serde_json::json!(rows)))
+}
+
+fn inbox_pipeline_add(
+    context: &CommandContext,
+    params: &serde_json::Value,
+) -> Result<CommandOutcome, AgentError> {
+    let url = required_str(params, "url")?;
+    let mode = pipeline_mode_param(params)?;
+    let resolver = context.pipelines.ok_or_else(|| {
+        AgentError::new(
+            "NO_RESOLVER",
+            "This build cannot read ADO pipelines",
+            "Report this as a bug.",
+        )
+    })?;
+    let pipeline = resolver.resolve(&url).map_err(inbox_error)?;
+    let added = crate::pipeline_inbox::add(context.db, &pipeline, mode).map_err(inbox_error)?;
+    let id = added.id.clone();
+    Ok(CommandOutcome::changed(
+        serde_json::json!(added),
+        StateChange::new("pr_inbox", id, "pipeline_added"),
+    ))
+}
+
+fn inbox_pipeline_mode(
+    context: &CommandContext,
+    params: &serde_json::Value,
+) -> Result<CommandOutcome, AgentError> {
+    let id = required_str(params, "id")?;
+    let mode = pipeline_mode_param(params)?.ok_or_else(|| {
+        AgentError::new(
+            "INVALID_PARAM",
+            "mode is required",
+            "Pass mode=off, mode=failures, mode=successes or mode=both.",
+        )
+    })?;
+    crate::pipeline_inbox::set_mode(context.db, &id, mode).map_err(inbox_error)?;
+    Ok(CommandOutcome::changed(
+        serde_json::json!({"id":id,"mode":mode}),
+        StateChange::new("pr_inbox", id, "pipeline_mode"),
+    ))
+}
+
+fn inbox_pipeline_remove(
+    context: &CommandContext,
+    params: &serde_json::Value,
+) -> Result<CommandOutcome, AgentError> {
+    let id = required_str(params, "id")?;
+    crate::pipeline_inbox::remove(context.db, &id).map_err(inbox_error)?;
+    Ok(CommandOutcome::changed(
+        serde_json::json!({"id":id,"removed":true}),
+        StateChange::new("pr_inbox", id, "pipeline_removed"),
     ))
 }
 
@@ -1762,6 +1876,27 @@ mod tests {
         }
     }
 
+    /// Resolves any well-formed pipeline link without ADO: a run id N belongs
+    /// to pipeline N / 1000, named "pipeline-<id>".
+    struct FakeResolver;
+    impl crate::pipeline_inbox::PipelineResolver for FakeResolver {
+        fn resolve(&self, link: &str) -> Result<crate::pipeline_inbox::ResolvedPipeline, String> {
+            use crate::pipeline_inbox::LinkTarget;
+            let link = crate::pipeline_inbox::parse_link(link)?;
+            let definition_id = match link.target {
+                LinkTarget::Definition(id) => id,
+                LinkTarget::Run(run) => run / 1000,
+            };
+            Ok(crate::pipeline_inbox::ResolvedPipeline {
+                organization: link.organization,
+                project_id: "guid".into(),
+                project_name: link.project,
+                definition_id,
+                name: format!("pipeline-{definition_id}"),
+            })
+        }
+    }
+
     fn call(
         db: &Connection,
         caller: &Caller,
@@ -1788,6 +1923,7 @@ mod tests {
                 db,
                 caller: Some(caller),
                 provisioner: Some(provisioner),
+                pipelines: Some(&FakeResolver),
             },
         )
     }
@@ -2032,6 +2168,7 @@ mod tests {
                 db: &db,
                 caller: Some(&caller),
                 provisioner: None,
+                pipelines: None,
             },
         )
         .expect("dispatch")
@@ -2044,12 +2181,126 @@ mod tests {
     /// token went stale needs to separate "cannot reach the app" from "the app
     /// no longer knows me", because only one of them is fixed by restarting.
     #[test]
+    fn pipeline_commands_do_what_the_inbox_ui_does() {
+        let db = memory_db();
+        let caller = agent("tile-1", "ws-own");
+        let added = call(&db, &caller, "inbox.pipeline_add",
+            serde_json::json!({"url":"https://dev.azure.com/skype/SCC/_build/results?buildId=33770001&view=logs"})).unwrap();
+        assert_eq!(added.data["name"], "pipeline-33770");
+        assert_eq!(added.data["project"], "SCC");
+        assert_eq!(added.data["mode"], "failures");
+        let id = added.data["id"].as_str().unwrap().to_string();
+
+        let duplicate = call(&db, &caller, "inbox.pipeline_add",
+            serde_json::json!({"url":"https://skype.visualstudio.com/SCC/_build?definitionId=33770"})).unwrap_err();
+        assert!(
+            duplicate.message.contains("Already watching"),
+            "{}",
+            duplicate.message
+        );
+        let bad = call(
+            &db,
+            &caller,
+            "inbox.pipeline_add",
+            serde_json::json!({"url":"https://github.com/o/r/actions/runs/1"}),
+        )
+        .unwrap_err();
+        assert!(
+            bad.message.contains("pipeline or run link"),
+            "{}",
+            bad.message
+        );
+        let with_mode = call(&db, &caller, "inbox.pipeline_add",
+            serde_json::json!({"url":"https://dev.azure.com/skype/SCC/_build?definitionId=7","mode":"both"})).unwrap();
+        assert_eq!(with_mode.data["mode"], "both");
+
+        call(
+            &db,
+            &caller,
+            "inbox.pipeline_mode",
+            serde_json::json!({"id":id,"mode":"successes"}),
+        )
+        .unwrap();
+        assert!(call(
+            &db,
+            &caller,
+            "inbox.pipeline_mode",
+            serde_json::json!({"id":id,"mode":"sometimes"})
+        )
+        .is_err());
+        let listed = call(&db, &caller, "inbox.pipelines", serde_json::Value::Null).unwrap();
+        let rows = listed.data.as_array().unwrap();
+        assert_eq!(rows.len(), 2);
+        assert!(rows
+            .iter()
+            .any(|r| r["id"] == id.as_str() && r["mode"] == "successes"));
+
+        // A notification for it shows in inbox.list and can be read.
+        db.execute(
+            "UPDATE pipeline_watches SET notify_after='2000-01-01T00:00:00Z'",
+            [],
+        )
+        .unwrap();
+        let target = crate::pipeline_inbox::targets(&db)
+            .unwrap()
+            .into_iter()
+            .find(|t| t.id == id)
+            .unwrap();
+        crate::pipeline_inbox::apply_runs(
+            &db,
+            &target,
+            &[crate::pipeline_inbox::Run {
+                id: 33770001,
+                number: "1".into(),
+                result: "succeeded".into(),
+                branch: "main".into(),
+                trigger: "Scheduled".into(),
+                finished_at: "2026-01-01T00:00:00Z".into(),
+            }],
+        )
+        .unwrap();
+        let inbox = call(&db, &caller, "inbox.list", serde_json::Value::Null).unwrap();
+        let item = &inbox.data["pipeline_items"][0];
+        assert_eq!(item["pipeline_name"], "pipeline-33770");
+        assert_eq!(item["is_read"], false);
+        let event = item["id"].as_str().unwrap().to_string();
+        call(
+            &db,
+            &caller,
+            "inbox.read",
+            serde_json::json!({"id":event,"read":true}),
+        )
+        .unwrap();
+        let inbox = call(&db, &caller, "inbox.list", serde_json::Value::Null).unwrap();
+        assert_eq!(inbox.data["pipeline_items"][0]["is_read"], true);
+
+        call(
+            &db,
+            &caller,
+            "inbox.pipeline_remove",
+            serde_json::json!({"id":id}),
+        )
+        .unwrap();
+        assert!(call(
+            &db,
+            &caller,
+            "inbox.pipeline_remove",
+            serde_json::json!({"id":id})
+        )
+        .is_err());
+        let inbox = call(&db, &caller, "inbox.list", serde_json::Value::Null).unwrap();
+        assert_eq!(inbox.data["pipelines"].as_array().unwrap().len(), 1);
+        assert!(inbox.data["pipeline_items"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
     fn ping_answers_without_an_identity_but_whoami_does_not() {
         let db = memory_db();
         let anonymous = CommandContext {
             db: &db,
             caller: None,
             provisioner: None,
+            pipelines: None,
         };
 
         assert_eq!(

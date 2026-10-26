@@ -56,6 +56,7 @@ fn serve_inner(
                 db: &db,
                 caller: caller.as_ref(),
                 provisioner: None,
+                pipelines: None,
             },
         ))
     }

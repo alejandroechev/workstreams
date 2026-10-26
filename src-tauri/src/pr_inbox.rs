@@ -257,6 +257,11 @@ pub struct InboxSnapshot {
     pub items: Vec<InboxItem>,
     pub repos: Vec<RepoStatus>,
     pub mutes: Vec<MuteRule>,
+    /// Watched pipelines and their run notifications (ADR 038).
+    #[serde(default)]
+    pub pipelines: Vec<crate::pipeline_inbox::PipelineStatus>,
+    #[serde(default)]
+    pub pipeline_items: Vec<crate::pipeline_inbox::PipelineItem>,
 }
 
 pub fn configure(db: &Connection, project_id: &str, mode: WatchMode) -> Result<(), String> {
@@ -693,6 +698,9 @@ pub fn record_error(db: &Connection, target: &Target, error: &str) -> Result<(),
 }
 
 pub fn set_read(db: &Connection, id: &str, is_read: bool) -> Result<(), String> {
+    if crate::pipeline_inbox::set_read(db, id, is_read)? {
+        return Ok(());
+    }
     let changed = db
         .execute(
             "UPDATE pr_inbox_events SET is_read=?2 WHERE id=?1",
@@ -875,20 +883,22 @@ pub fn snapshot(db: &Connection) -> Result<InboxSnapshot, String> {
         items,
         repos,
         mutes,
+        pipelines: crate::pipeline_inbox::list(db)?,
+        pipeline_items: crate::pipeline_inbox::items(db)?,
     })
 }
 
-trait JsonTransport {
+pub(crate) trait JsonTransport {
     fn get(&self, url: reqwest::Url) -> Result<serde_json::Value, String>;
 }
 
-struct AdoTransport {
+pub(crate) struct AdoTransport {
     client: reqwest::blocking::Client,
     token: String,
 }
 
 impl AdoTransport {
-    fn connect() -> Result<Self, String> {
+    pub(crate) fn connect() -> Result<Self, String> {
         Ok(Self {
             client: reqwest::blocking::Client::builder()
                 .timeout(std::time::Duration::from_secs(30))
@@ -1450,14 +1460,15 @@ impl InboxPoller {
                 let selected = db
                     .lock()
                     .map_err(|e| e.to_string())
-                    .and_then(|db| targets(&db));
+                    .and_then(|db| Ok((targets(&db)?, crate::pipeline_inbox::targets(&db)?)));
                 match selected {
-                    Ok(selected) => {
+                    Ok((selected, pipelines)) => {
                         let fingerprint: Vec<_> = selected
                             .iter()
                             .map(|t| (t.project_id.clone(), t.remote.clone(), t.revision))
+                            .chain(pipelines.iter().map(|p| p.fingerprint()))
                             .collect();
-                        if !selected.is_empty()
+                        if !(selected.is_empty() && pipelines.is_empty())
                             && (fingerprint != previous || last.elapsed() >= poll_interval)
                         {
                             let transport = connect();
@@ -1489,6 +1500,18 @@ impl InboxPoller {
                                     eprintln!("[pr-inbox] Could not save poll: {error}");
                                 }
                             }
+                            // Pipelines after PRs, each on its own (ADR 038).
+                            if stopped.try_recv() != Err(std::sync::mpsc::TryRecvError::Empty) {
+                                return;
+                            }
+                            crate::pipeline_inbox::check_all(
+                                &db,
+                                transport
+                                    .as_ref()
+                                    .map(|t| t as &dyn JsonTransport)
+                                    .map_err(String::as_str),
+                                &pipelines,
+                            );
                             last = Instant::now();
                         }
                         previous = fingerprint;
@@ -1537,6 +1560,70 @@ mod tests {
         let unix = azure_cli_command(false);
         assert_eq!(unix.get_program(), "az");
         assert_eq!(unix.get_args().next().unwrap(), "account");
+    }
+
+    #[test]
+    fn inbox_worker_checks_watched_pipelines_even_with_no_pr_repos() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::{Arc, Mutex};
+        use std::time::{Duration, Instant};
+        struct Builds;
+        impl JsonTransport for Builds {
+            fn get(&self, _: reqwest::Url) -> Result<serde_json::Value, String> {
+                Ok(
+                    json!({"value":[{"id":5,"buildNumber":"5","result":"failed","sourceBranch":"refs/heads/main","reason":"schedule","finishTime":"2026-01-01T00:00:00Z"}]}),
+                )
+            }
+        }
+        let db = Arc::new(Mutex::new(db()));
+        let connects = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&connects);
+        let _poller = InboxPoller::start_with(
+            Arc::clone(&db),
+            move || {
+                counter.fetch_add(1, Ordering::SeqCst);
+                Ok(Builds)
+            },
+            Duration::from_secs(60),
+            Duration::from_millis(5),
+        );
+        std::thread::sleep(Duration::from_millis(30));
+        assert_eq!(
+            connects.load(Ordering::SeqCst),
+            0,
+            "nothing watched, no credentials"
+        );
+        crate::pipeline_inbox::add(
+            &db.lock().unwrap(),
+            &crate::pipeline_inbox::ResolvedPipeline {
+                organization: "o".into(),
+                project_id: "p".into(),
+                project_name: "P".into(),
+                definition_id: 1,
+                name: "nightly".into(),
+            },
+            None,
+        )
+        .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            let rows = crate::pipeline_inbox::list(&db.lock().unwrap()).unwrap();
+            if rows[0].last_result.as_deref() == Some("failed") {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "a newly added pipeline was not checked promptly"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(
+            snapshot(&db.lock().unwrap())
+                .unwrap()
+                .pipeline_items
+                .is_empty(),
+            "the first check is silent"
+        );
     }
 
     #[test]
