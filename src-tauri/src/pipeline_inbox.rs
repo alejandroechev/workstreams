@@ -561,6 +561,19 @@ pub(crate) fn fetch_runs(
         .collect())
 }
 
+/// A finish time as something that orders by time: ADO writes up to seven
+/// fractional digits, sometimes none, so the text alone sorts "08:00:00Z"
+/// after "08:00:00.1Z".
+fn time_key(timestamp: &str) -> (String, String) {
+    let trimmed = timestamp.trim_end_matches('Z');
+    let (base, fraction) = trimmed.split_once('.').unwrap_or((trimmed, ""));
+    let mut fraction: String = fraction.chars().take(9).collect();
+    while fraction.len() < 9 {
+        fraction.push('0');
+    }
+    (base.to_string(), fraction)
+}
+
 fn still_current(db: &Connection, target: &PipelineTarget) -> Result<bool, String> {
     db.query_row(
         "SELECT EXISTS(SELECT 1 FROM pipeline_watches WHERE id=?1 AND revision=?2)",
@@ -587,9 +600,11 @@ pub fn apply_runs(db: &Connection, target: &PipelineTarget, runs: &[Run]) -> Res
         .map_err(|e| e.to_string())?;
     let mode = PipelineMode::parse(&mode).unwrap_or(PipelineMode::Failures);
     let tx = db.unchecked_transaction().map_err(|e| e.to_string())?;
-    let newest = runs
-        .iter()
-        .max_by(|a, b| a.finished_at.cmp(&b.finished_at).then(a.id.cmp(&b.id)));
+    let newest = runs.iter().max_by(|a, b| {
+        time_key(&a.finished_at)
+            .cmp(&time_key(&b.finished_at))
+            .then(a.id.cmp(&b.id))
+    });
     if let Some(run) = newest {
         tx.execute(
             "UPDATE pipeline_watches SET last_run_id=?2,last_run_number=?3,last_result=?4,last_finished_at=?5 WHERE id=?1",
@@ -941,6 +956,27 @@ mod tests {
             .unwrap()
             .iter()
             .all(|p| p.last_result.as_deref() == Some("canceled")));
+    }
+
+    #[test]
+    fn the_newest_run_is_chosen_by_time_not_by_text() {
+        let conn = db();
+        add(&conn, &resolved(1, "p"), None).unwrap();
+        let target = targets(&conn).unwrap().remove(0);
+        apply_runs(
+            &conn,
+            &target,
+            &[
+                run(1, "failed", "2026-10-26T08:00:00Z"),
+                run(2, "succeeded", "2026-10-26T08:00:00.1Z"),
+                run(3, "canceled", "2026-10-26T07:59:59.9999999Z"),
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            list(&conn).unwrap()[0].last_result.as_deref(),
+            Some("succeeded")
+        );
     }
 
     #[test]

@@ -80,6 +80,20 @@ export interface PipelineGroup {
   items: PipelineItem[];
 }
 
+/**
+ * Orders two ADO finish times by time. ADO writes up to seven fractional
+ * digits, sometimes none, so plain text comparison puts "08:00:00Z" after
+ * "08:00:00.1Z". Both are UTC ("Z").
+ */
+export function compareTimes(a: string, b: string): number {
+  const key = (t: string) => {
+    const [base, fraction = ""] = t.replace(/Z$/, "").split(".");
+    return `${base}.${fraction.slice(0, 9).padEnd(9, "0")}`;
+  };
+  const [x, y] = [key(a), key(b)];
+  return x < y ? -1 : x > y ? 1 : 0;
+}
+
 /** Runs grouped under their pipeline, newest run first; the pipeline with the newest run first. */
 export function groupPipelineItems(items: PipelineItem[]): PipelineGroup[] {
   const groups = new Map<string, PipelineGroup>();
@@ -87,7 +101,7 @@ export function groupPipelineItems(items: PipelineItem[]): PipelineGroup[] {
     const group = groups.get(item.pipeline_id);
     if (group) {
       group.items.push(item);
-      if (item.finished_at > group.latest) group.latest = item.finished_at;
+      if (compareTimes(item.finished_at, group.latest) > 0) group.latest = item.finished_at;
       group.unread ||= !item.is_read;
     } else {
       groups.set(item.pipeline_id, {
@@ -100,9 +114,9 @@ export function groupPipelineItems(items: PipelineItem[]): PipelineGroup[] {
       });
     }
   }
-  const ordered = [...groups.values()].sort((a, b) => b.latest.localeCompare(a.latest));
+  const ordered = [...groups.values()].sort((a, b) => compareTimes(b.latest, a.latest));
   for (const group of ordered) {
-    group.items.sort((a, b) => b.finished_at.localeCompare(a.finished_at) || b.run_id - a.run_id);
+    group.items.sort((a, b) => compareTimes(b.finished_at, a.finished_at) || b.run_id - a.run_id);
   }
   return ordered;
 }

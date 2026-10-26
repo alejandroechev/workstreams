@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  compareTimes,
   countUnreadInbox,
   groupPipelineItems,
   isPipelineMode,
@@ -70,6 +71,20 @@ describe("grouping pipeline notifications", () => {
       ["a", false, ["a2", "a1"]],
     ]);
     expect(groups[0]).toMatchObject({ pipeline_name: "Watchdog", project: "SCC" });
+  });
+});
+
+describe("ordering by time, not text", () => {
+  it("puts a run with fractional seconds after one at the whole second before it", () => {
+    const [group] = groupPipelineItems([
+      item({ id: "whole", run_id: 1, finished_at: "2026-10-26T08:00:00Z" }),
+      item({ id: "frac", run_id: 2, finished_at: "2026-10-26T08:00:00.1Z" }),
+      item({ id: "seven", run_id: 3, finished_at: "2026-10-26T07:59:59.9999999Z" }),
+    ]);
+    expect(group.items.map((i) => i.id)).toEqual(["frac", "whole", "seven"]);
+    expect(group.latest).toBe("2026-10-26T08:00:00.1Z");
+    expect(compareTimes("2026-10-26T08:00:00Z", "2026-10-26T08:00:00.000Z")).toBe(0);
+    expect(compareTimes("2026-10-26T08:00:00.5Z", "2026-10-26T08:00:00.4999999Z")).toBeGreaterThan(0);
   });
 });
 

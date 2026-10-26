@@ -349,3 +349,33 @@ describe("Inbox, pipelines (ADR 038)", () => {
   });
 });
 
+describe("Inbox caught-up message with pipeline runs", () => {
+  const run = (id: string, is_read: boolean): PipelineItem => ({
+    id, pipeline_id: "w", pipeline_name: "watchdog", project: "SCC", run_id: id.length, run_number: id, result: "failed",
+    branch: "main", trigger: "Scheduled", finished_at: "2026-10-26T19:08:00Z", url: "u", is_read, discovered_at: "2026-10-26T19:09:00Z",
+  });
+
+  it("doesn't claim everything is read while pipeline runs are unread", () => {
+    render(<PrInboxModal snapshot={{ items: [], repos: [], mutes: [], pipelines: [], pipeline_items: [run("a", false), run("bb", false)] }}
+      error={null} loading={false} onRead={vi.fn()} onClose={vi.fn()} />);
+    expect(screen.queryByTestId("pr-inbox-caught-up")).not.toBeInTheDocument();
+  });
+
+  it("counts read runs as hidden when everything is read, and says nothing in the With read view", () => {
+    render(<PrInboxModal snapshot={{ items: [event({ is_read: true })], repos: snapshot.repos, mutes: [], pipelines: [], pipeline_items: [run("a", true)] }}
+      error={null} loading={false} onRead={vi.fn()} onClose={vi.fn()} />);
+    expect(screen.getByTestId("pr-inbox-caught-up")).toHaveTextContent("No unread notifications. 2 read hidden.");
+    fireEvent.click(screen.getByRole("button", { name: "With read" }));
+    expect(screen.queryByTestId("pr-inbox-caught-up")).not.toBeInTheDocument();
+  });
+
+  it("counts only the selected kind", () => {
+    render(<PrInboxModal snapshot={{ items: [event({ is_read: false })], repos: snapshot.repos, mutes: [], pipelines: [], pipeline_items: [run("a", true)] }}
+      error={null} loading={false} onRead={vi.fn()} onClose={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "Pipelines" }));
+    // The unread PR is in another kind: only the read run is hidden here.
+    expect(screen.getByTestId("pr-inbox-caught-up")).toHaveTextContent("No unread notifications. 1 read hidden.");
+    expect(screen.queryByTestId("inbox-pipelines-empty")).not.toBeInTheDocument();
+  });
+});
+

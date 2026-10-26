@@ -65,6 +65,9 @@ export function PrInboxModal({ snapshot, loading, error, onRead, onMute, onReset
   const visible = showRead ? snapshot.items : snapshot.items.filter((item) => !item.is_read);
   const visibleRuns = showRead ? runs : runs.filter((item) => !item.is_read);
   const pipelineGroups = groupPipelineItems(visibleRuns);
+  // What the current filters show, and what they hide because it was read.
+  const shownCount = (kind === "pipelines" ? 0 : visible.length) + (kind === "prs" ? 0 : visibleRuns.length);
+  const inKind = (kind === "pipelines" ? 0 : snapshot.items.length) + (kind === "prs" ? 0 : runs.length);
   const failedChecks = (snapshot.pipelines ?? []).filter((pipeline) => pipeline.error);
   const openRun = (run: PipelineItem) => act(async () => {
     await openUrl(run.url);
@@ -210,9 +213,9 @@ export function PrInboxModal({ snapshot, loading, error, onRead, onMute, onReset
             <p role="alert" style={{ ...emptyStyle, color: "#f38ba8", textAlign: "left" }}>{actionError ?? error}</p>
           )}
           {!loading && !error && total === 0 && <p style={emptyStyle}>No notifications yet.</p>}
-          {!loading && !error && total > 0 && visible.length === 0 && (
+          {!loading && !error && !showRead && inKind > 0 && shownCount === 0 && (
             <p data-testid="pr-inbox-caught-up" style={emptyStyle}>
-              No unread notifications. {total} read hidden.
+              No unread notifications. {inKind} read hidden.
             </p>
           )}
           {kind !== "pipelines" && (
@@ -344,9 +347,9 @@ export function PrInboxModal({ snapshot, loading, error, onRead, onMute, onReset
                   {pipeline.name}: {pipeline.error}
                 </p>
               ))}
-              {kind === "pipelines" && pipelineGroups.length === 0 && (
+              {kind === "pipelines" && runs.length === 0 && (
                 <p data-testid="inbox-pipelines-empty" style={emptyStyle}>
-                  No pipeline notifications{runs.length > 0 ? " unread" : ""}. Choose what notifies in Pipelines.
+                  No pipeline notifications. Choose what notifies in Pipelines.
                 </p>
               )}
               {pipelineGroups.map((group) => (

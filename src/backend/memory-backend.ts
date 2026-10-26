@@ -4,6 +4,7 @@ import type { WorkLane } from "../domain/work-lanes";
 import { MAX_MESSAGES_PER_SESSION } from "../companion/protocol";
 import { supportsPrInbox, type PrInboxItem, type PrInboxMute, type PrInboxSnapshot, type PrWatchMode } from "../domain/pr-inbox";
 import {
+  compareTimes,
   parsePipelineLink,
   pipelineModeWatches,
   type PipelineItem,
@@ -113,7 +114,7 @@ export class MemoryBackend implements Backend {
       mutes: this.prInbox.mutes,
       pipelines: this.pipelineWatches.map((watch) => ({ ...watch.status })),
       pipeline_items: [...this.pipelineItems].sort((a, b) =>
-        b.finished_at.localeCompare(a.finished_at) || b.run_id - a.run_id),
+        compareTimes(b.finished_at, a.finished_at) || b.run_id - a.run_id),
     });
   }
 
@@ -149,7 +150,7 @@ export class MemoryBackend implements Backend {
       && same(w.status.project, definition.project) && w.status.definition_id === definition.definition_id);
     if (existing) throw new Error(`Already watching “${existing.status.name}”.`);
     const base = `https://dev.azure.com/${encodeURIComponent(definition.organization)}/${encodeURIComponent(definition.project)}/_build`;
-    const last = [...definition.runs].sort((a, b) => b.finished_at.localeCompare(a.finished_at))[0];
+    const last = [...definition.runs].sort((a, b) => compareTimes(b.finished_at, a.finished_at))[0];
     const status: PipelineStatus = {
       id: crypto.randomUUID(),
       organization: definition.organization,
@@ -194,11 +195,11 @@ export class MemoryBackend implements Backend {
     if (!watch) throw new Error(`No watched pipeline ${id}`);
     const { status } = watch;
     const base = `https://dev.azure.com/${encodeURIComponent(status.organization)}/${encodeURIComponent(status.project)}/_build`;
-    if (!status.last_finished_at || run.finished_at >= status.last_finished_at) {
+    if (!status.last_finished_at || compareTimes(run.finished_at, status.last_finished_at) >= 0) {
       Object.assign(status, { last_result: run.result, last_run_number: run.number, last_run_url: `${base}/results?buildId=${run.id}`, last_finished_at: run.finished_at });
     }
     status.last_checked = new Date().toISOString();
-    if (!pipelineModeWatches(status.mode, run.result) || run.finished_at <= watch.notifyAfter) return;
+    if (!pipelineModeWatches(status.mode, run.result) || compareTimes(run.finished_at, watch.notifyAfter) <= 0) return;
     if (this.pipelineItems.some((i) => i.pipeline_id === id && i.run_id === run.id && i.result === run.result)) return;
     this.pipelineItems.push({
       id: crypto.randomUUID(),
