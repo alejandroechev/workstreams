@@ -7,9 +7,11 @@ import { test, expect, type Page } from "@playwright/test";
 async function configureInvokeHandlers(page: Page) {
   await page.addInitScript(() => {
     type Args = Record<string, unknown>;
+    const settings = new Map<string, string>();
     const handlers: Record<string, (a: Args) => unknown> = {
-      get_setting: () => null,
-      set_setting: () => null,
+      // Settings persist for the page's lifetime, like the SQLite table.
+      get_setting: (a: Args) => settings.get(String(a.key)) ?? null,
+      set_setting: (a: Args) => { settings.set(String(a.key), String(a.value)); return null; },
       derive_worktree_path: (a: Args) => ({
         path: `C:\\worktrees\\${String((a.branchName as string) ?? "branch").replace(/[^a-z0-9-]/gi, "-")}`,
         exists: false,
@@ -207,5 +209,34 @@ test.describe("Workstream creation flow", () => {
     // ...but is now stopped (moon indicator) and its tiles are unmounted.
     await expect(item.locator('[data-testid="ws-indicator-stopped"]')).toBeVisible();
     await expect(page.locator('[data-testid^="tile-pinned-"]')).toHaveCount(0);
+  });
+});
+
+test.describe("Workstream without a repo", () => {
+  test("creates a new empty folder of its own under the parent folder, opens it, and numbers a second one", async ({ page }) => {
+    const create = async (name: string) => {
+      await page.locator('[data-testid="new-workstream-button"]').click();
+      await expect(page.locator('[data-testid="ws-create-form"]')).toBeVisible();
+      // No repo selected: a new folder is the default.
+      await expect(page.locator('[data-testid="ws-create-repo-standalone"] input')).toBeChecked();
+      await page.locator('[data-testid="ws-create-parent-folder"]').fill("/scratch/ws");
+      await page.locator('[data-testid="ws-create-name"]').fill(name);
+      await expect(page.locator('[data-testid="ws-create-folder-preview"]')).toContainText("/scratch/ws/scratch-idea");
+      await page.locator('[data-testid="ws-create-submit"]').click();
+      await expect(page.locator('[data-testid="ws-create-form"]')).toHaveCount(0);
+    };
+    await create("Scratch idea");
+    const item = page.locator('[data-testid="workstream-item"]', { hasText: "Scratch idea" }).first();
+    await expect(item).toHaveAttribute("data-active", "true");
+    await expect(page.locator('[data-testid^="tile-pinned-"]')).toBeVisible();
+    await create("Scratch idea");
+    const dirs = await page.evaluate(async () => {
+      const backend = (window as unknown as { __WS_BACKEND__: { listWorkstreams(): Promise<Array<{ name: string; directory: string; project_id: string | null }>> } }).__WS_BACKEND__;
+      return (await backend.listWorkstreams()).filter((w) => w.name === "Scratch idea").map((w) => [w.directory, w.project_id]);
+    });
+    expect(dirs.sort()).toEqual([["/scratch/ws/scratch-idea", null], ["/scratch/ws/scratch-idea-2", null]]);
+    // The parent folder is remembered for the next one.
+    await page.locator('[data-testid="new-workstream-button"]').click();
+    await expect(page.locator('[data-testid="ws-create-parent-folder"]')).toHaveValue("/scratch/ws");
   });
 });

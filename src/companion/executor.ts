@@ -1,3 +1,4 @@
+import { folderSlug } from "./folders";
 import {
   checkRequest,
   rejectMessage,
@@ -146,20 +147,4 @@ export function requestsToPrune(doc: CompanionDocument, now: number): string[] {
     .map(([key]) => key);
 }
 
-/**
- * A folder name from a workstream name: ASCII, lowercase, dashes, ≤50 chars.
- * Never contains a path separator or dot segment, whatever the phone sent.
- */
-export function folderSlug(name: string): string {
-  const slug = name
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    // Letters with no Unicode decomposition to a plain ASCII base.
-    .replace(/[øœæßđłþð]/g, (c) => ({ ø: "o", œ: "oe", æ: "ae", ß: "ss", đ: "d", ł: "l", þ: "th", ð: "d" })[c] ?? "")
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 50)
-    .replace(/-+$/g, "");
-  return slug || "workstream";
-}
+export { folderSlug };

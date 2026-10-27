@@ -1,3 +1,4 @@
+import "@testing-library/jest-dom/vitest";
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup } from "@testing-library/react";
 import WorkstreamCreateForm from "../WorkstreamCreateForm";
@@ -16,10 +17,34 @@ describe("WorkstreamCreateForm", () => {
   const getRadio = (testId: string) =>
     screen.getByTestId(testId).querySelector("input") as HTMLInputElement;
 
-  it("defaults to base_repo + new session when no project preselected", () => {
+  it("defaults to a new folder + new session when no repo is selected", () => {
     render(<WorkstreamCreateForm projects={projects} onSubmit={vi.fn()} onCancel={vi.fn()} />);
-    expect(getRadio("ws-create-repo-base_repo").checked).toBe(true);
+    expect(getRadio("ws-create-repo-standalone").checked).toBe(true);
+    expect(screen.queryByTestId("ws-create-repo-base_repo")).toBeNull();
+    expect(screen.queryByTestId("ws-create-repo-worktree")).toBeNull();
     expect(getRadio("ws-create-session-new").checked).toBe(true);
+  });
+
+  it("creates a workstream without a repo in a new folder under the chosen parent folder", () => {
+    const onSubmit = vi.fn();
+    render(<WorkstreamCreateForm projects={projects} standaloneRoot="~/Workstreams" onSubmit={onSubmit} onCancel={vi.fn()} />);
+    const parent = screen.getByTestId("ws-create-parent-folder") as HTMLInputElement;
+    expect(parent.value).toBe("~/Workstreams");
+    fireEvent.change(screen.getByTestId("ws-create-name"), { target: { value: "Café ideas" } });
+    expect(screen.getByTestId("ws-create-folder-preview")).toHaveTextContent("~/Workstreams/cafe-ideas");
+    fireEvent.change(parent, { target: { value: "/data/scratch" } });
+    fireEvent.click(screen.getByTestId("ws-create-submit"));
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    const [name, dir, opts] = onSubmit.mock.calls[0];
+    expect([name, dir]).toEqual(["Café ideas", ""]);
+    expect(opts).toMatchObject({ workstreamType: "standalone", parentFolder: "/data/scratch", sessionChoice: "new", projectId: undefined });
+  });
+
+  it("needs a parent folder for a workstream without a repo", () => {
+    render(<WorkstreamCreateForm projects={projects} onSubmit={vi.fn()} onCancel={vi.fn()} />);
+    fireEvent.change(screen.getByTestId("ws-create-name"), { target: { value: "x" } });
+    fireEvent.change(screen.getByTestId("ws-create-parent-folder"), { target: { value: "  " } });
+    expect((screen.getByTestId("ws-create-submit") as HTMLButtonElement).disabled).toBe(true);
   });
 
   it("allows choosing either session type when import_worktree is selected", () => {

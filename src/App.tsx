@@ -71,6 +71,8 @@ import { stopSession } from "./companion/stop-session";
 import { postTileNotice } from "./domain/tile-notices";
 import { revokeBeforeRelink } from "./companion/relink";
 import { homeDir } from "@tauri-apps/api/path";
+import { createStandaloneFolder } from "./companion/folders";
+import { loadCompanionSettings, saveCompanionSettings, tauriSettingsStore } from "./companion/settings";
 
 // Wire the persistent Workbench store into the cross-tile dispatcher
 // so right-clicks from anywhere persist to the workstream's setting
@@ -394,10 +396,20 @@ export default function App() {
     () => new Set(taskIdByWs.keys()),
     [taskIdByWs],
   );
+  // Where folders for workstreams without a repo go (shared with the phone companion).
+  const [standaloneRoot, setStandaloneRoot] = useState("~/Workstreams");
   const [showWsCreate, setShowWsCreate] = useState<{
     show: boolean;
     projectId?: string;
   }>({ show: false });
+  useEffect(() => {
+    if (!showWsCreate.show) return;
+    let cancelled = false;
+    loadCompanionSettings(tauriSettingsStore)
+      .then((settings) => { if (!cancelled && settings.folderRoot.trim()) setStandaloneRoot(settings.folderRoot); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [showWsCreate.show]);
   const [showForkWs, setShowForkWs] = useState<{
     show: boolean;
     wsId?: string;
@@ -1024,7 +1036,7 @@ export default function App() {
     name: string;
     directory: string;
     projectId?: string;
-    workstreamType: "import_worktree" | "base_repo" | "worktree";
+    workstreamType: "import_worktree" | "base_repo" | "worktree" | "standalone";
     worktreeBranch?: string;
     baseBranch?: string;
     pullBaseFirst?: boolean;
@@ -1355,8 +1367,29 @@ export default function App() {
         sessionChoice?: "new" | "existing";
         baseBranch?: string;
         pullBaseFirst?: boolean;
+        parentFolder?: string;
       },
     ) => {
+      // No repo: the workstream gets a new empty folder of its own, like one
+      // created from the phone, under the same root setting.
+      if (opts.workstreamType === "standalone") {
+        const root = opts.parentFolder?.trim() || standaloneRoot;
+        try {
+          directory = await createStandaloneFolder({
+            root,
+            name,
+            homeDir: () => homeDir(),
+            createDirectory: (path) => backend.createDirectory(path),
+          });
+        } catch (e) {
+          alert(`Could not create the workstream's folder: ${typeof e === "string" ? e : (e as Error)?.message || String(e)}`);
+          return;
+        }
+        if (root !== standaloneRoot) {
+          setStandaloneRoot(root);
+          void saveCompanionSettings(tauriSettingsStore, { folderRoot: root }).catch(() => {});
+        }
+      }
       const payload: PendingCreate = {
         name,
         directory,
@@ -1399,7 +1432,7 @@ export default function App() {
           spawnedPtys.current.delete(created.tile.id);
         });
     },
-    [backend, doCreateWorkstream],
+    [backend, doCreateWorkstream, standaloneRoot],
   );
 
   const handleRenameWorkstream = useCallback(
@@ -2805,6 +2838,7 @@ export default function App() {
               : undefined
           }
           projects={projects}
+          standaloneRoot={standaloneRoot}
           onSubmit={handleCreateWorkstream}
           onCancel={() => setShowWsCreate({ show: false })}
         />

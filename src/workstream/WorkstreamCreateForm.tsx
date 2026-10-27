@@ -4,8 +4,9 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
 import type { Project } from "../domain/types";
 import { selectableRepositories } from "../domain/repository-visibility";
+import { folderSlug } from "../companion/folders";
 
-export type RepoChoice = "import_worktree" | "base_repo" | "worktree";
+export type RepoChoice = "import_worktree" | "base_repo" | "worktree" | "standalone";
 export type SessionChoice = "new" | "existing";
 
 interface WorktreeInfo {
@@ -30,21 +31,28 @@ interface Props {
      *  starting a new branch from a stale local copy. Ignored for
      *  non-worktree flows. Default true (form pre-checks). */
     pullBaseFirst?: boolean;
+    /** With no repo: the folder the new workstream's own folder is created in. */
+    parentFolder?: string;
   }) => void;
   onCancel: () => void;
+  /** Where folders for workstreams without a repo go by default (`~` allowed). */
+  standaloneRoot?: string;
 }
 
 function slugify(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
 }
 
-export default function WorkstreamCreateForm({ project: initialProject, projects, onSubmit, onCancel }: Props) {
+export default function WorkstreamCreateForm({ project: initialProject, projects, onSubmit, onCancel, standaloneRoot = "~/Workstreams" }: Props) {
   const availableProjects = selectableRepositories(projects);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(initialProject?.id || null);
   const project = selectedProjectId ? availableProjects.find((p) => p.id === selectedProjectId) : undefined;
   const hasProject = !!project;
   const [name, setName] = useState(hasProject ? project.name : "");
-  const [repoChoice, setRepoChoice] = useState<RepoChoice>(hasProject ? "worktree" : "base_repo");
+  const [repoChoice, setRepoChoice] = useState<RepoChoice>(hasProject ? "worktree" : "standalone");
+  // Follows the saved root (it loads after the form opens) until you edit it.
+  const [editedParent, setParentFolder] = useState<string | null>(null);
+  const parentFolder = editedParent ?? standaloneRoot;
   const [directory, setDirectory] = useState(project?.directory || "");
   const [branchName, setBranchName] = useState("");
   const [worktreeInfo, setWorktreeInfo] = useState<WorktreeInfo | null>(null);
@@ -67,7 +75,7 @@ export default function WorkstreamCreateForm({ project: initialProject, projects
       setRepoChoice("worktree");
     } else {
       setDirectory("");
-      setRepoChoice("base_repo");
+      setRepoChoice("standalone");
     }
   };
 
@@ -103,6 +111,16 @@ export default function WorkstreamCreateForm({ project: initialProject, projects
 
   const handleSubmit = () => {
     if (!name.trim()) return;
+    if (repoChoice === "standalone") {
+      if (!parentFolder.trim()) return;
+      onSubmit(name.trim(), "", {
+        projectId: undefined,
+        workstreamType: "standalone",
+        sessionChoice: effectiveSession,
+        parentFolder: parentFolder.trim(),
+      });
+      return;
+    }
     const dir = directory || (project?.directory ?? "");
     if (!dir) return;
     onSubmit(name.trim(), dir, {
@@ -117,11 +135,19 @@ export default function WorkstreamCreateForm({ project: initialProject, projects
     });
   };
 
-  const repoOptions: { value: RepoChoice; label: string; desc: string }[] = [
+  // Without a repo there is nothing to branch or work in: a new empty folder,
+  // or a folder you already have.
+  const repoOptions: { value: RepoChoice; label: string; desc: string }[] = hasProject ? [
     { value: "import_worktree", label: "Import Existing Worktree", desc: "Point to an existing worktree directory" },
     { value: "base_repo", label: "Base Repo", desc: "Work directly in the repo root" },
     { value: "worktree", label: "New Worktree", desc: "Create a new git worktree branch alongside the repo" },
+  ] : [
+    { value: "standalone", label: "New Folder", desc: "A new empty folder of its own, no repo" },
+    { value: "import_worktree", label: "Existing Folder", desc: "Point to a folder you already have" },
   ];
+  const canSubmit = repoChoice === "standalone"
+    ? !!name.trim() && !!parentFolder.trim()
+    : !!name.trim() && !!directory && !(repoChoice === "worktree" && !branchName.trim());
 
   const sessionOptions: { value: SessionChoice; label: string; desc: string }[] = [
     { value: "new", label: "New Session", desc: "Spawn a fresh Copilot session" },
@@ -299,6 +325,38 @@ export default function WorkstreamCreateForm({ project: initialProject, projects
           </>
         )}
 
+        {/* Parent folder (no repo, new folder) */}
+        {repoChoice === "standalone" && (
+          <>
+            <label style={{ fontSize: 11, color: "#a6adc8", display: "block", marginBottom: 4 }}>Parent folder</label>
+            <input
+              data-testid="ws-create-parent-folder"
+              type="text"
+              value={parentFolder}
+              onChange={(e) => setParentFolder(e.target.value)}
+              onKeyDown={(e) => e.stopPropagation()}
+              placeholder="~/Workstreams"
+              spellCheck={false}
+              style={{
+                width: "100%",
+                background: "#313244",
+                border: "1px solid #45475a",
+                borderRadius: 4,
+                color: "#cdd6f4",
+                padding: "8px 10px",
+                fontSize: 12,
+                fontFamily: "monospace",
+                outline: "none",
+                boxSizing: "border-box",
+                marginBottom: 4,
+              }}
+            />
+            <div data-testid="ws-create-folder-preview" style={{ fontSize: 10, color: "#6c7086", marginBottom: 14 }}>
+              Creates {parentFolder.trim().replace(/[\\/]+$/, "") || "…"}/{folderSlug(name)} (a number is added if it exists). Also used for workstreams created from the phone.
+            </div>
+          </>
+        )}
+
         {/* Directory (import_worktree only) */}
         {repoChoice === "import_worktree" && (
           <>
@@ -432,7 +490,7 @@ export default function WorkstreamCreateForm({ project: initialProject, projects
           <button
             data-testid="ws-create-submit"
             onClick={handleSubmit}
-            disabled={!name.trim() || !directory || (repoChoice === "worktree" && !branchName.trim())}
+            disabled={!canSubmit}
             style={{
               padding: "8px 20px",
               background: !name.trim() || !directory ? "#45475a" : "#89b4fa",

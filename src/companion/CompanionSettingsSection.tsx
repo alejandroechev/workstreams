@@ -247,7 +247,7 @@ export function CompanionSettingsSection({
           </div>
 
           <label htmlFor="companion-folder-root" style={{ display: "block", margin: "12px 0 4px" }}>
-            Folder for workstreams created from the phone
+            Folder for workstreams without a repo
           </label>
           <input
             id="companion-folder-root"
@@ -259,7 +259,7 @@ export function CompanionSettingsSection({
             spellCheck={false}
             style={inputStyle}
           />
-          <div style={helpStyle}>Each new workstream gets its own empty folder here.</div>
+          <div style={helpStyle}>Each new workstream created from the phone, or with no repo on the desktop, gets its own empty folder here.</div>
 
           <div style={{ display: "flex", gap: 8, marginTop: 12, alignItems: "center", flexWrap: "wrap" }}>
             {confirmRepair ? (

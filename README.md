@@ -62,6 +62,9 @@ instead of buried behind tabs.
   inline, dimmed, one click from coming back. The set you had open comes back
   open on the next launch, without respawning everything in it: tiles mount when
   you visit a workstream, not at startup.
+- **Workstreams without a repo** — pick *None* as the repo and a workstream
+  gets a new empty folder of its own (default under `~/Workstreams`), with a
+  Copilot session ready in it.
 - **Agents that can drive the app** — a session can create and update its own
   workstreams through a local CLI, so the agent does not stop at the edge of the
   worktree. It acts only on what it owns, and asks before destroying anything.

@@ -27,6 +27,14 @@ linked one.
 
 ![New Workstream dialog](assets/feature-workstream-create.png)
 
+**Workstreams without a repo.** Leave **Repo** at *None* and the dialog offers
+**New Folder** (the default) or **Existing Folder**. New Folder creates an empty
+folder of its own under the **Parent folder** (default `~/Workstreams`), named
+after the workstream (`<parent>/<slug>`, with `-2`, `-3`… if taken), and opens
+the workstream there with a new Copilot session. The parent folder is the same
+setting the phone companion uses for the workstreams it creates, and the last
+one you used is remembered.
+
 ## Repo creation
 
 Add repos via two flows, both surfaced via a dropdown menu under the sidebar `+`:
@@ -447,7 +455,7 @@ whether the companion is connected, connecting, or why it is not.
 | --- | --- |
 | See the list | Every non-archived workstream, in sidebar order, with lane, loaded state and session count. Updates as you change things here. |
 | Swipe a not-loaded row → **Load** | Loads it in the background. The workstream you are looking at stays on screen. |
-| **+** → name (and optional prompt) | Creates a standalone workstream (no repo, no worktree) in a new empty folder under the folder root (default `~/Workstreams`, configurable), loads it, and with a prompt adds a Copilot session running it. |
+| **+** → name (and optional prompt) | Creates a standalone workstream (no repo, no worktree) in a new empty folder under the folder root (default `~/Workstreams`, configurable; shared with the desktop's no-repo workstreams), loads it, and with a prompt adds a Copilot session running it. |
 | Tap a row → prompt → **Start session** | Loads the workstream if needed, then appends a Copilot session tile running the repo's Copilot command (or the global one) with `-i <prompt>`. A workstream with sessions opens its **Sessions** list first; **+** starts a new one. |
 | **Sessions** → a session → message → **Send** | Stops that Copilot session and resumes it in the same tile with `--resume=<id> -i <message>`. Works for sessions started on the laptop too; see *Conversations* below. |
 

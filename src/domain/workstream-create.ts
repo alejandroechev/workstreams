@@ -17,7 +17,8 @@ export interface CreateWorkstreamInput {
   name: string;
   directory: string;
   projectId?: string;
-  workstreamType: "import_worktree" | "base_repo" | "worktree";
+  /** "standalone": no repo, in a folder of its own created beforehand. */
+  workstreamType: "import_worktree" | "base_repo" | "worktree" | "standalone";
   worktreeBranch?: string;
   baseBranch?: string;
   sessionChoice: "new" | "existing";
