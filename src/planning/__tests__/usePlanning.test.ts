@@ -2,6 +2,9 @@ import { act, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MemoryBackend } from "../../backend/memory-backend";
 import { usePlanning } from "../usePlanning";
+import { emit } from "../../test-shims/tauri-event-shim";
+
+vi.mock("@tauri-apps/api/event", () => import("../../test-shims/tauri-event-shim"));
 
 const LINK = "https://dev.azure.com/skype/OneWork/_backlogs/backlog/Waimea%20Bay/Features";
 
@@ -53,6 +56,23 @@ describe("usePlanning freshness", () => {
     await act(async () => { await result.current.refresh(); });
     expect(result.current.error).toMatch(/timed out/);
     expect(result.current.data).not.toBeNull();
+  });
+
+  it("picks up draft changes made elsewhere (the CLI) on refresh and when Planning state changes", async () => {
+    const b = backend();
+    await b.planningConnect(LINK);
+    const { result } = renderHook(() => usePlanning(b, true));
+    await act(async () => {});
+    await b.planningAddChange({ kind: "create_feature", temp_id: -1, title: "From the CLI", target_date: null, description: null });
+    await act(async () => { await result.current.refresh(); });
+    expect(result.current.draft).toHaveLength(1);
+    await b.planningAddChange({ kind: "create_feature", temp_id: -2, title: "Again", target_date: null, description: null });
+    await act(async () => { await emit("state-changed", { entity: "planning" }); });
+    await act(async () => {});
+    expect(result.current.draft).toHaveLength(2);
+    await b.planningAddChange({ kind: "create_feature", temp_id: -3, title: "Ignored", target_date: null, description: null });
+    await act(async () => { await emit("state-changed", { entity: "workstream" }); });
+    expect(result.current.draft).toHaveLength(2);
   });
 
   it("selects a sprint, keeps the draft, and publishes", async () => {

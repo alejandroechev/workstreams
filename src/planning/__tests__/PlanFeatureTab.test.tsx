@@ -55,6 +55,22 @@ describe("planning a feature and publishing", () => {
     expect(screen.queryByTestId("planning-draft-count")).toBeNull();
   });
 
+  it("reorders stories that only exist in the draft", async () => {
+    const backend = await open(featureTeam());
+    await backend.planningAddChange({ kind: "create_feature", temp_id: -1, title: "New F", target_date: null, description: null });
+    await backend.planningAddChange({ kind: "create_story", temp_id: -2, parent: -1, title: "First", points: 1, description: null });
+    await backend.planningAddChange({ kind: "create_story", temp_id: -3, parent: -1, title: "Second", points: 1, description: null });
+    fireEvent.click(screen.getByTestId("planning-refresh"));
+    fireEvent.click(screen.getByTestId("planning-tab-plan-feature"));
+    fireEvent.change(await screen.findByTestId("planning-feature-select"), { target: { value: "-1" } });
+    fireEvent.click(await screen.findByTestId("planning-pf-down--2"));
+    await waitFor(() => expect(screen.getAllByTestId(/^planning-pf-story-/)[0]).toHaveAttribute("data-testid", "planning-pf-story--3"));
+    await act(async () => { fireEvent.click(screen.getByTestId("planning-publish")); });
+    await waitFor(() => expect(screen.getByTestId("planning-publish-result")).toHaveTextContent("published"));
+    const ado = backend.planningAdoItems();
+    expect([ado.find((i) => i.title === "Second")?.order, ado.find((i) => i.title === "First")?.order]).toEqual([1000, 2000]);
+  });
+
   it("holds back a story changed in ADO meanwhile, and Discard empties the draft", async () => {
     const backend = await open(planSprintTeam(), { sprint: "OneWork\\S23" });
     fireEvent.click(screen.getByTestId("planning-tab-plan-sprint"));

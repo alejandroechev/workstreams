@@ -30,4 +30,17 @@ describe("planning a sprint", () => {
     expect((await backend.planningState()).draft).toContainEqual({ kind: "move", id: 41, rev: 1, to_iteration: "OneWork\\Q4", assign_to_me: false });
     expect((await backend.planningState()).draft).toContainEqual({ kind: "move", id: 45, rev: 1, to_iteration: "OneWork\\S23", assign_to_me: true });
   });
+
+  it("plans a story that only exists in the draft into the sprint and back out", async () => {
+    const backend = await open(planSprintTeam(), { sprint: "OneWork\\S23" });
+    await backend.planningAddChange({ kind: "create_story", temp_id: -1, parent: 100, title: "Brand new", points: 2, description: null });
+    fireEvent.click(screen.getByTestId("planning-refresh"));
+    fireEvent.click(screen.getByTestId("planning-tab-plan-sprint"));
+    fireEvent.click(await screen.findByTestId("planning-add--1"));
+    await screen.findByTestId("planning-planned--1");
+    expect((await backend.planningState()).draft).toEqual([expect.objectContaining({ kind: "create_story", temp_id: -1, iteration: "OneWork\\S23" })]);
+    fireEvent.click(screen.getByTestId("planning-take-out--1"));
+    await screen.findByTestId("planning-candidate--1");
+    expect((await backend.planningState()).draft).toEqual([expect.objectContaining({ kind: "create_story", temp_id: -1, iteration: "OneWork\\Q4" })]);
+  });
 });

@@ -192,6 +192,15 @@ describe("the draft", () => {
     expect(draft.map((c) => describeChange(c, d, items))).toHaveLength(10);
   });
 
+  it("plans and orders a story before it exists", () => {
+    let draft: Change[] = [{ kind: "create_story", temp_id: -2, parent: 100, title: "S", points: 2, description: null }];
+    draft = addChange(draft, { kind: "move", id: -2, rev: 0, to_iteration: "P\\S23", assign_to_me: false });
+    draft = addChange(draft, { kind: "order", id: -2, rev: 0, order: 3000 });
+    expect(draft).toEqual([{ kind: "create_story", temp_id: -2, parent: 100, title: "S", points: 2, description: null, iteration: "P\\S23", order: 3000 }]);
+    const items = applyDraft(data([feature]), draft);
+    expect(items.find((i) => i.id === -2)).toMatchObject({ iteration_path: "P\\S23", order: 3000 });
+  });
+
   it("orders between neighbours", () => {
     expect([orderBetween(1, 3), orderBetween(null, 3), orderBetween(1, null), orderBetween(null, null)]).toEqual([2, -997, 1001, 1000]);
   });

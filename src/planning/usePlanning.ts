@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
 import type { Backend } from "../backend/types";
 import type { Change, PlanningConnection, PlanningData, PublishResult } from "../domain/planning";
 
@@ -10,7 +11,9 @@ const message = (error: unknown) => String(error instanceof Error ? error.messag
 /**
  * Planning's data: the saved connection, selected sprint and draft, and the
  * ADO data. ADO is read when Planning opens, every 5 minutes while it stays
- * open, and on Refresh — never while it is closed or not connected.
+ * open, and on Refresh — never while it is closed or not connected. Each read
+ * also re-reads the saved draft, as does an agent's planning change, so
+ * changes made from the CLI show up.
  */
 export function usePlanning(backend: Backend, open: boolean) {
   const [connection, setConnection] = useState<PlanningConnection | null>(null);
@@ -21,10 +24,18 @@ export function usePlanning(backend: Backend, open: boolean) {
   const [lastPublish, setLastPublish] = useState<PublishResult | null>(null);
   const connected = useRef(false);
 
+  const sync = useCallback(async () => {
+    const state = await backend.planningState();
+    setConnection(state.connection);
+    setDraftState(state.draft);
+    connected.current = !!state.connection;
+  }, [backend]);
+
   const load = useCallback(async () => {
-    if (!connected.current) return;
-    setLoading(true);
     try {
+      await sync();
+      if (!connected.current) return;
+      setLoading(true);
       setData(await backend.planningFetch());
       setError(null);
     } catch (failure) {
@@ -32,21 +43,21 @@ export function usePlanning(backend: Backend, open: boolean) {
     } finally {
       setLoading(false);
     }
-  }, [backend]);
+  }, [backend, sync]);
 
   useEffect(() => {
     if (!open) return;
-    let cancelled = false;
-    void backend.planningState().then((state) => {
-      if (cancelled) return;
-      setConnection(state.connection);
-      setDraftState(state.draft);
-      connected.current = !!state.connection;
-      void load();
-    }).catch((failure) => { if (!cancelled) setError(message(failure)); });
+    void Promise.resolve().then(load);
     const timer = setInterval(() => void load(), PLANNING_REFRESH_MS);
-    return () => { cancelled = true; clearInterval(timer); };
-  }, [backend, open, load]);
+    // An agent changed the draft or published it.
+    const unlisten = listen<{ entity?: string }>("state-changed", (event) => {
+      if (event.payload?.entity === "planning") void load();
+    }).catch(() => null);
+    return () => {
+      clearInterval(timer);
+      void unlisten.then((dispose) => dispose?.());
+    };
+  }, [open, load]);
 
   const connect = useCallback(async (url: string) => {
     const next = await backend.planningConnect(url);

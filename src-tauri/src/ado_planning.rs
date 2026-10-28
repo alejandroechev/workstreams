@@ -572,6 +572,12 @@ pub enum Change {
         title: String,
         points: Option<f64>,
         description: Option<String>,
+        /// Planned into a sprint before it exists; otherwise its feature's iteration.
+        #[serde(default)]
+        iteration: Option<String>,
+        /// Backlog order set before it exists.
+        #[serde(default)]
+        order: Option<f64>,
     },
 }
 
@@ -632,6 +638,16 @@ pub fn add_change(draft: &mut Vec<Change>, change: Change) {
                             Change::CreateFeature { temp_id, title, .. },
                             Change::Retitle { title: t, .. },
                         ) if *temp_id == target => *title = t.clone(),
+                        (
+                            Change::CreateStory {
+                                temp_id, iteration, ..
+                            },
+                            Change::Move { to_iteration, .. },
+                        ) if *temp_id == target => *iteration = Some(to_iteration.clone()),
+                        (
+                            Change::CreateStory { temp_id, order, .. },
+                            Change::Order { order: o, .. },
+                        ) if *temp_id == target => *order = Some(*o),
                         _ => {}
                     }
                 }
@@ -845,6 +861,8 @@ pub fn publish(
                 title,
                 points,
                 description,
+                iteration: planned,
+                order,
             } => {
                 let parent_id = if *parent < 0 {
                     *created.get(parent).ok_or((
@@ -855,10 +873,10 @@ pub fn publish(
                 } else {
                     *parent
                 };
-                let iteration = created_iterations
-                    .get(&parent_id)
-                    .or_else(|| parents.get(&parent_id))
-                    .cloned()
+                let iteration = planned
+                    .clone()
+                    .or_else(|| created_iterations.get(&parent_id).cloned())
+                    .or_else(|| parents.get(&parent_id).cloned())
                     .unwrap_or_else(|| conn.backlog_iteration.clone());
                 let mut ops = vec![
                     json!({"op":"add","path":"/fields/System.Title","value":title}),
@@ -872,6 +890,9 @@ pub fn publish(
                 ];
                 if let Some(p) = points {
                     ops.push(json!({"op":"add","path":format!("/fields/{}", conn.effort_field),"value":p}));
+                }
+                if let Some(o) = order {
+                    ops.push(json!({"op":"add","path":format!("/fields/{}", conn.order_field),"value":o}));
                 }
                 if let Some(d) = description.as_ref().filter(|d| !d.trim().is_empty()) {
                     ops.push(json!({"op":"add","path":"/fields/System.Description","value":d}));
@@ -971,7 +992,83 @@ pub fn publish(
             result.remaining.push(change.clone());
         }
     }
+    // What stays must make sense for the next attempt: point at what this
+    // publish created, and at the revisions it wrote itself, so a retry
+    // neither loses a new parent nor mistakes our own write for a conflict.
+    for change in &mut result.remaining {
+        match change {
+            Change::CreateStory { parent, .. } => {
+                if let Some(real) = created.get(parent) {
+                    *parent = *real;
+                }
+            }
+            Change::Move { id, rev, .. }
+            | Change::Estimate { id, rev, .. }
+            | Change::Retitle { id, rev, .. }
+            | Change::Order { id, rev, .. }
+            | Change::Remove { id, rev, .. } => {
+                if let Some((seen, after)) = ours.get(id) {
+                    if *seen == *rev {
+                        *rev = *after;
+                    }
+                }
+            }
+            Change::CreateFeature { .. } => {}
+        }
+    }
     result
+}
+
+static PUBLISHING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Tests that publish or hold the guard take this, since the flag is process-wide.
+#[cfg(test)]
+pub(crate) static PUBLISH_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Held while a publish runs. The draft can't change meanwhile, so what the
+/// publish leaves behind is exactly what it didn't write.
+pub struct PublishGuard;
+
+impl PublishGuard {
+    pub fn start() -> Result<Self, String> {
+        use std::sync::atomic::Ordering::SeqCst;
+        PUBLISHING
+            .compare_exchange(false, true, SeqCst, SeqCst)
+            .map(|_| Self)
+            .map_err(|_| "Publishing is already in progress".to_string())
+    }
+}
+
+impl Drop for PublishGuard {
+    fn drop(&mut self) {
+        PUBLISHING.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+/// Planning changes wait while a publish is running.
+pub fn ensure_not_publishing() -> Result<(), String> {
+    if PUBLISHING.load(std::sync::atomic::Ordering::SeqCst) {
+        Err("Publishing to ADO — try again when it finishes".into())
+    } else {
+        Ok(())
+    }
+}
+
+/// Saves the sprint Planning defaulted to (ADO's current) the first time, so a
+/// later rollover shows the "finished" banner instead of switching silently.
+/// Never overwrites a choice, and only for the team still connected.
+pub fn remember_default_sprint(
+    db: &Connection,
+    conn: &PlanningConnection,
+    path: &str,
+) -> Result<(), String> {
+    let still = load_connection(db)?.is_some_and(|c| {
+        c.team_id == conn.team_id && c.organization.eq_ignore_ascii_case(&conn.organization)
+    });
+    if still && selected_sprint(db)?.is_none() {
+        select_sprint(db, path)?;
+    }
+    Ok(())
 }
 
 // ── Summaries (the CLI's view; the UI computes the same in src/domain/planning.ts) ──
@@ -1637,6 +1734,8 @@ mod tests {
                 title: "S".into(),
                 points: Some(2.0),
                 description: None,
+                iteration: None,
+                order: None,
             },
         );
         add_change(
@@ -1744,6 +1843,8 @@ mod tests {
                 title: "Frontend".into(),
                 points: Some(5.0),
                 description: Some("d".into()),
+                iteration: None,
+                order: None,
             },
             Change::CreateStory {
                 temp_id: -3,
@@ -1751,6 +1852,8 @@ mod tests {
                 title: "More".into(),
                 points: None,
                 description: None,
+                iteration: None,
+                order: None,
             },
         ];
         let result = publish(&stub, &conn(), &data.me, &parent_iterations(&data), &draft);
@@ -1824,6 +1927,197 @@ mod tests {
             6,
             "2, 5, 4, the feature and two stories"
         );
+    }
+
+    /// Fails the first PATCH/POST matching a predicate, once.
+    struct Flaky<'a> {
+        inner: &'a Stub,
+        fail_patch_field: Option<&'static str>,
+        fail_post_title: Option<&'static str>,
+    }
+    impl AdoHttp for Flaky<'_> {
+        fn get(&self, url: reqwest::Url) -> Result<Value, String> {
+            self.inner.get(url)
+        }
+        fn post(&self, url: reqwest::Url, body: &Value, ct: &str) -> Result<Value, String> {
+            if self
+                .fail_post_title
+                .is_some_and(|t| body.to_string().contains(t))
+            {
+                return Err("ADO returned HTTP 500.".into());
+            }
+            self.inner.post(url, body, ct)
+        }
+        fn patch(&self, url: reqwest::Url, body: &Value) -> Result<Value, String> {
+            if self
+                .fail_patch_field
+                .is_some_and(|f| body.to_string().contains(f))
+            {
+                return Err("ADO returned HTTP 500.".into());
+            }
+            self.inner.patch(url, body)
+        }
+    }
+
+    #[test]
+    fn a_retry_after_a_partial_failure_neither_conflicts_with_our_own_write_nor_loses_a_new_parent()
+    {
+        let stub = seeded();
+        let data = fetch(&stub, &conn(), None).unwrap();
+        let draft = vec![
+            Change::Estimate {
+                id: 2,
+                rev: 1,
+                points: Some(5.0),
+            },
+            Change::Retitle {
+                id: 2,
+                rev: 1,
+                title: "Renamed".into(),
+            },
+            Change::CreateFeature {
+                temp_id: -1,
+                title: "F".into(),
+                target_date: None,
+                description: None,
+            },
+            Change::CreateStory {
+                temp_id: -2,
+                parent: -1,
+                title: "Child".into(),
+                points: None,
+                description: None,
+                iteration: None,
+                order: None,
+            },
+        ];
+        let flaky = Flaky {
+            inner: &stub,
+            fail_patch_field: Some("System.Title"),
+            fail_post_title: Some("Child"),
+        };
+        let first = publish(&flaky, &conn(), &data.me, &parent_iterations(&data), &draft);
+        assert_eq!(first.failures.len(), 2);
+        let fid = *first.written.iter().find(|id| **id > 9000).unwrap();
+        // The retained changes now point at what this publish created and wrote.
+        assert_eq!(
+            first.remaining,
+            vec![
+                Change::Retitle {
+                    id: 2,
+                    rev: 2,
+                    title: "Renamed".into()
+                },
+                Change::CreateStory {
+                    temp_id: -2,
+                    parent: fid,
+                    title: "Child".into(),
+                    points: None,
+                    description: None,
+                    iteration: None,
+                    order: None
+                },
+            ]
+        );
+        let data = fetch(&stub, &conn(), None).unwrap();
+        let retry = publish(
+            &stub,
+            &conn(),
+            &data.me,
+            &parent_iterations(&data),
+            &first.remaining,
+        );
+        assert!(
+            retry.conflicts.is_empty() && retry.failures.is_empty(),
+            "{retry:?}"
+        );
+        assert_eq!(stub.items.borrow()[&2]["fields"]["System.Title"], "Renamed");
+    }
+
+    #[test]
+    fn new_stories_can_be_planned_into_a_sprint_and_ordered_before_they_exist() {
+        let mut draft = vec![Change::CreateStory {
+            temp_id: -2,
+            parent: 100,
+            title: "S".into(),
+            points: None,
+            description: None,
+            iteration: None,
+            order: None,
+        }];
+        add_change(
+            &mut draft,
+            Change::Move {
+                id: -2,
+                rev: 0,
+                to_iteration: "P\\S23".into(),
+                assign_to_me: false,
+            },
+        );
+        add_change(
+            &mut draft,
+            Change::Order {
+                id: -2,
+                rev: 0,
+                order: 3000.0,
+            },
+        );
+        assert_eq!(
+            draft,
+            vec![Change::CreateStory {
+                temp_id: -2,
+                parent: 100,
+                title: "S".into(),
+                points: None,
+                description: None,
+                iteration: Some("P\\S23".into()),
+                order: Some(3000.0)
+            }]
+        );
+        let stub = seeded();
+        let data = fetch(&stub, &conn(), None).unwrap();
+        publish(&stub, &conn(), &data.me, &parent_iterations(&data), &draft);
+        let items = stub.items.borrow();
+        let s = items
+            .values()
+            .find(|v| v["fields"]["System.Title"] == "S")
+            .unwrap();
+        assert_eq!(s["fields"]["System.IterationPath"], "P\\S23");
+        assert_eq!(s["fields"]["Microsoft.VSTS.Common.StackRank"], 3000.0);
+    }
+
+    #[test]
+    fn the_first_default_sprint_is_remembered_once() {
+        let db = Connection::open_in_memory().unwrap();
+        crate::db::init_db(&db).unwrap();
+        save_connection(&db, &conn()).unwrap();
+        remember_default_sprint(&db, &conn(), "P\\S22").unwrap();
+        assert_eq!(selected_sprint(&db).unwrap().as_deref(), Some("P\\S22"));
+        remember_default_sprint(&db, &conn(), "P\\S23").unwrap();
+        assert_eq!(
+            selected_sprint(&db).unwrap().as_deref(),
+            Some("P\\S22"),
+            "an existing choice is never overwritten"
+        );
+        let mut other = conn();
+        other.team_id = "other".into();
+        db.execute("DELETE FROM settings WHERE key = 'planning.sprint'", [])
+            .unwrap();
+        remember_default_sprint(&db, &other, "P\\S23").unwrap();
+        assert!(
+            selected_sprint(&db).unwrap().is_none(),
+            "not for a team that is no longer connected"
+        );
+    }
+
+    #[test]
+    fn changes_are_refused_while_a_publish_is_running() {
+        let _serial = PUBLISH_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let guard = PublishGuard::start().unwrap();
+        assert!(PublishGuard::start().is_err());
+        assert!(ensure_not_publishing().unwrap_err().contains("Publishing"));
+        drop(guard);
+        assert!(ensure_not_publishing().is_ok());
     }
 
     #[test]

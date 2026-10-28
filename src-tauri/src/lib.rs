@@ -465,8 +465,14 @@ async fn planning_fetch(state: State<'_, AppState>) -> Result<ado_planning::Plan
             ado_planning::selected_sprint(&db)?,
         )
     };
+    let db = Arc::clone(&state.db);
     tauri::async_runtime::spawn_blocking(move || {
-        ado_planning::AdoPlanning.fetch(&conn, selected.as_deref())
+        let data = ado_planning::AdoPlanning.fetch(&conn, selected.as_deref())?;
+        if selected.is_none() {
+            let db = db.lock().map_err(|e| e.to_string())?;
+            ado_planning::remember_default_sprint(&db, &conn, &data.selected_sprint)?;
+        }
+        Ok(data)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -483,6 +489,7 @@ fn planning_add_change(
     state: State<'_, AppState>,
     change: ado_planning::Change,
 ) -> Result<Vec<ado_planning::Change>, String> {
+    ado_planning::ensure_not_publishing()?;
     let db = state.db.lock().map_err(|e| e.to_string())?;
     let mut draft = ado_planning::load_draft(&db)?;
     ado_planning::add_change(&mut draft, change);
@@ -496,6 +503,7 @@ fn planning_set_draft(
     state: State<'_, AppState>,
     draft: Vec<ado_planning::Change>,
 ) -> Result<(), String> {
+    ado_planning::ensure_not_publishing()?;
     let db = state.db.lock().map_err(|e| e.to_string())?;
     ado_planning::save_draft(&db, &draft)
 }
@@ -506,6 +514,9 @@ async fn planning_publish(
     state: State<'_, AppState>,
 ) -> Result<ado_planning::PublishResult, String> {
     use ado_planning::PlanningGateway;
+    // No planning change can land while this runs, so what it leaves in the
+    // draft is exactly what it didn't write.
+    let guard = ado_planning::PublishGuard::start()?;
     let db = Arc::clone(&state.db);
     let (conn, selected, draft) = {
         let db = db.lock().map_err(|e| e.to_string())?;
@@ -516,17 +527,11 @@ async fn planning_publish(
         )
     };
     tauri::async_runtime::spawn_blocking(move || {
+        let _guard = guard;
         let data = ado_planning::AdoPlanning.fetch(&conn, selected.as_deref())?;
         let result = ado_planning::AdoPlanning.publish(&data, &draft)?;
         let db = db.lock().map_err(|e| e.to_string())?;
-        // Changes added while publishing are kept after the ones that remain.
-        let mut next = result.remaining.clone();
-        for change in ado_planning::load_draft(&db)? {
-            if !draft.contains(&change) {
-                next.push(change);
-            }
-        }
-        ado_planning::save_draft(&db, &next)?;
+        ado_planning::save_draft(&db, &result.remaining)?;
         Ok(result)
     })
     .await

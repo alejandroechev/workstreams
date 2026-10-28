@@ -1,8 +1,8 @@
 import "@testing-library/jest-dom/vitest";
-import { fireEvent, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { act, fireEvent, screen, waitFor } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { open } from "./harness";
-import { sprintTeam, TEAM_LINK } from "./fixtures";
+import { planSprintTeam, sprintTeam, TEAM_LINK } from "./fixtures";
 
 afterEach(() => localStorage.clear());
 
@@ -21,4 +21,22 @@ describe("connecting", () => {
     fireEvent.keyDown(input, { key: "Enter" });
     expect(await screen.findByTestId("planning-team")).toHaveTextContent("Waimea Bay");
   });
+
+  it("locks the plan while publishing, so nothing changes under it", async () => {
+    const backend = await open(planSprintTeam(), { sprint: "OneWork\\S23" });
+    await backend.planningAddChange({ kind: "estimate", id: 43, rev: 1, points: 3 });
+    fireEvent.click(screen.getByTestId("planning-refresh"));
+    fireEvent.click(screen.getByTestId("planning-tab-plan-sprint"));
+    let release!: () => void;
+    const real = backend.planningPublish.bind(backend);
+    vi.spyOn(backend, "planningPublish").mockImplementation(() => new Promise((resolve) => { release = () => resolve(real()); }));
+    fireEvent.click(await screen.findByTestId("planning-publish"));
+    await waitFor(() => expect(screen.getByTestId("planning-plan-area")).toHaveAttribute("aria-busy", "true"));
+    expect(screen.getByTestId("planning-add-42")).toBeDisabled();
+    expect(screen.getByTestId("planning-discard")).toBeDisabled();
+    await act(async () => { release(); });
+    await waitFor(() => expect(screen.getByTestId("planning-plan-area")).toHaveAttribute("aria-busy", "false"));
+    expect(screen.getByTestId("planning-add-42")).not.toBeDisabled();
+  });
 });
+

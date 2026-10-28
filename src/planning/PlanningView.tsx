@@ -113,7 +113,13 @@ export function PlanningView({ planning, onClose, now = () => new Date() }: Prop
             ))}
           </nav>
           {(error || actionError) && <p role="alert" data-testid="planning-error" style={{ color: C.red, margin: "6px 14px 0" }}>{actionError ?? error}</p>}
-          <main style={{ flex: 1, minHeight: 0, padding: "10px 14px", display: "flex", flexDirection: "column" }}>
+          {/* Locked while publishing (or any other action), so nothing changes under it. */}
+          <fieldset
+            data-testid="planning-plan-area"
+            aria-busy={busy}
+            disabled={busy}
+            style={{ flex: 1, minHeight: 0, padding: "10px 14px", margin: 0, border: "none", minWidth: 0, display: "flex", flexDirection: "column", pointerEvents: busy ? "none" : undefined, opacity: busy ? 0.6 : 1 }}
+          >
             {!data ? (
               <p style={{ color: C.sub }}>{loading ? "Loading from ADO…" : "No data yet."}</p>
             ) : tab === "sprint" ? (
@@ -125,7 +131,7 @@ export function PlanningView({ planning, onClose, now = () => new Date() }: Prop
             ) : (
               <PlanFeatureTab data={data} items={items} draft={draft} onAddChange={planning.addChange} />
             )}
-          </main>
+          </fieldset>
           {(draft.length > 0 || (published && lastPublish)) && (
             <footer data-testid="planning-draft-bar" style={{ borderTop: `1px solid ${C.surface0}`, padding: "8px 14px", display: "grid", gap: 6 }}>
               {published && lastPublish && (

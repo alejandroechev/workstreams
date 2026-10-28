@@ -40,10 +40,13 @@ export function PlanSprintTab({ data, items, draft, onAddChange, onSetDraft }: P
     void action().catch((failure) => setError(String(failure instanceof Error ? failure.message : failure)));
   };
 
-  /** Into the sprint: a move, or undoing an earlier move out of it. */
+  /** Into the sprint: a move, or undoing an earlier move out of it. A new story just records where it goes. */
   const putIn = (story: PlanItem) => run(async () => {
     const before = original(story.id);
-    if (!before) return;
+    if (!before) {
+      await onAddChange({ kind: "move", id: story.id, rev: 0, to_iteration: data.selected_sprint, assign_to_me: false });
+      return;
+    }
     if (before.iteration_path === data.selected_sprint) {
       await onSetDraft(draft.filter((c) => !(c.kind === "move" && c.id === story.id)));
     } else {
@@ -54,7 +57,10 @@ export function PlanSprintTab({ data, items, draft, onAddChange, onSetDraft }: P
   /** Out of the sprint: undo the move that put it there, or move it back to its feature's iteration. */
   const takeOut = (story: PlanItem) => run(async () => {
     const before = original(story.id);
-    if (!before) return;
+    if (!before) {
+      await onAddChange({ kind: "move", id: story.id, rev: 0, to_iteration: outOfSprintIteration(data, items, story), assign_to_me: false });
+      return;
+    }
     if (before.iteration_path !== data.selected_sprint) {
       await onSetDraft(draft.filter((c) => !(c.kind === "move" && c.id === story.id)));
     } else {

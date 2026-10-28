@@ -107,7 +107,7 @@ export function PlanFeatureTab({ data, items, draft, onAddChange }: Props) {
     list.splice(to, 0, moved);
     for (const [index, story] of list.entries()) {
       const order = (index + 1) * 1000;
-      if (story.order !== order && story.id > 0) await onAddChange({ kind: "order", id: story.id, rev: story.rev, order });
+      if (story.order !== order) await onAddChange({ kind: "order", id: story.id, rev: story.rev, order });
     }
   });
 

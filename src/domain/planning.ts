@@ -63,7 +63,13 @@ export type Change =
   | { kind: "order"; id: number; rev: number; order: number }
   | { kind: "remove"; id: number; rev: number }
   | { kind: "create_feature"; temp_id: number; title: string; target_date: string | null; description: string | null }
-  | { kind: "create_story"; temp_id: number; parent: number; title: string; points: number | null; description: string | null };
+  | {
+      kind: "create_story"; temp_id: number; parent: number; title: string; points: number | null; description: string | null;
+      /** Planned into a sprint before it exists; otherwise its feature's iteration. */
+      iteration?: string | null;
+      /** Backlog order set before it exists. */
+      order?: number | null;
+    };
 
 export interface Conflict {
   id: number;
@@ -104,6 +110,8 @@ export function addChange(draft: Change[], change: Change): Change[] {
       if (target(c) !== id) return c;
       if (c.kind === "create_story" && change.kind === "estimate") return { ...c, points: change.points };
       if ((c.kind === "create_story" || c.kind === "create_feature") && change.kind === "retitle") return { ...c, title: change.title };
+      if (c.kind === "create_story" && change.kind === "move") return { ...c, iteration: change.to_iteration };
+      if (c.kind === "create_story" && change.kind === "order") return { ...c, order: change.order };
       return c;
     });
   }
@@ -140,8 +148,8 @@ export function applyDraft(data: PlanningData, draft: Change[]): PlanItem[] {
       const item: PlanItem = {
         id: change.temp_id, rev: 0, kind: "User Story", title: change.title, state: "New",
         assigned_to: data.me.display_name, assigned_to_me: true,
-        iteration_path: parent?.iteration_path ?? data.connection.backlog_iteration,
-        story_points: change.points, order: null, target_date: null, parent_id: change.parent, tasks_done: 0, tasks_total: 0, url: "",
+        iteration_path: change.iteration ?? parent?.iteration_path ?? data.connection.backlog_iteration,
+        story_points: change.points, order: change.order ?? null, target_date: null, parent_id: change.parent, tasks_done: 0, tasks_total: 0, url: "",
       };
       items.push(item);
       byId.set(item.id, item);
@@ -228,9 +236,10 @@ export function featureSummaries(data: PlanningData, items: PlanItem[] = data.it
     });
 }
 
-/** Backlog order: lower first; unordered items last, by id. */
+/** Backlog order: lower first; unordered items last — existing ones by id, then new ones as added. */
 export function byOrder(items: PlanItem[]): PlanItem[] {
-  return [...items].sort((a, b) => (a.order ?? Infinity) - (b.order ?? Infinity) || a.id - b.id);
+  return [...items].sort((a, b) =>
+    (a.order ?? Infinity) - (b.order ?? Infinity) || Number(a.id < 0) - Number(b.id < 0) || Math.abs(a.id) - Math.abs(b.id));
 }
 
 export type GaugeState = "under" | "on" | "over";

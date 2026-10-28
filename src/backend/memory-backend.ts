@@ -135,7 +135,8 @@ export class MemoryBackend implements Backend {
     organization: "skype", project: "OneWork", team: "Waimea Bay", iterations: [], items: [],
   };
   private planningSaved: PlanningState = { connection: null, selected_sprint: null, draft: [] };
-  private planningFlags = { authError: false, failFetch: false, fetches: 0, writes: 0, nextId: 90000 };
+  private planningFlags = { authError: false, failFetch: false, fetches: 0, writes: 0, nextId: 90000, publishing: false };
+  private planningWriteFails: ((change: Change) => boolean) | null = null;
 
   /** The team the in-memory ADO serves, with its sprints and work items (me = "Me"). */
   seedPlanningAdo(seed: { organization?: string; project?: string; team?: string; iterations: Iteration[]; items: PlanItem[] }): void {
@@ -146,6 +147,8 @@ export class MemoryBackend implements Backend {
   }
 
   setPlanningAuthError(on: boolean): void { this.planningFlags.authError = on; }
+  /** Makes the writes of matching changes fail, as an ADO error would; null to stop. */
+  failPlanningWrite(test: ((change: Change) => boolean) | null): void { this.planningWriteFails = test; }
   failPlanningFetch(on: boolean): void { this.planningFlags.failFetch = on; }
   planningFetchCount(): number { return this.planningFlags.fetches; }
   planningWrites(): number { return this.planningFlags.writes; }
@@ -196,6 +199,8 @@ export class MemoryBackend implements Backend {
       (i.parent_id !== null && featureIds.has(i.parent_id))
       || (i.assigned_to_me && (i.iteration_path === selected || i.iteration_path === previous))
       || (i.assigned_to_me && (i.state === "New" || i.state === "Active"))));
+    // The first default is remembered, so a later rollover is offered, not applied.
+    if (!saved && selected) this.planningSaved.selected_sprint = selected;
     return structuredClone({
       connection, me: { id: "me", display_name: "Me", unique_name: "me@example.com" },
       iterations, selected_sprint: selected, previous_sprint: previous, items: [...features, ...stories],
@@ -206,18 +211,36 @@ export class MemoryBackend implements Backend {
     this.planningSaved.selected_sprint = path;
   }
 
+  private ensureNotPublishing(): void {
+    if (this.planningFlags.publishing) throw new Error("Publishing to ADO — try again when it finishes");
+  }
+
   async planningAddChange(change: Change): Promise<Change[]> {
+    this.ensureNotPublishing();
     this.planningSaved.draft = addPlanningChange(this.planningSaved.draft, change);
     return structuredClone(this.planningSaved.draft);
   }
 
   async planningSetDraft(draft: Change[]): Promise<void> {
+    this.ensureNotPublishing();
     this.planningSaved.draft = structuredClone(draft);
   }
 
   /** Publishes like the native side: in order, re-checking each item's revision; never deletes. */
   async planningPublish(): Promise<PublishResult> {
+    if (this.planningFlags.publishing) throw new Error("Publishing is already in progress");
+    this.planningFlags.publishing = true;
+    try {
+      return await this.publishPlanningDraft();
+    } finally {
+      this.planningFlags.publishing = false;
+    }
+  }
+
+  private async publishPlanningDraft(): Promise<PublishResult> {
     const data = await this.planningFetch();
+    // Writes take a round trip to ADO; edits made meanwhile must wait.
+    await new Promise((resolve) => setTimeout(resolve, 0));
     const ado = this.planningAdo;
     const result: PublishResult = { written: [], conflicts: [], failures: [], remaining: [] };
     const created = new Map<number, number>();
@@ -235,13 +258,21 @@ export class MemoryBackend implements Backend {
           result.remaining.push(change);
           continue;
         }
+        if (this.planningWriteFails?.(change)) {
+          result.failures.push({ id: change.temp_id, message: "ADO returned HTTP 500." });
+          result.remaining.push(change);
+          continue;
+        }
         const id = ++this.planningFlags.nextId;
         const parentItem = ado.items.find((i) => i.id === parent);
         ado.items.push({
           id, rev: 1, kind: change.kind === "create_feature" ? "Feature" : "User Story", title: change.title, state: "New",
           assigned_to: "Me", assigned_to_me: true,
-          iteration_path: change.kind === "create_feature" ? data.connection.backlog_iteration : parentItem?.iteration_path ?? data.connection.backlog_iteration,
-          story_points: change.kind === "create_story" ? change.points : null, order: null,
+          iteration_path: change.kind === "create_feature"
+            ? data.connection.backlog_iteration
+            : change.iteration ?? parentItem?.iteration_path ?? data.connection.backlog_iteration,
+          story_points: change.kind === "create_story" ? change.points : null,
+          order: change.kind === "create_story" ? change.order ?? null : null,
           target_date: change.kind === "create_feature" ? change.target_date : null, parent_id: parent ?? null,
           tasks_done: 0, tasks_total: 0, url: `https://dev.azure.com/${ado.organization}/${ado.project}/_workitems/edit/${id}`,
         });
@@ -263,6 +294,11 @@ export class MemoryBackend implements Backend {
         result.remaining.push(change);
         continue;
       }
+      if (this.planningWriteFails?.(change)) {
+        result.failures.push({ id: change.id, message: "ADO returned HTTP 500." });
+        result.remaining.push(change);
+        continue;
+      }
       switch (change.kind) {
         case "move":
           item.iteration_path = change.to_iteration;
@@ -278,6 +314,14 @@ export class MemoryBackend implements Backend {
       if (!result.written.includes(item.id)) result.written.push(item.id);
       this.planningFlags.writes += 1;
     }
+    // What stays points at what this publish created and at the revisions it
+    // wrote itself, so a retry neither loses a new parent nor conflicts with us.
+    result.remaining = result.remaining.map((change) => {
+      if (change.kind === "create_story") return { ...change, parent: created.get(change.parent) ?? change.parent };
+      if (change.kind === "create_feature") return change;
+      const seen = ours.get(change.id);
+      return seen && seen[0] === change.rev ? { ...change, rev: seen[1] } : change;
+    });
     this.planningSaved.draft = structuredClone(result.remaining);
     return result;
   }

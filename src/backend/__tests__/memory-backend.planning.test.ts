@@ -70,6 +70,57 @@ describe("MemoryBackend planning", () => {
     expect((await b.planningState()).draft).toEqual([]);
   });
 
+  it("leaves a retryable draft after a partial failure: new parents and our own revisions carried over", async () => {
+    const b = seeded();
+    await b.planningConnect(LINK);
+    await b.planningAddChange({ kind: "estimate", id: 2, rev: 1, points: 5 });
+    await b.planningAddChange({ kind: "retitle", id: 2, rev: 1, title: "Renamed" });
+    await b.planningAddChange({ kind: "create_feature", temp_id: -1, title: "F", target_date: null, description: null });
+    await b.planningAddChange({ kind: "create_story", temp_id: -2, parent: -1, title: "Child", points: null, description: null });
+    b.failPlanningWrite((c) => c.kind === "retitle" || (c.kind === "create_story" && c.title === "Child"));
+    const first = await b.planningPublish();
+    expect(first.failures).toHaveLength(2);
+    const fid = b.planningAdoItems().find((i) => i.title === "F")!.id;
+    expect((await b.planningState()).draft).toEqual([
+      { kind: "retitle", id: 2, rev: 2, title: "Renamed" },
+      { kind: "create_story", temp_id: -2, parent: fid, title: "Child", points: null, description: null },
+    ]);
+    b.failPlanningWrite(null);
+    const retry = await b.planningPublish();
+    expect(retry.conflicts).toEqual([]);
+    expect(retry.failures).toEqual([]);
+    expect(b.planningAdoItems().find((i) => i.id === 2)?.title).toBe("Renamed");
+    expect(b.planningAdoItems().find((i) => i.title === "Child")?.parent_id).toBe(fid);
+  });
+
+  it("creates a story where and in the order it was planned", async () => {
+    const b = seeded();
+    await b.planningConnect(LINK);
+    await b.planningAddChange({ kind: "create_story", temp_id: -1, parent: 100, title: "New", points: 2, description: null });
+    await b.planningAddChange({ kind: "move", id: -1, rev: 0, to_iteration: "OneWork\\S23", assign_to_me: false });
+    await b.planningAddChange({ kind: "order", id: -1, rev: 0, order: 3000 });
+    await b.planningPublish();
+    expect(b.planningAdoItems().find((i) => i.title === "New")).toMatchObject({ iteration_path: "OneWork\\S23", order: 3000 });
+  });
+
+  it("remembers the sprint it first defaulted to, so a rollover is offered rather than applied", async () => {
+    const b = seeded();
+    await b.planningConnect(LINK);
+    await b.planningFetch();
+    expect((await b.planningState()).selected_sprint).toBe("OneWork\\S22");
+  });
+
+  it("refuses draft changes while a publish is running", async () => {
+    const b = seeded();
+    await b.planningConnect(LINK);
+    await b.planningAddChange({ kind: "estimate", id: 2, rev: 1, points: 5 });
+    const publishing = b.planningPublish();
+    await expect(b.planningAddChange({ kind: "estimate", id: 1, rev: 1, points: 1 })).rejects.toThrow("Publishing");
+    await expect(b.planningSetDraft([])).rejects.toThrow("Publishing");
+    await publishing;
+    await expect(b.planningAddChange({ kind: "estimate", id: 1, rev: 1, points: 1 })).resolves.toHaveLength(1);
+  });
+
   it("can fail a read, as a network error would", async () => {
     const b = seeded();
     await b.planningConnect(LINK);
