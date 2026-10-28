@@ -8,6 +8,7 @@ pub mod pull_requests;
 // different permission model (a security descriptor at creation rather than a
 // chmod) -- see ADR 026. Gated so the desktop app still builds and ships on
 // Windows without the agent channel, rather than failing to compile at all.
+mod ado_planning;
 #[cfg(unix)]
 pub mod agent_socket;
 mod code_review;
@@ -414,6 +415,122 @@ fn mute_pr_inbox_event(
 ) -> Result<pr_inbox::MuteRule, String> {
     let db = state.db.lock().map_err(|e| e.to_string())?;
     pr_inbox::mute(&db, &id)
+}
+
+// ── Planning (ADR 039) ─────────────────────────────────────────────────
+
+#[derive(serde::Serialize)]
+struct PlanningState {
+    connection: Option<ado_planning::PlanningConnection>,
+    selected_sprint: Option<String>,
+    draft: Vec<ado_planning::Change>,
+}
+
+#[tauri::command]
+fn planning_state(state: State<'_, AppState>) -> Result<PlanningState, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    Ok(PlanningState {
+        connection: ado_planning::load_connection(&db)?,
+        selected_sprint: ado_planning::selected_sprint(&db)?,
+        draft: ado_planning::load_draft(&db)?,
+    })
+}
+
+/// Connects Planning to the team a pasted sprint or backlog link names. Asks
+/// ADO, so it runs off the IPC thread and without the DB lock.
+#[tauri::command]
+async fn planning_connect(
+    state: State<'_, AppState>,
+    url: String,
+) -> Result<ado_planning::PlanningConnection, String> {
+    use ado_planning::PlanningGateway;
+    let db = Arc::clone(&state.db);
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = ado_planning::AdoPlanning.connect(&url)?;
+        let db = db.lock().map_err(|e| e.to_string())?;
+        ado_planning::save_connection(&db, &conn)?;
+        Ok(conn)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn planning_fetch(state: State<'_, AppState>) -> Result<ado_planning::PlanningData, String> {
+    use ado_planning::PlanningGateway;
+    let (conn, selected) = {
+        let db = state.db.lock().map_err(|e| e.to_string())?;
+        (
+            ado_planning::load_connection(&db)?.ok_or("Planning isn't connected to a team yet")?,
+            ado_planning::selected_sprint(&db)?,
+        )
+    };
+    tauri::async_runtime::spawn_blocking(move || {
+        ado_planning::AdoPlanning.fetch(&conn, selected.as_deref())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+fn planning_select_sprint(state: State<'_, AppState>, path: String) -> Result<(), String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    ado_planning::select_sprint(&db, &path)
+}
+
+#[tauri::command]
+fn planning_add_change(
+    state: State<'_, AppState>,
+    change: ado_planning::Change,
+) -> Result<Vec<ado_planning::Change>, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    let mut draft = ado_planning::load_draft(&db)?;
+    ado_planning::add_change(&mut draft, change);
+    ado_planning::save_draft(&db, &draft)?;
+    Ok(draft)
+}
+
+/// Replaces the draft (dropping changes, or Discard with an empty list).
+#[tauri::command]
+fn planning_set_draft(
+    state: State<'_, AppState>,
+    draft: Vec<ado_planning::Change>,
+) -> Result<(), String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    ado_planning::save_draft(&db, &draft)
+}
+
+/// Publishes the draft against fresh ADO data; what conflicts or fails stays.
+#[tauri::command]
+async fn planning_publish(
+    state: State<'_, AppState>,
+) -> Result<ado_planning::PublishResult, String> {
+    use ado_planning::PlanningGateway;
+    let db = Arc::clone(&state.db);
+    let (conn, selected, draft) = {
+        let db = db.lock().map_err(|e| e.to_string())?;
+        (
+            ado_planning::load_connection(&db)?.ok_or("Planning isn't connected to a team yet")?,
+            ado_planning::selected_sprint(&db)?,
+            ado_planning::load_draft(&db)?,
+        )
+    };
+    tauri::async_runtime::spawn_blocking(move || {
+        let data = ado_planning::AdoPlanning.fetch(&conn, selected.as_deref())?;
+        let result = ado_planning::AdoPlanning.publish(&data, &draft)?;
+        let db = db.lock().map_err(|e| e.to_string())?;
+        // Changes added while publishing are kept after the ones that remain.
+        let mut next = result.remaining.clone();
+        for change in ado_planning::load_draft(&db)? {
+            if !draft.contains(&change) {
+                next.push(change);
+            }
+        }
+        ado_planning::save_draft(&db, &next)?;
+        Ok(result)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Starts watching the pipeline a pasted link points at (ADR 038). Resolving
@@ -1469,6 +1586,7 @@ fn serve_agent_request(
             caller: caller.as_ref(),
             provisioner: Some(&AppProvisioner { app: app.clone() }),
             pipelines: Some(&pipeline_inbox::AdoResolver),
+            planning: Some(&ado_planning::AdoPlanning),
         },
     );
     agent_registry::log_command(
@@ -6171,6 +6289,13 @@ pub fn run() {
             get_pr_inbox,
             configure_pr_inbox,
             add_pipeline_watch,
+            planning_state,
+            planning_connect,
+            planning_fetch,
+            planning_select_sprint,
+            planning_add_change,
+            planning_set_draft,
+            planning_publish,
             set_pipeline_watch_mode,
             remove_pipeline_watch,
             set_pr_inbox_read,

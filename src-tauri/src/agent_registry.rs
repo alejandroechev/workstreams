@@ -214,6 +214,9 @@ pub struct CommandContext<'a> {
     /// Resolves pasted pipeline links (ADR 038). Asks ADO, so like
     /// worktree creation it runs while the request holds the DB lock.
     pub pipelines: Option<&'a dyn crate::pipeline_inbox::PipelineResolver>,
+    /// Reads and publishes Planning data (ADR 039); asks ADO under the lock,
+    /// like worktree creation.
+    pub planning: Option<&'a dyn crate::ado_planning::PlanningGateway>,
 }
 
 impl CommandContext<'_> {
@@ -362,6 +365,62 @@ pub const COMMANDS: &[Command] = &[
         requires_identity: true,
         destructive: false,
         handler: inbox_unmute_all,
+    },
+    Command {
+        id: "planning.sprint",
+        log_params: &[],
+        summary: "Your user stories in Planning's selected sprint, with committed / done / to-go story points (ADR 039)",
+        requires_identity: true,
+        destructive: false,
+        handler: planning_sprint,
+    },
+    Command {
+        id: "planning.features",
+        log_params: &[],
+        summary: "Your open features: target date, done and pending story points, sprints left, at risk",
+        requires_identity: true,
+        destructive: false,
+        handler: planning_features,
+    },
+    Command {
+        id: "planning.feature",
+        log_params: &["id"],
+        summary: "One feature and its stories (params: id)",
+        requires_identity: true,
+        destructive: false,
+        handler: planning_feature,
+    },
+    Command {
+        id: "planning.move",
+        log_params: &["story", "sprint"],
+        summary: "Draft: move a story to a sprint (params: story, sprint = name or path); nothing reaches ADO until planning.publish",
+        requires_identity: true,
+        destructive: false,
+        handler: planning_move,
+    },
+    Command {
+        id: "planning.estimate",
+        log_params: &["story", "points"],
+        summary: "Draft: set a story's story points (params: story, points)",
+        requires_identity: true,
+        destructive: false,
+        handler: planning_estimate,
+    },
+    Command {
+        id: "planning.add_story",
+        log_params: &["feature", "points"],
+        summary: "Draft: add a user story to a feature (params: feature, title, points optional)",
+        requires_identity: true,
+        destructive: false,
+        handler: planning_add_story,
+    },
+    Command {
+        id: "planning.publish",
+        log_params: &[],
+        summary: "Publish the planning draft to ADO; reports what was written and what changed in ADO meanwhile",
+        requires_identity: true,
+        destructive: false,
+        handler: planning_publish,
     },
     Command {
         id: "inbox.pipelines",
@@ -690,6 +749,234 @@ fn inbox_pipeline_remove(
     Ok(CommandOutcome::changed(
         serde_json::json!({"id":id,"removed":true}),
         StateChange::new("pr_inbox", id, "pipeline_removed"),
+    ))
+}
+
+fn planning_error(error: String) -> AgentError {
+    AgentError::new(
+        "PLANNING_ERROR",
+        error,
+        "Connect Planning to your team in the app (paste a sprint or backlog link) and run az login if ADO refuses.",
+    )
+}
+
+/// The planning gateway and fresh data for the selected sprint.
+fn planning_data(
+    context: &CommandContext,
+) -> Result<crate::ado_planning::PlanningData, AgentError> {
+    let gateway = context.planning.ok_or_else(|| {
+        AgentError::new(
+            "NO_PLANNING",
+            "This build cannot read ADO planning data",
+            "Report this as a bug.",
+        )
+    })?;
+    let conn = crate::ado_planning::load_connection(context.db)
+        .map_err(planning_error)?
+        .ok_or_else(|| planning_error("Planning isn't connected to a team yet".into()))?;
+    let selected = crate::ado_planning::selected_sprint(context.db).map_err(planning_error)?;
+    gateway
+        .fetch(&conn, selected.as_deref())
+        .map_err(planning_error)
+}
+
+fn param_i64(params: &serde_json::Value, key: &str) -> Result<i64, AgentError> {
+    params
+        .get(key)
+        .and_then(|v| {
+            v.as_i64()
+                .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+        })
+        .ok_or_else(|| {
+            AgentError::new(
+                "INVALID_PARAM",
+                format!("{key} must be a work item id"),
+                format!("Pass {key}=<id>."),
+            )
+        })
+}
+
+fn param_points(params: &serde_json::Value) -> Result<Option<f64>, AgentError> {
+    match params.get("points") {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(v) => v
+            .as_f64()
+            .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+            .filter(|p| p.is_finite() && *p >= 0.0)
+            .map(Some)
+            .ok_or_else(|| {
+                AgentError::new(
+                    "INVALID_PARAM",
+                    "points must be a number of story points",
+                    "Pass points=3, for example.",
+                )
+            }),
+    }
+}
+
+fn planning_sprint(
+    context: &CommandContext,
+    _: &serde_json::Value,
+) -> Result<CommandOutcome, AgentError> {
+    let data = planning_data(context)?;
+    Ok(CommandOutcome::read(serde_json::json!(
+        crate::ado_planning::sprint_summary(&data)
+    )))
+}
+
+fn planning_features(
+    context: &CommandContext,
+    _: &serde_json::Value,
+) -> Result<CommandOutcome, AgentError> {
+    let data = planning_data(context)?;
+    Ok(CommandOutcome::read(serde_json::json!(
+        crate::ado_planning::feature_summaries(&data)
+    )))
+}
+
+fn planning_feature(
+    context: &CommandContext,
+    params: &serde_json::Value,
+) -> Result<CommandOutcome, AgentError> {
+    let id = param_i64(params, "id")?;
+    let data = planning_data(context)?;
+    let feature = crate::ado_planning::feature_summaries(&data)
+        .into_iter()
+        .find(|f| f.feature.id == id)
+        .ok_or_else(|| planning_error(format!("Feature {id} isn't one of your open features")))?;
+    Ok(CommandOutcome::read(serde_json::json!(feature)))
+}
+
+fn planning_story(
+    data: &crate::ado_planning::PlanningData,
+    id: i64,
+) -> Result<crate::ado_planning::PlanItem, AgentError> {
+    data.items
+        .iter()
+        .find(|i| i.id == id && i.kind == "User Story")
+        .cloned()
+        .ok_or_else(|| {
+            planning_error(format!(
+                "Story {id} isn't one of your stories or your features' stories"
+            ))
+        })
+}
+
+fn planning_add(
+    context: &CommandContext,
+    change: crate::ado_planning::Change,
+) -> Result<CommandOutcome, AgentError> {
+    let mut draft = crate::ado_planning::load_draft(context.db).map_err(planning_error)?;
+    crate::ado_planning::add_change(&mut draft, change);
+    crate::ado_planning::save_draft(context.db, &draft).map_err(planning_error)?;
+    Ok(CommandOutcome::changed(
+        serde_json::json!({ "draft": draft.len() }),
+        StateChange::new("planning", "draft", "changed"),
+    ))
+}
+
+fn planning_move(
+    context: &CommandContext,
+    params: &serde_json::Value,
+) -> Result<CommandOutcome, AgentError> {
+    let story = param_i64(params, "story")?;
+    let sprint = required_str(params, "sprint")?;
+    let data = planning_data(context)?;
+    let item = planning_story(&data, story)?;
+    let path = data
+        .iterations
+        .iter()
+        .find(|i| i.path == sprint || i.name.eq_ignore_ascii_case(&sprint))
+        .map(|i| i.path.clone())
+        .ok_or_else(|| planning_error(format!("No sprint named {sprint} in the team's sprints")))?;
+    planning_add(
+        context,
+        crate::ado_planning::Change::Move {
+            id: item.id,
+            rev: item.rev,
+            to_iteration: path,
+            assign_to_me: item.assigned_to.is_none(),
+        },
+    )
+}
+
+fn planning_estimate(
+    context: &CommandContext,
+    params: &serde_json::Value,
+) -> Result<CommandOutcome, AgentError> {
+    let story = param_i64(params, "story")?;
+    let points = param_points(params)?;
+    let data = planning_data(context)?;
+    let item = planning_story(&data, story)?;
+    planning_add(
+        context,
+        crate::ado_planning::Change::Estimate {
+            id: item.id,
+            rev: item.rev,
+            points,
+        },
+    )
+}
+
+fn planning_add_story(
+    context: &CommandContext,
+    params: &serde_json::Value,
+) -> Result<CommandOutcome, AgentError> {
+    let feature = param_i64(params, "feature")?;
+    let title = required_str(params, "title")?;
+    if title.trim().is_empty() {
+        return Err(planning_error("A story needs a title".into()));
+    }
+    let points = param_points(params)?;
+    let draft = crate::ado_planning::load_draft(context.db).map_err(planning_error)?;
+    let known_new_feature = draft.iter().any(|c| matches!(c, crate::ado_planning::Change::CreateFeature { temp_id, .. } if *temp_id == feature));
+    if !known_new_feature {
+        let data = planning_data(context)?;
+        if !data
+            .items
+            .iter()
+            .any(|i| i.id == feature && i.kind == "Feature")
+        {
+            return Err(planning_error(format!(
+                "Feature {feature} isn't one of your open features"
+            )));
+        }
+    }
+    let temp_id = draft
+        .iter()
+        .filter_map(|c| match c {
+            crate::ado_planning::Change::CreateFeature { temp_id, .. }
+            | crate::ado_planning::Change::CreateStory { temp_id, .. } => Some(*temp_id),
+            _ => None,
+        })
+        .min()
+        .unwrap_or(0)
+        .min(0)
+        - 1;
+    planning_add(
+        context,
+        crate::ado_planning::Change::CreateStory {
+            temp_id,
+            parent: feature,
+            title: title.trim().to_string(),
+            points,
+            description: None,
+        },
+    )
+}
+
+fn planning_publish(
+    context: &CommandContext,
+    _: &serde_json::Value,
+) -> Result<CommandOutcome, AgentError> {
+    let data = planning_data(context)?;
+    let gateway = context.planning.expect("checked by planning_data");
+    let draft = crate::ado_planning::load_draft(context.db).map_err(planning_error)?;
+    let result = gateway.publish(&data, &draft).map_err(planning_error)?;
+    crate::ado_planning::save_draft(context.db, &result.remaining).map_err(planning_error)?;
+    Ok(CommandOutcome::changed(
+        serde_json::json!(result),
+        StateChange::new("planning", "draft", "published"),
     ))
 }
 
@@ -1897,6 +2184,123 @@ mod tests {
         }
     }
 
+    /// A tiny ADO: sprint S22 (current) and S23, feature 100 with stories 1
+    /// (mine, Closed, 1 SP), 2 (mine, New, 3 SP in S22) and 3 (unassigned, 5 SP).
+    struct FakePlanning;
+    impl crate::ado_planning::PlanningGateway for FakePlanning {
+        fn connect(&self, link: &str) -> Result<crate::ado_planning::PlanningConnection, String> {
+            let l = crate::ado_planning::parse_team_link(link)?;
+            Ok(crate::ado_planning::PlanningConnection {
+                organization: l.organization,
+                project: l.project,
+                team: l.team,
+                team_id: "t".into(),
+                area_path: "P\\A".into(),
+                backlog_iteration: "P\\CY26".into(),
+                order_field: "Microsoft.VSTS.Common.StackRank".into(),
+                effort_field: "Microsoft.VSTS.Scheduling.StoryPoints".into(),
+            })
+        }
+        fn fetch(
+            &self,
+            conn: &crate::ado_planning::PlanningConnection,
+            selected: Option<&str>,
+        ) -> Result<crate::ado_planning::PlanningData, String> {
+            use crate::ado_planning::{Iteration, Me, PlanItem, PlanningData};
+            let item = |id: i64,
+                        kind: &str,
+                        state: &str,
+                        mine: bool,
+                        iteration: &str,
+                        points: Option<f64>,
+                        parent: Option<i64>| PlanItem {
+                id,
+                rev: 1,
+                kind: kind.into(),
+                title: format!("item {id}"),
+                state: state.into(),
+                assigned_to: mine.then(|| "Me".to_string()),
+                assigned_to_me: mine,
+                iteration_path: iteration.into(),
+                story_points: points,
+                order: None,
+                target_date: (kind == "Feature").then(|| "2026-11-22".to_string()),
+                parent_id: parent,
+                tasks_done: 0,
+                tasks_total: 0,
+                url: format!("u/{id}"),
+            };
+            let iterations = vec![
+                Iteration {
+                    name: "S22".into(),
+                    path: "P\\S22".into(),
+                    start: Some("2026-10-26".into()),
+                    finish: Some("2026-11-08".into()),
+                    timeframe: "current".into(),
+                },
+                Iteration {
+                    name: "S23".into(),
+                    path: "P\\S23".into(),
+                    start: Some("2026-11-09".into()),
+                    finish: Some("2026-11-22".into()),
+                    timeframe: "future".into(),
+                },
+            ];
+            Ok(PlanningData {
+                connection: conn.clone(),
+                me: Me {
+                    id: "me".into(),
+                    display_name: "Me".into(),
+                    unique_name: "me@x.com".into(),
+                },
+                selected_sprint: selected.unwrap_or("P\\S22").into(),
+                previous_sprint: None,
+                iterations,
+                items: vec![
+                    item(100, "Feature", "Active", true, "P\\Q4", None, None),
+                    item(
+                        1,
+                        "User Story",
+                        "Closed",
+                        true,
+                        "P\\S22",
+                        Some(1.0),
+                        Some(100),
+                    ),
+                    item(2, "User Story", "New", true, "P\\S22", Some(3.0), Some(100)),
+                    item(3, "User Story", "New", false, "P\\Q4", Some(5.0), Some(100)),
+                ],
+            })
+        }
+        fn publish(
+            &self,
+            _: &crate::ado_planning::PlanningData,
+            draft: &[crate::ado_planning::Change],
+        ) -> Result<crate::ado_planning::PublishResult, String> {
+            use crate::ado_planning::{Change, Conflict, PublishResult};
+            let mut result = PublishResult::default();
+            for c in draft {
+                match c {
+                    Change::Move { id: 3, .. } => {
+                        result.conflicts.push(Conflict {
+                            id: 3,
+                            title: "item 3".into(),
+                            field: "System.IterationPath".into(),
+                            ado_value: "P\\S24".into(),
+                        });
+                        result.remaining.push(c.clone());
+                    }
+                    Change::Move { id, .. } | Change::Estimate { id, .. } => {
+                        result.written.push(*id)
+                    }
+                    Change::CreateStory { .. } => result.written.push(9001),
+                    _ => {}
+                }
+            }
+            Ok(result)
+        }
+    }
+
     fn call(
         db: &Connection,
         caller: &Caller,
@@ -1924,6 +2328,7 @@ mod tests {
                 caller: Some(caller),
                 provisioner: Some(provisioner),
                 pipelines: Some(&FakeResolver),
+                planning: Some(&FakePlanning),
             },
         )
     }
@@ -2169,6 +2574,7 @@ mod tests {
                 caller: Some(&caller),
                 provisioner: None,
                 pipelines: None,
+                planning: None,
             },
         )
         .expect("dispatch")
@@ -2180,6 +2586,132 @@ mod tests {
     /// A connectivity check must survive a missing identity: an agent whose
     /// token went stale needs to separate "cannot reach the app" from "the app
     /// no longer knows me", because only one of them is fixed by restarting.
+    #[test]
+    fn planning_commands_read_and_change_the_ui_draft_and_publish_it() {
+        use crate::ado_planning::PlanningGateway;
+        let db = memory_db();
+        let caller = agent("tile-1", "ws-own");
+        let unconnected =
+            call(&db, &caller, "planning.sprint", serde_json::Value::Null).unwrap_err();
+        assert!(
+            unconnected.message.contains("isn't connected"),
+            "{}",
+            unconnected.message
+        );
+        crate::ado_planning::save_connection(
+            &db,
+            &FakePlanning
+                .connect("https://dev.azure.com/o/P/_backlogs/backlog/T/Features")
+                .unwrap(),
+        )
+        .unwrap();
+
+        let sprint = call(&db, &caller, "planning.sprint", serde_json::Value::Null)
+            .unwrap()
+            .data;
+        assert_eq!(
+            (
+                sprint["committed"].as_f64(),
+                sprint["done"].as_f64(),
+                sprint["to_go"].as_f64()
+            ),
+            (Some(4.0), Some(1.0), Some(3.0))
+        );
+        assert_eq!(sprint["stories"].as_array().unwrap().len(), 2);
+        let features = call(&db, &caller, "planning.features", serde_json::Value::Null)
+            .unwrap()
+            .data;
+        assert_eq!(
+            (
+                features[0]["done"].as_f64(),
+                features[0]["pending"].as_f64()
+            ),
+            (Some(1.0), Some(8.0))
+        );
+        let feature = call(
+            &db,
+            &caller,
+            "planning.feature",
+            serde_json::json!({"id": 100}),
+        )
+        .unwrap()
+        .data;
+        assert_eq!(feature["stories"].as_array().unwrap().len(), 3);
+        assert!(call(
+            &db,
+            &caller,
+            "planning.feature",
+            serde_json::json!({"id": 5})
+        )
+        .is_err());
+
+        call(
+            &db,
+            &caller,
+            "planning.move",
+            serde_json::json!({"story": 2, "sprint": "S23"}),
+        )
+        .unwrap();
+        call(
+            &db,
+            &caller,
+            "planning.move",
+            serde_json::json!({"story": 3, "sprint": "P\\S23"}),
+        )
+        .unwrap();
+        call(
+            &db,
+            &caller,
+            "planning.estimate",
+            serde_json::json!({"story": 2, "points": 5}),
+        )
+        .unwrap();
+        let added = call(
+            &db,
+            &caller,
+            "planning.add_story",
+            serde_json::json!({"feature": 100, "title": "New one", "points": 2.5}),
+        )
+        .unwrap()
+        .data;
+        assert_eq!(added["draft"], 4);
+        assert!(call(
+            &db,
+            &caller,
+            "planning.move",
+            serde_json::json!({"story": 2, "sprint": "S99"})
+        )
+        .is_err());
+        assert!(call(
+            &db,
+            &caller,
+            "planning.move",
+            serde_json::json!({"story": 404, "sprint": "S23"})
+        )
+        .is_err());
+        let draft = crate::ado_planning::load_draft(&db).unwrap();
+        assert!(
+            draft.contains(&crate::ado_planning::Change::Move {
+                id: 3,
+                rev: 1,
+                to_iteration: "P\\S23".into(),
+                assign_to_me: true
+            }),
+            "picking up an unassigned story assigns it"
+        );
+
+        let published = call(&db, &caller, "planning.publish", serde_json::Value::Null)
+            .unwrap()
+            .data;
+        assert_eq!(published["written"].as_array().unwrap().len(), 3);
+        assert_eq!(published["conflicts"][0]["ado_value"], "P\\S24");
+        assert_eq!(
+            crate::ado_planning::load_draft(&db).unwrap().len(),
+            1,
+            "the conflicting change stays in the draft"
+        );
+    }
+
     #[test]
     fn pipeline_commands_do_what_the_inbox_ui_does() {
         let db = memory_db();
@@ -2301,6 +2833,7 @@ mod tests {
             caller: None,
             provisioner: None,
             pipelines: None,
+            planning: None,
         };
 
         assert_eq!(

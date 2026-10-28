@@ -57,6 +57,7 @@ fn serve_inner(
                 caller: caller.as_ref(),
                 provisioner: None,
                 pipelines: None,
+                planning: None,
             },
         ))
     }

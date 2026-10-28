@@ -910,13 +910,23 @@ impl AdoTransport {
     }
 }
 
-impl JsonTransport for AdoTransport {
-    fn get(&self, url: reqwest::Url) -> Result<serde_json::Value, String> {
+impl AdoTransport {
+    /// One request with the inbox's rules: bearer token, no redirects, 30 s
+    /// timeout, 8 MiB cap, and no provider body or credential in any error.
+    pub(crate) fn send_json(
+        &self,
+        method: reqwest::Method,
+        url: reqwest::Url,
+        body: Option<(&serde_json::Value, &str)>,
+    ) -> Result<serde_json::Value, String> {
         use std::io::Read;
-        let response = self
-            .client
-            .get(url)
-            .bearer_auth(&self.token)
+        let mut request = self.client.request(method, url).bearer_auth(&self.token);
+        if let Some((json, content_type)) = body {
+            request = request
+                .header(reqwest::header::CONTENT_TYPE, content_type)
+                .body(json.to_string());
+        }
+        let response = request
             .send()
             .map_err(|_| "ADO connection failed or timed out. Check your network and VPN.")?;
         let status = response.status();
@@ -941,6 +951,12 @@ impl JsonTransport for AdoTransport {
             return Err("ADO response exceeded the size limit; sync was not applied".into());
         }
         serde_json::from_slice(&bytes).map_err(|_| "ADO returned an invalid JSON response".into())
+    }
+}
+
+impl JsonTransport for AdoTransport {
+    fn get(&self, url: reqwest::Url) -> Result<serde_json::Value, String> {
+        self.send_json(reqwest::Method::GET, url, None)
     }
 }
 
