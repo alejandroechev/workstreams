@@ -871,10 +871,7 @@ fn planning_add(
     context: &CommandContext,
     change: crate::ado_planning::Change,
 ) -> Result<CommandOutcome, AgentError> {
-    crate::ado_planning::ensure_not_publishing().map_err(planning_error)?;
-    let mut draft = crate::ado_planning::load_draft(context.db).map_err(planning_error)?;
-    crate::ado_planning::add_change(&mut draft, change);
-    crate::ado_planning::save_draft(context.db, &draft).map_err(planning_error)?;
+    let draft = crate::ado_planning::add_to_draft(context.db, change).map_err(planning_error)?;
     Ok(CommandOutcome::changed(
         serde_json::json!({ "draft": draft.len() }),
         StateChange::new("planning", "draft", "changed"),
@@ -977,10 +974,9 @@ fn planning_publish(
     context: &CommandContext,
     _: &serde_json::Value,
 ) -> Result<CommandOutcome, AgentError> {
-    let _guard = crate::ado_planning::PublishGuard::start().map_err(planning_error)?;
+    let (_guard, draft) = crate::ado_planning::start_publish(context.db).map_err(planning_error)?;
     let data = planning_data(context)?;
     let gateway = context.planning.expect("checked by planning_data");
-    let draft = crate::ado_planning::load_draft(context.db).map_err(planning_error)?;
     let result = gateway.publish(&data, &draft).map_err(planning_error)?;
     crate::ado_planning::save_draft(context.db, &result.remaining).map_err(planning_error)?;
     Ok(CommandOutcome::changed(

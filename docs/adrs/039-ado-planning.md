@@ -75,7 +75,12 @@ feature was created now points at the real feature, and a change to an item
 this publish already wrote carries the revision it wrote, so the retry isn't
 mistaken for a conflict. **While a publish runs, the draft is locked**: the
 Plan tabs are disabled, and draft changes from the UI or an agent are refused
-until it finishes, so what it leaves behind is exactly what it didn't write.
+until it finishes, so what it leaves behind is exactly what it didn't write. The
+check and the publish's snapshot both happen under the database lock, so a
+change can't slip between them. The draft is also shared with agents, so the
+view never overwrites a change it hasn't seen: a new item whose temporary id
+is already taken, or a replacement of a draft that changed since the view
+read it (an undo, Discard), is refused and the view reloads the draft.
 
 **Reading** costs these requests:
 - a WIQL query each for your stories in the selected and previous sprints,
@@ -111,6 +116,12 @@ it is planned into and its order).
   so conflicts are judged against fresh revisions.
 - **Removing an uncreated item** from the draft simply drops it; removing a
   real one sets Removed and can be undone in ADO.
+- **Agent planning commands hold the database lock while they talk to ADO**,
+  like every agent command that asks a remote service (worktree creation,
+  pipeline links): the dispatcher holds the lock for the whole request. A
+  large `planning.publish` from an agent therefore delays other database work
+  until it finishes; the UI's publish doesn't, because it releases the lock
+  for its requests.
 - **Not covered:** a whole-team view, tasks and bugs as planning items,
   linking to the local Tasks board, and background polling.
 

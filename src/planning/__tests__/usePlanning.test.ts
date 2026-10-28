@@ -75,6 +75,19 @@ describe("usePlanning freshness", () => {
     expect(result.current.draft).toHaveLength(2);
   });
 
+  it("never drops a change made meanwhile: a stale replacement is refused and the draft reloaded", async () => {
+    const b = backend();
+    await b.planningConnect(LINK);
+    const { result } = renderHook(() => usePlanning(b, true));
+    await act(async () => {});
+    await act(async () => { await result.current.addChange({ kind: "create_feature", temp_id: -1, title: "Mine", target_date: null, description: null }); });
+    await b.planningAddChange({ kind: "create_feature", temp_id: -2, title: "The CLI's", target_date: null, description: null });
+    await act(async () => { await expect(result.current.setDraft([])).rejects.toThrow("changed meanwhile"); });
+    expect(result.current.draft.map((c) => "title" in c && c.title)).toEqual(["Mine", "The CLI's"]);
+    await act(async () => { await result.current.setDraft([]); });
+    expect((await b.planningState()).draft).toEqual([]);
+  });
+
   it("selects a sprint, keeps the draft, and publishes", async () => {
     const b = backend();
     await b.planningConnect(LINK);

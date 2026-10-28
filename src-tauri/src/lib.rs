@@ -489,23 +489,20 @@ fn planning_add_change(
     state: State<'_, AppState>,
     change: ado_planning::Change,
 ) -> Result<Vec<ado_planning::Change>, String> {
-    ado_planning::ensure_not_publishing()?;
     let db = state.db.lock().map_err(|e| e.to_string())?;
-    let mut draft = ado_planning::load_draft(&db)?;
-    ado_planning::add_change(&mut draft, change);
-    ado_planning::save_draft(&db, &draft)?;
-    Ok(draft)
+    ado_planning::add_to_draft(&db, change)
 }
 
-/// Replaces the draft (dropping changes, or Discard with an empty list).
+/// Replaces the draft (dropping changes, or Discard with an empty list), if it
+/// is still `base`, the draft the view edited.
 #[tauri::command]
 fn planning_set_draft(
     state: State<'_, AppState>,
     draft: Vec<ado_planning::Change>,
+    base: Option<Vec<ado_planning::Change>>,
 ) -> Result<(), String> {
-    ado_planning::ensure_not_publishing()?;
     let db = state.db.lock().map_err(|e| e.to_string())?;
-    ado_planning::save_draft(&db, &draft)
+    ado_planning::replace_draft(&db, &draft, base.as_deref())
 }
 
 /// Publishes the draft against fresh ADO data; what conflicts or fails stays.
@@ -514,17 +511,16 @@ async fn planning_publish(
     state: State<'_, AppState>,
 ) -> Result<ado_planning::PublishResult, String> {
     use ado_planning::PlanningGateway;
-    // No planning change can land while this runs, so what it leaves in the
-    // draft is exactly what it didn't write.
-    let guard = ado_planning::PublishGuard::start()?;
     let db = Arc::clone(&state.db);
-    let (conn, selected, draft) = {
+    // From the snapshot on, no planning change can land, so what the publish
+    // leaves in the draft is exactly what it didn't write.
+    let (guard, conn, selected, draft) = {
         let db = db.lock().map_err(|e| e.to_string())?;
-        (
-            ado_planning::load_connection(&db)?.ok_or("Planning isn't connected to a team yet")?,
-            ado_planning::selected_sprint(&db)?,
-            ado_planning::load_draft(&db)?,
-        )
+        let conn =
+            ado_planning::load_connection(&db)?.ok_or("Planning isn't connected to a team yet")?;
+        let selected = ado_planning::selected_sprint(&db)?;
+        let (guard, draft) = ado_planning::start_publish(&db)?;
+        (guard, conn, selected, draft)
     };
     tauri::async_runtime::spawn_blocking(move || {
         let _guard = guard;

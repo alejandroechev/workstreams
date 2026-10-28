@@ -121,6 +121,18 @@ describe("MemoryBackend planning", () => {
     await expect(b.planningAddChange({ kind: "estimate", id: 1, rev: 1, points: 1 })).resolves.toHaveLength(1);
   });
 
+  it("refuses a taken new id and a replacement based on a stale draft", async () => {
+    const b = seeded();
+    await b.planningConnect(LINK);
+    const feature = (title: string) => ({ kind: "create_feature" as const, temp_id: -1, title, target_date: null, description: null });
+    await b.planningAddChange(feature("From the CLI"));
+    await expect(b.planningAddChange(feature("Stale view"))).rejects.toThrow("changed meanwhile");
+    await expect(b.planningSetDraft([], [])).rejects.toThrow("changed meanwhile");
+    expect((await b.planningState()).draft).toEqual([feature("From the CLI")]);
+    await b.planningSetDraft([], [feature("From the CLI")]);
+    expect((await b.planningState()).draft).toEqual([]);
+  });
+
   it("can fail a read, as a network error would", async () => {
     const b = seeded();
     await b.planningConnect(LINK);

@@ -110,6 +110,8 @@ function pathJoin(parent: string, child: string): string {
 /**
  * In-memory Backend implementation for tests and offline development.
  */
+const PLANNING_CHANGED_MEANWHILE = "The draft changed meanwhile (an agent or another view) — it has been reloaded; try again";
+
 export class MemoryBackend implements Backend {
   private prInbox: PrInboxSnapshot = { items: [], repos: [], mutes: [] };
 
@@ -217,12 +219,16 @@ export class MemoryBackend implements Backend {
 
   async planningAddChange(change: Change): Promise<Change[]> {
     this.ensureNotPublishing();
+    const creation = (c: Change) => (c.kind === "create_feature" || c.kind === "create_story" ? c.temp_id : null);
+    const id = creation(change);
+    if (id !== null && this.planningSaved.draft.some((c) => creation(c) === id)) throw new Error(PLANNING_CHANGED_MEANWHILE);
     this.planningSaved.draft = addPlanningChange(this.planningSaved.draft, change);
     return structuredClone(this.planningSaved.draft);
   }
 
-  async planningSetDraft(draft: Change[]): Promise<void> {
+  async planningSetDraft(draft: Change[], base?: Change[]): Promise<void> {
     this.ensureNotPublishing();
+    if (base && JSON.stringify(base) !== JSON.stringify(this.planningSaved.draft)) throw new Error(PLANNING_CHANGED_MEANWHILE);
     this.planningSaved.draft = structuredClone(draft);
   }
 

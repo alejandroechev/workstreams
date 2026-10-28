@@ -23,13 +23,16 @@ export function usePlanning(backend: Backend, open: boolean) {
   const [loading, setLoading] = useState(false);
   const [lastPublish, setLastPublish] = useState<PublishResult | null>(null);
   const connected = useRef(false);
+  /** The draft as last seen, which a replacement is based on. */
+  const seen = useRef<Change[]>([]);
+  const showDraft = useCallback((next: Change[]) => { seen.current = next; setDraftState(next); }, []);
 
   const sync = useCallback(async () => {
     const state = await backend.planningState();
     setConnection(state.connection);
-    setDraftState(state.draft);
+    showDraft(state.draft);
     connected.current = !!state.connection;
-  }, [backend]);
+  }, [backend, showDraft]);
 
   const load = useCallback(async () => {
     try {
@@ -63,7 +66,6 @@ export function usePlanning(backend: Backend, open: boolean) {
     const next = await backend.planningConnect(url);
     setConnection(next);
     connected.current = true;
-    setDraftState((await backend.planningState()).draft);
     await load();
   }, [backend, load]);
 
@@ -72,19 +74,28 @@ export function usePlanning(backend: Backend, open: boolean) {
     await load();
   }, [backend, load]);
 
-  const addChange = useCallback(async (change: Change) => {
-    setDraftState(await backend.planningAddChange(change));
-  }, [backend]);
+  /** On a refusal the saved draft is shown again, so a retry starts from it. */
+  const reloadingOnFailure = useCallback(async <T,>(action: () => Promise<T>): Promise<T> => {
+    try {
+      return await action();
+    } catch (failure) {
+      await sync().catch(() => {});
+      throw failure;
+    }
+  }, [sync]);
 
-  const setDraft = useCallback(async (next: Change[]) => {
-    await backend.planningSetDraft(next);
-    setDraftState(next);
-  }, [backend]);
+  const addChange = useCallback((change: Change) => reloadingOnFailure(async () => {
+    showDraft(await backend.planningAddChange(change));
+  }), [backend, reloadingOnFailure, showDraft]);
+
+  const setDraft = useCallback((next: Change[]) => reloadingOnFailure(async () => {
+    await backend.planningSetDraft(next, seen.current);
+    showDraft(next);
+  }), [backend, reloadingOnFailure, showDraft]);
 
   const publish = useCallback(async () => {
     const result = await backend.planningPublish();
     setLastPublish(result);
-    setDraftState((await backend.planningState()).draft);
     await load();
     return result;
   }, [backend, load]);

@@ -15,7 +15,7 @@ describe("TauriBackend planning", () => {
     await b.planningFetch();
     await b.planningSelectSprint("P\\S23");
     await b.planningAddChange(change);
-    await b.planningSetDraft([change]);
+    await b.planningSetDraft([change], []);
     await b.planningPublish();
     expect(invoke.mock.calls).toEqual([
       ["planning_state"],
@@ -23,7 +23,7 @@ describe("TauriBackend planning", () => {
       ["planning_fetch"],
       ["planning_select_sprint", { path: "P\\S23" }],
       ["planning_add_change", { change }],
-      ["planning_set_draft", { draft: [change] }],
+      ["planning_set_draft", { draft: [change], base: [] }],
       ["planning_publish"],
     ]);
   });

@@ -88,7 +88,8 @@ export interface Backend {
   /** Adds a change to the draft (the last change per item and kind wins); returns the draft. */
   planningAddChange(change: Change): Promise<Change[]>;
   /** Replaces the draft: dropping changes, or Discard with []. */
-  planningSetDraft(draft: Change[]): Promise<void>;
+  /** With `base`, refused if the saved draft is no longer the one that was edited. */
+  planningSetDraft(draft: Change[], base?: Change[]): Promise<void>;
   /** Publishes the draft; what conflicted or failed stays in it. */
   planningPublish(): Promise<PublishResult>;
   // Projects

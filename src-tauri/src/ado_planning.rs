@@ -1045,6 +1045,56 @@ impl Drop for PublishGuard {
     }
 }
 
+const CHANGED_MEANWHILE: &str =
+    "The draft changed meanwhile (an agent or another view) — it has been reloaded; try again";
+
+// The three entry points below take the DB connection, so callers hold the DB
+// lock: checking the publish flag and touching the draft are then atomic with
+// a publish taking its snapshot.
+
+/// Adds a change to the saved draft. Refused while publishing, and for a new
+/// item whose temporary id another new item already took.
+pub fn add_to_draft(db: &Connection, change: Change) -> Result<Vec<Change>, String> {
+    ensure_not_publishing()?;
+    let mut draft = load_draft(db)?;
+    let creation = |c: &Change| match c {
+        Change::CreateFeature { temp_id, .. } | Change::CreateStory { temp_id, .. } => {
+            Some(*temp_id)
+        }
+        _ => None,
+    };
+    if let Some(id) = creation(&change) {
+        if draft.iter().any(|c| creation(c) == Some(id)) {
+            return Err(CHANGED_MEANWHILE.into());
+        }
+    }
+    add_change(&mut draft, change);
+    save_draft(db, &draft)?;
+    Ok(draft)
+}
+
+/// Replaces the saved draft. With `base`, only if the draft is still the one
+/// the caller edited, so a change made meanwhile isn't silently dropped.
+pub fn replace_draft(
+    db: &Connection,
+    draft: &[Change],
+    base: Option<&[Change]>,
+) -> Result<(), String> {
+    ensure_not_publishing()?;
+    if let Some(base) = base {
+        if load_draft(db)? != base {
+            return Err(CHANGED_MEANWHILE.into());
+        }
+    }
+    save_draft(db, draft)
+}
+
+/// Starts a publish: from here until the guard drops, the draft can't change.
+pub fn start_publish(db: &Connection) -> Result<(PublishGuard, Vec<Change>), String> {
+    let guard = PublishGuard::start()?;
+    Ok((guard, load_draft(db)?))
+}
+
 /// Planning changes wait while a publish is running.
 pub fn ensure_not_publishing() -> Result<(), String> {
     if PUBLISHING.load(std::sync::atomic::Ordering::SeqCst) {
@@ -2108,6 +2158,42 @@ mod tests {
             selected_sprint(&db).unwrap().is_none(),
             "not for a team that is no longer connected"
         );
+    }
+
+    #[test]
+    fn the_saved_draft_refuses_a_taken_new_id_a_stale_replacement_and_changes_while_publishing() {
+        let _serial = PUBLISH_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let db = Connection::open_in_memory().unwrap();
+        crate::db::init_db(&db).unwrap();
+        let feature = |temp_id: i64, title: &str| Change::CreateFeature {
+            temp_id,
+            title: title.into(),
+            target_date: None,
+            description: None,
+        };
+        add_to_draft(&db, feature(-1, "From the CLI")).unwrap();
+        let err = add_to_draft(&db, feature(-1, "From a stale view")).unwrap_err();
+        assert!(err.contains("changed meanwhile"), "{err}");
+        assert_eq!(load_draft(&db).unwrap(), vec![feature(-1, "From the CLI")]);
+
+        let stale: Vec<Change> = vec![];
+        assert!(replace_draft(&db, &[], Some(&stale))
+            .unwrap_err()
+            .contains("changed meanwhile"));
+        assert_eq!(load_draft(&db).unwrap().len(), 1);
+        replace_draft(&db, &[], Some(&[feature(-1, "From the CLI")])).unwrap();
+        assert!(load_draft(&db).unwrap().is_empty());
+
+        let (guard, snapshot) = start_publish(&db).unwrap();
+        assert!(snapshot.is_empty());
+        assert!(add_to_draft(&db, feature(-2, "x"))
+            .unwrap_err()
+            .contains("Publishing"));
+        assert!(replace_draft(&db, &[], None)
+            .unwrap_err()
+            .contains("Publishing"));
+        drop(guard);
+        add_to_draft(&db, feature(-2, "x")).unwrap();
     }
 
     #[test]

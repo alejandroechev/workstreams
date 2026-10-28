@@ -85,8 +85,8 @@ export class TauriBackend implements Backend {
     return invoke<Change[]>("planning_add_change", { change });
   }
 
-  async planningSetDraft(draft: Change[]): Promise<void> {
-    await invoke("planning_set_draft", { draft });
+  async planningSetDraft(draft: Change[], base?: Change[]): Promise<void> {
+    await invoke("planning_set_draft", { draft, base: base ?? null });
   }
 
   async planningPublish(): Promise<PublishResult> {
