@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type { WorkLane } from "../domain/work-lanes";
 import type { PrInboxSnapshot, PrWatchMode, PrInboxMute } from "../domain/pr-inbox";
 import type { PipelineMode, PipelineStatus } from "../domain/pipeline-inbox";
+import type { Change, PlanningConnection, PlanningData, PlanningState, PublishResult } from "../domain/planning";
 import type { Project, Workstream, Tile, TileType, WorkstreamLayout, CopilotConfigItem } from "../domain/types";
 import type { SessionFileComment } from "../domain/file-comments";
 import type { Review, ReviewComment, ChangedFile, DiffSides } from "../domain/code-review";
@@ -62,6 +63,34 @@ export class TauriBackend implements Backend {
 
   async addPipelineWatch(url: string, mode?: PipelineMode): Promise<PipelineStatus> {
     return invoke<PipelineStatus>("add_pipeline_watch", { url, mode: mode ?? null });
+  }
+
+  async planningState(): Promise<PlanningState> {
+    return invoke<PlanningState>("planning_state");
+  }
+
+  async planningConnect(url: string): Promise<PlanningConnection> {
+    return invoke<PlanningConnection>("planning_connect", { url });
+  }
+
+  async planningFetch(): Promise<PlanningData> {
+    return invoke<PlanningData>("planning_fetch");
+  }
+
+  async planningSelectSprint(path: string): Promise<void> {
+    await invoke("planning_select_sprint", { path });
+  }
+
+  async planningAddChange(change: Change): Promise<Change[]> {
+    return invoke<Change[]>("planning_add_change", { change });
+  }
+
+  async planningSetDraft(draft: Change[]): Promise<void> {
+    await invoke("planning_set_draft", { draft });
+  }
+
+  async planningPublish(): Promise<PublishResult> {
+    return invoke<PublishResult>("planning_publish");
   }
 
   async setPipelineWatchMode(id: string, mode: PipelineMode): Promise<void> {

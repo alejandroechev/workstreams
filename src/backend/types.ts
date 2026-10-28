@@ -3,6 +3,7 @@ import type { DiffOrderView } from "../domain/diff-reading-order";
 import type { WorkLane } from "../domain/work-lanes";
 import type { PrInboxMute, PrInboxSnapshot, PrWatchMode } from "../domain/pr-inbox";
 import type { PipelineMode, PipelineStatus } from "../domain/pipeline-inbox";
+import type { Change, PlanningConnection, PlanningData, PlanningState, PublishResult } from "../domain/planning";
 import type { Project, Workstream, Tile, TileType, WorkstreamLayout, CopilotConfigItem } from "../domain/types";
 import type { SessionFileComment } from "../domain/file-comments";
 import type { TraceFile } from "../domain/trace-format";
@@ -76,6 +77,20 @@ export interface Backend {
   setPipelineWatchMode(id: string, mode: PipelineMode): Promise<void>;
   /** Stops watching a pipeline and drops its notifications. */
   removePipelineWatch(id: string): Promise<void>;
+  // Planning (ADR 039)
+  /** The saved connection, selected sprint and draft. */
+  planningState(): Promise<PlanningState>;
+  /** Connects Planning to the team a sprint or backlog link names. */
+  planningConnect(url: string): Promise<PlanningConnection>;
+  /** Reads the team's sprints and your stories and features from ADO. */
+  planningFetch(): Promise<PlanningData>;
+  planningSelectSprint(path: string): Promise<void>;
+  /** Adds a change to the draft (the last change per item and kind wins); returns the draft. */
+  planningAddChange(change: Change): Promise<Change[]>;
+  /** Replaces the draft: dropping changes, or Discard with []. */
+  planningSetDraft(draft: Change[]): Promise<void>;
+  /** Publishes the draft; what conflicted or failed stays in it. */
+  planningPublish(): Promise<PublishResult>;
   // Projects
   listProjects(): Promise<Project[]>;
   createProject(name: string, directory: string, color?: string): Promise<Project>;

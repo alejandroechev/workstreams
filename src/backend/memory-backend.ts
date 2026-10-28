@@ -12,6 +12,18 @@ import {
   type PipelineStatus,
 } from "../domain/pipeline-inbox";
 
+import {
+  addChange as addPlanningChange,
+  parseTeamLink,
+  type Change,
+  type Iteration,
+  type PlanItem,
+  type PlanningConnection,
+  type PlanningData,
+  type PlanningState,
+  type PublishResult,
+} from "../domain/planning";
+
 /** A run as the in-memory ADO knows it, for pipeline fixtures (ADR 038). */
 export interface MemoryPipelineRun {
   id: number;
@@ -116,6 +128,158 @@ export class MemoryBackend implements Backend {
       pipeline_items: [...this.pipelineItems].sort((a, b) =>
         compareTimes(b.finished_at, a.finished_at) || b.run_id - a.run_id),
     });
+  }
+
+  // ── Planning (ADR 039): an in-memory ADO team for E2E ──
+  private planningAdo: { organization: string; project: string; team: string; iterations: Iteration[]; items: PlanItem[] } = {
+    organization: "skype", project: "OneWork", team: "Waimea Bay", iterations: [], items: [],
+  };
+  private planningSaved: PlanningState = { connection: null, selected_sprint: null, draft: [] };
+  private planningFlags = { authError: false, failFetch: false, fetches: 0, writes: 0, nextId: 90000 };
+
+  /** The team the in-memory ADO serves, with its sprints and work items (me = "Me"). */
+  seedPlanningAdo(seed: { organization?: string; project?: string; team?: string; iterations: Iteration[]; items: PlanItem[] }): void {
+    this.planningAdo = {
+      organization: seed.organization ?? "skype", project: seed.project ?? "OneWork", team: seed.team ?? "Waimea Bay",
+      iterations: structuredClone(seed.iterations), items: structuredClone(seed.items),
+    };
+  }
+
+  setPlanningAuthError(on: boolean): void { this.planningFlags.authError = on; }
+  failPlanningFetch(on: boolean): void { this.planningFlags.failFetch = on; }
+  planningFetchCount(): number { return this.planningFlags.fetches; }
+  planningWrites(): number { return this.planningFlags.writes; }
+  planningAdoItems(): PlanItem[] { return structuredClone(this.planningAdo.items); }
+
+  /** Someone else edits an item in ADO: its revision moves on. */
+  changePlanningItemInAdo(id: number, patch: Partial<PlanItem>): void {
+    const item = this.planningAdo.items.find((i) => i.id === id);
+    if (item) Object.assign(item, patch, { rev: item.rev + 1 });
+  }
+
+  async planningState(): Promise<PlanningState> {
+    return structuredClone(this.planningSaved);
+  }
+
+  async planningConnect(url: string): Promise<PlanningConnection> {
+    const link = parseTeamLink(url);
+    if (!link) throw new Error("That isn't an Azure DevOps team sprint or backlog link. Paste the link of your team's sprint (…/_sprints/taskboard/<team>/…) or backlog (…/_backlogs/backlog/<team>/…).");
+    if (this.planningFlags.authError) throw new Error("Azure CLI authentication failed. Install az and run az login for your ADO account.");
+    const ado = this.planningAdo;
+    if (link.organization.toLowerCase() !== ado.organization.toLowerCase() || link.team.toLowerCase() !== ado.team.toLowerCase()) {
+      throw new Error("That team wasn't found, or your Azure CLI account can't see it.");
+    }
+    const connection: PlanningConnection = {
+      organization: ado.organization, project: ado.project, team: ado.team, team_id: "memory-team",
+      area_path: `${ado.project}\\Area`, backlog_iteration: `${ado.project}\\CY26`,
+      order_field: "Microsoft.VSTS.Common.StackRank", effort_field: "Microsoft.VSTS.Scheduling.StoryPoints",
+    };
+    this.planningSaved.connection = connection;
+    return structuredClone(connection);
+  }
+
+  async planningFetch(): Promise<PlanningData> {
+    const connection = this.planningSaved.connection;
+    if (!connection) throw new Error("Planning isn't connected to a team yet");
+    this.planningFlags.fetches += 1;
+    if (this.planningFlags.failFetch) throw new Error("ADO connection failed or timed out. Check your network and VPN.");
+    const ado = this.planningAdo;
+    const iterations = [...ado.iterations].sort((a, b) => (a.start ?? "").localeCompare(b.start ?? ""));
+    const saved = this.planningSaved.selected_sprint;
+    const selected = (saved && iterations.some((i) => i.path === saved) ? saved : null)
+      ?? iterations.find((i) => i.timeframe === "current")?.path ?? iterations[iterations.length - 1]?.path ?? "";
+    const index = iterations.findIndex((i) => i.path === selected);
+    const previous = index > 0 ? iterations[index - 1].path : null;
+    const features = ado.items.filter((i) => i.kind === "Feature" && i.assigned_to_me && i.state !== "Closed" && i.state !== "Removed");
+    const featureIds = new Set(features.map((f) => f.id));
+    const stories = ado.items.filter((i) => i.kind === "User Story" && (
+      (i.parent_id !== null && featureIds.has(i.parent_id))
+      || (i.assigned_to_me && (i.iteration_path === selected || i.iteration_path === previous))
+      || (i.assigned_to_me && (i.state === "New" || i.state === "Active"))));
+    return structuredClone({
+      connection, me: { id: "me", display_name: "Me", unique_name: "me@example.com" },
+      iterations, selected_sprint: selected, previous_sprint: previous, items: [...features, ...stories],
+    });
+  }
+
+  async planningSelectSprint(path: string): Promise<void> {
+    this.planningSaved.selected_sprint = path;
+  }
+
+  async planningAddChange(change: Change): Promise<Change[]> {
+    this.planningSaved.draft = addPlanningChange(this.planningSaved.draft, change);
+    return structuredClone(this.planningSaved.draft);
+  }
+
+  async planningSetDraft(draft: Change[]): Promise<void> {
+    this.planningSaved.draft = structuredClone(draft);
+  }
+
+  /** Publishes like the native side: in order, re-checking each item's revision; never deletes. */
+  async planningPublish(): Promise<PublishResult> {
+    const data = await this.planningFetch();
+    const ado = this.planningAdo;
+    const result: PublishResult = { written: [], conflicts: [], failures: [], remaining: [] };
+    const created = new Map<number, number>();
+    const ours = new Map<number, [number, number]>();
+    const fieldOf: Record<string, string> = { move: "System.IterationPath", estimate: "Microsoft.VSTS.Scheduling.StoryPoints", retitle: "System.Title", order: "Microsoft.VSTS.Common.StackRank", remove: "System.State" };
+    const valueOf = (item: PlanItem, kind: string): string => {
+      const v = { move: item.iteration_path, estimate: item.story_points, retitle: item.title, order: item.order, remove: item.state }[kind];
+      return v === null || v === undefined ? "(empty)" : String(v);
+    };
+    for (const change of this.planningSaved.draft) {
+      if (change.kind === "create_feature" || change.kind === "create_story") {
+        const parent = change.kind === "create_story" ? (change.parent < 0 ? created.get(change.parent) : change.parent) : null;
+        if (change.kind === "create_story" && parent === undefined) {
+          result.failures.push({ id: change.temp_id, message: "Its feature wasn't created" });
+          result.remaining.push(change);
+          continue;
+        }
+        const id = ++this.planningFlags.nextId;
+        const parentItem = ado.items.find((i) => i.id === parent);
+        ado.items.push({
+          id, rev: 1, kind: change.kind === "create_feature" ? "Feature" : "User Story", title: change.title, state: "New",
+          assigned_to: "Me", assigned_to_me: true,
+          iteration_path: change.kind === "create_feature" ? data.connection.backlog_iteration : parentItem?.iteration_path ?? data.connection.backlog_iteration,
+          story_points: change.kind === "create_story" ? change.points : null, order: null,
+          target_date: change.kind === "create_feature" ? change.target_date : null, parent_id: parent ?? null,
+          tasks_done: 0, tasks_total: 0, url: `https://dev.azure.com/${ado.organization}/${ado.project}/_workitems/edit/${id}`,
+        });
+        created.set(change.temp_id, id);
+        result.written.push(id);
+        this.planningFlags.writes += 1;
+        continue;
+      }
+      const item = ado.items.find((i) => i.id === change.id);
+      if (!item) {
+        result.failures.push({ id: change.id, message: "That item wasn't found, or your Azure CLI account can't see it." });
+        result.remaining.push(change);
+        continue;
+      }
+      const seen = ours.get(change.id);
+      const expected = seen && seen[0] === change.rev ? seen[1] : change.rev;
+      if (item.rev !== expected) {
+        result.conflicts.push({ id: item.id, title: item.title, field: fieldOf[change.kind], ado_value: valueOf(item, change.kind) });
+        result.remaining.push(change);
+        continue;
+      }
+      switch (change.kind) {
+        case "move":
+          item.iteration_path = change.to_iteration;
+          if (change.assign_to_me) { item.assigned_to = "Me"; item.assigned_to_me = true; }
+          break;
+        case "estimate": item.story_points = change.points; break;
+        case "retitle": item.title = change.title; break;
+        case "order": item.order = change.order; break;
+        case "remove": item.state = "Removed"; break;
+      }
+      item.rev += 1;
+      ours.set(item.id, [change.rev, item.rev]);
+      if (!result.written.includes(item.id)) result.written.push(item.id);
+      this.planningFlags.writes += 1;
+    }
+    this.planningSaved.draft = structuredClone(result.remaining);
+    return result;
   }
 
   // ── Pipelines (ADR 038) ──
