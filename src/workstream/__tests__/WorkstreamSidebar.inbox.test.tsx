@@ -132,3 +132,12 @@ describe("WorkstreamSidebar Inbox and Pipelines entries", () => {
     expect(screen.getByLabelText("A pipeline check failed")).toBeInTheDocument();
   });
 });
+
+describe("WorkstreamSidebar Planning entry", () => {
+  it("opens Planning from the sidebar footer", () => {
+    const onOpenPlanning = vi.fn();
+    renderSidebar({ onOpenPlanning });
+    fireEvent.click(screen.getByTestId("planning-button"));
+    expect(onOpenPlanning).toHaveBeenCalled();
+  });
+});

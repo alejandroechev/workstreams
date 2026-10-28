@@ -72,6 +72,12 @@ instead of buried behind tabs.
   and the Repo Explorer diff sorts by its recommendation, numbered, with a
   Recommended / Name toggle. The app checks the order covers every changed file
   and flags it when the diff has moved on since (macOS and Linux).
+- **Planning your ADO work** — a Planning view (sidebar) shows the user stories
+  of yours in the sprint you pick, and your features' done vs pending story
+  points against their target dates. Plan a sprint by dragging stories against an
+  8-story-point gauge, or break a feature into estimated stories. Every change is
+  a draft until you press **Publish to ADO**
+  ([ADR 039](docs/adrs/039-ado-planning.md)).
 - **ADO Inbox** — opt in per repo to follow reviews assigned to you, PRs you opened, or both, with per-PR comment, vote, build-gate and closure events. Paste a link to any ADO pipeline (or one of its runs) to be told when its runs fail, succeed or both ([ADR 038](docs/adrs/038-pipeline-notifications.md)).
   Uses your `az login` account, checks every two minutes while the app is open,
   and keeps read/unread state across restarts. The first check is silent. An

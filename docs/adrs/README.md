@@ -51,6 +51,7 @@ whatever replaced it — the history is the point.
 | [036](036-pr-inbox-mutes.md) | Muting kinds of PR inbox events globally by kind, subject and outcome; muted events are skipped, matching ones read | Accepted |
 | [037](037-acceptance-review-mode.md) | Reviewing acceptance tests in the Plan tile: one test per screen, marks in the draft file, storyboards, read-only screenshots, no writes after approval | Accepted |
 | [038](038-pipeline-notifications.md) | Pipeline notifications in the Inbox: watch pipelines added by link, per-pipeline mode, no replay, checked in the PR inbox poller | Accepted |
+| [039](039-ado-planning.md) | Planning your ADO sprint and features in a global view: you pick the sprint, an 8-SP gauge, changes go through a draft published with per-item revision checks | Accepted |
 
 ## Writing a new ADR
 

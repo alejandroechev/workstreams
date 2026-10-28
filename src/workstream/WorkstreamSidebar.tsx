@@ -43,6 +43,7 @@ import {
   XMarkIcon,
   InboxIcon,
   RocketLaunchIcon,
+  CalendarDaysIcon,
 } from "@heroicons/react/20/solid";
 import { getAppSettings } from "../domain/app-settings";
 import { selectableRepositories } from "../domain/repository-visibility";
@@ -75,6 +76,8 @@ interface Props {
   onOpenInbox?: () => void;
   /** Opens the Pipelines manager (ADR 038). */
   onOpenPipelines?: () => void;
+  /** Opens Planning: your ADO sprint and features (ADR 039). */
+  onOpenPlanning?: () => void;
   /** A watched pipeline's last check failed. */
   pipelinesError?: boolean;
   /** Pull requests with at least one unread event, not the event count. */
@@ -207,6 +210,7 @@ export default function WorkstreamSidebar({
   onOpenTaskBoard,
   onOpenInbox,
   onOpenPipelines,
+  onOpenPlanning,
   pipelinesError = false,
   inboxUnread = 0,
   inboxRepos,
@@ -1250,6 +1254,19 @@ export default function WorkstreamSidebar({
             {(inboxError || inboxRepos?.some((repo) => repo.enabled && repo.error)) && (
               <ExclamationTriangleIcon aria-label="Inbox connection error" style={{ width: 14, height: 14, color: "#f9e2af" }} />
             )}
+          </button>
+        )}
+        {onOpenPlanning && (
+          <button
+            data-testid="planning-button"
+            onClick={onOpenPlanning}
+            title="Your ADO sprint and features, and planning them"
+            style={{ ...footerButtonStyle, color: "#6c7086" }}
+            onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "#1e1e2e"; }}
+            onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "transparent"; }}
+          >
+            <CalendarDaysIcon style={{ width: 14, height: 14 }} />
+            <span style={{ flex: 1, textAlign: "left" }}>Planning</span>
           </button>
         )}
         {onOpenPipelines && (

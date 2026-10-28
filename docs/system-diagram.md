@@ -105,6 +105,11 @@ graph TB
     Sidebar --> PrInboxUI
     PrInboxUI -- "Tauri: configure / snapshot / read state" --> PrInboxRS
     AgentRegistryRS -- "inbox.configure / list / read / pipeline_*" --> PrInboxRS
+    App --> PlanningUI["Planning view (ADR 039)<br/>Sprint · Features · Plan sprint · Plan feature<br/>draft → Publish to ADO"]
+    PlanningUI -- "Tauri: planning_*" --> PlanningRS["ado_planning.rs<br/>team link, WIQL + batch reads<br/>draft in settings; publish with test /rev"]
+    AgentRegistryRS -- "planning.*" --> PlanningRS
+    PlanningRS --> AzureCli
+    PlanningRS -- "bounded HTTPS (GET / POST / PATCH)" --> AdoAPI
     AgentRegistryRS -- "diff.order.set / get" --> DiffOrderRS
     AgentRegistryRS -- "companion.send (phone sessions only)" --> CompanionMsgRS
     CompanionMsgRS -- "companion_sessions / companion_messages" --> AppDB

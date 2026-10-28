@@ -14,6 +14,8 @@ import WorkstreamSidebar from "./workstream/WorkstreamSidebar";
 import { usePrInbox } from "./workstream/usePrInbox";
 import { PrInboxModal } from "./workstream/PrInboxModal";
 import { PipelinesModal } from "./workstream/PipelinesModal";
+import { PlanningView } from "./planning/PlanningView";
+import { usePlanning } from "./planning/usePlanning";
 import { TaskBoard } from "./tasks/TaskBoard";
 import { WorkstreamQuickNote } from "./tasks/WorkstreamQuickNote";
 import { InProgressTaskList } from "./tasks/InProgressTaskList";
@@ -84,6 +86,8 @@ export default function App() {
   const inbox = usePrInbox(backend);
   const [showInbox, setShowInbox] = useState(false);
   const [showPipelines, setShowPipelines] = useState(false);
+  const [showPlanning, setShowPlanning] = useState(false);
+  const planning = usePlanning(backend, showPlanning);
   const [projects, setProjects] = useState<Project[]>([]);
   const [workLanes, setWorkLanes] = useState<WorkLane[]>([]);
   const [workstreams, setWorkstreams] = useState<Workstream[]>([]);
@@ -2302,6 +2306,7 @@ export default function App() {
           onOpenPipelines={() => setShowPipelines(true)}
           onClose={() => setShowInbox(false)} />
       )}
+      {showPlanning && <PlanningView planning={planning} onClose={() => setShowPlanning(false)} />}
       {showPipelines && (
         <PipelinesModal pipelines={inbox.snapshot.pipelines ?? []}
           onAdd={inbox.addPipeline} onSetMode={inbox.setPipelineMode} onRemove={inbox.removePipeline}
@@ -2311,6 +2316,7 @@ export default function App() {
         onOpenInbox={() => setShowInbox(true)}
         inboxUnread={countUnreadInbox(inbox.snapshot)}
         onOpenPipelines={() => setShowPipelines(true)}
+        onOpenPlanning={() => setShowPlanning(true)}
         pipelinesError={(inbox.snapshot.pipelines ?? []).some((pipeline) => !!pipeline.error)}
         inboxRepos={inbox.loading ? undefined : inbox.snapshot.repos}
         inboxError={inbox.error}
