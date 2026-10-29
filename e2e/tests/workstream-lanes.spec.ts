@@ -41,6 +41,9 @@ async function createWorkstream(page: Page, name: string) {
   await page.locator('[data-testid="ws-create-name"]').fill(name);
   await page.locator('[data-testid="ws-create-submit"]').click();
   await expect(page.locator('[data-testid="ws-create-form"]')).toHaveCount(0);
+  // The new workstream's terminal takes focus a moment later; wait for it, or
+  // it steals focus from (and so closes) whatever the test opens next.
+  await expect(page.getByRole("textbox", { name: "Terminal input" }).last()).toBeFocused();
 }
 
 async function addLane(page: Page, name: string) {
