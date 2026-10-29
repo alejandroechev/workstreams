@@ -228,7 +228,7 @@ describe("tasks", () => {
     draft = addChange(draft, { kind: "set_state", id: 11, rev: 1, state: "Resolved" });
     expect(draft).toEqual([{ kind: "set_state", id: 11, rev: 1, state: "Resolved" }]);
     const after = applyDraft(d, draft).find((i) => i.id === 2)!;
-    expect(after.tasks!.map((t) => t.state)).toEqual(["Closed", "Resolved", "New"]);
+    expect(after.tasks!.map((t) => t.state)).toEqual(["New", "Resolved", "Closed"]);
     expect(after.state).toBe("Active");
     expect(taskProgress(after)).toEqual({ done: 2, total: 3 });
     expect(story.tasks![1].state).toBe("Active");
@@ -239,6 +239,17 @@ describe("tasks", () => {
     expect(describeChange({ kind: "set_state", id: 2, rev: 1, state: "Resolved" }, d, [resolved])).toBe("Set “item 2” to Resolved");
   });
 
+  it("removing and setting a state replace each other, and drafted rows keep the state order", () => {
+    let draft: Change[] = [{ kind: "remove", id: 2, rev: 1 }];
+    draft = addChange(draft, { kind: "set_state", id: 2, rev: 1, state: "Resolved" });
+    expect(draft).toEqual([{ kind: "set_state", id: 2, rev: 1, state: "Resolved" }]);
+    draft = addChange(draft, { kind: "remove", id: 2, rev: 1 });
+    expect(draft).toEqual([{ kind: "remove", id: 2, rev: 1 }]);
+    const story = item(2, { state: "Active", tasks: [task(10, "New"), task(11, "Active")] });
+    const after = applyDraft(data([feature, story]), [{ kind: "set_state", id: 10, rev: 1, state: "Closed" }]).find((i) => i.id === 2)!;
+    expect(after.tasks!.map((t) => t.id)).toEqual([11, 10]);
+  });
+
   it("offer to resolve a story only once all its tasks are done", () => {
     const story = (state: string, tasks: PlanTask[]) => item(2, { state, tasks });
     expect(resolveOffer(story("Active", [task(1, "Closed"), task(2, "Active")]))).toBe(false);
@@ -246,6 +257,7 @@ describe("tasks", () => {
     expect(resolveOffer(story("New", [task(1, "Closed")]))).toBe(true);
     expect(resolveOffer(story("Resolved", [task(1, "Closed")]))).toBe(false);
     expect(resolveOffer(story("Closed", [task(1, "Closed")]))).toBe(false);
+    expect(resolveOffer(story("Removed", [task(1, "Closed")]))).toBe(false);
     expect(resolveOffer(story("Active", []))).toBe(false);
     expect(resolveOffer(item(2, { state: "Active" }))).toBe(false);
   });

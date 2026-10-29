@@ -654,8 +654,12 @@ impl Change {
         }
     }
 
+    /// Removing an item and setting its state both set its state, so they
+    /// replace each other.
     fn same_slot(&self, other: &Change) -> bool {
-        std::mem::discriminant(self) == std::mem::discriminant(other)
+        let sets_state = |c: &Change| matches!(c, Change::Remove { .. } | Change::SetState { .. });
+        (std::mem::discriminant(self) == std::mem::discriminant(other)
+            || (sets_state(self) && sets_state(other)))
             && self.target() == other.target()
     }
 }
@@ -1839,6 +1843,29 @@ mod tests {
                 state: "Active".into()
             }]
         );
+    }
+
+    #[test]
+    fn removing_and_setting_a_state_replace_each_other() {
+        let mut draft = vec![Change::Remove { id: 3, rev: 1 }];
+        add_change(
+            &mut draft,
+            Change::SetState {
+                id: 3,
+                rev: 1,
+                state: "Resolved".into(),
+            },
+        );
+        assert_eq!(
+            draft,
+            vec![Change::SetState {
+                id: 3,
+                rev: 1,
+                state: "Resolved".into()
+            }]
+        );
+        add_change(&mut draft, Change::Remove { id: 3, rev: 1 });
+        assert_eq!(draft, vec![Change::Remove { id: 3, rev: 1 }]);
     }
 
     #[test]

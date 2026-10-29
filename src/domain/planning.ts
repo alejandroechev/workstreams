@@ -133,7 +133,9 @@ export function addChange(draft: Change[], change: Change): Change[] {
       return c;
     });
   }
-  const index = draft.findIndex((c) => c.kind === change.kind && target(c) === id);
+  // Removing an item and setting its state both set its state: they replace each other.
+  const slot = (kind: Change["kind"]) => (kind === "remove" || kind === "set_state" ? "state" : kind);
+  const index = draft.findIndex((c) => slot(c.kind) === slot(change.kind) && target(c) === id);
   if (index < 0) return [...draft, change];
   return draft.map((c, i) => (i === index ? change : c));
 }
@@ -178,7 +180,7 @@ export function applyDraft(data: PlanningData, draft: Change[]): PlanItem[] {
       if (item) { item.state = change.state; continue; }
       for (const story of items) {
         const task = story.tasks?.find((t) => t.id === change.id);
-        if (task) { story.tasks = story.tasks!.map((t) => (t === task ? { ...t, state: change.state } : t)); break; }
+        if (task) { story.tasks = sortTasks(story.tasks!.map((t) => (t === task ? { ...t, state: change.state } : t))); break; }
       }
       continue;
     }
@@ -220,7 +222,7 @@ export function taskProgress(story: PlanItem): { done: number; total: number } {
 /** Whether to offer resolving a story: it has tasks, all done, and isn't done itself. */
 export function resolveOffer(story: PlanItem): boolean {
   const tasks = story.tasks ?? [];
-  return tasks.length > 0 && tasks.every((t) => isDone(t.state)) && !isDone(story.state);
+  return tasks.length > 0 && tasks.every((t) => isDone(t.state)) && !isDone(story.state) && story.state !== "Removed";
 }
 const points = (i: PlanItem) => i.story_points ?? 0;
 const sum = (items: PlanItem[]) => items.reduce((total, i) => total + points(i), 0);

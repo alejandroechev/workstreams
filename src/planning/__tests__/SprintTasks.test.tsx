@@ -84,4 +84,21 @@ describe("tasks in the sprint tab", () => {
     expect((await backend.planningState()).draft).toContainEqual({ kind: "set_state", id: 3, rev: 1, state: "Resolved" });
     expect(screen.getByTestId("planning-draft-count")).toHaveTextContent("3 changes not published");
   });
+
+  it("brings a dismissed offer back after any task change, and never offers it for a story being removed", async () => {
+    const backend = await open(taskTeam());
+    pick(32, "Closed");
+    await screen.findByTestId("planning-task-pending-32");
+    pick(33, "Closed");
+    await screen.findByTestId("planning-resolve-offer-3");
+    fireEvent.click(screen.getByTestId("planning-resolve-dismiss-3"));
+    pick(33, "Active");
+    await waitFor(() => expect((screen.getByTestId("planning-task-state-33") as HTMLSelectElement).value).toBe("Active"));
+    pick(33, "Closed");
+    await screen.findByTestId("planning-resolve-offer-3");
+
+    await backend.planningAddChange({ kind: "remove", id: 3, rev: 1 });
+    fireEvent.click(screen.getByTestId("planning-refresh"));
+    await waitFor(() => expect(screen.queryByTestId("planning-resolve-offer-3")).toBeNull());
+  });
 });

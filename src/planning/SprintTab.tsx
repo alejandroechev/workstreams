@@ -140,6 +140,8 @@ export function SprintTab({ data, now, draft = [], onAddChange, onSetDraft }: Pr
     dismissedAt: dismissed[story.id],
     onDismiss: (signature) => setDismissed((d) => ({ ...d, [story.id]: signature })),
     onSetState: (task, original, state) => run(async () => {
+      // A task change brings a dismissed offer back.
+      setDismissed((d) => { const { [story.id]: _, ...rest } = d; return rest; });
       if (state === original.state) {
         await onSetDraft?.(draft.filter((c) => !(c.kind === "set_state" && c.id === task.id)));
       } else {
