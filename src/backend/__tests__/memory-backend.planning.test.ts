@@ -133,6 +133,36 @@ describe("MemoryBackend planning", () => {
     expect((await b.planningState()).draft).toEqual([]);
   });
 
+  it("lists sprint stories' tasks like ADO, and publishes their states with a revision check", async () => {
+    const b = seeded();
+    b.seedPlanningAdo({
+      iterations: [{ name: "S22", path: "OneWork\\S22", start: "2026-10-26T00:00:00Z", finish: "2026-11-08T00:00:00Z", timeframe: "current" }],
+      items: [
+        story(1, { state: "Active" }),
+        story(10, { kind: "Task", title: "Closed one", state: "Closed", parent_id: 1 }),
+        story(11, { kind: "Task", title: "Mine", state: "Active", parent_id: 1, order: 2 }),
+        story(12, { kind: "Task", title: "Erwin's", state: "New", parent_id: 1, assigned_to: "Erwin", assigned_to_me: false }),
+        story(13, { kind: "Task", title: "Gone", state: "Removed", parent_id: 1 }),
+        story(14, { kind: "Bug", title: "A bug", state: "New", parent_id: 1 }),
+      ],
+    });
+    await b.planningConnect(LINK);
+    const data = await b.planningFetch();
+    expect(data.items.map((i) => i.id)).toEqual([1]);
+    const s = data.items[0];
+    expect(s.tasks!.map((t) => [t.id, t.state, t.assigned_to])).toEqual([[12, "New", "Erwin"], [11, "Active", "Me"], [10, "Closed", "Me"]]);
+    expect([s.tasks_done, s.tasks_total]).toEqual([1, 3]);
+    await expect(b.planningAddChange({ kind: "set_state", id: 11, rev: 1, state: "Removed" })).rejects.toThrow("New, Active, Blocked, Resolved or Closed");
+    await b.planningAddChange({ kind: "set_state", id: 11, rev: 1, state: "Closed" });
+    await b.planningAddChange({ kind: "set_state", id: 12, rev: 1, state: "Active" });
+    b.changePlanningItemInAdo(12, { state: "Blocked" });
+    const result = await b.planningPublish();
+    expect(result.conflicts).toEqual([{ id: 12, title: "Erwin's", field: "System.State", ado_value: "Blocked" }]);
+    const ado = b.planningAdoItems();
+    expect([ado.find((i) => i.id === 11)?.state, ado.find((i) => i.id === 12)?.state]).toEqual(["Closed", "Blocked"]);
+    expect((await b.planningState()).draft).toEqual([{ kind: "set_state", id: 12, rev: 1, state: "Active" }]);
+  });
+
   it("can fail a read, as a network error would", async () => {
     const b = seeded();
     await b.planningConnect(LINK);

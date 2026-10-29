@@ -45,7 +45,23 @@ export interface PlanItem {
   tasks_done: number;
   tasks_total: number;
   url: string;
+  /** Child tasks of a story in the selected sprint, by state then backlog order; no Removed ones. */
+  tasks?: PlanTask[];
 }
+
+export interface PlanTask {
+  id: number;
+  rev: number;
+  title: string;
+  state: string;
+  assigned_to: string | null;
+  assigned_to_me: boolean;
+  order: number | null;
+  url: string;
+}
+
+/** The states a task (or a story, through the resolve offer) can be set to, in display order. */
+export const SETTABLE_STATES = ["New", "Active", "Blocked", "Resolved", "Closed"] as const;
 
 export interface PlanningData {
   connection: PlanningConnection;
@@ -62,6 +78,8 @@ export type Change =
   | { kind: "retitle"; id: number; rev: number; title: string }
   | { kind: "order"; id: number; rev: number; order: number }
   | { kind: "remove"; id: number; rev: number }
+  /** A task's state, or a story's through the "resolve the story" offer. */
+  | { kind: "set_state"; id: number; rev: number; state: string }
   | { kind: "create_feature"; temp_id: number; title: string; target_date: string | null; description: string | null }
   | {
       kind: "create_story"; temp_id: number; parent: number; title: string; points: number | null; description: string | null;
@@ -155,6 +173,15 @@ export function applyDraft(data: PlanningData, draft: Change[]): PlanItem[] {
       byId.set(item.id, item);
       continue;
     }
+    if (change.kind === "set_state") {
+      const item = byId.get(change.id);
+      if (item) { item.state = change.state; continue; }
+      for (const story of items) {
+        const task = story.tasks?.find((t) => t.id === change.id);
+        if (task) { story.tasks = story.tasks!.map((t) => (t === task ? { ...t, state: change.state } : t)); break; }
+      }
+      continue;
+    }
     const item = byId.get(change.id);
     if (!item) continue;
     switch (change.kind) {
@@ -172,6 +199,29 @@ export function applyDraft(data: PlanningData, draft: Change[]): PlanItem[] {
 }
 
 const isDone = (state: string) => state === "Resolved" || state === "Closed";
+
+const stateRank = (state: string) => {
+  const index = (SETTABLE_STATES as readonly string[]).indexOf(state);
+  return index < 0 ? SETTABLE_STATES.length : index;
+};
+
+/** Tasks by state (New, Active, Blocked, Resolved, Closed), then backlog order, as the native side lists them. */
+export function sortTasks(tasks: PlanTask[]): PlanTask[] {
+  return [...tasks].sort((a, b) =>
+    stateRank(a.state) - stateRank(b.state) || (a.order ?? Infinity) - (b.order ?? Infinity) || a.id - b.id);
+}
+
+/** A story's task progress from its (possibly drafted) tasks. */
+export function taskProgress(story: PlanItem): { done: number; total: number } {
+  if (!story.tasks) return { done: story.tasks_done, total: story.tasks_total };
+  return { done: story.tasks.filter((t) => isDone(t.state)).length, total: story.tasks.length };
+}
+
+/** Whether to offer resolving a story: it has tasks, all done, and isn't done itself. */
+export function resolveOffer(story: PlanItem): boolean {
+  const tasks = story.tasks ?? [];
+  return tasks.length > 0 && tasks.every((t) => isDone(t.state)) && !isDone(story.state);
+}
 const points = (i: PlanItem) => i.story_points ?? 0;
 const sum = (items: PlanItem[]) => items.reduce((total, i) => total + points(i), 0);
 
@@ -346,6 +396,11 @@ export function describeChange(change: Change, data: PlanningData | null, items:
     case "retitle": return `Rename #${change.id} to “${change.title}”`;
     case "order": return `Reorder “${title(change.id)}”`;
     case "remove": return `Remove “${title(change.id)}” (state Removed)`;
+    case "set_state": {
+      if (items.some((i) => i.id === change.id)) return `Set “${title(change.id)}” to ${change.state}`;
+      const task = items.flatMap((i) => i.tasks ?? []).find((t) => t.id === change.id);
+      return `Set task “${task?.title ?? `#${change.id}`}” to ${change.state}`;
+    }
     case "create_feature": return `New feature “${change.title}”${change.target_date ? `, target ${change.target_date}` : ""}`;
     case "create_story": return `New story “${change.title}” (${change.points ?? "?"} SP) in ${title(change.parent)}`;
   }

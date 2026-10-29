@@ -14,6 +14,8 @@ import {
 
 import {
   addChange as addPlanningChange,
+  SETTABLE_STATES,
+  sortTasks as sortPlanTasks,
   parseTeamLink,
   type Change,
   type Iteration,
@@ -200,7 +202,18 @@ export class MemoryBackend implements Backend {
     const stories = ado.items.filter((i) => i.kind === "User Story" && (
       (i.parent_id !== null && featureIds.has(i.parent_id))
       || (i.assigned_to_me && (i.iteration_path === selected || i.iteration_path === previous))
-      || (i.assigned_to_me && (i.state === "New" || i.state === "Active"))));
+      || (i.assigned_to_me && (i.state === "New" || i.state === "Active"))))
+      .map((story) => {
+        if (story.iteration_path !== selected) return story;
+        const children = ado.items.filter((t) => t.kind === "Task" && t.parent_id === story.id);
+        if (children.length === 0) return story;
+        const tasks = sortPlanTasks(children.filter((t) => t.state !== "Removed").map((t) => ({
+          id: t.id, rev: t.rev, title: t.title, state: t.state, assigned_to: t.assigned_to,
+          assigned_to_me: t.assigned_to_me, order: t.order, url: t.url,
+        })));
+        const done = tasks.filter((t) => t.state === "Resolved" || t.state === "Closed").length;
+        return { ...story, tasks, tasks_done: done, tasks_total: tasks.length };
+      });
     // The first default is remembered, so a later rollover is offered, not applied.
     if (!saved && selected) this.planningSaved.selected_sprint = selected;
     return structuredClone({
@@ -219,6 +232,9 @@ export class MemoryBackend implements Backend {
 
   async planningAddChange(change: Change): Promise<Change[]> {
     this.ensureNotPublishing();
+    if (change.kind === "set_state" && !(SETTABLE_STATES as readonly string[]).includes(change.state)) {
+      throw new Error(`"${change.state}" isn't a state Planning sets; use New, Active, Blocked, Resolved or Closed`);
+    }
     const creation = (c: Change) => (c.kind === "create_feature" || c.kind === "create_story" ? c.temp_id : null);
     const id = creation(change);
     if (id !== null && this.planningSaved.draft.some((c) => creation(c) === id)) throw new Error(PLANNING_CHANGED_MEANWHILE);
@@ -251,9 +267,9 @@ export class MemoryBackend implements Backend {
     const result: PublishResult = { written: [], conflicts: [], failures: [], remaining: [] };
     const created = new Map<number, number>();
     const ours = new Map<number, [number, number]>();
-    const fieldOf: Record<string, string> = { move: "System.IterationPath", estimate: "Microsoft.VSTS.Scheduling.StoryPoints", retitle: "System.Title", order: "Microsoft.VSTS.Common.StackRank", remove: "System.State" };
+    const fieldOf: Record<string, string> = { move: "System.IterationPath", estimate: "Microsoft.VSTS.Scheduling.StoryPoints", retitle: "System.Title", order: "Microsoft.VSTS.Common.StackRank", remove: "System.State", set_state: "System.State" };
     const valueOf = (item: PlanItem, kind: string): string => {
-      const v = { move: item.iteration_path, estimate: item.story_points, retitle: item.title, order: item.order, remove: item.state }[kind];
+      const v = { move: item.iteration_path, estimate: item.story_points, retitle: item.title, order: item.order, remove: item.state, set_state: item.state }[kind];
       return v === null || v === undefined ? "(empty)" : String(v);
     };
     for (const change of this.planningSaved.draft) {
@@ -314,6 +330,7 @@ export class MemoryBackend implements Backend {
         case "retitle": item.title = change.title; break;
         case "order": item.order = change.order; break;
         case "remove": item.state = "Removed"; break;
+        case "set_state": item.state = change.state; break;
       }
       item.rev += 1;
       ours.set(item.id, [change.rev, item.rev]);

@@ -13,10 +13,14 @@ import {
   orderBetween,
   outOfSprintIteration,
   parseTeamLink,
+  resolveOffer,
+  sortTasks,
   sprintSummary,
+  taskProgress,
   type Change,
   type PlanItem,
   type PlanningData,
+  type PlanTask,
 } from "../planning";
 
 const item = (id: number, over: Partial<PlanItem> = {}): PlanItem => ({
@@ -203,6 +207,47 @@ describe("the draft", () => {
 
   it("orders between neighbours", () => {
     expect([orderBetween(1, 3), orderBetween(null, 3), orderBetween(1, null), orderBetween(null, null)]).toEqual([2, -997, 1001, 1000]);
+  });
+});
+
+describe("tasks", () => {
+  const task = (id: number, state: string, over: Partial<PlanTask> = {}): PlanTask => ({
+    id, rev: 1, title: `task ${id}`, state, assigned_to: "Me", assigned_to_me: true, order: null, url: `u/${id}`, ...over,
+  });
+
+  it("are listed by state, then backlog order", () => {
+    const sorted = sortTasks([task(1, "Closed"), task(2, "Active", { order: 2 }), task(3, "New"), task(4, "Active", { order: 1 }), task(5, "Blocked"), task(6, "Resolved")]);
+    expect(sorted.map((t) => t.id)).toEqual([3, 4, 2, 5, 6, 1]);
+  });
+
+  it("take their drafted state, and progress counts it", () => {
+    const story = item(2, { state: "Active", tasks: [task(10, "Closed"), task(11, "Active"), task(12, "New")], tasks_done: 1, tasks_total: 3 });
+    const d = data([feature, story]);
+    let draft: Change[] = [];
+    draft = addChange(draft, { kind: "set_state", id: 11, rev: 1, state: "Closed" });
+    draft = addChange(draft, { kind: "set_state", id: 11, rev: 1, state: "Resolved" });
+    expect(draft).toEqual([{ kind: "set_state", id: 11, rev: 1, state: "Resolved" }]);
+    const after = applyDraft(d, draft).find((i) => i.id === 2)!;
+    expect(after.tasks!.map((t) => t.state)).toEqual(["Closed", "Resolved", "New"]);
+    expect(after.state).toBe("Active");
+    expect(taskProgress(after)).toEqual({ done: 2, total: 3 });
+    expect(story.tasks![1].state).toBe("Active");
+    expect(describeChange(draft[0], d, applyDraft(d, draft))).toBe("Set task “task 11” to Resolved");
+    // A story's own state (the resolve offer).
+    const resolved = applyDraft(d, [{ kind: "set_state", id: 2, rev: 1, state: "Resolved" }]).find((i) => i.id === 2)!;
+    expect(resolved.state).toBe("Resolved");
+    expect(describeChange({ kind: "set_state", id: 2, rev: 1, state: "Resolved" }, d, [resolved])).toBe("Set “item 2” to Resolved");
+  });
+
+  it("offer to resolve a story only once all its tasks are done", () => {
+    const story = (state: string, tasks: PlanTask[]) => item(2, { state, tasks });
+    expect(resolveOffer(story("Active", [task(1, "Closed"), task(2, "Active")]))).toBe(false);
+    expect(resolveOffer(story("Active", [task(1, "Closed"), task(2, "Resolved")]))).toBe(true);
+    expect(resolveOffer(story("New", [task(1, "Closed")]))).toBe(true);
+    expect(resolveOffer(story("Resolved", [task(1, "Closed")]))).toBe(false);
+    expect(resolveOffer(story("Closed", [task(1, "Closed")]))).toBe(false);
+    expect(resolveOffer(story("Active", []))).toBe(false);
+    expect(resolveOffer(item(2, { state: "Active" }))).toBe(false);
   });
 });
 
