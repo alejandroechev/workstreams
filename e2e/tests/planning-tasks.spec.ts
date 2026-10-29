@@ -11,7 +11,7 @@ import { ITERATIONS, TEAM_LINK, taskTeam } from "../../src/planning/__tests__/fi
 
 type W = { __WS_BACKEND__: MemoryBackend };
 
-async function start(page: Page) {
+async function start(page: Page, items: PlanItem[] = taskTeam()) {
   await page.clock.install({ time: new Date("2026-10-30T12:00:00Z") });
   await page.addInitScript(() => {
     Object.assign(window, { __WS_INVOKE_HANDLERS__: { get_setting: () => null, set_setting: () => null } });
@@ -21,7 +21,7 @@ async function start(page: Page) {
     const b = (window as unknown as W).__WS_BACKEND__;
     b.seedPlanningAdo({ iterations, items });
     await b.planningConnect(link);
-  }, { items: taskTeam(), iterations: ITERATIONS, link: TEAM_LINK });
+  }, { items, iterations: ITERATIONS, link: TEAM_LINK });
   await page.getByTestId("planning-button").click();
   await expect(page.getByTestId("planning-view")).toBeVisible();
 }
@@ -133,4 +133,18 @@ test("AT-5: a story whose tasks are done offers to be resolved, through the draf
   const ado = await backend<PlanItem[]>(page, "planningAdoItems");
   expect(ado.find((i) => i.id === 3)?.state).toBe("Resolved");
   await expect(page.locator("[data-testid^='planning-resolve-offer-']")).toHaveCount(0);
+});
+
+test("long task names wrap inside the card instead of overflowing it", async ({ page }) => {
+  const long = " — implement the very long named media store chunk reader with retries and_a_really_long_identifier_without_spaces";
+  await start(page, taskTeam().map((i) => (i.kind === "Task" ? { ...i, title: i.title + long } : i)));
+  await page.getByTestId("planning-task-state-32").selectOption("Closed");
+  await expect(page.getByTestId("planning-task-pending-32")).toBeVisible();
+  for (const layout of ["board", "feature"]) {
+    await page.getByTestId(`planning-layout-${layout}`).click();
+    const overflowing = await page.locator("[data-testid^='planning-story-']").evaluateAll((cards) =>
+      cards.filter((c) => c.scrollWidth > c.clientWidth + 1).map((c) => c.getAttribute("data-testid")));
+    expect(overflowing, layout).toEqual([]);
+    await expect(page.getByTestId("planning-task-state-32")).toBeInViewport();
+  }
 });

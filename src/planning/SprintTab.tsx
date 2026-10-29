@@ -34,16 +34,31 @@ interface TaskActions {
 
 function TaskRow({ task, original, pending, onSetState }: { task: PlanTask; original: PlanTask; pending: boolean; onSetState: TaskActions["onSetState"] }) {
   return (
-    <div data-testid={`planning-task-${task.id}`} data-state={task.state} style={{ display: "flex", gap: 6, alignItems: "center", marginLeft: 6, paddingLeft: 6, borderLeft: `2px solid ${C.surface0}`, fontSize: 11 }}>
-      <a href={task.url} target="_blank" rel="noreferrer" style={{ flex: 1, minWidth: 0, color: C.sub, textDecoration: "none", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{task.title}</a>
-      {!task.assigned_to_me && task.assigned_to && <span style={{ color: C.muted, fontSize: 10 }}>{task.assigned_to}</span>}
-      {pending && <span data-testid={`planning-task-pending-${task.id}`} title={`In ADO: ${original.state}`} style={{ color: C.peach, fontSize: 10 }}>● not published</span>}
+    <div data-testid={`planning-task-${task.id}`} data-state={task.state} style={{ display: "flex", gap: 6, alignItems: "flex-start", minWidth: 0, marginLeft: 6, paddingLeft: 6, borderLeft: `2px solid ${C.surface0}`, fontSize: 11 }}>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        {/* Long names wrap to two lines at most; the full name is on hover. */}
+        <a
+          href={task.url}
+          target="_blank"
+          rel="noreferrer"
+          title={task.title}
+          style={{ color: C.sub, textDecoration: "none", overflowWrap: "anywhere", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}
+        >
+          {task.title}
+        </a>
+        {((!task.assigned_to_me && task.assigned_to) || pending) && (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, fontSize: 10 }}>
+            {!task.assigned_to_me && task.assigned_to && <span style={{ color: C.muted }}>{task.assigned_to}</span>}
+            {pending && <span data-testid={`planning-task-pending-${task.id}`} title={`In ADO: ${original.state}`} style={{ color: C.peach }}>● not published</span>}
+          </div>
+        )}
+      </div>
       <select
         data-testid={`planning-task-state-${task.id}`}
         aria-label={`State of ${task.title}`}
         value={task.state}
         onChange={(e) => onSetState(task, original, e.target.value)}
-        style={{ fontSize: 10, color: pending ? C.peach : STATE_COLORS[task.state] ?? C.sub, background: C.crust, border: `1px solid ${C.surface1}`, borderRadius: 8, padding: "0 4px", fontFamily: "inherit" }}
+        style={{ flexShrink: 0, fontSize: 10, color: pending ? C.peach : STATE_COLORS[task.state] ?? C.sub, background: C.crust, border: `1px solid ${C.surface1}`, borderRadius: 8, padding: "0 4px", fontFamily: "inherit" }}
       >
         {(SETTABLE_STATES as readonly string[]).includes(task.state) ? null : <option value={task.state}>{task.state}</option>}
         {SETTABLE_STATES.map((state) => <option key={state} value={state}>{state}</option>)}
@@ -59,9 +74,9 @@ function StoryCard({ story, planned, feature, actions }: { story: PlanItem; plan
   const signature = tasks.map((t) => `${t.id}:${t.state}`).join(",");
   const offer = !pendingResolve && resolveOffer(planned) && actions.dismissedAt !== signature;
   return (
-    <div data-testid={`planning-story-${story.id}`} data-state={story.state} style={{ ...card, marginBottom: 6 }}>
+    <div data-testid={`planning-story-${story.id}`} data-state={story.state} style={{ ...card, marginBottom: 6, minWidth: 0 }}>
       <div style={{ display: "flex", gap: 8, alignItems: "baseline" }}>
-        <a href={story.url} target="_blank" rel="noreferrer" style={{ flex: 1, color: C.text, textDecoration: "none" }}>{story.title}</a>
+        <a href={story.url} target="_blank" rel="noreferrer" style={{ flex: 1, minWidth: 0, overflowWrap: "anywhere", color: C.text, textDecoration: "none" }}>{story.title}</a>
         <span data-testid={`planning-sp-${story.id}`} style={{ fontWeight: 700, color: story.story_points === null ? C.yellow : C.text }}>
           {points(story.story_points)}
         </span>
@@ -80,7 +95,7 @@ function StoryCard({ story, planned, feature, actions }: { story: PlanItem; plan
         )}
       </div>
       {actions.expanded && tasks.length > 0 && (
-        <div style={{ display: "grid", gap: 2, marginTop: 4 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: 3, marginTop: 4 }}>
           {tasks.map((task) => {
             const original = story.tasks?.find((t) => t.id === task.id) ?? task;
             const pending = actions.draft.some((c) => c.kind === "set_state" && c.id === task.id);
@@ -209,7 +224,7 @@ export function SprintTab({ data, now, draft = [], onAddChange, onSetDraft }: Pr
               {stories.map((s) => (
                 <div key={s.id} style={{ display: "flex", gap: 8, alignItems: "baseline" }}>
                   <span style={{ fontSize: 9, border: `1px solid ${STATE_COLORS[s.state] ?? C.muted}`, color: STATE_COLORS[s.state] ?? C.muted, borderRadius: 8, padding: "0 6px", minWidth: 54, textAlign: "center" }}>{s.state}</span>
-                  <div style={{ flex: 1 }}>{storyCard(s, feature)}</div>
+                  <div style={{ flex: 1, minWidth: 0 }}>{storyCard(s, feature)}</div>
                 </div>
               ))}
             </section>
