@@ -263,6 +263,33 @@ pub struct PlanItem {
     pub tasks_done: u32,
     pub tasks_total: u32,
     pub url: String,
+    /// The child tasks of a story in the selected sprint: by state, then
+    /// backlog order; Removed ones left out.
+    #[serde(default)]
+    pub tasks: Vec<PlanTask>,
+}
+
+/// A task under a sprint story.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PlanTask {
+    pub id: i64,
+    pub rev: i64,
+    pub title: String,
+    pub state: String,
+    pub assigned_to: Option<String>,
+    pub assigned_to_me: bool,
+    pub order: Option<f64>,
+    pub url: String,
+}
+
+/// The states a task (or, through the resolve offer, a story) can be set to.
+pub const SETTABLE_STATES: [&str; 5] = ["New", "Active", "Blocked", "Resolved", "Closed"];
+
+fn state_rank(state: &str) -> usize {
+    SETTABLE_STATES
+        .iter()
+        .position(|s| *s == state)
+        .unwrap_or(SETTABLE_STATES.len())
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -373,6 +400,7 @@ fn to_item(value: &Value, conn: &PlanningConnection, me: &Me) -> Option<PlanItem
         tasks_done: 0,
         tasks_total: 0,
         url: web_url(conn, value["id"].as_i64()?),
+        tasks: Vec::new(),
     })
 }
 
@@ -490,6 +518,7 @@ pub fn fetch(
     }
     let task_ids: Vec<i64> = task_owner.keys().copied().collect();
     let mut progress: std::collections::HashMap<i64, (u32, u32)> = Default::default();
+    let mut tasks: std::collections::HashMap<i64, Vec<PlanTask>> = Default::default();
     for task in get_items(http, conn, &task_ids)? {
         if task["fields"]["System.WorkItemType"].as_str() != Some("Task") {
             continue;
@@ -504,6 +533,18 @@ pub fn fetch(
             if matches!(state, "Closed" | "Resolved" | "Done") {
                 entry.0 += 1;
             }
+            if let Some(item) = to_item(&task, conn, &me) {
+                tasks.entry(*owner).or_default().push(PlanTask {
+                    id: item.id,
+                    rev: item.rev,
+                    title: item.title,
+                    state: item.state,
+                    assigned_to: item.assigned_to,
+                    assigned_to_me: item.assigned_to_me,
+                    order: item.order,
+                    url: item.url,
+                });
+            }
         }
     }
 
@@ -516,6 +557,19 @@ pub fn fetch(
         if let Some((done, total)) = progress.get(&item.id) {
             item.tasks_done = *done;
             item.tasks_total = *total;
+        }
+        if let Some(mut list) = tasks.remove(&item.id) {
+            list.sort_by(|a, b| {
+                state_rank(&a.state)
+                    .cmp(&state_rank(&b.state))
+                    .then(
+                        a.order
+                            .unwrap_or(f64::INFINITY)
+                            .total_cmp(&b.order.unwrap_or(f64::INFINITY)),
+                    )
+                    .then(a.id.cmp(&b.id))
+            });
+            item.tasks = list;
         }
     }
     Ok(PlanningData {
@@ -560,6 +614,12 @@ pub enum Change {
         id: i64,
         rev: i64,
     },
+    /// A task's state, or a story's through the "resolve the story" offer.
+    SetState {
+        id: i64,
+        rev: i64,
+        state: String,
+    },
     CreateFeature {
         temp_id: i64,
         title: String,
@@ -588,7 +648,8 @@ impl Change {
             | Self::Estimate { id, .. }
             | Self::Retitle { id, .. }
             | Self::Order { id, .. }
-            | Self::Remove { id, .. } => *id,
+            | Self::Remove { id, .. }
+            | Self::SetState { id, .. } => *id,
             Self::CreateFeature { temp_id, .. } | Self::CreateStory { temp_id, .. } => *temp_id,
         }
     }
@@ -782,6 +843,7 @@ fn field_and_value(conn: &PlanningConnection, change: &Change, me: &Me) -> Vec<(
         Change::Retitle { title, .. } => vec![("System.Title".into(), json!(title))],
         Change::Order { order, .. } => vec![(conn.order_field.clone(), json!(order))],
         Change::Remove { .. } => vec![("System.State".into(), json!("Removed"))],
+        Change::SetState { state, .. } => vec![("System.State".into(), json!(state))],
         _ => Vec::new(),
     }
 }
@@ -921,7 +983,8 @@ pub fn publish(
                     | Change::Estimate { rev, .. }
                     | Change::Retitle { rev, .. }
                     | Change::Order { rev, .. }
-                    | Change::Remove { rev, .. } => *rev,
+                    | Change::Remove { rev, .. }
+                    | Change::SetState { rev, .. } => *rev,
                     _ => 0,
                 };
                 let fields = field_and_value(conn, other, me);
@@ -1006,7 +1069,8 @@ pub fn publish(
             | Change::Estimate { id, rev, .. }
             | Change::Retitle { id, rev, .. }
             | Change::Order { id, rev, .. }
-            | Change::Remove { id, rev, .. } => {
+            | Change::Remove { id, rev, .. }
+            | Change::SetState { id, rev, .. } => {
                 if let Some((seen, after)) = ours.get(id) {
                     if *seen == *rev {
                         *rev = *after;
@@ -1056,6 +1120,13 @@ const CHANGED_MEANWHILE: &str =
 /// item whose temporary id another new item already took.
 pub fn add_to_draft(db: &Connection, change: Change) -> Result<Vec<Change>, String> {
     ensure_not_publishing()?;
+    if let Change::SetState { state, .. } = &change {
+        if !SETTABLE_STATES.contains(&state.as_str()) {
+            return Err(format!(
+                "\"{state}\" isn't a state Planning sets; use New, Active, Blocked, Resolved or Closed"
+            ));
+        }
+    }
     let mut draft = load_draft(db)?;
     let creation = |c: &Change| match c {
         Change::CreateFeature { temp_id, .. } | Change::CreateStory { temp_id, .. } => {
@@ -1627,6 +1698,195 @@ mod tests {
             ("IN ('New', 'Active')".to_string(), vec![2, 3, 4, 7]),
         ]);
         s
+    }
+
+    #[test]
+    fn sprint_stories_carry_their_tasks_in_state_order_without_extra_requests() {
+        let plain = seeded();
+        fetch(&plain, &conn(), None).unwrap();
+        let stub = seeded();
+        stub.item(
+            13,
+            "Bug",
+            "A bug",
+            "New",
+            true,
+            "P\\S22",
+            None,
+            Some(2),
+            &[],
+        );
+        stub.item(
+            14,
+            "Task",
+            "Write tests",
+            "New",
+            false,
+            "P\\S22",
+            None,
+            Some(2),
+            &[],
+        );
+        stub.item(
+            15,
+            "Task",
+            "Docs",
+            "Resolved",
+            true,
+            "P\\S22",
+            None,
+            Some(2),
+            &[],
+        );
+        stub.items.borrow_mut().get_mut(&15).unwrap()["fields"]
+            ["Microsoft.VSTS.Common.StackRank"] = json!(1.0);
+        {
+            let mut items = stub.items.borrow_mut();
+            let relations = items.get_mut(&2).unwrap()["relations"]
+                .as_array_mut()
+                .unwrap();
+            for c in [13, 14, 15] {
+                relations.push(json!({"rel": CHILD, "url": format!("https://dev.azure.com/o/_apis/wit/workItems/{c}")}));
+            }
+        }
+        let data = fetch(&stub, &conn(), None).unwrap();
+        assert_eq!(
+            stub.log.borrow().len(),
+            plain.log.borrow().len(),
+            "no extra requests"
+        );
+        let auth = data.items.iter().find(|i| i.id == 2).unwrap();
+        let shown: Vec<(i64, &str, Option<&str>, bool)> = auth
+            .tasks
+            .iter()
+            .map(|t| {
+                (
+                    t.id,
+                    t.state.as_str(),
+                    t.assigned_to.as_deref(),
+                    t.assigned_to_me,
+                )
+            })
+            .collect();
+        assert_eq!(
+            shown,
+            vec![
+                (14, "New", Some("Erwin"), false),
+                (11, "Active", Some("Me"), true),
+                (15, "Resolved", Some("Me"), true),
+                (10, "Closed", Some("Me"), true),
+            ],
+            "by state, then backlog order; no Removed task and no Bug"
+        );
+        assert_eq!((auth.tasks_done, auth.tasks_total), (2, 4));
+        assert_eq!(auth.tasks[0].title, "Write tests");
+        assert_eq!(auth.tasks[0].rev, 1);
+        assert!(auth.tasks[0].url.ends_with("/_workitems/edit/14"));
+        assert!(data
+            .items
+            .iter()
+            .filter(|i| i.id != 2)
+            .all(|i| i.tasks.is_empty()));
+    }
+
+    #[test]
+    fn a_state_change_writes_only_the_state_with_a_revision_test_and_holds_back_a_changed_task() {
+        let stub = seeded();
+        let data = fetch(&stub, &conn(), None).unwrap();
+        let before = stub.items.borrow()[&11]["fields"].clone();
+        stub.items.borrow_mut().get_mut(&10).unwrap()["rev"] = json!(2);
+        stub.items.borrow_mut().get_mut(&10).unwrap()["fields"]["System.State"] = json!("Blocked");
+        let draft = vec![
+            Change::SetState {
+                id: 11,
+                rev: 1,
+                state: "Closed".into(),
+            },
+            Change::SetState {
+                id: 10,
+                rev: 1,
+                state: "Active".into(),
+            },
+            Change::SetState {
+                id: 2,
+                rev: 1,
+                state: "Resolved".into(),
+            },
+        ];
+        let result = publish(&stub, &conn(), &data.me, &parent_iterations(&data), &draft);
+        let mut after = stub.items.borrow()[&11]["fields"].clone();
+        assert_eq!(after["System.State"], "Closed");
+        after["System.State"] = before["System.State"].clone();
+        assert_eq!(after, before, "nothing but the state is written");
+        assert_eq!(
+            stub.items.borrow()[&2]["fields"]["System.State"],
+            "Resolved"
+        );
+        assert_eq!(result.conflicts.len(), 1);
+        assert_eq!(
+            (
+                result.conflicts[0].id,
+                result.conflicts[0].field.as_str(),
+                result.conflicts[0].ado_value.as_str()
+            ),
+            (10, "System.State", "Blocked")
+        );
+        assert_eq!(
+            result.remaining,
+            vec![Change::SetState {
+                id: 10,
+                rev: 1,
+                state: "Active".into()
+            }]
+        );
+    }
+
+    #[test]
+    fn only_the_five_task_states_can_be_set() {
+        let _serial = PUBLISH_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let db = Connection::open_in_memory().unwrap();
+        crate::db::init_db(&db).unwrap();
+        for bad in ["Removed", "Done-ish", ""] {
+            let err = add_to_draft(
+                &db,
+                Change::SetState {
+                    id: 1,
+                    rev: 1,
+                    state: bad.into(),
+                },
+            )
+            .unwrap_err();
+            assert!(
+                err.contains("New, Active, Blocked, Resolved or Closed"),
+                "{err}"
+            );
+        }
+        add_to_draft(
+            &db,
+            Change::SetState {
+                id: 1,
+                rev: 1,
+                state: "Blocked".into(),
+            },
+        )
+        .unwrap();
+        add_to_draft(
+            &db,
+            Change::SetState {
+                id: 1,
+                rev: 1,
+                state: "Closed".into(),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            load_draft(&db).unwrap(),
+            vec![Change::SetState {
+                id: 1,
+                rev: 1,
+                state: "Closed".into()
+            }]
+        );
     }
 
     #[test]

@@ -407,6 +407,14 @@ pub const COMMANDS: &[Command] = &[
         handler: planning_estimate,
     },
     Command {
+        id: "planning.task_state",
+        log_params: &["task", "state"],
+        summary: "Draft: set a task's state (params: task = id of a task under a story in the selected sprint, state = New | Active | Blocked | Resolved | Closed); its state in ADO again drops the pending change",
+        requires_identity: true,
+        destructive: false,
+        handler: planning_task_state,
+    },
+    Command {
         id: "planning.add_story",
         log_params: &["feature", "points"],
         summary: "Draft: add a user story to a feature (params: feature, title, points optional)",
@@ -917,6 +925,53 @@ fn planning_estimate(
             id: item.id,
             rev: item.rev,
             points,
+        },
+    )
+}
+
+fn planning_task_state(
+    context: &CommandContext,
+    params: &serde_json::Value,
+) -> Result<CommandOutcome, AgentError> {
+    use crate::ado_planning::Change;
+    let id = param_i64(params, "task")?;
+    let state = required_str(params, "state")?;
+    if !crate::ado_planning::SETTABLE_STATES.contains(&state.as_str()) {
+        return Err(planning_error(format!(
+            "\"{state}\" isn't a state Planning sets; use New, Active, Blocked, Resolved or Closed"
+        )));
+    }
+    let data = planning_data(context)?;
+    let task = crate::ado_planning::sprint_summary(&data)
+        .stories
+        .into_iter()
+        .flat_map(|s| s.tasks)
+        .find(|t| t.id == id)
+        .ok_or_else(|| {
+            planning_error(format!(
+                "{id} isn't a task of a story in the selected sprint"
+            ))
+        })?;
+    if task.state == state {
+        let base = crate::ado_planning::load_draft(context.db).map_err(planning_error)?;
+        let next: Vec<Change> = base
+            .iter()
+            .filter(|c| !matches!(c, Change::SetState { id: t, .. } if *t == id))
+            .cloned()
+            .collect();
+        crate::ado_planning::replace_draft(context.db, &next, Some(&base))
+            .map_err(planning_error)?;
+        return Ok(CommandOutcome::changed(
+            serde_json::json!({ "draft": next.len() }),
+            StateChange::new("planning", "draft", "changed"),
+        ));
+    }
+    planning_add(
+        context,
+        Change::SetState {
+            id,
+            rev: task.rev,
+            state,
         },
     )
 }
@@ -2234,6 +2289,17 @@ mod tests {
                 tasks_done: 0,
                 tasks_total: 0,
                 url: format!("u/{id}"),
+                tasks: Vec::new(),
+            };
+            let task = |id: i64, state: &str, mine: bool| crate::ado_planning::PlanTask {
+                id,
+                rev: 4,
+                title: format!("task {id}"),
+                state: state.into(),
+                assigned_to: Some(if mine { "Me" } else { "Erwin" }.into()),
+                assigned_to_me: mine,
+                order: None,
+                url: format!("u/{id}"),
             };
             let iterations = vec![
                 Iteration {
@@ -2272,8 +2338,14 @@ mod tests {
                         Some(1.0),
                         Some(100),
                     ),
-                    item(2, "User Story", "New", true, "P\\S22", Some(3.0), Some(100)),
-                    item(3, "User Story", "New", false, "P\\Q4", Some(5.0), Some(100)),
+                    PlanItem {
+                        tasks: vec![task(20, "Active", true), task(21, "Closed", false)],
+                        ..item(2, "User Story", "New", true, "P\\S22", Some(3.0), Some(100))
+                    },
+                    PlanItem {
+                        tasks: vec![task(30, "New", true)],
+                        ..item(3, "User Story", "New", false, "P\\Q4", Some(5.0), Some(100))
+                    },
                 ],
             })
         }
@@ -2591,6 +2663,75 @@ mod tests {
     /// A connectivity check must survive a missing identity: an agent whose
     /// token went stale needs to separate "cannot reach the app" from "the app
     /// no longer knows me", because only one of them is fixed by restarting.
+    #[test]
+    fn planning_task_state_reads_tasks_and_drafts_their_state() {
+        let _serial = crate::ado_planning::PUBLISH_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        use crate::ado_planning::{Change, PlanningGateway};
+        let db = memory_db();
+        let caller = agent("tile-1", "ws-own");
+        crate::ado_planning::save_connection(
+            &db,
+            &FakePlanning
+                .connect("https://dev.azure.com/o/P/_backlogs/backlog/T/Features")
+                .unwrap(),
+        )
+        .unwrap();
+        let sprint = call(&db, &caller, "planning.sprint", serde_json::Value::Null)
+            .unwrap()
+            .data;
+        let tasks = &sprint["stories"][1]["tasks"];
+        assert_eq!(tasks[0]["id"], 20);
+        assert_eq!(tasks[0]["title"], "task 20");
+        assert_eq!(tasks[0]["state"], "Active");
+        assert_eq!(tasks[1]["assigned_to"], "Erwin");
+
+        let set = |task: i64, state: &str| {
+            call(
+                &db,
+                &caller,
+                "planning.task_state",
+                serde_json::json!({"task": task, "state": state}),
+            )
+        };
+        let outcome = set(20, "Closed").unwrap();
+        assert_eq!(outcome.data["draft"], 1);
+        assert_eq!(
+            crate::ado_planning::load_draft(&db).unwrap(),
+            vec![Change::SetState {
+                id: 20,
+                rev: 4,
+                state: "Closed".into()
+            }]
+        );
+        for (task, state, expect) in [
+            (20, "Removed", "New, Active, Blocked, Resolved or Closed"),
+            (20, "Done-ish", "New, Active, Blocked, Resolved or Closed"),
+            (
+                30,
+                "Closed",
+                "isn't a task of a story in the selected sprint",
+            ),
+            (
+                2,
+                "Closed",
+                "isn't a task of a story in the selected sprint",
+            ),
+        ] {
+            let err = set(task, state).unwrap_err();
+            assert!(
+                err.message.contains(expect),
+                "{task} {state}: {}",
+                err.message
+            );
+        }
+        assert_eq!(crate::ado_planning::load_draft(&db).unwrap().len(), 1);
+        // Back to its state in ADO: the pending change goes away.
+        assert_eq!(set(20, "Active").unwrap().data["draft"], 0);
+        assert!(crate::ado_planning::load_draft(&db).unwrap().is_empty());
+    }
+
     #[test]
     fn planning_commands_read_and_change_the_ui_draft_and_publish_it() {
         let _serial = crate::ado_planning::PUBLISH_TEST_LOCK
