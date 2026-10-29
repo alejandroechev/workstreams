@@ -123,7 +123,7 @@ export function PlanningView({ planning, onClose, now = () => new Date() }: Prop
             {!data ? (
               <p style={{ color: C.sub }}>{loading ? "Loading from ADO…" : "No data yet."}</p>
             ) : tab === "sprint" ? (
-              <SprintTab data={data} now={now()} />
+              <SprintTab data={data} now={now()} draft={draft} onAddChange={planning.addChange} onSetDraft={planning.setDraft} />
             ) : tab === "features" ? (
               <FeaturesTab data={data} />
             ) : tab === "plan-sprint" ? (

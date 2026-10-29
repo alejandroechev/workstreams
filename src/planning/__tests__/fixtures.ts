@@ -68,3 +68,22 @@ export function planSprintTeam(): PlanItem[] {
     item(45, { title: "Nobody's yet", assigned_to: null, assigned_to_me: false, story_points: 5, parent_id: 100, order: 3 }),
   ];
 }
+
+/** planning-tasks AT-1..AT-5: a sprint story with tasks of every kind, a resolved one, and one without tasks. */
+export function taskTeam(): PlanItem[] {
+  const task = (id: number, title: string, state: string, over: Partial<PlanItem> = {}) =>
+    item(id, { kind: "Task", title, state, story_points: null, iteration_path: "OneWork\\S22", parent_id: 3, ...over });
+  return [
+    feature(200, "Audio Transcoding", { target_date: "2026-12-31T00:00:00Z" }),
+    item(2, { title: "No tasks yet", story_points: 2, iteration_path: "OneWork\\S22", parent_id: 200 }),
+    item(3, { title: "AMS Application State", state: "Active", story_points: 3, iteration_path: "OneWork\\S22", parent_id: 200 }),
+    item(7, { title: "Already resolved", state: "Resolved", story_points: 1, iteration_path: "OneWork\\S22", parent_id: 200 }),
+    task(31, "Design API", "Closed"),
+    task(32, "Implement handler", "Active"),
+    task(33, "Write tests", "New", erwin),
+    task(34, "Docs", "Resolved"),
+    task(35, "Old idea", "Removed"),
+    item(36, { kind: "Bug", title: "A bug", state: "New", iteration_path: "OneWork\\S22", parent_id: 3 }),
+    task(71, "Done long ago", "Closed", { parent_id: 7 }),
+  ];
+}
