@@ -111,7 +111,8 @@ it is planned into and its order).
 ## Consequences
 
 - **The Sprint and Features tabs show ADO as it is**; the Plan tabs show it as
-  it will be after publishing.
+  it will be after publishing. The one exception is tasks (see the amendment):
+  the Sprint tab shows drafted task states, marked not published.
 - **Publishing re-reads the whole view first**, a few seconds of requests,
   so conflicts are judged against fresh revisions.
 - **Removing an uncreated item** from the draft simply drops it; removing a
@@ -122,8 +123,36 @@ it is planned into and its order).
   large `planning.publish` from an agent therefore delays other database work
   until it finishes; the UI's publish doesn't, because it releases the lock
   for its requests.
-- **Not covered:** a whole-team view, tasks and bugs as planning items,
+- **Not covered:** a whole-team view, creating tasks, bugs as planning items,
   linking to the local Tasks board, and background polling.
+
+## Amendment (2026-10-29): tasks under sprint stories
+
+The Sprint tab lists each story's **tasks**, not just "2/4 tasks". The reads
+already fetched every child of the sprint's stories to count progress, so the
+native side now keeps them on each story (`tasks`: id, revision, title, state,
+assignee, order, link), with no extra request. Tasks are listed by state (New,
+Active, Blocked, Resolved, Closed), then backlog order. Removed tasks and
+children that aren't Tasks (Bugs) are left out. A **Show tasks** switch,
+remembered and on by default, hides them, and each card expands on its own.
+
+**A task's state changes through the draft**, like every other planning
+change. It is a new change, `set_state {id, rev, state}`, which writes only
+`System.State` with the same `test /rev` check. So a task a teammate changed
+meanwhile is held back as *changed in ADO*. Only New, Active, Blocked,
+Resolved and Closed can be set; Removed belongs to ADO. Choosing a task's ADO
+state again drops its pending change. Until published, the row shows the new
+state marked *not published*, and the card's task progress counts it. The
+story's column and the header stay ADO's.
+
+**Resolving a story.** When every task of a story is Resolved or Closed
+(draft included) and the story isn't, the card offers to resolve it. Accepting
+adds `set_state` Resolved for the story to the draft; it is never automatic.
+Dismissing hides the offer until one of the story's task states changes.
+
+Agents get the same: `planning.sprint` includes each story's tasks, and
+`planning.task_state task=<id> state=<State>` drafts a state for a task of a
+story in the selected sprint.
 
 ## References
 

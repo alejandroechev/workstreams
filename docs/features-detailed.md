@@ -72,7 +72,7 @@ remembered, and when it ends a banner offers to switch to ADO's current sprint.
 
 | Tab | What it shows / does |
 | --- | --- |
-| Sprint | Your user stories in the selected sprint, as a board by state or a list by feature (the toggle is remembered). Each story shows its story points (**?** when not estimated), feature and task progress. The header shows committed SP against 8, done, to go, days left and the number not estimated. |
+| Sprint | Your user stories in the selected sprint, as a board by state or a list by feature (the toggle is remembered). Each story shows its story points (**?** when not estimated), feature and task progress, and lists its tasks (by state; title, the assignee when it isn't you, and a state picker). **Show tasks** (remembered) hides them; click a card's "N/M tasks" to expand just that one. Changing a task's state goes into the draft and shows *not published* until you publish. When all of a story's tasks are done, the card offers to resolve the story (also through the draft). The header shows committed SP against 8, done, to go, days left and the number not estimated. |
 | Features | Your open features: target date, sprints left, done (Resolved + Closed) vs pending SP (yours in brackets), not estimated, every story (others' with their names; Removed left out), and **at risk** when your pending SP exceed sprints left × 8. |
 | Plan sprint | Drag (or use the arrows) between your candidates — carried over from the previous sprint first, then your stories not in a sprint, then unassigned stories in your features — and the sprint, against a gauge marked at 8: green 7–9, yellow below, orange above. Nothing is blocked. |
 | Plan feature | Create a feature (title, target date, description) or pick one; add stories with story points (any number), rename, re-estimate, reorder and remove them. The total updates as you type. |
@@ -94,6 +94,7 @@ workstreams agent call planning.feature id=<feature-id>
 workstreams agent call planning.move story=<id> sprint="S23 (Nov 22)"
 workstreams agent call planning.estimate story=<id> points=3
 workstreams agent call planning.add_story feature=<id> title="…" points=2
+workstreams agent call planning.task_state task=<id> state=Closed
 workstreams agent call planning.publish
 ```
 
