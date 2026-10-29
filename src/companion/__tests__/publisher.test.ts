@@ -250,3 +250,57 @@ describe("publishing the laptop's session tiles", () => {
     expect(publishSessionTiles(laptop, [])).toBe(false);
   });
 });
+
+describe("keeping the document's history small", () => {
+  // A real Automerge document: its history is what the sync server loads on
+  // every reconnect, and whole-list rewrites once grew it to 15M operations.
+  async function realDoc() {
+    const A = await import("@automerge/automerge");
+    const { emptyDocument } = await import("../protocol");
+    let doc = A.from(emptyDocument() as unknown as Record<string, unknown>);
+    const handle = {
+      read: () => A.toJS(doc) as unknown as ReturnType<typeof emptyDocument>,
+      change: (mutate: (d: ReturnType<typeof emptyDocument>) => void) => { doc = A.change(doc, (d) => mutate(d as unknown as ReturnType<typeof emptyDocument>)); },
+      subscribe: () => () => {},
+      broadcast: () => {},
+      close: () => {},
+    };
+    const ops = () => A.getAllChanges(doc).reduce((n, c) => n + A.decodeChange(c).ops.length, 0);
+    return { handle: handle as unknown as Parameters<typeof publishSessionTiles>[0], ops };
+  }
+  const tiles = (n: number, activityOf = (i: number) => i) =>
+    Array.from({ length: n }, (_, i) => ({
+      tileId: `tile-${i}-0123456789abcdef`, workstreamId: `ws-${i}-0123456789abcdef`, title: `A Copilot session title ${i}`,
+      summary: `Summary of what session ${i} is doing`, linked: true, linkRevision: `rev-${i}-0123456789abcdef0123456789`,
+      lastActivity: activityOf(i), origin: "laptop" as const,
+    }));
+
+  it("updates one tile's activity with a handful of operations, not a rewrite of the list", async () => {
+    const { handle, ops } = await realDoc();
+    publishSessionTiles(handle, tiles(38));
+    const before = ops();
+    expect(publishSessionTiles(handle, tiles(38, (i) => (i === 7 ? 999 : i)))).toBe(true);
+    expect(ops() - before).toBeLessThan(5);
+    expect(handle.read().laptop.tiles).toEqual(tiles(38, (i) => (i === 7 ? 999 : i)));
+    // A tile added, one removed, and the order changed still end up exact.
+    const next = [...tiles(38).slice(1, 20).reverse(), ...tiles(40).slice(38)];
+    publishSessionTiles(handle, next);
+    expect(handle.read().laptop.tiles).toEqual(next);
+  });
+
+  it("updates one workstream's loaded flag with a handful of operations", async () => {
+    const { handle, ops } = await realDoc();
+    const ws = (loaded: number) => Array.from({ length: 33 }, (_, i) => ({
+      id: `ws-${i}-0123456789abcdef`, name: `Workstream number ${i}`, laneId: i % 3 ? `lane-${i % 3}` : null, loaded: i === loaded, sessionCount: i % 4,
+    }));
+    const lanes = [{ id: "lane-1", name: "One" }, { id: "lane-2", name: "Two" }];
+    publishLaptopState(handle, { workstreams: ws(1), lanes });
+    const before = ops();
+    expect(publishLaptopState(handle, { workstreams: ws(2), lanes })).toBe(true);
+    expect(ops() - before).toBeLessThan(5);
+    expect(handle.read().laptop.workstreams).toEqual(ws(2));
+    const fewer = ws(2).slice(5);
+    publishLaptopState(handle, { workstreams: fewer, lanes: lanes.slice(1) });
+    expect(handle.read().laptop).toMatchObject({ workstreams: fewer, lanes: lanes.slice(1) });
+  });
+});

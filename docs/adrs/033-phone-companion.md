@@ -114,6 +114,11 @@ apps derive them from the lane id with the shared `laneColor()`.
 - Rejected requests are marked `failed` with a reason, never silently dropped,
   so the phone can show what happened.
 - Completed requests older than a few days are pruned to bound history.
+- The laptop edits its published lists (workstreams, lanes, session tiles) in
+  place, writing only the fields that changed. Automerge keeps every write
+  and stores each string character as an operation, so rewriting whole lists
+  on every small change grew the document to 15M operations in two weeks; the
+  sync server loads that history on every reconnect and stalled under it.
 
 ### What a request does
 

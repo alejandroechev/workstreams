@@ -52,6 +52,33 @@ export function buildLaptopState(input: {
   return { workstreams, lanes };
 }
 
+/**
+ * Makes a published list equal `wanted`, in place: an entry with the same key
+ * at the same position only gets the fields that differ; others are replaced,
+ * extra ones removed. Automerge keeps every write forever (and stores each
+ * string character as an operation), so rewriting a whole list on every small
+ * change grows the history the sync server loads on each reconnect.
+ */
+function syncList<T extends object>(list: T[], wanted: readonly T[], key: keyof T): void {
+  const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+  for (let i = 0; i < wanted.length; i += 1) {
+    const next = wanted[i];
+    const current = list[i];
+    if (current && current[key] === next[key]) {
+      const target = current as Record<string, unknown>;
+      for (const [field, value] of Object.entries(next)) {
+        if (!same(target[field], value)) target[field] = JSON.parse(JSON.stringify(value ?? null)) as unknown;
+      }
+      for (const field of Object.keys(target)) if (!(field in next)) delete target[field];
+    } else if (i < list.length) {
+      list[i] = JSON.parse(JSON.stringify(next)) as T;
+    } else {
+      list.push(JSON.parse(JSON.stringify(next)) as T);
+    }
+  }
+  if (list.length > wanted.length) list.splice(wanted.length, list.length - wanted.length);
+}
+
 /** Writes the state if it differs from what is published. Returns whether it wrote. */
 export function publishLaptopState(doc: CompanionDoc, state: LaptopState): boolean {
   const snapshot = doc.read();
@@ -63,8 +90,10 @@ export function publishLaptopState(doc: CompanionDoc, state: LaptopState): boole
     return false;
   }
   doc.change((draft) => {
-    draft.laptop.workstreams = state.workstreams;
-    draft.laptop.lanes = state.lanes;
+    if (!Array.isArray(draft.laptop.workstreams)) draft.laptop.workstreams = [];
+    if (!Array.isArray(draft.laptop.lanes)) draft.laptop.lanes = [];
+    syncList(draft.laptop.workstreams, state.workstreams, "id");
+    syncList(draft.laptop.lanes, state.lanes, "id");
   });
   return true;
 }
@@ -204,7 +233,9 @@ export function publishSessionTiles(doc: CompanionDoc, tiles: PublishedSessionTi
   if (!isKnownSchema(snapshot)) return false;
   if (JSON.stringify(snapshot.laptop.tiles ?? null) === JSON.stringify(tiles)) return false;
   doc.change((draft) => {
-    if (isKnownSchema(draft)) draft.laptop.tiles = JSON.parse(JSON.stringify(tiles)) as PublishedSessionTile[];
+    if (!isKnownSchema(draft)) return;
+    if (!Array.isArray(draft.laptop.tiles)) draft.laptop.tiles = [];
+    syncList(draft.laptop.tiles, tiles, "tileId");
   });
   return true;
 }
