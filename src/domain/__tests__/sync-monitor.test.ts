@@ -57,7 +57,7 @@ describe("which problems a run of checks shows", () => {
     const problems = activeProblems([ok(0, v)], DEFAULT_THRESHOLDS);
     expect(problems.map((p) => p.kind).sort()).toEqual(["disk", "doc_growth:2kBad", "doc_size:zzz", "logins", "memory"]);
     expect(problems.find((p) => p.kind === "doc_growth:2kBad")?.message).toContain("Workstreams companion");
-    expect(problems.find((p) => p.kind === "doc_size:zzz")?.message).toContain("unknown app");
+    expect(problems.find((p) => p.kind === "doc_size:zzz")?.message).toContain("unknown app (zzz)");
     expect(problems.every((p) => p.hint.length > 0)).toBe(true);
   });
 

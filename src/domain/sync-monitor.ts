@@ -236,7 +236,8 @@ export function activeProblems(checks: SyncCheck[], t: SyncThresholds, open: Syn
     }
   }
   for (const doc of latest.docs) {
-    const app = doc.appName ?? "unknown app";
+    // An unregistered document is named by its id, to find it in apps.json or the admin dashboard.
+    const app = doc.appName ?? `unknown app (${doc.docId.slice(0, 8)})`;
     if (doc.sizeBytes / MB > t.maxDocMB) {
       out.push({ kind: `doc_size:${doc.docId}`, severity: "warning", message: `${app} document is ${round(doc.sizeBytes / MB)} MB`, hint: HINTS.doc });
     }
