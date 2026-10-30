@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import type { Backend } from "../backend/types";
-import type { Change, PlanningConnection, PlanningData, PublishResult } from "../domain/planning";
+import type { Change, OrphanReport, PlanningConnection, PlanningData, PublishResult } from "../domain/planning";
 
 /** How often Planning re-reads ADO while it is open (ADR 039). */
 export const PLANNING_REFRESH_MS = 5 * 60_000;
@@ -22,6 +22,8 @@ export function usePlanning(backend: Backend, open: boolean) {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [lastPublish, setLastPublish] = useState<PublishResult | null>(null);
+  const [orphans, setOrphans] = useState<OrphanReport | null>(null);
+  const [orphanError, setOrphanError] = useState<string | null>(null);
   const connected = useRef(false);
   /** The draft as last seen, which a replacement is based on. */
   const seen = useRef<Change[]>([]);
@@ -39,14 +41,37 @@ export function usePlanning(backend: Backend, open: boolean) {
       await sync();
       if (!connected.current) return;
       setLoading(true);
-      setData(await backend.planningFetch());
-      setError(null);
+      // Orphaned PRs are read alongside; their failure doesn't hide the rest.
+      const orphanRead = backend.planningOrphans()
+        .then((report) => { setOrphans(report); setOrphanError(null); })
+        .catch((failure) => setOrphanError(message(failure)));
+      try {
+        setData(await backend.planningFetch());
+        setError(null);
+      } finally {
+        await orphanRead;
+      }
     } catch (failure) {
       setError(message(failure));
     } finally {
       setLoading(false);
     }
   }, [backend, sync]);
+
+  const setOrphanDays = useCallback(async (days: number) => {
+    await backend.planningSetOrphanDays(days);
+    setOrphans(await backend.planningOrphans());
+  }, [backend]);
+
+  const hideOrphan = useCallback(async (kind: "pr" | "repo", id: string, label: string) => {
+    const hidden = await backend.planningHideOrphan(kind, id, label);
+    setOrphans((o) => (o ? { ...o, hidden } : o));
+  }, [backend]);
+
+  const unhideOrphan = useCallback(async (kind: "pr" | "repo", id: string) => {
+    const hidden = await backend.planningUnhideOrphan(kind, id);
+    setOrphans((o) => (o ? { ...o, hidden } : o));
+  }, [backend]);
 
   useEffect(() => {
     if (!open) return;
@@ -100,7 +125,10 @@ export function usePlanning(backend: Backend, open: boolean) {
     return result;
   }, [backend, load]);
 
-  return { connection, draft, data, error, loading, lastPublish, connect, refresh: load, selectSprint, addChange, setDraft, publish };
+  return {
+    connection, draft, data, error, loading, lastPublish, orphans, orphanError,
+    connect, refresh: load, selectSprint, addChange, setDraft, publish, setOrphanDays, hideOrphan, unhideOrphan,
+  };
 }
 
 export type Planning = ReturnType<typeof usePlanning>;

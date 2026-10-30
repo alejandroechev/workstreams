@@ -3,7 +3,7 @@ import type { DiffOrderView } from "../domain/diff-reading-order";
 import type { WorkLane } from "../domain/work-lanes";
 import type { PrInboxMute, PrInboxSnapshot, PrWatchMode } from "../domain/pr-inbox";
 import type { PipelineMode, PipelineStatus } from "../domain/pipeline-inbox";
-import type { Change, PlanningConnection, PlanningData, PlanningState, PublishResult } from "../domain/planning";
+import type { Change, OrphanHidden, OrphanReport, PlanningConnection, PlanningData, PlanningState, PublishResult } from "../domain/planning";
 import type { Project, Workstream, Tile, TileType, WorkstreamLayout, CopilotConfigItem } from "../domain/types";
 import type { SessionFileComment } from "../domain/file-comments";
 import type { TraceFile } from "../domain/trace-format";
@@ -92,6 +92,13 @@ export interface Backend {
   planningSetDraft(draft: Change[], base?: Change[]): Promise<void>;
   /** Publishes the draft; what conflicted or failed stays in it. */
   planningPublish(): Promise<PublishResult>;
+  /** Your orphaned PRs (no linked work item) in the saved range, with what is hidden. */
+  planningOrphans(): Promise<OrphanReport>;
+  /** The Orphaned PRs range: 7, 30 or 90 days. */
+  planningSetOrphanDays(days: number): Promise<void>;
+  /** Hides a PR (`kind` "pr", id = PR id) or a repo (`kind` "repo", id = repository id). */
+  planningHideOrphan(kind: "pr" | "repo", id: string, label: string): Promise<OrphanHidden>;
+  planningUnhideOrphan(kind: "pr" | "repo", id: string): Promise<OrphanHidden>;
   // Projects
   listProjects(): Promise<Project[]>;
   createProject(name: string, directory: string, color?: string): Promise<Project>;

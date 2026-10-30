@@ -1,5 +1,5 @@
 import { render, screen } from "@testing-library/react";
-import { MemoryBackend } from "../../backend/memory-backend";
+import { MemoryBackend, type MemoryPlanningPr } from "../../backend/memory-backend";
 import { PlanningView } from "../PlanningView";
 import { usePlanning } from "../usePlanning";
 import { ITERATIONS, TEAM_LINK } from "./fixtures";
@@ -14,9 +14,10 @@ function Harness({ backend }: { backend: MemoryBackend }) {
 }
 
 /** Renders Planning over an in-memory ADO team holding `items`. */
-export async function open(items: PlanItem[], options: { connect?: boolean; sprint?: string } = {}) {
+export async function open(items: PlanItem[], options: { connect?: boolean; sprint?: string; prs?: MemoryPlanningPr[] } = {}) {
   const backend = new MemoryBackend();
   backend.seedPlanningAdo({ iterations: ITERATIONS, items });
+  if (options.prs) backend.seedPlanningPrs(options.prs);
   if (options.connect !== false) await backend.planningConnect(TEAM_LINK);
   if (options.sprint) await backend.planningSelectSprint(options.sprint);
   render(<Harness backend={backend} />);

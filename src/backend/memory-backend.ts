@@ -22,9 +22,22 @@ import {
   type PlanItem,
   type PlanningConnection,
   type PlanningData,
+  type OrphanHidden,
+  type OrphanPr,
+  type OrphanReport,
   type PlanningState,
   type PublishResult,
 } from "../domain/planning";
+
+/** A PR in the in-memory ADO, for the Orphaned PRs tab. */
+export interface MemoryPlanningPr extends Omit<OrphanPr, "state" | "url"> {
+  status: "active" | "completed" | "abandoned";
+  draft: boolean;
+  /** Created by you (the connected user). */
+  mine: boolean;
+  /** Work items linked to it. */
+  linkedTo?: number[];
+}
 
 /** A run as the in-memory ADO knows it, for pipeline fixtures (ADR 038). */
 export interface MemoryPipelineRun {
@@ -141,6 +154,10 @@ export class MemoryBackend implements Backend {
   private planningSaved: PlanningState = { connection: null, selected_sprint: null, draft: [] };
   private planningFlags = { authError: false, failFetch: false, fetches: 0, writes: 0, nextId: 90000, publishing: false };
   private planningWriteFails: ((change: Change) => boolean) | null = null;
+  private planningPrs: MemoryPlanningPr[] = [];
+  private planningOrphanDays = 30;
+  private planningOrphanHidden: OrphanHidden = { prs: [], repos: [] };
+  private planningOrphanFetches = 0;
 
   /** The team the in-memory ADO serves, with its sprints and work items (me = "Me"). */
   seedPlanningAdo(seed: { organization?: string; project?: string; team?: string; iterations: Iteration[]; items: PlanItem[] }): void {
@@ -151,6 +168,10 @@ export class MemoryBackend implements Backend {
   }
 
   setPlanningAuthError(on: boolean): void { this.planningFlags.authError = on; }
+  seedPlanningPrs(prs: MemoryPlanningPr[]): void { this.planningPrs = structuredClone(prs); }
+  planningOrphansFetchCount(): number { return this.planningOrphanFetches; }
+  /** The work items a PR is linked to in the in-memory ADO. */
+  planningPrLinks(pr: number): number[] { return [...(this.planningPrs.find((p) => p.id === pr)?.linkedTo ?? [])]; }
   /** Makes the writes of matching changes fail, as an ADO error would; null to stop. */
   failPlanningWrite(test: ((change: Change) => boolean) | null): void { this.planningWriteFails = test; }
   failPlanningFetch(on: boolean): void { this.planningFlags.failFetch = on; }
@@ -222,6 +243,40 @@ export class MemoryBackend implements Backend {
     });
   }
 
+  async planningOrphans(): Promise<OrphanReport> {
+    const connection = this.planningSaved.connection;
+    if (!connection) throw new Error("Planning isn't connected to a team yet");
+    this.planningOrphanFetches += 1;
+    if (this.planningFlags.failFetch) throw new Error("ADO connection failed or timed out. Check your network and VPN.");
+    const since = Date.now() - this.planningOrphanDays * 86_400_000;
+    const prs = this.planningPrs
+      .filter((p) => p.mine && p.status !== "abandoned" && Date.parse(p.created) >= since && !(p.linkedTo?.length))
+      .sort((a, b) => b.created.localeCompare(a.created) || b.id - a.id)
+      .map((p): OrphanPr => ({
+        id: p.id, title: p.title, project: p.project, project_id: p.project_id, repo: p.repo, repo_id: p.repo_id,
+        state: p.status === "active" && p.draft ? "draft" : p.status, created: p.created,
+        url: `https://dev.azure.com/${connection.organization}/${p.project}/_git/${p.repo.split("/").pop()}/pullrequest/${p.id}`,
+      }));
+    return structuredClone({ days: this.planningOrphanDays, prs, hidden: this.planningOrphanHidden });
+  }
+
+  async planningSetOrphanDays(days: number): Promise<void> {
+    if (![7, 30, 90].includes(days)) throw new Error(`The range is 7, 30 or 90 days, not ${days}`);
+    this.planningOrphanDays = days;
+  }
+
+  async planningHideOrphan(kind: "pr" | "repo", id: string, label: string): Promise<OrphanHidden> {
+    const list = kind === "pr" ? this.planningOrphanHidden.prs : this.planningOrphanHidden.repos;
+    if (!list.some((h) => h.id === id)) list.push({ id, label });
+    return structuredClone(this.planningOrphanHidden);
+  }
+
+  async planningUnhideOrphan(kind: "pr" | "repo", id: string): Promise<OrphanHidden> {
+    const key = kind === "pr" ? "prs" : "repos";
+    this.planningOrphanHidden[key] = this.planningOrphanHidden[key].filter((h) => h.id !== id);
+    return structuredClone(this.planningOrphanHidden);
+  }
+
   async planningSelectSprint(path: string): Promise<void> {
     this.planningSaved.selected_sprint = path;
   }
@@ -232,6 +287,7 @@ export class MemoryBackend implements Backend {
 
   async planningAddChange(change: Change): Promise<Change[]> {
     this.ensureNotPublishing();
+    if (change.kind === "link_pr" && change.id <= 0) throw new Error("Link a PR to a work item that exists in ADO");
     if (change.kind === "set_state" && !(SETTABLE_STATES as readonly string[]).includes(change.state)) {
       throw new Error(`"${change.state}" isn't a state Planning sets; use New, Active, Blocked, Resolved or Closed`);
     }
@@ -312,7 +368,9 @@ export class MemoryBackend implements Backend {
       const seen = ours.get(change.id);
       const expected = seen && seen[0] === change.rev ? seen[1] : change.rev;
       if (item.rev !== expected) {
-        result.conflicts.push({ id: item.id, title: item.title, field: fieldOf[change.kind], ado_value: valueOf(item, change.kind) });
+        result.conflicts.push(change.kind === "link_pr"
+          ? { id: item.id, title: item.title, field: "Links", ado_value: `revision ${item.rev}` }
+          : { id: item.id, title: item.title, field: fieldOf[change.kind], ado_value: valueOf(item, change.kind) });
         result.remaining.push(change);
         continue;
       }
@@ -331,6 +389,11 @@ export class MemoryBackend implements Backend {
         case "order": item.order = change.order; break;
         case "remove": item.state = "Removed"; break;
         case "set_state": item.state = change.state; break;
+        case "link_pr": {
+          const pr = this.planningPrs.find((p) => p.id === change.pr.id);
+          if (pr) pr.linkedTo = [...(pr.linkedTo ?? []), item.id];
+          break;
+        }
       }
       item.rev += 1;
       ours.set(item.id, [change.rev, item.rev]);

@@ -1,15 +1,16 @@
 import { useEffect, useState } from "react";
 import { ArrowPathIcon, XMarkIcon } from "@heroicons/react/24/outline";
-import { applyDraft, describeChange, draftLabel, endedSprintOffer } from "../domain/planning";
+import { applyDraft, describeChange, draftLabel, endedSprintOffer, visibleOrphans } from "../domain/planning";
 import type { Planning } from "./usePlanning";
 import { SprintTab } from "./SprintTab";
 import { FeaturesTab } from "./FeaturesTab";
 import { PlanSprintTab } from "./PlanSprintTab";
 import { PlanFeatureTab } from "./PlanFeatureTab";
+import { OrphansTab } from "./OrphansTab";
 import { button, C, input, primary } from "./styles";
 
-type Tab = "sprint" | "features" | "plan-sprint" | "plan-feature";
-const TABS: Array<[Tab, string]> = [["sprint", "Sprint"], ["features", "Features"], ["plan-sprint", "Plan sprint"], ["plan-feature", "Plan feature"]];
+type Tab = "sprint" | "features" | "plan-sprint" | "plan-feature" | "orphans";
+const TABS: Array<[Tab, string]> = [["sprint", "Sprint"], ["features", "Features"], ["plan-sprint", "Plan sprint"], ["plan-feature", "Plan feature"], ["orphans", "Orphaned PRs"]];
 
 interface Props {
   planning: Planning;
@@ -108,7 +109,7 @@ export function PlanningView({ planning, onClose, now = () => new Date() }: Prop
             {TABS.map(([value, text]) => (
               <button key={value} role="tab" aria-selected={tab === value} data-testid={`planning-tab-${value}`} onClick={() => setTab(value)}
                 style={{ ...button, borderRadius: 12, background: tab === value ? C.blue : C.mantle, color: tab === value ? C.crust : C.sub, border: `1px solid ${tab === value ? C.blue : C.surface1}` }}>
-                {text}
+                {text}{value === "orphans" && planning.orphans ? ` · ${visibleOrphans(planning.orphans).length}` : ""}
               </button>
             ))}
           </nav>
@@ -126,6 +127,18 @@ export function PlanningView({ planning, onClose, now = () => new Date() }: Prop
               <SprintTab data={data} now={now()} draft={draft} onAddChange={planning.addChange} onSetDraft={planning.setDraft} />
             ) : tab === "features" ? (
               <FeaturesTab data={data} />
+            ) : tab === "orphans" ? (
+              <OrphansTab
+                data={data}
+                report={planning.orphans}
+                error={planning.orphanError}
+                draft={draft}
+                onAddChange={planning.addChange}
+                onSetDraft={planning.setDraft}
+                onDays={planning.setOrphanDays}
+                onHide={planning.hideOrphan}
+                onUnhide={planning.unhideOrphan}
+              />
             ) : tab === "plan-sprint" ? (
               <PlanSprintTab data={data} items={items} draft={draft} onAddChange={planning.addChange} onSetDraft={planning.setDraft} />
             ) : (

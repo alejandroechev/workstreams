@@ -3,6 +3,7 @@
  * (files/features/ado-planning/acceptance.md). Shared by unit and E2E tests.
  */
 import type { Iteration, PlanItem } from "../../domain/planning";
+import type { MemoryPlanningPr } from "../../backend/memory-backend";
 
 export const TEAM_LINK = "https://skype.visualstudio.com/OneWork/_sprints/taskboard/Waimea%20Bay/OneWork/CY26/H2/Q4/Oct/S22%20(Nov%208)";
 export const BACKLOG_LINK = "https://dev.azure.com/skype/OneWork/_backlogs/backlog/Waimea%20Bay/Features";
@@ -85,5 +86,23 @@ export function taskTeam(): PlanItem[] {
     task(35, "Old idea", "Removed"),
     item(36, { kind: "Bug", title: "A bug", state: "New", iteration_path: "OneWork\\S22", parent_id: 3 }),
     task(71, "Done long ago", "Closed", { parent_id: 7 }),
+  ];
+}
+
+/** orphan-prs AT-1..AT-5: your PRs in the in-memory ADO, relative to the fixed clock (2026-10-30). */
+export function orphanPrs(): MemoryPlanningPr[] {
+  const pr = (id: number, title: string, repo: string, project: string, created: string, over: Partial<MemoryPlanningPr> = {}): MemoryPlanningPr => ({
+    id, title, project, project_id: `${project}-id`, repo: `${project}/${repo}`, repo_id: `${repo}-id`,
+    status: "completed", draft: false, created, mine: true, ...over,
+  });
+  return [
+    pr(101, "Fix chunk reader retries", "acs_media_sdk", "SCC", "2026-10-28T10:00:00Z", { status: "active" }),
+    pr(102, "Draft: async SDK design", "acs_media_sdk", "SCC", "2026-10-27T10:00:00Z", { status: "active", draft: true }),
+    pr(103, "Route Agency reviews back", "engaine", "SCC", "2026-10-29T10:00:00Z"),
+    pr(104, "Other project change", "other-repo", "OneWork", "2026-10-20T10:00:00Z"),
+    pr(105, "Already linked", "engaine", "SCC", "2026-10-26T10:00:00Z", { linkedTo: [3] }),
+    pr(106, "Abandoned idea", "engaine", "SCC", "2026-10-25T10:00:00Z", { status: "abandoned" }),
+    pr(107, "Someone else's", "engaine", "SCC", "2026-10-24T10:00:00Z", { mine: false }),
+    pr(108, "Old August PR", "engaine", "SCC", "2026-08-15T10:00:00Z"),
   ];
 }

@@ -6,6 +6,8 @@ import {
   daysLeft,
   describeChange,
   draftLabel,
+  linkTargets,
+  visibleOrphans,
   endedSprintOffer,
   featureSummaries,
   gauge,
@@ -260,6 +262,38 @@ describe("tasks", () => {
     expect(resolveOffer(story("Removed", [task(1, "Closed")]))).toBe(false);
     expect(resolveOffer(story("Active", []))).toBe(false);
     expect(resolveOffer(item(2, { state: "Active" }))).toBe(false);
+  });
+});
+
+describe("orphaned PRs", () => {
+  const pr = (id: number) => ({ id, project_id: "p", repo_id: "r", title: `PR ${id}` });
+  it("keeps one pending link per PR, and describes it", () => {
+    let draft: Change[] = [];
+    draft = addChange(draft, { kind: "link_pr", id: 2, rev: 1, pr: pr(7) });
+    draft = addChange(draft, { kind: "link_pr", id: 3, rev: 1, pr: pr(8) });
+    draft = addChange(draft, { kind: "link_pr", id: 3, rev: 1, pr: pr(7) });
+    expect(draft).toEqual([{ kind: "link_pr", id: 3, rev: 1, pr: pr(7) }, { kind: "link_pr", id: 3, rev: 1, pr: pr(8) }]);
+    const d = data([feature, item(3, { title: "Story three" })]);
+    expect(applyDraft(d, draft)).toEqual(applyDraft(d, []));
+    expect(describeChange(draft[0], d, d.items)).toBe("Link PR “PR 7” to “Story three”");
+  });
+
+  it("offers my stories and the tasks of sprint stories as link targets", () => {
+    const sprintStory = item(2, { title: "In sprint", rev: 3, tasks: [{ id: 20, rev: 5, title: "A task", state: "Active", assigned_to: "Me", assigned_to_me: true, order: null, url: "" }] });
+    const other = item(4, { title: "Feature story", iteration_path: "P\\Q4", assigned_to_me: false, assigned_to: "Erwin" });
+    const d = data([feature, sprintStory, other, item(5, { state: "Removed" }), item(6, { kind: "Bug" })]);
+    expect(linkTargets(d)).toEqual([
+      { id: 2, rev: 3, title: "In sprint", task: false },
+      { id: 20, rev: 5, title: "A task", task: true },
+      { id: 4, rev: 1, title: "Feature story", task: false },
+    ]);
+  });
+
+  it("leaves hidden PRs and repos out of the visible list", () => {
+    const o = (id: number, repo_id: string) => ({ id, title: `PR ${id}`, project: "SCC", project_id: "s", repo: `SCC/${repo_id}`, repo_id, state: "completed", created: "2026-10-29", url: "" });
+    const report = { days: 30, prs: [o(1, "a"), o(2, "a"), o(3, "b")], hidden: { prs: [{ id: "3", label: "PR 3" }], repos: [{ id: "a", label: "SCC/a" }] } };
+    expect(visibleOrphans(report)).toEqual([]);
+    expect(visibleOrphans({ ...report, hidden: { prs: [], repos: [] } }).map((p) => p.id)).toEqual([1, 2, 3]);
   });
 });
 

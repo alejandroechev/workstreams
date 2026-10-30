@@ -163,6 +163,39 @@ describe("MemoryBackend planning", () => {
     expect((await b.planningState()).draft).toEqual([{ kind: "set_state", id: 12, rev: 1, state: "Active" }]);
   });
 
+  it("lists my unlinked PRs in the range, hides them, and links them through the draft", async () => {
+    const b = seeded();
+    await b.planningConnect(LINK);
+    const day = 86_400_000;
+    const at = (daysAgo: number) => new Date(Date.now() - daysAgo * day).toISOString();
+    const mem = (id: number, status: "active" | "completed" | "abandoned", daysAgo: number, over: Record<string, unknown> = {}) =>
+      ({ id, title: `PR ${id}`, project: "SCC", project_id: "scc", repo: "SCC/engaine", repo_id: "engaine", status, draft: false, created: at(daysAgo), mine: true, ...over });
+    b.seedPlanningPrs([
+      mem(1, "active", 3, { draft: true }), mem(2, "completed", 20), mem(3, "completed", 60),
+      mem(4, "abandoned", 2), mem(5, "completed", 2, { mine: false }), mem(6, "completed", 1, { linkedTo: [1] }),
+    ]);
+    let report = await b.planningOrphans();
+    expect([report.days, report.prs.map((p) => [p.id, p.state])]).toEqual([30, [[1, "draft"], [2, "completed"]]]);
+    await b.planningSetOrphanDays(90);
+    expect((await b.planningOrphans()).prs.map((p) => p.id)).toEqual([1, 2, 3]);
+    await expect(b.planningSetOrphanDays(45)).rejects.toThrow("7, 30 or 90");
+    expect(b.planningOrphansFetchCount()).toBe(2);
+    const hidden = await b.planningHideOrphan("repo", "engaine", "SCC/engaine");
+    expect(hidden.repos).toEqual([{ id: "engaine", label: "SCC/engaine" }]);
+    expect((await b.planningOrphans()).hidden.repos).toHaveLength(1);
+    expect((await b.planningUnhideOrphan("repo", "engaine")).repos).toEqual([]);
+
+    const ref = (id: number) => ({ id, project_id: "scc", repo_id: "engaine", title: `PR ${id}` });
+    await b.planningAddChange({ kind: "link_pr", id: 2, rev: 1, pr: ref(1) });
+    await b.planningAddChange({ kind: "link_pr", id: 1, rev: 1, pr: ref(2) });
+    b.changePlanningItemInAdo(1, { title: "changed" });
+    expect(b.planningWrites()).toBe(0);
+    const result = await b.planningPublish();
+    expect(result.conflicts).toEqual([{ id: 1, title: "changed", field: "Links", ado_value: "revision 2" }]);
+    expect((await b.planningOrphans()).prs.map((p) => p.id)).toEqual([2, 3]);
+    expect(b.planningPrLinks(1)).toEqual([2]);
+  });
+
   it("can fail a read, as a network error would", async () => {
     const b = seeded();
     await b.planningConnect(LINK);

@@ -44,6 +44,7 @@ describe("usePlanning freshness", () => {
     rerender({ open: true });
     await act(async () => {});
     expect(b.planningFetchCount()).toBe(4);
+    expect(b.planningOrphansFetchCount()).toBe(b.planningFetchCount());
   });
 
   it("keeps the last data and shows the error when a load fails", async () => {

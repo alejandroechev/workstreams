@@ -80,6 +80,8 @@ export type Change =
   | { kind: "remove"; id: number; rev: number }
   /** A task's state, or a story's through the "resolve the story" offer. */
   | { kind: "set_state"; id: number; rev: number; state: string }
+  /** Links one of your orphaned PRs to a work item (`id`). */
+  | { kind: "link_pr"; id: number; rev: number; pr: PrRef }
   | { kind: "create_feature"; temp_id: number; title: string; target_date: string | null; description: string | null }
   | {
       kind: "create_story"; temp_id: number; parent: number; title: string; points: number | null; description: string | null;
@@ -88,6 +90,78 @@ export type Change =
       /** Backlog order set before it exists. */
       order?: number | null;
     };
+
+export interface PrRef {
+  id: number;
+  project_id: string;
+  repo_id: string;
+  title: string;
+}
+
+/** One of your PRs with no linked work item (the Orphaned PRs tab). */
+export interface OrphanPr {
+  id: number;
+  title: string;
+  project: string;
+  project_id: string;
+  repo: string;
+  repo_id: string;
+  /** "active", "draft" or "completed". */
+  state: string;
+  created: string;
+  url: string;
+}
+
+export interface HiddenEntry {
+  id: string;
+  label: string;
+}
+
+export interface OrphanHidden {
+  prs: HiddenEntry[];
+  repos: HiddenEntry[];
+}
+
+export interface OrphanReport {
+  days: number;
+  /** Every orphan in the range, hidden ones included. */
+  prs: OrphanPr[];
+  hidden: OrphanHidden;
+}
+
+export const ORPHAN_RANGES = [7, 30, 90] as const;
+
+export function isOrphanHidden(pr: OrphanPr, hidden: OrphanHidden): boolean {
+  return hidden.prs.some((h) => h.id === String(pr.id)) || hidden.repos.some((h) => h.id === pr.repo_id);
+}
+
+/** The orphans the tab lists: hidden PRs and repos left out. */
+export function visibleOrphans(report: OrphanReport): OrphanPr[] {
+  return report.prs.filter((pr) => !isOrphanHidden(pr, report.hidden));
+}
+
+export interface LinkTarget {
+  id: number;
+  rev: number;
+  title: string;
+  task: boolean;
+}
+
+/**
+ * What an orphaned PR can be linked to: the selected sprint's stories, each
+ * followed by its tasks, then your features' other stories.
+ */
+export function linkTargets(data: PlanningData): LinkTarget[] {
+  const stories = data.items.filter((i) => i.kind === "User Story" && i.state !== "Removed");
+  const inSprint = stories.filter((s) => s.iteration_path === data.selected_sprint);
+  const out: LinkTarget[] = [];
+  for (const story of inSprint) {
+    out.push({ id: story.id, rev: story.rev, title: story.title, task: false });
+    for (const task of story.tasks ?? []) out.push({ id: task.id, rev: task.rev, title: task.title, task: true });
+  }
+  for (const story of stories) if (!inSprint.includes(story)) out.push({ id: story.id, rev: story.rev, title: story.title, task: false });
+  return out;
+}
 
 export interface Conflict {
   id: number;
@@ -135,7 +209,10 @@ export function addChange(draft: Change[], change: Change): Change[] {
   }
   // Removing an item and setting its state both set its state: they replace each other.
   const slot = (kind: Change["kind"]) => (kind === "remove" || kind === "set_state" ? "state" : kind);
-  const index = draft.findIndex((c) => slot(c.kind) === slot(change.kind) && target(c) === id);
+  // A PR has one pending link: linking it again moves the link.
+  const index = change.kind === "link_pr"
+    ? draft.findIndex((c) => c.kind === "link_pr" && c.pr.id === change.pr.id)
+    : draft.findIndex((c) => slot(c.kind) === slot(change.kind) && target(c) === id);
   if (index < 0) return [...draft, change];
   return draft.map((c, i) => (i === index ? change : c));
 }
@@ -175,6 +252,7 @@ export function applyDraft(data: PlanningData, draft: Change[]): PlanItem[] {
       byId.set(item.id, item);
       continue;
     }
+    if (change.kind === "link_pr") continue;
     if (change.kind === "set_state") {
       const item = byId.get(change.id);
       if (item) { item.state = change.state; continue; }
@@ -398,6 +476,10 @@ export function describeChange(change: Change, data: PlanningData | null, items:
     case "retitle": return `Rename #${change.id} to “${change.title}”`;
     case "order": return `Reorder “${title(change.id)}”`;
     case "remove": return `Remove “${title(change.id)}” (state Removed)`;
+    case "link_pr": {
+      const task = items.flatMap((i) => i.tasks ?? []).find((t) => t.id === change.id);
+      return `Link PR “${change.pr.title}” to “${items.find((i) => i.id === change.id)?.title ?? task?.title ?? `#${change.id}`}”`;
+    }
     case "set_state": {
       if (items.some((i) => i.id === change.id)) return `Set “${title(change.id)}” to ${change.state}`;
       const task = items.flatMap((i) => i.tasks ?? []).find((t) => t.id === change.id);

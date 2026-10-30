@@ -17,6 +17,10 @@ describe("TauriBackend planning", () => {
     await b.planningAddChange(change);
     await b.planningSetDraft([change], []);
     await b.planningPublish();
+    await b.planningOrphans();
+    await b.planningSetOrphanDays(90);
+    await b.planningHideOrphan("repo", "r1", "SCC/x");
+    await b.planningUnhideOrphan("pr", "7");
     expect(invoke.mock.calls).toEqual([
       ["planning_state"],
       ["planning_connect", { url: "https://x" }],
@@ -25,6 +29,10 @@ describe("TauriBackend planning", () => {
       ["planning_add_change", { change }],
       ["planning_set_draft", { draft: [change], base: [] }],
       ["planning_publish"],
+      ["planning_orphans"],
+      ["planning_set_orphan_days", { days: 90 }],
+      ["planning_hide_orphan", { kind: "repo", id: "r1", label: "SCC/x" }],
+      ["planning_unhide_orphan", { kind: "pr", id: "7" }],
     ]);
   });
 });

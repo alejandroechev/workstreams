@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type { WorkLane } from "../domain/work-lanes";
 import type { PrInboxSnapshot, PrWatchMode, PrInboxMute } from "../domain/pr-inbox";
 import type { PipelineMode, PipelineStatus } from "../domain/pipeline-inbox";
-import type { Change, PlanningConnection, PlanningData, PlanningState, PublishResult } from "../domain/planning";
+import type { Change, OrphanHidden, OrphanReport, PlanningConnection, PlanningData, PlanningState, PublishResult } from "../domain/planning";
 import type { Project, Workstream, Tile, TileType, WorkstreamLayout, CopilotConfigItem } from "../domain/types";
 import type { SessionFileComment } from "../domain/file-comments";
 import type { Review, ReviewComment, ChangedFile, DiffSides } from "../domain/code-review";
@@ -91,6 +91,22 @@ export class TauriBackend implements Backend {
 
   async planningPublish(): Promise<PublishResult> {
     return invoke<PublishResult>("planning_publish");
+  }
+
+  async planningOrphans(): Promise<OrphanReport> {
+    return invoke<OrphanReport>("planning_orphans");
+  }
+
+  async planningSetOrphanDays(days: number): Promise<void> {
+    await invoke("planning_set_orphan_days", { days });
+  }
+
+  async planningHideOrphan(kind: "pr" | "repo", id: string, label: string): Promise<OrphanHidden> {
+    return invoke<OrphanHidden>("planning_hide_orphan", { kind, id, label });
+  }
+
+  async planningUnhideOrphan(kind: "pr" | "repo", id: string): Promise<OrphanHidden> {
+    return invoke<OrphanHidden>("planning_unhide_orphan", { kind, id });
   }
 
   async setPipelineWatchMode(id: string, mode: PipelineMode): Promise<void> {
