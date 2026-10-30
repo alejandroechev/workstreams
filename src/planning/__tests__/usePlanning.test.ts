@@ -89,6 +89,24 @@ describe("usePlanning freshness", () => {
     expect((await b.planningState()).draft).toEqual([]);
   });
 
+  it("keeps a Hide made while a refresh is in flight", async () => {
+    const b = backend();
+    await b.planningConnect(LINK);
+    b.seedPlanningPrs([{ id: 1, title: "PR 1", project: "P", project_id: "p", repo: "P/r", repo_id: "r", status: "active", draft: false, mine: true, created: new Date().toISOString() }]);
+    const { result } = renderHook(() => usePlanning(b, true));
+    await act(async () => {});
+    // The refresh's read happened before the Hide, and answers after it.
+    const stale = await b.planningOrphans();
+    let release!: () => void;
+    vi.spyOn(b, "planningOrphans").mockImplementationOnce(() => new Promise((resolve) => { release = () => resolve(stale); }));
+    let refreshing!: Promise<void>;
+    act(() => { refreshing = result.current.refresh(); });
+    await act(async () => { await result.current.hideOrphan("pr", "1", "PR 1"); });
+    expect(result.current.orphans?.hidden.prs).toHaveLength(1);
+    await act(async () => { release(); await refreshing; });
+    expect(result.current.orphans?.hidden.prs).toHaveLength(1);
+  });
+
   it("selects a sprint, keeps the draft, and publishes", async () => {
     const b = backend();
     await b.planningConnect(LINK);

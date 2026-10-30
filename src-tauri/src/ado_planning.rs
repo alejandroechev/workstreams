@@ -1028,10 +1028,35 @@ pub fn publish(
                     _ => 0,
                 };
                 let fields = field_and_value(conn, other, me);
+                let mut url = item_url(conn, id);
+                if matches!(other, Change::LinkPr { .. }) {
+                    url.query_pairs_mut().append_pair("$expand", "relations");
+                }
                 let current = http
-                    .get(item_url(conn, id))
+                    .get(url)
                     .map_err(|e| (false, not_found_as_missing(e, "That item"), None))?;
                 let current_rev = current["rev"].as_i64().unwrap_or(-1);
+                // Already linked (in ADO, or by an earlier attempt): nothing to write.
+                if let Change::LinkPr { pr, .. } = other {
+                    let wanted = pr.artifact_url();
+                    let present = current["relations"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .any(|r| {
+                            r["rel"] == "ArtifactLink"
+                                && r["url"]
+                                    .as_str()
+                                    .is_some_and(|u| u.eq_ignore_ascii_case(&wanted))
+                        });
+                    if present {
+                        crate::orphan_prs::with_cache(|c| c.forget(&conn.organization, pr.id));
+                        if !result.written.contains(&id) {
+                            result.written.push(id);
+                        }
+                        return Ok(());
+                    }
+                }
                 let expected = match ours.get(&id) {
                     Some((seen, after)) if *seen == rev => *after,
                     _ => rev,
@@ -2055,6 +2080,40 @@ mod tests {
             }
         )
         .is_err());
+
+        // Linked in ADO meanwhile (same revision seen): nothing to write, and it's done.
+        let rev = stub.items.borrow()[&2]["rev"].as_i64().unwrap();
+        let patches = || {
+            stub.log
+                .borrow()
+                .iter()
+                .filter(|l| l.starts_with("PATCH"))
+                .count()
+        };
+        let before = patches();
+        let again = publish(
+            &stub,
+            &conn(),
+            &data.me,
+            &parent_iterations(&data),
+            &[Change::LinkPr {
+                id: 2,
+                rev,
+                pr: PrRef {
+                    project_id: "PROJ".into(),
+                    ..pr(7)
+                },
+            }],
+        );
+        assert_eq!(
+            (
+                again.written.clone(),
+                again.failures.len(),
+                again.remaining.len()
+            ),
+            (vec![2], 0, 0)
+        );
+        assert_eq!(patches(), before, "no duplicate relation is written");
     }
 
     #[test]

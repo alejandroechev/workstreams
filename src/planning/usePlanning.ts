@@ -25,6 +25,8 @@ export function usePlanning(backend: Backend, open: boolean) {
   const [orphans, setOrphans] = useState<OrphanReport | null>(null);
   const [orphanError, setOrphanError] = useState<string | null>(null);
   const connected = useRef(false);
+  /** Bumped by every Hide/Unhide, so an older read can't undo one. */
+  const hiddenVersion = useRef(0);
   /** The draft as last seen, which a replacement is based on. */
   const seen = useRef<Change[]>([]);
   const showDraft = useCallback((next: Change[]) => { seen.current = next; setDraftState(next); }, []);
@@ -37,13 +39,17 @@ export function usePlanning(backend: Backend, open: boolean) {
   }, [backend, showDraft]);
 
   const load = useCallback(async () => {
+    const version = hiddenVersion.current;
     try {
       await sync();
       if (!connected.current) return;
       setLoading(true);
       // Orphaned PRs are read alongside; their failure doesn't hide the rest.
       const orphanRead = backend.planningOrphans()
-        .then((report) => { setOrphans(report); setOrphanError(null); })
+        .then((report) => {
+          setOrphans((current) => (current && hiddenVersion.current !== version ? { ...report, hidden: current.hidden } : report));
+          setOrphanError(null);
+        })
         .catch((failure) => setOrphanError(message(failure)));
       try {
         setData(await backend.planningFetch());
@@ -64,11 +70,13 @@ export function usePlanning(backend: Backend, open: boolean) {
   }, [backend]);
 
   const hideOrphan = useCallback(async (kind: "pr" | "repo", id: string, label: string) => {
+    hiddenVersion.current += 1;
     const hidden = await backend.planningHideOrphan(kind, id, label);
     setOrphans((o) => (o ? { ...o, hidden } : o));
   }, [backend]);
 
   const unhideOrphan = useCallback(async (kind: "pr" | "repo", id: string) => {
+    hiddenVersion.current += 1;
     const hidden = await backend.planningUnhideOrphan(kind, id);
     setOrphans((o) => (o ? { ...o, hidden } : o));
   }, [backend]);

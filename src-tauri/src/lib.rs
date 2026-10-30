@@ -460,12 +460,11 @@ async fn planning_connect(
 #[tauri::command]
 async fn planning_orphans(state: State<'_, AppState>) -> Result<orphan_prs::OrphanReport, String> {
     use ado_planning::PlanningGateway;
-    let (conn, days, hidden) = {
+    let (conn, days) = {
         let db = state.db.lock().map_err(|e| e.to_string())?;
         (
             ado_planning::load_connection(&db)?.ok_or("Planning isn't connected to a team yet")?,
             orphan_prs::load_days(&db)?,
-            orphan_prs::load_hidden(&db)?,
         )
     };
     let prs = tauri::async_runtime::spawn_blocking(move || {
@@ -473,6 +472,11 @@ async fn planning_orphans(state: State<'_, AppState>) -> Result<orphan_prs::Orph
     })
     .await
     .map_err(|e| e.to_string())??;
+    // Read after the requests, so a Hide made meanwhile is included.
+    let hidden = {
+        let db = state.db.lock().map_err(|e| e.to_string())?;
+        orphan_prs::load_hidden(&db)?
+    };
     Ok(orphan_prs::OrphanReport { days, prs, hidden })
 }
 

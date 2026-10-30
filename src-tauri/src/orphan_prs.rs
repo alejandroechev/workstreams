@@ -15,6 +15,8 @@ const DEFAULT_DAYS: u32 = 30;
 const DAYS_KEY: &str = "planning.orphans.days";
 const HIDDEN_KEY: &str = "planning.orphans.hidden";
 const CACHE_TTL: Duration = Duration::from_secs(60 * 60);
+/// PRs per page of the organization-level list.
+const PAGE: usize = 1000;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct OrphanPr {
@@ -115,20 +117,31 @@ pub fn read_orphans(
 ) -> Result<Vec<OrphanPr>, String> {
     let me = whoami(http, organization)?;
     let since = iso_utc(now_secs.saturating_sub(u64::from(days) * 86_400));
-    let body = http.get(api(
-        organization,
-        &["_apis", "git", "pullrequests"],
-        &[
-            ("searchCriteria.creatorId", &me.id),
-            ("searchCriteria.status", "all"),
-            ("searchCriteria.minTime", &since),
-            ("searchCriteria.queryTimeRangeType", "created"),
-            ("$top", "1000"),
-        ],
-    ))?;
+    let mut listed: Vec<serde_json::Value> = Vec::new();
+    loop {
+        let skip = listed.len().to_string();
+        let body = http.get(api(
+            organization,
+            &["_apis", "git", "pullrequests"],
+            &[
+                ("searchCriteria.creatorId", &me.id),
+                ("searchCriteria.status", "all"),
+                ("searchCriteria.minTime", &since),
+                ("searchCriteria.queryTimeRangeType", "created"),
+                ("$top", &PAGE.to_string()),
+                ("$skip", &skip),
+            ],
+        ))?;
+        let page = body["value"].as_array().cloned().unwrap_or_default();
+        let full = page.len() >= PAGE;
+        listed.extend(page);
+        if !full {
+            break;
+        }
+    }
     let org_key = organization.to_ascii_lowercase();
     let mut out = Vec::new();
-    for pr in body["value"].as_array().into_iter().flatten() {
+    for pr in &listed {
         let status = pr["status"].as_str().unwrap_or("");
         if status != "active" && status != "completed" {
             continue;
@@ -305,7 +318,14 @@ mod tests {
                 );
             }
             if path.ends_with("/_apis/git/pullrequests") {
-                return Ok(json!({"value": self.prs}));
+                let q = |k: &str| {
+                    url.query_pairs()
+                        .find(|(key, _)| key == k)
+                        .and_then(|(_, v)| v.parse::<usize>().ok())
+                };
+                let (skip, top) = (q("$skip").unwrap_or(0), q("$top").unwrap_or(usize::MAX));
+                let page: Vec<&Value> = self.prs.iter().skip(skip).take(top).collect();
+                return Ok(json!({"value": page}));
             }
             if path.ends_with("/workitems") {
                 let id: i64 = path.split('/').rev().nth(1).unwrap().parse().unwrap();
@@ -426,6 +446,26 @@ mod tests {
         assert!(log.iter().any(|l| l.starts_with(
             "GET /o/SCC-id/_apis/git/repositories/engaine-id/pullRequests/3/workitems"
         )));
+    }
+
+    #[test]
+    fn reads_every_page_of_a_long_list() {
+        let mut s = stub();
+        s.linked.clear();
+        s.prs = (1..=PAGE as i64 * 2 + 3)
+            .map(|id| pr(id, "active", false, "SCC", "repo", "2026-10-28T10:00:00Z"))
+            .collect();
+        let prs =
+            read_orphans(&s, "o", 30, NOW, &mut LinkCache::default(), Instant::now()).unwrap();
+        assert_eq!(prs.len(), PAGE * 2 + 3);
+        assert_eq!(
+            s.log
+                .borrow()
+                .iter()
+                .filter(|l| l.contains("/_apis/git/pullrequests?"))
+                .count(),
+            3
+        );
     }
 
     #[test]

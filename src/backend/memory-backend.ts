@@ -391,7 +391,7 @@ export class MemoryBackend implements Backend {
         case "set_state": item.state = change.state; break;
         case "link_pr": {
           const pr = this.planningPrs.find((p) => p.id === change.pr.id);
-          if (pr) pr.linkedTo = [...(pr.linkedTo ?? []), item.id];
+          if (pr && !pr.linkedTo?.includes(item.id)) pr.linkedTo = [...(pr.linkedTo ?? []), item.id];
           break;
         }
       }

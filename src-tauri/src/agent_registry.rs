@@ -1132,9 +1132,14 @@ fn planning_link_pr(
         .find(|i| i.id == item)
         .map(|i| i.rev)
         .or_else(|| {
-            crate::ado_planning::sprint_summary(&data)
-                .stories
+            // Tasks of every story in the selected sprint, as the tab offers them.
+            data.items
                 .iter()
+                .filter(|s| {
+                    s.kind == "User Story"
+                        && s.state != "Removed"
+                        && s.iteration_path == data.selected_sprint
+                })
                 .flat_map(|s| s.tasks.iter())
                 .find(|t| t.id == item)
                 .map(|t| t.rev)
@@ -2576,6 +2581,11 @@ mod tests {
                         tasks: vec![task(30, "New", true)],
                         ..item(3, "User Story", "New", false, "P\\Q4", Some(5.0), Some(100))
                     },
+                    // A teammate's story in the sprint: its tasks can be link targets.
+                    PlanItem {
+                        tasks: vec![task(50, "Active", false)],
+                        ..item(5, "User Story", "Active", false, "P\\S22", Some(2.0), None)
+                    },
                 ],
             })
         }
@@ -3027,6 +3037,13 @@ mod tests {
             serde_json::json!({"pr": 71, "item": 2}),
         )
         .unwrap();
+        call(
+            &db,
+            &caller,
+            "planning.link_pr",
+            serde_json::json!({"pr": 72, "item": 50}),
+        )
+        .unwrap();
         for (params, expect) in [
             (
                 serde_json::json!({"pr": 404, "item": 2}),
@@ -3044,7 +3061,7 @@ mod tests {
             let err = call(&db, &caller, "planning.link_pr", params.clone()).unwrap_err();
             assert!(err.message.contains(expect), "{params}: {}", err.message);
         }
-        assert_eq!(crate::ado_planning::load_draft(&db).unwrap().len(), 2);
+        assert_eq!(crate::ado_planning::load_draft(&db).unwrap().len(), 3);
     }
 
     #[test]
