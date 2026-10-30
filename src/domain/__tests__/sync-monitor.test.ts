@@ -86,6 +86,21 @@ describe("which problems a run of checks shows", () => {
     expect(activeProblems([ok(0, bad), ok(2 * MIN, blind)], DEFAULT_THRESHOLDS, open).map((p) => p.kind).sort()).toEqual(["disk", "memory"]);
   });
 
+  it("keeps an outage open across a sleep while the server still fails", () => {
+    const open = [{ kind: "unreachable", severity: "critical" as const, started_at: 0, message: "", hint: "" }];
+    expect(activeProblems([down(0), down(2 * MIN), down(60 * MIN)], DEFAULT_THRESHOLDS, open).map((p) => p.kind)).toEqual(["unreachable"]);
+    expect(activeProblems([down(0), down(2 * MIN), ok(60 * MIN)], DEFAULT_THRESHOLDS, open)).toEqual([]);
+  });
+
+  it("keeps a large document's problem when it only dropped out of the top 20", () => {
+    const doc = (id: string, mb: number) => ({ docId: id, appName: "App", sizeBytes: mb * 2 ** 20, growthBytes24h: 0, modifiedAt: "" });
+    const open = [{ kind: "doc_size:big", severity: "warning" as const, started_at: 0, message: "App document is 21 MB", hint: "h" }];
+    const full = vitals({ docs: Array.from({ length: 20 }, (_, i) => doc(`d${i}`, 30 + i)) });
+    expect(activeProblems([ok(0, full)], DEFAULT_THRESHOLDS, open).map((p) => p.kind)).toContain("doc_size:big");
+    const short = vitals({ docs: [doc("d0", 1)] });
+    expect(activeProblems([ok(0, short)], DEFAULT_THRESHOLDS, open)).toEqual([]);
+  });
+
   it("keeps CPU open while it stays high, even if a vitals gap broke the run", () => {
     const high = (at: number) => ok(at, vitals({ box: { cpuPercent: 95, memory: vitals().box.memory } }));
     const open = [{ kind: "cpu", severity: "critical" as const, started_at: 0, message: "", hint: "" }];

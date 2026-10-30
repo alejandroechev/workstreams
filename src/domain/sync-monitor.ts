@@ -173,7 +173,10 @@ export function activeProblems(checks: SyncCheck[], t: SyncThresholds, open: Syn
   const out: ProblemDraft[] = [];
   const bad = (c: SyncCheck) => !c.reachable || c.latency_ms > t.slowMs;
   const firstBad = run.slice(0, t.unreachableChecks);
-  if (firstBad.length >= t.unreachableChecks && firstBad.every(bad)) {
+  // Opening needs consecutive bad checks; once open, it stays while the latest is bad
+  // (a sleep in between breaks the run, not the outage).
+  const outageOpen = open.some((p) => p.kind === "unreachable");
+  if ((outageOpen && bad(run[0])) || (firstBad.length >= t.unreachableChecks && firstBad.every(bad))) {
     const latest = run[0];
     out.push({
       kind: "unreachable",
@@ -222,6 +225,15 @@ export function activeProblems(checks: SyncCheck[], t: SyncThresholds, open: Syn
       message: `Sync server rejected ${latest.rejectedLogins.last5Minutes} logins in 5 minutes`,
       hint: HINTS.logins,
     });
+  }
+  // The server lists its 20 largest documents: one missing from a full list may
+  // just have been outranked, so its open problem stays.
+  if (latest.docs.length >= 20) {
+    const listed = new Set(latest.docs.map((d) => d.docId));
+    for (const p of open) {
+      const [base, docId] = p.kind.split(":");
+      if ((base === "doc_size" || base === "doc_growth") && docId && !listed.has(docId)) keep(p.kind);
+    }
   }
   for (const doc of latest.docs) {
     const app = doc.appName ?? "unknown app";
