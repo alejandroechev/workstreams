@@ -407,6 +407,54 @@ pub const COMMANDS: &[Command] = &[
         handler: planning_estimate,
     },
     Command {
+        id: "planning.orphan_prs",
+        log_params: &["days"],
+        summary: "Your PRs with no linked work item, across Planning's organization (params: days = 7 | 30 | 90, default the tab's range); hidden ones are flagged",
+        requires_identity: true,
+        destructive: false,
+        handler: planning_orphan_prs,
+    },
+    Command {
+        id: "planning.hide_pr",
+        log_params: &["pr"],
+        summary: "Hide an orphaned PR from the Orphaned PRs tab (params: pr)",
+        requires_identity: true,
+        destructive: false,
+        handler: planning_hide_pr,
+    },
+    Command {
+        id: "planning.unhide_pr",
+        log_params: &["pr"],
+        summary: "Show a hidden PR again (params: pr)",
+        requires_identity: true,
+        destructive: false,
+        handler: planning_unhide_pr,
+    },
+    Command {
+        id: "planning.hide_repo",
+        log_params: &["repo"],
+        summary: "Hide every orphaned PR of a repo (params: repo = \"Project/repo\" or repository id)",
+        requires_identity: true,
+        destructive: false,
+        handler: planning_hide_repo,
+    },
+    Command {
+        id: "planning.unhide_repo",
+        log_params: &["repo"],
+        summary: "Show a hidden repo's PRs again (params: repo)",
+        requires_identity: true,
+        destructive: false,
+        handler: planning_unhide_repo,
+    },
+    Command {
+        id: "planning.link_pr",
+        log_params: &["pr", "item"],
+        summary: "Draft: link an orphaned PR to one of your stories or a task of a sprint story (params: pr, item); written on planning.publish",
+        requires_identity: true,
+        destructive: false,
+        handler: planning_link_pr,
+    },
+    Command {
         id: "planning.task_state",
         log_params: &["task", "state"],
         summary: "Draft: set a task's state (params: task = id of a task under a story in the selected sprint, state = New | Active | Blocked | Resolved | Closed); its state in ADO again drops the pending change",
@@ -925,6 +973,188 @@ fn planning_estimate(
             id: item.id,
             rev: item.rev,
             points,
+        },
+    )
+}
+
+fn planning_orphan_list(
+    context: &CommandContext,
+    days: Option<u32>,
+) -> Result<
+    (
+        Vec<crate::orphan_prs::OrphanPr>,
+        crate::orphan_prs::Hidden,
+        u32,
+    ),
+    AgentError,
+> {
+    let gateway = context.planning.ok_or_else(|| {
+        AgentError::new(
+            "NO_PLANNING",
+            "This build cannot read ADO planning data",
+            "Report this as a bug.",
+        )
+    })?;
+    let conn = crate::ado_planning::load_connection(context.db)
+        .map_err(planning_error)?
+        .ok_or_else(|| planning_error("Planning isn't connected to a team yet".into()))?;
+    let days = match days {
+        Some(d) if crate::orphan_prs::RANGES.contains(&d) => d,
+        Some(d) => {
+            return Err(planning_error(format!(
+                "The range is 7, 30 or 90 days, not {d}"
+            )))
+        }
+        None => crate::orphan_prs::load_days(context.db).map_err(planning_error)?,
+    };
+    let prs = gateway
+        .orphans(&conn.organization, days)
+        .map_err(planning_error)?;
+    let hidden = crate::orphan_prs::load_hidden(context.db).map_err(planning_error)?;
+    Ok((prs, hidden, days))
+}
+
+fn planning_orphan_prs(
+    context: &CommandContext,
+    params: &serde_json::Value,
+) -> Result<CommandOutcome, AgentError> {
+    let days = match params.get("days") {
+        None | Some(serde_json::Value::Null) => None,
+        Some(_) => Some(param_i64(params, "days")?.clamp(0, i64::from(u32::MAX)) as u32),
+    };
+    let (prs, hidden, days) = planning_orphan_list(context, days)?;
+    let prs: Vec<serde_json::Value> = prs
+        .iter()
+        .map(|p| {
+            let mut v = serde_json::json!(p);
+            v["hidden"] = serde_json::json!(p.is_hidden(&hidden));
+            v
+        })
+        .collect();
+    Ok(CommandOutcome::read(
+        serde_json::json!({ "days": days, "prs": prs, "hidden": hidden }),
+    ))
+}
+
+fn planning_find_orphan(
+    context: &CommandContext,
+    id: i64,
+) -> Result<crate::orphan_prs::OrphanPr, AgentError> {
+    let (prs, _, _) = planning_orphan_list(context, None)?;
+    prs.into_iter().find(|p| p.id == id).ok_or_else(|| {
+        planning_error(format!(
+            "{id} isn't one of your orphaned PRs in the tab's range"
+        ))
+    })
+}
+
+fn planning_hidden_changed(hidden: crate::orphan_prs::Hidden) -> CommandOutcome {
+    CommandOutcome::changed(
+        serde_json::json!({ "hidden": hidden }),
+        StateChange::new("planning", "orphans", "changed"),
+    )
+}
+
+fn planning_hide_pr(
+    context: &CommandContext,
+    params: &serde_json::Value,
+) -> Result<CommandOutcome, AgentError> {
+    let pr = planning_find_orphan(context, param_i64(params, "pr")?)?;
+    let entry = crate::orphan_prs::HiddenEntry {
+        id: pr.id.to_string(),
+        label: pr.title,
+    };
+    crate::orphan_prs::hide(context.db, "pr", entry)
+        .map(planning_hidden_changed)
+        .map_err(planning_error)
+}
+
+fn planning_unhide_pr(
+    context: &CommandContext,
+    params: &serde_json::Value,
+) -> Result<CommandOutcome, AgentError> {
+    let id = param_i64(params, "pr")?.to_string();
+    crate::orphan_prs::unhide(context.db, "pr", &id)
+        .map(planning_hidden_changed)
+        .map_err(planning_error)
+}
+
+fn planning_hide_repo(
+    context: &CommandContext,
+    params: &serde_json::Value,
+) -> Result<CommandOutcome, AgentError> {
+    let repo = required_str(params, "repo")?;
+    let (prs, _, _) = planning_orphan_list(context, None)?;
+    let found = prs
+        .iter()
+        .find(|p| p.repo_id == repo || p.repo.eq_ignore_ascii_case(&repo))
+        .ok_or_else(|| {
+            planning_error(format!("No orphaned PR of yours is in a repo named {repo}"))
+        })?;
+    let entry = crate::orphan_prs::HiddenEntry {
+        id: found.repo_id.clone(),
+        label: found.repo.clone(),
+    };
+    crate::orphan_prs::hide(context.db, "repo", entry)
+        .map(planning_hidden_changed)
+        .map_err(planning_error)
+}
+
+fn planning_unhide_repo(
+    context: &CommandContext,
+    params: &serde_json::Value,
+) -> Result<CommandOutcome, AgentError> {
+    let repo = required_str(params, "repo")?;
+    let hidden = crate::orphan_prs::load_hidden(context.db).map_err(planning_error)?;
+    let id = hidden
+        .repos
+        .iter()
+        .find(|h| h.id == repo || h.label.eq_ignore_ascii_case(&repo))
+        .map(|h| h.id.clone())
+        .unwrap_or(repo);
+    crate::orphan_prs::unhide(context.db, "repo", &id)
+        .map(planning_hidden_changed)
+        .map_err(planning_error)
+}
+
+/// Links an orphaned PR to one of your stories or a task of a sprint story.
+fn planning_link_pr(
+    context: &CommandContext,
+    params: &serde_json::Value,
+) -> Result<CommandOutcome, AgentError> {
+    let pr = planning_find_orphan(context, param_i64(params, "pr")?)?;
+    let item = param_i64(params, "item")?;
+    let data = planning_data(context)?;
+    let rev = data
+        .items
+        .iter()
+        .filter(|i| i.kind == "User Story" && i.state != "Removed")
+        .find(|i| i.id == item)
+        .map(|i| i.rev)
+        .or_else(|| {
+            crate::ado_planning::sprint_summary(&data)
+                .stories
+                .iter()
+                .flat_map(|s| s.tasks.iter())
+                .find(|t| t.id == item)
+                .map(|t| t.rev)
+        })
+        .ok_or_else(|| {
+            planning_error(format!(
+                "{item} isn't one of your stories or a task of a sprint story"
+            ))
+        })?;
+    planning_add(
+        context,
+        crate::ado_planning::Change::LinkPr {
+            id: item,
+            rev,
+            pr: crate::ado_planning::PrRef {
+                id: pr.id,
+                project_id: pr.project_id,
+                repo_id: pr.repo_id,
+                title: pr.title,
+            },
         },
     )
 }
@@ -2376,6 +2606,28 @@ mod tests {
             }
             Ok(result)
         }
+        fn orphans(&self, _: &str, days: u32) -> Result<Vec<crate::orphan_prs::OrphanPr>, String> {
+            let pr = |id: i64, repo: &str| crate::orphan_prs::OrphanPr {
+                id,
+                title: format!("PR {id}"),
+                project: "SCC".into(),
+                project_id: "scc-id".into(),
+                repo: format!("SCC/{repo}"),
+                repo_id: format!("{repo}-id"),
+                state: "completed".into(),
+                created: "2026-10-29T10:00:00Z".into(),
+                url: format!("u/pr/{id}"),
+            };
+            Ok(if days >= 30 {
+                vec![
+                    pr(70, "engaine"),
+                    pr(71, "engaine"),
+                    pr(72, "media_components"),
+                ]
+            } else {
+                vec![pr(70, "engaine")]
+            })
+        }
     }
 
     fn call(
@@ -2663,6 +2915,138 @@ mod tests {
     /// A connectivity check must survive a missing identity: an agent whose
     /// token went stale needs to separate "cannot reach the app" from "the app
     /// no longer knows me", because only one of them is fixed by restarting.
+    #[test]
+    fn planning_orphan_commands_list_hide_and_link() {
+        let _serial = crate::ado_planning::PUBLISH_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        use crate::ado_planning::{Change, PlanningGateway, PrRef};
+        let db = memory_db();
+        let caller = agent("tile-1", "ws-own");
+        crate::ado_planning::save_connection(
+            &db,
+            &FakePlanning
+                .connect("https://dev.azure.com/o/P/_backlogs/backlog/T/Features")
+                .unwrap(),
+        )
+        .unwrap();
+        let list = |params: serde_json::Value| {
+            call(&db, &caller, "planning.orphan_prs", params)
+                .unwrap()
+                .data
+        };
+        let all = list(serde_json::Value::Null);
+        assert_eq!(all["days"], 30);
+        assert_eq!(all["prs"].as_array().unwrap().len(), 3);
+        for field in ["id", "title", "repo", "state", "created", "url", "hidden"] {
+            assert!(all["prs"][0].get(field).is_some(), "{field}");
+        }
+        assert_eq!(
+            list(serde_json::json!({"days": 7}))["prs"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(call(
+            &db,
+            &caller,
+            "planning.orphan_prs",
+            serde_json::json!({"days": 45})
+        )
+        .is_err());
+
+        call(
+            &db,
+            &caller,
+            "planning.hide_pr",
+            serde_json::json!({"pr": 72}),
+        )
+        .unwrap();
+        call(
+            &db,
+            &caller,
+            "planning.hide_repo",
+            serde_json::json!({"repo": "SCC/engaine"}),
+        )
+        .unwrap();
+        let hidden = list(serde_json::Value::Null);
+        assert!(hidden["prs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|p| p["hidden"] == true));
+        assert_eq!(hidden["hidden"]["repos"][0]["label"], "SCC/engaine");
+        call(
+            &db,
+            &caller,
+            "planning.unhide_repo",
+            serde_json::json!({"repo": "SCC/engaine"}),
+        )
+        .unwrap();
+        call(
+            &db,
+            &caller,
+            "planning.unhide_pr",
+            serde_json::json!({"pr": 72}),
+        )
+        .unwrap();
+        assert!(list(serde_json::Value::Null)["prs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|p| p["hidden"] == false));
+
+        let linked = call(
+            &db,
+            &caller,
+            "planning.link_pr",
+            serde_json::json!({"pr": 70, "item": 20}),
+        )
+        .unwrap()
+        .data;
+        assert_eq!(linked["draft"], 1);
+        assert_eq!(
+            crate::ado_planning::load_draft(&db).unwrap(),
+            vec![Change::LinkPr {
+                id: 20,
+                rev: 4,
+                pr: PrRef {
+                    id: 70,
+                    project_id: "scc-id".into(),
+                    repo_id: "engaine-id".into(),
+                    title: "PR 70".into()
+                }
+            }],
+            "a task of a sprint story, at its revision"
+        );
+        call(
+            &db,
+            &caller,
+            "planning.link_pr",
+            serde_json::json!({"pr": 71, "item": 2}),
+        )
+        .unwrap();
+        for (params, expect) in [
+            (
+                serde_json::json!({"pr": 404, "item": 2}),
+                "isn't one of your orphaned PRs",
+            ),
+            (
+                serde_json::json!({"pr": 72, "item": 100}),
+                "isn't one of your stories or a task of a sprint story",
+            ),
+            (
+                serde_json::json!({"pr": 72, "item": 30}),
+                "isn't one of your stories or a task of a sprint story",
+            ),
+        ] {
+            let err = call(&db, &caller, "planning.link_pr", params.clone()).unwrap_err();
+            assert!(err.message.contains(expect), "{params}: {}", err.message);
+        }
+        assert_eq!(crate::ado_planning::load_draft(&db).unwrap().len(), 2);
+    }
+
     #[test]
     fn planning_task_state_reads_tasks_and_drafts_their_state() {
         let _serial = crate::ado_planning::PUBLISH_TEST_LOCK

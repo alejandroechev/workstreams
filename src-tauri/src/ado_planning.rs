@@ -103,7 +103,7 @@ pub fn parse_team_link(text: &str) -> Result<TeamLink, String> {
 
 // ── URLs ────────────────────────────────────────────────────────────────
 
-fn base(org: &str) -> reqwest::Url {
+pub(crate) fn base(org: &str) -> reqwest::Url {
     let mut url = reqwest::Url::parse("https://dev.azure.com/").expect("constant URL");
     url.path_segments_mut()
         .expect("HTTPS base")
@@ -112,7 +112,7 @@ fn base(org: &str) -> reqwest::Url {
     url
 }
 
-fn api(org: &str, segments: &[&str], query: &[(&str, &str)]) -> reqwest::Url {
+pub(crate) fn api(org: &str, segments: &[&str], query: &[(&str, &str)]) -> reqwest::Url {
     let mut url = base(org);
     url.path_segments_mut()
         .expect("HTTPS base")
@@ -153,7 +153,7 @@ pub struct PlanningConnection {
     pub effort_field: String,
 }
 
-fn text(value: &Value) -> Option<String> {
+pub(crate) fn text(value: &Value) -> Option<String> {
     value.as_str().filter(|s| !s.is_empty()).map(str::to_owned)
 }
 
@@ -404,6 +404,25 @@ fn to_item(value: &Value, conn: &PlanningConnection, me: &Me) -> Option<PlanItem
     })
 }
 
+/// Who the Azure CLI login is in an organization.
+pub(crate) fn whoami(http: &dyn AdoHttp, organization: &str) -> Result<Me, String> {
+    let who = http.get({
+        let mut url = base(organization);
+        url.path_segments_mut()
+            .expect("HTTPS base")
+            .extend(["_apis", "connectionData"]);
+        url.query_pairs_mut()
+            .append_pair("api-version", "7.1-preview.1");
+        url
+    })?;
+    let user = &who["authenticatedUser"];
+    Ok(Me {
+        id: text(&user["id"]).ok_or("ADO didn't say who you are")?,
+        display_name: text(&user["providerDisplayName"]).unwrap_or_default(),
+        unique_name: text(&user["properties"]["Account"]["$value"]).unwrap_or_default(),
+    })
+}
+
 /// The previous sprint is the one before the selected sprint in date order.
 pub fn previous_sprint(iterations: &[Iteration], selected: &str) -> Option<String> {
     let index = iterations.iter().position(|i| i.path == selected)?;
@@ -419,21 +438,7 @@ pub fn fetch(
     conn: &PlanningConnection,
     selected: Option<&str>,
 ) -> Result<PlanningData, String> {
-    let who = http.get({
-        let mut url = base(&conn.organization);
-        url.path_segments_mut()
-            .expect("HTTPS base")
-            .extend(["_apis", "connectionData"]);
-        url.query_pairs_mut()
-            .append_pair("api-version", "7.1-preview.1");
-        url
-    })?;
-    let user = &who["authenticatedUser"];
-    let me = Me {
-        id: text(&user["id"]).ok_or("ADO didn't say who you are")?,
-        display_name: text(&user["providerDisplayName"]).unwrap_or_default(),
-        unique_name: text(&user["properties"]["Account"]["$value"]).unwrap_or_default(),
-    };
+    let me = whoami(http, &conn.organization)?;
     let body = http.get(api(
         &conn.organization,
         &[
@@ -620,6 +625,12 @@ pub enum Change {
         rev: i64,
         state: String,
     },
+    /// Links one of your orphaned PRs to a work item (`id`).
+    LinkPr {
+        id: i64,
+        rev: i64,
+        pr: PrRef,
+    },
     CreateFeature {
         temp_id: i64,
         title: String,
@@ -641,6 +652,25 @@ pub enum Change {
     },
 }
 
+/// The pull request a `LinkPr` change links.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PrRef {
+    pub id: i64,
+    pub project_id: String,
+    pub repo_id: String,
+    pub title: String,
+}
+
+impl PrRef {
+    /// How a work item refers to a pull request.
+    fn artifact_url(&self) -> String {
+        format!(
+            "vstfs:///Git/PullRequestId/{}%2F{}%2F{}",
+            self.project_id, self.repo_id, self.id
+        )
+    }
+}
+
 impl Change {
     fn target(&self) -> i64 {
         match self {
@@ -649,7 +679,8 @@ impl Change {
             | Self::Retitle { id, .. }
             | Self::Order { id, .. }
             | Self::Remove { id, .. }
-            | Self::SetState { id, .. } => *id,
+            | Self::SetState { id, .. }
+            | Self::LinkPr { id, .. } => *id,
             Self::CreateFeature { temp_id, .. } | Self::CreateStory { temp_id, .. } => *temp_id,
         }
     }
@@ -657,6 +688,10 @@ impl Change {
     /// Removing an item and setting its state both set its state, so they
     /// replace each other.
     fn same_slot(&self, other: &Change) -> bool {
+        // A PR has one pending link: linking it again moves the link.
+        if let (Change::LinkPr { pr: a, .. }, Change::LinkPr { pr: b, .. }) = (self, other) {
+            return a.id == b.id;
+        }
         let sets_state = |c: &Change| matches!(c, Change::Remove { .. } | Change::SetState { .. });
         (std::mem::discriminant(self) == std::mem::discriminant(other)
             || (sets_state(self) && sets_state(other)))
@@ -988,7 +1023,8 @@ pub fn publish(
                     | Change::Retitle { rev, .. }
                     | Change::Order { rev, .. }
                     | Change::Remove { rev, .. }
-                    | Change::SetState { rev, .. } => *rev,
+                    | Change::SetState { rev, .. }
+                    | Change::LinkPr { rev, .. } => *rev,
                     _ => 0,
                 };
                 let fields = field_and_value(conn, other, me);
@@ -1001,6 +1037,21 @@ pub fn publish(
                     _ => rev,
                 };
                 if current_rev != expected {
+                    if matches!(other, Change::LinkPr { .. }) {
+                        return Err((
+                            true,
+                            String::new(),
+                            Some(Conflict {
+                                id,
+                                title: current["fields"]["System.Title"]
+                                    .as_str()
+                                    .unwrap_or("")
+                                    .to_string(),
+                                field: "Links".into(),
+                                ado_value: format!("revision {current_rev}"),
+                            }),
+                        ));
+                    }
                     let (field, _) = &fields[0];
                     return Err((
                         true,
@@ -1020,6 +1071,13 @@ pub fn publish(
                 for (field, value) in &fields {
                     ops.push(json!({"op":"add","path":format!("/fields/{field}"),"value":value}));
                 }
+                if let Change::LinkPr { pr, .. } = other {
+                    ops.push(json!({"op":"add","path":"/relations/-","value":{
+                        "rel": "ArtifactLink",
+                        "url": pr.artifact_url(),
+                        "attributes": {"name": "Pull Request"},
+                    }}));
+                }
                 let body = http
                     .patch(item_url(conn, id), &Value::Array(ops))
                     .map_err(|e| {
@@ -1030,7 +1088,10 @@ pub fn publish(
                                 Some(Conflict {
                                     id,
                                     title: String::new(),
-                                    field: fields[0].0.clone(),
+                                    field: fields
+                                        .first()
+                                        .map(|f| f.0.clone())
+                                        .unwrap_or_else(|| "Links".into()),
                                     ado_value: "(changed while publishing)".into(),
                                 }),
                             )
@@ -1039,6 +1100,9 @@ pub fn publish(
                         }
                     })?;
                 ours.insert(id, (rev, body["rev"].as_i64().unwrap_or(current_rev + 1)));
+                if let Change::LinkPr { pr, .. } = other {
+                    crate::orphan_prs::with_cache(|c| c.forget(&conn.organization, pr.id));
+                }
                 if !result.written.contains(&id) {
                     result.written.push(id);
                 }
@@ -1074,7 +1138,8 @@ pub fn publish(
             | Change::Retitle { id, rev, .. }
             | Change::Order { id, rev, .. }
             | Change::Remove { id, rev, .. }
-            | Change::SetState { id, rev, .. } => {
+            | Change::SetState { id, rev, .. }
+            | Change::LinkPr { id, rev, .. } => {
                 if let Some((seen, after)) = ours.get(id) {
                     if *seen == *rev {
                         *rev = *after;
@@ -1124,6 +1189,11 @@ const CHANGED_MEANWHILE: &str =
 /// item whose temporary id another new item already took.
 pub fn add_to_draft(db: &Connection, change: Change) -> Result<Vec<Change>, String> {
     ensure_not_publishing()?;
+    if let Change::LinkPr { id, .. } = &change {
+        if *id <= 0 {
+            return Err("Link a PR to a work item that exists in ADO".into());
+        }
+    }
     if let Change::SetState { state, .. } = &change {
         if !SETTABLE_STATES.contains(&state.as_str()) {
             return Err(format!(
@@ -1337,6 +1407,12 @@ pub trait PlanningGateway: Send + Sync {
         selected: Option<&str>,
     ) -> Result<PlanningData, String>;
     fn publish(&self, data: &PlanningData, draft: &[Change]) -> Result<PublishResult, String>;
+    /// Your orphaned PRs in the organization, created in the last `days` days.
+    fn orphans(
+        &self,
+        organization: &str,
+        days: u32,
+    ) -> Result<Vec<crate::orphan_prs::OrphanPr>, String>;
 }
 
 pub struct AdoPlanning;
@@ -1372,6 +1448,27 @@ impl PlanningGateway for AdoPlanning {
             &parent_iterations(data),
             draft,
         ))
+    }
+    fn orphans(
+        &self,
+        organization: &str,
+        days: u32,
+    ) -> Result<Vec<crate::orphan_prs::OrphanPr>, String> {
+        let http = crate::pr_inbox::AdoTransport::connect()?;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|e| e.to_string())?
+            .as_secs();
+        crate::orphan_prs::with_cache(|cache| {
+            crate::orphan_prs::read_orphans(
+                &http,
+                organization,
+                days,
+                now,
+                cache,
+                std::time::Instant::now(),
+            )
+        })
     }
 }
 
@@ -1550,6 +1647,11 @@ mod tests {
                 }
                 if let Some(f) = op["path"].as_str().unwrap().strip_prefix("/fields/") {
                     item["fields"][f] = op["value"].clone();
+                } else if op["path"] == "/relations/-" {
+                    item["relations"]
+                        .as_array_mut()
+                        .unwrap()
+                        .push(op["value"].clone());
                 }
             }
             let rev = item["rev"].as_i64().unwrap() + 1;
@@ -1843,6 +1945,116 @@ mod tests {
                 state: "Active".into()
             }]
         );
+    }
+
+    #[test]
+    fn a_pr_link_is_a_revision_checked_artifact_link_and_one_per_pr() {
+        let pr = |id: i64| PrRef {
+            id,
+            project_id: "proj".into(),
+            repo_id: "repo".into(),
+            title: format!("PR {id}"),
+        };
+        let mut draft = vec![Change::LinkPr {
+            id: 2,
+            rev: 1,
+            pr: pr(7),
+        }];
+        add_change(
+            &mut draft,
+            Change::LinkPr {
+                id: 3,
+                rev: 1,
+                pr: pr(8),
+            },
+        );
+        add_change(
+            &mut draft,
+            Change::LinkPr {
+                id: 3,
+                rev: 1,
+                pr: pr(7),
+            },
+        );
+        assert_eq!(
+            draft,
+            vec![
+                Change::LinkPr {
+                    id: 3,
+                    rev: 1,
+                    pr: pr(7)
+                },
+                Change::LinkPr {
+                    id: 3,
+                    rev: 1,
+                    pr: pr(8)
+                }
+            ],
+            "a PR's link moves; two PRs can share an item"
+        );
+        let stub = seeded();
+        let data = fetch(&stub, &conn(), None).unwrap();
+        stub.items.borrow_mut().get_mut(&4).unwrap()["rev"] = json!(5);
+        let draft = vec![
+            Change::LinkPr {
+                id: 2,
+                rev: 1,
+                pr: pr(7),
+            },
+            Change::Estimate {
+                id: 2,
+                rev: 1,
+                points: Some(2.0),
+            },
+            Change::LinkPr {
+                id: 4,
+                rev: 1,
+                pr: pr(9),
+            },
+        ];
+        let result = publish(&stub, &conn(), &data.me, &parent_iterations(&data), &draft);
+        let item = stub.items.borrow()[&2].clone();
+        let link = item["relations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["rel"] == "ArtifactLink")
+            .unwrap()
+            .clone();
+        assert_eq!(link["url"], "vstfs:///Git/PullRequestId/proj%2Frepo%2F7");
+        assert_eq!(
+            item["fields"]["Microsoft.VSTS.Scheduling.StoryPoints"], 2.0,
+            "same item, after our own write"
+        );
+        assert_eq!(
+            result.conflicts,
+            vec![Conflict {
+                id: 4,
+                title: "Unestimated".into(),
+                field: "Links".into(),
+                ado_value: "revision 5".into()
+            }]
+        );
+        assert_eq!(
+            result.remaining,
+            vec![Change::LinkPr {
+                id: 4,
+                rev: 1,
+                pr: pr(9)
+            }]
+        );
+        let db = Connection::open_in_memory().unwrap();
+        crate::db::init_db(&db).unwrap();
+        let _serial = PUBLISH_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        assert!(add_to_draft(
+            &db,
+            Change::LinkPr {
+                id: -1,
+                rev: 0,
+                pr: pr(1)
+            }
+        )
+        .is_err());
     }
 
     #[test]

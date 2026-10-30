@@ -23,6 +23,7 @@ mod loop_cli;
 mod loop_definition;
 mod loop_verifier;
 mod loops;
+mod orphan_prs;
 mod pipeline_inbox;
 mod pty;
 mod repo_create;
@@ -453,6 +454,54 @@ async fn planning_connect(
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// Your orphaned PRs in the saved range, with what is hidden (ADR 039).
+#[tauri::command]
+async fn planning_orphans(state: State<'_, AppState>) -> Result<orphan_prs::OrphanReport, String> {
+    use ado_planning::PlanningGateway;
+    let (conn, days, hidden) = {
+        let db = state.db.lock().map_err(|e| e.to_string())?;
+        (
+            ado_planning::load_connection(&db)?.ok_or("Planning isn't connected to a team yet")?,
+            orphan_prs::load_days(&db)?,
+            orphan_prs::load_hidden(&db)?,
+        )
+    };
+    let prs = tauri::async_runtime::spawn_blocking(move || {
+        ado_planning::AdoPlanning.orphans(&conn.organization, days)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    Ok(orphan_prs::OrphanReport { days, prs, hidden })
+}
+
+#[tauri::command]
+fn planning_set_orphan_days(state: State<'_, AppState>, days: u32) -> Result<(), String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    orphan_prs::save_days(&db, days)
+}
+
+/// Hides a PR (`kind` "pr", id = PR id) or a repo (`kind` "repo", id = repository id).
+#[tauri::command]
+fn planning_hide_orphan(
+    state: State<'_, AppState>,
+    kind: String,
+    id: String,
+    label: String,
+) -> Result<orphan_prs::Hidden, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    orphan_prs::hide(&db, &kind, orphan_prs::HiddenEntry { id, label })
+}
+
+#[tauri::command]
+fn planning_unhide_orphan(
+    state: State<'_, AppState>,
+    kind: String,
+    id: String,
+) -> Result<orphan_prs::Hidden, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    orphan_prs::unhide(&db, &kind, &id)
 }
 
 #[tauri::command]
@@ -6297,6 +6346,10 @@ pub fn run() {
             planning_add_change,
             planning_set_draft,
             planning_publish,
+            planning_orphans,
+            planning_set_orphan_days,
+            planning_hide_orphan,
+            planning_unhide_orphan,
             set_pipeline_watch_mode,
             remove_pipeline_watch,
             set_pr_inbox_read,
