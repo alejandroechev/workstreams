@@ -110,6 +110,10 @@ graph TB
     AgentRegistryRS -- "planning.*" --> PlanningRS
     PlanningRS --> AzureCli
     PlanningRS -- "bounded HTTPS (GET / POST / PATCH)" --> AdoAPI
+    App --> SyncMonUI["Sync server dot + panel (ADR 040)<br/>rules in TS: once per problem, mutes<br/>Inbox entries + desktop notifications"]
+    SyncMonUI -- "Tauri: sync_monitor_*" --> SyncMonRS["sync_monitor.rs<br/>check every 2 min · 24 h of checks<br/>problems + events in SQLite"]
+    AgentRegistryRS -- "sync.*" --> SyncMonRS
+    SyncMonRS -- "/health + /health/vitals (MONITOR_KEY)" --> SyncCloud
     AgentRegistryRS -- "diff.order.set / get" --> DiffOrderRS
     AgentRegistryRS -- "companion.send (phone sessions only)" --> CompanionMsgRS
     CompanionMsgRS -- "companion_sessions / companion_messages" --> AppDB

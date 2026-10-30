@@ -80,6 +80,11 @@ instead of buried behind tabs.
   8-story-point gauge, or break a feature into estimated stories. Every change is
   a draft until you press **Publish to ADO**
   ([ADR 039](docs/adrs/039-ado-planning.md)).
+- **Sync server monitoring** — a status dot in the sidebar watches the shared
+  sync server every two minutes: unreachable, CPU, memory, disk, refused logins,
+  and documents growing out of hand. Each problem raises one Inbox entry and
+  desktop notification when it starts and one when it clears
+  ([ADR 040](docs/adrs/040-sync-server-monitoring.md)).
 - **ADO Inbox** — opt in per repo to follow reviews assigned to you, PRs you opened, or both, with per-PR comment, vote, build-gate and closure events. Paste a link to any ADO pipeline (or one of its runs) to be told when its runs fail, succeed or both ([ADR 038](docs/adrs/038-pipeline-notifications.md)).
   Uses your `az login` account, checks every two minutes while the app is open,
   and keeps read/unread state across restarts. The first check is silent. An

@@ -106,6 +106,34 @@ workstreams agent call planning.publish
 The draft commands change the same draft the view shows. See
 [ADR 039](adrs/039-ado-planning.md).
 
+## Sync server monitoring
+
+The **Sync server** button in the sidebar footer shows the shared sync server's
+state as a dot: grey (no server configured — set one up under Settings →
+Companion), green, yellow (a warning, e.g. a large document) or red
+(unreachable, CPU, memory, disk or refused logins). Workstreams checks it every
+two minutes while open.
+
+Click it for the **Sync server** panel:
+- reachability, and with a **monitor key** the vitals: CPU, memory, swap,
+  disk, refused logins;
+- 24-hour sparklines and the largest documents with their app;
+- open problems, each with **Mute 24 h**, and recent alerts;
+- **Settings**: the monitor key (`MONITOR_KEY` from the server's `.env`) and
+  every threshold.
+
+Each problem adds one Inbox entry (under **Sync server**, with a hint on what to
+check) and one desktop notification when it starts, and one more when it
+clears.
+
+```sh
+workstreams agent call sync.status
+workstreams agent call sync.history hours=6
+workstreams agent call sync.mute kind=cpu hours=24
+```
+
+See [ADR 040](adrs/040-sync-server-monitoring.md).
+
 ## Inbox: pull requests and pipelines
 
 The **Inbox** in the sidebar has two sections, **Pull requests** and
