@@ -3,6 +3,7 @@ import type { DiffOrderView } from "../domain/diff-reading-order";
 import type { WorkLane } from "../domain/work-lanes";
 import type { PrInboxMute, PrInboxSnapshot, PrWatchMode } from "../domain/pr-inbox";
 import type { PipelineMode, PipelineStatus } from "../domain/pipeline-inbox";
+import type { SyncCheck, SyncEvent, SyncMonitorState, SyncProblem, SyncThresholds } from "../domain/sync-monitor";
 import type { Change, OrphanHidden, OrphanReport, PlanningConnection, PlanningData, PlanningState, PublishResult } from "../domain/planning";
 import type { Project, Workstream, Tile, TileType, WorkstreamLayout, CopilotConfigItem } from "../domain/types";
 import type { SessionFileComment } from "../domain/file-comments";
@@ -99,6 +100,17 @@ export interface Backend {
   /** Hides a PR (`kind` "pr", id = PR id) or a repo (`kind` "repo", id = repository id). */
   planningHideOrphan(kind: "pr" | "repo", id: string, label: string): Promise<OrphanHidden>;
   planningUnhideOrphan(kind: "pr" | "repo", id: string): Promise<OrphanHidden>;
+  // Sync server monitoring (ADR 040)
+  /** Checks the sync server once and stores it; null when none is configured. */
+  syncMonitorCheck(): Promise<SyncCheck | null>;
+  syncMonitorState(): Promise<SyncMonitorState>;
+  /** Saves the open problems and new events; shows a desktop notification for each in `notify`. */
+  syncMonitorApply(problems: SyncProblem[], events: SyncEvent[], notify: SyncEvent[]): Promise<void>;
+  syncMonitorSetKey(key: string): Promise<void>;
+  syncMonitorSetThresholds(thresholds: Partial<SyncThresholds>): Promise<void>;
+  /** Mutes a problem kind's alerts; returns until when (ms). */
+  syncMonitorMute(kind: string, hours: number): Promise<number>;
+  syncMonitorSetRead(id: string, isRead: boolean): Promise<void>;
   // Projects
   listProjects(): Promise<Project[]>;
   createProject(name: string, directory: string, color?: string): Promise<Project>;

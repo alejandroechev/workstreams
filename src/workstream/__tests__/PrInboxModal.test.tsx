@@ -379,3 +379,23 @@ describe("Inbox caught-up message with pipeline runs", () => {
   });
 });
 
+describe("sync server alerts in the Inbox", () => {
+  const syncEvent = (id: string, is_read: boolean, event: "started" | "resolved" = "started") => ({
+    id, kind: "unreachable", event, at: Date.parse("2026-10-30T12:00:00Z"), message: `Sync server unreachable ${id}`, hint: "Check the VPS", is_read,
+  });
+
+  it("lists them with their hint, counts them as unread, and marks them read", async () => {
+    const onSyncRead = vi.fn(async () => {});
+    render(<PrInboxModal snapshot={{ ...snapshot, items: [] }} error={null} loading={false} onRead={vi.fn()} onClose={vi.fn()}
+      syncEvents={[syncEvent("a", false), syncEvent("b", true, "resolved")]} onSyncRead={onSyncRead} />);
+    expect(screen.getByTestId("inbox-section-sync")).toBeInTheDocument();
+    expect(screen.getByTestId("sync-event-a")).toBeInTheDocument();
+    expect(screen.queryByTestId("sync-event-b")).toBeNull();
+    expect(screen.getByTestId("sync-event-hint-a")).toHaveTextContent("Check the VPS");
+    expect(screen.getByText(/1 unread of 2 notifications/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Read: Sync server unreachable a" }));
+    await waitFor(() => expect(onSyncRead).toHaveBeenCalledWith("a", true));
+    fireEvent.click(screen.getByTestId("inbox-kind-prs"));
+    expect(screen.queryByTestId("inbox-section-sync")).toBeNull();
+  });
+});

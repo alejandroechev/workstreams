@@ -13,6 +13,9 @@ import { fileBufferRegistry } from "./files/FileBufferRegistry";
 import WorkstreamSidebar from "./workstream/WorkstreamSidebar";
 import { usePrInbox } from "./workstream/usePrInbox";
 import { PrInboxModal } from "./workstream/PrInboxModal";
+import { SyncPanel } from "./sync-monitor/SyncPanel";
+import { useSyncMonitor } from "./sync-monitor/useSyncMonitor";
+import { statusLevel } from "./domain/sync-monitor";
 import { PipelinesModal } from "./workstream/PipelinesModal";
 import { PlanningView } from "./planning/PlanningView";
 import { usePlanning } from "./planning/usePlanning";
@@ -87,6 +90,8 @@ export default function App() {
   const [showInbox, setShowInbox] = useState(false);
   const [showPipelines, setShowPipelines] = useState(false);
   const [showPlanning, setShowPlanning] = useState(false);
+  const [showSync, setShowSync] = useState(false);
+  const syncMonitor = useSyncMonitor(backend);
   const planning = usePlanning(backend, showPlanning);
   const [projects, setProjects] = useState<Project[]>([]);
   const [workLanes, setWorkLanes] = useState<WorkLane[]>([]);
@@ -2304,9 +2309,12 @@ export default function App() {
         <PrInboxModal snapshot={inbox.snapshot} error={inbox.error} loading={inbox.loading}
           onRead={inbox.setRead} onMute={inbox.mute} onResetMutes={inbox.resetMutes}
           onOpenPipelines={() => setShowPipelines(true)}
+          syncEvents={syncMonitor.state?.events ?? []}
+          onSyncRead={syncMonitor.setRead}
           onClose={() => setShowInbox(false)} />
       )}
       {showPlanning && <PlanningView planning={planning} onClose={() => setShowPlanning(false)} />}
+      {showSync && <SyncPanel monitor={syncMonitor} onClose={() => setShowSync(false)} />}
       {showPipelines && (
         <PipelinesModal pipelines={inbox.snapshot.pipelines ?? []}
           onAdd={inbox.addPipeline} onSetMode={inbox.setPipelineMode} onRemove={inbox.removePipeline}
@@ -2314,9 +2322,11 @@ export default function App() {
       )}
       <WorkstreamSidebar
         onOpenInbox={() => setShowInbox(true)}
-        inboxUnread={countUnreadInbox(inbox.snapshot)}
+        inboxUnread={countUnreadInbox(inbox.snapshot) + (syncMonitor.state?.events ?? []).filter((e) => !e.is_read).length}
         onOpenPipelines={() => setShowPipelines(true)}
         onOpenPlanning={() => setShowPlanning(true)}
+        onOpenSync={() => setShowSync(true)}
+        syncLevel={statusLevel(!!syncMonitor.state?.configured, syncMonitor.state?.problems ?? [])}
         pipelinesError={(inbox.snapshot.pipelines ?? []).some((pipeline) => !!pipeline.error)}
         inboxRepos={inbox.loading ? undefined : inbox.snapshot.repos}
         inboxError={inbox.error}

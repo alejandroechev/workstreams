@@ -12,6 +12,7 @@ import {
   type PipelineStatus,
 } from "../domain/pipeline-inbox";
 
+import { baseKind, MUTE_KINDS, type SyncCheck, type SyncEvent, type SyncMonitorState, type SyncProblem, type SyncThresholds, type SyncVitals } from "../domain/sync-monitor";
 import {
   addChange as addPlanningChange,
   SETTABLE_STATES,
@@ -155,6 +156,12 @@ export class MemoryBackend implements Backend {
   private planningFlags = { authError: false, failFetch: false, fetches: 0, writes: 0, nextId: 90000, publishing: false };
   private planningWriteFails: ((change: Change) => boolean) | null = null;
   private planningPrs: MemoryPlanningPr[] = [];
+  // ── Sync server monitoring (ADR 040): an in-memory sync server ──
+  private syncServer: { url: string | null; health: "ok" | "slow" | "down"; vitals: SyncVitals | null; monitorKey: string | null } =
+    { url: null, health: "ok", vitals: null, monitorKey: null };
+  private syncStore: { key: string; thresholds: Partial<SyncThresholds>; mutes: Record<string, number>; checks: SyncCheck[]; problems: SyncProblem[]; events: SyncEvent[] } =
+    { key: "", thresholds: {}, mutes: {}, checks: [], problems: [], events: [] };
+  private syncNotified: SyncEvent[] = [];
   private planningOrphanDays = 30;
   private planningOrphanHidden: OrphanHidden = { prs: [], repos: [] };
   private planningOrphanFetches = 0;
@@ -169,6 +176,16 @@ export class MemoryBackend implements Backend {
 
   setPlanningAuthError(on: boolean): void { this.planningFlags.authError = on; }
   seedPlanningPrs(prs: MemoryPlanningPr[]): void { this.planningPrs = structuredClone(prs); }
+  /** A sync server at `url` (the companion's), answering with these vitals to `monitorKey`. */
+  seedSyncServer(server: { url?: string | null; health?: "ok" | "slow" | "down"; vitals?: SyncVitals | null; monitorKey?: string | null }): void {
+    this.syncServer = { ...this.syncServer, url: "https://sync.example", ...server };
+  }
+  setSyncHealth(health: "ok" | "slow" | "down"): void { this.syncServer.health = health; }
+  setSyncVitals(vitals: SyncVitals | null): void { this.syncServer.vitals = vitals; }
+  /** Stored checks, as if made earlier (for the panel's history). */
+  seedSyncChecks(checks: SyncCheck[]): void { this.syncStore.checks = structuredClone(checks); }
+  /** Desktop notifications shown so far. */
+  syncNotifications(): SyncEvent[] { return structuredClone(this.syncNotified); }
   planningOrphansFetchCount(): number { return this.planningOrphanFetches; }
   /** The work items a PR is linked to in the in-memory ADO. */
   planningPrLinks(pr: number): number[] { return [...(this.planningPrs.find((p) => p.id === pr)?.linkedTo ?? [])]; }
@@ -241,6 +258,68 @@ export class MemoryBackend implements Backend {
       connection, me: { id: "me", display_name: "Me", unique_name: "me@example.com" },
       iterations, selected_sprint: selected, previous_sprint: previous, items: [...features, ...stories],
     });
+  }
+
+  async syncMonitorCheck(): Promise<SyncCheck | null> {
+    const server = this.syncServer;
+    if (!server.url) return null;
+    const at = Date.now();
+    const reachable = server.health !== "down";
+    const key = this.syncStore.key;
+    let vitals: SyncVitals | null = null;
+    let vitalsError: string | null = null;
+    if (reachable && key) {
+      if (!server.monitorKey) vitalsError = "The server has no MONITOR_KEY configured";
+      else if (key !== server.monitorKey) vitalsError = "Invalid monitor key";
+      else vitals = structuredClone(server.vitals);
+    }
+    const check: SyncCheck = {
+      at, reachable, latency_ms: server.health === "slow" ? 7000 : reachable ? 90 : 0,
+      error: reachable ? null : "No answer within 10 s", vitals, vitals_error: vitalsError,
+    };
+    this.syncStore.checks = [...this.syncStore.checks.filter((c) => c.at >= at - 86_400_000 && c.at !== at), check];
+    return structuredClone(check);
+  }
+
+  async syncMonitorState(): Promise<SyncMonitorState> {
+    const now = Date.now();
+    const mutes = Object.fromEntries(Object.entries(this.syncStore.mutes).filter(([, until]) => until > now));
+    return structuredClone({
+      configured: !!this.syncServer.url,
+      server_url: this.syncServer.url,
+      has_key: !!this.syncStore.key,
+      thresholds: this.syncStore.thresholds,
+      mutes,
+      checks: this.syncStore.checks.filter((c) => c.at >= now - 86_400_000),
+      problems: this.syncStore.problems,
+      events: [...this.syncStore.events].sort((a, b) => b.at - a.at).slice(0, 100),
+    });
+  }
+
+  async syncMonitorApply(problems: SyncProblem[], events: SyncEvent[], notify: SyncEvent[]): Promise<void> {
+    this.syncStore.problems = structuredClone(problems);
+    const known = new Set(this.syncStore.events.map((e) => e.id));
+    this.syncStore.events.push(...structuredClone(events.filter((e) => !known.has(e.id))));
+    this.syncNotified.push(...structuredClone(notify));
+  }
+
+  async syncMonitorSetKey(key: string): Promise<void> { this.syncStore.key = key.trim(); }
+
+  async syncMonitorSetThresholds(thresholds: Partial<SyncThresholds>): Promise<void> {
+    this.syncStore.thresholds = structuredClone(thresholds);
+  }
+
+  async syncMonitorMute(kind: string, hours: number): Promise<number> {
+    const base = baseKind(kind);
+    if (!(MUTE_KINDS as readonly string[]).includes(base)) throw new Error(`Unknown problem kind ${kind}`);
+    const until = Date.now() + hours * 3_600_000;
+    this.syncStore.mutes[base] = until;
+    return until;
+  }
+
+  async syncMonitorSetRead(id: string, isRead: boolean): Promise<void> {
+    const event = this.syncStore.events.find((e) => e.id === id);
+    if (event) event.is_read = isRead;
   }
 
   async planningOrphans(): Promise<OrphanReport> {

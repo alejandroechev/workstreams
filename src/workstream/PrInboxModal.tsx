@@ -12,7 +12,8 @@ import {
 import { groupPipelineItems, resultLabel, type PipelineItem } from "../domain/pipeline-inbox";
 import { resultColor } from "./pipeline-result";
 
-type Kind = "all" | "prs" | "pipelines";
+import type { SyncEvent } from "../domain/sync-monitor";
+type Kind = "all" | "prs" | "pipelines" | "sync";
 
 interface Props {
   snapshot: PrInboxSnapshot;
@@ -24,6 +25,9 @@ interface Props {
   onResetMutes?: () => Promise<unknown>;
   /** Opens the Pipelines manager (ADR 038). */
   onOpenPipelines?: () => void;
+  /** Sync server alerts (ADR 040), newest first. */
+  syncEvents?: SyncEvent[];
+  onSyncRead?: (id: string, isRead: boolean) => Promise<void>;
   onClose: () => void;
 }
 
@@ -36,7 +40,7 @@ interface Props {
  * reached from the same sidebar footer, so a different shell read as a
  * different app.
  */
-export function PrInboxModal({ snapshot, loading, error, onRead, onMute, onResetMutes, onOpenPipelines, onClose }: Props) {
+export function PrInboxModal({ snapshot, loading, error, onRead, onMute, onResetMutes, onOpenPipelines, syncEvents = [], onSyncRead, onClose }: Props) {
   const [kind, setKind] = useState<Kind>("all");
   const [actionError, setActionError] = useState<string | null>(null);
   const [showMutes, setShowMutes] = useState(false);
@@ -60,14 +64,17 @@ export function PrInboxModal({ snapshot, loading, error, onRead, onMute, onReset
   };
 
   const runs = snapshot.pipeline_items ?? [];
-  const total = snapshot.items.length + runs.length;
-  const unread = snapshot.items.filter((item) => !item.is_read).length + runs.filter((item) => !item.is_read).length;
+  const total = snapshot.items.length + runs.length + syncEvents.length;
+  const unread = snapshot.items.filter((item) => !item.is_read).length + runs.filter((item) => !item.is_read).length
+    + syncEvents.filter((e) => !e.is_read).length;
   const visible = showRead ? snapshot.items : snapshot.items.filter((item) => !item.is_read);
   const visibleRuns = showRead ? runs : runs.filter((item) => !item.is_read);
+  const visibleSync = showRead ? syncEvents : syncEvents.filter((e) => !e.is_read);
+  const shows = (section: Kind) => kind === "all" || kind === section;
   const pipelineGroups = groupPipelineItems(visibleRuns);
   // What the current filters show, and what they hide because it was read.
-  const shownCount = (kind === "pipelines" ? 0 : visible.length) + (kind === "prs" ? 0 : visibleRuns.length);
-  const inKind = (kind === "pipelines" ? 0 : snapshot.items.length) + (kind === "prs" ? 0 : runs.length);
+  const shownCount = (shows("prs") ? visible.length : 0) + (shows("pipelines") ? visibleRuns.length : 0) + (shows("sync") ? visibleSync.length : 0);
+  const inKind = (shows("prs") ? snapshot.items.length : 0) + (shows("pipelines") ? runs.length : 0) + (shows("sync") ? syncEvents.length : 0);
   const failedChecks = (snapshot.pipelines ?? []).filter((pipeline) => pipeline.error);
   const openRun = (run: PipelineItem) => act(async () => {
     await openUrl(run.url);
@@ -131,7 +138,7 @@ export function PrInboxModal({ snapshot, loading, error, onRead, onMute, onReset
             happened before you started watching is reported.
           </span>
           <div role="group" aria-label="Show kind" style={{ display: "flex" }}>
-            {([["All", "all"], ["Pull requests", "prs"], ["Pipelines", "pipelines"]] as const).map(([label, value], index, all) => (
+            {([["All", "all"], ["Pull requests", "prs"], ["Pipelines", "pipelines"], ["Sync server", "sync"]] as const).map(([label, value], index, all) => (
               <button
                 key={value}
                 aria-pressed={kind === value}
@@ -218,7 +225,45 @@ export function PrInboxModal({ snapshot, loading, error, onRead, onMute, onReset
               No unread notifications. {inKind} read hidden.
             </p>
           )}
-          {kind !== "pipelines" && (
+          {shows("sync") && (kind === "sync" || visibleSync.length > 0) && (
+            <section data-testid="inbox-section-sync">
+              {kind === "all" && <h2 style={sectionHeadingStyle}>Sync server</h2>}
+              {kind === "sync" && syncEvents.length === 0 && (
+                <p style={emptyStyle}>No sync server alerts. Open Sync server in the sidebar to see its state.</p>
+              )}
+              <ul style={{ listStyle: "none", margin: 0, padding: "0 12px", display: "grid", gap: 6 }}>
+                {visibleSync.map((e) => (
+                  <li
+                    key={e.id}
+                    data-testid={`sync-event-${e.id}`}
+                    data-read={e.is_read}
+                    style={{
+                      border: "1px solid #313244",
+                      borderLeft: `2px solid ${e.is_read ? "#45475a" : e.event === "resolved" ? "#a6e3a1" : "#f38ba8"}`,
+                      borderRadius: 4,
+                      padding: "8px 10px",
+                      marginTop: 8,
+                      background: "#181825",
+                      fontSize: 11,
+                    }}
+                  >
+                    <div style={{ display: "flex", gap: 8, alignItems: "baseline" }}>
+                      <span style={{ flex: 1, fontSize: 12, fontWeight: e.is_read ? 400 : 600, color: e.is_read ? "#a6adc8" : "#cdd6f4" }}>{e.message}</span>
+                      <span style={{ color: "#6c7086", whiteSpace: "nowrap" }}>{new Date(e.at).toLocaleString()}</span>
+                      {onSyncRead && (
+                        <button disabled={busy} aria-label={`${e.is_read ? "Mark unread" : "Read"}: ${e.message}`}
+                          onClick={() => void act(() => onSyncRead(e.id, !e.is_read))} style={{ ...buttonStyle, padding: "1px 6px", fontSize: 10 }}>
+                          {e.is_read ? "Unread" : "Read"}
+                        </button>
+                      )}
+                    </div>
+                    <div data-testid={`sync-event-hint-${e.id}`} style={{ color: "#a6adc8", marginTop: 4 }}>{e.hint}</div>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
+          {shows("prs") && (
           <section data-testid="inbox-section-prs">
           {kind === "all" && <h2 style={sectionHeadingStyle}>Pull requests</h2>}
           {snapshot.repos.map((repo) => {
@@ -339,7 +384,7 @@ export function PrInboxModal({ snapshot, loading, error, onRead, onMute, onReset
           })}
           </section>
           )}
-          {kind !== "prs" && (
+          {shows("pipelines") && (
             <section data-testid="inbox-section-pipelines">
               {kind === "all" && <h2 style={sectionHeadingStyle}>Pipelines</h2>}
               {failedChecks.map((pipeline) => (

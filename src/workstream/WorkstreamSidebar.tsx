@@ -1,4 +1,5 @@
 // @test-skip: sidebar UI shell, behavior covered by backend tests
+import { STATUS_COLORS, type StatusLevel } from "../domain/sync-monitor";
 import { useState, useRef, useEffect } from "react";
 import { listen } from "@tauri-apps/api/event";
 import type { Project, Workstream } from "../domain/types";
@@ -50,6 +51,13 @@ import { selectableRepositories } from "../domain/repository-visibility";
 import { WorkstreamActionMenu } from "./WorkstreamActionMenu";
 import type { LoopSummary } from "../domain/loop";
 
+const SYNC_TITLES: Record<StatusLevel, string> = {
+  off: "Sync server: not configured (set it up in Settings → Companion)",
+  ok: "Sync server: healthy",
+  warning: "Sync server: a warning — open for details",
+  critical: "Sync server: a problem affecting every app that syncs — open for details",
+};
+
 interface Props {
   projects: Project[];
   workstreams: Workstream[];
@@ -78,6 +86,10 @@ interface Props {
   onOpenPipelines?: () => void;
   /** Opens Planning: your ADO sprint and features (ADR 039). */
   onOpenPlanning?: () => void;
+  /** Opens the Sync server panel (ADR 040). */
+  onOpenSync?: () => void;
+  /** The sync server's monitored state, for the status dot. */
+  syncLevel?: StatusLevel;
   /** A watched pipeline's last check failed. */
   pipelinesError?: boolean;
   /** Pull requests with at least one unread event, not the event count. */
@@ -211,6 +223,8 @@ export default function WorkstreamSidebar({
   onOpenInbox,
   onOpenPipelines,
   onOpenPlanning,
+  onOpenSync,
+  syncLevel = "off",
   pipelinesError = false,
   inboxUnread = 0,
   inboxRepos,
@@ -1267,6 +1281,20 @@ export default function WorkstreamSidebar({
           >
             <CalendarDaysIcon style={{ width: 14, height: 14 }} />
             <span style={{ flex: 1, textAlign: "left" }}>Planning</span>
+          </button>
+        )}
+        {onOpenSync && (
+          <button
+            data-testid="sync-status-button"
+            data-level={syncLevel}
+            onClick={onOpenSync}
+            title={SYNC_TITLES[syncLevel]}
+            style={{ ...footerButtonStyle, color: syncLevel === "critical" || syncLevel === "warning" ? "#cdd6f4" : "#6c7086" }}
+            onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "#1e1e2e"; }}
+            onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "transparent"; }}
+          >
+            <span aria-hidden="true" style={{ width: 9, height: 9, margin: "0 2px", borderRadius: "50%", background: STATUS_COLORS[syncLevel], flexShrink: 0 }} />
+            <span style={{ flex: 1, textAlign: "left" }}>Sync server</span>
           </button>
         )}
         {onOpenPipelines && (

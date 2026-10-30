@@ -140,4 +140,14 @@ describe("WorkstreamSidebar Planning entry", () => {
     fireEvent.click(screen.getByTestId("planning-button"));
     expect(onOpenPlanning).toHaveBeenCalled();
   });
+
+  it("shows the sync server's state as a dot and opens its panel", () => {
+    const onOpenSync = vi.fn();
+    renderSidebar({ onOpenSync, syncLevel: "critical" });
+    const button = screen.getByTestId("sync-status-button");
+    expect(button).toHaveAttribute("data-level", "critical");
+    expect(button).toHaveAttribute("title", expect.stringContaining("every app that syncs"));
+    fireEvent.click(button);
+    expect(onOpenSync).toHaveBeenCalled();
+  });
 });

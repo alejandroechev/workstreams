@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type { WorkLane } from "../domain/work-lanes";
 import type { PrInboxSnapshot, PrWatchMode, PrInboxMute } from "../domain/pr-inbox";
 import type { PipelineMode, PipelineStatus } from "../domain/pipeline-inbox";
+import type { SyncCheck, SyncEvent, SyncMonitorState, SyncProblem, SyncThresholds } from "../domain/sync-monitor";
 import type { Change, OrphanHidden, OrphanReport, PlanningConnection, PlanningData, PlanningState, PublishResult } from "../domain/planning";
 import type { Project, Workstream, Tile, TileType, WorkstreamLayout, CopilotConfigItem } from "../domain/types";
 import type { SessionFileComment } from "../domain/file-comments";
@@ -91,6 +92,34 @@ export class TauriBackend implements Backend {
 
   async planningPublish(): Promise<PublishResult> {
     return invoke<PublishResult>("planning_publish");
+  }
+
+  async syncMonitorCheck(): Promise<SyncCheck | null> {
+    return invoke<SyncCheck | null>("sync_monitor_check");
+  }
+
+  async syncMonitorState(): Promise<SyncMonitorState> {
+    return invoke<SyncMonitorState>("sync_monitor_state");
+  }
+
+  async syncMonitorApply(problems: SyncProblem[], events: SyncEvent[], notify: SyncEvent[]): Promise<void> {
+    await invoke("sync_monitor_apply", { problems, events, notify });
+  }
+
+  async syncMonitorSetKey(key: string): Promise<void> {
+    await invoke("sync_monitor_set_key", { key });
+  }
+
+  async syncMonitorSetThresholds(thresholds: Partial<SyncThresholds>): Promise<void> {
+    await invoke("sync_monitor_set_thresholds", { thresholds });
+  }
+
+  async syncMonitorMute(kind: string, hours: number): Promise<number> {
+    return invoke<number>("sync_monitor_mute", { kind, hours });
+  }
+
+  async syncMonitorSetRead(id: string, isRead: boolean): Promise<void> {
+    await invoke("sync_monitor_set_read", { id, isRead });
   }
 
   async planningOrphans(): Promise<OrphanReport> {

@@ -36,3 +36,28 @@ describe("TauriBackend planning", () => {
     ]);
   });
 });
+
+describe("TauriBackend sync monitoring", () => {
+  beforeEach(() => { invoke.mockReset(); invoke.mockResolvedValue(null); });
+
+  it("calls the native sync monitor commands", async () => {
+    const b = new TauriBackend();
+    const event = { id: "e", kind: "cpu", event: "started" as const, at: 1, message: "m", hint: "h", is_read: false };
+    await b.syncMonitorCheck();
+    await b.syncMonitorState();
+    await b.syncMonitorApply([], [event], [event]);
+    await b.syncMonitorSetKey("k");
+    await b.syncMonitorSetThresholds({ cpuPercent: 90 });
+    await b.syncMonitorMute("cpu", 24);
+    await b.syncMonitorSetRead("e", true);
+    expect(invoke.mock.calls).toEqual([
+      ["sync_monitor_check"],
+      ["sync_monitor_state"],
+      ["sync_monitor_apply", { problems: [], events: [event], notify: [event] }],
+      ["sync_monitor_set_key", { key: "k" }],
+      ["sync_monitor_set_thresholds", { thresholds: { cpuPercent: 90 } }],
+      ["sync_monitor_mute", { kind: "cpu", hours: 24 }],
+      ["sync_monitor_set_read", { id: "e", isRead: true }],
+    ]);
+  });
+});
