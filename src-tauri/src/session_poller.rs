@@ -266,6 +266,15 @@ pub fn start_poller(app: AppHandle, poller: Arc<SessionPoller>) {
                             let db_meta = conn
                                 .as_ref()
                                 .and_then(|c| query_session_meta(c, &found_sid));
+                            // Save the link here, not in the tile's UI: that only runs
+                            // for the workstream on screen, so a session started in a
+                            // background workstream (from the phone) was never linked.
+                            crate::link_tile_session(
+                                &app,
+                                tile_id,
+                                &found_sid,
+                                db_meta.as_ref().and_then(|m| m.summary.as_deref()),
+                            );
                             Some(SessionStats {
                                 session_id: found_sid.clone(),
                                 session_name: Some(session_name.clone()),

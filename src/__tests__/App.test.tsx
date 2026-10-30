@@ -36,6 +36,7 @@ const mocks = vi.hoisted(() => {
   );
   let stateChangedHandler: ((event: { payload: unknown }) => void) | null =
     null;
+  let tileUpdatedHandler: ((event: { payload: unknown }) => void) | null = null;
   const eventListen = vi.fn(
     async (
       eventName: string,
@@ -43,6 +44,7 @@ const mocks = vi.hoisted(() => {
     ) => {
       if (eventName === "tile-created") tileCreatedHandler = handler;
       if (eventName === "state-changed") stateChangedHandler = handler;
+      if (eventName === "tile-updated") tileUpdatedHandler = handler;
       return () => {
         if (eventName === "tile-created") tileCreatedHandler = null;
       };
@@ -58,6 +60,9 @@ const mocks = vi.hoisted(() => {
     },
     emitTileCreated: (tile: unknown) => {
       tileCreatedHandler?.({ payload: tile });
+    },
+    emitTileUpdated: (tile: unknown) => {
+      tileUpdatedHandler?.({ payload: tile });
     },
     emitStateChanged: (change: unknown) => {
       stateChangedHandler?.({ payload: change });
@@ -120,7 +125,11 @@ vi.mock("../workstream/WorkstreamSidebar", () => ({
   ),
 }));
 vi.mock("../tiling/TileGrid", () => ({
-  default: () => <main data-testid="tile-grid" />,
+  default: ({ tiles }: { tiles?: Array<{ id: string; title: string | null; config_json: string }> }) => (
+    <main data-testid="tile-grid">
+      {tiles?.map((t) => <span key={t.id} data-testid={`grid-tile-${t.id}`} data-config={t.config_json}>{t.title}</span>)}
+    </main>
+  ),
 }));
 vi.mock("../tiling/StatusBar", () => ({
   default: () => <div data-testid="status-bar" />,
@@ -554,6 +563,22 @@ describe("tile-created event paths", () => {
     act(() => mocks.emitTileCreated(makeTile("evt-tile")));
     act(() => mocks.emitTileCreated(makeTile("evt-tile")));
     expect(backend.updateLayout).not.toHaveBeenCalled();
+  });
+
+  it("tile-updated (a session linked natively) replaces the tile's config and title", async () => {
+    const backend = createBackend();
+    await renderApp(backend);
+    // Load the workstream, so it has tiles to update.
+    fireEvent.click(screen.getByText("One"));
+    await screen.findByTestId("tile-grid");
+    act(() => mocks.emitTileCreated(makeTile("phone-tile")));
+    expect(await screen.findByTestId("grid-tile-phone-tile")).toBeInTheDocument();
+    const linked = { ...makeTile("phone-tile"), title: "Madrid weather", config_json: JSON.stringify({ copilot_session_id: "sid-1" }) };
+    act(() => mocks.emitTileUpdated(linked));
+    const tile = await screen.findByTestId("grid-tile-phone-tile");
+    expect(tile).toHaveTextContent("Madrid weather");
+    expect(JSON.parse(tile.getAttribute("data-config")!).copilot_session_id).toBe("sid-1");
+    expect(() => act(() => mocks.emitTileUpdated({ ...linked, workstream_id: "ws-99" }))).not.toThrow();
   });
 
   it("tile-created event for an unloaded workstream is a no-op", async () => {

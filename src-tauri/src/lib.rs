@@ -27,6 +27,7 @@ mod orphan_prs;
 mod pipeline_inbox;
 mod pty;
 mod repo_create;
+mod session_link;
 mod session_poller;
 mod shell_env;
 mod sync_monitor;
@@ -163,6 +164,30 @@ struct FeaturesWatcherHandle {
 impl Drop for FeaturesWatcherHandle {
     fn drop(&mut self) {
         self.stop.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+/// Saves the session the poller found for a tile, and tells the UI.
+pub(crate) fn link_tile_session(
+    app: &tauri::AppHandle,
+    tile_id: &str,
+    session_id: &str,
+    summary: Option<&str>,
+) {
+    use tauri::Manager;
+    let Some(state) = app.try_state::<AppState>() else {
+        return;
+    };
+    let linked = match state.db.lock() {
+        Ok(db) => session_link::link_found_session(&db, tile_id, session_id, summary, &now()),
+        Err(e) => Err(e.to_string()),
+    };
+    match linked {
+        Ok(Some(tile)) => {
+            let _ = app.emit("tile-updated", &tile);
+        }
+        Ok(None) => {}
+        Err(e) => eprintln!("[poller] couldn't save the session link of tile {tile_id}: {e}"),
     }
 }
 
@@ -6440,6 +6465,21 @@ pub fn run() {
             }
             // Start the session stats poller background thread
             session_poller::start_poller(app.handle().clone(), poller);
+            // Phone sessions earlier versions left unlinked (ADR 033).
+            if let Some(home) = dirs::home_dir() {
+                let state = app.state::<AppState>();
+                let db = state.db.lock().unwrap();
+                match session_link::repair_phone_tiles(&db, &home, &now()) {
+                    Ok(tiles) if !tiles.is_empty() => {
+                        eprintln!(
+                            "[companion] linked {} phone session(s) to their Copilot sessions",
+                            tiles.len()
+                        )
+                    }
+                    Err(e) => eprintln!("[companion] couldn't repair phone session links: {e}"),
+                    _ => {}
+                }
+            }
             // Start the filesystem watcher
             fs_watcher_clone.start(app.handle().clone());
             Ok(())

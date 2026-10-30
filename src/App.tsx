@@ -2047,6 +2047,22 @@ export default function App() {
   // mounted set changes, so closing a workstream publishes its tiles as they
   // are now, not as they were when last read.
   const [savedTiles, setSavedTiles] = useState<ReadonlyMap<string, Tile[]>>(new Map());
+  // The session poller linked a tile to its Copilot session natively (any
+  // workstream, on screen or not), so phone-started sessions can be resumed.
+  useEffect(() => {
+    const unlisten = listen<Tile>("tile-updated", (event) => {
+      const tile = event.payload;
+      upsertTileLocally(tile);
+      setSavedTiles((prev) => {
+        const tiles = prev.get(tile.workstream_id);
+        if (!tiles?.some((t) => t.id === tile.id)) return prev;
+        const next = new Map(prev);
+        next.set(tile.workstream_id, tiles.map((t) => (t.id === tile.id ? tile : t)));
+        return next;
+      });
+    });
+    return () => { void unlisten.then((dispose) => dispose()).catch(() => {}); };
+  }, [upsertTileLocally]);
   const companionWorkstreamIds = workstreams.filter((w) => w.status !== "archived").map((w) => w.id).join(",");
   const mountedWorkstreamIds = [...wsStates.keys()].sort().join(",");
   useEffect(() => {

@@ -193,6 +193,13 @@ with the message as a new interactive prompt, which Copilot CLI supports as
   linked Copilot session id. The laptop recomputes it before touching anything; a tile re-linked to
   another session since the phone looked fails with "different Copilot session", and an unlinked tile
   can't be messaged at all. A message never resumes a session the phone didn't see.
+- **Linking phone-started sessions (2026-10-30).** The session poller saves a tile's link to its
+  Copilot session itself, for every tile, and emits `tile-updated`. The link used to be saved by the
+  tile's UI, which only runs for the workstream on screen, so a session started from the phone in a
+  background workstream stayed unlinked: it couldn't be resumed or messaged. A phone-started tile is
+  linked even when its workstream already has a linked session; laptop tiles keep the
+  one-linked-session-per-workstream rule. On startup, phone tiles left unlinked by earlier versions
+  get the session that started in their folder within two minutes of the phone's request.
 - **Stop, then resume, in the same tile.** If the workstream isn't loaded it is mounted in the
   background (the active workstream never changes). The laptop writes a notice line,
   `Resumed from phone: <first line>`, into the tile's terminal, sends Ctrl+C twice 150 ms apart, waits up
