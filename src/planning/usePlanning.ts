@@ -65,8 +65,10 @@ export function usePlanning(backend: Backend, open: boolean) {
   }, [backend, sync]);
 
   const setOrphanDays = useCallback(async (days: number) => {
+    const version = hiddenVersion.current;
     await backend.planningSetOrphanDays(days);
-    setOrphans(await backend.planningOrphans());
+    const report = await backend.planningOrphans();
+    setOrphans((current) => (current && hiddenVersion.current !== version ? { ...report, hidden: current.hidden } : report));
   }, [backend]);
 
   const hideOrphan = useCallback(async (kind: "pr" | "repo", id: string, label: string) => {

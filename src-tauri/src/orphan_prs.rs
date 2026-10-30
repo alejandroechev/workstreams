@@ -141,6 +141,7 @@ pub fn read_orphans(
     }
     let org_key = organization.to_ascii_lowercase();
     let mut out = Vec::new();
+    let mut seen = std::collections::HashSet::new();
     for pr in &listed {
         let status = pr["status"].as_str().unwrap_or("");
         if status != "active" && status != "completed" {
@@ -153,6 +154,10 @@ pub fn read_orphans(
         ) else {
             continue;
         };
+        // A PR created while paging shifts later pages, so one can repeat.
+        if !seen.insert(id) {
+            continue;
+        }
         let completed = status == "completed";
         let cached = cache
             .entries
@@ -455,9 +460,11 @@ mod tests {
         s.prs = (1..=PAGE as i64 * 2 + 3)
             .map(|id| pr(id, "active", false, "SCC", "repo", "2026-10-28T10:00:00Z"))
             .collect();
+        // The page boundary shifted: one PR shows up on two pages.
+        s.prs.insert(PAGE, s.prs[PAGE - 1].clone());
         let prs =
             read_orphans(&s, "o", 30, NOW, &mut LinkCache::default(), Instant::now()).unwrap();
-        assert_eq!(prs.len(), PAGE * 2 + 3);
+        assert_eq!(prs.len(), PAGE * 2 + 3, "repeated PRs are listed once");
         assert_eq!(
             s.log
                 .borrow()
@@ -466,6 +473,10 @@ mod tests {
                 .count(),
             3
         );
+        let mut ids: Vec<i64> = prs.iter().map(|p| p.id).collect();
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(ids.len(), prs.len());
     }
 
     #[test]
