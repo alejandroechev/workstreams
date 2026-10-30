@@ -299,7 +299,8 @@ export class MemoryBackend implements Backend {
   async syncMonitorApply(problems: SyncProblem[], events: SyncEvent[], notify: SyncEvent[]): Promise<void> {
     this.syncStore.problems = structuredClone(problems);
     const known = new Set(this.syncStore.events.map((e) => e.id));
-    const inserted = events.filter((e) => !known.has(e.id));
+    // A mute set while the evaluation ran still wins.
+    const inserted = events.filter((e) => !known.has(e.id) && !((this.syncStore.mutes[baseKind(e.kind)] ?? 0) > e.at));
     this.syncStore.events.push(...structuredClone(inserted));
     // Only what was actually recorded is notified, so a repeat never alerts twice.
     const insertedIds = new Set(inserted.map((e) => e.id));

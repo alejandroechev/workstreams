@@ -341,8 +341,26 @@ pub fn apply(
         )
         .map_err(|e| e.to_string())?;
     }
+    // Mutes are read inside the transaction, so one set while the
+    // evaluation ran (by an agent) still suppresses the alert.
+    let mutes: std::collections::BTreeMap<String, i64> = tx
+        .query_row(
+            "SELECT value FROM settings WHERE key = ?1",
+            [MUTES_SETTING],
+            |r| r.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_default();
     let mut inserted = Vec::new();
     for e in new_events {
+        if mutes
+            .get(base_kind(&e.kind))
+            .is_some_and(|until| *until > e.at)
+        {
+            continue;
+        }
         let added = tx
             .execute(
                 "INSERT OR IGNORE INTO sync_events (id, kind, event, at, message, hint, is_read) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0)",
@@ -501,6 +519,21 @@ mod tests {
         assert_eq!(problems(&db).unwrap(), vec![p]);
         assert_eq!(events(&db, 10).unwrap(), vec![e]);
         set_read(&db, "cpu-5-started", true).unwrap();
+        // A mute set while an evaluation ran still wins.
+        mute(&db, "disk", 24, 0).unwrap();
+        let disk = Event {
+            id: "disk-9-started".into(),
+            kind: "disk".into(),
+            event: "started".into(),
+            at: 9,
+            message: "m".into(),
+            hint: "h".into(),
+            is_read: false,
+        };
+        assert!(apply(&mut db, &[], std::slice::from_ref(&disk))
+            .unwrap()
+            .is_empty());
+        assert_eq!(events(&db, 10).unwrap().len(), 1);
         assert!(events(&db, 10).unwrap()[0].is_read);
         apply(&mut db, &[], &[]).unwrap();
         assert!(problems(&db).unwrap().is_empty());

@@ -192,7 +192,13 @@ export function activeProblems(checks: SyncCheck[], t: SyncThresholds, open: Syn
     || (cpuRun.length >= t.cpuChecks && cpuRun.every((c) => c.vitals && cpuOf(c.vitals) > t.cpuPercent))) {
     out.push({ kind: "cpu", severity: "critical", message: `Sync server CPU high (${round(cpuOf(latest))}%)`, hint: HINTS.cpu });
   }
+  // A reading that's missing on its own keeps its open problem: no evidence of recovery.
+  const keep = (kind: string) => {
+    const p = open.find((o) => o.kind === kind);
+    if (p) out.push({ kind: p.kind, severity: p.severity, message: p.message, hint: p.hint });
+  };
   const mem = latest.box.memory;
+  if (!mem) keep("memory");
   if (mem) {
     const freeMB = mem.availableBytes / MB;
     const swapPercent = mem.swapTotalBytes > 0 ? (mem.swapUsedBytes / mem.swapTotalBytes) * 100 : 0;
@@ -205,6 +211,7 @@ export function activeProblems(checks: SyncCheck[], t: SyncThresholds, open: Syn
       });
     }
   }
+  if (!latest.disk) keep("disk");
   if (latest.disk && latest.disk.freeBytes / GB < t.minDiskFreeGB) {
     out.push({ kind: "disk", severity: "critical", message: `Sync server disk low (${round(latest.disk.freeBytes / GB)} GB free)`, hint: HINTS.disk });
   }

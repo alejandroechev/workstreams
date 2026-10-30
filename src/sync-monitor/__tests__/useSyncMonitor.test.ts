@@ -78,6 +78,22 @@ describe("useSyncMonitor", () => {
     expect((await b.syncMonitorState()).events).toHaveLength(1);
   });
 
+  it("doesn't alert for a kind muted while the evaluation was running", async () => {
+    const b = new MemoryBackend();
+    b.seedSyncServer({ url: "https://sync.example", monitorKey: "m", vitals: vitals({ disk: { freeBytes: 2 ** 30, totalBytes: 2 ** 34 } }) });
+    await b.syncMonitorSetKey("m");
+    const read = b.syncMonitorState.bind(b);
+    vi.spyOn(b, "syncMonitorState").mockImplementationOnce(async () => {
+      const snapshot = await read();
+      await b.syncMonitorMute("disk", 24);
+      return snapshot;
+    });
+    renderHook(() => useSyncMonitor(b));
+    await tick(0);
+    expect(b.syncNotifications()).toEqual([]);
+    expect((await b.syncMonitorState()).events).toEqual([]);
+  });
+
   it("reloads when an agent mutes something", async () => {
     const b = new MemoryBackend();
     b.seedSyncServer({ url: "https://sync.example" });

@@ -75,6 +75,17 @@ describe("which problems a run of checks shows", () => {
     expect(activeProblems([ok(0, low), ok(2 * MIN)], DEFAULT_THRESHOLDS, open)).toEqual([]);
   });
 
+  it("keeps a memory or disk problem open when just that reading is missing", () => {
+    const bad = vitals({
+      box: { cpuPercent: 5, memory: { totalBytes: 1e9, availableBytes: 50 * 2 ** 20, swapTotalBytes: 2e9, swapUsedBytes: 1e8 } },
+      disk: { freeBytes: 2 ** 30, totalBytes: 2 ** 34 },
+    });
+    const open = activeProblems([ok(0, bad)], DEFAULT_THRESHOLDS).map((p) => ({ ...p, started_at: 0 }));
+    expect(open.map((p) => p.kind).sort()).toEqual(["disk", "memory"]);
+    const blind = vitals({ box: { cpuPercent: 5, memory: null }, disk: null });
+    expect(activeProblems([ok(0, bad), ok(2 * MIN, blind)], DEFAULT_THRESHOLDS, open).map((p) => p.kind).sort()).toEqual(["disk", "memory"]);
+  });
+
   it("keeps CPU open while it stays high, even if a vitals gap broke the run", () => {
     const high = (at: number) => ok(at, vitals({ box: { cpuPercent: 95, memory: vitals().box.memory } }));
     const open = [{ kind: "cpu", severity: "critical" as const, started_at: 0, message: "", hint: "" }];
