@@ -154,6 +154,27 @@ Agents get the same: `planning.sprint` includes each story's tasks, and
 `planning.task_state task=<id> state=<State>` drafts a state for a task of a
 story in the selected sprint.
 
+## Amendment (2026-10-30): orphaned PRs
+
+A fifth tab, **Orphaned PRs**, lists the PRs you created in the last 7, 30 or
+90 days (default 30, remembered) that have no linked work item. They come
+from **every repo of Planning's organization** with no configuration: one
+organization-level `git/pullrequests` request filtered by creator and creation
+time, then one `pullRequests/{id}/workitems` request per PR. Abandoned PRs are
+left out, and drafts count as active. Completed PRs' link results are cached for an
+hour (and forgotten when Planning links them), so later reads mostly re-check
+active PRs.
+
+You can **hide** a PR or a whole repo. Both are remembered, and *Show hidden* lists them
+with Unhide. **Link to…** offers the selected sprint's stories with their
+tasks, then your features' other stories. Linking is a draft change
+(`link_pr {id, rev, pr}`), one pending link per PR, published as an
+`ArtifactLink` relation (`vstfs:///Git/PullRequestId/<project>%2F<repo>%2F<pr>`)
+on the work item with the same `test /rev` check. A work item changed meanwhile
+is held back as *changed in ADO*. Agents get `planning.orphan_prs`,
+`planning.hide_pr` / `unhide_pr`, `planning.hide_repo` / `unhide_repo` and
+`planning.link_pr`.
+
 ## References
 
 - [ADR 030: ADO PR inbox](030-ado-pr-inbox.md) (token and HTTP rules)
