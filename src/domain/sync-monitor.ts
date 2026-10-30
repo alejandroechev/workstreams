@@ -157,10 +157,19 @@ const HINTS = {
   doc: "Large histories slow every sync of that app. Look for an app rewriting whole values on every change.",
 };
 
-/** The problems the stored checks show now. */
-export function activeProblems(checks: SyncCheck[], t: SyncThresholds): ProblemDraft[] {
+const VITALS_KINDS = new Set(["cpu", "memory", "disk", "logins", "doc_size", "doc_growth"]);
+
+/**
+ * The problems the stored checks show now. `open` are the problems already
+ * open: when the latest check brought no vitals (unreachable, or the vitals
+ * failed), nothing is known about them, so they stay open rather than read as
+ * recovered.
+ */
+export function activeProblems(checks: SyncCheck[], t: SyncThresholds, open: SyncProblem[] = []): ProblemDraft[] {
   const run = recentRun(checks);
   if (run.length === 0) return [];
+  const carried = (): ProblemDraft[] =>
+    open.filter((p) => VITALS_KINDS.has(baseKind(p.kind))).map(({ kind, severity, message, hint }) => ({ kind, severity, message, hint }));
   const out: ProblemDraft[] = [];
   const bad = (c: SyncCheck) => !c.reachable || c.latency_ms > t.slowMs;
   const firstBad = run.slice(0, t.unreachableChecks);
@@ -174,10 +183,13 @@ export function activeProblems(checks: SyncCheck[], t: SyncThresholds): ProblemD
     });
   }
   const latest = run[0].vitals;
-  if (!run[0].reachable || !latest) return out;
+  if (!run[0].reachable || !latest) return [...out, ...carried()];
 
   const cpuRun = run.slice(0, t.cpuChecks);
-  if (cpuRun.length >= t.cpuChecks && cpuRun.every((c) => c.vitals && cpuOf(c.vitals) > t.cpuPercent)) {
+  const cpuOpen = open.some((p) => p.kind === "cpu");
+  // Raised after enough high checks in a row; once open, it stays while the latest is high.
+  if ((cpuOpen && cpuOf(latest) > t.cpuPercent)
+    || (cpuRun.length >= t.cpuChecks && cpuRun.every((c) => c.vitals && cpuOf(c.vitals) > t.cpuPercent))) {
     out.push({ kind: "cpu", severity: "critical", message: `Sync server CPU high (${round(cpuOf(latest))}%)`, hint: HINTS.cpu });
   }
   const mem = latest.box.memory;

@@ -64,6 +64,22 @@ describe("which problems a run of checks shows", () => {
   it("reads nothing from vitals when the latest check has none", () => {
     expect(kinds([ok(0, null)])).toEqual([]);
   });
+
+  it("keeps an open vitals problem while vitals are missing, until fresh vitals show recovery", () => {
+    const low = vitals({ disk: { freeBytes: 1 * 2 ** 30, totalBytes: 2 ** 34 } });
+    const open = activeProblems([ok(0, low)], DEFAULT_THRESHOLDS).map((p) => ({ ...p, started_at: 0 }));
+    expect(open.map((p) => p.kind)).toEqual(["disk"]);
+    const noVitals = { ...ok(2 * MIN, null), vitals_error: "Invalid monitor key" };
+    expect(activeProblems([ok(0, low), noVitals], DEFAULT_THRESHOLDS, open).map((p) => p.kind)).toEqual(["disk"]);
+    expect(activeProblems([ok(0, low), down(2 * MIN), down(4 * MIN)], DEFAULT_THRESHOLDS, open).map((p) => p.kind).sort()).toEqual(["disk", "unreachable"]);
+    expect(activeProblems([ok(0, low), ok(2 * MIN)], DEFAULT_THRESHOLDS, open)).toEqual([]);
+  });
+
+  it("keeps CPU open while it stays high, even if a vitals gap broke the run", () => {
+    const high = (at: number) => ok(at, vitals({ box: { cpuPercent: 95, memory: vitals().box.memory } }));
+    const open = [{ kind: "cpu", severity: "critical" as const, started_at: 0, message: "", hint: "" }];
+    expect(activeProblems([high(0), ok(2 * MIN, null), high(4 * MIN)], DEFAULT_THRESHOLDS, open).map((p) => p.kind)).toEqual(["cpu"]);
+  });
 });
 
 describe("alerting once per problem", () => {

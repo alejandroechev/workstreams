@@ -20,14 +20,22 @@ const message = (error: unknown) => String(error instanceof Error ? error.messag
 export function useSyncMonitor(backend: Backend) {
   const [state, setState] = useState<SyncMonitorState | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const running = useRef(false);
+  // Every check and evaluation runs one at a time: two reading the same open
+  // problems at once would both alert for the same new one.
+  const queue = useRef<Promise<unknown>>(Promise.resolve());
+  const serial = useCallback(<T,>(work: () => Promise<T>): Promise<T> => {
+    const next = queue.current.then(work, work);
+    queue.current = next.catch(() => undefined);
+    return next;
+  }, []);
 
   /** Applies the rules to what's stored, without a new check. */
-  const evaluate = useCallback(async () => {
+  const evaluateNow = useCallback(async () => {
     const stored = await backend.syncMonitorState();
     if (stored.configured && stored.checks.length > 0) {
       const now = Date.now();
-      const next = transition(stored.problems, activeProblems(stored.checks, thresholdsFrom(stored.thresholds)), stored.mutes, now);
+      const active = activeProblems(stored.checks, thresholdsFrom(stored.thresholds), stored.problems);
+      const next = transition(stored.problems, active, stored.mutes, now);
       await backend.syncMonitorApply(next.problems, next.events, next.notify);
       setState(await backend.syncMonitorState());
     } else {
@@ -35,19 +43,17 @@ export function useSyncMonitor(backend: Backend) {
     }
   }, [backend]);
 
-  const cycle = useCallback(async () => {
-    if (running.current) return;
-    running.current = true;
+  const evaluate = useCallback(() => serial(evaluateNow), [serial, evaluateNow]);
+
+  const cycle = useCallback(() => serial(async () => {
     try {
       await backend.syncMonitorCheck();
-      await evaluate();
+      await evaluateNow();
       setError(null);
     } catch (failure) {
       setError(message(failure));
-    } finally {
-      running.current = false;
     }
-  }, [backend, evaluate]);
+  }), [backend, evaluateNow, serial]);
 
   useEffect(() => {
     void Promise.resolve().then(cycle);
@@ -71,6 +77,7 @@ export function useSyncMonitor(backend: Backend) {
     await backend.syncMonitorSetThresholds(thresholds);
     await evaluate();
   }, [backend, evaluate]);
+
 
   const mute = useCallback(async (kind: string, hours = 24) => {
     await backend.syncMonitorMute(kind, hours);

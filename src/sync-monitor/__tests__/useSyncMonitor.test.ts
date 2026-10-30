@@ -65,6 +65,19 @@ describe("useSyncMonitor", () => {
     b.setSyncVitals(vitals());
   });
 
+  it("never alerts twice when an agent's change and a check overlap", async () => {
+    const b = new MemoryBackend();
+    b.seedSyncServer({ url: "https://sync.example", monitorKey: "m", vitals: vitals({ disk: { freeBytes: 2 ** 30, totalBytes: 2 ** 34 } }) });
+    await b.syncMonitorSetKey("m");
+    renderHook(() => useSyncMonitor(b));
+    await act(async () => {
+      await Promise.all([emit("state-changed", { entity: "sync" }), vi.advanceTimersByTimeAsync(0), emit("state-changed", { entity: "sync" })]);
+    });
+    await tick(0);
+    expect(b.syncNotifications().map((e) => e.kind)).toEqual(["disk"]);
+    expect((await b.syncMonitorState()).events).toHaveLength(1);
+  });
+
   it("reloads when an agent mutes something", async () => {
     const b = new MemoryBackend();
     b.seedSyncServer({ url: "https://sync.example" });

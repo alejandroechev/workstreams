@@ -299,8 +299,11 @@ export class MemoryBackend implements Backend {
   async syncMonitorApply(problems: SyncProblem[], events: SyncEvent[], notify: SyncEvent[]): Promise<void> {
     this.syncStore.problems = structuredClone(problems);
     const known = new Set(this.syncStore.events.map((e) => e.id));
-    this.syncStore.events.push(...structuredClone(events.filter((e) => !known.has(e.id))));
-    this.syncNotified.push(...structuredClone(notify));
+    const inserted = events.filter((e) => !known.has(e.id));
+    this.syncStore.events.push(...structuredClone(inserted));
+    // Only what was actually recorded is notified, so a repeat never alerts twice.
+    const insertedIds = new Set(inserted.map((e) => e.id));
+    this.syncNotified.push(...structuredClone(notify.filter((e) => insertedIds.has(e.id))));
   }
 
   async syncMonitorSetKey(key: string): Promise<void> { this.syncStore.key = key.trim(); }

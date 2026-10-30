@@ -511,12 +511,13 @@ fn sync_monitor_apply(
     events: Vec<sync_monitor::Event>,
     notify: Vec<sync_monitor::Event>,
 ) -> Result<(), String> {
-    {
+    let inserted = {
         let mut db = state.db.lock().map_err(|e| e.to_string())?;
-        sync_monitor::apply(&mut db, &problems, &events)?;
-    }
+        sync_monitor::apply(&mut db, &problems, &events)?
+    };
     use tauri_plugin_notification::NotificationExt;
-    for event in &notify {
+    // Only events recorded just now: a repeat never notifies twice.
+    for event in notify.iter().filter(|e| inserted.contains(&e.id)) {
         // A refused permission leaves the Inbox and the status dot.
         let _ = app
             .notification()

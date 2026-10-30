@@ -70,7 +70,8 @@ export function SyncPanel({ monitor, onClose }: Props) {
   const level = statusLevel(!!state?.configured, state?.problems ?? []);
   const checks = state?.checks ?? [];
   const latest = checks[checks.length - 1];
-  const vitals = [...checks].reverse().find((c) => c.vitals)?.vitals ?? null;
+  // Only the latest check's vitals: older ones would hide that they're failing now.
+  const vitals = latest?.vitals ?? null;
   const thresholds = thresholdsFrom(state?.thresholds);
   // The stored mutes are the ones still in force.
   const mutedUntil = (kind: string) => state?.mutes[baseKind(kind)];
@@ -120,7 +121,7 @@ export function SyncPanel({ monitor, onClose }: Props) {
                 <p data-testid="sync-vitals-missing" style={{ ...card, color: C.sub, margin: 0 }}>
                   {!state.has_key
                     ? "Add a monitor key below to see CPU, memory, disk, rejected logins and document sizes."
-                    : latest?.vitals_error ?? "No vitals yet."}
+                    : latest?.vitals_error ?? (latest && !latest.reachable ? "No vitals while the server is unreachable." : "No vitals yet.")}
                 </p>
               ) : (
                 <div data-testid="sync-vitals" style={{ ...card, display: "grid", gap: 6 }}>

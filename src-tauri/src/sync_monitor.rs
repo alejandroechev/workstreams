@@ -325,7 +325,12 @@ pub fn events(db: &Connection, limit: u32) -> Result<Vec<Event>, String> {
 
 /// Replaces the open problems and records new events, in one transaction.
 /// An event id that exists already is ignored, so applying twice is harmless.
-pub fn apply(db: &mut Connection, open: &[Problem], new_events: &[Event]) -> Result<(), String> {
+/// Returns the ids actually recorded, the only ones worth notifying.
+pub fn apply(
+    db: &mut Connection,
+    open: &[Problem],
+    new_events: &[Event],
+) -> Result<Vec<String>, String> {
     let tx = db.transaction().map_err(|e| e.to_string())?;
     tx.execute("DELETE FROM sync_problems", [])
         .map_err(|e| e.to_string())?;
@@ -336,14 +341,20 @@ pub fn apply(db: &mut Connection, open: &[Problem], new_events: &[Event]) -> Res
         )
         .map_err(|e| e.to_string())?;
     }
+    let mut inserted = Vec::new();
     for e in new_events {
-        tx.execute(
-            "INSERT OR IGNORE INTO sync_events (id, kind, event, at, message, hint, is_read) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0)",
-            params![e.id, e.kind, e.event, e.at, e.message, e.hint],
-        )
-        .map_err(|e| e.to_string())?;
+        let added = tx
+            .execute(
+                "INSERT OR IGNORE INTO sync_events (id, kind, event, at, message, hint, is_read) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0)",
+                params![e.id, e.kind, e.event, e.at, e.message, e.hint],
+            )
+            .map_err(|e| e.to_string())?;
+        if added > 0 {
+            inserted.push(e.id.clone());
+        }
     }
-    tx.commit().map_err(|e| e.to_string())
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(inserted)
 }
 
 pub fn set_read(db: &Connection, id: &str, is_read: bool) -> Result<(), String> {
@@ -477,8 +488,16 @@ mod tests {
             hint: "h".into(),
             is_read: false,
         };
-        apply(&mut db, std::slice::from_ref(&p), std::slice::from_ref(&e)).unwrap();
-        apply(&mut db, std::slice::from_ref(&p), std::slice::from_ref(&e)).unwrap();
+        assert_eq!(
+            apply(&mut db, std::slice::from_ref(&p), std::slice::from_ref(&e)).unwrap(),
+            vec!["cpu-5-started".to_string()]
+        );
+        assert!(
+            apply(&mut db, std::slice::from_ref(&p), std::slice::from_ref(&e))
+                .unwrap()
+                .is_empty(),
+            "nothing new to notify"
+        );
         assert_eq!(problems(&db).unwrap(), vec![p]);
         assert_eq!(events(&db, 10).unwrap(), vec![e]);
         set_read(&db, "cpu-5-started", true).unwrap();
