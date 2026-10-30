@@ -39,6 +39,7 @@ async-trait = "0.1.92"
 tokio = { version = "1.53.1", features = ["sync", "time", "rt", "macros"] }
 serde_yaml = "0.9.34"
 reqwest = { version = "0.12", features = ["blocking", "json"] }
+tauri-plugin-notification = "2"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_System_Threading", "Win32_Foundation"] }

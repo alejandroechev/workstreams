@@ -29,6 +29,7 @@ mod pty;
 mod repo_create;
 mod session_poller;
 mod shell_env;
+mod sync_monitor;
 mod tasks;
 mod trace_record;
 
@@ -454,6 +455,108 @@ async fn planning_connect(
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+fn now_ms() -> i64 {
+    sync_monitor_now()
+}
+
+/// Milliseconds since the epoch, for sync monitoring.
+pub(crate) fn sync_monitor_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+/// One sync server check (ADR 040), stored; None when no server is configured.
+/// The request runs off the IPC thread and without the DB lock.
+#[tauri::command]
+async fn sync_monitor_check(
+    state: State<'_, AppState>,
+) -> Result<Option<sync_monitor::Check>, String> {
+    let (server, key) = {
+        let db = state.db.lock().map_err(|e| e.to_string())?;
+        (
+            sync_monitor::server_url(&db)?,
+            sync_monitor::monitor_key(&db)?,
+        )
+    };
+    let Some(server) = server else {
+        return Ok(None);
+    };
+    let check = tauri::async_runtime::spawn_blocking(move || {
+        sync_monitor::run_check(&sync_monitor::HttpProbe, &server, key.as_deref(), now_ms())
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    sync_monitor::store_check(&db, &check)?;
+    Ok(Some(check))
+}
+
+#[tauri::command]
+fn sync_monitor_state(state: State<'_, AppState>) -> Result<sync_monitor::State, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    sync_monitor::state(&db, now_ms())
+}
+
+/// Saves the open problems and new alert events, and shows a desktop
+/// notification for each event in `notify`.
+#[tauri::command]
+fn sync_monitor_apply(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    problems: Vec<sync_monitor::Problem>,
+    events: Vec<sync_monitor::Event>,
+    notify: Vec<sync_monitor::Event>,
+) -> Result<(), String> {
+    {
+        let mut db = state.db.lock().map_err(|e| e.to_string())?;
+        sync_monitor::apply(&mut db, &problems, &events)?;
+    }
+    use tauri_plugin_notification::NotificationExt;
+    for event in &notify {
+        // A refused permission leaves the Inbox and the status dot.
+        let _ = app
+            .notification()
+            .builder()
+            .title(&event.message)
+            .body(&event.hint)
+            .show();
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn sync_monitor_set_key(state: State<'_, AppState>, key: String) -> Result<(), String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    sync_monitor::set_monitor_key(&db, &key)
+}
+
+#[tauri::command]
+fn sync_monitor_set_thresholds(
+    state: State<'_, AppState>,
+    thresholds: serde_json::Value,
+) -> Result<(), String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    sync_monitor::set_thresholds(&db, &thresholds)
+}
+
+#[tauri::command]
+fn sync_monitor_mute(state: State<'_, AppState>, kind: String, hours: u32) -> Result<i64, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    sync_monitor::mute(&db, &kind, hours, now_ms())
+}
+
+#[tauri::command]
+fn sync_monitor_set_read(
+    state: State<'_, AppState>,
+    id: String,
+    is_read: bool,
+) -> Result<(), String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    sync_monitor::set_read(&db, &id, is_read)
 }
 
 /// Your orphaned PRs in the saved range, with what is hidden (ADR 039).
@@ -6301,6 +6404,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_notification::init())
         .manage(app_state)
         .manage(file_io::WatcherState::new())
         .setup(move |app| {
@@ -6351,6 +6455,13 @@ pub fn run() {
             planning_set_draft,
             planning_publish,
             planning_orphans,
+            sync_monitor_check,
+            sync_monitor_state,
+            sync_monitor_apply,
+            sync_monitor_set_key,
+            sync_monitor_set_thresholds,
+            sync_monitor_mute,
+            sync_monitor_set_read,
             planning_set_orphan_days,
             planning_hide_orphan,
             planning_unhide_orphan,

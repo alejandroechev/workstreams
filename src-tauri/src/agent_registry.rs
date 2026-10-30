@@ -407,6 +407,30 @@ pub const COMMANDS: &[Command] = &[
         handler: planning_estimate,
     },
     Command {
+        id: "sync.status",
+        log_params: &[],
+        summary: "The sync server's monitored state (ADR 040): whether one is configured, the latest check and vitals, open problems and active mutes",
+        requires_identity: true,
+        destructive: false,
+        handler: sync_status,
+    },
+    Command {
+        id: "sync.history",
+        log_params: &["hours"],
+        summary: "Stored sync server checks of the last hours (params: hours = 1..24, default 24)",
+        requires_identity: true,
+        destructive: false,
+        handler: sync_history,
+    },
+    Command {
+        id: "sync.mute",
+        log_params: &["kind", "hours"],
+        summary: "Mute a sync server problem kind's alerts (params: kind = unreachable | cpu | memory | disk | logins | doc_size | doc_growth, hours = default 24)",
+        requires_identity: true,
+        destructive: false,
+        handler: sync_mute,
+    },
+    Command {
         id: "planning.orphan_prs",
         log_params: &["days"],
         summary: "Your PRs with no linked work item, across Planning's organization (params: days = 7 | 30 | 90, default the tab's range); hidden ones are flagged",
@@ -975,6 +999,62 @@ fn planning_estimate(
             points,
         },
     )
+}
+
+fn sync_error(message: String) -> AgentError {
+    AgentError::new(
+        "SYNC_MONITOR",
+        message,
+        "Check Settings → Sync server monitoring.",
+    )
+}
+
+fn sync_status(
+    context: &CommandContext,
+    _: &serde_json::Value,
+) -> Result<CommandOutcome, AgentError> {
+    let state =
+        crate::sync_monitor::state(context.db, crate::sync_monitor_now()).map_err(sync_error)?;
+    Ok(CommandOutcome::read(serde_json::json!({
+        "configured": state.configured,
+        "server_url": state.server_url,
+        "has_key": state.has_key,
+        "latest": state.checks.last(),
+        "problems": state.problems,
+        "mutes": state.mutes,
+    })))
+}
+
+fn sync_history(
+    context: &CommandContext,
+    params: &serde_json::Value,
+) -> Result<CommandOutcome, AgentError> {
+    let hours = match params.get("hours") {
+        None | Some(serde_json::Value::Null) => 24,
+        Some(_) => param_i64(params, "hours")?.clamp(1, 24),
+    };
+    let since = crate::sync_monitor_now() - hours * 3_600_000;
+    let checks = crate::sync_monitor::checks_since(context.db, since).map_err(sync_error)?;
+    Ok(CommandOutcome::read(
+        serde_json::json!({ "hours": hours, "checks": checks }),
+    ))
+}
+
+fn sync_mute(
+    context: &CommandContext,
+    params: &serde_json::Value,
+) -> Result<CommandOutcome, AgentError> {
+    let kind = required_str(params, "kind")?;
+    let hours = match params.get("hours") {
+        None | Some(serde_json::Value::Null) => 24,
+        Some(_) => param_i64(params, "hours")?.clamp(0, i64::from(u32::MAX)) as u32,
+    };
+    let until = crate::sync_monitor::mute(context.db, &kind, hours, crate::sync_monitor_now())
+        .map_err(sync_error)?;
+    Ok(CommandOutcome::changed(
+        serde_json::json!({ "kind": crate::sync_monitor::base_kind(&kind), "until": until }),
+        StateChange::new("sync", "mutes", "changed"),
+    ))
 }
 
 fn planning_orphan_list(
@@ -2925,6 +3005,91 @@ mod tests {
     /// A connectivity check must survive a missing identity: an agent whose
     /// token went stale needs to separate "cannot reach the app" from "the app
     /// no longer knows me", because only one of them is fixed by restarting.
+    #[test]
+    fn sync_commands_report_history_and_mute() {
+        let mut db = memory_db();
+        let caller = agent("tile-1", "ws-own");
+        let off = call(&db, &caller, "sync.status", serde_json::Value::Null)
+            .unwrap()
+            .data;
+        assert_eq!(off["configured"], false);
+        db.execute(
+            "INSERT INTO settings (key, value) VALUES ('companion.server_url', 'https://sync.example')",
+            [],
+        )
+        .unwrap();
+        let now = crate::sync_monitor_now();
+        for (i, cpu) in [5.0, 92.0].iter().enumerate() {
+            crate::sync_monitor::store_check(
+                &db,
+                &crate::sync_monitor::Check {
+                    at: now - 60_000 * (2 - i as i64),
+                    reachable: true,
+                    latency_ms: 80,
+                    error: None,
+                    vitals: Some(serde_json::json!({"box": {"cpuPercent": cpu}})),
+                    vitals_error: None,
+                },
+            )
+            .unwrap();
+        }
+        crate::sync_monitor::store_check(
+            &db,
+            &crate::sync_monitor::Check {
+                at: now - 3 * 3_600_000,
+                reachable: true,
+                latency_ms: 70,
+                error: None,
+                vitals: None,
+                vitals_error: None,
+            },
+        )
+        .unwrap();
+        let problem = crate::sync_monitor::Problem {
+            kind: "cpu".into(),
+            severity: "critical".into(),
+            started_at: now,
+            message: "CPU 92%".into(),
+            hint: "h".into(),
+        };
+        crate::sync_monitor::apply(&mut db, &[problem], &[]).unwrap();
+
+        let status = call(&db, &caller, "sync.status", serde_json::Value::Null)
+            .unwrap()
+            .data;
+        assert_eq!(status["configured"], true);
+        assert_eq!(status["latest"]["vitals"]["box"]["cpuPercent"], 92.0);
+        assert_eq!(status["problems"][0]["kind"], "cpu");
+        let history = call(
+            &db,
+            &caller,
+            "sync.history",
+            serde_json::json!({"hours": 1}),
+        )
+        .unwrap()
+        .data;
+        assert_eq!(history["checks"].as_array().unwrap().len(), 2);
+        let muted = call(
+            &db,
+            &caller,
+            "sync.mute",
+            serde_json::json!({"kind": "cpu", "hours": 24}),
+        )
+        .unwrap();
+        assert!(muted.data["until"].as_i64().unwrap() > now);
+        let status = call(&db, &caller, "sync.status", serde_json::Value::Null)
+            .unwrap()
+            .data;
+        assert!(status["mutes"]["cpu"].as_i64().is_some());
+        assert!(call(
+            &db,
+            &caller,
+            "sync.mute",
+            serde_json::json!({"kind": "weather"})
+        )
+        .is_err());
+    }
+
     #[test]
     fn planning_orphan_commands_list_hide_and_link() {
         let _serial = crate::ado_planning::PUBLISH_TEST_LOCK

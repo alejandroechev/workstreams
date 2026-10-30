@@ -458,6 +458,33 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
             UNIQUE(watch_id, run_id, result)
         );
 
+        -- Sync server monitoring (ADR 040): 24 hours of checks, the open
+        -- problems, and a week of alert events for the Inbox.
+        CREATE TABLE IF NOT EXISTS sync_checks (
+            at INTEGER PRIMARY KEY,
+            reachable INTEGER NOT NULL,
+            latency_ms INTEGER NOT NULL,
+            error TEXT,
+            vitals TEXT,
+            vitals_error TEXT
+        );
+        CREATE TABLE IF NOT EXISTS sync_problems (
+            kind TEXT PRIMARY KEY,
+            severity TEXT NOT NULL,
+            started_at INTEGER NOT NULL,
+            message TEXT NOT NULL,
+            hint TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS sync_events (
+            id TEXT PRIMARY KEY,
+            kind TEXT NOT NULL,
+            event TEXT NOT NULL,
+            at INTEGER NOT NULL,
+            message TEXT NOT NULL,
+            hint TEXT NOT NULL,
+            is_read INTEGER NOT NULL DEFAULT 0
+        );
+
         CREATE INDEX IF NOT EXISTS command_log_created_idx ON command_log (created_at);
         CREATE INDEX IF NOT EXISTS command_log_command_idx ON command_log (command);
         CREATE INDEX IF NOT EXISTS task_events_task_idx ON task_events (task_id);
@@ -630,6 +657,9 @@ mod tests {
             "diff_orders",
             "companion_sessions",
             "companion_messages",
+            "sync_checks",
+            "sync_problems",
+            "sync_events",
         ];
         for table in &expected {
             let count: i64 = conn
