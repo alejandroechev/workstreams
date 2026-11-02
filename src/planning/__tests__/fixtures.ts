@@ -106,3 +106,15 @@ export function orphanPrs(): MemoryPlanningPr[] {
     pr(108, "Old August PR", "engaine", "SCC", "2026-08-15T10:00:00Z"),
   ];
 }
+
+export const KTLO_LINK = "https://skype.visualstudio.com/OneWork/_workitems/edit/4533022";
+
+/** ktlo-stories: AT-3's team plus this semester's KTLO feature (a teammate's), a story and last semester's closed feature. */
+export function ktloTeam(): PlanItem[] {
+  return [
+    ...taskTeam(),
+    feature(4533022, "KTLO — H2 2026", { ...erwin, iteration_path: "OneWork\\CY26" }),
+    item(7001, { title: "Not a feature", iteration_path: "OneWork\\S22" }),
+    feature(7003, "KTLO — H1 2026", { ...erwin, state: "Closed", iteration_path: "OneWork\\CY26" }),
+  ];
+}

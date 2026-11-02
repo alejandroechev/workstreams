@@ -175,6 +175,42 @@ is held back as *changed in ADO*. Agents get `planning.orphan_prs`,
 `planning.hide_pr` / `unhide_pr`, `planning.hide_repo` / `unhide_repo` and
 `planning.link_pr`.
 
+## Amendment (2026-11-02): KTLO stories from orphaned PRs
+
+Each semester has one ADO Feature for KTLO work. **The KTLO feature** is a
+single setting (`planning.ktlo`, the item id), set at the top of the Orphaned
+PRs tab by pasting the feature's link (`…/<project>/_workitems/edit/<id>`, in
+either host form). Setting it reads the item and refuses it, with the reason,
+unless it is a **Feature** in Planning's organization and project and not
+Closed or Removed; a refused link leaves the setting unchanged. Planning
+re-reads the feature on every read, so one closed in ADO is flagged ("set this
+semester's") and new KTLO stories are disabled until it is replaced. The
+feature is usually a teammate's, so it doesn't appear in the Features tab, and
+nothing tracks KTLO's progress.
+
+**＋ New KTLO story…** in a PR row's Link to… list opens a small form: name
+(the PR's title), story points (1; blank means not estimated) and sprint (the
+sprint after ADO's current one, whatever sprint is selected; any sprint from
+the current one on). It adds two draft changes: the existing `create_story`,
+with the KTLO feature as its parent and the chosen sprint, and a `link_pr` to
+the new story's **temporary id**. Like every story Planning creates, it is New,
+assigned to you, in the team's area path, with no description.
+
+**`link_pr` may target a drafted story.** A temporary id is accepted only while
+the draft creates that story. The drafted story is offered in other rows'
+Link to… lists, so several PRs can share it. Publishing writes those PR links
+in the story's creation request, as extra `ArtifactLink` relations, rather than
+as later patches: one request, and no revision check against an item this
+publish has just created. If the story isn't created, its links stay in the
+draft with it. Removing the story's creation drops its links, and in the tab,
+resetting Link to… on the PR the story was made for (its first link) drops the
+story and every link to it.
+
+Agents get `planning.ktlo`, `planning.set_ktlo link=` (the same checks) and
+`planning.ktlo_story pr= [title=] [points=] [sprint=]` (the same defaults; it
+returns the temporary id), and `planning.link_pr` accepts a drafted story's
+temporary id.
+
 ## References
 
 - [ADR 030: ADO PR inbox](030-ado-pr-inbox.md) (token and HTTP rules)

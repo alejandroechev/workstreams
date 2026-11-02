@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import type { Backend } from "../backend/types";
-import type { Change, OrphanReport, PlanningConnection, PlanningData, PublishResult } from "../domain/planning";
+import type { Change, KtloFeature, OrphanReport, PlanningConnection, PlanningData, PublishResult } from "../domain/planning";
 
 /** How often Planning re-reads ADO while it is open (ADR 039). */
 export const PLANNING_REFRESH_MS = 5 * 60_000;
@@ -24,6 +24,8 @@ export function usePlanning(backend: Backend, open: boolean) {
   const [lastPublish, setLastPublish] = useState<PublishResult | null>(null);
   const [orphans, setOrphans] = useState<OrphanReport | null>(null);
   const [orphanError, setOrphanError] = useState<string | null>(null);
+  const [ktlo, setKtloState] = useState<KtloFeature | null>(null);
+  const [ktloError, setKtloError] = useState<string | null>(null);
   const connected = useRef(false);
   /** Bumped by every Hide/Unhide, so an older read can't undo one. */
   const hiddenVersion = useRef(0);
@@ -51,11 +53,15 @@ export function usePlanning(backend: Backend, open: boolean) {
           setOrphanError(null);
         })
         .catch((failure) => setOrphanError(message(failure)));
+      // So is the KTLO feature, re-read so a feature closed in ADO is flagged.
+      const ktloRead = backend.planningKtlo()
+        .then((feature) => { setKtloState(feature); setKtloError(null); })
+        .catch((failure) => setKtloError(message(failure)));
       try {
         setData(await backend.planningFetch());
         setError(null);
       } finally {
-        await orphanRead;
+        await Promise.all([orphanRead, ktloRead]);
       }
     } catch (failure) {
       setError(message(failure));
@@ -75,6 +81,13 @@ export function usePlanning(backend: Backend, open: boolean) {
     hiddenVersion.current += 1;
     const hidden = await backend.planningHideOrphan(kind, id, label);
     setOrphans((o) => (o ? { ...o, hidden } : o));
+  }, [backend]);
+
+  /** Sets the KTLO feature; a refusal is thrown and the old one stays. */
+  const setKtlo = useCallback(async (link: string) => {
+    const feature = await backend.planningSetKtlo(link);
+    setKtloState(feature);
+    setKtloError(null);
   }, [backend]);
 
   const unhideOrphan = useCallback(async (kind: "pr" | "repo", id: string) => {
@@ -136,8 +149,8 @@ export function usePlanning(backend: Backend, open: boolean) {
   }, [backend, load]);
 
   return {
-    connection, draft, data, error, loading, lastPublish, orphans, orphanError,
-    connect, refresh: load, selectSprint, addChange, setDraft, publish, setOrphanDays, hideOrphan, unhideOrphan,
+    connection, draft, data, error, loading, lastPublish, orphans, orphanError, ktlo, ktloError,
+    connect, refresh: load, selectSprint, addChange, setDraft, publish, setOrphanDays, hideOrphan, unhideOrphan, setKtlo,
   };
 }
 

@@ -4,7 +4,7 @@ import type { WorkLane } from "../domain/work-lanes";
 import type { PrInboxSnapshot, PrWatchMode, PrInboxMute } from "../domain/pr-inbox";
 import type { PipelineMode, PipelineStatus } from "../domain/pipeline-inbox";
 import type { SyncCheck, SyncEvent, SyncMonitorState, SyncProblem, SyncThresholds } from "../domain/sync-monitor";
-import type { Change, OrphanHidden, OrphanReport, PlanningConnection, PlanningData, PlanningState, PublishResult } from "../domain/planning";
+import type { Change, KtloFeature, OrphanHidden, OrphanReport, PlanningConnection, PlanningData, PlanningState, PublishResult } from "../domain/planning";
 import type { Project, Workstream, Tile, TileType, WorkstreamLayout, CopilotConfigItem } from "../domain/types";
 import type { SessionFileComment } from "../domain/file-comments";
 import type { Review, ReviewComment, ChangedFile, DiffSides } from "../domain/code-review";
@@ -120,6 +120,14 @@ export class TauriBackend implements Backend {
 
   async syncMonitorSetRead(id: string, isRead: boolean): Promise<void> {
     await invoke("sync_monitor_set_read", { id, isRead });
+  }
+
+  async planningKtlo(): Promise<KtloFeature | null> {
+    return invoke<KtloFeature | null>("planning_ktlo");
+  }
+
+  async planningSetKtlo(link: string): Promise<KtloFeature> {
+    return invoke<KtloFeature>("planning_set_ktlo", { link });
   }
 
   async planningOrphans(): Promise<OrphanReport> {

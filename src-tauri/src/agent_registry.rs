@@ -473,7 +473,7 @@ pub const COMMANDS: &[Command] = &[
     Command {
         id: "planning.link_pr",
         log_params: &["pr", "item"],
-        summary: "Draft: link an orphaned PR to one of your stories or a task of a sprint story (params: pr, item); written on planning.publish",
+        summary: "Draft: link an orphaned PR to one of your stories, a task of a sprint story, or a drafted story's temporary id (params: pr, item); written on planning.publish",
         requires_identity: true,
         destructive: false,
         handler: planning_link_pr,
@@ -493,6 +493,30 @@ pub const COMMANDS: &[Command] = &[
         requires_identity: true,
         destructive: false,
         handler: planning_add_story,
+    },
+    Command {
+        id: "planning.ktlo",
+        log_params: &[],
+        summary: "This semester's KTLO feature as ADO has it now (id, title, state, url, problem), or null when none is set",
+        requires_identity: true,
+        destructive: false,
+        handler: planning_ktlo,
+    },
+    Command {
+        id: "planning.set_ktlo",
+        log_params: &["link"],
+        summary: "Set the KTLO feature from its link (params: link = …/_workitems/edit/<id>); refused unless it's an open Feature in Planning's organization and project",
+        requires_identity: true,
+        destructive: false,
+        handler: planning_set_ktlo,
+    },
+    Command {
+        id: "planning.ktlo_story",
+        log_params: &["pr", "points", "sprint"],
+        summary: "Draft: a new story under the KTLO feature with an orphaned PR linked to it (params: pr, title = default the PR's title, points = default 1, sprint = name or path, default the sprint after the current one); returns its temporary id, which planning.link_pr accepts for more PRs",
+        requires_identity: true,
+        destructive: false,
+        handler: planning_ktlo_story,
     },
     Command {
         id: "planning.publish",
@@ -1204,6 +1228,22 @@ fn planning_link_pr(
 ) -> Result<CommandOutcome, AgentError> {
     let pr = planning_find_orphan(context, param_i64(params, "pr")?)?;
     let item = param_i64(params, "item")?;
+    if item < 0 {
+        // A drafted story: add_to_draft refuses a temporary id it doesn't hold.
+        return planning_add(
+            context,
+            crate::ado_planning::Change::LinkPr {
+                id: item,
+                rev: 0,
+                pr: crate::ado_planning::PrRef {
+                    id: pr.id,
+                    project_id: pr.project_id,
+                    repo_id: pr.repo_id,
+                    title: pr.title,
+                },
+            },
+        );
+    }
     let data = planning_data(context)?;
     let rev = data
         .items
@@ -1242,6 +1282,154 @@ fn planning_link_pr(
             },
         },
     )
+}
+
+fn planning_gateway<'a>(
+    context: &CommandContext<'a>,
+) -> Result<
+    (
+        &'a dyn crate::ado_planning::PlanningGateway,
+        crate::ado_planning::PlanningConnection,
+    ),
+    AgentError,
+> {
+    let gateway = context.planning.ok_or_else(|| {
+        AgentError::new(
+            "NO_PLANNING",
+            "This build cannot read ADO planning data",
+            "Report this as a bug.",
+        )
+    })?;
+    let conn = crate::ado_planning::load_connection(context.db)
+        .map_err(planning_error)?
+        .ok_or_else(|| planning_error("Planning isn't connected to a team yet".into()))?;
+    Ok((gateway, conn))
+}
+
+fn planning_ktlo(
+    context: &CommandContext,
+    _: &serde_json::Value,
+) -> Result<CommandOutcome, AgentError> {
+    let (gateway, conn) = planning_gateway(context)?;
+    let feature = match crate::ado_planning::ktlo_id(context.db).map_err(planning_error)? {
+        Some(id) => Some(gateway.ktlo(&conn, id).map_err(planning_error)?),
+        None => None,
+    };
+    Ok(CommandOutcome::read(serde_json::json!({ "ktlo": feature })))
+}
+
+fn planning_set_ktlo(
+    context: &CommandContext,
+    params: &serde_json::Value,
+) -> Result<CommandOutcome, AgentError> {
+    let link = required_str(params, "link")?;
+    let (gateway, conn) = planning_gateway(context)?;
+    let feature = gateway.check_ktlo(&conn, &link).map_err(planning_error)?;
+    crate::ado_planning::save_ktlo(context.db, feature.id).map_err(planning_error)?;
+    Ok(CommandOutcome::changed(
+        serde_json::json!({ "ktlo": feature }),
+        StateChange::new("planning", "ktlo", "changed"),
+    ))
+}
+
+/// Drafts a new story under the KTLO feature, with the PR linked to it.
+fn planning_ktlo_story(
+    context: &CommandContext,
+    params: &serde_json::Value,
+) -> Result<CommandOutcome, AgentError> {
+    use crate::ado_planning::{Change, PrRef};
+    let (gateway, conn) = planning_gateway(context)?;
+    let id = crate::ado_planning::ktlo_id(context.db)
+        .map_err(planning_error)?
+        .ok_or_else(|| {
+            planning_error("Set the KTLO feature first (planning.set_ktlo link=…)".into())
+        })?;
+    let feature = gateway.ktlo(&conn, id).map_err(planning_error)?;
+    if let Some(problem) = feature.problem {
+        return Err(planning_error(problem));
+    }
+    let pr = planning_find_orphan(context, param_i64(params, "pr")?)?;
+    let title = match params.get("title") {
+        None | Some(serde_json::Value::Null) => pr.title.clone(),
+        Some(_) => required_str(params, "title")?,
+    };
+    if title.trim().is_empty() {
+        return Err(planning_error("A KTLO story needs a title".into()));
+    }
+    let points = match params.get("points") {
+        None | Some(serde_json::Value::Null) => Some(1.0),
+        Some(_) => param_points(params)?,
+    };
+    let data = planning_data(context)?;
+    let sprints = crate::ado_planning::sprints_from_current(&data.iterations);
+    let iteration = match params.get("sprint") {
+        None | Some(serde_json::Value::Null) => crate::ado_planning::next_sprint(&data.iterations)
+            .map(|i| i.path.clone())
+            .ok_or_else(|| planning_error("ADO lists no current or future sprint".into()))?,
+        Some(_) => {
+            let wanted = required_str(params, "sprint")?;
+            sprints
+                .iter()
+                .find(|i| {
+                    i.path.eq_ignore_ascii_case(&wanted) || i.name.eq_ignore_ascii_case(&wanted)
+                })
+                .map(|i| i.path.clone())
+                .ok_or_else(|| {
+                    planning_error(format!(
+                        "{wanted} isn't a sprint from the current one on: {}",
+                        sprints
+                            .iter()
+                            .map(|i| i.name.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ))
+                })?
+        }
+    };
+    let draft = crate::ado_planning::load_draft(context.db).map_err(planning_error)?;
+    let temp_id = draft
+        .iter()
+        .filter_map(|c| match c {
+            Change::CreateFeature { temp_id, .. } | Change::CreateStory { temp_id, .. } => {
+                Some(*temp_id)
+            }
+            _ => None,
+        })
+        .min()
+        .unwrap_or(0)
+        .min(0)
+        - 1;
+    crate::ado_planning::add_to_draft(
+        context.db,
+        Change::CreateStory {
+            temp_id,
+            parent: feature.id,
+            title: title.trim().to_string(),
+            points,
+            description: None,
+            iteration: Some(iteration.clone()),
+            order: None,
+        },
+    )
+    .map_err(planning_error)?;
+    let draft = crate::ado_planning::add_to_draft(
+        context.db,
+        Change::LinkPr {
+            id: temp_id,
+            rev: 0,
+            pr: PrRef {
+                id: pr.id,
+                project_id: pr.project_id,
+                repo_id: pr.repo_id,
+                title: pr.title,
+            },
+        },
+    )
+    .map_err(planning_error)?;
+    Ok(CommandOutcome::changed(
+        serde_json::json!({ "draft": draft.len(), "story": temp_id, "sprint": iteration, "points": points }),
+        StateChange::new("planning", "draft", "changed"),
+    ))
 }
 
 fn planning_task_state(
@@ -2696,6 +2884,47 @@ mod tests {
             }
             Ok(result)
         }
+        /// Feature 4533022 is the open KTLO feature, 4533000 last semester's
+        /// (Closed); anything else is a User Story.
+        fn ktlo(
+            &self,
+            conn: &crate::ado_planning::PlanningConnection,
+            id: i64,
+        ) -> Result<crate::ado_planning::KtloFeature, String> {
+            let (state, problem) = match id {
+                4533022 => ("Active", None),
+                4533000 => (
+                    "Closed",
+                    Some("This KTLO feature is Closed — set this semester's.".to_string()),
+                ),
+                _ => (
+                    "New",
+                    Some(format!("#{id} is a User Story, not a Feature.")),
+                ),
+            };
+            Ok(crate::ado_planning::KtloFeature {
+                id,
+                title: format!("KTLO {id}"),
+                state: state.into(),
+                url: format!(
+                    "https://dev.azure.com/{}/{}/_workitems/edit/{id}",
+                    conn.organization, conn.project
+                ),
+                problem,
+            })
+        }
+        fn check_ktlo(
+            &self,
+            conn: &crate::ado_planning::PlanningConnection,
+            link: &str,
+        ) -> Result<crate::ado_planning::KtloFeature, String> {
+            let link = crate::ado_planning::parse_work_item_link(link)?;
+            let feature = self.ktlo(conn, link.id)?;
+            match feature.problem.clone() {
+                Some(p) => Err(p),
+                None => Ok(feature),
+            }
+        }
         fn orphans(&self, _: &str, days: u32) -> Result<Vec<crate::orphan_prs::OrphanPr>, String> {
             let pr = |id: i64, repo: &str| crate::orphan_prs::OrphanPr {
                 id,
@@ -3227,6 +3456,146 @@ mod tests {
             assert!(err.message.contains(expect), "{params}: {}", err.message);
         }
         assert_eq!(crate::ado_planning::load_draft(&db).unwrap().len(), 3);
+    }
+
+    #[test]
+    fn planning_ktlo_commands_set_the_feature_and_draft_ktlo_stories() {
+        let _serial = crate::ado_planning::PUBLISH_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        use crate::ado_planning::{Change, PlanningGateway};
+        let db = memory_db();
+        let caller = agent("tile-1", "ws-own");
+        crate::ado_planning::save_connection(
+            &db,
+            &FakePlanning
+                .connect("https://dev.azure.com/o/P/_backlogs/backlog/T/Features")
+                .unwrap(),
+        )
+        .unwrap();
+        let link = |id: i64| format!("https://o.visualstudio.com/P/_workitems/edit/{id}");
+
+        assert_eq!(
+            call(&db, &caller, "planning.ktlo", serde_json::Value::Null)
+                .unwrap()
+                .data["ktlo"],
+            serde_json::Value::Null
+        );
+        let err = call(
+            &db,
+            &caller,
+            "planning.ktlo_story",
+            serde_json::json!({"pr": 70}),
+        )
+        .unwrap_err();
+        assert!(err.message.contains("KTLO feature"), "{}", err.message);
+        let err = call(
+            &db,
+            &caller,
+            "planning.set_ktlo",
+            serde_json::json!({"link": link(2)}),
+        )
+        .unwrap_err();
+        assert!(err.message.contains("not a Feature"), "{}", err.message);
+        let set = call(
+            &db,
+            &caller,
+            "planning.set_ktlo",
+            serde_json::json!({"link": link(4533022)}),
+        )
+        .unwrap();
+        assert_eq!(set.data["ktlo"]["id"], 4533022);
+        let shown = call(&db, &caller, "planning.ktlo", serde_json::Value::Null)
+            .unwrap()
+            .data;
+        assert_eq!(
+            (
+                shown["ktlo"]["id"].as_i64(),
+                shown["ktlo"]["state"].as_str()
+            ),
+            (Some(4533022), Some("Active"))
+        );
+
+        let drafted = call(
+            &db,
+            &caller,
+            "planning.ktlo_story",
+            serde_json::json!({"pr": 70, "title": "Deps"}),
+        )
+        .unwrap();
+        assert_eq!(drafted.data["story"], -1);
+        call(
+            &db,
+            &caller,
+            "planning.link_pr",
+            serde_json::json!({"pr": 71, "item": -1}),
+        )
+        .unwrap();
+        let draft = crate::ado_planning::load_draft(&db).unwrap();
+        assert_eq!(
+            draft[0],
+            Change::CreateStory {
+                temp_id: -1,
+                parent: 4533022,
+                title: "Deps".into(),
+                points: Some(1.0),
+                description: None,
+                iteration: Some("P\\S23".into()),
+                order: None,
+            },
+            "1 point and the sprint after the current one by default"
+        );
+        assert!(matches!(&draft[1], Change::LinkPr { id: -1, pr, .. } if pr.id == 70));
+        assert!(matches!(&draft[2], Change::LinkPr { id: -1, pr, .. } if pr.id == 71));
+
+        let titled = call(
+            &db,
+            &caller,
+            "planning.ktlo_story",
+            serde_json::json!({"pr": 72, "points": 2, "sprint": "S22"}),
+        )
+        .unwrap();
+        assert_eq!(titled.data["story"], -2);
+        let draft = crate::ado_planning::load_draft(&db).unwrap();
+        assert!(matches!(
+            &draft[3],
+            Change::CreateStory { title, points: Some(p), iteration: Some(i), .. }
+                if title == "PR 72" && *p == 2.0 && i == "P\\S22"
+        ));
+
+        for (params, expect) in [
+            (
+                serde_json::json!({"pr": 99}),
+                "isn't one of your orphaned PRs",
+            ),
+            (
+                serde_json::json!({"pr": 70, "sprint": "S21"}),
+                "isn't a sprint from the current one on",
+            ),
+            (serde_json::json!({"pr": 70, "title": "  "}), "title"),
+        ] {
+            let err = call(&db, &caller, "planning.ktlo_story", params.clone()).unwrap_err();
+            assert!(err.message.contains(expect), "{params}: {}", err.message);
+        }
+        let err = call(
+            &db,
+            &caller,
+            "planning.link_pr",
+            serde_json::json!({"pr": 70, "item": -9}),
+        )
+        .unwrap_err();
+        assert!(err.message.contains("drafted"), "{}", err.message);
+
+        // Last semester's feature, closed: no new KTLO stories.
+        crate::ado_planning::save_ktlo(&db, 4533000).unwrap();
+        let err = call(
+            &db,
+            &caller,
+            "planning.ktlo_story",
+            serde_json::json!({"pr": 70}),
+        )
+        .unwrap_err();
+        assert!(err.message.contains("Closed"), "{}", err.message);
     }
 
     #[test]

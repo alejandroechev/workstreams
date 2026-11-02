@@ -609,6 +609,48 @@ async fn planning_orphans(state: State<'_, AppState>) -> Result<orphan_prs::Orph
     Ok(orphan_prs::OrphanReport { days, prs, hidden })
 }
 
+/// The configured KTLO feature as ADO has it now, or `None` when none is set.
+#[tauri::command]
+async fn planning_ktlo(
+    state: State<'_, AppState>,
+) -> Result<Option<ado_planning::KtloFeature>, String> {
+    use ado_planning::PlanningGateway;
+    let (conn, id) = {
+        let db = state.db.lock().map_err(|e| e.to_string())?;
+        (
+            ado_planning::load_connection(&db)?.ok_or("Planning isn't connected to a team yet")?,
+            ado_planning::ktlo_id(&db)?,
+        )
+    };
+    let Some(id) = id else { return Ok(None) };
+    tauri::async_runtime::spawn_blocking(move || ado_planning::AdoPlanning.ktlo(&conn, id))
+        .await
+        .map_err(|e| e.to_string())?
+        .map(Some)
+}
+
+/// Sets the KTLO feature from its link, if ADO confirms it is an open Feature
+/// in Planning's project. A refused link leaves the setting unchanged.
+#[tauri::command]
+async fn planning_set_ktlo(
+    state: State<'_, AppState>,
+    link: String,
+) -> Result<ado_planning::KtloFeature, String> {
+    use ado_planning::PlanningGateway;
+    let conn = {
+        let db = state.db.lock().map_err(|e| e.to_string())?;
+        ado_planning::load_connection(&db)?.ok_or("Planning isn't connected to a team yet")?
+    };
+    let feature = tauri::async_runtime::spawn_blocking(move || {
+        ado_planning::AdoPlanning.check_ktlo(&conn, &link)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    ado_planning::save_ktlo(&db, feature.id)?;
+    Ok(feature)
+}
+
 #[tauri::command]
 fn planning_set_orphan_days(state: State<'_, AppState>, days: u32) -> Result<(), String> {
     let db = state.db.lock().map_err(|e| e.to_string())?;
@@ -6504,6 +6546,8 @@ pub fn run() {
             sync_monitor_mute,
             sync_monitor_set_read,
             planning_set_orphan_days,
+            planning_ktlo,
+            planning_set_ktlo,
             planning_hide_orphan,
             planning_unhide_orphan,
             set_pipeline_watch_mode,

@@ -138,6 +138,9 @@ export function PlanningView({ planning, onClose, now = () => new Date() }: Prop
                 onDays={planning.setOrphanDays}
                 onHide={planning.hideOrphan}
                 onUnhide={planning.unhideOrphan}
+                ktlo={planning.ktlo}
+                ktloError={planning.ktloError}
+                onSetKtlo={planning.setKtlo}
               />
             ) : tab === "plan-sprint" ? (
               <PlanSprintTab data={data} items={items} draft={draft} onAddChange={planning.addChange} onSetDraft={planning.setDraft} />

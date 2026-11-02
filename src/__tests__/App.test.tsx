@@ -315,6 +315,8 @@ function createBackend(): Backend {
     planningSetOrphanDays: vi.fn(),
     planningHideOrphan: vi.fn(),
     planningUnhideOrphan: vi.fn(),
+    planningKtlo: vi.fn(async () => null),
+    planningSetKtlo: vi.fn(),
     companionDeleteSession: vi.fn(async () => {}),
     companionPruneSessions: vi.fn(async () => 0),
     gitLog: vi.fn(),

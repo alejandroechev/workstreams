@@ -145,13 +145,16 @@ export interface LinkTarget {
   rev: number;
   title: string;
   task: boolean;
+  /** A story only in the draft (a new KTLO story), created on publish. */
+  drafted?: boolean;
 }
 
 /**
  * What an orphaned PR can be linked to: the selected sprint's stories, each
- * followed by its tasks, then your features' other stories.
+ * followed by its tasks, then your features' other stories, then the KTLO
+ * stories drafted for other PRs.
  */
-export function linkTargets(data: PlanningData): LinkTarget[] {
+export function linkTargets(data: PlanningData, draft: Change[] = []): LinkTarget[] {
   const stories = data.items.filter((i) => i.kind === "User Story" && i.state !== "Removed");
   const inSprint = stories.filter((s) => s.iteration_path === data.selected_sprint);
   const out: LinkTarget[] = [];
@@ -160,7 +163,89 @@ export function linkTargets(data: PlanningData): LinkTarget[] {
     for (const task of story.tasks ?? []) out.push({ id: task.id, rev: task.rev, title: task.title, task: true });
   }
   for (const story of stories) if (!inSprint.includes(story)) out.push({ id: story.id, rev: story.rev, title: story.title, task: false });
+  for (const c of draft) {
+    if (c.kind === "create_story" && draft.some((l) => l.kind === "link_pr" && l.id === c.temp_id)) {
+      out.push({ id: c.temp_id, rev: 0, title: c.title, task: false, drafted: true });
+    }
+  }
   return out;
+}
+
+/** This semester's KTLO feature as ADO has it now; `problem` says why it can't take new stories. */
+export interface KtloFeature {
+  id: number;
+  title: string;
+  state: string;
+  url: string;
+  problem: string | null;
+}
+
+/** The index of ADO's current sprint, or -1 when ADO marks none. */
+function currentIndex(data: PlanningData): number {
+  return data.iterations.findIndex((i) => i.timeframe === "current");
+}
+
+/** The sprint after ADO's current one (the current one if it's the last), whatever sprint is selected. */
+export function nextSprint(data: PlanningData): Iteration | null {
+  const index = currentIndex(data);
+  if (index < 0) return data.iterations.find((i) => i.timeframe === "future") ?? null;
+  return data.iterations[index + 1] ?? data.iterations[index];
+}
+
+/** The sprints a new KTLO story can go into: ADO's current one and every later one. */
+export function sprintsFromCurrent(data: PlanningData): Iteration[] {
+  const index = currentIndex(data);
+  return index < 0 ? data.iterations.filter((i) => i.timeframe === "future") : data.iterations.slice(index);
+}
+
+/**
+ * Drafts a new story under the KTLO feature with `pr` linked to it. The PR's
+ * previous pending link, if any, moves to the new story.
+ */
+export function ktloStoryDraft(
+  draft: Change[],
+  ktloId: number,
+  pr: PrRef,
+  story: { title: string; points: number | null; iteration: string },
+): Change[] {
+  const tempId = nextTempId(draft);
+  const created = addChange(draft, {
+    kind: "create_story", temp_id: tempId, parent: ktloId, title: story.title, points: story.points,
+    description: null, iteration: story.iteration, order: null,
+  });
+  return addChange(created, { kind: "link_pr", id: tempId, rev: 0, pr });
+}
+
+/**
+ * Drops a PR's pending link. If that PR's link is the first to a drafted
+ * story (the PR it was created for), the story and every link to it go too.
+ */
+export function unlinkPr(draft: Change[], prId: number): Change[] {
+  const link = draft.find((c) => c.kind === "link_pr" && c.pr.id === prId);
+  if (!link || link.kind !== "link_pr") return draft;
+  const first = draft.find((c) => c.kind === "link_pr" && c.id === link.id);
+  if (link.id < 0 && first === link) {
+    return draft.filter((c) => !(c.kind === "create_story" && c.temp_id === link.id) && !(c.kind === "link_pr" && c.id === link.id));
+  }
+  return draft.filter((c) => c !== link);
+}
+
+/** Reads a work item link (`…/<project>/_workitems/edit/<id>`), as the native side does (for the in-memory backend). */
+export function parseWorkItemLink(text: string): { organization: string; project: string; id: number } | null {
+  let url: URL;
+  try { url = new URL(text.trim()); } catch { return null; }
+  if (url.protocol !== "https:" || url.port || url.username) return null;
+  const path = url.pathname.replace(/^\/+|\/+$/g, "").split("/").map((s) => { try { return decodeURIComponent(s); } catch { return ""; } });
+  const host = url.hostname.toLowerCase();
+  let organization: string;
+  let rest: string[];
+  if (host === "dev.azure.com" && path.length >= 2) [organization, rest] = [path[0], path.slice(1)];
+  else if (host.endsWith(".visualstudio.com") && !host.slice(0, -".visualstudio.com".length).includes(".")) [organization, rest] = [host.slice(0, -".visualstudio.com".length), path];
+  else return null;
+  const [project, w, e, raw, ...extra] = rest;
+  const id = Number(raw);
+  if (extra.length || w !== "_workitems" || e !== "edit" || !project || !organization || !/^\d+$/.test(raw ?? "") || id <= 0) return null;
+  return { organization, project, id };
 }
 
 export interface Conflict {
@@ -194,7 +279,8 @@ const target = (c: Change) => ("id" in c ? c.id : c.temp_id);
  */
 export function addChange(draft: Change[], change: Change): Change[] {
   const id = target(change);
-  if (id < 0 && change.kind !== "create_feature" && change.kind !== "create_story") {
+  // A PR link to a drafted story is its own change, kept until the story is.
+  if (id < 0 && change.kind !== "create_feature" && change.kind !== "create_story" && change.kind !== "link_pr") {
     if (change.kind === "remove") {
       return draft.filter((c) => target(c) !== id && !(c.kind === "create_story" && c.parent === id));
     }

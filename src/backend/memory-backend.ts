@@ -18,7 +18,9 @@ import {
   SETTABLE_STATES,
   sortTasks as sortPlanTasks,
   parseTeamLink,
+  parseWorkItemLink,
   type Change,
+  type KtloFeature,
   type Iteration,
   type PlanItem,
   type PlanningConnection,
@@ -165,6 +167,7 @@ export class MemoryBackend implements Backend {
   private planningOrphanDays = 30;
   private planningOrphanHidden: OrphanHidden = { prs: [], repos: [] };
   private planningOrphanFetches = 0;
+  private planningKtloId: number | null = null;
 
   /** The team the in-memory ADO serves, with its sprints and work items (me = "Me"). */
   seedPlanningAdo(seed: { organization?: string; project?: string; team?: string; iterations: Iteration[]; items: PlanItem[] }): void {
@@ -360,6 +363,38 @@ export class MemoryBackend implements Backend {
     return structuredClone(this.planningOrphanHidden);
   }
 
+  private readKtlo(id: number): KtloFeature {
+    const ado = this.planningAdo;
+    const item = ado.items.find((i) => i.id === id);
+    if (!item) throw new Error(`Work item #${id} wasn't found, or your Azure CLI account can't see it.`);
+    const problem = item.kind !== "Feature"
+      ? `#${id} is a ${item.kind}, not a Feature.`
+      : item.state === "Closed" || item.state === "Removed" ? `This KTLO feature is ${item.state} — set this semester's.` : null;
+    return { id, title: item.title, state: item.state, url: `https://dev.azure.com/${ado.organization}/${ado.project}/_workitems/edit/${id}`, problem };
+  }
+
+  async planningKtlo(): Promise<KtloFeature | null> {
+    if (!this.planningSaved.connection) throw new Error("Planning isn't connected to a team yet");
+    return this.planningKtloId === null ? null : this.readKtlo(this.planningKtloId);
+  }
+
+  async planningSetKtlo(text: string): Promise<KtloFeature> {
+    const connection = this.planningSaved.connection;
+    if (!connection) throw new Error("Planning isn't connected to a team yet");
+    const link = parseWorkItemLink(text);
+    if (!link) throw new Error("That isn't an Azure DevOps work item link. Paste the feature's link (…/_workitems/edit/<id>).");
+    if (link.organization.toLowerCase() !== connection.organization.toLowerCase()) {
+      throw new Error(`That link is in another organization (${link.organization}); Planning works in ${connection.organization}.`);
+    }
+    if (link.project.toLowerCase() !== connection.project.toLowerCase()) {
+      throw new Error(`That link is in another project (${link.project}); Planning works in ${connection.project}.`);
+    }
+    const feature = this.readKtlo(link.id);
+    if (feature.problem) throw new Error(feature.problem);
+    this.planningKtloId = feature.id;
+    return feature;
+  }
+
   async planningSelectSprint(path: string): Promise<void> {
     this.planningSaved.selected_sprint = path;
   }
@@ -370,7 +405,10 @@ export class MemoryBackend implements Backend {
 
   async planningAddChange(change: Change): Promise<Change[]> {
     this.ensureNotPublishing();
-    if (change.kind === "link_pr" && change.id <= 0) throw new Error("Link a PR to a work item that exists in ADO");
+    if (change.kind === "link_pr" && change.id <= 0
+      && !(change.id < 0 && this.planningSaved.draft.some((c) => c.kind === "create_story" && c.temp_id === change.id))) {
+      throw new Error("Link a PR to a work item that exists in ADO, or to a story drafted in this plan");
+    }
     if (change.kind === "set_state" && !(SETTABLE_STATES as readonly string[]).includes(change.state)) {
       throw new Error(`"${change.state}" isn't a state Planning sets; use New, Active, Blocked, Resolved or Closed`);
     }
@@ -411,7 +449,10 @@ export class MemoryBackend implements Backend {
       const v = { move: item.iteration_path, estimate: item.story_points, retitle: item.title, order: item.order, remove: item.state, set_state: item.state }[kind];
       return v === null || v === undefined ? "(empty)" : String(v);
     };
-    for (const change of this.planningSaved.draft) {
+    const draft = this.planningSaved.draft;
+    for (const change of draft) {
+      // Written with its story's creation; kept below if that didn't happen.
+      if (change.kind === "link_pr" && change.id < 0) continue;
       if (change.kind === "create_feature" || change.kind === "create_story") {
         const parent = change.kind === "create_story" ? (change.parent < 0 ? created.get(change.parent) : change.parent) : null;
         if (change.kind === "create_story" && parent === undefined) {
@@ -437,6 +478,12 @@ export class MemoryBackend implements Backend {
           target_date: change.kind === "create_feature" ? change.target_date : null, parent_id: parent ?? null,
           tasks_done: 0, tasks_total: 0, url: `https://dev.azure.com/${ado.organization}/${ado.project}/_workitems/edit/${id}`,
         });
+        // PRs linked to this drafted story are linked as it's created.
+        for (const link of draft) {
+          if (link.kind !== "link_pr" || link.id !== change.temp_id) continue;
+          const pr = this.planningPrs.find((p) => p.id === link.pr.id);
+          if (pr && !pr.linkedTo?.includes(id)) pr.linkedTo = [...(pr.linkedTo ?? []), id];
+        }
         created.set(change.temp_id, id);
         result.written.push(id);
         this.planningFlags.writes += 1;
@@ -482,6 +529,9 @@ export class MemoryBackend implements Backend {
       ours.set(item.id, [change.rev, item.rev]);
       if (!result.written.includes(item.id)) result.written.push(item.id);
       this.planningFlags.writes += 1;
+    }
+    for (const change of draft) {
+      if (change.kind === "link_pr" && change.id < 0 && !created.has(change.id)) result.remaining.push(change);
     }
     // What stays points at what this publish created and at the revisions it
     // wrote itself, so a retry neither loses a new parent nor conflicts with us.

@@ -7,6 +7,11 @@ import {
   describeChange,
   draftLabel,
   linkTargets,
+  ktloStoryDraft,
+  nextSprint,
+  parseWorkItemLink,
+  sprintsFromCurrent,
+  unlinkPr,
   visibleOrphans,
   endedSprintOffer,
   featureSummaries,
@@ -306,5 +311,53 @@ describe("team links", () => {
     for (const bad of ["https://github.com/o/r", "https://dev.azure.com/skype/OneWork/_workitems/edit/1", "nope", "http://dev.azure.com/s/P/_backlogs/backlog/T"]) {
       expect(parseTeamLink(bad)).toBeNull();
     }
+  });
+});
+
+describe("KTLO stories", () => {
+  const pr = (id: number) => ({ id, project_id: "p", repo_id: "r", title: `PR ${id}` });
+
+  it("the next sprint follows ADO's current one, whatever sprint is selected", () => {
+    expect(nextSprint(data([], "P\\S21"))?.path).toBe("P\\S23");
+    const last = data([]);
+    last.iterations = last.iterations.slice(0, 2);
+    expect(nextSprint(last)?.path).toBe("P\\S22");
+    expect(sprintsFromCurrent(data([], "P\\S21")).map((i) => i.name)).toEqual(["S22", "S23"]);
+  });
+
+  it("drafts a story under the KTLO feature with the PR linked to it", () => {
+    const draft = ktloStoryDraft([], 4533022, pr(7), { title: "Bump", points: 1, iteration: "P\\S23" });
+    expect(draft).toEqual([
+      { kind: "create_story", temp_id: -1, parent: 4533022, title: "Bump", points: 1, description: null, iteration: "P\\S23", order: null },
+      { kind: "link_pr", id: -1, rev: 0, pr: pr(7) },
+    ]);
+    // A PR already linked elsewhere moves to the new story.
+    const moved = ktloStoryDraft([{ kind: "link_pr", id: 2, rev: 1, pr: pr(7) }], 4533022, pr(7), { title: "B", points: null, iteration: "P\\S23" });
+    expect(moved.filter((c) => c.kind === "link_pr")).toEqual([{ kind: "link_pr", id: -1, rev: 0, pr: pr(7) }]);
+  });
+
+  it("keeps links to a drafted story, and offers it as a link target", () => {
+    let draft = ktloStoryDraft([], 4533022, pr(7), { title: "Deps", points: 1, iteration: "P\\S23" });
+    draft = addChange(draft, { kind: "link_pr", id: -1, rev: 0, pr: pr(8) });
+    expect(draft.filter((c) => c.kind === "link_pr")).toHaveLength(2);
+    const targets = linkTargets(data([item(2)]), draft);
+    expect(targets[targets.length - 1]).toEqual({ id: -1, rev: 0, title: "Deps", task: false, drafted: true });
+  });
+
+  it("unlinking the PR that created a drafted story drops the story and every link to it", () => {
+    let draft = ktloStoryDraft([], 4533022, pr(7), { title: "Deps", points: 1, iteration: "P\\S23" });
+    draft = addChange(draft, { kind: "link_pr", id: -1, rev: 0, pr: pr(8) });
+    draft = addChange(draft, { kind: "link_pr", id: 2, rev: 1, pr: pr(9) });
+    expect(unlinkPr(draft, 8)).toHaveLength(3);
+    expect(unlinkPr(draft, 7)).toEqual([{ kind: "link_pr", id: 2, rev: 1, pr: pr(9) }]);
+    expect(unlinkPr(draft, 9)).toHaveLength(3);
+  });
+
+  it("reads work item links in both host forms", () => {
+    const want = { organization: "skype", project: "OneWork", id: 4533022 };
+    expect(parseWorkItemLink("https://skype.visualstudio.com/OneWork/_workitems/edit/4533022")).toEqual(want);
+    expect(parseWorkItemLink(" https://dev.azure.com/skype/OneWork/_workitems/edit/4533022/ ")).toEqual(want);
+    expect(parseWorkItemLink("https://dev.azure.com/skype/OneWork/_sprints/x")).toBeNull();
+    expect(parseWorkItemLink("4533022")).toBeNull();
   });
 });

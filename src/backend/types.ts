@@ -4,7 +4,7 @@ import type { WorkLane } from "../domain/work-lanes";
 import type { PrInboxMute, PrInboxSnapshot, PrWatchMode } from "../domain/pr-inbox";
 import type { PipelineMode, PipelineStatus } from "../domain/pipeline-inbox";
 import type { SyncCheck, SyncEvent, SyncMonitorState, SyncProblem, SyncThresholds } from "../domain/sync-monitor";
-import type { Change, OrphanHidden, OrphanReport, PlanningConnection, PlanningData, PlanningState, PublishResult } from "../domain/planning";
+import type { Change, KtloFeature, OrphanHidden, OrphanReport, PlanningConnection, PlanningData, PlanningState, PublishResult } from "../domain/planning";
 import type { Project, Workstream, Tile, TileType, WorkstreamLayout, CopilotConfigItem } from "../domain/types";
 import type { SessionFileComment } from "../domain/file-comments";
 import type { TraceFile } from "../domain/trace-format";
@@ -100,6 +100,10 @@ export interface Backend {
   /** Hides a PR (`kind` "pr", id = PR id) or a repo (`kind` "repo", id = repository id). */
   planningHideOrphan(kind: "pr" | "repo", id: string, label: string): Promise<OrphanHidden>;
   planningUnhideOrphan(kind: "pr" | "repo", id: string): Promise<OrphanHidden>;
+  /** This semester's KTLO feature as ADO has it now, or null when none is set. */
+  planningKtlo(): Promise<KtloFeature | null>;
+  /** Sets the KTLO feature from its link; refused (unchanged) unless it's an open Feature in Planning's project. */
+  planningSetKtlo(link: string): Promise<KtloFeature>;
   // Sync server monitoring (ADR 040)
   /** Checks the sync server once and stores it; null when none is configured. */
   syncMonitorCheck(): Promise<SyncCheck | null>;

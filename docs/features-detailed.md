@@ -75,7 +75,7 @@ remembered, and when it ends a banner offers to switch to ADO's current sprint.
 | Sprint | Your user stories in the selected sprint, as a board by state or a list by feature (the toggle is remembered). Each story shows its story points (**?** when not estimated), feature and task progress, and lists its tasks (by state; title, the assignee when it isn't you, and a state picker). **Show tasks** (remembered) hides them; click a card's "N/M tasks" to expand just that one. Changing a task's state goes into the draft and shows *not published* until you publish. When all of a story's tasks are done, the card offers to resolve the story (also through the draft). The header shows committed SP against 8, done, to go, days left and the number not estimated. |
 | Features | Your open features: target date, sprints left, done (Resolved + Closed) vs pending SP (yours in brackets), not estimated, every story (others' with their names; Removed left out), and **at risk** when your pending SP exceed sprints left × 8. |
 | Plan sprint | Drag (or use the arrows) between your candidates — carried over from the previous sprint first, then your stories not in a sprint, then unassigned stories in your features — and the sprint, against a gauge marked at 8: green 7–9, yellow below, orange above. Nothing is blocked. |
-| Orphaned PRs | Your PRs from the last 7 / 30 / 90 days, across every repo of the organization, with no linked work item (abandoned ones left out), newest first; the tab shows how many. **Hide** a PR or **Hide repo**; **Show hidden** lists them with Unhide. **Link to…** a sprint story, one of its tasks, or a story of your features — through the draft, like everything else here. |
+| Orphaned PRs | Your PRs from the last 7 / 30 / 90 days, across every repo of the organization, with no linked work item (abandoned ones left out), newest first; the tab shows how many. **Hide** a PR or **Hide repo**; **Show hidden** lists them with Unhide. **Link to…** a sprint story, one of its tasks, or a story of your features — through the draft, like everything else here. Paste this semester's **KTLO feature** link at the top of the tab once; then **＋ New KTLO story…** in a row's Link to… list drafts a new story under it (name = the PR's title, 1 story point, the sprint after ADO's current one, all editable), with the PR linked. Other PRs can link to that drafted story too, and resetting Link to… on the PR it was made for drops it. A KTLO feature closed in ADO is flagged and disables new KTLO stories. |
 | Plan feature | Create a feature (title, target date, description) or pick one; add stories with story points (any number), rename, re-estimate, reorder and remove them. The total updates as you type. |
 
 Every planning change goes into a **draft** ("N changes not published", with
@@ -99,7 +99,10 @@ workstreams agent call planning.task_state task=<id> state=Closed
 workstreams agent call planning.orphan_prs days=30
 workstreams agent call planning.hide_pr pr=<id>
 workstreams agent call planning.hide_repo repo="SCC/engaine"
-workstreams agent call planning.link_pr pr=<id> item=<story-or-task-id>
+workstreams agent call planning.link_pr pr=<id> item=<story-or-task-id, or a drafted story's temporary id>
+workstreams agent call planning.ktlo
+workstreams agent call planning.set_ktlo link="https://skype.visualstudio.com/OneWork/_workitems/edit/4533022"
+workstreams agent call planning.ktlo_story pr=<id> title="…" points=1 sprint="S23 (Nov 22)"
 workstreams agent call planning.publish
 ```
 

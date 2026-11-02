@@ -423,6 +423,31 @@ pub(crate) fn whoami(http: &dyn AdoHttp, organization: &str) -> Result<Me, Strin
     })
 }
 
+/// The sprints a new KTLO story can go into: ADO's current one and every later one.
+pub fn sprints_from_current(iterations: &[Iteration]) -> &[Iteration] {
+    match iterations.iter().position(|i| i.timeframe == "current") {
+        Some(index) => &iterations[index..],
+        None => {
+            let first_future = iterations
+                .iter()
+                .position(|i| i.timeframe == "future")
+                .unwrap_or(iterations.len());
+            &iterations[first_future..]
+        }
+    }
+}
+
+/// The sprint after ADO's current one (the current one if it's the last),
+/// whatever sprint is selected: a new KTLO story's default.
+pub fn next_sprint(iterations: &[Iteration]) -> Option<&Iteration> {
+    let from = sprints_from_current(iterations);
+    if iterations.iter().any(|i| i.timeframe == "current") {
+        from.get(1).or_else(|| from.first())
+    } else {
+        from.first()
+    }
+}
+
 /// The previous sprint is the one before the selected sprint in date order.
 pub fn previous_sprint(iterations: &[Iteration], selected: &str) -> Option<String> {
     let index = iterations.iter().position(|i| i.path == selected)?;
@@ -705,10 +730,11 @@ impl Change {
 /// the stories under it).
 pub fn add_change(draft: &mut Vec<Change>, change: Change) {
     let target = change.target();
+    // A PR link to a drafted story is its own change, kept until the story is.
     if target < 0
         && !matches!(
             change,
-            Change::CreateFeature { .. } | Change::CreateStory { .. }
+            Change::CreateFeature { .. } | Change::CreateStory { .. } | Change::LinkPr { .. }
         )
     {
         match change {
@@ -829,6 +855,172 @@ pub fn select_sprint(db: &Connection, path: &str) -> Result<(), String> {
     set_setting(db, SPRINT_KEY, path)
 }
 
+// ── KTLO feature ────────────────────────────────────────────────────────
+
+const KTLO_KEY: &str = "planning.ktlo";
+
+const NOT_A_WORK_ITEM_LINK: &str =
+    "That isn't an Azure DevOps work item link. Paste the feature's link (…/_workitems/edit/<id>).";
+
+/// A work item's link: `…/<project>/_workitems/edit/<id>`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WorkItemLink {
+    pub organization: String,
+    pub project: String,
+    pub id: i64,
+}
+
+/// Reads a work item link on `dev.azure.com/<org>/<project>` or
+/// `<org>.visualstudio.com/<project>`.
+pub fn parse_work_item_link(text: &str) -> Result<WorkItemLink, String> {
+    let url = reqwest::Url::parse(text.trim()).map_err(|_| NOT_A_WORK_ITEM_LINK)?;
+    if url.scheme() != "https" || url.port().is_some() || !url.username().is_empty() {
+        return Err(NOT_A_WORK_ITEM_LINK.into());
+    }
+    let host = url.host_str().unwrap_or("").to_ascii_lowercase();
+    let path: Vec<String> = url
+        .path()
+        .trim_matches('/')
+        .split('/')
+        .map(crate::pull_requests::percent_decode)
+        .collect();
+    let (organization, rest) = if host == "dev.azure.com" && path.len() >= 2 {
+        (path[0].clone(), &path[1..])
+    } else if let Some(org) = host.strip_suffix(".visualstudio.com") {
+        if org.contains('.') {
+            return Err(NOT_A_WORK_ITEM_LINK.into());
+        }
+        (org.to_string(), &path[..])
+    } else {
+        return Err(NOT_A_WORK_ITEM_LINK.into());
+    };
+    let id = match rest {
+        [project, w, e, id] if w == "_workitems" && e == "edit" && valid_segment(project) => {
+            id.parse::<i64>().ok().filter(|id| *id > 0)
+        }
+        _ => None,
+    }
+    .ok_or(NOT_A_WORK_ITEM_LINK)?;
+    if !valid_segment(&organization) {
+        return Err(NOT_A_WORK_ITEM_LINK.into());
+    }
+    Ok(WorkItemLink {
+        organization,
+        project: rest[0].clone(),
+        id,
+    })
+}
+
+/// This semester's KTLO feature, read fresh from ADO. `problem` says why new
+/// KTLO stories can't go under it (closed, not a feature, …).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct KtloFeature {
+    pub id: i64,
+    pub title: String,
+    pub state: String,
+    pub url: String,
+    pub problem: Option<String>,
+}
+
+pub fn read_ktlo(
+    http: &dyn AdoHttp,
+    conn: &PlanningConnection,
+    id: i64,
+) -> Result<KtloFeature, String> {
+    let item = http
+        .get(item_url(conn, id))
+        .map_err(|e| not_found_as_missing(e, &format!("Work item #{id}")))?;
+    let f = &item["fields"];
+    let kind = text(&f["System.WorkItemType"]).unwrap_or_default();
+    let state = text(&f["System.State"]).unwrap_or_default();
+    let project = text(&f["System.TeamProject"]);
+    let problem = if !kind.eq_ignore_ascii_case("Feature") {
+        Some(format!("#{id} is a {kind}, not a Feature."))
+    } else if project.is_some_and(|p| !p.eq_ignore_ascii_case(&conn.project)) {
+        Some(format!(
+            "#{id} is in another project; Planning works in {}.",
+            conn.project
+        ))
+    } else if state == "Closed" || state == "Removed" {
+        Some(format!(
+            "This KTLO feature is {state} — set this semester's."
+        ))
+    } else {
+        None
+    };
+    Ok(KtloFeature {
+        id,
+        title: text(&f["System.Title"]).unwrap_or_default(),
+        state,
+        url: web_url(conn, id),
+        problem,
+    })
+}
+
+pub fn ktlo_id(db: &Connection) -> Result<Option<i64>, String> {
+    Ok(get_setting(db, KTLO_KEY)?.and_then(|v| v.parse().ok()))
+}
+
+/// The configured KTLO feature as ADO has it now, or `None` when none is set.
+// The commands go through `PlanningGateway`; these compose the same steps for tests.
+#[cfg(test)]
+pub fn ktlo(
+    db: &Connection,
+    http: &dyn AdoHttp,
+    conn: &PlanningConnection,
+) -> Result<Option<KtloFeature>, String> {
+    match ktlo_id(db)? {
+        Some(id) => read_ktlo(http, conn, id).map(Some),
+        None => Ok(None),
+    }
+}
+
+/// Sets the KTLO feature from its link: an open Feature in Planning's
+/// organization and project, or it's refused and the setting is unchanged.
+// The commands go through `PlanningGateway`; these compose the same steps for tests.
+#[cfg(test)]
+pub fn set_ktlo(
+    db: &Connection,
+    http: &dyn AdoHttp,
+    conn: &PlanningConnection,
+    link: &str,
+) -> Result<KtloFeature, String> {
+    let link = parse_work_item_link(link)?;
+    let feature = check_ktlo_link(http, conn, &link)?;
+    set_setting(db, KTLO_KEY, &feature.id.to_string())?;
+    Ok(feature)
+}
+
+/// Reads the linked item and refuses it unless it can be the KTLO feature.
+pub fn check_ktlo_link(
+    http: &dyn AdoHttp,
+    conn: &PlanningConnection,
+    link: &WorkItemLink,
+) -> Result<KtloFeature, String> {
+    if !link.organization.eq_ignore_ascii_case(&conn.organization) {
+        return Err(format!(
+            "That link is in another organization ({}); Planning works in {}.",
+            link.organization, conn.organization
+        ));
+    }
+    if !link.project.eq_ignore_ascii_case(&conn.project) {
+        return Err(format!(
+            "That link is in another project ({}); Planning works in {}.",
+            link.project, conn.project
+        ));
+    }
+    let feature = read_ktlo(http, conn, link.id)?;
+    match feature.problem.clone() {
+        Some(problem) => Err(problem),
+        None => Ok(feature),
+    }
+}
+
+/// Saves an already-checked KTLO feature.
+pub fn save_ktlo(db: &Connection, id: i64) -> Result<(), String> {
+    set_setting(db, KTLO_KEY, &id.to_string())
+}
+
 // ── Publishing ──────────────────────────────────────────────────────────
 
 /// A change ADO refused because the item changed since it was loaded.
@@ -919,6 +1111,10 @@ pub fn publish(
     let mut created_iterations: std::collections::HashMap<i64, String> = Default::default();
 
     for change in draft {
+        // Written with its story's creation; kept below if that didn't happen.
+        if matches!(change, Change::LinkPr { id, .. } if *id < 0) {
+            continue;
+        }
         let outcome: Result<(), (bool, String, Option<Conflict>)> = (|| match change {
             Change::CreateFeature {
                 temp_id,
@@ -998,6 +1194,21 @@ pub fn publish(
                 if let Some(d) = description.as_ref().filter(|d| !d.trim().is_empty()) {
                     ops.push(json!({"op":"add","path":"/fields/System.Description","value":d}));
                 }
+                // PRs linked to this drafted story are linked as it's created.
+                let prs: Vec<&PrRef> = draft
+                    .iter()
+                    .filter_map(|c| match c {
+                        Change::LinkPr { id, pr, .. } if id == temp_id => Some(pr),
+                        _ => None,
+                    })
+                    .collect();
+                for pr in &prs {
+                    ops.push(json!({"op":"add","path":"/relations/-","value":{
+                        "rel": "ArtifactLink",
+                        "url": pr.artifact_url(),
+                        "attributes": {"name": "Pull Request"},
+                    }}));
+                }
                 let url = api(
                     &conn.organization,
                     &[&conn.project, "_apis", "wit", "workitems", "$User Story"],
@@ -1011,6 +1222,9 @@ pub fn publish(
                     "ADO didn't return the new story's id".into(),
                     None,
                 ))?;
+                for pr in &prs {
+                    crate::orphan_prs::with_cache(|c| c.forget(&conn.organization, pr.id));
+                }
                 created.insert(*temp_id, id);
                 result.written.push(id);
                 Ok(())
@@ -1148,6 +1362,13 @@ pub fn publish(
             result.remaining.push(change.clone());
         }
     }
+    for change in draft {
+        if let Change::LinkPr { id, .. } = change {
+            if *id < 0 && !created.contains_key(id) {
+                result.remaining.push(change.clone());
+            }
+        }
+    }
     // What stays must make sense for the next attempt: point at what this
     // publish created, and at the revisions it wrote itself, so a retry
     // neither loses a new parent nor mistakes our own write for a conflict.
@@ -1214,11 +1435,6 @@ const CHANGED_MEANWHILE: &str =
 /// item whose temporary id another new item already took.
 pub fn add_to_draft(db: &Connection, change: Change) -> Result<Vec<Change>, String> {
     ensure_not_publishing()?;
-    if let Change::LinkPr { id, .. } = &change {
-        if *id <= 0 {
-            return Err("Link a PR to a work item that exists in ADO".into());
-        }
-    }
     if let Change::SetState { state, .. } = &change {
         if !SETTABLE_STATES.contains(&state.as_str()) {
             return Err(format!(
@@ -1227,6 +1443,17 @@ pub fn add_to_draft(db: &Connection, change: Change) -> Result<Vec<Change>, Stri
         }
     }
     let mut draft = load_draft(db)?;
+    if let Change::LinkPr { id, .. } = &change {
+        let drafted = draft
+            .iter()
+            .any(|c| matches!(c, Change::CreateStory { temp_id, .. } if temp_id == id));
+        if *id == 0 || (*id < 0 && !drafted) {
+            return Err(
+                "Link a PR to a work item that exists in ADO, or to a story drafted in this plan"
+                    .into(),
+            );
+        }
+    }
     let creation = |c: &Change| match c {
         Change::CreateFeature { temp_id, .. } | Change::CreateStory { temp_id, .. } => {
             Some(*temp_id)
@@ -1438,6 +1665,10 @@ pub trait PlanningGateway: Send + Sync {
         organization: &str,
         days: u32,
     ) -> Result<Vec<crate::orphan_prs::OrphanPr>, String>;
+    /// The KTLO feature `id` as ADO has it now.
+    fn ktlo(&self, conn: &PlanningConnection, id: i64) -> Result<KtloFeature, String>;
+    /// Reads a pasted KTLO feature link, refusing anything that can't be one.
+    fn check_ktlo(&self, conn: &PlanningConnection, link: &str) -> Result<KtloFeature, String>;
 }
 
 pub struct AdoPlanning;
@@ -1451,6 +1682,15 @@ pub fn parent_iterations(data: &PlanningData) -> std::collections::HashMap<i64, 
 }
 
 impl PlanningGateway for AdoPlanning {
+    fn ktlo(&self, conn: &PlanningConnection, id: i64) -> Result<KtloFeature, String> {
+        let http = crate::pr_inbox::AdoTransport::connect()?;
+        read_ktlo(&http, conn, id)
+    }
+    fn check_ktlo(&self, conn: &PlanningConnection, link: &str) -> Result<KtloFeature, String> {
+        let link = parse_work_item_link(link)?;
+        let http = crate::pr_inbox::AdoTransport::connect()?;
+        check_ktlo_link(&http, conn, &link)
+    }
     fn connect(&self, link: &str) -> Result<PlanningConnection, String> {
         let link = parse_team_link(link)?;
         let http = crate::pr_inbox::AdoTransport::connect()?;
@@ -2114,6 +2354,301 @@ mod tests {
             (vec![2], 0, 0)
         );
         assert_eq!(patches(), before, "no duplicate relation is written");
+    }
+
+    fn pr_ref(id: i64) -> PrRef {
+        PrRef {
+            id,
+            project_id: "proj".into(),
+            repo_id: "repo".into(),
+            title: format!("PR {id}"),
+        }
+    }
+
+    fn new_story(temp_id: i64) -> Change {
+        Change::CreateStory {
+            temp_id,
+            parent: 100,
+            title: "Dependency bumps".into(),
+            points: Some(1.0),
+            description: None,
+            iteration: Some("P\\S23".into()),
+            order: None,
+        }
+    }
+
+    #[test]
+    fn a_pr_can_link_to_a_drafted_story_and_removing_the_story_drops_its_links() {
+        let mut draft = vec![new_story(-5)];
+        add_change(
+            &mut draft,
+            Change::LinkPr {
+                id: -5,
+                rev: 0,
+                pr: pr_ref(7),
+            },
+        );
+        add_change(
+            &mut draft,
+            Change::LinkPr {
+                id: -5,
+                rev: 0,
+                pr: pr_ref(8),
+            },
+        );
+        assert_eq!(draft.len(), 3, "both links are kept: {draft:?}");
+        add_change(
+            &mut draft,
+            Change::LinkPr {
+                id: 2,
+                rev: 1,
+                pr: pr_ref(8),
+            },
+        );
+        assert_eq!(
+            draft[2],
+            Change::LinkPr {
+                id: 2,
+                rev: 1,
+                pr: pr_ref(8)
+            },
+            "a PR's link moves, even away from a drafted story"
+        );
+        add_change(&mut draft, Change::Remove { id: -5, rev: 0 });
+        assert_eq!(
+            draft,
+            vec![Change::LinkPr {
+                id: 2,
+                rev: 1,
+                pr: pr_ref(8)
+            }]
+        );
+
+        let db = Connection::open_in_memory().unwrap();
+        crate::db::init_db(&db).unwrap();
+        let _serial = PUBLISH_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        assert!(
+            add_to_draft(
+                &db,
+                Change::LinkPr {
+                    id: -5,
+                    rev: 0,
+                    pr: pr_ref(7)
+                }
+            )
+            .unwrap_err()
+            .contains("drafted"),
+            "a temporary id must be a drafted story"
+        );
+        add_to_draft(&db, new_story(-5)).unwrap();
+        let saved = add_to_draft(
+            &db,
+            Change::LinkPr {
+                id: -5,
+                rev: 0,
+                pr: pr_ref(7),
+            },
+        )
+        .unwrap();
+        assert_eq!(saved.len(), 2);
+    }
+
+    #[test]
+    fn publishing_a_drafted_story_links_its_prs_in_the_same_request() {
+        let stub = seeded();
+        let data = fetch(&stub, &conn(), None).unwrap();
+        let draft = vec![
+            Change::LinkPr {
+                id: -5,
+                rev: 0,
+                pr: pr_ref(7),
+            },
+            new_story(-5),
+            Change::LinkPr {
+                id: -5,
+                rev: 0,
+                pr: pr_ref(8),
+            },
+        ];
+        let result = publish(&stub, &conn(), &data.me, &parent_iterations(&data), &draft);
+        assert_eq!(
+            (result.failures.len(), result.remaining.len()),
+            (0, 0),
+            "{result:?}"
+        );
+        let id = result.written[0];
+        let item = stub.items.borrow()[&id].clone();
+        let links: Vec<String> = item["relations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|r| r["rel"] == "ArtifactLink")
+            .map(|r| r["url"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(
+            links,
+            vec![
+                "vstfs:///Git/PullRequestId/proj%2Frepo%2F7".to_string(),
+                "vstfs:///Git/PullRequestId/proj%2Frepo%2F8".to_string()
+            ]
+        );
+        assert_eq!(item["fields"]["System.State"], "New");
+        assert_eq!(item["fields"]["System.IterationPath"], "P\\S23");
+        assert!(
+            !stub.log.borrow().iter().any(|l| l.starts_with("PATCH")),
+            "no second write for the links"
+        );
+
+        // The story can't be created: it and its links stay for a retry.
+        let failing = Stub::default();
+        let draft = vec![
+            Change::LinkPr {
+                id: -6,
+                rev: 0,
+                pr: pr_ref(7),
+            },
+            Change::CreateStory {
+                temp_id: -6,
+                parent: -99,
+                title: "Orphan".into(),
+                points: Some(1.0),
+                description: None,
+                iteration: None,
+                order: None,
+            },
+        ];
+        let result = publish(&failing, &conn(), &data.me, &Default::default(), &draft);
+        assert_eq!(result.remaining.len(), 2, "{result:?}");
+        assert_eq!(result.failures.len(), 1, "one failure, for the story");
+    }
+
+    #[test]
+    fn parses_work_item_links_in_both_host_forms() {
+        let want = WorkItemLink {
+            organization: "skype".into(),
+            project: "OneWork".into(),
+            id: 4533022,
+        };
+        for link in [
+            "https://skype.visualstudio.com/OneWork/_workitems/edit/4533022",
+            " https://dev.azure.com/skype/OneWork/_workitems/edit/4533022/ ",
+            "https://dev.azure.com/skype/OneWork/_workitems/edit/4533022?src=x",
+        ] {
+            assert_eq!(parse_work_item_link(link).unwrap(), want, "{link}");
+        }
+        for bad in [
+            "https://dev.azure.com/skype/OneWork/_sprints/taskboard/T",
+            "https://dev.azure.com/skype/OneWork/_workitems/edit/abc",
+            "http://dev.azure.com/skype/OneWork/_workitems/edit/1",
+            "https://github.com/a/b",
+            "4533022",
+        ] {
+            assert!(
+                parse_work_item_link(bad)
+                    .unwrap_err()
+                    .contains("work item link"),
+                "{bad}"
+            );
+        }
+    }
+
+    fn ktlo_stub() -> Stub {
+        let s = seeded();
+        s.item(
+            4533022,
+            "Feature",
+            "KTLO — H2 2026",
+            "Active",
+            false,
+            "P\\CY26",
+            None,
+            None,
+            &[],
+        );
+        s.item(
+            7001,
+            "User Story",
+            "A story",
+            "New",
+            true,
+            "P\\S22",
+            None,
+            None,
+            &[],
+        );
+        s.item(
+            7002,
+            "Feature",
+            "Elsewhere",
+            "Active",
+            false,
+            "Q\\CY26",
+            None,
+            None,
+            &[],
+        );
+        s.item(
+            7003,
+            "Feature",
+            "KTLO — H1 2026",
+            "Closed",
+            false,
+            "P\\CY26",
+            None,
+            None,
+            &[],
+        );
+        for (id, project) in [(4533022, "P"), (7001, "P"), (7002, "Q"), (7003, "P")] {
+            s.items.borrow_mut().get_mut(&id).unwrap()["fields"]["System.TeamProject"] =
+                json!(project);
+        }
+        s
+    }
+
+    #[test]
+    fn the_ktlo_feature_must_be_an_open_feature_in_plannings_project() {
+        let stub = ktlo_stub();
+        let db = Connection::open_in_memory().unwrap();
+        crate::db::init_db(&db).unwrap();
+        let link = |id: i64| format!("https://o.visualstudio.com/P/_workitems/edit/{id}");
+        assert_eq!(ktlo(&db, &stub, &conn()).unwrap(), None, "none set");
+
+        let set = set_ktlo(&db, &stub, &conn(), &link(4533022)).unwrap();
+        assert_eq!(
+            (set.id, set.title.as_str(), set.problem.clone()),
+            (4533022, "KTLO — H2 2026", None)
+        );
+        assert_eq!(set.url, "https://dev.azure.com/o/P/_workitems/edit/4533022");
+
+        for (bad, reason) in [
+            (link(7001), "User Story, not a Feature"),
+            (link(7002), "another project"),
+            (link(7003), "Closed"),
+            (
+                "https://dev.azure.com/other/P/_workitems/edit/4533022".into(),
+                "another organization",
+            ),
+            (
+                "https://dev.azure.com/o/Q/_workitems/edit/4533022".into(),
+                "another project",
+            ),
+            (link(424242), "wasn't found"),
+            ("nope".to_string(), "work item link"),
+        ] {
+            let err = set_ktlo(&db, &stub, &conn(), &bad).unwrap_err();
+            assert!(err.contains(reason), "{bad}: {err}");
+        }
+        assert_eq!(
+            ktlo_id(&db).unwrap(),
+            Some(4533022),
+            "a refused link changes nothing"
+        );
+
+        // Closed later in ADO: still set, but flagged.
+        stub.items.borrow_mut().get_mut(&4533022).unwrap()["fields"]["System.State"] =
+            json!("Closed");
+        let now = ktlo(&db, &stub, &conn()).unwrap().unwrap();
+        assert!(now.problem.unwrap().contains("Closed"));
     }
 
     #[test]

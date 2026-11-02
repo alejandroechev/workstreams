@@ -76,7 +76,8 @@ instead of buried behind tabs.
   of yours in the sprint you pick, and your features' done vs pending story
   points against their target dates. Each sprint story lists its tasks, whose
   state you can change; an **Orphaned PRs** tab finds your recent PRs with no
-  work item and links them. Plan a sprint by dragging stories against an
+  work item and links them, to an existing story or to a new story under this
+  semester's KTLO feature. Plan a sprint by dragging stories against an
   8-story-point gauge, or break a feature into estimated stories. Every change is
   a draft until you press **Publish to ADO**
   ([ADR 039](docs/adrs/039-ado-planning.md)).
