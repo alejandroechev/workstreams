@@ -786,7 +786,14 @@ pub fn add_change(draft: &mut Vec<Change>, change: Change) {
     }
     // A PR's link moves to the end when it's re-pointed, so a drafted story's
     // first link stays the PR it was made for.
-    if matches!(change, Change::LinkPr { .. }) {
+    // The same target again keeps its place.
+    if let Some(existing) = draft
+        .iter_mut()
+        .find(|c| c.same_slot(&change) && c.target() == change.target())
+        .filter(|_| matches!(change, Change::LinkPr { .. }))
+    {
+        *existing = change;
+    } else if matches!(change, Change::LinkPr { .. }) {
         draft.retain(|c| !c.same_slot(&change));
         draft.push(change);
     } else if let Some(existing) = draft.iter_mut().find(|c| c.same_slot(&change)) {
@@ -1486,12 +1493,32 @@ pub fn replace_draft(
     base: Option<&[Change]>,
 ) -> Result<(), String> {
     ensure_not_publishing()?;
+    if let Some(dangling) = dangling_link(draft) {
+        return Err(format!(
+            "The link of PR {dangling} points at a new story that isn't in the draft"
+        ));
+    }
     if let Some(base) = base {
         if load_draft(db)? != base {
             return Err(CHANGED_MEANWHILE.into());
         }
     }
     save_draft(db, draft)
+}
+
+/// A PR link to a temporary id the draft doesn't create, which could never publish.
+fn dangling_link(draft: &[Change]) -> Option<i64> {
+    draft.iter().find_map(|c| match c {
+        Change::LinkPr { id, pr, .. }
+            if *id < 0
+                && !draft
+                    .iter()
+                    .any(|d| matches!(d, Change::CreateStory { temp_id, .. } if temp_id == id)) =>
+        {
+            Some(pr.id)
+        }
+        _ => None,
+    })
 }
 
 /// Starts a publish: from here until the guard drops, the draft can't change.
@@ -2526,6 +2553,52 @@ mod tests {
                 pr: pr_ref(8)
             }]
         );
+    }
+
+    #[test]
+    fn relinking_to_the_same_target_keeps_its_place_and_dangling_links_are_refused() {
+        let mut draft = vec![new_story(-5)];
+        add_change(
+            &mut draft,
+            Change::LinkPr {
+                id: -5,
+                rev: 0,
+                pr: pr_ref(7),
+            },
+        );
+        add_change(
+            &mut draft,
+            Change::LinkPr {
+                id: -5,
+                rev: 0,
+                pr: pr_ref(8),
+            },
+        );
+        add_change(
+            &mut draft,
+            Change::LinkPr {
+                id: -5,
+                rev: 0,
+                pr: pr_ref(7),
+            },
+        );
+        assert!(
+            matches!(&draft[1], Change::LinkPr { pr, .. } if pr.id == 7),
+            "an unchanged link keeps its place: {draft:?}"
+        );
+
+        let db = Connection::open_in_memory().unwrap();
+        crate::db::init_db(&db).unwrap();
+        let _serial = PUBLISH_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dangling = vec![Change::LinkPr {
+            id: -5,
+            rev: 0,
+            pr: pr_ref(7),
+        }];
+        assert!(replace_draft(&db, &dangling, None)
+            .unwrap_err()
+            .contains("isn't in the draft"));
+        replace_draft(&db, &draft, None).unwrap();
     }
 
     #[test]

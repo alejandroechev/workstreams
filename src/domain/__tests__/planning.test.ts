@@ -362,6 +362,14 @@ describe("KTLO stories", () => {
     expect(unlinkPr(draft, 7)).toEqual([]);
   });
 
+  it("linking a PR to the same target again keeps its place", () => {
+    let draft = ktloStoryDraft([], 4533022, pr(7), { title: "Deps", points: 1, iteration: "P\\S23" });
+    draft = addChange(draft, { kind: "link_pr", id: -1, rev: 0, pr: pr(8) });
+    draft = addChange(draft, { kind: "link_pr", id: -1, rev: 0, pr: pr(7) });
+    expect(unlinkPr(draft, 7)).toEqual([]);
+    expect(unlinkPr(draft, 8)).toHaveLength(2);
+  });
+
   it("removing a drafted feature drops links to its drafted stories too", () => {
     const draft: Change[] = [
       { kind: "create_feature", temp_id: -1, title: "F", target_date: null, description: null },

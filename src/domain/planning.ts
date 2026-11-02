@@ -297,9 +297,12 @@ export function addChange(draft: Change[], change: Change): Change[] {
   }
   // Removing an item and setting its state both set its state: they replace each other.
   const slot = (kind: Change["kind"]) => (kind === "remove" || kind === "set_state" ? "state" : kind);
-  // A PR has one pending link: linking it again moves the link, to the end, so
-  // a drafted story's first link stays the PR it was made for.
+  // A PR has one pending link: linking it elsewhere moves the link, to the
+  // end, so a drafted story's first link stays the PR it was made for. The
+  // same target again keeps its place.
   if (change.kind === "link_pr") {
+    const same = draft.findIndex((c) => c.kind === "link_pr" && c.pr.id === change.pr.id && c.id === change.id);
+    if (same >= 0) return draft.map((c, i) => (i === same ? change : c));
     return [...draft.filter((c) => !(c.kind === "link_pr" && c.pr.id === change.pr.id)), change];
   }
   const index = draft.findIndex((c) => slot(c.kind) === slot(change.kind) && target(c) === id);

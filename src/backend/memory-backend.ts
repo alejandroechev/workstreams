@@ -421,6 +421,9 @@ export class MemoryBackend implements Backend {
 
   async planningSetDraft(draft: Change[], base?: Change[]): Promise<void> {
     this.ensureNotPublishing();
+    const dangling = draft.find((c) => c.kind === "link_pr" && c.id < 0
+      && !draft.some((d) => d.kind === "create_story" && d.temp_id === c.id));
+    if (dangling?.kind === "link_pr") throw new Error(`The link of PR ${dangling.pr.id} points at a new story that isn't in the draft`);
     if (base && JSON.stringify(base) !== JSON.stringify(this.planningSaved.draft)) throw new Error(PLANNING_CHANGED_MEANWHILE);
     this.planningSaved.draft = structuredClone(draft);
   }

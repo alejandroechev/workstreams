@@ -165,6 +165,19 @@ describe("KTLO stories on the Orphaned PRs tab", () => {
     expect((await backend.planningState()).draft).toEqual([]);
   });
 
+  it("choosing a PR's own drafted story again changes nothing", async () => {
+    const backend = await openKtlo();
+    fireEvent.change(linkSelect(101), { target: { value: "new-ktlo" } });
+    fireEvent.click(await screen.findByTestId("planning-ktlo-add"));
+    await screen.findByTestId("planning-orphan-pending-101");
+    const before = (await backend.planningState()).draft;
+    fireEvent.change(linkSelect(101), { target: { value: "new-ktlo" } });
+    await screen.findByTestId("planning-ktlo-form-101");
+    fireEvent.change(linkSelect(101), { target: { value: "-1" } });
+    await waitFor(() => expect(screen.queryByTestId("planning-ktlo-form-101")).toBeNull());
+    expect((await backend.planningState()).draft).toEqual(before);
+  });
+
   it("cancelling the form changes nothing", async () => {
     const backend = await openKtlo();
     fireEvent.change(linkSelect(101), { target: { value: "new-ktlo" } });

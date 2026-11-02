@@ -134,6 +134,9 @@ export function OrphansTab({ data, report, error, draft, onAddChange, onSetDraft
   const pendingFor = (pr: OrphanPr) => draft.find((c): c is Extract<Change, { kind: "link_pr" }> => c.kind === "link_pr" && c.pr.id === pr.id);
   const link = (pr: OrphanPr, value: string) => {
     if (value === NEW_KTLO) { setFormFor(pr.id); return; }
+    setFormFor(null);
+    // The PR's current target again: nothing changes.
+    if (value && value === String(pendingFor(pr)?.id ?? "")) return;
     run(async () => {
       if (!value) {
         await onSetDraft(unlinkPr(draft, pr.id));
