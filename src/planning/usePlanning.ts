@@ -29,6 +29,8 @@ export function usePlanning(backend: Backend, open: boolean) {
   const connected = useRef(false);
   /** Bumped by every Hide/Unhide, so an older read can't undo one. */
   const hiddenVersion = useRef(0);
+  /** Bumped by every KTLO read and setting, so only the latest one is shown. */
+  const ktloVersion = useRef(0);
   /** The draft as last seen, which a replacement is based on. */
   const seen = useRef<Change[]>([]);
   const showDraft = useCallback((next: Change[]) => { seen.current = next; setDraftState(next); }, []);
@@ -54,9 +56,10 @@ export function usePlanning(backend: Backend, open: boolean) {
         })
         .catch((failure) => setOrphanError(message(failure)));
       // So is the KTLO feature, re-read so a feature closed in ADO is flagged.
+      const ktloAsked = ++ktloVersion.current;
       const ktloRead = backend.planningKtlo()
-        .then((feature) => { setKtloState(feature); setKtloError(null); })
-        .catch((failure) => setKtloError(message(failure)));
+        .then((feature) => { if (ktloVersion.current === ktloAsked) { setKtloState(feature); setKtloError(null); } })
+        .catch((failure) => { if (ktloVersion.current === ktloAsked) setKtloError(message(failure)); });
       try {
         setData(await backend.planningFetch());
         setError(null);
@@ -86,6 +89,7 @@ export function usePlanning(backend: Backend, open: boolean) {
   /** Sets the KTLO feature; a refusal is thrown and the old one stays. */
   const setKtlo = useCallback(async (link: string) => {
     const feature = await backend.planningSetKtlo(link);
+    ktloVersion.current += 1;
     setKtloState(feature);
     setKtloError(null);
   }, [backend]);

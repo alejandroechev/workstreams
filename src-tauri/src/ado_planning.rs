@@ -739,13 +739,16 @@ pub fn add_change(draft: &mut Vec<Change>, change: Change) {
     {
         match change {
             Change::Remove { .. } => {
-                draft.retain(|c| match c {
+                // The item, a new feature's new stories, and everything aimed
+                // at them (PR links included).
+                let mut removed = vec![target];
+                removed.extend(draft.iter().filter_map(|c| match c {
                     Change::CreateStory {
                         temp_id, parent, ..
-                    } => *temp_id != target && *parent != target,
-                    Change::CreateFeature { temp_id, .. } => *temp_id != target,
-                    _ => c.target() != target,
-                });
+                    } if *parent == target => Some(*temp_id),
+                    _ => None,
+                }));
+                draft.retain(|c| !removed.contains(&c.target()));
             }
             _ => {
                 for c in draft.iter_mut() {
@@ -781,7 +784,12 @@ pub fn add_change(draft: &mut Vec<Change>, change: Change) {
         }
         return;
     }
-    if let Some(existing) = draft.iter_mut().find(|c| c.same_slot(&change)) {
+    // A PR's link moves to the end when it's re-pointed, so a drafted story's
+    // first link stays the PR it was made for.
+    if matches!(change, Change::LinkPr { .. }) {
+        draft.retain(|c| !c.same_slot(&change));
+        draft.push(change);
+    } else if let Some(existing) = draft.iter_mut().find(|c| c.same_slot(&change)) {
         *existing = change;
     } else {
         draft.push(change);
@@ -2247,15 +2255,15 @@ mod tests {
                 Change::LinkPr {
                     id: 3,
                     rev: 1,
-                    pr: pr(7)
+                    pr: pr(8)
                 },
                 Change::LinkPr {
                     id: 3,
                     rev: 1,
-                    pr: pr(8)
+                    pr: pr(7)
                 }
             ],
-            "a PR's link moves; two PRs can share an item"
+            "a PR's link moves (to the end); two PRs can share an item"
         );
         let stub = seeded();
         let data = fetch(&stub, &conn(), None).unwrap();
@@ -2451,6 +2459,73 @@ mod tests {
         )
         .unwrap();
         assert_eq!(saved.len(), 2);
+    }
+
+    #[test]
+    fn relinking_appends_and_removing_a_drafted_feature_drops_its_stories_links() {
+        let mut draft = vec![Change::LinkPr {
+            id: 2,
+            rev: 1,
+            pr: pr_ref(8),
+        }];
+        add_change(&mut draft, new_story(-5));
+        add_change(
+            &mut draft,
+            Change::LinkPr {
+                id: -5,
+                rev: 0,
+                pr: pr_ref(7),
+            },
+        );
+        add_change(
+            &mut draft,
+            Change::LinkPr {
+                id: -5,
+                rev: 0,
+                pr: pr_ref(8),
+            },
+        );
+        assert!(
+            matches!(&draft[1], Change::LinkPr { pr, .. } if pr.id == 7),
+            "the story's first link stays its creator's: {draft:?}"
+        );
+
+        let mut draft = vec![
+            Change::CreateFeature {
+                temp_id: -1,
+                title: "F".into(),
+                target_date: None,
+                description: None,
+            },
+            Change::CreateStory {
+                temp_id: -2,
+                parent: -1,
+                title: "S".into(),
+                points: None,
+                description: None,
+                iteration: None,
+                order: None,
+            },
+            Change::LinkPr {
+                id: -2,
+                rev: 0,
+                pr: pr_ref(7),
+            },
+            Change::LinkPr {
+                id: 2,
+                rev: 1,
+                pr: pr_ref(8),
+            },
+        ];
+        add_change(&mut draft, Change::Remove { id: -1, rev: 0 });
+        assert_eq!(
+            draft,
+            vec![Change::LinkPr {
+                id: 2,
+                rev: 1,
+                pr: pr_ref(8)
+            }]
+        );
     }
 
     #[test]

@@ -282,7 +282,9 @@ export function addChange(draft: Change[], change: Change): Change[] {
   // A PR link to a drafted story is its own change, kept until the story is.
   if (id < 0 && change.kind !== "create_feature" && change.kind !== "create_story" && change.kind !== "link_pr") {
     if (change.kind === "remove") {
-      return draft.filter((c) => target(c) !== id && !(c.kind === "create_story" && c.parent === id));
+      // The item, a new feature's new stories, and everything aimed at them (PR links included).
+      const removed = new Set([id, ...draft.flatMap((c) => (c.kind === "create_story" && c.parent === id ? [c.temp_id] : []))]);
+      return draft.filter((c) => !removed.has(target(c)));
     }
     return draft.map((c) => {
       if (target(c) !== id) return c;
@@ -295,10 +297,12 @@ export function addChange(draft: Change[], change: Change): Change[] {
   }
   // Removing an item and setting its state both set its state: they replace each other.
   const slot = (kind: Change["kind"]) => (kind === "remove" || kind === "set_state" ? "state" : kind);
-  // A PR has one pending link: linking it again moves the link.
-  const index = change.kind === "link_pr"
-    ? draft.findIndex((c) => c.kind === "link_pr" && c.pr.id === change.pr.id)
-    : draft.findIndex((c) => slot(c.kind) === slot(change.kind) && target(c) === id);
+  // A PR has one pending link: linking it again moves the link, to the end, so
+  // a drafted story's first link stays the PR it was made for.
+  if (change.kind === "link_pr") {
+    return [...draft.filter((c) => !(c.kind === "link_pr" && c.pr.id === change.pr.id)), change];
+  }
+  const index = draft.findIndex((c) => slot(c.kind) === slot(change.kind) && target(c) === id);
   if (index < 0) return [...draft, change];
   return draft.map((c, i) => (i === index ? change : c));
 }

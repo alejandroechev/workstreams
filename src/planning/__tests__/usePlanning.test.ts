@@ -107,6 +107,32 @@ describe("usePlanning freshness", () => {
     expect(result.current.orphans?.hidden.prs).toHaveLength(1);
   });
 
+  it("keeps a KTLO feature set while a refresh is in flight", async () => {
+    const b = backend();
+    b.seedPlanningAdo({
+      iterations: [{ name: "S22", path: "OneWork\\S22", start: "2026-10-26T00:00:00Z", finish: "2026-11-08T00:00:00Z", timeframe: "current" }],
+      items: [100, 200].map((id) => ({
+        id, rev: 1, kind: "Feature", title: `KTLO ${id}`, state: "Active", assigned_to: "E", assigned_to_me: false, iteration_path: "OneWork",
+        story_points: null, order: null, target_date: null, parent_id: null, tasks_done: 0, tasks_total: 0, url: "",
+      })),
+    });
+    await b.planningConnect(LINK);
+    await b.planningSetKtlo("https://dev.azure.com/skype/OneWork/_workitems/edit/100");
+    const { result } = renderHook(() => usePlanning(b, true));
+    await act(async () => {});
+    // The refresh read feature 100 before the change to 200, and answers after it.
+    const stale = await b.planningKtlo();
+    let release!: () => void;
+    const read = vi.spyOn(b, "planningKtlo").mockImplementationOnce(() => new Promise((resolve) => { release = () => resolve(stale); }));
+    let refreshing!: Promise<void>;
+    act(() => { refreshing = result.current.refresh(); });
+    await vi.waitFor(() => expect(read).toHaveBeenCalled());
+    await act(async () => { await result.current.setKtlo("https://dev.azure.com/skype/OneWork/_workitems/edit/200"); });
+    expect(result.current.ktlo?.id).toBe(200);
+    await act(async () => { release(); await refreshing; });
+    expect(result.current.ktlo?.id).toBe(200);
+  });
+
   it("selects a sprint, keeps the draft, and publishes", async () => {
     const b = backend();
     await b.planningConnect(LINK);

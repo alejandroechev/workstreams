@@ -277,10 +277,11 @@ describe("orphaned PRs", () => {
     draft = addChange(draft, { kind: "link_pr", id: 2, rev: 1, pr: pr(7) });
     draft = addChange(draft, { kind: "link_pr", id: 3, rev: 1, pr: pr(8) });
     draft = addChange(draft, { kind: "link_pr", id: 3, rev: 1, pr: pr(7) });
-    expect(draft).toEqual([{ kind: "link_pr", id: 3, rev: 1, pr: pr(7) }, { kind: "link_pr", id: 3, rev: 1, pr: pr(8) }]);
+    // A re-pointed link moves to the end.
+    expect(draft).toEqual([{ kind: "link_pr", id: 3, rev: 1, pr: pr(8) }, { kind: "link_pr", id: 3, rev: 1, pr: pr(7) }]);
     const d = data([feature, item(3, { title: "Story three" })]);
     expect(applyDraft(d, draft)).toEqual(applyDraft(d, []));
-    expect(describeChange(draft[0], d, d.items)).toBe("Link PR “PR 7” to “Story three”");
+    expect(describeChange(draft[1], d, d.items)).toBe("Link PR “PR 7” to “Story three”");
   });
 
   it("offers my stories and the tasks of sprint stories as link targets", () => {
@@ -351,6 +352,24 @@ describe("KTLO stories", () => {
     expect(unlinkPr(draft, 8)).toHaveLength(3);
     expect(unlinkPr(draft, 7)).toEqual([{ kind: "link_pr", id: 2, rev: 1, pr: pr(9) }]);
     expect(unlinkPr(draft, 9)).toHaveLength(3);
+  });
+
+  it("a PR re-pointed at a drafted story doesn't become its creator", () => {
+    let draft: Change[] = [{ kind: "link_pr", id: 2, rev: 1, pr: pr(8) }];
+    draft = ktloStoryDraft(draft, 4533022, pr(7), { title: "Deps", points: 1, iteration: "P\\S23" });
+    draft = addChange(draft, { kind: "link_pr", id: -1, rev: 0, pr: pr(8) });
+    expect(unlinkPr(draft, 8).map((c) => c.kind)).toEqual(["create_story", "link_pr"]);
+    expect(unlinkPr(draft, 7)).toEqual([]);
+  });
+
+  it("removing a drafted feature drops links to its drafted stories too", () => {
+    const draft: Change[] = [
+      { kind: "create_feature", temp_id: -1, title: "F", target_date: null, description: null },
+      { kind: "create_story", temp_id: -2, parent: -1, title: "S", points: 1, description: null },
+      { kind: "link_pr", id: -2, rev: 0, pr: pr(7) },
+      { kind: "link_pr", id: 2, rev: 1, pr: pr(8) },
+    ];
+    expect(addChange(draft, { kind: "remove", id: -1, rev: 0 })).toEqual([{ kind: "link_pr", id: 2, rev: 1, pr: pr(8) }]);
   });
 
   it("reads work item links in both host forms", () => {
