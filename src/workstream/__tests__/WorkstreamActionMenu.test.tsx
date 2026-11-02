@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { WorkstreamActionMenu } from "../WorkstreamActionMenu";
 import type { Workstream } from "../../domain/types";
 
@@ -194,5 +194,25 @@ describe("bound workstreams offer Go to task instead of Create task", () => {
     fireEvent.click(screen.getByTestId("action-go-to-task"));
     expect(onGoToTask).toHaveBeenCalledTimes(1);
     expect(handlers.onClose).toHaveBeenCalled();
+  });
+
+  it("moves up and left to stay inside the window when opened near its bottom-right", async () => {
+    const rect = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
+      x: 0, y: 0, width: 220, height: 300, top: 0, left: 0, right: 220, bottom: 300, toJSON: () => ({}),
+    });
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 800 });
+    Object.defineProperty(window, "innerHeight", { configurable: true, value: 600 });
+    renderMenu({ anchor: { top: 550, left: 700 } });
+    const menu = screen.getByTestId("workstream-action-menu");
+    await waitFor(() => expect(menu.style.top).toBe("292px"));
+    expect(menu.style.left).toBe("572px");
+    rect.mockRestore();
+  });
+
+  it("keeps its anchor when it already fits", () => {
+    renderMenu({ anchor: { top: 40, left: 30 } });
+    const menu = screen.getByTestId("workstream-action-menu");
+    expect(menu.style.top).toBe("40px");
+    expect(menu.style.left).toBe("30px");
   });
 });

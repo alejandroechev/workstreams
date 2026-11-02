@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import type { Workstream } from "../domain/types";
 import {
@@ -63,6 +63,25 @@ export function WorkstreamActionMenu({
   anchor,
 }: WorkstreamActionMenuProps) {
   const ref = useRef<HTMLDivElement>(null);
+  const [position, setPosition] = useState({ top: anchor.top, left: anchor.left });
+
+  // Rows near the bottom or right of the window would push part of the menu
+  // off screen, so shift it back inside once its size is known.
+  const clampPosition = useCallback(() => {
+    const menu = ref.current;
+    if (!menu) return;
+    const { width, height } = menu.getBoundingClientRect();
+    setPosition({
+      top: Math.max(MARGIN, Math.min(anchor.top, window.innerHeight - height - MARGIN)),
+      left: Math.max(MARGIN, Math.min(anchor.left, window.innerWidth - width - MARGIN)),
+    });
+  }, [anchor.top, anchor.left]);
+
+  useLayoutEffect(() => {
+    clampPosition();
+    window.addEventListener("resize", clampPosition);
+    return () => window.removeEventListener("resize", clampPosition);
+  }, [clampPosition]);
 
   useEffect(() => {
     const handleClick = (e: MouseEvent) => {
@@ -96,8 +115,8 @@ export function WorkstreamActionMenu({
       onClick={(e) => e.stopPropagation()}
       style={{
         ...menuStyle,
-        top: anchor.top,
-        left: anchor.left,
+        top: position.top,
+        left: position.left,
       }}
       role="menu"
     >
@@ -198,8 +217,12 @@ function Divider() {
   return <div style={dividerStyle} />;
 }
 
+const MARGIN = 8;
+
 const menuStyle: CSSProperties = {
   position: "fixed",
+  maxHeight: `calc(100vh - ${MARGIN * 2}px)`,
+  overflowY: "auto",
   zIndex: 2000,
   minWidth: 200,
   background: "#181825",

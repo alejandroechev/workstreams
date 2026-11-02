@@ -163,4 +163,27 @@ test.describe("workstream lanes", () => {
     await expect(archived).toBeVisible();
     await expect(archived).toHaveAttribute("data-archived", "true");
   });
+
+  test("the actions menu of a row near the bottom stays fully on screen", async ({ page }) => {
+    await createWorkstream(page, "Low row");
+    const row = page.locator('[data-testid="workstream-item"]', { hasText: "Low row" });
+    const rowBox = (await row.boundingBox())!;
+    // Shrink the window so the row sits just above its bottom edge.
+    const width = page.viewportSize()!.width;
+    const height = Math.ceil(rowBox.y + rowBox.height + 20);
+    await page.setViewportSize({ width, height });
+
+    await row.hover();
+    await row.locator('[data-testid^="ws-actions-"]').click();
+    const menu = page.locator('[data-testid="workstream-action-menu"]');
+    await expect(menu).toBeVisible();
+    await expect.poll(async () => {
+      const box = (await menu.boundingBox())!;
+      return box.y >= 0 && box.y + box.height <= height;
+    }).toBe(true);
+    // A window shorter than the menu makes it scroll; every option stays reachable.
+    const archive = page.locator('[data-testid="action-archive"]');
+    await archive.scrollIntoViewIfNeeded();
+    await expect(archive).toBeInViewport({ ratio: 1 });
+  });
 });
