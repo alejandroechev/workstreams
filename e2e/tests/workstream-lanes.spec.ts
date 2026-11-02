@@ -50,10 +50,16 @@ async function addLane(page: Page, name: string) {
   // An inline input, not a dialog: window.prompt does not exist in the Tauri
   // webview, so a prompt-based control is dead in the packaged app while
   // working perfectly here in Chromium.
-  await page.locator('[data-testid="ws-add-lane"]').click();
-  const input = page.locator('[data-testid="ws-new-lane-input"]');
-  await input.fill(name);
-  await input.press("Enter");
+  // The input cancels on blur, and a just-created terminal can take focus late
+  // and close it, so retry until the lane exists.
+  const lanes = page.locator('[data-testid^="ws-lane-toggle-"]', { hasText: name });
+  await expect(async () => {
+    await page.locator('[data-testid="ws-add-lane"]').click();
+    const input = page.locator('[data-testid="ws-new-lane-input"]');
+    await input.fill(name, { timeout: 2000 });
+    await input.press("Enter", { timeout: 2000 });
+    await expect(lanes).toHaveCount(1, { timeout: 1000 });
+  }).toPass({ timeout: 15000 });
 }
 
 test.describe("workstream lanes", () => {
