@@ -1,9 +1,12 @@
 import { featureSummaries, type PlanningData } from "../domain/planning";
 import { C, card, points, STATE_COLORS } from "./styles";
 
-/** Your open features as ADO has them: target, done vs pending, risk, every story. */
-export function FeaturesTab({ data }: { data: PlanningData }) {
-  const features = featureSummaries(data);
+/**
+ * Your open features as ADO has them: target, done vs pending, risk, every
+ * story. The KTLO feature is left out: its progress isn't something you plan.
+ */
+export function FeaturesTab({ data, ktloId = null }: { data: PlanningData; ktloId?: number | null }) {
+  const features = featureSummaries(data).filter((f) => f.feature.id !== ktloId);
   return (
     <div style={{ overflowY: "auto", minHeight: 0, display: "flex", flexDirection: "column", gap: 10 }}>
       {features.length === 0 && <p style={{ color: C.sub, fontSize: 12 }}>No open features assigned to you.</p>}

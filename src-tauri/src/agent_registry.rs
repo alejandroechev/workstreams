@@ -938,9 +938,13 @@ fn planning_features(
     _: &serde_json::Value,
 ) -> Result<CommandOutcome, AgentError> {
     let data = planning_data(context)?;
-    Ok(CommandOutcome::read(serde_json::json!(
-        crate::ado_planning::feature_summaries(&data)
-    )))
+    // The KTLO feature is left out, as in the Features tab.
+    let ktlo = crate::ado_planning::ktlo_id(context.db).map_err(planning_error)?;
+    let features: Vec<_> = crate::ado_planning::feature_summaries(&data)
+        .into_iter()
+        .filter(|f| Some(f.feature.id) != ktlo)
+        .collect();
+    Ok(CommandOutcome::read(serde_json::json!(features)))
 }
 
 fn planning_feature(
@@ -3585,6 +3589,13 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.message.contains("drafted"), "{}", err.message);
+
+        // planning.features leaves the KTLO feature out (feature 100 is mine).
+        crate::ado_planning::save_ktlo(&db, 100).unwrap();
+        let features = call(&db, &caller, "planning.features", serde_json::Value::Null)
+            .unwrap()
+            .data;
+        assert!(features.as_array().unwrap().is_empty(), "{features}");
 
         // Last semester's feature, closed: no new KTLO stories.
         crate::ado_planning::save_ktlo(&db, 4533000).unwrap();

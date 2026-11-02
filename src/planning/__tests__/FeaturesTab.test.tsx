@@ -1,8 +1,8 @@
 import "@testing-library/jest-dom/vitest";
-import { fireEvent, screen } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { open } from "./harness";
-import { featureTeam } from "./fixtures";
+import { featureTeam, KTLO_LINK, ktloTeam } from "./fixtures";
 
 afterEach(() => localStorage.clear());
 
@@ -17,5 +17,16 @@ describe("the features tab", () => {
     expect(screen.getByTestId("planning-feature-story-16")).toHaveTextContent("Erwin Alvarez");
     expect(screen.queryByTestId("planning-feature-story-17")).toBeNull();
     expect(screen.queryByTestId("planning-feature-risk-100")).toBeNull();
+  });
+
+  it("leaves out the KTLO feature, even when it is assigned to me", async () => {
+    const team = ktloTeam().map((i) => (i.id === 4533022 ? { ...i, assigned_to: "Me", assigned_to_me: true } : i));
+    const backend = await open(team);
+    fireEvent.click(screen.getByTestId("planning-tab-features"));
+    expect(await screen.findByTestId("planning-feature-4533022")).toBeInTheDocument();
+    await backend.planningSetKtlo(KTLO_LINK);
+    fireEvent.click(screen.getByTestId("planning-refresh"));
+    await waitFor(() => expect(screen.queryByTestId("planning-feature-4533022")).toBeNull());
+    expect(screen.getByTestId("planning-feature-200")).toBeInTheDocument();
   });
 });

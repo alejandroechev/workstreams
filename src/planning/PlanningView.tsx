@@ -126,7 +126,7 @@ export function PlanningView({ planning, onClose, now = () => new Date() }: Prop
             ) : tab === "sprint" ? (
               <SprintTab data={data} now={now()} draft={draft} onAddChange={planning.addChange} onSetDraft={planning.setDraft} />
             ) : tab === "features" ? (
-              <FeaturesTab data={data} />
+              <FeaturesTab data={data} ktloId={planning.ktlo?.id ?? null} />
             ) : tab === "orphans" ? (
               <OrphansTab
                 data={data}
