@@ -130,5 +130,8 @@ describe("pipeline repos", () => {
     expect(pipelineRepoView(ado, "none", repos)).toMatchObject({ repos: [], repo_source: "manual", repo_label: null });
     expect(pipelineRepoView(ado, "gone", repos).repo_source).toBe("auto");
     expect(pipelineRepoView(null, null, repos)).toMatchObject({ repos: [], repo_label: null });
+    const archived = [...repos, { id: "old", name: "old checkout", git_remote: repos[0].git_remote, archived: true }];
+    expect(pipelineRepoView(ado, null, archived).repos.map((r) => r.id)).toEqual(["r1", "r2"]);
+    expect(pipelineRepoView(ado, "old", archived)).toMatchObject({ repos: [{ id: "old", name: "old checkout" }], repo_source: "manual" });
   });
 });

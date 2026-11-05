@@ -769,7 +769,8 @@ pub struct PipelineTarget {
     revision: i64,
     /// ADO's project name, for repos a run names without a URL.
     project_name: String,
-    has_repo: bool,
+    /// No repo stored and its definition not yet asked.
+    needs_backfill: bool,
 }
 
 impl PipelineTarget {
@@ -787,7 +788,8 @@ impl PipelineTarget {
 pub fn targets(db: &Connection) -> Result<Vec<PipelineTarget>, String> {
     let mut stmt = db
         .prepare(
-            "SELECT id,organization,project_id,definition_id,revision,project_name,ado_repo IS NOT NULL FROM pipeline_watches ORDER BY id",
+            "SELECT id,organization,project_id,definition_id,revision,project_name,
+            ado_repo IS NULL AND repo_backfilled = 0 FROM pipeline_watches ORDER BY id",
         )
         .map_err(|e| e.to_string())?;
     let rows = stmt
@@ -799,7 +801,7 @@ pub fn targets(db: &Connection) -> Result<Vec<PipelineTarget>, String> {
                 definition_id: r.get(3)?,
                 revision: r.get(4)?,
                 project_name: r.get(5)?,
-                has_repo: r.get(6)?,
+                needs_backfill: r.get(6)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -997,37 +999,47 @@ pub(crate) fn check_all(
             .map_err(str::to_owned)
             .and_then(|http| fetch_runs(http, target));
         // A pipeline watched before repos were detected, whose runs don't say:
-        // its definition does, for one extra request (until it is known).
+        // its definition is asked, once. Whatever comes back (a repo, none, an
+        // error) it isn't asked again; a later run naming a repo still sets it.
         let backfill = match (&result, http) {
             (Ok(runs), Ok(http))
-                if !target.has_repo && runs.iter().all(|r| r.repository.is_none()) =>
+                if target.needs_backfill && runs.iter().all(|r| r.repository.is_none()) =>
             {
-                api_get(
-                    http,
-                    ado_url(
-                        &target.organization,
-                        &target.project_id,
-                        &[
-                            "_apis",
-                            "build",
-                            "definitions",
-                            &target.definition_id.to_string(),
-                        ],
-                    ),
+                Some(
+                    api_get(
+                        http,
+                        ado_url(
+                            &target.organization,
+                            &target.project_id,
+                            &[
+                                "_apis",
+                                "build",
+                                "definitions",
+                                &target.definition_id.to_string(),
+                            ],
+                        ),
+                    )
+                    .ok()
+                    .and_then(|d| {
+                        repository_of(&d["repository"], &target.organization, &target.project_name)
+                    }),
                 )
-                .ok()
-                .and_then(|d| {
-                    repository_of(&d["repository"], &target.organization, &target.project_name)
-                })
             }
             _ => None,
         };
-        if let Some(repo) = &backfill {
-            if let Err(error) = db
-                .lock()
+        if let Some(found) = &backfill {
+            let saved = db.lock().map_err(|e| e.to_string()).and_then(|db| {
+                if let Some(repo) = found {
+                    save_detected(&db, target, repo)?;
+                }
+                db.execute(
+                    "UPDATE pipeline_watches SET repo_backfilled = 1 WHERE id = ?1 AND revision = ?2",
+                    params![target.id, target.revision],
+                )
+                .map(|_| ())
                 .map_err(|e| e.to_string())
-                .and_then(|db| save_detected(&db, target, repo))
-            {
+            });
+            if let Err(error) = saved {
                 eprintln!("[pipeline-inbox] Could not save a pipeline's repo: {error}");
             }
         }
@@ -1477,6 +1489,31 @@ mod tests {
             quiet.asked.borrow().len(),
             asked_before + 1,
             "a pipeline with a repo costs one request"
+        );
+    }
+
+    #[test]
+    fn the_definition_is_asked_once_even_when_it_names_no_repo() {
+        let quiet = Stub::new(vec![
+            ("/_apis/build/builds", Ok(json!({"value": []}))),
+            ("/_apis/build/definitions/33995", Ok(definition(33995, "p"))),
+        ]);
+        let db = db();
+        add(&db, &resolved(33995, "p"), None).unwrap();
+        let shared = std::sync::Mutex::new(db);
+        for _ in 0..3 {
+            let target = targets(&shared.lock().unwrap()).unwrap().remove(0);
+            check_all(&shared, Ok(&quiet), std::slice::from_ref(&target));
+        }
+        let definitions = quiet
+            .asked
+            .borrow()
+            .iter()
+            .filter(|u| u.contains("/definitions/"))
+            .count();
+        assert_eq!(
+            definitions, 1,
+            "a definition without a repository isn't asked again"
         );
     }
 

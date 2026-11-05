@@ -86,10 +86,11 @@ export function remoteKey(remote: string | null): string | null {
 export function pipelineRepoView(
   ado: AdoRepoRef | null,
   override: string | null,
-  repos: Array<{ id: string; name: string; git_remote: string | null }>,
+  repos: Array<{ id: string; name: string; git_remote: string | null; archived?: boolean }>,
 ): PipelineRepoView {
   const key = ado ? repoKey(ado) : null;
-  const autoRepos = key ? repos.filter((r) => remoteKey(r.git_remote) === key).map(({ id, name }) => ({ id, name })) : [];
+  // Archived repos never match automatically; an override may still name one.
+  const autoRepos = key ? repos.filter((r) => !r.archived && remoteKey(r.git_remote) === key).map(({ id, name }) => ({ id, name })) : [];
   const chosen = override === "none" ? [] : override ? repos.filter((r) => r.id === override).map(({ id, name }) => ({ id, name })) : null;
   const manual = override === "none" || (chosen !== null && chosen.length > 0);
   const shown = manual ? chosen! : autoRepos;

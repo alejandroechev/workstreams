@@ -555,6 +555,9 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
         // the user's override: NULL = automatic, 'none', or a projects.id.
         "ALTER TABLE pipeline_watches ADD COLUMN ado_repo TEXT",
         "ALTER TABLE pipeline_watches ADD COLUMN repo_override TEXT",
+        // Whether a pipeline without a stored repo has had its one definition
+        // read, so one whose definition names none isn't asked every check.
+        "ALTER TABLE pipeline_watches ADD COLUMN repo_backfilled INTEGER NOT NULL DEFAULT 0",
     ];
     for sql in &migrations {
         // SQLite errors if column already exists — ignore that error
