@@ -106,6 +106,13 @@ test("AT-5: overriding the repo, clearing it, and going back to Automatic", asyn
   await chip(page, id).click();
   const options = page.getByTestId(`pipeline-repo-menu-${id}`).getByRole("menuitemradio");
   await expect(options).toHaveText(["Automatic — media_components", "media_components", "acs_media_sdk", "No repo"]);
+  // Every option is visible where it opened: nothing clips or covers it, without scrolling.
+  const reachable = await options.evaluateAll((els) => els.map((el) => {
+    const r = el.getBoundingClientRect();
+    const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+    return !!hit && (hit === el || el.contains(hit));
+  }));
+  expect(reachable).toEqual([true, true, true, true]);
   await page.getByTestId(`pipeline-repo-option-${id}-${await projectId(page, "acs_media_sdk")}`).click();
   await expect(chip(page, id)).toHaveText(/^acs_media_sdk\s*set by you/, SNAPSHOT);
   await chip(page, id).click();

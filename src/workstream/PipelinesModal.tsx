@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { ArrowTopRightOnSquareIcon, TrashIcon, XMarkIcon } from "@heroicons/react/24/outline";
 import {
@@ -36,7 +37,41 @@ function automaticLabel(pipeline: PipelineStatus): string {
 /** A pipeline's repo, with a menu to set it by hand (Automatic, a repo, or No repo). */
 function RepoChip({ pipeline, repos, disabled, onSet }: { pipeline: PipelineStatus; repos: RepoRef[]; disabled: boolean; onSet: (repo: string) => void }) {
   const [open, setOpen] = useState(false);
+  const chip = useRef<HTMLButtonElement>(null);
+  const menu = useRef<HTMLDivElement>(null);
+  const [at, setAt] = useState<{ top: number; left: number } | null>(null);
   const manual = pipeline.repo_source === "manual";
+
+  // The menu lives in a portal at a fixed position under the chip, so the
+  // pipeline list's scroll area can't clip it; it flips above when there's no
+  // room below, and stays inside the window.
+  useLayoutEffect(() => {
+    if (!open || !chip.current) { setAt(null); return; }
+    const place = () => {
+      const anchor = chip.current!.getBoundingClientRect();
+      const size = menu.current?.getBoundingClientRect() ?? { width: 240, height: 0 };
+      const margin = 8;
+      const below = anchor.bottom + 4;
+      const top = below + size.height > window.innerHeight - margin ? Math.max(margin, anchor.top - 4 - size.height) : below;
+      const left = Math.max(margin, Math.min(anchor.right - size.width, window.innerWidth - size.width - margin));
+      setAt({ top, left });
+    };
+    place();
+    const raf = requestAnimationFrame(place);
+    const close = (event: Event) => {
+      if (event.type === "mousedown" && (menu.current?.contains(event.target as Node) || chip.current?.contains(event.target as Node))) return;
+      setOpen(false);
+    };
+    window.addEventListener("mousedown", close, true);
+    window.addEventListener("resize", close);
+    window.addEventListener("scroll", close, true);
+    return () => {
+      cancelAnimationFrame(raf);
+      window.removeEventListener("mousedown", close, true);
+      window.removeEventListener("resize", close);
+      window.removeEventListener("scroll", close, true);
+    };
+  }, [open]);
   const notInWorkstreams = !manual && pipeline.repos.length === 0 && pipeline.ado_repo;
   const label = pipeline.repo_label
     ? notInWorkstreams ? `${pipeline.repo_label} — not in Workstreams` : pipeline.repo_label
@@ -57,6 +92,7 @@ function RepoChip({ pipeline, repos, disabled, onSet }: { pipeline: PipelineStat
   return (
     <div style={{ position: "relative", flex: "none" }}>
       <button
+        ref={chip}
         data-testid={`pipeline-repo-${pipeline.id}`}
         aria-haspopup="menu"
         aria-expanded={open}
@@ -69,13 +105,20 @@ function RepoChip({ pipeline, repos, disabled, onSet }: { pipeline: PipelineStat
         <span style={{ fontSize: 10, fontStyle: "normal", color: manual ? "#f9e2af" : "#7f849c" }}>{manual ? "set by you" : "auto"}</span>
         <span aria-hidden="true">▾</span>
       </button>
-      {open && (
-        <div role="menu" data-testid={`pipeline-repo-menu-${pipeline.id}`} style={menuStyle}>
+      {open && createPortal(
+        <div
+          ref={menu}
+          role="menu"
+          data-testid={`pipeline-repo-menu-${pipeline.id}`}
+          onClick={(event) => event.stopPropagation()}
+          style={{ ...menuStyle, top: at?.top ?? -9999, left: at?.left ?? -9999, visibility: at ? "visible" : "hidden" }}
+        >
           <div style={{ color: "#6c7086", fontSize: 10, padding: "2px 6px" }}>Repo for this pipeline</div>
           {option("auto", `Automatic — ${automaticLabel(pipeline)}`)}
           {repos.map((repo) => option(repo.id, repo.name))}
           {option("none", "No repo")}
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );
@@ -253,7 +296,7 @@ const chipStyle: React.CSSProperties = {
 };
 
 const menuStyle: React.CSSProperties = {
-  position: "absolute", right: 0, top: "calc(100% + 4px)", zIndex: 1, minWidth: 240, maxHeight: 260, overflowY: "auto",
+  position: "fixed", zIndex: 2100, minWidth: 240, maxHeight: 260, overflowY: "auto",
   background: "#181825", border: "1px solid #45475a", borderRadius: 6, padding: 4, display: "grid", gap: 1,
   boxShadow: "0 6px 16px rgba(0,0,0,0.45)",
 };
