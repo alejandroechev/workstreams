@@ -173,23 +173,19 @@ describe("acceptance Review mode", () => {
   });
 
   describe("storyboards", () => {
-    it("shows the frames in order with their steps and captions, and enlarges one", async () => {
+    it("shows each step's frames in order, under that step, with their captions", async () => {
       await open();
-      const board = screen.getByTestId("acceptance-storyboard");
-      const frames = within(board).getAllByTestId("acceptance-frame");
+      expect(screen.getAllByTestId("acceptance-storyboard").map((b) => b.getAttribute("data-step"))).toEqual(["given", "when", "then"]);
+      const frames = screen.getAllByTestId("acceptance-frame");
       expect(frames.map((f) => f.getAttribute("data-step"))).toEqual(["given", "when", "then"]);
       expect(frames.map((f) => f.textContent)).toEqual([
         expect.stringContaining("The form"), expect.stringContaining("Pressing Save"), expect.stringContaining("The toast"),
       ]);
-      fireEvent.click(within(frames[2]).getByTestId("acceptance-frame-enlarge"));
-      expect(screen.getByTestId("acceptance-frame-large").getAttribute("data-index")).toBe("2");
-      fireEvent.click(screen.getByTestId("acceptance-frame-large-close"));
-      expect(screen.queryByTestId("acceptance-frame-large")).toBeNull();
     });
 
     it("puts the latest round's screenshot next to each frame it has, read-only", async () => {
       await open();
-      const frames = within(screen.getByTestId("acceptance-storyboard")).getAllByTestId("acceptance-frame");
+      const frames = screen.getAllByTestId("acceptance-frame");
       await waitFor(() => expect(within(frames[0]).getByTestId("acceptance-actual").getAttribute("src")).toBe(`data:image/png;base64,${btoa("SHOT1")}`));
       expect(within(frames[0]).getByText("Actual — round 2")).toBeTruthy();
       expect(within(frames[0]).getByText("Expected")).toBeTruthy();
@@ -213,7 +209,7 @@ describe("acceptance Review mode", () => {
 
     it("says when a screenshot can't be loaded", async () => {
       await open(newFormat, { "/f/validation": ["r3"], "/f/validation/r3": ["AT-1-2.png"] });
-      const frames = within(screen.getByTestId("acceptance-storyboard")).getAllByTestId("acceptance-frame");
+      const frames = screen.getAllByTestId("acceptance-frame");
       await waitFor(() => expect(within(frames[1]).getByRole("alert").textContent).toContain("AT-1-2.png"));
     });
   });

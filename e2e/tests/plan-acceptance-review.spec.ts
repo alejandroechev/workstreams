@@ -245,7 +245,7 @@ test.describe("acceptance Review mode", () => {
     expect(commands).not.toContain("write_to_pty");
   });
 
-  test("AT-6, AT-9: a storyboard filmstrip with real screenshots beside its mockups, read-only", async ({ page }) => {
+  test("AT-6, AT-9: each step's frames full width under its text, with real screenshots under their mockups, read-only", async ({ page }) => {
     await configure(page, FILE("approved"), { [`${DIR}/validation`]: ["r1", "r2"], [`${DIR}/validation/r1`]: [], [`${DIR}/validation/r2`]: ["AT-1-1.png", "AT-1-4.png"] });
     const frames = page.locator('[data-testid="acceptance-frame"]');
     await expect(frames).toHaveCount(4);
@@ -261,9 +261,16 @@ test.describe("acceptance Review mode", () => {
     await expect(frames.nth(1).locator('[data-testid="acceptance-actual"]')).toHaveCount(0);
     await expect(frames.nth(3).locator('[data-testid="acceptance-actual"]')).toBeVisible();
     await expect(page.getByRole("button", { name: /^(pass|fail|accept)\b/i })).toHaveCount(0);
-    await frames.nth(2).locator('[data-testid="acceptance-frame-enlarge"]').click();
-    await expect(page.locator('[data-testid="acceptance-frame-large"]')).toHaveAttribute("data-index", "2");
-    await expect(page.locator('[data-testid="acceptance-frame-large"]')).toContainText("Save is busy");
+    await expect(frames.nth(2)).toContainText("Save is busy");
+    // Each step reads top to bottom: its text, then its frames at the card's full width.
+    const card = (await page.getByTestId("acceptance-card").boundingBox())!;
+    const label = async (step: string) => (await page.getByTestId("acceptance-card").getByText(step, { exact: true }).first().boundingBox())!.y;
+    const [given, when, then] = [await label("Given"), await label("When"), await label("Then")];
+    const boxes = await Promise.all([0, 1, 2, 3].map(async (i) => (await frames.nth(i).boundingBox())!));
+    for (const box of boxes) expect(box.width).toBeGreaterThan(card.width * 0.95);
+    expect(given < boxes[0].y && boxes[0].y < when).toBe(true);
+    expect(when < boxes[1].y && boxes[2].y < then).toBe(true);
+    expect(then < boxes[3].y).toBe(true);
   });
 
   test("AT-8 (UI half): Show me this writes a request into the test", async ({ page }) => {

@@ -76,12 +76,14 @@ same operations on the command line.
 - **How frames render.** They reuse `GrillVisualView`, now given an allowed
   asset folder: the same confinement to the document's own folder, and the same
   sandbox (`sandbox="allow-scripts"` srcdoc with a CSP prefix, no network, no
-  parent access, frame-only `frame-src`). They show as a filmstrip; clicking a
-  frame's header enlarges it.
+  parent access, frame-only `frame-src`). Each step reads top to bottom: its
+  text, then its frames at the card's full width (frames without a step follow
+  Then). *(Amended 2026-11-05: frames used to sit side by side in a filmstrip
+  under Then, with a click to enlarge one, and were often too narrow to read.)*
 - **Where screenshots come from.** `validate-acceptance` saves a screenshot per
   frame it can reach, as `validation/r<n>/<AT-id>-<frame number>.png`, frames
   numbered from 1 in marker order. Review mode lists `validation/r*` and shows
-  each frame's latest screenshot beside it, as *Expected* / *Actual — round
+  each frame's latest screenshot under it, as *Expected* / *Actual — round
   n*. The comparison is read-only.
 
 ## Consequences

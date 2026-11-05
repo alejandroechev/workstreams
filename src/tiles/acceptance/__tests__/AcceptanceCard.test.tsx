@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { AcceptanceCard, type AcceptanceCardProps } from "../AcceptanceCard";
 import { parseAcceptance } from "../../../domain/acceptance/parse";
 import { memoryAcceptanceIo } from "./memory-io";
@@ -50,5 +50,23 @@ describe("an acceptance card", () => {
     expect((screen.getByTestId("acceptance-mark-clear") as HTMLButtonElement).disabled).toBe(true);
     expect(screen.queryByTestId("acceptance-storyboard")).toBeNull();
     expect(screen.getByText("Validates US-1")).toBeTruthy();
+  });
+
+  it("shows each step's frames full width right after that step's text, and unstepped frames after Then", () => {
+    renderCard({ test: parse([
+      "## AT-1 — T", "**Given** the form", "**When** pressing Save", "**Then** a toast",
+      '**Frame:** acceptance-assets/AT-1/1.html "Form" (given)',
+      '**Frame:** acceptance-assets/AT-1/2.html "Press" (when)',
+      '**Frame:** acceptance-assets/AT-1/x.html "Extra"',
+      '**Frame:** acceptance-assets/AT-1/3.html "Toast" (then)',
+      "**Passes when:** it shows",
+    ].join("\n")) });
+    const card = screen.getByTestId("acceptance-card");
+    const order = [...card.querySelectorAll('[data-testid="md"], [data-testid="acceptance-frame"]')]
+      .map((el) => (el.getAttribute("data-testid") === "md" ? el.textContent : `frame:${within(el as HTMLElement).getByTestId("acceptance-frame-caption").textContent}`));
+    expect(order).toEqual(["the form", "frame:Form", "pressing Save", "frame:Press", "a toast", "frame:Toast", "frame:Extra", "it shows"]);
+    for (const board of screen.getAllByTestId("acceptance-storyboard")) {
+      expect(board.style.gridTemplateColumns).toBe("");
+    }
   });
 });

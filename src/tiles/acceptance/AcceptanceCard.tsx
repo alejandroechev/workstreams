@@ -1,4 +1,4 @@
-import { useState, type CSSProperties, type ReactNode } from "react";
+import { Fragment, useState, type CSSProperties, type ReactNode } from "react";
 import { MarkdownView } from "../../ui/MarkdownView";
 import type { AcceptanceTestBlock, ReviewMark } from "../../domain/acceptance/parse";
 import { MARK_COLORS, MARK_LABELS, markOf, type ValidationRound } from "../../domain/acceptance/view";
@@ -16,6 +16,8 @@ export interface AcceptanceCardProps {
   onMark(mark: ReviewMark | null): void;
   onRequestVisual(note: string): void;
 }
+
+const STEPS = [["given", "Given"], ["when", "When"], ["then", "Then"]] as const;
 
 function Section({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -85,10 +87,14 @@ export function AcceptanceCard({ test, readOnly, featureDir, io, rounds, assetRe
         <div key={i} data-testid="acceptance-visual-requested" style={{ fontSize: 11, color: "#f9e2af" }}>Visual requested: {note}</div>
       ))}
 
-      {test.given && <Section label="Given">{md(test.given)}</Section>}
-      {test.when && <Section label="When">{md(test.when)}</Section>}
-      {test.then && <Section label="Then">{md(test.then)}</Section>}
-      {test.frames.length > 0 && <Storyboard test={test} featureDir={featureDir} io={io} rounds={rounds} revision={assetRevision} />}
+      {/* Each step reads top to bottom: its text, then its frames at full width. */}
+      {STEPS.map(([step, label]) => (
+        <Fragment key={step}>
+          {test[step] && <Section label={label}>{md(test[step])}</Section>}
+          <Storyboard test={test} step={step} featureDir={featureDir} io={io} rounds={rounds} revision={assetRevision} />
+        </Fragment>
+      ))}
+      <Storyboard test={test} step={null} featureDir={featureDir} io={io} rounds={rounds} revision={assetRevision} />
       {test.passesWhen && (
         <div style={{ borderLeft: "3px solid #a6e3a1", padding: "6px 8px", background: "#181825", fontSize: 13 }}>
           <b>Passes when:</b> {md(test.passesWhen)}
