@@ -10,6 +10,8 @@ import {
   type PipelineItem,
   type PipelineMode,
   type PipelineStatus,
+  pipelineRepoView,
+  type AdoRepoRef,
 } from "../domain/pipeline-inbox";
 
 import { baseKind, MUTE_KINDS, type SyncCheck, type SyncEvent, type SyncMonitorState, type SyncProblem, type SyncThresholds, type SyncVitals } from "../domain/sync-monitor";
@@ -50,6 +52,8 @@ export interface MemoryPipelineRun {
   finished_at: string;
   branch?: string;
   trigger?: string;
+  /** The repo this run built, as ADO reports it. */
+  repository?: AdoRepoRef | null;
 }
 import type { Project, Workstream, Tile, TileType, WorkstreamLayout, CopilotConfigItem } from "../domain/types";
 import type { SessionFileComment } from "../domain/file-comments";
@@ -144,9 +148,13 @@ export class MemoryBackend implements Backend {
       repos: this.prInbox.repos.filter((repo) => this.projects.has(repo.project_id))
         .map((repo) => ({ ...repo, repo_name: this.projects.get(repo.project_id)!.name })),
       mutes: this.prInbox.mutes,
-      pipelines: this.pipelineWatches.map((watch) => ({ ...watch.status })),
-      pipeline_items: [...this.pipelineItems].sort((a, b) =>
-        compareTimes(b.finished_at, a.finished_at) || b.run_id - a.run_id),
+      pipelines: this.pipelineWatches.map((watch) => this.pipelineWithRepo(watch)),
+      pipeline_items: [...this.pipelineItems]
+        .map((item) => {
+          const watch = this.pipelineWatches.find((w) => w.status.id === item.pipeline_id);
+          return { ...item, repo: watch ? this.pipelineWithRepo(watch).repo_label : null };
+        })
+        .sort((a, b) => compareTimes(b.finished_at, a.finished_at) || b.run_id - a.run_id),
     });
   }
 
@@ -549,14 +557,39 @@ export class MemoryBackend implements Backend {
   }
 
   // ── Pipelines (ADR 038) ──
-  private pipelineDefinitions: Array<{ organization: string; project: string; definition_id: number; name: string; runs: MemoryPipelineRun[] }> = [];
-  private pipelineWatches: Array<{ status: PipelineStatus; notifyAfter: string }> = [];
+  private pipelineDefinitions: Array<{ organization: string; project: string; definition_id: number; name: string; runs: MemoryPipelineRun[]; repository?: AdoRepoRef | null }> = [];
+  private pipelineWatches: Array<{ status: PipelineStatus; notifyAfter: string; adoRepo: AdoRepoRef | null; override: string | null }> = [];
   private pipelineItems: PipelineItem[] = [];
   private pipelineAuthError = false;
 
   /** A pipeline the in-memory ADO can resolve, with its finished runs (newest last or any order). */
-  seedPipelineDefinition(definition: { organization: string; project: string; definition_id: number; name: string; runs?: MemoryPipelineRun[] }): void {
+  seedPipelineDefinition(definition: { organization: string; project: string; definition_id: number; name: string; runs?: MemoryPipelineRun[]; repository?: AdoRepoRef | null }): void {
     this.pipelineDefinitions.push({ ...definition, runs: [...(definition.runs ?? [])] });
+  }
+
+  /** A pipeline's status with its repos worked out now, as the native side does on every read. */
+  private pipelineWithRepo(watch: { status: PipelineStatus; adoRepo: AdoRepoRef | null; override: string | null }): PipelineStatus {
+    return { ...watch.status, ado_repo: watch.adoRepo, ...pipelineRepoView(watch.adoRepo, watch.override, [...this.projects.values()]) };
+  }
+
+  /** Sets a repo's git remote, as the native side detects it from the folder. */
+  setProjectRemote(id: string, remote: string | null): void {
+    const project = this.projects.get(id);
+    if (!project) throw new Error(`No repo ${id}`);
+    project.git_remote = remote;
+  }
+
+  /** A pipeline watched before repos were detected: it has none stored. */
+  forgetPipelineRepo(id: string): void {
+    const watch = this.pipelineWatches.find((w) => w.status.id === id);
+    if (watch) watch.adoRepo = null;
+  }
+
+  async setPipelineWatchRepo(id: string, repo: string): Promise<void> {
+    const watch = this.pipelineWatches.find((w) => w.status.id === id);
+    if (!watch) throw new Error("That pipeline isn't watched");
+    if (repo !== "auto" && repo !== "none" && !this.projects.has(repo)) throw new Error(`No repo with id ${repo}`);
+    watch.override = repo === "auto" ? null : repo;
   }
 
   /** Makes adding fail the way a missing `az login` does. */
@@ -595,10 +628,12 @@ export class MemoryBackend implements Backend {
       last_finished_at: last?.finished_at ?? null,
       last_checked: new Date().toISOString(),
       error: null,
+      ado_repo: null, repos: [], auto_repos: [], repo_source: "auto", repo_label: null,
     };
-    this.pipelineWatches.push({ status, notifyAfter: new Date().toISOString() });
+    const watch = { status, notifyAfter: new Date().toISOString(), adoRepo: definition.repository ?? null, override: null };
+    this.pipelineWatches.push(watch);
     this.pipelineWatches.sort((a, b) => a.status.name.localeCompare(b.status.name));
-    return { ...status };
+    return this.pipelineWithRepo(watch);
   }
 
   async setPipelineWatchMode(id: string, mode: PipelineMode): Promise<void> {
@@ -625,7 +660,15 @@ export class MemoryBackend implements Backend {
     if (!watch) throw new Error(`No watched pipeline ${id}`);
     const { status } = watch;
     const base = `https://dev.azure.com/${encodeURIComponent(status.organization)}/${encodeURIComponent(status.project)}/_build`;
-    if (!status.last_finished_at || compareTimes(run.finished_at, status.last_finished_at) >= 0) {
+    const newest = !status.last_finished_at || compareTimes(run.finished_at, status.last_finished_at) >= 0;
+    // The newest run's repo is what the pipeline builds now; one that doesn't say keeps the stored one.
+    if (newest && run.repository) watch.adoRepo = run.repository;
+    // A pipeline without a repo learns its definition's on its next check.
+    if (!watch.adoRepo) {
+      watch.adoRepo = this.pipelineDefinitions.find((d) => d.organization === status.organization
+        && d.project === status.project && d.definition_id === status.definition_id)?.repository ?? null;
+    }
+    if (newest) {
       Object.assign(status, { last_result: run.result, last_run_number: run.number, last_run_url: `${base}/results?buildId=${run.id}`, last_finished_at: run.finished_at });
     }
     status.last_checked = new Date().toISOString();

@@ -141,6 +141,259 @@ pub struct ResolvedPipeline {
     pub project_name: String,
     pub definition_id: u64,
     pub name: String,
+    /// The repo its definition builds, when ADO says.
+    #[serde(default)]
+    pub repository: Option<AdoRepoRef>,
+}
+
+// ── Repos ───────────────────────────────────────────────────────────────
+
+/// The repo ADO says a pipeline builds: Azure Repos (`kind` "azure") or GitHub
+/// (`kind` "github", `name` = owner/repo).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct AdoRepoRef {
+    pub id: String,
+    pub kind: String,
+    pub organization: String,
+    pub project: String,
+    pub name: String,
+}
+
+impl AdoRepoRef {
+    /// "Project/repo" for Azure Repos, "owner/repo" for GitHub.
+    pub fn display(&self) -> String {
+        if self.kind == "github" {
+            self.name.clone()
+        } else {
+            format!("{}/{}", self.project, self.name)
+        }
+    }
+
+    /// What a git remote must normalize to, to be this repo.
+    pub fn key(&self) -> String {
+        if self.kind == "github" {
+            format!("github:{}", self.name).to_lowercase()
+        } else {
+            format!("azure:{}/{}/{}", self.organization, self.project, self.name).to_lowercase()
+        }
+    }
+}
+
+fn github_name(text: &str) -> Option<String> {
+    let path = text
+        .trim()
+        .strip_prefix("git@github.com:")
+        .or_else(|| text.trim().strip_prefix("https://github.com/"))
+        .or_else(|| text.trim().strip_prefix("ssh://git@github.com/"))?;
+    let path = path.trim_end_matches('/');
+    let path = path.strip_suffix(".git").unwrap_or(path);
+    let parts: Vec<&str> = path.split('/').collect();
+    (parts.len() == 2
+        && parts
+            .iter()
+            .all(|p| !p.is_empty() && *p != "." && *p != ".."))
+    .then(|| path.to_string())
+}
+
+/// A git remote as a repo key (see [`AdoRepoRef::key`]), or `None` when it
+/// isn't an Azure Repos or GitHub remote.
+pub fn remote_key(remote: &str) -> Option<String> {
+    if let Ok(repo) = crate::pr_inbox::AdoRepo::parse(remote) {
+        let (org, project, name) = repo.parts();
+        return Some(format!("azure:{org}/{project}/{name}").to_lowercase());
+    }
+    github_name(remote).map(|name| format!("github:{name}").to_lowercase())
+}
+
+/// Reads ADO's `repository` object (a definition's or a run's). Without a
+/// usable URL, an Azure repo is taken to live in the pipeline's own
+/// organization and project.
+pub(crate) fn repository_of(
+    value: &serde_json::Value,
+    organization: &str,
+    project: &str,
+) -> Option<AdoRepoRef> {
+    let text = |key: &str| {
+        value[key]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+    };
+    let id = text("id")?;
+    let kind = text("type").unwrap_or_default();
+    if kind.eq_ignore_ascii_case("GitHub") {
+        let name = text("url")
+            .and_then(|u| github_name(&u))
+            .or_else(|| text("name").filter(|n| n.split('/').count() == 2))?;
+        return Some(AdoRepoRef {
+            id,
+            kind: "github".into(),
+            organization: String::new(),
+            project: String::new(),
+            name,
+        });
+    }
+    if !kind.eq_ignore_ascii_case("TfsGit") {
+        return None;
+    }
+    if let Some(repo) = text("url").and_then(|u| crate::pr_inbox::AdoRepo::parse(&u).ok()) {
+        let (org, proj, name) = repo.parts();
+        return Some(AdoRepoRef {
+            id,
+            kind: "azure".into(),
+            organization: org.into(),
+            project: proj.into(),
+            name: name.into(),
+        });
+    }
+    Some(AdoRepoRef {
+        id,
+        kind: "azure".into(),
+        organization: organization.into(),
+        project: project.into(),
+        name: text("name")?,
+    })
+}
+
+/// A Workstreams repo a pipeline is linked to.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct RepoRef {
+    pub id: String,
+    pub name: String,
+}
+
+/// The pipeline's repos, as shown: the override when there is one (a repo
+/// removed since counts as none set), otherwise every Workstreams repo
+/// matching ADO's.
+struct RepoView {
+    repos: Vec<RepoRef>,
+    auto_repos: Vec<RepoRef>,
+    manual: bool,
+    label: Option<String>,
+}
+
+struct KnownRepos(Vec<(RepoRef, Option<String>)>);
+
+impl KnownRepos {
+    fn load(db: &Connection) -> Result<Self, String> {
+        let mut stmt = db
+            .prepare("SELECT id, name, git_remote FROM projects WHERE archived = 0 ORDER BY created_at, id")
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |r| {
+                let remote: Option<String> = r.get(2)?;
+                Ok((
+                    RepoRef {
+                        id: r.get(0)?,
+                        name: r.get(1)?,
+                    },
+                    remote.as_deref().and_then(remote_key),
+                ))
+            })
+            .map_err(|e| e.to_string())?;
+        Ok(Self(
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(|e| e.to_string())?,
+        ))
+    }
+
+    fn view(
+        &self,
+        db: &Connection,
+        ado: Option<&AdoRepoRef>,
+        over: Option<&str>,
+    ) -> Result<RepoView, String> {
+        let auto_repos: Vec<RepoRef> = match ado {
+            Some(repo) => {
+                let key = repo.key();
+                self.0
+                    .iter()
+                    .filter(|(_, k)| k.as_deref() == Some(key.as_str()))
+                    .map(|(r, _)| r.clone())
+                    .collect()
+            }
+            None => Vec::new(),
+        };
+        let chosen = match over {
+            Some("none") => Some(Vec::new()),
+            Some(id) => db
+                .query_row("SELECT id, name FROM projects WHERE id = ?1", [id], |r| {
+                    Ok(RepoRef {
+                        id: r.get(0)?,
+                        name: r.get(1)?,
+                    })
+                })
+                .optional()
+                .map_err(|e| e.to_string())?
+                .map(|r| vec![r]),
+            None => None,
+        };
+        let manual = chosen.is_some();
+        let repos = chosen.unwrap_or_else(|| auto_repos.clone());
+        let label = match repos.as_slice() {
+            [] if !manual => ado.map(AdoRepoRef::display),
+            [] => None,
+            [only] => Some(only.name.clone()),
+            [first, rest @ ..] => Some(format!("{} +{}", first.name, rest.len())),
+        };
+        Ok(RepoView {
+            repos,
+            auto_repos,
+            manual,
+            label,
+        })
+    }
+}
+
+fn parse_stored(raw: Option<String>) -> Option<AdoRepoRef> {
+    raw.and_then(|r| serde_json::from_str(&r).ok())
+}
+
+/// Sets a pipeline's repo by hand: `auto` (follow ADO), `none`, or a repo id.
+pub fn set_repo(db: &Connection, id: &str, repo: &str) -> Result<(), String> {
+    let value = match repo {
+        "auto" => None,
+        "none" => Some("none".to_string()),
+        other => {
+            let exists: bool = db
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM projects WHERE id = ?1)",
+                    [other],
+                    |r| r.get(0),
+                )
+                .map_err(|e| e.to_string())?;
+            if !exists {
+                return Err(format!("No repo with id {other}"));
+            }
+            Some(other.to_string())
+        }
+    };
+    let changed = db
+        .execute(
+            "UPDATE pipeline_watches SET repo_override = ?2 WHERE id = ?1",
+            params![id, value],
+        )
+        .map_err(|e| e.to_string())?;
+    if changed == 0 {
+        return Err("That pipeline isn't watched".into());
+    }
+    Ok(())
+}
+
+/// Stores the repo ADO now reports for a pipeline, if the pipeline is still
+/// the one that was checked.
+fn save_detected(
+    db: &Connection,
+    target: &PipelineTarget,
+    repo: &AdoRepoRef,
+) -> Result<(), String> {
+    let json = serde_json::to_string(repo).map_err(|e| e.to_string())?;
+    db.execute(
+        "UPDATE pipeline_watches SET ado_repo = ?2 WHERE id = ?1 AND revision = ?3",
+        params![target.id, json, target.revision],
+    )
+    .map(|_| ())
+    .map_err(|e| e.to_string())
 }
 
 /// `https://dev.azure.com/<org>/<project>/<segments…>`. Requests always go to
@@ -208,6 +461,11 @@ pub(crate) fn resolve(
         project_name: text(&definition["project"]["name"]).unwrap_or_else(|| project.clone()),
         definition_id,
         name: text(&definition["name"]).ok_or("ADO returned a pipeline without a name")?,
+        repository: repository_of(
+            &definition["repository"],
+            org,
+            &text(&definition["project"]["name"]).unwrap_or_else(|| project.clone()),
+        ),
     })
 }
 
@@ -248,6 +506,17 @@ pub struct PipelineStatus {
     pub last_finished_at: Option<String>,
     pub last_checked: Option<String>,
     pub error: Option<String>,
+    /// The repo ADO says it builds, when known.
+    pub ado_repo: Option<AdoRepoRef>,
+    /// Its Workstreams repos, as shown: the override, or the automatic match.
+    pub repos: Vec<RepoRef>,
+    /// The Workstreams repos ADO's repo matches (what Automatic would show).
+    pub auto_repos: Vec<RepoRef>,
+    /// "auto" or "manual".
+    pub repo_source: String,
+    /// What the repo chip says: a repo name ("+N" for more), ADO's repo when
+    /// none matches, or nothing.
+    pub repo_label: Option<String>,
 }
 
 /// One notification: a run that finished with a result the mode watches.
@@ -267,6 +536,8 @@ pub struct PipelineItem {
     pub url: String,
     pub is_read: bool,
     pub discovered_at: String,
+    /// The pipeline's repo, as its chip shows it.
+    pub repo: Option<String>,
 }
 
 fn pipeline_url(org: &str, project: &str, definition_id: u64) -> String {
@@ -311,8 +582,8 @@ pub fn add(
     let id = uuid::Uuid::new_v4().to_string();
     db.execute(
         &format!(
-            "INSERT INTO pipeline_watches(id,organization,project_id,project_name,definition_id,name,mode,created_at,notify_after)
-            VALUES (?1,?2,?3,?4,?5,?6,?7,{NOW},{NOW})"
+            "INSERT INTO pipeline_watches(id,organization,project_id,project_name,definition_id,name,mode,created_at,notify_after,ado_repo)
+            VALUES (?1,?2,?3,?4,?5,?6,?7,{NOW},{NOW},?8)"
         ),
         params![
             id,
@@ -321,7 +592,11 @@ pub fn add(
             pipeline.project_name,
             pipeline.definition_id,
             pipeline.name,
-            mode.unwrap_or(PipelineMode::Failures).as_str()
+            mode.unwrap_or(PipelineMode::Failures).as_str(),
+            pipeline
+                .repository
+                .as_ref()
+                .and_then(|r| serde_json::to_string(r).ok())
         ],
     )
     .map_err(|e| e.to_string())?;
@@ -362,10 +637,11 @@ pub fn remove(db: &Connection, id: &str) -> Result<(), String> {
 }
 
 pub fn list(db: &Connection) -> Result<Vec<PipelineStatus>, String> {
+    let known = KnownRepos::load(db)?;
     let mut stmt = db
         .prepare(
             "SELECT id,organization,project_name,definition_id,name,mode,last_result,last_run_number,
-            last_run_id,last_finished_at,last_checked,error
+            last_run_id,last_finished_at,last_checked,error,ado_repo,repo_override
             FROM pipeline_watches ORDER BY name COLLATE NOCASE, id",
         )
         .map_err(|e| e.to_string())?;
@@ -376,33 +652,57 @@ pub fn list(db: &Connection) -> Result<Vec<PipelineStatus>, String> {
             let definition_id: u64 = r.get(3)?;
             let mode: String = r.get(5)?;
             let last_run: Option<u64> = r.get(8)?;
-            Ok(PipelineStatus {
-                id: r.get(0)?,
-                url: pipeline_url(&org, &project, definition_id),
-                last_run_url: last_run.map(|run| run_url(&org, &project, run)),
-                organization: org,
-                project,
-                definition_id,
-                name: r.get(4)?,
-                mode: PipelineMode::parse(&mode).unwrap_or(PipelineMode::Failures),
-                last_result: r.get(6)?,
-                last_run_number: r.get(7)?,
-                last_finished_at: r.get(9)?,
-                last_checked: r.get(10)?,
-                error: r.get(11)?,
-            })
+            let ado_repo = parse_stored(r.get(12)?);
+            let over: Option<String> = r.get(13)?;
+            Ok((
+                ado_repo,
+                over,
+                PipelineStatus {
+                    id: r.get(0)?,
+                    url: pipeline_url(&org, &project, definition_id),
+                    last_run_url: last_run.map(|run| run_url(&org, &project, run)),
+                    organization: org,
+                    project,
+                    definition_id,
+                    name: r.get(4)?,
+                    mode: PipelineMode::parse(&mode).unwrap_or(PipelineMode::Failures),
+                    last_result: r.get(6)?,
+                    last_run_number: r.get(7)?,
+                    last_finished_at: r.get(9)?,
+                    last_checked: r.get(10)?,
+                    error: r.get(11)?,
+                    ado_repo: None,
+                    repos: Vec::new(),
+                    auto_repos: Vec::new(),
+                    repo_source: "auto".into(),
+                    repo_label: None,
+                },
+            ))
         })
         .map_err(|e| e.to_string())?;
-    rows.collect::<Result<Vec<_>, _>>()
-        .map_err(|e| e.to_string())
+    let rows = rows
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+    rows.into_iter()
+        .map(|(ado_repo, over, mut status)| {
+            let view = known.view(db, ado_repo.as_ref(), over.as_deref())?;
+            status.ado_repo = ado_repo;
+            status.repos = view.repos;
+            status.auto_repos = view.auto_repos;
+            status.repo_source = if view.manual { "manual" } else { "auto" }.into();
+            status.repo_label = view.label;
+            Ok(status)
+        })
+        .collect()
 }
 
 /// Every pipeline notification, newest run first.
 pub fn items(db: &Connection) -> Result<Vec<PipelineItem>, String> {
+    let known = KnownRepos::load(db)?;
     let mut stmt = db
         .prepare(
             "SELECT e.id,w.id,w.name,w.organization,w.project_name,e.run_id,e.run_number,e.result,
-            e.branch,e.trigger_label,e.finished_at,e.is_read,e.created_at
+            e.branch,e.trigger_label,e.finished_at,e.is_read,e.created_at,w.ado_repo,w.repo_override
             FROM pipeline_events e JOIN pipeline_watches w ON w.id=e.watch_id
             ORDER BY julianday(e.finished_at) DESC, e.run_id DESC, e.created_at DESC",
         )
@@ -412,7 +712,7 @@ pub fn items(db: &Connection) -> Result<Vec<PipelineItem>, String> {
             let org: String = r.get(3)?;
             let project: String = r.get(4)?;
             let run_id: u64 = r.get(5)?;
-            Ok(PipelineItem {
+            let item = PipelineItem {
                 id: r.get(0)?,
                 pipeline_id: r.get(1)?,
                 pipeline_name: r.get(2)?,
@@ -426,11 +726,24 @@ pub fn items(db: &Connection) -> Result<Vec<PipelineItem>, String> {
                 finished_at: r.get(10)?,
                 is_read: r.get(11)?,
                 discovered_at: r.get(12)?,
-            })
+                repo: None,
+            };
+            Ok((
+                parse_stored(r.get(13)?),
+                r.get::<_, Option<String>>(14)?,
+                item,
+            ))
         })
         .map_err(|e| e.to_string())?;
-    rows.collect::<Result<Vec<_>, _>>()
-        .map_err(|e| e.to_string())
+    let rows = rows
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+    rows.into_iter()
+        .map(|(ado_repo, over, mut item)| {
+            item.repo = known.view(db, ado_repo.as_ref(), over.as_deref())?.label;
+            Ok(item)
+        })
+        .collect()
 }
 
 /// Marks a pipeline notification read or unread. `false` when there is no
@@ -454,6 +767,9 @@ pub struct PipelineTarget {
     pub project_id: String,
     pub definition_id: u64,
     revision: i64,
+    /// ADO's project name, for repos a run names without a URL.
+    project_name: String,
+    has_repo: bool,
 }
 
 impl PipelineTarget {
@@ -471,7 +787,7 @@ impl PipelineTarget {
 pub fn targets(db: &Connection) -> Result<Vec<PipelineTarget>, String> {
     let mut stmt = db
         .prepare(
-            "SELECT id,organization,project_id,definition_id,revision FROM pipeline_watches ORDER BY id",
+            "SELECT id,organization,project_id,definition_id,revision,project_name,ado_repo IS NOT NULL FROM pipeline_watches ORDER BY id",
         )
         .map_err(|e| e.to_string())?;
     let rows = stmt
@@ -482,6 +798,8 @@ pub fn targets(db: &Connection) -> Result<Vec<PipelineTarget>, String> {
                 project_id: r.get(2)?,
                 definition_id: r.get(3)?,
                 revision: r.get(4)?,
+                project_name: r.get(5)?,
+                has_repo: r.get(6)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -498,6 +816,8 @@ pub struct Run {
     pub branch: String,
     pub trigger: String,
     pub finished_at: String,
+    /// The repo this run built, when ADO says.
+    pub repository: Option<AdoRepoRef>,
 }
 
 fn trigger_label(reason: &str, requester: Option<&str>) -> String {
@@ -556,6 +876,11 @@ pub(crate) fn fetch_runs(
                     run["requestedFor"]["displayName"].as_str(),
                 ),
                 finished_at,
+                repository: repository_of(
+                    &run["repository"],
+                    &target.organization,
+                    &target.project_name,
+                ),
             })
         })
         .collect())
@@ -605,6 +930,11 @@ pub fn apply_runs(db: &Connection, target: &PipelineTarget, runs: &[Run]) -> Res
             .cmp(&time_key(&b.finished_at))
             .then(a.id.cmp(&b.id))
     });
+    // The newest run's repo is what the pipeline builds now; a run that
+    // doesn't say keeps what is stored.
+    if let Some(repo) = newest.and_then(|run| run.repository.as_ref()) {
+        save_detected(&tx, target, repo)?;
+    }
     if let Some(run) = newest {
         tx.execute(
             "UPDATE pipeline_watches SET last_run_id=?2,last_run_number=?3,last_result=?4,last_finished_at=?5 WHERE id=?1",
@@ -666,6 +996,41 @@ pub(crate) fn check_all(
         let result = http
             .map_err(str::to_owned)
             .and_then(|http| fetch_runs(http, target));
+        // A pipeline watched before repos were detected, whose runs don't say:
+        // its definition does, for one extra request (until it is known).
+        let backfill = match (&result, http) {
+            (Ok(runs), Ok(http))
+                if !target.has_repo && runs.iter().all(|r| r.repository.is_none()) =>
+            {
+                api_get(
+                    http,
+                    ado_url(
+                        &target.organization,
+                        &target.project_id,
+                        &[
+                            "_apis",
+                            "build",
+                            "definitions",
+                            &target.definition_id.to_string(),
+                        ],
+                    ),
+                )
+                .ok()
+                .and_then(|d| {
+                    repository_of(&d["repository"], &target.organization, &target.project_name)
+                })
+            }
+            _ => None,
+        };
+        if let Some(repo) = &backfill {
+            if let Err(error) = db
+                .lock()
+                .map_err(|e| e.to_string())
+                .and_then(|db| save_detected(&db, target, repo))
+            {
+                eprintln!("[pipeline-inbox] Could not save a pipeline's repo: {error}");
+            }
+        }
         let saved = db
             .lock()
             .map_err(|e| e.to_string())
@@ -805,6 +1170,7 @@ mod tests {
                 project_name: "SCC".into(),
                 definition_id: 33770,
                 name: "agency_pipeline_watchdog".into(),
+                repository: None,
             }
         );
         // Requests go to dev.azure.com whatever the link's host form.
@@ -824,6 +1190,296 @@ mod tests {
         assert!(!error.contains("/_apis/"), "{error}");
     }
 
+    // ── Repos ──
+
+    fn azure(project: &str, name: &str) -> AdoRepoRef {
+        AdoRepoRef {
+            id: format!("{name}-guid"),
+            kind: "azure".into(),
+            organization: "skype".into(),
+            project: project.into(),
+            name: name.into(),
+        }
+    }
+
+    fn workstreams_repo(db: &Connection, id: &str, name: &str, remote: Option<&str>) {
+        db.execute(
+            "INSERT INTO projects (id, name, directory, git_remote, created_at, updated_at) VALUES (?1, ?2, '/x', ?3, 'now', 'now')",
+            params![id, name, remote],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn reads_a_pipelines_repository_from_ado_in_every_form() {
+        let r = |v: serde_json::Value| repository_of(&v, "skype", "SCC");
+        let want = azure("SCC", "media_components");
+        assert_eq!(
+            r(
+                json!({"id": "media_components-guid", "type": "TfsGit", "name": "media_components",
+                "url": "https://dev.azure.com/skype/SCC/_git/media_components"})
+            ),
+            Some(want.clone())
+        );
+        assert_eq!(
+            r(json!({"id": "media_components-guid", "type": "TfsGit", "name": "media_components"})),
+            Some(want.clone()),
+            "no URL: the pipeline's organization and project"
+        );
+        let other = r(json!({"id": "g", "type": "TfsGit", "name": "x",
+            "url": "https://skype.visualstudio.com/Other%20Proj/_git/lib"}))
+        .unwrap();
+        assert_eq!(
+            (other.project.as_str(), other.name.as_str()),
+            ("Other Proj", "lib")
+        );
+        let gh = r(
+            json!({"id": "Org/Tool", "type": "GitHub", "name": "Org/Tool",
+            "url": "https://github.com/Org/Tool.git"}),
+        )
+        .unwrap();
+        assert_eq!(
+            (gh.kind.as_str(), gh.name.as_str(), gh.display()),
+            ("github", "Org/Tool", "Org/Tool".to_string())
+        );
+        assert_eq!(r(json!({})), None);
+        assert_eq!(r(json!({"type": "TfsGit"})), None);
+        assert_eq!(want.display(), "SCC/media_components");
+    }
+
+    #[test]
+    fn matches_remotes_in_any_form_and_never_by_folder_name() {
+        let key = azure("SCC", "Media_Components").key();
+        for remote in [
+            "https://dev.azure.com/skype/SCC/_git/media_components",
+            "https://skype@dev.azure.com/skype/scc/_git/media_components",
+            "https://skype.visualstudio.com/SCC/_git/media_components",
+            "git@ssh.dev.azure.com:v3/skype/SCC/media_components",
+        ] {
+            assert_eq!(
+                remote_key(remote).as_deref(),
+                Some(key.as_str()),
+                "{remote}"
+            );
+        }
+        let gh = AdoRepoRef {
+            id: "Org/Tool".into(),
+            kind: "github".into(),
+            organization: String::new(),
+            project: String::new(),
+            name: "Org/Tool".into(),
+        };
+        for remote in [
+            "https://github.com/org/tool.git",
+            "git@github.com:Org/Tool.git",
+            "https://github.com/Org/Tool",
+        ] {
+            assert_eq!(
+                remote_key(remote).as_deref(),
+                Some(gh.key().as_str()),
+                "{remote}"
+            );
+        }
+        assert_eq!(remote_key("/Users/me/media_components"), None);
+    }
+
+    #[test]
+    fn a_pipeline_shows_its_ado_repo_and_every_matching_workstreams_repo() {
+        let db = db();
+        let mut p = resolved(1, "CI");
+        p.repository = Some(azure("SCC", "media_components"));
+        let added = add(&db, &p, None).unwrap();
+        assert_eq!(added.ado_repo, Some(azure("SCC", "media_components")));
+        assert_eq!(
+            (added.repos.len(), added.repo_source.as_str()),
+            (0, "auto"),
+            "not in Workstreams yet"
+        );
+        assert_eq!(added.repo_label.as_deref(), Some("SCC/media_components"));
+
+        workstreams_repo(
+            &db,
+            "r1",
+            "media_components",
+            Some("git@ssh.dev.azure.com:v3/skype/SCC/media_components"),
+        );
+        workstreams_repo(
+            &db,
+            "r2",
+            "media_components (2nd)",
+            Some("https://skype.visualstudio.com/SCC/_git/media_components"),
+        );
+        workstreams_repo(&db, "r3", "media_components", None);
+        let shown = list(&db).unwrap().remove(0);
+        let ids: Vec<&str> = shown.repos.iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            vec!["r1", "r2"],
+            "linked to both checkouts, never by folder name"
+        );
+        assert_eq!(shown.auto_repos, shown.repos);
+        assert_eq!(shown.repo_label.as_deref(), Some("media_components +1"));
+    }
+
+    #[test]
+    fn the_newest_runs_repo_updates_the_detected_one_and_an_override_sticks() {
+        let db = db();
+        workstreams_repo(
+            &db,
+            "mc",
+            "media_components",
+            Some("https://dev.azure.com/skype/SCC/_git/media_components"),
+        );
+        workstreams_repo(
+            &db,
+            "acs",
+            "acs_media_sdk",
+            Some("https://dev.azure.com/skype/SCC/_git/acs_media_sdk"),
+        );
+        let added = add(&db, &resolved(1, "CI"), None).unwrap();
+        assert_eq!(added.ado_repo, None, "watched before repos were detected");
+        let target = targets(&db).unwrap().remove(0);
+        let mut newest = run(2, "failed", NEW);
+        newest.repository = Some(azure("SCC", "media_components"));
+        let mut older = run(1, "failed", "2001-01-01T00:00:00Z");
+        older.repository = Some(azure("SCC", "acs_media_sdk"));
+        apply_runs(&db, &target, &[older.clone(), newest]).unwrap();
+        assert_eq!(
+            list(&db).unwrap()[0].repos[0].id,
+            "mc",
+            "the newest run decides"
+        );
+
+        set_repo(&db, &added.id, "acs").unwrap();
+        let mut moved = run(3, "failed", "2100-01-02T00:00:00Z");
+        moved.repository = Some(azure("SCC", "engaine"));
+        apply_runs(&db, &target, &[moved]).unwrap();
+        let shown = list(&db).unwrap().remove(0);
+        assert_eq!(
+            (shown.repos[0].id.as_str(), shown.repo_source.as_str()),
+            ("acs", "manual")
+        );
+        assert_eq!(
+            shown.ado_repo,
+            Some(azure("SCC", "engaine")),
+            "Automatic keeps following ADO"
+        );
+        assert!(shown.auto_repos.is_empty());
+
+        // A run without a repository keeps what is stored.
+        apply_runs(&db, &target, &[run(4, "failed", "2100-01-03T00:00:00Z")]).unwrap();
+        assert_eq!(
+            list(&db).unwrap()[0].ado_repo,
+            Some(azure("SCC", "engaine"))
+        );
+
+        set_repo(&db, &added.id, "none").unwrap();
+        let none = list(&db).unwrap().remove(0);
+        assert_eq!(
+            (
+                none.repos.len(),
+                none.repo_source.as_str(),
+                none.repo_label.clone()
+            ),
+            (0, "manual", None)
+        );
+        set_repo(&db, &added.id, "auto").unwrap();
+        let auto = list(&db).unwrap().remove(0);
+        assert_eq!(
+            (auto.repo_source.as_str(), auto.repo_label.as_deref()),
+            ("auto", Some("SCC/engaine"))
+        );
+
+        assert!(set_repo(&db, &added.id, "nope")
+            .unwrap_err()
+            .contains("No repo with id nope"));
+        assert!(set_repo(&db, "ghost", "auto")
+            .unwrap_err()
+            .contains("isn't watched"));
+    }
+
+    #[test]
+    fn notifications_carry_the_pipelines_repo() {
+        let db = db();
+        workstreams_repo(
+            &db,
+            "mc",
+            "media_components",
+            Some("https://dev.azure.com/skype/SCC/_git/media_components"),
+        );
+        let mut p = resolved(1, "CI");
+        p.repository = Some(azure("SCC", "media_components"));
+        add(&db, &p, None).unwrap();
+        make_old(&db);
+        let target = targets(&db).unwrap().remove(0);
+        apply_runs(&db, &target, &[run(10, "failed", NEW)]).unwrap();
+        assert_eq!(
+            items(&db).unwrap()[0].repo.as_deref(),
+            Some("media_components")
+        );
+    }
+
+    #[test]
+    fn resolving_a_pipeline_reads_its_definitions_repository() {
+        let mut def = definition(33770, "watchdog");
+        def["repository"] = json!({"id": "media_components-guid", "type": "TfsGit", "name": "media_components",
+            "url": "https://dev.azure.com/skype/SCC/_git/media_components"});
+        let stub = Stub::new(vec![("/_apis/build/definitions/33770", Ok(def))]);
+        let link = parse_link("https://dev.azure.com/skype/SCC/_build?definitionId=33770").unwrap();
+        assert_eq!(
+            resolve(&stub, &link).unwrap().repository,
+            Some(azure("SCC", "media_components"))
+        );
+    }
+
+    #[test]
+    fn a_check_reads_each_runs_repository_and_backfills_from_the_definition_once() {
+        let stub = Stub::new(vec![(
+            "/_apis/build/builds",
+            Ok(json!({"value": [
+                {"id": 9, "buildNumber": "9", "result": "failed", "finishTime": "2026-10-26T08:10:44Z",
+                 "repository": {"id": "acs-guid", "type": "TfsGit", "name": "acs_media_sdk"}}
+            ]})),
+        )]);
+        let db = db();
+        add(&db, &resolved(33995, "p"), None).unwrap();
+        let target = targets(&db).unwrap().remove(0);
+        assert_eq!(
+            fetch_runs(&stub, &target).unwrap()[0]
+                .repository
+                .as_ref()
+                .map(|r| r.name.as_str()),
+            Some("acs_media_sdk")
+        );
+
+        // No run names a repository: the definition is asked, for a pipeline without one.
+        let mut def = definition(33995, "p");
+        def["repository"] = json!({"id": "mc-guid", "type": "TfsGit", "name": "media_components"});
+        let quiet = Stub::new(vec![
+            ("/_apis/build/builds", Ok(json!({"value": []}))),
+            ("/_apis/build/definitions/33995", Ok(def)),
+        ]);
+        let shared = std::sync::Mutex::new(db);
+        check_all(&shared, Ok(&quiet), std::slice::from_ref(&target));
+        let db = shared.into_inner().unwrap();
+        assert_eq!(
+            list(&db).unwrap()[0]
+                .ado_repo
+                .as_ref()
+                .map(|r| r.name.as_str()),
+            Some("media_components")
+        );
+        let shared = std::sync::Mutex::new(db);
+        let asked_before = quiet.asked.borrow().len();
+        let target = targets(&shared.lock().unwrap()).unwrap().remove(0);
+        check_all(&shared, Ok(&quiet), &[target]);
+        assert_eq!(
+            quiet.asked.borrow().len(),
+            asked_before + 1,
+            "a pipeline with a repo costs one request"
+        );
+    }
+
     // ── Store ──
 
     fn resolved(id: u64, name: &str) -> ResolvedPipeline {
@@ -833,6 +1489,7 @@ mod tests {
             project_name: "SCC".into(),
             definition_id: id,
             name: name.into(),
+            repository: None,
         }
     }
 
@@ -903,6 +1560,7 @@ mod tests {
             branch: "main".into(),
             trigger: "Scheduled".into(),
             finished_at: finished.into(),
+            repository: None,
         }
     }
 

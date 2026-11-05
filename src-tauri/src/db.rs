@@ -551,6 +551,10 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
         // What a mute rule matches an event on (ADR 036).
         "ALTER TABLE pr_inbox_events ADD COLUMN subject TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE pr_inbox_events ADD COLUMN outcome TEXT NOT NULL DEFAULT ''",
+        // The repo ADO says a watched pipeline builds (JSON AdoRepoRef), and
+        // the user's override: NULL = automatic, 'none', or a projects.id.
+        "ALTER TABLE pipeline_watches ADD COLUMN ado_repo TEXT",
+        "ALTER TABLE pipeline_watches ADD COLUMN repo_override TEXT",
     ];
     for sql in &migrations {
         // SQLite errors if column already exists — ignore that error

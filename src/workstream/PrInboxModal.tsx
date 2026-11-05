@@ -413,6 +413,9 @@ export function PrInboxModal({ snapshot, loading, error, onRead, onMute, onReset
                 >
                   <div style={{ fontSize: 12, fontWeight: group.unread ? 600 : 400, color: "#cdd6f4" }}>
                     {group.pipeline_name} <span style={{ color: "#6c7086", fontWeight: 400, fontSize: 11 }}>{group.project}</span>
+                    {group.items[0]?.repo && (
+                      <span data-testid={`pipeline-group-repo-${group.pipeline_id}`} style={{ color: "#a6adc8", fontWeight: 400, fontSize: 11 }}> · {group.items[0].repo}</span>
+                    )}
                   </div>
                   <ul style={{ listStyle: "none", margin: "8px 0 0", padding: 0, display: "grid", gap: 4 }}>
                     {group.items.map((run) => (

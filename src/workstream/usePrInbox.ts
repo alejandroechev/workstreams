@@ -66,10 +66,15 @@ export function usePrInbox(backend: Backend) {
     setRevision((value) => value + 1);
   }, [backend]);
 
+  const setPipelineRepo = useCallback(async (id: string, repo: string) => {
+    await backend.setPipelineWatchRepo(id, repo);
+    setRevision((value) => value + 1);
+  }, [backend]);
+
   const removePipeline = useCallback(async (id: string) => {
     await backend.removePipelineWatch(id);
     setRevision((value) => value + 1);
   }, [backend]);
 
-  return { snapshot, error, loading, configure, setRead, mute, resetMutes, addPipeline, setPipelineMode, removePipeline };
+  return { snapshot, error, loading, configure, setRead, mute, resetMutes, addPipeline, setPipelineMode, setPipelineRepo, removePipeline };
 }

@@ -2,12 +2,14 @@ import { useEffect, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { ArrowTopRightOnSquareIcon, TrashIcon, XMarkIcon } from "@heroicons/react/24/outline";
 import {
+  adoRepoDisplay,
   PIPELINE_MODES,
   PIPELINE_MODE_LABELS,
   isPipelineMode,
   resultLabel,
   type PipelineMode,
   type PipelineStatus,
+  type RepoRef,
 } from "../domain/pipeline-inbox";
 import { resultColor } from "./pipeline-result";
 
@@ -16,7 +18,67 @@ interface Props {
   onAdd: (url: string) => Promise<unknown>;
   onSetMode: (id: string, mode: PipelineMode) => Promise<void>;
   onRemove: (id: string) => Promise<void>;
+  /** Sets a pipeline's repo: a repo id, "none", or "auto". */
+  onSetRepo: (id: string, repo: string) => Promise<void>;
+  /** Every Workstreams repo, for the repo menu. */
+  repos: RepoRef[];
   onClose: () => void;
+}
+
+const names = (repos: RepoRef[]) => (repos.length <= 1 ? repos[0]?.name ?? "" : `${repos[0].name} +${repos.length - 1}`);
+
+/** What Automatic would show: the matched repos, ADO's repo, or nothing known yet. */
+function automaticLabel(pipeline: PipelineStatus): string {
+  if (pipeline.auto_repos.length > 0) return names(pipeline.auto_repos);
+  return pipeline.ado_repo ? `${adoRepoDisplay(pipeline.ado_repo)} (not in Workstreams)` : "not known yet";
+}
+
+/** A pipeline's repo, with a menu to set it by hand (Automatic, a repo, or No repo). */
+function RepoChip({ pipeline, repos, disabled, onSet }: { pipeline: PipelineStatus; repos: RepoRef[]; disabled: boolean; onSet: (repo: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const manual = pipeline.repo_source === "manual";
+  const notInWorkstreams = !manual && pipeline.repos.length === 0 && pipeline.ado_repo;
+  const label = pipeline.repo_label
+    ? notInWorkstreams ? `${pipeline.repo_label} — not in Workstreams` : pipeline.repo_label
+    : "No repo";
+  const current = manual ? (pipeline.repos[0]?.id ?? "none") : "auto";
+  const option = (value: string, text: string) => (
+    <button
+      key={value}
+      role="menuitemradio"
+      aria-checked={current === value}
+      data-testid={`pipeline-repo-option-${pipeline.id}-${value}`}
+      onClick={() => { setOpen(false); onSet(value); }}
+      style={{ ...menuItemStyle, background: current === value ? "#313244" : "transparent" }}
+    >
+      {text}
+    </button>
+  );
+  return (
+    <div style={{ position: "relative", flex: "none" }}>
+      <button
+        data-testid={`pipeline-repo-${pipeline.id}`}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        disabled={disabled}
+        title={manual ? "Repo set by you" : "Repo detected from Azure DevOps"}
+        onClick={() => setOpen(!open)}
+        style={{ ...chipStyle, color: pipeline.repo_label && !notInWorkstreams ? "#cdd6f4" : "#7f849c", fontStyle: notInWorkstreams || !pipeline.repo_label ? "italic" : "normal" }}
+      >
+        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 220 }}>{label}</span>
+        <span style={{ fontSize: 10, fontStyle: "normal", color: manual ? "#f9e2af" : "#7f849c" }}>{manual ? "set by you" : "auto"}</span>
+        <span aria-hidden="true">▾</span>
+      </button>
+      {open && (
+        <div role="menu" data-testid={`pipeline-repo-menu-${pipeline.id}`} style={menuStyle}>
+          <div style={{ color: "#6c7086", fontSize: 10, padding: "2px 6px" }}>Repo for this pipeline</div>
+          {option("auto", `Automatic — ${automaticLabel(pipeline)}`)}
+          {repos.map((repo) => option(repo.id, repo.name))}
+          {option("none", "No repo")}
+        </div>
+      )}
+    </div>
+  );
 }
 
 /**
@@ -24,7 +86,7 @@ interface Props {
  * runs to add it, pick what notifies, remove it. Chrome mirrors the Inbox and
  * the Repo manager.
  */
-export function PipelinesModal({ pipelines, onAdd, onSetMode, onRemove, onClose }: Props) {
+export function PipelinesModal({ pipelines, onAdd, onSetMode, onRemove, onSetRepo, repos, onClose }: Props) {
   const [url, setUrl] = useState("");
   const [adding, setAdding] = useState(false);
   const [addError, setAddError] = useState<string | null>(null);
@@ -151,6 +213,7 @@ export function PipelinesModal({ pipelines, onAdd, onSetMode, onRemove, onClose 
                   </div>
                 )}
               </div>
+              <RepoChip pipeline={pipeline} repos={repos} disabled={busy} onSet={(repo) => void act(() => onSetRepo(pipeline.id, repo))} />
               <select
                 data-testid={`pipeline-mode-${pipeline.id}`}
                 aria-label={`Notifications for ${pipeline.name}`}
@@ -183,6 +246,22 @@ export function PipelinesModal({ pipelines, onAdd, onSetMode, onRemove, onClose 
     </div>
   );
 }
+
+const chipStyle: React.CSSProperties = {
+  display: "inline-flex", alignItems: "center", gap: 6, maxWidth: 280, background: "#11111b", border: "1px solid #45475a",
+  borderRadius: 10, padding: "2px 8px", fontSize: 11, cursor: "pointer", fontFamily: "inherit",
+};
+
+const menuStyle: React.CSSProperties = {
+  position: "absolute", right: 0, top: "calc(100% + 4px)", zIndex: 1, minWidth: 240, maxHeight: 260, overflowY: "auto",
+  background: "#181825", border: "1px solid #45475a", borderRadius: 6, padding: 4, display: "grid", gap: 1,
+  boxShadow: "0 6px 16px rgba(0,0,0,0.45)",
+};
+
+const menuItemStyle: React.CSSProperties = {
+  border: "none", borderRadius: 4, padding: "4px 6px", textAlign: "left", color: "#cdd6f4", fontSize: 11,
+  cursor: "pointer", fontFamily: "inherit",
+};
 
 const backdropStyle: React.CSSProperties = {
   position: "fixed",

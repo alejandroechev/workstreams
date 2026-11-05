@@ -78,6 +78,8 @@ export interface Backend {
   setPipelineWatchMode(id: string, mode: PipelineMode): Promise<void>;
   /** Stops watching a pipeline and drops its notifications. */
   removePipelineWatch(id: string): Promise<void>;
+  /** Sets a pipeline's repo by hand: a repo id, "none", or "auto" to follow what ADO says again. */
+  setPipelineWatchRepo(id: string, repo: string): Promise<void>;
   // Planning (ADR 039)
   /** The saved connection, selected sprint and draft. */
   planningState(): Promise<PlanningState>;

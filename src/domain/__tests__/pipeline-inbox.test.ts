@@ -6,6 +6,10 @@ import {
   isPipelineMode,
   parsePipelineLink,
   pipelineModeWatches,
+  pipelineRepoView,
+  remoteKey,
+  repoKey,
+  type AdoRepoRef,
   resultLabel,
   type PipelineItem,
 } from "../pipeline-inbox";
@@ -96,5 +100,35 @@ describe("the Inbox badge", () => {
       pipeline_items: [item({ id: "x" }), item({ id: "y" }), item({ id: "z", is_read: true })],
     })).toBe(3);
     expect(countUnreadInbox({ items: [] })).toBe(0);
+  });
+});
+
+describe("pipeline repos", () => {
+  const ado: AdoRepoRef = { id: "g", kind: "azure", organization: "skype", project: "SCC", name: "Media_Components" };
+  const repos = [
+    { id: "r1", name: "media_components", git_remote: "git@ssh.dev.azure.com:v3/skype/SCC/media_components" },
+    { id: "r2", name: "mc 2nd", git_remote: "https://skype.visualstudio.com/SCC/_git/media_components" },
+    { id: "r3", name: "media_components", git_remote: null },
+    { id: "acs", name: "acs_media_sdk", git_remote: "https://dev.azure.com/skype/SCC/_git/acs_media_sdk" },
+  ];
+
+  it("normalizes Azure Repos and GitHub remotes, never folders", () => {
+    expect(remoteKey("https://skype@dev.azure.com/skype/scc/_git/media_components")).toBe(repoKey(ado));
+    expect(remoteKey("git@github.com:Org/Tool.git")).toBe(repoKey({ id: "x", kind: "github", organization: "", project: "", name: "org/tool" }));
+    expect(remoteKey("/Users/me/media_components")).toBeNull();
+  });
+
+  it("links every matching repo, labels the rest with ADO's repo, and applies overrides", () => {
+    expect(pipelineRepoView(ado, null, repos)).toEqual({
+      repos: [{ id: "r1", name: "media_components" }, { id: "r2", name: "mc 2nd" }],
+      auto_repos: [{ id: "r1", name: "media_components" }, { id: "r2", name: "mc 2nd" }],
+      repo_source: "auto", repo_label: "media_components +1",
+    });
+    const engaine = { ...ado, name: "engaine" };
+    expect(pipelineRepoView(engaine, null, repos).repo_label).toBe("SCC/engaine");
+    expect(pipelineRepoView(ado, "acs", repos)).toMatchObject({ repos: [{ id: "acs", name: "acs_media_sdk" }], repo_source: "manual", repo_label: "acs_media_sdk" });
+    expect(pipelineRepoView(ado, "none", repos)).toMatchObject({ repos: [], repo_source: "manual", repo_label: null });
+    expect(pipelineRepoView(ado, "gone", repos).repo_source).toBe("auto");
+    expect(pipelineRepoView(null, null, repos)).toMatchObject({ repos: [], repo_label: null });
   });
 });

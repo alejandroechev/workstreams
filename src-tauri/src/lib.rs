@@ -792,6 +792,17 @@ fn set_pipeline_watch_mode(
     pipeline_inbox::set_mode(&db, &id, mode)
 }
 
+/// Sets a pipeline's repo by hand: a repo id, "none", or "auto" to follow ADO.
+#[tauri::command]
+fn set_pipeline_watch_repo(
+    state: State<'_, AppState>,
+    id: String,
+    repo: String,
+) -> Result<(), String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    pipeline_inbox::set_repo(&db, &id, &repo)
+}
+
 #[tauri::command]
 fn remove_pipeline_watch(state: State<'_, AppState>, id: String) -> Result<(), String> {
     let db = state.db.lock().map_err(|e| e.to_string())?;
@@ -6551,6 +6562,7 @@ pub fn run() {
             planning_hide_orphan,
             planning_unhide_orphan,
             set_pipeline_watch_mode,
+            set_pipeline_watch_repo,
             remove_pipeline_watch,
             set_pr_inbox_read,
             mute_pr_inbox_event,

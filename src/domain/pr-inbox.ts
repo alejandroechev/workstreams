@@ -159,7 +159,12 @@ export interface PrInboxSnapshot {
 
 /** UI eligibility only; native code independently validates every HTTP destination. */
 export function supportsPrInbox(remote: string | null): boolean {
-  if (!remote) return false;
+  return parseAdoRemote(remote) !== null;
+}
+
+/** An Azure Repos clone URL (HTTPS in either host form, or SSH) as [organization, project, repository], decoded. */
+export function parseAdoRemote(remote: string | null): [string, string, string] | null {
+  if (!remote) return null;
   try {
     const ssh = remote.trim().match(/^(?:git@ssh\.dev\.azure\.com:v3\/|ssh:\/\/git@ssh\.dev\.azure\.com\/v3\/)(.*)$/);
     let parts: string[];
@@ -167,22 +172,22 @@ export function supportsPrInbox(remote: string | null): boolean {
       parts = ssh[1].split("/");
     } else {
       const url = new URL(remote.trim());
-      if (url.protocol !== "https:" || url.port || url.search || url.hash) return false;
+      if (url.protocol !== "https:" || url.port || url.search || url.hash) return null;
       const path = url.pathname.replace(/\/$/, "").slice(1).split("/");
       if (url.hostname === "dev.azure.com" && path.length === 4 && path[2] === "_git") {
         parts = [path[0], path[1], path[3]];
       } else if (/^[^.]+\.visualstudio\.com$/.test(url.hostname) && path.length === 3 && path[1] === "_git") {
         parts = [url.hostname.split(".")[0], path[0], path[2]];
-      } else return false;
+      } else return null;
     }
-    return parts.length === 3 && parts.every((part) => {
-      const decoded = decodeURIComponent(part);
-      return decoded.length > 0 && decoded !== "." && decoded !== ".."
-        && !decoded.includes("/") && !decoded.includes("\\")
-        && !Array.from(decoded).some((c) => c.charCodeAt(0) < 32 || c.charCodeAt(0) === 127);
-    });
+    if (parts.length !== 3) return null;
+    const decoded = parts.map((part) => decodeURIComponent(part));
+    const valid = decoded.every((part) => part.length > 0 && part !== "." && part !== ".."
+      && !part.includes("/") && !part.includes("\\")
+      && !Array.from(part).some((c) => c.charCodeAt(0) < 32 || c.charCodeAt(0) === 127));
+    return valid ? [decoded[0], decoded[1], decoded[2]] : null;
   } catch (error) {
-    if (error instanceof TypeError || error instanceof URIError) return false;
+    if (error instanceof TypeError || error instanceof URIError) return null;
     throw error;
   }
 }

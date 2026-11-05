@@ -2334,6 +2334,8 @@ export default function App() {
       {showPipelines && (
         <PipelinesModal pipelines={inbox.snapshot.pipelines ?? []}
           onAdd={inbox.addPipeline} onSetMode={inbox.setPipelineMode} onRemove={inbox.removePipeline}
+          onSetRepo={inbox.setPipelineRepo}
+          repos={projects.filter((p) => !p.archived).map((p) => ({ id: p.id, name: p.name }))}
           onClose={() => setShowPipelines(false)} />
       )}
       <WorkstreamSidebar

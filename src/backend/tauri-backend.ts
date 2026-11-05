@@ -150,6 +150,10 @@ export class TauriBackend implements Backend {
     await invoke("set_pipeline_watch_mode", { id, mode });
   }
 
+  async setPipelineWatchRepo(id: string, repo: string): Promise<void> {
+    await invoke("set_pipeline_watch_repo", { id, repo });
+  }
+
   async removePipelineWatch(id: string): Promise<void> {
     await invoke("remove_pipeline_watch", { id });
   }

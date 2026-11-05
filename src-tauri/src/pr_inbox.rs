@@ -69,6 +69,11 @@ impl AdoRepo {
         })
     }
 
+    /// Organization, project and repository, as the remote names them.
+    pub fn parts(&self) -> (&str, &str, &str) {
+        (&self.organization, &self.project, &self.repository)
+    }
+
     pub(super) fn url(&self, segments: &[&str]) -> reqwest::Url {
         let mut url = reqwest::Url::parse("https://dev.azure.com/").expect("constant URL");
         url.path_segments_mut()
@@ -1617,6 +1622,7 @@ mod tests {
                 project_name: "P".into(),
                 definition_id: 1,
                 name: "nightly".into(),
+                repository: None,
             },
             None,
         )

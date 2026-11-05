@@ -86,6 +86,41 @@ deletes its notifications. Agent CLI: `inbox.pipelines`, `inbox.pipeline_add`,
 - No browsing of organizations or projects, no branch filters, no stage-level
   detail.
 
+## Amendment (2026-11-05): the repo a pipeline builds
+
+Each watched pipeline is labelled with its repo, in the Pipelines manager and on
+its Inbox notifications. Pipelines stay a standalone list: the repo is a label,
+never a requirement, and there's no per-repo pipeline view.
+
+- **Detected from ADO, at no extra polling cost.** Adding a pipeline stores its
+  definition's `repository` (from the request adding already makes). Every
+  check then takes the newest run's `repository` from the builds response it
+  already fetches, so a pipeline re-pointed in ADO follows. A run that doesn't
+  name one keeps what is stored. A pipeline watched before this has no repo
+  until a run names one, or, if none does, its definition is asked once.
+  Azure Repos URLs are read in any host form. Without a URL, the repo is taken
+  to be in the pipeline's own organization and project. GitHub repos are
+  `owner/repo`.
+- **Matched to Workstreams repos when read.** ADO's repo (stored as JSON in
+  `pipeline_watches.ado_repo`) is compared with every non-archived repo's
+  `git_remote`, normalized the way the PR inbox reads clone URLs:
+  - Azure Repos: organization/project/repository, case-insensitive, HTTPS in
+    either host form or SSH;
+  - GitHub: owner/repo.
+
+  Folder names never match. The pipeline links to every repo with that remote
+  (two checkouts → "repo +1"). One whose repo isn't in Workstreams shows ADO's
+  name, marked *not in Workstreams*, and links as soon as that repo is added,
+  because nothing is copied.
+- **Manual override** (`pipeline_watches.repo_override`): NULL follows ADO,
+  `none` shows no repo, or a repo id. It is set from the repo chip's menu
+  (Automatic — <what ADO says> · each repo · No repo). An override survives
+  restarts and later changes in ADO, and the menu keeps showing what Automatic
+  would be. An override to a repo that has since been removed counts as unset.
+- **Agents.** `inbox.pipelines` includes `ado_repo`, `repos`, `auto_repos`,
+  `repo_source` (`auto` | `manual`) and `repo_label`, and
+  `inbox.pipeline_set_repo pipeline= repo=<id|none|auto>` sets the override.
+
 ## References
 
 - [ADR 030: ADO PR inbox](030-ado-pr-inbox.md)

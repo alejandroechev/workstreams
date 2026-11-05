@@ -1,4 +1,4 @@
-import { countUnreadPrs, type PrInboxItem } from "./pr-inbox";
+import { countUnreadPrs, parseAdoRemote, type PrInboxItem } from "./pr-inbox";
 
 /** Which finished runs of a watched pipeline notify (ADR 038). Mirrors the native `PipelineMode`. */
 export type PipelineMode = "off" | "failures" | "successes" | "both";
@@ -37,6 +37,68 @@ export function resultLabel(result: string): string {
   return RESULT_LABELS[result] ?? result;
 }
 
+/** The repo ADO says a pipeline builds (`kind` "azure", or "github" with `name` = owner/repo). */
+export interface AdoRepoRef {
+  id: string;
+  kind: "azure" | "github";
+  organization: string;
+  project: string;
+  name: string;
+}
+
+/** A Workstreams repo a pipeline is linked to. */
+export interface RepoRef {
+  id: string;
+  name: string;
+}
+
+/** What a pipeline's repo chip shows (computed natively; mirrored here for the in-memory backend). */
+export interface PipelineRepoView {
+  repos: RepoRef[];
+  auto_repos: RepoRef[];
+  repo_source: "auto" | "manual";
+  repo_label: string | null;
+}
+
+/** "Project/repo" for Azure Repos, "owner/repo" for GitHub. */
+export function adoRepoDisplay(repo: AdoRepoRef): string {
+  return repo.kind === "github" ? repo.name : `${repo.project}/${repo.name}`;
+}
+
+/** What a git remote must normalize to, to be this repo. */
+export function repoKey(repo: AdoRepoRef): string {
+  return (repo.kind === "github" ? `github:${repo.name}` : `azure:${repo.organization}/${repo.project}/${repo.name}`).toLowerCase();
+}
+
+/** A git remote as a repo key, or null when it isn't an Azure Repos or GitHub remote. */
+export function remoteKey(remote: string | null): string | null {
+  const ado = parseAdoRemote(remote);
+  if (ado) return `azure:${ado.join("/")}`.toLowerCase();
+  const gh = remote?.trim().match(/^(?:git@github\.com:|https:\/\/github\.com\/|ssh:\/\/git@github\.com\/)([^/]+)\/([^/]+?)(?:\.git)?\/?$/);
+  return gh ? `github:${gh[1]}/${gh[2]}`.toLowerCase() : null;
+}
+
+/**
+ * A pipeline's repos: the override when set (`none`, or a repo id; a repo
+ * that no longer exists counts as unset), otherwise every repo whose remote
+ * matches ADO's.
+ */
+export function pipelineRepoView(
+  ado: AdoRepoRef | null,
+  override: string | null,
+  repos: Array<{ id: string; name: string; git_remote: string | null }>,
+): PipelineRepoView {
+  const key = ado ? repoKey(ado) : null;
+  const autoRepos = key ? repos.filter((r) => remoteKey(r.git_remote) === key).map(({ id, name }) => ({ id, name })) : [];
+  const chosen = override === "none" ? [] : override ? repos.filter((r) => r.id === override).map(({ id, name }) => ({ id, name })) : null;
+  const manual = override === "none" || (chosen !== null && chosen.length > 0);
+  const shown = manual ? chosen! : autoRepos;
+  const label = shown.length === 0
+    ? (!manual && ado ? adoRepoDisplay(ado) : null)
+    : shown.length === 1 ? shown[0].name : `${shown[0].name} +${shown.length - 1}`;
+  return { repos: shown, auto_repos: autoRepos, repo_source: manual ? "manual" : "auto", repo_label: label };
+}
+
 /** A watched pipeline, as the Pipelines manager lists it. */
 export interface PipelineStatus {
   id: string;
@@ -52,6 +114,15 @@ export interface PipelineStatus {
   last_finished_at: string | null;
   last_checked: string | null;
   error: string | null;
+  /** The repo ADO says it builds, when known. */
+  ado_repo: AdoRepoRef | null;
+  /** Its Workstreams repos as shown: the override, or the automatic match. */
+  repos: RepoRef[];
+  /** What Automatic would show. */
+  auto_repos: RepoRef[];
+  repo_source: "auto" | "manual";
+  /** The repo chip's text, or null for no repo. */
+  repo_label: string | null;
 }
 
 /** One notification: a run that finished with a result its pipeline's mode watches. */
@@ -69,6 +140,8 @@ export interface PipelineItem {
   url: string;
   is_read: boolean;
   discovered_at: string;
+  /** The pipeline's repo, as its chip shows it. */
+  repo?: string | null;
 }
 
 export interface PipelineGroup {

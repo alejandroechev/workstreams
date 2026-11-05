@@ -297,6 +297,7 @@ function createBackend(): Backend {
     addPipelineWatch: vi.fn(),
     setPipelineWatchMode: vi.fn(async () => {}),
     removePipelineWatch: vi.fn(async () => {}),
+    setPipelineWatchRepo: vi.fn(async () => {}),
     planningState: vi.fn(async () => ({ connection: null, selected_sprint: null, draft: [] })),
     planningConnect: vi.fn(),
     planningFetch: vi.fn(),

@@ -174,6 +174,7 @@ workstreams agent call inbox.pipeline_add url='https://dev.azure.com/<org>/<proj
 workstreams agent call inbox.pipelines
 workstreams agent call inbox.pipeline_mode id=<pipeline-id> mode=both
 workstreams agent call inbox.pipeline_remove id=<pipeline-id>
+workstreams agent call inbox.pipeline_set_repo pipeline=<pipeline-id> repo=<repo-id|none|auto>
 ```
 
 `inbox.list` returns `pipelines` and `pipeline_items` next to the PR events,

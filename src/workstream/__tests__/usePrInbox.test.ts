@@ -66,6 +66,8 @@ describe("pipelines through the inbox hook", () => {
     expect(result.current.snapshot.pipelines).toEqual([expect.objectContaining({ id, name: "Nightly", mode: "failures" })]);
     await act(async () => { await result.current.setPipelineMode(id, "both"); });
     expect(result.current.snapshot.pipelines![0].mode).toBe("both");
+    await act(async () => { await result.current.setPipelineRepo(id, "none"); });
+    expect(result.current.snapshot.pipelines![0].repo_source).toBe("manual");
     await act(async () => { await result.current.removePipeline(id); });
     expect(result.current.snapshot.pipelines).toEqual([]);
   });

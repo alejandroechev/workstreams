@@ -291,6 +291,12 @@ describe("Inbox, pipelines (ADR 038)", () => {
     return { onRead, onOpenPipelines };
   };
 
+  it("names each pipeline's repo, when it has one", () => {
+    renderInbox({ snapshot: { ...both, pipeline_items: [run({ id: "r2", repo: "media_components" }), run({ id: "n1", pipeline_id: "n", repo: null })] } });
+    expect(screen.getByTestId("pipeline-group-repo-w")).toHaveTextContent("media_components");
+    expect(screen.queryByTestId("pipeline-group-repo-n")).toBeNull();
+  });
+
   it("is the Inbox: pull requests and pipelines in their own sections", () => {
     renderInbox();
     expect(screen.getByRole("dialog", { name: "Inbox" })).toBeInTheDocument();
@@ -344,6 +350,7 @@ describe("Inbox, pipelines (ADR 038)", () => {
     renderInbox({ snapshot: { ...both, pipelines: [{
       id: "w", organization: "skype", project: "SCC", definition_id: 1, name: "agency_pipeline_watchdog", url: "u", mode: "failures",
       last_result: null, last_run_number: null, last_run_url: null, last_finished_at: null, last_checked: null, error: "ADO access denied.",
+      ado_repo: null, repos: [], auto_repos: [], repo_source: "auto", repo_label: null,
     }] } });
     expect(screen.getByTestId("pipeline-check-error-w")).toHaveTextContent("agency_pipeline_watchdog: ADO access denied.");
   });

@@ -529,7 +529,7 @@ pub const COMMANDS: &[Command] = &[
     Command {
         id: "inbox.pipelines",
         log_params: &[],
-        summary: "List watched ADO pipelines, their mode, last result and error",
+        summary: "List watched ADO pipelines: mode, last result, error, and repo (ado_repo = what ADO says it builds; repos = its Workstreams repos; repo_source = auto | manual)",
         requires_identity: true,
         destructive: false,
         handler: inbox_pipelines,
@@ -549,6 +549,14 @@ pub const COMMANDS: &[Command] = &[
         requires_identity: true,
         destructive: false,
         handler: inbox_pipeline_mode,
+    },
+    Command {
+        id: "inbox.pipeline_set_repo",
+        log_params: &["pipeline", "repo"],
+        summary: "Set a watched pipeline's repo by hand (params: pipeline = its id, repo = a repo id, none, or auto to follow ADO again)",
+        requires_identity: true,
+        destructive: false,
+        handler: inbox_pipeline_set_repo,
     },
     Command {
         id: "inbox.pipeline_remove",
@@ -841,6 +849,19 @@ fn inbox_pipeline_mode(
     Ok(CommandOutcome::changed(
         serde_json::json!({"id":id,"mode":mode}),
         StateChange::new("pr_inbox", id, "pipeline_mode"),
+    ))
+}
+
+fn inbox_pipeline_set_repo(
+    context: &CommandContext,
+    params: &serde_json::Value,
+) -> Result<CommandOutcome, AgentError> {
+    let id = required_str(params, "pipeline")?;
+    let repo = required_str(params, "repo")?;
+    crate::pipeline_inbox::set_repo(context.db, &id, &repo).map_err(inbox_error)?;
+    Ok(CommandOutcome::changed(
+        serde_json::json!({"id": id, "repo": repo}),
+        StateChange::new("pr_inbox", id, "pipeline_repo"),
     ))
 }
 
@@ -2742,6 +2763,13 @@ mod tests {
                 LinkTarget::Run(run) => run / 1000,
             };
             Ok(crate::pipeline_inbox::ResolvedPipeline {
+                repository: Some(crate::pipeline_inbox::AdoRepoRef {
+                    id: format!("repo-{definition_id}-guid"),
+                    kind: "azure".into(),
+                    organization: link.organization.clone(),
+                    project: link.project.clone(),
+                    name: format!("repo-{definition_id}"),
+                }),
                 organization: link.organization,
                 project_id: "guid".into(),
                 project_name: link.project,
@@ -3808,6 +3836,85 @@ mod tests {
     }
 
     #[test]
+    fn pipeline_repo_commands_show_and_override_the_repo() {
+        let db = memory_db();
+        let caller = agent("tile-1", "ws-own");
+        for (id, name, remote) in [
+            (
+                "mc",
+                "media_components",
+                "https://dev.azure.com/skype/SCC/_git/repo-33770",
+            ),
+            (
+                "acs",
+                "acs_media_sdk",
+                "https://dev.azure.com/skype/SCC/_git/acs_media_sdk",
+            ),
+        ] {
+            db.execute(
+                "INSERT INTO projects (id, name, directory, git_remote, color, created_at, updated_at) VALUES (?1, ?2, '/x', ?3, '#fff', 'now', 'now')",
+                rusqlite::params![id, name, remote],
+            )
+            .unwrap();
+        }
+        let added = call(
+            &db,
+            &caller,
+            "inbox.pipeline_add",
+            serde_json::json!({"url":"https://dev.azure.com/skype/SCC/_build?definitionId=33770"}),
+        )
+        .unwrap();
+        let id = added.data["id"].as_str().unwrap().to_string();
+        let shown = |db: &Connection| {
+            call(db, &caller, "inbox.pipelines", serde_json::Value::Null)
+                .unwrap()
+                .data[0]
+                .clone()
+        };
+        let first = shown(&db);
+        assert_eq!(first["ado_repo"]["name"], "repo-33770");
+        assert_eq!(first["repos"][0]["id"], "mc");
+        assert_eq!(first["repo_source"], "auto");
+
+        let set = |repo: &str| {
+            call(
+                &db,
+                &caller,
+                "inbox.pipeline_set_repo",
+                serde_json::json!({"pipeline": id, "repo": repo}),
+            )
+        };
+        set("acs").unwrap();
+        let manual = shown(&db);
+        assert_eq!(
+            (
+                manual["repos"][0]["id"].as_str(),
+                manual["repo_source"].as_str()
+            ),
+            (Some("acs"), Some("manual"))
+        );
+        set("none").unwrap();
+        assert_eq!(shown(&db)["repos"].as_array().unwrap().len(), 0);
+        set("auto").unwrap();
+        assert_eq!(shown(&db), first);
+
+        let err = call(
+            &db,
+            &caller,
+            "inbox.pipeline_set_repo",
+            serde_json::json!({"pipeline": "ghost", "repo": "auto"}),
+        )
+        .unwrap_err();
+        assert!(err.message.contains("isn't watched"), "{}", err.message);
+        let err = set("nope").unwrap_err();
+        assert!(
+            err.message.contains("No repo with id nope"),
+            "{}",
+            err.message
+        );
+    }
+
+    #[test]
     fn pipeline_commands_do_what_the_inbox_ui_does() {
         let db = memory_db();
         let caller = agent("tile-1", "ws-own");
@@ -3883,6 +3990,7 @@ mod tests {
                 branch: "main".into(),
                 trigger: "Scheduled".into(),
                 finished_at: "2026-01-01T00:00:00Z".into(),
+                repository: None,
             }],
         )
         .unwrap();
