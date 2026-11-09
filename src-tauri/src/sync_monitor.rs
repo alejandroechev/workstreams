@@ -254,12 +254,8 @@ pub fn store_check(db: &Connection, check: &Check) -> Result<(), String> {
         [check.at - KEEP_MS],
     )
     .map_err(|e| e.to_string())?;
-    // Alerts older than a week are history nobody reads.
-    db.execute(
-        "DELETE FROM sync_events WHERE at < ?1",
-        [check.at - 7 * KEEP_MS],
-    )
-    .map_err(|e| e.to_string())?;
+    // Alerts are never pruned here: read ones expire with the rest of the
+    // Inbox (ADR 041), and unread ones stay until read.
     Ok(())
 }
 
@@ -489,6 +485,24 @@ mod tests {
         );
         assert_eq!(kept.len(), 25);
         assert_eq!(kept[0].vitals.as_ref().unwrap()["box"]["cpuPercent"], 2.0);
+    }
+
+    #[test]
+    fn checks_never_delete_alerts_only_inbox_expiry_does() {
+        let mut db = db();
+        let old = Event {
+            id: "cpu-1-started".into(),
+            kind: "cpu".into(),
+            event: "started".into(),
+            at: 1,
+            message: "m".into(),
+            hint: "h".into(),
+            is_read: false,
+        };
+        apply(&mut db, &[], std::slice::from_ref(&old)).unwrap();
+        let s = stub();
+        store_check(&db, &run_check(&s, "u", Some("k"), 30 * KEEP_MS)).unwrap();
+        assert_eq!(events(&db, 10).unwrap(), vec![old], "an unread alert stays");
     }
 
     #[test]

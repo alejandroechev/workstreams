@@ -15,6 +15,7 @@ import { usePrInbox } from "./workstream/usePrInbox";
 import { PrInboxModal } from "./workstream/PrInboxModal";
 import { startPendingInvestigations } from "./workstream/investigate";
 import type { AgentMessage } from "./domain/agent-messages";
+import { revealTile } from "./tiling/reveal-tile";
 import { SyncPanel } from "./sync-monitor/SyncPanel";
 import { useSyncMonitor } from "./sync-monitor/useSyncMonitor";
 import { statusLevel } from "./domain/sync-monitor";
@@ -2177,17 +2178,18 @@ export default function App() {
   const pendingTileFocus = useRef<{ wsId: string; tileId: string } | null>(null);
   const applyPendingTileFocus = (states: Map<string, WsState>) => {
     const pending = pendingTileFocus.current;
-    if (!pending) return;
-    const index = states.get(pending.wsId)?.tileOrder.indexOf(pending.tileId) ?? -1;
-    if (index < 0) return;
+    const current = pending && states.get(pending.wsId);
+    const revealed = current && revealTile(current, pending.tileId);
+    if (!pending || !revealed) return;
     pendingTileFocus.current = null;
     setWsStates((prev) => {
-      const current = prev.get(pending.wsId);
-      if (!current) return prev;
+      if (!prev.has(pending.wsId)) return prev;
       const next = new Map(prev);
-      next.set(pending.wsId, { ...current, focusedIndex: index, fullscreenTileId: null });
+      next.set(pending.wsId, revealTile(prev.get(pending.wsId)!, pending.tileId) ?? prev.get(pending.wsId)!);
       return next;
     });
+    // Even when it was already focused: the Inbox took keyboard focus.
+    setFocusToken((n) => n + 1);
   };
   const openAgentMessage = useCallback(
     (message: AgentMessage) => {
