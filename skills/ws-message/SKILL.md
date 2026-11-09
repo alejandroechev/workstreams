@@ -79,4 +79,5 @@ the message in the terminal.
 | `BAD_MESSAGE` | Unknown level, missing or over-long title, or a body over 20000 characters. Fix it and send again. |
 | `RATE_LIMITED` | This session sent 20 messages in the last hour. Wait, or combine them into one. |
 | `NOT_A_SESSION` | The caller isn't a Copilot session in Workstreams. Answer in the terminal. |
+| `NO_IDENTITY` | No session token reached Workstreams (not run from a session tile). Answer in the terminal. |
 | exit code 3 or 4 | Workstreams is not running, or this is not a Workstreams session. Answer in the terminal. |
