@@ -254,7 +254,8 @@ describe("LoopControlTile definitions tab", () => {
         "aria-selected",
       ),
     ).toBe("true");
-    expect(screen.getByTestId("loop-definition-editor-path").textContent).toBe(
+    // The catalog loads asynchronously; under a loaded test run it lands after the tab.
+    expect((await screen.findByTestId("loop-definition-editor-path")).textContent).toBe(
       first.path,
     );
 
