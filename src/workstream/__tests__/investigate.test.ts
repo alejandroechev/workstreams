@@ -46,4 +46,32 @@ describe("starting investigation sessions", () => {
     expect(d.unmarkSpawned).toHaveBeenCalled();
     expect(await backend.pendingInvestigationSessions()).toHaveLength(1);
   });
+
+  it("refuses runs that aren't failures or don't exist", async () => {
+    const { backend } = await setup();
+    await expect(backend.startPipelineInvestigation("nope")).rejects.toThrow("No pipeline notification");
+    const watch = (await backend.getPrInbox()).pipelines![0];
+    await backend.setPipelineWatchMode(watch.id, "both");
+    backend.finishPipelineRun(watch.id, { id: 10, number: "10", result: "succeeded", finished_at: "2100-01-02T00:00:00Z" });
+    const ok = (await backend.getPrInbox()).pipeline_items!.find((i) => i.result === "succeeded")!;
+    await expect(backend.startPipelineInvestigation(ok.id)).rejects.toThrow("Only failed runs");
+  });
+
+  it("reuses a run's investigation, and starts afresh once its workstream is gone", async () => {
+    const { backend, item } = await setup();
+    const first = await backend.startPipelineInvestigation(item.id);
+    expect(await backend.startPipelineInvestigation(item.id)).toEqual({ workstream_id: first.workstream_id, created: false });
+    await backend.deleteWorkstream(first.workstream_id);
+    expect((await backend.getPrInbox()).pipeline_items![0].investigation).toBeNull();
+    expect((await backend.startPipelineInvestigation(item.id)).created).toBe(true);
+  });
+
+  it("skips an investigation already being started", async () => {
+    const { backend, item } = await setup();
+    await backend.startPipelineInvestigation(item.id);
+    const d = deps(backend);
+    d.inFlight.add(item.id);
+    await startPendingInvestigations(d);
+    expect(d.spawn).not.toHaveBeenCalled();
+  });
 });

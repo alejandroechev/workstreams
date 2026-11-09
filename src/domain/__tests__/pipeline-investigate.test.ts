@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { investigationBranch, investigationName, investigationPrompt } from "../pipeline-investigate";
+import { investigationBase, investigationBranch, investigationName, investigationPrompt } from "../pipeline-investigate";
 import type { PipelineItem } from "../pipeline-inbox";
 
 const item: PipelineItem = {
@@ -26,5 +26,19 @@ describe("pipeline investigations (mirror of the native rules)", () => {
     expect(investigationPrompt(item, { kind: "standalone", repo: "SCC/x", failure: null })).toContain("no local checkout");
     expect(investigationPrompt(item, { kind: "standalone", repo: "media_components", failure: "branch gone" }))
       .toContain("creating a worktree of media_components failed (branch gone)");
+  });
+
+  it("branches from the run's branch, but not from a non-branch ref", () => {
+    expect(investigationBase(item)).toBe("origin/release/2.4");
+    expect(investigationBase({ ...item, branch: "refs/pull/12/merge" })).toBeNull();
+    expect(investigationBase({ ...item, branch: " " })).toBeNull();
+    const fromDefault = investigationPrompt(item, { kind: "worktree", repo: "media_components", branch: "investigate/x", base: null });
+    expect(fromDefault).toContain("created from the default branch; the run built release/2.4");
+  });
+
+  it("copes with no repo and a URL it can't read", () => {
+    const text = investigationPrompt({ ...item, url: "not a url" }, { kind: "standalone", repo: "", failure: null });
+    expect(text).toContain("Repo: none linked");
+    expect(text).toContain("--org https://dev.azure.com/<organization>");
   });
 });
