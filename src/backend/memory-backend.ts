@@ -13,6 +13,15 @@ import {
   pipelineRepoView,
   type AdoRepoRef,
 } from "../domain/pipeline-inbox";
+import {
+  investigationBase,
+  investigationBranch,
+  investigationName,
+  investigationPrompt,
+  type InvestigationPlacement,
+  type InvestigationStarted,
+  type PendingInvestigation,
+} from "../domain/pipeline-investigate";
 
 import { baseKind, MUTE_KINDS, type SyncCheck, type SyncEvent, type SyncMonitorState, type SyncProblem, type SyncThresholds, type SyncVitals } from "../domain/sync-monitor";
 import {
@@ -152,7 +161,12 @@ export class MemoryBackend implements Backend {
       pipeline_items: [...this.pipelineItems]
         .map((item) => {
           const watch = this.pipelineWatches.find((w) => w.status.id === item.pipeline_id);
-          return { ...item, repo: watch ? this.pipelineWithRepo(watch).repo_label : null };
+          const investigation = this.investigations.get(item.id);
+          return {
+            ...item,
+            repo: watch ? this.pipelineWithRepo(watch).repo_label : null,
+            investigation: investigation && this.workstreams.has(investigation.workstream_id) ? investigation.workstream_id : null,
+          };
         })
         .sort((a, b) => compareTimes(b.finished_at, a.finished_at) || b.run_id - a.run_id),
     });
@@ -572,6 +586,69 @@ export class MemoryBackend implements Backend {
     return { ...watch.status, ado_repo: watch.adoRepo, ...pipelineRepoView(watch.adoRepo, watch.override, [...this.projects.values()]) };
   }
 
+  // ── Pipeline investigations (mirror of src-tauri/src/pipeline_investigate.rs) ──
+  private adoRequests = 0;
+  /** How many times this backend asked Azure DevOps (adding pipelines). */
+  adoRequestCount(): number { return this.adoRequests; }
+  private investigations = new Map<string, PendingInvestigation & { started: boolean }>();
+  private investigationWorktreeFailure: string | null = null;
+  private investigationWorktrees: Array<{ directory: string; branch: string; base: string | null }> = [];
+  /** Where standalone investigations work (the home directory natively). */
+  investigationHome = "/Users/demo";
+
+  /** Makes worktree creation for investigations fail with this git error; null to stop. */
+  failInvestigationWorktree(error: string | null): void { this.investigationWorktreeFailure = error; }
+  /** The worktrees investigations asked git for. */
+  investigationWorktreeRequests(): Array<{ directory: string; branch: string; base: string | null }> {
+    return structuredClone(this.investigationWorktrees);
+  }
+
+  async startPipelineInvestigation(itemId: string): Promise<InvestigationStarted> {
+    const item = this.pipelineItems.find((i) => i.id === itemId);
+    if (!item) throw new Error(`No pipeline notification with id ${itemId}`);
+    if (item.result !== "failed") throw new Error(`Only failed runs can be investigated; run #${item.run_number} ${item.result}`);
+    const existing = this.investigations.get(itemId);
+    if (existing && this.workstreams.has(existing.workstream_id)) return { workstream_id: existing.workstream_id, created: false };
+    const watch = this.pipelineWatches.find((w) => w.status.id === item.pipeline_id);
+    const status = watch ? this.pipelineWithRepo(watch) : null;
+    const linked = status?.repos[0] ? this.projects.get(status.repos[0].id) : undefined;
+    const repoLabel = linked?.name ?? (status?.ado_repo ? `${status.ado_repo.project}/${status.ado_repo.name}` : "");
+    let placement: InvestigationPlacement;
+    let directory = this.investigationHome;
+    if (linked) {
+      const branch = investigationBranch(item);
+      const base = investigationBase(item);
+      this.investigationWorktrees.push({ directory: linked.directory, branch, base });
+      if (this.investigationWorktreeFailure) {
+        placement = { kind: "standalone", repo: linked.name, failure: this.investigationWorktreeFailure };
+      } else {
+        placement = { kind: "worktree", repo: linked.name, branch, base };
+        directory = `${linked.directory}-${branch.replace(/\//g, "-")}`;
+      }
+    } else {
+      placement = { kind: "standalone", repo: repoLabel, failure: null };
+    }
+    const worktree = placement.kind === "worktree";
+    const ws = await this.createWorkstream(investigationName(item), directory, {
+      projectId: worktree ? linked!.id : undefined,
+      workstreamType: worktree ? "worktree" : "standalone",
+      worktreeBranch: placement.kind === "worktree" ? placement.branch : undefined,
+    });
+    this.investigations.set(itemId, { event_id: itemId, workstream_id: ws.id, directory, prompt: investigationPrompt(item, placement), started: false });
+    return { workstream_id: ws.id, created: true };
+  }
+
+  async pendingInvestigationSessions(): Promise<PendingInvestigation[]> {
+    return [...this.investigations.values()]
+      .filter((i) => !i.started && this.workstreams.has(i.workstream_id))
+      .map(({ started: _started, ...rest }) => ({ ...rest }));
+  }
+
+  async markInvestigationSessionStarted(eventId: string): Promise<void> {
+    const investigation = this.investigations.get(eventId);
+    if (investigation) investigation.started = true;
+  }
+
   /** Sets a repo's git remote, as the native side detects it from the folder. */
   setProjectRemote(id: string, remote: string | null): void {
     const project = this.projects.get(id);
@@ -602,6 +679,7 @@ export class MemoryBackend implements Backend {
     if (!link) {
       throw new Error("That isn't an Azure DevOps pipeline or run link. Paste a link to a pipeline (…/_build?definitionId=…) or one of its runs (…/_build/results?buildId=…).");
     }
+    this.adoRequests += 1;
     if (this.pipelineAuthError) {
       throw new Error("Azure CLI authentication failed. Install az and run az login for your ADO account.");
     }

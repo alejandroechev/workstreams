@@ -538,6 +538,8 @@ pub struct PipelineItem {
     pub discovered_at: String,
     /// The pipeline's repo, as its chip shows it.
     pub repo: Option<String>,
+    /// The workstream investigating this run, when there is one.
+    pub investigation: Option<String>,
 }
 
 fn pipeline_url(org: &str, project: &str, definition_id: u64) -> String {
@@ -702,8 +704,10 @@ pub fn items(db: &Connection) -> Result<Vec<PipelineItem>, String> {
     let mut stmt = db
         .prepare(
             "SELECT e.id,w.id,w.name,w.organization,w.project_name,e.run_id,e.run_number,e.result,
-            e.branch,e.trigger_label,e.finished_at,e.is_read,e.created_at,w.ado_repo,w.repo_override
+            e.branch,e.trigger_label,e.finished_at,e.is_read,e.created_at,w.ado_repo,w.repo_override,ws.id
             FROM pipeline_events e JOIN pipeline_watches w ON w.id=e.watch_id
+            LEFT JOIN pipeline_investigations i ON i.event_id=e.id
+            LEFT JOIN workstreams ws ON ws.id=i.workstream_id
             ORDER BY julianday(e.finished_at) DESC, e.run_id DESC, e.created_at DESC",
         )
         .map_err(|e| e.to_string())?;
@@ -727,6 +731,7 @@ pub fn items(db: &Connection) -> Result<Vec<PipelineItem>, String> {
                 is_read: r.get(11)?,
                 discovered_at: r.get(12)?,
                 repo: None,
+                investigation: r.get(15)?,
             };
             Ok((
                 parse_stored(r.get(13)?),
@@ -744,6 +749,35 @@ pub fn items(db: &Connection) -> Result<Vec<PipelineItem>, String> {
             Ok(item)
         })
         .collect()
+}
+
+/// A notification, its pipeline's Workstreams repos and the repo ADO reports.
+pub(crate) type ItemWithRepos = (PipelineItem, Vec<RepoRef>, Option<AdoRepoRef>);
+
+/// One notification with its pipeline's Workstreams repos as shown (override
+/// or automatic) and the repo ADO reports, for an investigation.
+pub(crate) fn item_with_repos(
+    db: &Connection,
+    event_id: &str,
+) -> Result<Option<ItemWithRepos>, String> {
+    let row: Option<(Option<String>, Option<String>)> = db
+        .query_row(
+            "SELECT w.ado_repo, w.repo_override FROM pipeline_events e
+            JOIN pipeline_watches w ON w.id=e.watch_id WHERE e.id=?1",
+            [event_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+    let Some((ado, over)) = row else {
+        return Ok(None);
+    };
+    let ado = parse_stored(ado);
+    let view = KnownRepos::load(db)?.view(db, ado.as_ref(), over.as_deref())?;
+    Ok(items(db)?
+        .into_iter()
+        .find(|i| i.id == event_id)
+        .map(|item| (item, view.repos, ado)))
 }
 
 /// Marks a pipeline notification read or unread. `false` when there is no

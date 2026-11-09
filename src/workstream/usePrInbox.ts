@@ -76,5 +76,12 @@ export function usePrInbox(backend: Backend) {
     setRevision((value) => value + 1);
   }, [backend]);
 
-  return { snapshot, error, loading, configure, setRead, mute, resetMutes, addPipeline, setPipelineMode, setPipelineRepo, removePipeline };
+  // Investigate a failed run (ADR 038): the notification's read state is left alone.
+  const investigate = useCallback(async (itemId: string) => {
+    const started = await backend.startPipelineInvestigation(itemId);
+    setRevision((value) => value + 1);
+    return started;
+  }, [backend]);
+
+  return { snapshot, error, loading, configure, setRead, mute, resetMutes, addPipeline, setPipelineMode, setPipelineRepo, removePipeline, investigate };
 }

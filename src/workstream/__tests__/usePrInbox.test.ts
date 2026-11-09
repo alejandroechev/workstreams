@@ -71,4 +71,19 @@ describe("pipelines through the inbox hook", () => {
     await act(async () => { await result.current.removePipeline(id); });
     expect(result.current.snapshot.pipelines).toEqual([]);
   });
+
+  it("investigates a failed run and shows the run's investigation right away", async () => {
+    const backend = new MemoryBackend();
+    backend.seedPipelineDefinition({ organization: "o", project: "P", definition_id: 1, name: "Nightly" });
+    const watch = await backend.addPipelineWatch("https://dev.azure.com/o/P/_build?definitionId=1", "failures");
+    backend.finishPipelineRun(watch.id, { id: 3, number: "3", result: "failed", finished_at: "2100-01-01T00:00:00Z" });
+    const { result } = renderHook(() => usePrInbox(backend));
+    await act(async () => {});
+    const item = result.current.snapshot.pipeline_items![0];
+    let started = { workstream_id: "", created: false };
+    await act(async () => { started = await result.current.investigate(item.id); });
+    expect(started.created).toBe(true);
+    expect(result.current.snapshot.pipeline_items![0].investigation).toBe(started.workstream_id);
+    expect(result.current.snapshot.pipeline_items![0].is_read).toBe(false);
+  });
 });

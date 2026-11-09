@@ -196,6 +196,12 @@ pub trait Provisioner: Send + Sync {
         branch: &str,
         base_branch: Option<&str>,
     ) -> Result<String, String>;
+
+    /// Fetches `branch` from origin into `project_directory`'s repo, so a
+    /// worktree can start from `origin/<branch>`. Fakes need not fetch.
+    fn fetch_branch(&self, _project_directory: &str, _branch: &str) -> Result<(), String> {
+        Ok(())
+    }
 }
 
 /// Where a worktree would go, and whether something is already there.
@@ -551,6 +557,14 @@ pub const COMMANDS: &[Command] = &[
         handler: inbox_pipeline_mode,
     },
     Command {
+        id: "inbox.investigate",
+        log_params: &["item"],
+        summary: "Investigate a failed pipeline run (params: item = its notification id): makes a workstream for it (a worktree of its repo from the run's branch, else standalone) whose Copilot session the app starts with the run's context; returns {workstream_id, created}, or the existing investigation",
+        requires_identity: true,
+        destructive: false,
+        handler: inbox_investigate,
+    },
+    Command {
         id: "inbox.pipeline_set_repo",
         log_params: &["pipeline", "repo"],
         summary: "Set a watched pipeline's repo by hand (params: pipeline = its id, repo = a repo id, none, or auto to follow ADO again)",
@@ -849,6 +863,35 @@ fn inbox_pipeline_mode(
     Ok(CommandOutcome::changed(
         serde_json::json!({"id":id,"mode":mode}),
         StateChange::new("pr_inbox", id, "pipeline_mode"),
+    ))
+}
+
+fn inbox_investigate(
+    context: &CommandContext,
+    params: &serde_json::Value,
+) -> Result<CommandOutcome, AgentError> {
+    use crate::pipeline_investigate as investigate;
+    let item = required_str(params, "item")?;
+    let target = investigate::target(context.db, &item).map_err(inbox_error)?;
+    let started = match investigate::existing(context.db, &item).map_err(inbox_error)? {
+        Some(id) => investigate::Started {
+            workstream_id: id,
+            created: false,
+        },
+        None => {
+            // Holds the lock while git runs, like ws.create's worktrees.
+            let placement =
+                investigate::place(context.provisioner, &target, &investigate::home_dir());
+            let created_by = match context.caller {
+                Some(Caller::Agent { tile_id, .. }) => Some(tile_id.clone()),
+                _ => None,
+            };
+            investigate::record(context.db, &target, &placement, created_by).map_err(inbox_error)?
+        }
+    };
+    Ok(CommandOutcome::changed(
+        serde_json::json!(started),
+        StateChange::new("pipeline_investigation", &started.workstream_id, "started"),
     ))
 }
 
@@ -3832,6 +3875,94 @@ mod tests {
             crate::ado_planning::load_draft(&db).unwrap().len(),
             1,
             "the conflicting change stays in the draft"
+        );
+    }
+
+    #[test]
+    fn inbox_investigate_creates_or_reuses_an_investigation() {
+        let db = memory_db();
+        let caller = agent("tile-1", "ws-own");
+        db.execute(
+            "INSERT INTO projects (id, name, directory, git_remote, color, created_at, updated_at) VALUES ('mc', 'media_components', '/code/mc', 'https://dev.azure.com/skype/SCC/_git/repo-33770', '#fff', 'now', 'now')",
+            [],
+        )
+        .unwrap();
+        let added = call(
+            &db,
+            &caller,
+            "inbox.pipeline_add",
+            serde_json::json!({"url":"https://dev.azure.com/skype/SCC/_build?definitionId=33770"}),
+        )
+        .unwrap();
+        let watch = added.data["id"].as_str().unwrap().to_string();
+        for (id, result) in [("n1", "failed"), ("n2", "succeeded")] {
+            db.execute(
+                "INSERT INTO pipeline_events (id, watch_id, run_id, run_number, result, branch, trigger_label, finished_at, created_at)
+                VALUES (?1, ?2, 7, '20261105.3', ?3, 'release/2.4', 'Scheduled', '2026-11-05T08:10:44Z', 'now')",
+                rusqlite::params![id, watch, result],
+            )
+            .unwrap();
+        }
+        let git = FakeProvisioner::default();
+        let first = call_with(
+            &db,
+            &caller,
+            "inbox.investigate",
+            serde_json::json!({"item": "n1"}),
+            &git,
+        )
+        .unwrap();
+        assert_eq!(first.data["created"], true);
+        let ws = first.data["workstream_id"].as_str().unwrap().to_string();
+        assert_eq!(
+            *git.created.lock().unwrap(),
+            vec![(
+                "/code/mc".to_string(),
+                "investigate/pipeline-33770-20261105.3".to_string(),
+                Some("origin/release/2.4".to_string())
+            )]
+        );
+        let again = call(
+            &db,
+            &caller,
+            "inbox.investigate",
+            serde_json::json!({"item": "n1"}),
+        )
+        .unwrap();
+        assert_eq!(
+            (
+                again.data["workstream_id"].as_str(),
+                again.data["created"].as_bool()
+            ),
+            (Some(ws.as_str()), Some(false))
+        );
+        assert_eq!(
+            crate::pipeline_investigate::pending_sessions(&db)
+                .unwrap()
+                .len(),
+            1
+        );
+
+        let err = call(
+            &db,
+            &caller,
+            "inbox.investigate",
+            serde_json::json!({"item": "n2"}),
+        )
+        .unwrap_err();
+        assert!(err.message.contains("Only failed runs"), "{}", err.message);
+        let err = call(
+            &db,
+            &caller,
+            "inbox.investigate",
+            serde_json::json!({"item": "nope"}),
+        )
+        .unwrap_err();
+        assert!(
+            err.message
+                .contains("No pipeline notification with id nope"),
+            "{}",
+            err.message
         );
     }
 

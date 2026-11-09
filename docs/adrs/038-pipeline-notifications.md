@@ -121,6 +121,38 @@ never a requirement, and there's no per-repo pipeline view.
   `repo_source` (`auto` | `manual`) and `repo_label`, and
   `inbox.pipeline_set_repo pipeline= repo=<id|none|auto>` sets the override.
 
+## Amendment (2026-11-06): Investigate a failed run
+
+A failed run in the Inbox has an **Investigate** button. One click makes a
+workstream for that run and starts a Copilot session in it, with a prompt
+describing the run. The Inbox stays open, the active workstream stays the same,
+and the notification's read state doesn't change.
+
+- **A new workstream per run**, named `Investigate <pipeline> #<run>`. If the
+  pipeline has a repo, it's a worktree of the first linked repo on a new branch
+  `investigate/<pipeline>-<run>`, from `origin/<run branch>` (fetched first). A
+  run whose branch isn't a branch (`refs/pull/…`, tags) uses the repo's default
+  base. With no repo, or if the worktree can't be made, it's a standalone
+  workstream in the home directory, and the prompt says why there's no checkout.
+- **The prompt carries identifiers and links only.** Pipeline, project, run
+  number and id, result, branch, trigger, finish time, repo and run URL; then an
+  instruction to fetch the failing steps and logs with `az`, and the goal: find
+  the root cause, classify it as code, pipeline, infrastructure or flakiness,
+  propose a fix, and change nothing until asked. Workstreams makes no extra ADO
+  request. Fetching logs ourselves was rejected: the session can do it, and
+  the prompt stays small.
+- **One investigation per notification.** `pipeline_investigations(event_id,
+  workstream_id, prompt, session_started)` links them, so after a restart the
+  button reads **Open investigation** and switches to that workstream. Deleting
+  the workstream frees the run to be investigated again.
+- **Native side makes, app side starts.** The native command (or
+  `inbox.investigate` for agents) creates the workstream and records the
+  prompt. The app then starts every investigation whose session hasn't started:
+  right after a click, on a `pipeline_investigation` state change from an agent,
+  and on startup (so one interrupted mid-start gets its session). A session that
+  fails to start stays pending.
+- Not on the phone companion.
+
 ## References
 
 - [ADR 030: ADO PR inbox](030-ado-pr-inbox.md)

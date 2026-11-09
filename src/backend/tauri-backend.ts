@@ -4,6 +4,7 @@ import type { WorkLane } from "../domain/work-lanes";
 import type { PrInboxSnapshot, PrWatchMode, PrInboxMute } from "../domain/pr-inbox";
 import type { PipelineMode, PipelineStatus } from "../domain/pipeline-inbox";
 import type { SyncCheck, SyncEvent, SyncMonitorState, SyncProblem, SyncThresholds } from "../domain/sync-monitor";
+import type { InvestigationStarted, PendingInvestigation } from "../domain/pipeline-investigate";
 import type { Change, KtloFeature, OrphanHidden, OrphanReport, PlanningConnection, PlanningData, PlanningState, PublishResult } from "../domain/planning";
 import type { Project, Workstream, Tile, TileType, WorkstreamLayout, CopilotConfigItem } from "../domain/types";
 import type { SessionFileComment } from "../domain/file-comments";
@@ -148,6 +149,18 @@ export class TauriBackend implements Backend {
 
   async setPipelineWatchMode(id: string, mode: PipelineMode): Promise<void> {
     await invoke("set_pipeline_watch_mode", { id, mode });
+  }
+
+  async startPipelineInvestigation(item: string): Promise<InvestigationStarted> {
+    return invoke<InvestigationStarted>("start_pipeline_investigation", { item });
+  }
+
+  async pendingInvestigationSessions(): Promise<PendingInvestigation[]> {
+    return invoke<PendingInvestigation[]>("pipeline_investigation_pending");
+  }
+
+  async markInvestigationSessionStarted(eventId: string): Promise<void> {
+    await invoke("pipeline_investigation_session_started", { eventId });
   }
 
   async setPipelineWatchRepo(id: string, repo: string): Promise<void> {

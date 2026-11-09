@@ -444,6 +444,16 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
         -- One row per notification: a run reaching a result the mode watches.
         -- Unique on (pipeline, run, result), so a retried run that changes
         -- result notifies once more and never twice.
+        -- One investigation workstream per failed pipeline run (ADR 038).
+        -- session_started = 0 until the app has started its Copilot session.
+        CREATE TABLE IF NOT EXISTS pipeline_investigations (
+            event_id TEXT PRIMARY KEY,
+            workstream_id TEXT NOT NULL,
+            prompt TEXT NOT NULL,
+            session_started INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL
+        );
+
         CREATE TABLE IF NOT EXISTS pipeline_events (
             id TEXT PRIMARY KEY,
             watch_id TEXT NOT NULL REFERENCES pipeline_watches(id) ON DELETE CASCADE,

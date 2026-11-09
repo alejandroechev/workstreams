@@ -25,6 +25,7 @@ mod loop_verifier;
 mod loops;
 mod orphan_prs;
 mod pipeline_inbox;
+mod pipeline_investigate;
 mod pty;
 mod repo_create;
 mod session_link;
@@ -790,6 +791,57 @@ fn set_pipeline_watch_mode(
     let mode = pipeline_inbox::PipelineMode::parse(&mode)?;
     let db = state.db.lock().map_err(|e| e.to_string())?;
     pipeline_inbox::set_mode(&db, &id, mode)
+}
+
+/// Starts investigating a failed pipeline run, or returns its investigation.
+/// The git work runs off the IPC thread and without the database lock.
+#[tauri::command]
+async fn start_pipeline_investigation(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    item: String,
+) -> Result<pipeline_investigate::Started, String> {
+    let target = {
+        let db = state.db.lock().map_err(|e| e.to_string())?;
+        if let Some(id) = pipeline_investigate::existing(&db, &item)? {
+            return Ok(pipeline_investigate::Started {
+                workstream_id: id,
+                created: false,
+            });
+        }
+        pipeline_investigate::target(&db, &item)?
+    };
+    let placed = target.clone();
+    let placement = tauri::async_runtime::spawn_blocking(move || {
+        let provisioner = AppProvisioner { app };
+        pipeline_investigate::place(
+            Some(&provisioner),
+            &placed,
+            &pipeline_investigate::home_dir(),
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    pipeline_investigate::record(&db, &target, &placement, None)
+}
+
+/// Investigations whose Copilot session hasn't been started yet.
+#[tauri::command]
+fn pipeline_investigation_pending(
+    state: State<'_, AppState>,
+) -> Result<Vec<pipeline_investigate::PendingSession>, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    pipeline_investigate::pending_sessions(&db)
+}
+
+#[tauri::command]
+fn pipeline_investigation_session_started(
+    state: State<'_, AppState>,
+    event_id: String,
+) -> Result<(), String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    pipeline_investigate::mark_session_started(&db, &event_id)
 }
 
 /// Sets a pipeline's repo by hand: a repo id, "none", or "auto" to follow ADO.
@@ -1775,14 +1827,33 @@ impl agent_registry::Provisioner for AppProvisioner {
         // blocking on the answer, and telling it "created" before git has run
         // is what produced a workstream pointing at a directory that did not
         // exist. Pull the base first so a new branch starts from the real tip.
+        // A base on origin (an investigation's) was just fetched; pulling it
+        // as a local branch would fail and only add a request.
+        let pull = !base_branch.is_some_and(|b| b.starts_with("origin/"));
         create_worktree_inner(
             &self.app,
             "agent",
             project_directory,
             branch,
             base_branch,
-            true,
+            pull,
         )
+    }
+
+    fn fetch_branch(&self, project_directory: &str, branch: &str) -> Result<(), String> {
+        let out = git_cmd()
+            .args(["fetch", "origin", branch])
+            .current_dir(project_directory)
+            .output()
+            .map_err(|e| format!("git fetch failed: {e}"))?;
+        if out.status.success() {
+            Ok(())
+        } else {
+            Err(format!(
+                "git fetch origin {branch} failed: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            ))
+        }
     }
 }
 
@@ -6563,6 +6634,9 @@ pub fn run() {
             planning_unhide_orphan,
             set_pipeline_watch_mode,
             set_pipeline_watch_repo,
+            start_pipeline_investigation,
+            pipeline_investigation_pending,
+            pipeline_investigation_session_started,
             remove_pipeline_watch,
             set_pr_inbox_read,
             mute_pr_inbox_event,

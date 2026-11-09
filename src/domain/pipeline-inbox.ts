@@ -143,6 +143,8 @@ export interface PipelineItem {
   discovered_at: string;
   /** The pipeline's repo, as its chip shows it. */
   repo?: string | null;
+  /** The workstream investigating this run, when there is one. */
+  investigation?: string | null;
 }
 
 export interface PipelineGroup {

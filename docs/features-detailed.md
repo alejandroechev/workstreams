@@ -169,12 +169,22 @@ its result, run number, branch, trigger and finish time; clicking it opens the
 run in ADO and marks it read. See
 [ADR 038](adrs/038-pipeline-notifications.md).
 
+A failed run has an **Investigate** button. It creates a workstream named
+`Investigate <pipeline> #<run>`: a worktree of the pipeline's repo on
+`investigate/<pipeline>-<run>`, branched from the failed run's branch, or a
+standalone workstream when there's no repo or the worktree can't be made. A
+Copilot session starts there in the background with the run's details. It
+fetches the logs with `az`, then reports a diagnosis without changing anything.
+The Inbox stays open, so you can investigate several failures in a row. Once a
+run has an investigation, its button reads **Open investigation**.
+
 ```sh
 workstreams agent call inbox.pipeline_add url='https://dev.azure.com/<org>/<project>/_build/results?buildId=<n>' mode=failures
 workstreams agent call inbox.pipelines
 workstreams agent call inbox.pipeline_mode id=<pipeline-id> mode=both
 workstreams agent call inbox.pipeline_remove id=<pipeline-id>
 workstreams agent call inbox.pipeline_set_repo pipeline=<pipeline-id> repo=<repo-id|none|auto>
+workstreams agent call inbox.investigate item=<notification-id>
 ```
 
 `inbox.list` returns `pipelines` and `pipeline_items` next to the PR events,

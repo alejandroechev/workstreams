@@ -346,6 +346,39 @@ describe("Inbox, pipelines (ADR 038)", () => {
     expect(screen.getByTestId("inbox-pipelines-empty")).toHaveTextContent("No pipeline notifications");
   });
 
+  it("offers Investigate on failed runs only, without marking them read", async () => {
+    let finish: () => void = () => {};
+    const onInvestigate = vi.fn(() => new Promise<void>((resolve) => { finish = resolve; }));
+    const { onRead } = renderInbox({ onInvestigate });
+    expect(screen.queryByTestId("pipeline-investigate-n1")).toBeNull();
+    const button = screen.getByTestId("pipeline-investigate-r2");
+    expect(button).toHaveTextContent("Investigate");
+    fireEvent.click(button);
+    expect(onInvestigate).toHaveBeenCalledWith("r2");
+    await waitFor(() => expect(screen.getByTestId("pipeline-investigate-r2")).toHaveTextContent("Starting…"));
+    expect(screen.getByTestId("pipeline-investigate-r2")).toBeDisabled();
+    finish();
+    await waitFor(() => expect(screen.getByTestId("pipeline-investigate-r2")).toHaveTextContent("Investigate"));
+    expect(onRead).not.toHaveBeenCalled();
+  });
+
+  it("opens a run's existing investigation instead of starting another", () => {
+    const onInvestigate = vi.fn();
+    const onOpenWorkstream = vi.fn();
+    renderInbox({ onInvestigate, onOpenWorkstream, snapshot: { ...both, pipeline_items: [run({ id: "r2", investigation: "ws-9" })] } });
+    const button = screen.getByTestId("pipeline-investigate-r2");
+    expect(button).toHaveTextContent("Open investigation");
+    fireEvent.click(button);
+    expect(onOpenWorkstream).toHaveBeenCalledWith("ws-9");
+    expect(onInvestigate).not.toHaveBeenCalled();
+  });
+
+  it("shows why an investigation could not start", async () => {
+    renderInbox({ onInvestigate: vi.fn().mockRejectedValue(new Error("Only failed runs can be investigated")) });
+    fireEvent.click(screen.getByTestId("pipeline-investigate-r2"));
+    expect(await screen.findByText(/Only failed runs can be investigated/)).toBeInTheDocument();
+  });
+
   it("shows a pipeline whose check failed", () => {
     renderInbox({ snapshot: { ...both, pipelines: [{
       id: "w", organization: "skype", project: "SCC", definition_id: 1, name: "agency_pipeline_watchdog", url: "u", mode: "failures",

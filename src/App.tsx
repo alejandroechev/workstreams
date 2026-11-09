@@ -13,6 +13,7 @@ import { fileBufferRegistry } from "./files/FileBufferRegistry";
 import WorkstreamSidebar from "./workstream/WorkstreamSidebar";
 import { usePrInbox } from "./workstream/usePrInbox";
 import { PrInboxModal } from "./workstream/PrInboxModal";
+import { startPendingInvestigations } from "./workstream/investigate";
 import { SyncPanel } from "./sync-monitor/SyncPanel";
 import { useSyncMonitor } from "./sync-monitor/useSyncMonitor";
 import { statusLevel } from "./domain/sync-monitor";
@@ -134,6 +135,8 @@ export default function App() {
   const [activeWsId, setActiveWsId] = useState<string | null>(null);
   const activeWsIdRef = useRef(activeWsId);
   useEffect(() => { activeWsIdRef.current = activeWsId; }, [activeWsId]);
+  // Set once startInvestigationSessions exists (below); read by the state-changed listener.
+  const startInvestigationSessionsRef = useRef<() => Promise<void>>(async () => {});
   /**
    * Worktree workstreams created here that open once provisioned, each with
    * the workstream that was active when it was created (ADR 011, amended).
@@ -491,10 +494,16 @@ export default function App() {
         setCompanionSessionsVersion((v) => v + 1);
         return;
       }
-      if (event.payload?.entity !== "workstream") return;
+      const entity = event.payload?.entity;
+      if (entity !== "workstream" && entity !== "pipeline_investigation") return;
       backend
         .listWorkstreams()
-        .then(setWorkstreams)
+        .then((list) => {
+          workstreamsRef.current = list;
+          setWorkstreams(list);
+          // An agent's inbox.investigate: start its session here, in the background.
+          if (entity === "pipeline_investigation") return startInvestigationSessionsRef.current();
+        })
         .catch((error) =>
           console.error("Failed to reload workstreams:", error),
         );
@@ -2129,6 +2138,47 @@ export default function App() {
   );
 
   /**
+   * Starts the Copilot session of every investigation that has none yet
+   * (ADR 038): in the background, leaving the active workstream alone.
+   */
+  const investigationsInFlight = useRef<Set<string>>(new Set());
+  const startInvestigationSessions = useCallback(
+    (): Promise<void> =>
+      startPendingInvestigations({
+        backend,
+        mount: mountWorkstream,
+        onTileCreated: upsertTileLocally,
+        markSpawned: (tileId) => { spawnedPtys.current.add(tileId); },
+        unmarkSpawned: (tileId) => { spawnedPtys.current.delete(tileId); },
+        commandFor: commandForWsId,
+        spawn: async (tileId, cwd, command, prompt) => { await backend.spawnCopilotSession(tileId, cwd, null, 30, 120, command, prompt); },
+        inFlight: investigationsInFlight.current,
+      }),
+    [backend, mountWorkstream, upsertTileLocally, commandForWsId],
+  );
+  useEffect(() => {
+    startInvestigationSessionsRef.current = startInvestigationSessions;
+  }, [startInvestigationSessions]);
+
+  const investigatePipelineRun = useCallback(
+    async (itemId: string) => {
+      await inbox.investigate(itemId);
+      const list = await backend.listWorkstreams();
+      workstreamsRef.current = list;
+      setWorkstreams(list);
+      await startInvestigationSessions();
+    },
+    [backend, inbox, startInvestigationSessions],
+  );
+
+  // An investigation left without a session (the app closed mid-start) gets one now.
+  useEffect(() => {
+    void startInvestigationSessionsRef.current().catch((error) =>
+      console.error("Failed to start pending investigations:", error),
+    );
+  }, [backend]);
+
+  /**
    * Delivers a phone message to an existing session tile: stops it and
    * resumes the same Copilot session there with the message as its prompt.
    */
@@ -2327,6 +2377,8 @@ export default function App() {
           onOpenPipelines={() => setShowPipelines(true)}
           syncEvents={syncMonitor.state?.events ?? []}
           onSyncRead={syncMonitor.setRead}
+          onInvestigate={investigatePipelineRun}
+          onOpenWorkstream={(id) => { setShowInbox(false); selectWorkstream(id); }}
           onClose={() => setShowInbox(false)} />
       )}
       {showPlanning && <PlanningView planning={planning} onClose={() => setShowPlanning(false)} />}

@@ -4,6 +4,7 @@ import type { WorkLane } from "../domain/work-lanes";
 import type { PrInboxMute, PrInboxSnapshot, PrWatchMode } from "../domain/pr-inbox";
 import type { PipelineMode, PipelineStatus } from "../domain/pipeline-inbox";
 import type { SyncCheck, SyncEvent, SyncMonitorState, SyncProblem, SyncThresholds } from "../domain/sync-monitor";
+import type { InvestigationStarted, PendingInvestigation } from "../domain/pipeline-investigate";
 import type { Change, KtloFeature, OrphanHidden, OrphanReport, PlanningConnection, PlanningData, PlanningState, PublishResult } from "../domain/planning";
 import type { Project, Workstream, Tile, TileType, WorkstreamLayout, CopilotConfigItem } from "../domain/types";
 import type { SessionFileComment } from "../domain/file-comments";
@@ -80,6 +81,11 @@ export interface Backend {
   removePipelineWatch(id: string): Promise<void>;
   /** Sets a pipeline's repo by hand: a repo id, "none", or "auto" to follow what ADO says again. */
   setPipelineWatchRepo(id: string, repo: string): Promise<void>;
+  /** Makes (or returns) the investigation workstream of a failed run (by notification id). */
+  startPipelineInvestigation(item: string): Promise<InvestigationStarted>;
+  /** Investigations whose Copilot session hasn't been started yet. */
+  pendingInvestigationSessions(): Promise<PendingInvestigation[]>;
+  markInvestigationSessionStarted(eventId: string): Promise<void>;
   // Planning (ADR 039)
   /** The saved connection, selected sprint and draft. */
   planningState(): Promise<PlanningState>;

@@ -28,6 +28,10 @@ interface Props {
   /** Sync server alerts (ADR 040), newest first. */
   syncEvents?: SyncEvent[];
   onSyncRead?: (id: string, isRead: boolean) => Promise<void>;
+  /** Starts investigating a failed run in a new workstream (by notification id). */
+  onInvestigate?: (itemId: string) => Promise<void>;
+  /** Switches to a workstream, e.g. a run's existing investigation. */
+  onOpenWorkstream?: (workstreamId: string) => void;
   onClose: () => void;
 }
 
@@ -40,7 +44,8 @@ interface Props {
  * reached from the same sidebar footer, so a different shell read as a
  * different app.
  */
-export function PrInboxModal({ snapshot, loading, error, onRead, onMute, onResetMutes, onOpenPipelines, syncEvents = [], onSyncRead, onClose }: Props) {
+export function PrInboxModal({ snapshot, loading, error, onRead, onMute, onResetMutes, onOpenPipelines, syncEvents = [], onSyncRead, onInvestigate, onOpenWorkstream, onClose }: Props) {
+  const [starting, setStarting] = useState<ReadonlySet<string>>(new Set());
   const [kind, setKind] = useState<Kind>("all");
   const [actionError, setActionError] = useState<string | null>(null);
   const [showMutes, setShowMutes] = useState(false);
@@ -54,6 +59,17 @@ export function PrInboxModal({ snapshot, loading, error, onRead, onMute, onReset
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
+
+  const investigate = async (itemId: string) => {
+    if (!onInvestigate) return;
+    setStarting((current) => new Set(current).add(itemId));
+    setActionError(null);
+    try { await onInvestigate(itemId); }
+    catch (failure) { setActionError(String(failure instanceof Error ? failure.message : failure)); }
+    finally {
+      setStarting((current) => { const next = new Set(current); next.delete(itemId); return next; });
+    }
+  };
 
   const act = async (action: () => Promise<void>) => {
     setBusy(true);
@@ -441,6 +457,20 @@ export function PrInboxModal({ snapshot, loading, error, onRead, onMute, onReset
                           <ArrowTopRightOnSquareIcon aria-hidden="true" width={11} height={11} style={{ display: "inline", marginLeft: 6 }} />
                         </button>
                         <span style={{ color: "#6c7086", whiteSpace: "nowrap" }}>{new Date(run.finished_at).toLocaleString()}</span>
+                        {run.result === "failed" && (run.investigation ? onOpenWorkstream : onInvestigate) && (
+                          <button
+                            data-testid={`pipeline-investigate-${run.id}`}
+                            disabled={starting.has(run.id)}
+                            title={run.investigation ? "Switch to this run's investigation workstream" : "Start a Copilot session that investigates this failure, in a new workstream"}
+                            onClick={() => {
+                              if (run.investigation) onOpenWorkstream?.(run.investigation);
+                              else void investigate(run.id);
+                            }}
+                            style={{ ...buttonStyle, padding: "1px 6px", fontSize: 10, whiteSpace: "nowrap" }}
+                          >
+                            {starting.has(run.id) ? "Starting…" : run.investigation ? "Open investigation" : "Investigate"}
+                          </button>
+                        )}
                         <button
                           disabled={busy}
                           aria-label={`${run.is_read ? "Mark unread" : "Read"}: ${group.pipeline_name} #${run.run_number}`}
