@@ -646,7 +646,9 @@ fn migrate_pr_inbox_events(conn: &Connection) -> rusqlite::Result<()> {
         (id,project_id,source,identity,pr_id,kind,title,author,summary,url,is_read,created_at,dedupe_key)
         SELECT id,project_id,source,identity,pr_id,'assigned',title,author,
             'Assigned to you as reviewer',url,is_read,discovered_at,''
-        FROM pr_inbox_seen WHERE notified=1",
+        FROM pr_inbox_seen s WHERE notified=1 AND NOT EXISTS (
+            SELECT 1 FROM inbox_tombstones t WHERE t.key =
+                'pr|'||s.project_id||'|'||s.source||'|'||s.identity||'|'||s.pr_id||'|assigned|')",
         [],
     )?;
     conn.execute(
@@ -699,6 +701,14 @@ mod tests {
         assert_eq!(count(&conn), 0);
         init_db(&conn).unwrap();
         assert_eq!(count(&conn), 0, "a restart does not resurrect it");
+        // A database that expired it before the marker existed.
+        conn.execute(
+            "DELETE FROM settings WHERE key='pr_inbox_events_migrated'",
+            [],
+        )
+        .unwrap();
+        init_db(&conn).unwrap();
+        assert_eq!(count(&conn), 0, "nor does the first marker-bearing start");
     }
 
     fn open_in_memory() -> Connection {
