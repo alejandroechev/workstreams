@@ -83,5 +83,8 @@ export function usePrInbox(backend: Backend) {
     return started;
   }, [backend]);
 
-  return { snapshot, error, loading, configure, setRead, mute, resetMutes, addPipeline, setPipelineMode, setPipelineRepo, removePipeline, investigate };
+  /** Re-reads now, e.g. when an agent posted a message (ADR 041). */
+  const refresh = useCallback(() => setRevision((value) => value + 1), []);
+
+  return { snapshot, error, loading, refresh, configure, setRead, mute, resetMutes, addPipeline, setPipelineMode, setPipelineRepo, removePipeline, investigate };
 }

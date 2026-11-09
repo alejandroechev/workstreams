@@ -389,6 +389,7 @@ function TileWrapperImpl({
   return (
     <div
       data-tile-id={tile.id}
+      data-focused={isFocused ? "true" : "false"}
       data-hidden={hidden ? "true" : "false"}
       style={{
         gridArea: hidden ? undefined : (gridArea ?? `t${index}`),

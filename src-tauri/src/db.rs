@@ -446,6 +446,25 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
         -- result notifies once more and never twice.
         -- One investigation workstream per failed pipeline run (ADR 038).
         -- session_started = 0 until the app has started its Copilot session.
+        -- Messages agents send to the Inbox (ADR 041).
+        CREATE TABLE IF NOT EXISTS agent_messages (
+            id TEXT PRIMARY KEY,
+            workstream_id TEXT NOT NULL,
+            workstream_name TEXT NOT NULL,
+            tile_id TEXT NOT NULL,
+            level TEXT NOT NULL,
+            title TEXT NOT NULL,
+            body TEXT NOT NULL,
+            is_read INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS agent_messages_tile_idx ON agent_messages (tile_id, created_at);
+        -- Expired Inbox entries, so pollers don't report them again (ADR 041).
+        CREATE TABLE IF NOT EXISTS inbox_tombstones (
+            key TEXT PRIMARY KEY,
+            expired_at TEXT NOT NULL
+        );
+
         CREATE TABLE IF NOT EXISTS pipeline_investigations (
             event_id TEXT PRIMARY KEY,
             workstream_id TEXT NOT NULL,

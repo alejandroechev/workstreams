@@ -86,4 +86,15 @@ describe("pipelines through the inbox hook", () => {
     expect(result.current.snapshot.pipeline_items![0].investigation).toBe(started.workstream_id);
     expect(result.current.snapshot.pipeline_items![0].is_read).toBe(false);
   });
+
+  it("re-reads the snapshot on demand, so an agent's message shows at once", async () => {
+    const backend = new MemoryBackend();
+    const { result } = renderHook(() => usePrInbox(backend));
+    await act(async () => {});
+    backend.postAgentMessage("w", "t", "done", "Benchmarks finished");
+    expect(result.current.snapshot.agent_messages ?? []).toEqual([]);
+    await act(async () => { result.current.refresh(); });
+    await act(async () => {});
+    expect(result.current.snapshot.agent_messages!.map((m) => m.title)).toEqual(["Benchmarks finished"]);
+  });
 });

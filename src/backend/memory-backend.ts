@@ -13,6 +13,7 @@ import {
   pipelineRepoView,
   type AdoRepoRef,
 } from "../domain/pipeline-inbox";
+import { checkAgentMessage, HOURLY_CAP, type AgentMessage } from "../domain/agent-messages";
 import {
   investigationBase,
   investigationBranch,
@@ -169,7 +170,34 @@ export class MemoryBackend implements Backend {
           };
         })
         .sort((a, b) => compareTimes(b.finished_at, a.finished_at) || b.run_id - a.run_id),
+      agent_messages: [...this.agentMessages].reverse().map((message) => {
+        const ws = this.workstreams.get(message.workstream_id);
+        return {
+          ...message,
+          workstream_name: ws?.name ?? message.workstream_name,
+          available: !!ws && this.tiles.has(message.tile_id),
+        };
+      }),
     });
+  }
+
+  // ── Agent messages (mirror of src-tauri/src/inbox_messages.rs, ADR 041) ──
+  private agentMessages: AgentMessage[] = [];
+
+  /** What an agent's `inbox.message` does: validated, capped, tied to its tile. */
+  postAgentMessage(workstreamId: string, tileId: string, level: string, title: string, body = ""): AgentMessage {
+    const problem = checkAgentMessage(level, title, body);
+    if (problem) throw new Error(problem);
+    const hourAgo = Date.now() - 60 * 60 * 1000;
+    if (this.agentMessages.filter((m) => m.tile_id === tileId && Date.parse(m.created_at) > hourAgo).length >= HOURLY_CAP) {
+      throw new Error("This session has sent 20 messages in the last hour");
+    }
+    const message: AgentMessage = {
+      id: generateId(), workstream_id: workstreamId, workstream_name: this.workstreams.get(workstreamId)?.name ?? "",
+      tile_id: tileId, level, title: title.trim(), body, is_read: false, created_at: new Date().toISOString(), available: true,
+    };
+    this.agentMessages.push(message);
+    return structuredClone(message);
   }
 
   // ── Planning (ADR 039): an in-memory ADO team for E2E ──
@@ -804,7 +832,7 @@ export class MemoryBackend implements Backend {
   }
 
   async setPrInboxRead(id: string, isRead: boolean): Promise<void> {
-    const run = this.pipelineItems.find((item) => item.id === id);
+    const run = this.pipelineItems.find((item) => item.id === id) ?? this.agentMessages.find((m) => m.id === id);
     if (run) {
       run.is_read = isRead;
       return;

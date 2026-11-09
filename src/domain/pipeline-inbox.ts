@@ -201,8 +201,9 @@ export function groupPipelineItems(items: PipelineItem[]): PipelineGroup[] {
  * The one Inbox badge: pull requests needing attention (three comments on one
  * PR are one thing to look at) plus unread pipeline runs (each is its own).
  */
-export function countUnreadInbox(snapshot: { items: PrInboxItem[]; pipeline_items?: PipelineItem[] }): number {
-  return countUnreadPrs(snapshot.items) + (snapshot.pipeline_items ?? []).filter((item) => !item.is_read).length;
+export function countUnreadInbox(snapshot: { items: PrInboxItem[]; pipeline_items?: PipelineItem[]; agent_messages?: Array<{ is_read: boolean }> }): number {
+  return countUnreadPrs(snapshot.items) + (snapshot.pipeline_items ?? []).filter((item) => !item.is_read).length
+    + (snapshot.agent_messages ?? []).filter((message) => !message.is_read).length;
 }
 
 export interface PipelineLink {

@@ -985,6 +985,13 @@ pub fn apply_runs(db: &Connection, target: &PipelineTarget, runs: &[Run]) -> Res
     .map_err(|e| e.to_string())?;
     let mut added = 0;
     for run in runs.iter().filter(|run| mode.watches(&run.result)) {
+        // An expired notification is not reported again (ADR 041).
+        if crate::inbox_retention::tombstoned(
+            &tx,
+            &crate::inbox_retention::pipeline_key(&target.id, run.id, &run.result),
+        )? {
+            continue;
+        }
         added += tx
             .execute(
                 &format!(
@@ -1607,6 +1614,23 @@ mod tests {
         assert!(items(&db).unwrap().is_empty());
         assert!(remove(&db, &b.id).is_err());
         assert!(set_mode(&db, "nope", PipelineMode::Both).is_err());
+    }
+
+    #[test]
+    fn an_expired_run_is_not_reported_again() {
+        let db = db();
+        add(&db, &resolved(1, "A"), Some(PipelineMode::Both)).unwrap();
+        make_old(&db);
+        let target = targets(&db).unwrap().remove(0);
+        apply_runs(&db, &target, &[run(10, "failed", NEW)]).unwrap();
+        db.execute_batch("UPDATE pipeline_events SET is_read=1, created_at='2000-01-01T00:00:00Z'")
+            .unwrap();
+        crate::inbox_retention::expire(&db, "2026-01-01T00:00:00Z").unwrap();
+        assert!(items(&db).unwrap().is_empty());
+        apply_runs(&db, &target, &[run(10, "failed", NEW)]).unwrap();
+        assert!(items(&db).unwrap().is_empty());
+        apply_runs(&db, &target, &[run(11, "failed", NEW)]).unwrap();
+        assert_eq!(items(&db).unwrap().len(), 1, "a new run still notifies");
     }
 
     // ── Checking ──

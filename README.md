@@ -86,7 +86,7 @@ instead of buried behind tabs.
   and documents growing out of hand. Each problem raises one Inbox entry and
   desktop notification when it starts and one when it clears
   ([ADR 040](docs/adrs/040-sync-server-monitoring.md)).
-- **ADO Inbox** — opt in per repo to follow reviews assigned to you, PRs you opened, or both, with per-PR comment, vote, build-gate and closure events. Paste a link to any ADO pipeline (or one of its runs) to be told when its runs fail, succeed or both; each pipeline shows the repo it builds, detected from ADO, which you can override. **Investigate** on a failed run starts a Copilot session in a new workstream (a worktree from the failed branch when the repo is known) that diagnoses the failure ([ADR 038](docs/adrs/038-pipeline-notifications.md)).
+- **ADO Inbox** — opt in per repo to follow reviews assigned to you, PRs you opened, or both, with per-PR comment, vote, build-gate and closure events. Paste a link to any ADO pipeline (or one of its runs) to be told when its runs fail, succeed or both; each pipeline shows the repo it builds, detected from ADO, which you can override. Ask a Copilot session to `/ws-message` you when something happens and its message lands in the Inbox's **Agent messages**; read entries of every kind expire after 5 days ([ADR 041](docs/adrs/041-agent-messages-and-inbox-retention.md)). **Investigate** on a failed run starts a Copilot session in a new workstream (a worktree from the failed branch when the repo is known) that diagnoses the failure ([ADR 038](docs/adrs/038-pipeline-notifications.md)).
   Uses your `az login` account, checks every two minutes while the app is open,
   and keeps read/unread state across restarts. The first check is silent. An
   unread pill in the sidebar footer flags new assignments without opening it.
@@ -106,7 +106,7 @@ instead of buried behind tabs.
   toggle asks agents to use `/ws-artifact` for requested HTML, publish it to
   the [shared gallery](https://alejandroechev.github.io/workstreams-artifacts/),
   and return a clickable link. Publishing is public and opt-in; the installer
-  installs both skills globally.
+  installs the skills globally (also `ws` and `ws-message`).
 - **Answer grills one question at a time** — the Plan tile's Grill tab turns a
   `grill-me.md` into a focused view: importance-coloured questions you can
   filter to what matters, option buttons, the recommendation hidden until you

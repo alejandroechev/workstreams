@@ -715,6 +715,15 @@ pub const COMMANDS: &[Command] = &[
         handler: diff_order_get,
     },
     Command {
+        id: "inbox.message",
+        // Never the body: it can be long, and it is the user's business.
+        log_params: &["level", "title"],
+        summary: "Send the user a message in the Workstreams Inbox (params: level=info|done|needs-you|error, title (≤120 chars), body (markdown, ≤20000 chars; body=@- reads stdin)). At most 20 per session per hour",
+        requires_identity: true,
+        destructive: false,
+        handler: inbox_message,
+    },
+    Command {
         id: "companion.send",
         // Never the text: it can be long, and it is the user's business.
         log_params: &["kind"],
@@ -2473,6 +2482,57 @@ fn companion_store_error(error: String) -> AgentError {
     )
 }
 
+fn inbox_message(
+    context: &CommandContext,
+    params: &serde_json::Value,
+) -> Result<CommandOutcome, AgentError> {
+    const FALLBACK: &str = "Give the message in the terminal instead.";
+    let Caller::Agent {
+        tile_id,
+        workstream_id,
+    } = context.caller()?
+    else {
+        return Err(AgentError::new(
+            "NOT_A_SESSION",
+            "Only a Copilot session in Workstreams can message the Inbox",
+            FALLBACK,
+        ));
+    };
+    let text = |key: &str| {
+        params
+            .get(key)
+            .and_then(|value| value.as_str())
+            .unwrap_or_default()
+            .to_string()
+    };
+    use crate::inbox_messages::{send, Refusal};
+    let message = send(
+        context.db,
+        workstream_id,
+        tile_id,
+        &text("level"),
+        &text("title"),
+        &text("body"),
+    )
+    .map_err(|refusal| match refusal {
+        Refusal::Invalid(error) => AgentError::new(
+            "BAD_MESSAGE",
+            error,
+            "Send level=info|done|needs-you|error, a title of at most 120 characters and a body of at most 20000.",
+        ),
+        Refusal::RateLimited => AgentError::new(
+            "RATE_LIMITED",
+            "This session has sent 20 messages in the last hour",
+            "Wait, or put the rest in one message.",
+        ),
+    })?;
+    let id = message.id.clone();
+    Ok(CommandOutcome::changed(
+        serde_json::json!(message),
+        StateChange::new("agent_message", id, "added"),
+    ))
+}
+
 fn companion_send(
     context: &CommandContext,
     params: &serde_json::Value,
@@ -3119,6 +3179,98 @@ mod tests {
         let sessions = crate::companion_messages::list(&db).unwrap();
         assert_eq!(sessions[0].messages[0].text, "# Done\n- a");
         assert_eq!(sessions[0].messages[0].kind, "result");
+    }
+
+    #[test]
+    fn inbox_message_posts_to_the_inbox_and_enforces_its_contract() {
+        let db = memory_db();
+        db.execute_batch(
+            "PRAGMA foreign_keys = OFF;
+            INSERT INTO workstreams (id, name, directory, created_at, updated_at) VALUES ('w1', 'Bench', '/b', 'now', 'now');",
+        )
+        .unwrap();
+        let caller = agent("t1", "w1");
+        let sent = call(
+            &db,
+            &caller,
+            "inbox.message",
+            serde_json::json!({"level":"done","title":"Benchmarks finished","body":"# p95\n- 38 → 21"}),
+        )
+        .unwrap();
+        let id = sent.data["id"].as_str().unwrap().to_string();
+        assert_eq!(sent.data["workstream_name"], "Bench");
+        assert_eq!(
+            sent.change,
+            Some(StateChange::new("agent_message", &id, "added"))
+        );
+        let listed = call(&db, &caller, "inbox.list", serde_json::json!({})).unwrap();
+        let message = &listed.data["agent_messages"][0];
+        assert_eq!(
+            (
+                &message["id"],
+                &message["title"],
+                &message["level"],
+                &message["is_read"]
+            ),
+            (
+                &serde_json::json!(id),
+                &serde_json::json!("Benchmarks finished"),
+                &serde_json::json!("done"),
+                &serde_json::json!(false)
+            )
+        );
+        call(
+            &db,
+            &caller,
+            "inbox.read",
+            serde_json::json!({"id": id, "read": true}),
+        )
+        .unwrap();
+        let listed = call(&db, &caller, "inbox.list", serde_json::json!({})).unwrap();
+        assert_eq!(listed.data["agent_messages"][0]["is_read"], true);
+
+        let refused = |params: serde_json::Value, who: &Caller| {
+            call(&db, who, "inbox.message", params).unwrap_err()
+        };
+        let bad = refused(serde_json::json!({"level":"urgent","title":"t"}), &caller);
+        assert_eq!(bad.code, "BAD_MESSAGE");
+        assert!(bad.message.contains("info, done, needs-you, error"));
+        assert!(refused(
+            serde_json::json!({"level":"done","title":"x".repeat(121)}),
+            &caller
+        )
+        .message
+        .contains("120"));
+        assert!(refused(serde_json::json!({"level":"done"}), &caller)
+            .message
+            .contains("title"));
+        assert!(refused(
+            serde_json::json!({"level":"done","title":"t","body":"x".repeat(20_001)}),
+            &caller
+        )
+        .message
+        .contains("20000"));
+        assert_eq!(
+            refused(
+                serde_json::json!({"level":"done","title":"t"}),
+                &Caller::Human
+            )
+            .code,
+            "NOT_A_SESSION"
+        );
+        for _ in 0..19 {
+            call(
+                &db,
+                &caller,
+                "inbox.message",
+                serde_json::json!({"level":"info","title":"t"}),
+            )
+            .unwrap();
+        }
+        assert_eq!(
+            refused(serde_json::json!({"level":"info","title":"t"}), &caller).code,
+            "RATE_LIMITED"
+        );
     }
 
     #[test]

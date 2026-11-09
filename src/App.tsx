@@ -14,6 +14,7 @@ import WorkstreamSidebar from "./workstream/WorkstreamSidebar";
 import { usePrInbox } from "./workstream/usePrInbox";
 import { PrInboxModal } from "./workstream/PrInboxModal";
 import { startPendingInvestigations } from "./workstream/investigate";
+import type { AgentMessage } from "./domain/agent-messages";
 import { SyncPanel } from "./sync-monitor/SyncPanel";
 import { useSyncMonitor } from "./sync-monitor/useSyncMonitor";
 import { statusLevel } from "./domain/sync-monitor";
@@ -135,6 +136,8 @@ export default function App() {
   const [activeWsId, setActiveWsId] = useState<string | null>(null);
   const activeWsIdRef = useRef(activeWsId);
   useEffect(() => { activeWsIdRef.current = activeWsId; }, [activeWsId]);
+  const refreshInboxRef = useRef(inbox.refresh);
+  useEffect(() => { refreshInboxRef.current = inbox.refresh; }, [inbox.refresh]);
   // Set once startInvestigationSessions exists (below); read by the state-changed listener.
   const startInvestigationSessionsRef = useRef<() => Promise<void>>(async () => {});
   /**
@@ -495,6 +498,11 @@ export default function App() {
         return;
       }
       const entity = event.payload?.entity;
+      // An agent's inbox.message: show it in the Inbox right away (ADR 041).
+      if (entity === "agent_message") {
+        refreshInboxRef.current();
+        return;
+      }
       if (entity !== "workstream" && entity !== "pipeline_investigation") return;
       backend
         .listWorkstreams()
@@ -2161,6 +2169,42 @@ export default function App() {
     startInvestigationSessionsRef.current = startInvestigationSessions;
   }, [startInvestigationSessions]);
 
+  /**
+   * Goes to the session that sent an agent message (ADR 041): marks it read,
+   * closes the Inbox, switches workstream and focuses the tile once its
+   * workstream has mounted.
+   */
+  const pendingTileFocus = useRef<{ wsId: string; tileId: string } | null>(null);
+  const applyPendingTileFocus = (states: Map<string, WsState>) => {
+    const pending = pendingTileFocus.current;
+    if (!pending) return;
+    const index = states.get(pending.wsId)?.tileOrder.indexOf(pending.tileId) ?? -1;
+    if (index < 0) return;
+    pendingTileFocus.current = null;
+    setWsStates((prev) => {
+      const current = prev.get(pending.wsId);
+      if (!current) return prev;
+      const next = new Map(prev);
+      next.set(pending.wsId, { ...current, focusedIndex: index, fullscreenTileId: null });
+      return next;
+    });
+  };
+  const openAgentMessage = useCallback(
+    (message: AgentMessage) => {
+      if (!message.is_read) void inbox.setRead(message.id, true).catch((error) => console.error("Failed to mark the message read:", error));
+      setShowInbox(false);
+      pendingTileFocus.current = { wsId: message.workstream_id, tileId: message.tile_id };
+      if (message.workstream_id === activeWsId) applyPendingTileFocus(wsStatesRef.current);
+      else selectWorkstream(message.workstream_id);
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [inbox, activeWsId, selectWorkstream],
+  );
+  useEffect(() => {
+    if (pendingTileFocus.current?.wsId === activeWsId) applyPendingTileFocus(wsStates);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wsStates, activeWsId]);
+
   const investigatePipelineRun = useCallback(
     async (itemId: string) => {
       await inbox.investigate(itemId);
@@ -2380,6 +2424,7 @@ export default function App() {
           onSyncRead={syncMonitor.setRead}
           onInvestigate={investigatePipelineRun}
           onOpenWorkstream={(id) => { setShowInbox(false); selectWorkstream(id); }}
+          onOpenAgentMessage={openAgentMessage}
           onClose={() => setShowInbox(false)} />
       )}
       {showPlanning && <PlanningView planning={planning} onClose={() => setShowPlanning(false)} />}

@@ -267,6 +267,9 @@ pub struct InboxSnapshot {
     pub pipelines: Vec<crate::pipeline_inbox::PipelineStatus>,
     #[serde(default)]
     pub pipeline_items: Vec<crate::pipeline_inbox::PipelineItem>,
+    /// Messages agents sent (ADR 041).
+    #[serde(default)]
+    pub agent_messages: Vec<crate::inbox_messages::AgentMessage>,
 }
 
 pub fn configure(db: &Connection, project_id: &str, mode: WatchMode) -> Result<(), String> {
@@ -377,6 +380,18 @@ fn record_event(
         )
         .map_err(|e| e.to_string())?;
     if muted {
+        return Ok(());
+    }
+    // An expired event is not reported again (ADR 041).
+    let key = crate::inbox_retention::pr_key(
+        &target.project_id,
+        source,
+        identity,
+        pr.id,
+        kind,
+        dedupe_key,
+    );
+    if crate::inbox_retention::tombstoned(tx, &key)? {
         return Ok(());
     }
     tx.execute(
@@ -703,7 +718,9 @@ pub fn record_error(db: &Connection, target: &Target, error: &str) -> Result<(),
 }
 
 pub fn set_read(db: &Connection, id: &str, is_read: bool) -> Result<(), String> {
-    if crate::pipeline_inbox::set_read(db, id, is_read)? {
+    if crate::pipeline_inbox::set_read(db, id, is_read)?
+        || crate::inbox_messages::set_read(db, id, is_read)?
+    {
         return Ok(());
     }
     let changed = db
@@ -890,6 +907,7 @@ pub fn snapshot(db: &Connection) -> Result<InboxSnapshot, String> {
         mutes,
         pipelines: crate::pipeline_inbox::list(db)?,
         pipeline_items: crate::pipeline_inbox::items(db)?,
+        agent_messages: crate::inbox_messages::list(db)?,
     })
 }
 
@@ -2165,6 +2183,25 @@ mod tests {
         assert!(snapshot(&db).unwrap().items.is_empty());
         apply_snapshot(&mut db, &target, "other", &[pr(2), pr(3)]).unwrap();
         assert_eq!(snapshot(&db).unwrap().items[0].pr_id, 3);
+    }
+
+    #[test]
+    fn inbox_an_expired_event_is_not_reported_again() {
+        let mut db = db();
+        configure(&db, "p", WatchMode::Reviewer).unwrap();
+        let target = targets(&db).unwrap().remove(0);
+        apply_snapshot(&mut db, &target, "me", &[]).unwrap();
+        apply_snapshot(&mut db, &target, "me", &[pr(1)]).unwrap();
+        assert_eq!(kinds(&db), vec![("assigned".into(), 1)]);
+        db.execute_batch("UPDATE pr_inbox_events SET is_read=1, created_at='2000-01-01T00:00:00Z'")
+            .unwrap();
+        crate::inbox_retention::expire(&db, "2026-01-01T00:00:00Z").unwrap();
+        assert!(kinds(&db).is_empty());
+        // The poller forgets the PR and sees it again: still nothing new.
+        db.execute_batch("DELETE FROM pr_inbox_seen").unwrap();
+        apply_snapshot(&mut db, &target, "me", &[]).unwrap();
+        apply_snapshot(&mut db, &target, "me", &[pr(1)]).unwrap();
+        assert!(kinds(&db).is_empty());
     }
 
     #[test]

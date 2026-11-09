@@ -6,7 +6,7 @@ graph TB
         subgraph Frontend["React Frontend (WebView2)"]
             App["App.tsx<br/>Root shell"]
             Sidebar["WorkstreamSidebar<br/>List/create/switch<br/>loaded set restored at startup (ADR 029)<br/>tiles mount lazily on first visit"]
-            PrInboxUI["Inbox (ADR 030, 031, 038)<br/>per-repo watch mode + one unread badge<br/>PR events grouped per PR<br/>pipeline runs grouped per pipeline + Pipelines manager<br/>read/unread + open ADO<br/>global mutes by kind/subject/outcome (ADR 036)<br/>local snapshot refresh every 5s"]
+            PrInboxUI["Inbox (ADR 030, 031, 038)<br/>per-repo watch mode + one unread badge<br/>PR events grouped per PR<br/>pipeline runs grouped per pipeline + Pipelines manager<br/>read/unread + open ADO<br/>global mutes by kind/subject/outcome (ADR 036)<br/>agent messages grouped per workstream (ADR 041)<br/>local snapshot refresh every 5s"]
             TileGrid["TileGrid<br/>Adaptive tiling layout"]
             Terminal["TerminalTile<br/>xterm.js + FitAddon + SerializeAddon"]
             CodeView["CodeViewerTile<br/>Monaco Editor (read-only)"]
@@ -57,7 +57,7 @@ graph TB
 
     subgraph Storage["Persistence"]
         AppDB["workstreams.db<br/>(SQLite — workstreams, tiles, layouts, scrollback<br/>+ command_log audit/telemetry<br/>+ workstream_pull_requests N:M links<br/>+ work_lanes<br/>+ diff_orders)"]
-        PrInboxDB["workstreams.db inbox state<br/>pr_inbox_config / baselines / seen / events<br/>pipeline_watches / pipeline_events<br/>role-scoped baselines + per-PR sub-state<br/>account-scoped dedup + durable read state"]
+        PrInboxDB["workstreams.db inbox state<br/>pr_inbox_config / baselines / seen / events<br/>pipeline_watches / pipeline_events<br/>agent_messages / inbox_tombstones (ADR 041)<br/>read entries expire after 5 days, startup + hourly<br/>role-scoped baselines + per-PR sub-state<br/>account-scoped dedup + durable read state"]
         LoopDB["workstreams.db loop ledger<br/>specs / runs / tasks / verifications<br/>evaluations / human approvals / events"]
         LoopYAML["bound session-state/files/loops/*.loop.yaml<br/>loop definition authority"]
         CopilotDB["~/.copilot/session-store.db<br/>(read-only enrichment)"]
@@ -104,7 +104,7 @@ graph TB
     App --> PrInboxUI
     Sidebar --> PrInboxUI
     PrInboxUI -- "Tauri: configure / snapshot / read state" --> PrInboxRS
-    AgentRegistryRS -- "inbox.configure / list / read / pipeline_*" --> PrInboxRS
+    AgentRegistryRS -- "inbox.configure / list / read / message / pipeline_*" --> PrInboxRS
     App --> PlanningUI["Planning view (ADR 039)<br/>Sprint · Features · Plan sprint · Plan feature<br/>draft → Publish to ADO"]
     PlanningUI -- "Tauri: planning_*" --> PlanningRS["ado_planning.rs<br/>team link, WIQL + batch reads<br/>draft in settings; publish with test /rev"]
     AgentRegistryRS -- "planning.*" --> PlanningRS

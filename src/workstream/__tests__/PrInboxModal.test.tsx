@@ -5,6 +5,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { PrInboxModal } from "../PrInboxModal";
 import type { PrInboxItem, PrInboxSnapshot } from "../../domain/pr-inbox";
 import type { PipelineItem } from "../../domain/pipeline-inbox";
+import type { AgentMessage } from "../../domain/agent-messages";
 
 vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: vi.fn().mockResolvedValue(undefined) }));
 
@@ -437,5 +438,65 @@ describe("sync server alerts in the Inbox", () => {
     await waitFor(() => expect(onSyncRead).toHaveBeenCalledWith("a", true));
     fireEvent.click(screen.getByTestId("inbox-kind-prs"));
     expect(screen.queryByTestId("inbox-section-sync")).toBeNull();
+  });
+});
+
+describe("Inbox, agent messages (ADR 041)", () => {
+  const message = (over: Partial<AgentMessage>): AgentMessage => ({
+    id: "m1", workstream_id: "w1", workstream_name: "Bench", tile_id: "t1", level: "done", title: "Benchmarks finished",
+    body: "## Results\n\n- p95: 38 → 21 ms\n- p99: 61 → 40 ms\n\n`bench/out.md`", is_read: false,
+    created_at: "2026-11-09T16:41:00Z", available: true, ...over,
+  });
+  const withMessages = (messages: AgentMessage[]): PrInboxSnapshot => ({ ...snapshot, agent_messages: messages });
+  const renderInbox = (over: Partial<React.ComponentProps<typeof PrInboxModal>> = {}) => {
+    const onRead = vi.fn().mockResolvedValue(undefined);
+    const onOpenAgentMessage = vi.fn();
+    render(<PrInboxModal snapshot={withMessages([message({}), message({ id: "m2", workstream_id: "w2", workstream_name: "Investigate", level: "needs-you", title: "Root cause found", created_at: "2026-11-09T15:58:00Z" })])}
+      error={null} loading={false} onRead={onRead} onOpenAgentMessage={onOpenAgentMessage} onClose={vi.fn()} {...over} />);
+    return { onRead, onOpenAgentMessage };
+  };
+
+  it("shows agent messages first, grouped by workstream, with level, title, a two-line preview and time", () => {
+    renderInbox();
+    const sections = screen.getAllByTestId(/^inbox-section-/).map((s) => s.getAttribute("data-testid"));
+    expect(sections[0]).toBe("inbox-section-agents");
+    expect(sections[1]).toBe("inbox-section-prs");
+    const groups = within(screen.getByTestId("inbox-section-agents")).getAllByTestId(/^agent-group-/);
+    expect(groups.map((g) => g.textContent)).toEqual([expect.stringContaining("Bench"), expect.stringContaining("Investigate")]);
+    const row = screen.getByTestId("agent-message-m1");
+    for (const text of ["Done", "Benchmarks finished"]) expect(row).toHaveTextContent(text);
+    expect(within(row).getAllByTestId("agent-message-preview-line").map((l) => l.textContent)).toEqual(["Results", "p95: 38 → 21 ms"]);
+    expect(screen.getByTestId("agent-message-m2")).toHaveTextContent("Needs you");
+    expect(screen.getByTestId("pr-inbox-summary")).toHaveTextContent("3 unread of 3 notifications");
+  });
+
+  it("expands the full body in place without opening or marking it read", () => {
+    const { onRead, onOpenAgentMessage } = renderInbox();
+    expect(screen.queryByTestId("agent-message-body-m1")).toBeNull();
+    fireEvent.click(screen.getByTestId("agent-message-expand-m1"));
+    const body = screen.getByTestId("agent-message-body-m1");
+    expect(within(body).getByRole("heading", { name: "Results" })).toBeInTheDocument();
+    expect(within(body).getAllByRole("listitem")).toHaveLength(2);
+    expect(onRead).not.toHaveBeenCalled();
+    expect(onOpenAgentMessage).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId("agent-message-expand-m1"));
+    expect(screen.queryByTestId("agent-message-body-m1")).toBeNull();
+  });
+
+  it("opens the sending session on click, and can't when it is gone", () => {
+    const { onOpenAgentMessage } = renderInbox({ snapshot: withMessages([message({}), message({ id: "gone", available: false })]) });
+    fireEvent.click(screen.getByTestId("agent-message-open-m1"));
+    expect(onOpenAgentMessage).toHaveBeenCalledWith(expect.objectContaining({ id: "m1" }));
+    expect(screen.getByTestId("agent-message-open-gone")).toBeDisabled();
+    expect(screen.getByTestId("agent-message-gone-gone")).toHaveTextContent("The workstream no longer exists");
+  });
+
+  it("filters to agent messages only, and no longer shows the long description", async () => {
+    const { onRead } = renderInbox();
+    expect(screen.queryByText(/ADO activity on the PRs each repo watches/)).toBeNull();
+    fireEvent.click(screen.getByTestId("inbox-kind-agents"));
+    expect(screen.getAllByTestId(/^inbox-section-/).map((s) => s.getAttribute("data-testid"))).toEqual(["inbox-section-agents"]);
+    fireEvent.click(screen.getByRole("button", { name: "Read: Benchmarks finished" }));
+    await waitFor(() => expect(onRead).toHaveBeenCalledWith("m1", true));
   });
 });

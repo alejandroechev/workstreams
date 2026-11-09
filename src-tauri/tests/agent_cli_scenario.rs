@@ -802,8 +802,14 @@ fn the_skill_only_documents_error_codes_that_are_reachable() {
         "failed to extract error codes from source; the check would be vacuous"
     );
 
+    // Heredoc delimiters (`<<'END_OF_RESULT'`) share the shape too.
+    let delimiters: Vec<&str> = skill
+        .split("<<'")
+        .skip(1)
+        .filter_map(|rest| rest.split('\'').next())
+        .collect();
     for token in skill.split(|c: char| !(c.is_ascii_uppercase() || c == '_')) {
-        if not_codes.contains(&token) {
+        if not_codes.contains(&token) || delimiters.contains(&token) {
             continue;
         }
         if token.len() > 5 && token.contains('_') && token.to_uppercase() == token {

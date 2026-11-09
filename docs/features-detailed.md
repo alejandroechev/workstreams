@@ -139,9 +139,30 @@ See [ADR 040](adrs/040-sync-server-monitoring.md).
 
 ## Inbox: pull requests and pipelines
 
-The **Inbox** in the sidebar has two sections, **Pull requests** and
-**Pipelines**, with All / Pull requests / Pipelines filters, an Unread / With
-read toggle, and one unread badge (unread PRs plus unread pipeline runs).
+The **Inbox** in the sidebar has sections for **Agent messages**, **Pull
+requests**, **Pipelines** and **Sync server**, with a filter for each, an
+Unread / With read toggle, and one unread badge. Read entries of every kind are
+deleted 5 days after they arrived; unread ones stay until you read them, and an
+expired event is not reported again ([ADR 041](adrs/041-agent-messages-and-inbox-retention.md)).
+
+### Agent messages
+
+Ask a Copilot session to message you when something happens — "/ws-message
+when the benchmarks finish" — and it sends one message to the Inbox when it
+does, fails, or gives up. Messages are grouped by workstream and show their
+level (Info, Done, Needs you, Error), title, a two-line preview and time. The
+expand button shows the whole markdown message in place; clicking the message
+takes you to the session that sent it and marks it read. The `ws-message` skill
+is installed globally by `npm run install-skills`.
+
+```sh
+workstreams agent call inbox.message level=done title='Benchmarks finished' body=@- <<'END_OF_MESSAGE'
+p95 dropped 38 → 21 ms. Report in `bench/out.md`.
+END_OF_MESSAGE
+```
+
+`inbox.list` returns them as `agent_messages`, and `inbox.read id=<id>
+read=true` marks them. A session may send 20 messages an hour.
 
 ### Pipelines
 

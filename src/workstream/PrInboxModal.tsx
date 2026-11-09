@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { ArrowTopRightOnSquareIcon, BellSlashIcon, XMarkIcon } from "@heroicons/react/24/outline";
+import { ArrowTopRightOnSquareIcon, BellSlashIcon, ChevronDownIcon, ChevronUpIcon, XMarkIcon } from "@heroicons/react/24/outline";
 import {
   describeMute,
   groupPrInboxItems,
@@ -11,9 +11,11 @@ import {
 } from "../domain/pr-inbox";
 import { groupPipelineItems, resultLabel, type PipelineItem } from "../domain/pipeline-inbox";
 import { resultColor } from "./pipeline-result";
+import { groupAgentMessages, levelLabel, previewLines, type AgentMessage } from "../domain/agent-messages";
+import { MarkdownView } from "../ui/MarkdownView";
 
 import type { SyncEvent } from "../domain/sync-monitor";
-type Kind = "all" | "prs" | "pipelines" | "sync";
+type Kind = "all" | "agents" | "prs" | "pipelines" | "sync";
 
 interface Props {
   snapshot: PrInboxSnapshot;
@@ -30,6 +32,8 @@ interface Props {
   onSyncRead?: (id: string, isRead: boolean) => Promise<void>;
   /** Starts investigating a failed run in a new workstream (by notification id). */
   onInvestigate?: (itemId: string) => Promise<void>;
+  /** Goes to the session that sent an agent message (ADR 041). */
+  onOpenAgentMessage?: (message: AgentMessage) => void;
   /** Switches to a workstream, e.g. a run's existing investigation. */
   onOpenWorkstream?: (workstreamId: string) => void;
   onClose: () => void;
@@ -44,7 +48,13 @@ interface Props {
  * reached from the same sidebar footer, so a different shell read as a
  * different app.
  */
-export function PrInboxModal({ snapshot, loading, error, onRead, onMute, onResetMutes, onOpenPipelines, syncEvents = [], onSyncRead, onInvestigate, onOpenWorkstream, onClose }: Props) {
+export function PrInboxModal({ snapshot, loading, error, onRead, onMute, onResetMutes, onOpenPipelines, syncEvents = [], onSyncRead, onInvestigate, onOpenWorkstream, onOpenAgentMessage, onClose }: Props) {
+  const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
+  const toggleExpanded = (id: string) => setExpanded((current) => {
+    const next = new Set(current);
+    if (!next.delete(id)) next.add(id);
+    return next;
+  });
   const [starting, setStarting] = useState<ReadonlySet<string>>(new Set());
   const [kind, setKind] = useState<Kind>("all");
   const [actionError, setActionError] = useState<string | null>(null);
@@ -80,17 +90,21 @@ export function PrInboxModal({ snapshot, loading, error, onRead, onMute, onReset
   };
 
   const runs = snapshot.pipeline_items ?? [];
-  const total = snapshot.items.length + runs.length + syncEvents.length;
+  const messages = snapshot.agent_messages ?? [];
+  const total = snapshot.items.length + runs.length + syncEvents.length + messages.length;
   const unread = snapshot.items.filter((item) => !item.is_read).length + runs.filter((item) => !item.is_read).length
-    + syncEvents.filter((e) => !e.is_read).length;
+    + syncEvents.filter((e) => !e.is_read).length + messages.filter((m) => !m.is_read).length;
+  const visibleMessages = showRead ? messages : messages.filter((m) => !m.is_read);
   const visible = showRead ? snapshot.items : snapshot.items.filter((item) => !item.is_read);
   const visibleRuns = showRead ? runs : runs.filter((item) => !item.is_read);
   const visibleSync = showRead ? syncEvents : syncEvents.filter((e) => !e.is_read);
   const shows = (section: Kind) => kind === "all" || kind === section;
   const pipelineGroups = groupPipelineItems(visibleRuns);
   // What the current filters show, and what they hide because it was read.
-  const shownCount = (shows("prs") ? visible.length : 0) + (shows("pipelines") ? visibleRuns.length : 0) + (shows("sync") ? visibleSync.length : 0);
-  const inKind = (shows("prs") ? snapshot.items.length : 0) + (shows("pipelines") ? runs.length : 0) + (shows("sync") ? syncEvents.length : 0);
+  const shownCount = (shows("prs") ? visible.length : 0) + (shows("pipelines") ? visibleRuns.length : 0) + (shows("sync") ? visibleSync.length : 0)
+    + (shows("agents") ? visibleMessages.length : 0);
+  const inKind = (shows("prs") ? snapshot.items.length : 0) + (shows("pipelines") ? runs.length : 0) + (shows("sync") ? syncEvents.length : 0)
+    + (shows("agents") ? messages.length : 0);
   const failedChecks = (snapshot.pipelines ?? []).filter((pipeline) => pipeline.error);
   const openRun = (run: PipelineItem) => act(async () => {
     await openUrl(run.url);
@@ -148,13 +162,8 @@ export function PrInboxModal({ snapshot, loading, error, onRead, onMute, onReset
         </div>
 
         <div style={{ ...noteStyle, display: "flex", alignItems: "center", gap: 12 }}>
-          <span style={{ flex: 1 }}>
-            ADO activity on the PRs each repo watches (choose in Repos) and runs of the pipelines you
-            watch (choose in Pipelines). Checks every two minutes while Workstreams is open; nothing that
-            happened before you started watching is reported.
-          </span>
-          <div role="group" aria-label="Show kind" style={{ display: "flex" }}>
-            {([["All", "all"], ["Pull requests", "prs"], ["Pipelines", "pipelines"], ["Sync server", "sync"]] as const).map(([label, value], index, all) => (
+          <div role="group" aria-label="Show kind" style={{ display: "flex", marginRight: "auto" }}>
+            {([["All", "all"], ["Agents", "agents"], ["Pull requests", "prs"], ["Pipelines", "pipelines"], ["Sync server", "sync"]] as const).map(([label, value], index, all) => (
               <button
                 key={value}
                 aria-pressed={kind === value}
@@ -240,6 +249,82 @@ export function PrInboxModal({ snapshot, loading, error, onRead, onMute, onReset
             <p data-testid="pr-inbox-caught-up" style={emptyStyle}>
               No unread notifications. {inKind} read hidden.
             </p>
+          )}
+          {shows("agents") && (kind === "agents" || visibleMessages.length > 0) && (
+            <section data-testid="inbox-section-agents">
+              {kind === "all" && <h2 style={sectionHeadingStyle}>Agent messages</h2>}
+              {kind === "agents" && visibleMessages.length === 0 && (
+                <p style={emptyStyle}>No agent messages. Ask a Copilot session to /ws-message you when something happens.</p>
+              )}
+              {groupAgentMessages(visibleMessages).map((group) => (
+                <article
+                  key={group.workstream_id}
+                  data-testid={`agent-group-${group.workstream_id}`}
+                  style={{ border: "1px solid #313244", borderRadius: 6, padding: "8px 10px", margin: "8px 12px 0", background: "#181825" }}
+                >
+                  <div style={{ fontSize: 12, fontWeight: 600, color: "#cdd6f4" }}>{group.workstream_name || "Workstream"}</div>
+                  <ul style={{ listStyle: "none", margin: "6px 0 0", padding: 0, display: "grid", gap: 6 }}>
+                    {group.messages.map((message) => {
+                      const open = expanded.has(message.id);
+                      return (
+                        <li key={message.id} data-testid={`agent-message-${message.id}`} data-read={message.is_read} style={{ fontSize: 11 }}>
+                          <div style={{ display: "flex", gap: 8, alignItems: "baseline" }}>
+                            <span style={{ color: levelColor(message.level), fontWeight: 600, whiteSpace: "nowrap" }}>{levelLabel(message.level)}</span>
+                            <button
+                              data-testid={`agent-message-open-${message.id}`}
+                              disabled={!message.available || !onOpenAgentMessage}
+                              onClick={() => onOpenAgentMessage?.(message)}
+                              title={message.available ? "Go to the session that sent this" : "The workstream no longer exists"}
+                              style={{
+                                flex: 1, minWidth: 0, background: "none", border: "none", padding: 0, textAlign: "left",
+                                cursor: message.available ? "pointer" : "default", fontFamily: "inherit", fontSize: 11,
+                                color: message.is_read ? "#6c7086" : "#cdd6f4", opacity: message.available ? 1 : 0.6,
+                              }}
+                            >
+                              <div style={{ fontWeight: message.is_read ? 400 : 600, overflowWrap: "anywhere" }}>{message.title}</div>
+                              {!open && previewLines(message.body).map((line, index) => (
+                                <div key={index} data-testid="agent-message-preview-line"
+                                  style={{ color: "#a6adc8", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{line}</div>
+                              ))}
+                              {!message.available && (
+                                <div data-testid={`agent-message-gone-${message.id}`} style={{ color: "#6c7086" }}>The workstream no longer exists</div>
+                              )}
+                            </button>
+                            <span style={{ color: "#6c7086", whiteSpace: "nowrap" }}>{new Date(message.created_at).toLocaleString()}</span>
+                            {message.body.trim() && (
+                              <button
+                                data-testid={`agent-message-expand-${message.id}`}
+                                aria-expanded={open}
+                                aria-label={open ? `Collapse: ${message.title}` : `Show all of: ${message.title}`}
+                                title={open ? "Collapse" : "Show the whole message"}
+                                onClick={() => toggleExpanded(message.id)}
+                                style={{ ...buttonStyle, padding: "1px 4px", display: "inline-flex" }}
+                              >
+                                {open ? <ChevronUpIcon width={12} height={12} /> : <ChevronDownIcon width={12} height={12} />}
+                              </button>
+                            )}
+                            <button
+                              disabled={busy}
+                              aria-label={`${message.is_read ? "Mark unread" : "Read"}: ${message.title}`}
+                              onClick={() => void act(() => onRead(message.id, !message.is_read))}
+                              style={{ ...buttonStyle, padding: "1px 6px", fontSize: 10 }}
+                            >
+                              {message.is_read ? "Unread" : "Read"}
+                            </button>
+                          </div>
+                          {open && (
+                            <div data-testid={`agent-message-body-${message.id}`} style={{ margin: "6px 0 0", padding: "6px 8px", background: "#11111b", borderRadius: 4 }}>
+                              <MarkdownView baseFontSize={12}>{message.body}</MarkdownView>
+                            </div>
+                          )}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </article>
+              ))}
+              <div style={{ height: 10 }} />
+            </section>
           )}
           {shows("sync") && (kind === "sync" || visibleSync.length > 0) && (
             <section data-testid="inbox-section-sync">
@@ -491,6 +576,10 @@ export function PrInboxModal({ snapshot, loading, error, onRead, onMute, onReset
       </section>
     </div>
   );
+}
+
+function levelColor(level: string): string {
+  return { done: "#a6e3a1", "needs-you": "#fab387", error: "#f38ba8" }[level] ?? "#89b4fa";
 }
 
 const sectionHeadingStyle: React.CSSProperties = {

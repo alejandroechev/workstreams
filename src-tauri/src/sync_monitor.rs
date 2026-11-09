@@ -361,6 +361,10 @@ pub fn apply(
         {
             continue;
         }
+        // An expired alert is not recorded again (ADR 041).
+        if crate::inbox_retention::tombstoned(&tx, &crate::inbox_retention::sync_key(&e.id))? {
+            continue;
+        }
         let added = tx
             .execute(
                 "INSERT OR IGNORE INTO sync_events (id, kind, event, at, message, hint, is_read) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0)",
@@ -485,6 +489,28 @@ mod tests {
         );
         assert_eq!(kept.len(), 25);
         assert_eq!(kept[0].vitals.as_ref().unwrap()["box"]["cpuPercent"], 2.0);
+    }
+
+    #[test]
+    fn an_expired_alert_is_not_recorded_again() {
+        let mut db = db();
+        let e = Event {
+            id: "cpu-5-started".into(),
+            kind: "cpu".into(),
+            event: "started".into(),
+            at: 5,
+            message: "m".into(),
+            hint: "h".into(),
+            is_read: false,
+        };
+        apply(&mut db, &[], std::slice::from_ref(&e)).unwrap();
+        set_read(&db, &e.id, true).unwrap();
+        crate::inbox_retention::expire(&db, "2026-01-01T00:00:00Z").unwrap();
+        assert!(events(&db, 10).unwrap().is_empty());
+        assert!(apply(&mut db, &[], std::slice::from_ref(&e))
+            .unwrap()
+            .is_empty());
+        assert!(events(&db, 10).unwrap().is_empty());
     }
 
     #[test]
