@@ -151,4 +151,16 @@ describe("starting investigation sessions", () => {
     expect(d.unmarkSpawned).not.toHaveBeenCalled();
     expect(await backend.pendingInvestigationSessions()).toEqual([]);
   });
+
+  it("after a restart, a tile already linked to a session counts as started and is left to resume", async () => {
+    const { backend, item } = await setup();
+    const started = await backend.startPipelineInvestigation(item.id);
+    const tile = await backend.createTile(started.workstream_id, "copilot_session", "Investigation",
+      JSON.stringify({ command_template: "copilot", copilot_session_id: "s-1" }));
+    const d = deps(backend);
+    await startPendingInvestigations(d);
+    expect(d.spawn).not.toHaveBeenCalled();
+    expect(d.markSpawned).not.toHaveBeenCalledWith(tile.id);
+    expect(await backend.pendingInvestigationSessions()).toEqual([]);
+  });
 });

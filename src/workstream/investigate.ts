@@ -1,6 +1,6 @@
 import type { Backend } from "../backend/types";
 import type { Tile } from "../domain/types";
-import { createCopilotSessionConfig } from "../domain/tile-config";
+import { createCopilotSessionConfig, parseCopilotSessionConfig } from "../domain/tile-config";
 
 export interface InvestigationDeps {
   backend: Pick<Backend, "pendingInvestigationSessions" | "markInvestigationSessionStarted" | "listTiles" | "createTile" | "listWorkstreams">;
@@ -35,8 +35,9 @@ export async function startPendingInvestigations(deps: InvestigationDeps): Promi
       if (!still.some((p) => p.event_id === session.event_id)) continue;
       // A tile left by an earlier attempt that never started is reused.
       const left = (await backend.listTiles(session.workstream_id)).find((t) => t.tile_type === "copilot_session");
-      if (left && deps.isSpawned(left.id)) {
-        // Something else already started it (without the prompt); never a second session.
+      // Already running, or linked to a session from before a restart (which
+      // the mount resumes): it started, only the record of it was lost.
+      if (left && (deps.isSpawned(left.id) || parseCopilotSessionConfig(left.config_json).copilot_session_id)) {
         await backend.markInvestigationSessionStarted(session.event_id);
         continue;
       }
