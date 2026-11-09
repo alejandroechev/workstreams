@@ -7,6 +7,7 @@ export interface InvestigationDeps {
   /** Mounts a workstream in the background (never changes the active one). */
   mount(workstreamId: string): Promise<void>;
   onTileCreated(tile: Tile): void;
+  isSpawned(tileId: string): boolean;
   markSpawned(tileId: string): void;
   unmarkSpawned(tileId: string): void;
   commandFor(workstreamId: string): string;
@@ -28,11 +29,21 @@ export async function startPendingInvestigations(deps: InvestigationDeps): Promi
     deps.inFlight.add(session.event_id);
     let tileId: string | null = null;
     try {
-      await deps.mount(session.workstream_id);
-      const tiles = await backend.listTiles(session.workstream_id);
-      const name = (await backend.listWorkstreams()).find((w) => w.id === session.workstream_id)?.name ?? "Investigation";
+      // The snapshot may be stale: another run may have started it meanwhile.
+      const still = await backend.pendingInvestigationSessions();
+      if (!still.some((p) => p.event_id === session.event_id)) continue;
       // A tile left by an earlier attempt that never started is reused.
-      const tile = tiles.find((t) => t.tile_type === "copilot_session")
+      const left = (await backend.listTiles(session.workstream_id)).find((t) => t.tile_type === "copilot_session");
+      if (left && deps.isSpawned(left.id)) {
+        // Something else already started it (without the prompt); never a second session.
+        await backend.markInvestigationSessionStarted(session.event_id);
+        continue;
+      }
+      // Claimed before mounting, so the mount doesn't start it without its prompt.
+      if (left) { tileId = left.id; deps.markSpawned(left.id); }
+      await deps.mount(session.workstream_id);
+      const name = (await backend.listWorkstreams()).find((w) => w.id === session.workstream_id)?.name ?? "Investigation";
+      const tile = left
         ?? await backend.createTile(session.workstream_id, "copilot_session", name, createCopilotSessionConfig(name, session.directory));
       tileId = tile.id;
       deps.onTileCreated(tile);

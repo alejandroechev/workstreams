@@ -131,9 +131,12 @@ and the notification's read state doesn't change.
 - **A new workstream per run**, named `Investigate <pipeline> #<run>`. If the
   pipeline has a repo, it's a worktree of the first linked repo on a new branch
   `investigate/<pipeline>-<run>`, from `origin/<run branch>` (fetched first). A
-  run whose branch isn't a branch (`refs/pull/…`, tags) uses the repo's default
-  base. With no repo, or if the worktree can't be made, it's a standalone
-  workstream in the home directory, and the prompt says why there's no checkout.
+  run whose branch isn't a branch (`refs/pull/…`, tags) starts from
+  `origin/<default branch>`, named explicitly so it never inherits whatever the
+  checkout has out. An existing branch of that name is never checked out (it
+  holds other work); the next free name (`-2`, `-3`…) is used. With no repo, or
+  if the worktree can't be made, it's a standalone workstream in the home
+  directory, and the prompt says why there's no checkout.
 - **The prompt carries identifiers and links only.** Pipeline, project, run
   number and id, result, branch, trigger, finish time, repo and run URL; then an
   instruction to fetch the failing steps and logs with `az`, and the goal: find
@@ -150,7 +153,12 @@ and the notification's read state doesn't change.
   prompt. The app then starts every investigation whose session hasn't started:
   right after a click, on a `pipeline_investigation` state change from an agent,
   and on startup (so one interrupted mid-start gets its session). A session that
-  fails to start stays pending.
+  fails to start stays pending. The app claims a left-over tile before mounting
+  the workstream, so the mount never starts it without its prompt.
+- **One starter at a time.** The UI and agent paths claim the run in-process
+  before running git; a second caller while one is starting gets an error
+  rather than a second worktree. It fails rather than waits because the agent
+  path holds the database lock that the UI path needs to finish.
 - Not on the phone companion.
 
 ## References

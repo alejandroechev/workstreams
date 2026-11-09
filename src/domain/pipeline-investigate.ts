@@ -20,7 +20,7 @@ export interface PendingInvestigation {
 }
 
 export type InvestigationPlacement =
-  | { kind: "worktree"; repo: string; branch: string; base: string | null }
+  | { kind: "worktree"; repo: string; branch: string; base: string }
   | { kind: "standalone"; repo: string; failure: string | null };
 
 function slug(text: string): string {
@@ -50,9 +50,9 @@ export function investigationBase(item: PipelineItem): string | null {
 export function investigationPrompt(item: PipelineItem, placement: InvestigationPlacement): string {
   const repo = placement.repo || "none linked";
   const location = placement.kind === "worktree"
-    ? placement.base
+    ? investigationBase(item)
       ? `You are in a worktree of ${repo} on a new branch ${placement.branch}, created from ${placement.base}: the code that failed.`
-      : `You are in a worktree of ${repo} on a new branch ${placement.branch}, created from the default branch; the run built ${item.branch}.`
+      : `You are in a worktree of ${repo} on a new branch ${placement.branch}, created from ${placement.base} (the default branch); the run built ${item.branch}.`
     : placement.failure
       ? `There is no local checkout: creating a worktree of ${repo} failed (${placement.failure.trim()}). Work from Azure DevOps.`
       : "There is no local checkout of this pipeline's repo; work from Azure DevOps.";

@@ -811,6 +811,7 @@ async fn start_pipeline_investigation(
         }
         pipeline_investigate::target(&db, &item)?
     };
+    let _claim = pipeline_investigate::claim(&item)?;
     let placed = target.clone();
     let placement = tauri::async_runtime::spawn_blocking(move || {
         let provisioner = AppProvisioner { app };
@@ -1838,6 +1839,16 @@ impl agent_registry::Provisioner for AppProvisioner {
             base_branch,
             pull,
         )
+    }
+
+    fn branch_exists(&self, project_directory: &str, branch: &str) -> bool {
+        local_branch_exists(project_directory, branch)
+            || remote_branch_ref(project_directory, branch).is_some()
+    }
+
+    fn default_branch(&self, project_directory: &str) -> Option<String> {
+        detect_default_remote_branch(project_directory)
+            .or_else(|| detect_local_default_branch(project_directory))
     }
 
     fn fetch_branch(&self, project_directory: &str, branch: &str) -> Result<(), String> {

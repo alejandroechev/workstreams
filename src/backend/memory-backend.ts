@@ -592,18 +592,28 @@ export class MemoryBackend implements Backend {
   adoRequestCount(): number { return this.adoRequests; }
   private investigations = new Map<string, PendingInvestigation & { started: boolean }>();
   private investigationWorktreeFailure: string | null = null;
-  private investigationWorktrees: Array<{ directory: string; branch: string; base: string | null }> = [];
+  private investigationWorktrees: Array<{ directory: string; branch: string; base: string }> = [];
+  private investigationsStarting = new Map<string, Promise<InvestigationStarted>>();
   /** Where standalone investigations work (the home directory natively). */
   investigationHome = "/Users/demo";
 
   /** Makes worktree creation for investigations fail with this git error; null to stop. */
   failInvestigationWorktree(error: string | null): void { this.investigationWorktreeFailure = error; }
   /** The worktrees investigations asked git for. */
-  investigationWorktreeRequests(): Array<{ directory: string; branch: string; base: string | null }> {
+  investigationWorktreeRequests(): Array<{ directory: string; branch: string; base: string }> {
     return structuredClone(this.investigationWorktrees);
   }
 
   async startPipelineInvestigation(itemId: string): Promise<InvestigationStarted> {
+    // Like the native claim: a second caller gets the first one's result.
+    const starting = this.investigationsStarting.get(itemId);
+    if (starting) return starting.then((s) => ({ ...s, created: false }));
+    const run = this.makeInvestigation(itemId);
+    this.investigationsStarting.set(itemId, run);
+    try { return await run; } finally { this.investigationsStarting.delete(itemId); }
+  }
+
+  private async makeInvestigation(itemId: string): Promise<InvestigationStarted> {
     const item = this.pipelineItems.find((i) => i.id === itemId);
     if (!item) throw new Error(`No pipeline notification with id ${itemId}`);
     if (item.result !== "failed") throw new Error(`Only failed runs can be investigated; run #${item.run_number} ${item.result}`);
@@ -616,8 +626,11 @@ export class MemoryBackend implements Backend {
     let placement: InvestigationPlacement;
     let directory = this.investigationHome;
     if (linked) {
-      const branch = investigationBranch(item);
-      const base = investigationBase(item);
+      // Never an existing branch: the next free name, as natively.
+      const wanted = investigationBranch(item);
+      const taken = new Set(this.investigationWorktrees.filter((w) => w.directory === linked.directory).map((w) => w.branch));
+      const branch = [wanted, ...Array.from({ length: 19 }, (_, i) => `${wanted}-${i + 2}`)].find((b) => !taken.has(b)) ?? wanted;
+      const base = investigationBase(item) ?? "origin/main";
       this.investigationWorktrees.push({ directory: linked.directory, branch, base });
       if (this.investigationWorktreeFailure) {
         placement = { kind: "standalone", repo: linked.name, failure: this.investigationWorktreeFailure };

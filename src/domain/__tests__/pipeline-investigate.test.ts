@@ -32,8 +32,9 @@ describe("pipeline investigations (mirror of the native rules)", () => {
     expect(investigationBase(item)).toBe("origin/release/2.4");
     expect(investigationBase({ ...item, branch: "refs/pull/12/merge" })).toBeNull();
     expect(investigationBase({ ...item, branch: " " })).toBeNull();
-    const fromDefault = investigationPrompt(item, { kind: "worktree", repo: "media_components", branch: "investigate/x", base: null });
-    expect(fromDefault).toContain("created from the default branch; the run built release/2.4");
+    const pr = { ...item, branch: "refs/pull/12/merge" };
+    const fromDefault = investigationPrompt(pr, { kind: "worktree", repo: "media_components", branch: "investigate/x", base: "origin/main" });
+    expect(fromDefault).toContain("created from origin/main (the default branch); the run built refs/pull/12/merge");
   });
 
   it("copes with no repo and a URL it can't read", () => {

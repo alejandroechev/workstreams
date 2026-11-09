@@ -2148,6 +2148,7 @@ export default function App() {
         backend,
         mount: mountWorkstream,
         onTileCreated: upsertTileLocally,
+        isSpawned: (tileId) => spawnedPtys.current.has(tileId),
         markSpawned: (tileId) => { spawnedPtys.current.add(tileId); },
         unmarkSpawned: (tileId) => { spawnedPtys.current.delete(tileId); },
         commandFor: commandForWsId,

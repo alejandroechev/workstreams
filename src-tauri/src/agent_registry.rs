@@ -202,6 +202,16 @@ pub trait Provisioner: Send + Sync {
     fn fetch_branch(&self, _project_directory: &str, _branch: &str) -> Result<(), String> {
         Ok(())
     }
+
+    /// Whether `branch` exists locally or on a remote of `project_directory`'s repo.
+    fn branch_exists(&self, _project_directory: &str, _branch: &str) -> bool {
+        false
+    }
+
+    /// The repo's default branch name (`main`), when it can be told.
+    fn default_branch(&self, _project_directory: &str) -> Option<String> {
+        None
+    }
 }
 
 /// Where a worktree would go, and whether something is already there.
@@ -880,6 +890,7 @@ fn inbox_investigate(
         },
         None => {
             // Holds the lock while git runs, like ws.create's worktrees.
+            let _claim = investigate::claim(&item).map_err(inbox_error)?;
             let placement =
                 investigate::place(context.provisioner, &target, &investigate::home_dir());
             let created_by = match context.caller {
