@@ -28,6 +28,7 @@ export async function startPendingInvestigations(deps: InvestigationDeps): Promi
     if (deps.inFlight.has(session.event_id)) continue;
     deps.inFlight.add(session.event_id);
     let tileId: string | null = null;
+    let spawned = false;
     try {
       // The snapshot may be stale: another run may have started it meanwhile.
       const still = await backend.pendingInvestigationSessions();
@@ -49,9 +50,11 @@ export async function startPendingInvestigations(deps: InvestigationDeps): Promi
       deps.onTileCreated(tile);
       deps.markSpawned(tile.id);
       await deps.spawn(tile.id, session.directory, deps.commandFor(session.workstream_id), session.prompt);
+      spawned = true;
       await backend.markInvestigationSessionStarted(session.event_id);
     } catch (error) {
-      if (tileId) deps.unmarkSpawned(tileId);
+      // Once running, the tile stays marked: the next pass only records that it started.
+      if (tileId && !spawned) deps.unmarkSpawned(tileId);
       console.error("[investigate] Could not start the investigation session:", error);
     } finally {
       deps.inFlight.delete(session.event_id);

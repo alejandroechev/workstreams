@@ -883,6 +883,7 @@ fn inbox_investigate(
     use crate::pipeline_investigate as investigate;
     let item = required_str(params, "item")?;
     let target = investigate::target(context.db, &item).map_err(inbox_error)?;
+    let _claim = investigate::claim(&item).map_err(inbox_error)?;
     let started = match investigate::existing(context.db, &item).map_err(inbox_error)? {
         Some(id) => investigate::Started {
             workstream_id: id,
@@ -890,7 +891,6 @@ fn inbox_investigate(
         },
         None => {
             // Holds the lock while git runs, like ws.create's worktrees.
-            let _claim = investigate::claim(&item).map_err(inbox_error)?;
             let placement =
                 investigate::place(context.provisioner, &target, &investigate::home_dir());
             let created_by = match context.caller {

@@ -131,4 +131,24 @@ describe("starting investigation sessions", () => {
       { directory: "/code/mc", branch: "investigate/media_components-CI-9-2", base: "origin/main" },
     ]);
   });
+
+  it("doesn't start a session again when only recording that it started failed", async () => {
+    const { backend, item } = await setup();
+    await backend.startPipelineInvestigation(item.id);
+    const spawned = new Set<string>();
+    const d = {
+      ...deps(backend),
+      isSpawned: (id: string) => spawned.has(id),
+      markSpawned: vi.fn((id: string) => { spawned.add(id); }),
+      unmarkSpawned: vi.fn((id: string) => { spawned.delete(id); }),
+    };
+    const mark = backend.markInvestigationSessionStarted.bind(backend);
+    let fails = 1;
+    backend.markInvestigationSessionStarted = async (id) => { if (fails-- > 0) throw new Error("db busy"); return mark(id); };
+    await startPendingInvestigations(d);
+    await startPendingInvestigations(d);
+    expect(d.spawn).toHaveBeenCalledTimes(1);
+    expect(d.unmarkSpawned).not.toHaveBeenCalled();
+    expect(await backend.pendingInvestigationSessions()).toEqual([]);
+  });
 });

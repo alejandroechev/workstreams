@@ -801,6 +801,8 @@ async fn start_pipeline_investigation(
     state: State<'_, AppState>,
     item: String,
 ) -> Result<pipeline_investigate::Started, String> {
+    // Claimed before looking, so nobody records one between the look and git.
+    let _claim = pipeline_investigate::claim(&item)?;
     let target = {
         let db = state.db.lock().map_err(|e| e.to_string())?;
         if let Some(id) = pipeline_investigate::existing(&db, &item)? {
@@ -811,7 +813,6 @@ async fn start_pipeline_investigation(
         }
         pipeline_investigate::target(&db, &item)?
     };
-    let _claim = pipeline_investigate::claim(&item)?;
     let placed = target.clone();
     let placement = tauri::async_runtime::spawn_blocking(move || {
         let provisioner = AppProvisioner { app };
@@ -1852,8 +1853,11 @@ impl agent_registry::Provisioner for AppProvisioner {
     }
 
     fn fetch_branch(&self, project_directory: &str, branch: &str) -> Result<(), String> {
+        // An explicit refspec: a single-branch clone's fetch mapping would
+        // otherwise update only FETCH_HEAD, leaving origin/<branch> stale.
+        let refspec = format!("+refs/heads/{branch}:refs/remotes/origin/{branch}");
         let out = git_cmd()
-            .args(["fetch", "origin", branch])
+            .args(["fetch", "origin", &refspec])
             .current_dir(project_directory)
             .output()
             .map_err(|e| format!("git fetch failed: {e}"))?;
