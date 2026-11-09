@@ -631,14 +631,26 @@ fn migrate_pr_inbox_events(conn: &Connection) -> rusqlite::Result<()> {
             DROP TABLE pr_inbox_baselines_old;",
         )?;
     }
-    // Idempotent: the primary key is the original notification id, so a second
-    // run cannot duplicate or resurrect a notification the user has since read.
+    // Once only: after read entries started to expire (ADR 041), re-running it
+    // would bring an expired notification back, unread.
+    let done: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM settings WHERE key='pr_inbox_events_migrated')",
+        [],
+        |r| r.get(0),
+    )?;
+    if done {
+        return Ok(());
+    }
     conn.execute(
         "INSERT OR IGNORE INTO pr_inbox_events
         (id,project_id,source,identity,pr_id,kind,title,author,summary,url,is_read,created_at,dedupe_key)
         SELECT id,project_id,source,identity,pr_id,'assigned',title,author,
             'Assigned to you as reviewer',url,is_read,discovered_at,''
         FROM pr_inbox_seen WHERE notified=1",
+        [],
+    )?;
+    conn.execute(
+        "INSERT OR REPLACE INTO settings (key, value) VALUES ('pr_inbox_events_migrated', '1')",
         [],
     )?;
     Ok(())
@@ -658,6 +670,36 @@ pub fn open_db(path: &Path) -> rusqlite::Result<Connection> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_legacy_inbox_migration_never_brings_back_an_expired_assignment() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = OFF;").unwrap();
+        init_db(&conn).unwrap();
+        conn.execute(
+            "DELETE FROM settings WHERE key='pr_inbox_events_migrated'",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO pr_inbox_seen (id,project_id,source,identity,pr_id,title,author,url,notified,is_read,discovered_at)
+            VALUES ('legacy','p','ado','me',7,'T','A','u',1,0,'2000-01-01T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+        init_db(&conn).unwrap();
+        let count = |c: &Connection| -> i64 {
+            c.query_row("SELECT COUNT(*) FROM pr_inbox_events", [], |r| r.get(0))
+                .unwrap()
+        };
+        assert_eq!(count(&conn), 1, "carried forward once");
+        conn.execute("UPDATE pr_inbox_events SET is_read=1", [])
+            .unwrap();
+        crate::inbox_retention::expire(&conn, "2026-01-01T00:00:00Z").unwrap();
+        assert_eq!(count(&conn), 0);
+        init_db(&conn).unwrap();
+        assert_eq!(count(&conn), 0, "a restart does not resurrect it");
+    }
 
     fn open_in_memory() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
