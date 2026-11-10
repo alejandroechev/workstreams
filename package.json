@@ -12,6 +12,7 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
+    "build:mac": "APPLE_SIGNING_IDENTITY=\"Workstreams Local\" tauri build --bundles app",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
