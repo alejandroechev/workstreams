@@ -30,6 +30,17 @@ function renderCard(overrides: Partial<QuestionCardProps> = {}) {
 }
 
 describe("a question card", () => {
+  it("wraps long option text instead of truncating it", () => {
+    const long = "A new workstream per investigation, with its own worktree from the failed branch and a Copilot session started in the background";
+    renderCard({ question: question({ options: [{ key: "a", text: long }] }) });
+    const button = screen.getByTestId("grill-option-a");
+    expect(button.textContent).toContain(long);
+    expect(button.style.whiteSpace).toBe("normal");
+    const text = button.querySelector("span")!;
+    expect(text.style.minWidth).toBe("0px");
+    expect(text.style.overflowWrap).toBe("anywhere");
+  });
+
   it("keeps the note when switching options", () => {
     const props = renderCard({ answer: "a — on the phone" });
     fireEvent.click(screen.getByTestId("grill-option-b"));

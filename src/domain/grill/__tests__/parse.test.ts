@@ -98,4 +98,21 @@ describe("existing grills", () => {
     expect(r2).toEqual(["A1", "A2", "A3", "A4", "A5", "A6"]);
     expect(grill.questions.find((x) => x.round === 1 && x.id === "Z1")).toBeTruthy();
   });
+
+  it("keeps an option's wrapped continuation lines in its text", () => {
+    const text = [
+      "### A1. Wrapping", "**Importance:** Low", "",
+      "- (a) A long option that the author wrapped",
+      "  onto a second, indented line.",
+      "- (b) Short.", "", "Context after the options.", "",
+      "**Recommendation:** (a)", "", "**Answer:**", "",
+    ].join("\n");
+    const parsed = parseGrill(text).questions[0];
+    expect(parsed.options).toEqual([
+      { key: "a", text: "A long option that the author wrapped onto a second, indented line." },
+      { key: "b", text: "Short." },
+    ]);
+    expect(parsed.context).toContain("Context after the options.");
+    expect(parsed.context).not.toContain("indented line");
+  });
 });

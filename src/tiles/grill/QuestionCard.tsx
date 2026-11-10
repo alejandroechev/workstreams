@@ -81,8 +81,8 @@ export function QuestionCard(props: QuestionCardProps) {
                   onClick={() => props.onAnswer(optionAnswer(option.key, picked?.note ?? ""), true)}
                   style={{ ...optionStyle, borderColor: active ? "#89b4fa" : "#313244", background: active ? "#1e2a40" : "#181825" }}
                 >
-                  <kbd style={kbdStyle}>{index + 1}</kbd>
-                  <span>({option.key}) {option.text}</span>
+                  <kbd style={{ ...kbdStyle, flexShrink: 0 }}>{index + 1}</kbd>
+                  <span style={{ flex: 1, minWidth: 0, overflowWrap: "anywhere" }}>({option.key}) {option.text}</span>
                 </button>
                 {!comparing && visualsFor(option.key).map((v) => (
                   <div key={v.path} style={{ marginTop: 4 }}><GrillVisualView visual={v} grillDir={grillDir} io={io} /></div>
@@ -184,7 +184,8 @@ export function QuestionCard(props: QuestionCardProps) {
 
 const cardStyle: CSSProperties = { display: "flex", flexDirection: "column", gap: 12, maxWidth: 880, margin: "0 auto", width: "100%" };
 const selectStyle: CSSProperties = { background: "#181825", color: "#cdd6f4", border: "1px solid #313244", borderRadius: 3, fontSize: 11 };
-const optionStyle: CSSProperties = { display: "flex", alignItems: "center", gap: 8, width: "100%", textAlign: "left", padding: "6px 10px", border: "1px solid", borderRadius: 5, color: "#cdd6f4", cursor: "pointer", fontSize: 13 };
+// WebKit (the macOS app) can keep a button's text on one line; long options must wrap.
+const optionStyle: CSSProperties = { display: "flex", alignItems: "center", gap: 8, width: "100%", textAlign: "left", whiteSpace: "normal", lineHeight: 1.4, padding: "6px 10px", border: "1px solid", borderRadius: 5, color: "#cdd6f4", cursor: "pointer", fontSize: 13 };
 const kbdStyle: CSSProperties = { fontSize: 10, padding: "0 4px", borderRadius: 3, border: "1px solid #45475a", color: "#a6adc8" };
 const inputStyle: CSSProperties = { background: "#181825", color: "#cdd6f4", border: "1px solid #313244", borderRadius: 4, padding: "4px 6px", fontSize: 13, fontFamily: "inherit" };
 const buttonStyle: CSSProperties = { alignSelf: "flex-start", background: "#313244", color: "#cdd6f4", border: "none", borderRadius: 4, padding: "4px 10px", fontSize: 12, cursor: "pointer" };

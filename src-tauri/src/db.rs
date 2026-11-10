@@ -631,6 +631,14 @@ fn migrate_pr_inbox_events(conn: &Connection) -> rusqlite::Result<()> {
             DROP TABLE pr_inbox_baselines_old;",
         )?;
     }
+    // The old copy below took every notified PR, including ones you authored,
+    // and showed them as "Assigned to you as reviewer". The poller gives its
+    // events fresh ids, so a seen row's id marks one of those copies.
+    conn.execute(
+        "DELETE FROM pr_inbox_events WHERE kind='assigned'
+        AND id IN (SELECT id FROM pr_inbox_seen WHERE role <> 'reviewer')",
+        [],
+    )?;
     // Once only: after read entries started to expire (ADR 041), re-running it
     // would bring an expired notification back, unread.
     let done: bool = conn.query_row(
@@ -646,7 +654,7 @@ fn migrate_pr_inbox_events(conn: &Connection) -> rusqlite::Result<()> {
         (id,project_id,source,identity,pr_id,kind,title,author,summary,url,is_read,created_at,dedupe_key)
         SELECT id,project_id,source,identity,pr_id,'assigned',title,author,
             'Assigned to you as reviewer',url,is_read,discovered_at,''
-        FROM pr_inbox_seen s WHERE notified=1 AND NOT EXISTS (
+        FROM pr_inbox_seen s WHERE notified=1 AND role='reviewer' AND NOT EXISTS (
             SELECT 1 FROM inbox_tombstones t WHERE t.key =
                 'pr|'||s.project_id||'|'||s.source||'|'||s.identity||'|'||s.pr_id||'|assigned|')",
         [],
@@ -672,6 +680,36 @@ pub fn open_db(path: &Path) -> rusqlite::Result<Connection> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn your_own_prs_are_never_shown_as_review_assignments() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = OFF;").unwrap();
+        init_db(&conn).unwrap();
+        // A copy the old migration made of a PR you authored.
+        conn.execute_batch(
+            "INSERT INTO pr_inbox_seen (id,project_id,source,identity,pr_id,title,author,url,notified,is_read,discovered_at,role)
+            VALUES ('mine','p','ado','me',7,'T','Me','u',1,0,'2026-11-06T00:00:00Z','author'),
+                   ('review','p','ado','me',8,'T','Ana','u',1,0,'2026-11-06T00:00:00Z','reviewer');
+            INSERT INTO pr_inbox_events (id,project_id,source,identity,pr_id,kind,title,author,summary,url,is_read,created_at,dedupe_key)
+            VALUES ('mine','p','ado','me',7,'assigned','T','Me','Assigned to you as reviewer','u',0,'2026-11-06T00:00:00Z','');
+            DELETE FROM settings WHERE key='pr_inbox_events_migrated';",
+        )
+        .unwrap();
+        init_db(&conn).unwrap();
+        let assigned: Vec<i64> = conn
+            .prepare("SELECT pr_id FROM pr_inbox_events WHERE kind='assigned' ORDER BY pr_id")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(
+            assigned,
+            vec![8],
+            "only the PR you review; yours is removed and never copied"
+        );
+    }
 
     #[test]
     fn the_legacy_inbox_migration_never_brings_back_an_expired_assignment() {

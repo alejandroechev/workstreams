@@ -162,9 +162,17 @@ function parseQuestion(
   const context: string[] = [];
   let recommendationLine: number | null = null;
   let answerLine: number | null = null;
+  // The option the previous line belonged to, so an indented wrap continues it.
+  let lastOption: GrillOption | null = null;
 
   for (let i = heading + 1; i < end; i += 1) {
     const line = lines[i];
+    const continues = lastOption && /^\s+\S/.test(line) && !OPTION.test(line);
+    if (!continues) lastOption = null;
+    if (continues && !fenced[i] && recommendationLine === null && answerLine === null) {
+      lastOption!.text = `${lastOption!.text} ${line.trim()}`;
+      continue;
+    }
     if (fenced[i]) { if (recommendationLine === null && answerLine === null) context.push(line); continue; }
     if (answerLine !== null) continue;
     if (recommendationLine !== null) {
@@ -181,7 +189,8 @@ function parseQuestion(
     } else if ((m = VISUAL_REQUESTED.exec(line))) {
       visualRequests.push(m[1].trim());
     } else if ((m = OPTION.exec(line))) {
-      options.push({ key: m[1], text: m[2].trim() });
+      lastOption = { key: m[1], text: m[2].trim() };
+      options.push(lastOption);
     } else if (RECOMMENDATION.test(line)) {
       recommendationLine = i;
     } else if (ANSWER.test(line)) {
