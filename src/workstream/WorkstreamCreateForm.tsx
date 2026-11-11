@@ -3,6 +3,7 @@ import { useState, useEffect } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
 import type { Project } from "../domain/types";
+import { compareNames, type WorkLane } from "../domain/work-lanes";
 import { selectableRepositories } from "../domain/repository-visibility";
 import { folderSlug } from "../companion/folders";
 
@@ -33,17 +34,31 @@ interface Props {
     pullBaseFirst?: boolean;
     /** With no repo: the folder the new workstream's own folder is created in. */
     parentFolder?: string;
+    /** The work lane to file it in; null for none. */
+    laneId?: string | null;
+    /** A lane to create and file it in, instead of `laneId`. */
+    newLaneName?: string;
   }) => void;
   onCancel: () => void;
   /** Where folders for workstreams without a repo go by default (`~` allowed). */
   standaloneRoot?: string;
+  /** Work lanes the new workstream can be filed in. */
+  lanes?: WorkLane[];
 }
+
+const NEW_LANE = "__new__";
 
 function slugify(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
 }
 
-export default function WorkstreamCreateForm({ project: initialProject, projects, onSubmit, onCancel, standaloneRoot = "~/Workstreams" }: Props) {
+export default function WorkstreamCreateForm({ project: initialProject, projects, onSubmit, onCancel, standaloneRoot = "~/Workstreams", lanes = [] }: Props) {
+  const [laneChoice, setLaneChoice] = useState<string>("");
+  const [newLaneName, setNewLaneName] = useState("");
+  const lane = laneChoice === NEW_LANE
+    ? { laneId: null, newLaneName: newLaneName.trim() }
+    : { laneId: laneChoice || null, newLaneName: undefined };
+  const laneReady = laneChoice !== NEW_LANE || !!newLaneName.trim();
   const availableProjects = selectableRepositories(projects);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(initialProject?.id || null);
   const project = selectedProjectId ? availableProjects.find((p) => p.id === selectedProjectId) : undefined;
@@ -110,7 +125,7 @@ export default function WorkstreamCreateForm({ project: initialProject, projects
   };
 
   const handleSubmit = () => {
-    if (!name.trim()) return;
+    if (!name.trim() || !laneReady) return;
     if (repoChoice === "standalone") {
       if (!parentFolder.trim()) return;
       onSubmit(name.trim(), "", {
@@ -118,6 +133,7 @@ export default function WorkstreamCreateForm({ project: initialProject, projects
         workstreamType: "standalone",
         sessionChoice: effectiveSession,
         parentFolder: parentFolder.trim(),
+        ...lane,
       });
       return;
     }
@@ -132,6 +148,7 @@ export default function WorkstreamCreateForm({ project: initialProject, projects
         undefined,
       sessionChoice: effectiveSession,
       pullBaseFirst: repoChoice === "worktree" ? pullBaseFirst : undefined,
+      ...lane,
     });
   };
 
@@ -145,9 +162,9 @@ export default function WorkstreamCreateForm({ project: initialProject, projects
     { value: "standalone", label: "New Folder", desc: "A new empty folder of its own, no repo" },
     { value: "import_worktree", label: "Existing Folder", desc: "Point to a folder you already have" },
   ];
-  const canSubmit = repoChoice === "standalone"
+  const canSubmit = laneReady && (repoChoice === "standalone"
     ? !!name.trim() && !!parentFolder.trim()
-    : !!name.trim() && !!directory && !(repoChoice === "worktree" && !branchName.trim());
+    : !!name.trim() && !!directory && !(repoChoice === "worktree" && !branchName.trim()));
 
   const sessionOptions: { value: SessionChoice; label: string; desc: string }[] = [
     { value: "new", label: "New Session", desc: "Spawn a fresh Copilot session" },
@@ -253,6 +270,37 @@ export default function WorkstreamCreateForm({ project: initialProject, projects
             marginBottom: 14,
           }}
         />
+
+        {/* Work lane */}
+        <label style={{ fontSize: 11, color: "#a6adc8", display: "block", marginBottom: 4 }}>Work lane</label>
+        <select
+          data-testid="ws-create-lane"
+          value={laneChoice}
+          onChange={(e) => setLaneChoice(e.target.value)}
+          onKeyDown={(e) => e.stopPropagation()}
+          style={{ ...fieldStyle, marginBottom: laneChoice === NEW_LANE ? 6 : 14, cursor: "pointer" }}
+        >
+          <option value="">No lane</option>
+          {[...lanes].sort((a, b) => compareNames(a.name, b.name)).map((l) => (
+            <option key={l.id} value={l.id}>{l.name}</option>
+          ))}
+          <option value={NEW_LANE}>New lane…</option>
+        </select>
+        {laneChoice === NEW_LANE && (
+          <input
+            data-testid="ws-create-new-lane"
+            type="text"
+            value={newLaneName}
+            onChange={(e) => setNewLaneName(e.target.value)}
+            onKeyDown={(e) => {
+              e.stopPropagation();
+              if (e.key === "Escape") onCancel();
+              if (e.key === "Enter") handleSubmit();
+            }}
+            placeholder="Lane name"
+            style={{ ...fieldStyle, marginBottom: 14 }}
+          />
+        )}
 
         {/* Repo type */}
         <label style={{ fontSize: 11, color: "#a6adc8", display: "block", marginBottom: 6 }}>Repo source</label>
@@ -509,3 +557,15 @@ export default function WorkstreamCreateForm({ project: initialProject, projects
     </div>
   );
 }
+
+const fieldStyle: React.CSSProperties = {
+  width: "100%",
+  background: "#313244",
+  border: "1px solid #45475a",
+  borderRadius: 4,
+  color: "#cdd6f4",
+  padding: "8px 10px",
+  fontSize: 12,
+  outline: "none",
+  boxSizing: "border-box",
+};

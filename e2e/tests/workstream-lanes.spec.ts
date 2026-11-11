@@ -79,6 +79,29 @@ test.describe("workstream lanes", () => {
     );
   });
 
+  test("a new workstream can be filed in a lane from the create form, existing or new", async ({ page }) => {
+    await addLane(page, "Media Store");
+    const fill = async (name: string) => {
+      await page.locator('[data-testid="new-workstream-button"]').click();
+      await page.locator('[data-testid="ws-create-project"]').selectOption({ label: "Demo" });
+      await page.locator('[data-testid="ws-create-repo-base_repo"] input').click();
+      await page.locator('[data-testid="ws-create-name"]').fill(name);
+    };
+
+    await fill("Read chunks");
+    await page.locator('[data-testid="ws-create-lane"]').selectOption({ label: "Media Store" });
+    await page.locator('[data-testid="ws-create-submit"]').click();
+    await expect(page.locator('[data-testid="ws-lane-lane-1"] [data-testid="workstream-item"]')).toContainText("Read chunks");
+
+    await fill("Triage");
+    await page.locator('[data-testid="ws-create-lane"]').selectOption({ label: "New lane…" });
+    await expect(page.locator('[data-testid="ws-create-submit"]')).toBeDisabled();
+    await page.locator('[data-testid="ws-create-new-lane"]').fill("Investigations");
+    await page.locator('[data-testid="ws-create-submit"]').click();
+    const lane = page.locator('[data-testid^="ws-lane-lane-"]', { has: page.locator('[data-testid^="ws-lane-toggle-"]', { hasText: "Investigations" }) });
+    await expect(lane.locator('[data-testid="workstream-item"]')).toContainText("Triage");
+  });
+
   test("dragging a workstream into a lane nests it there", async ({ page }) => {
     await createWorkstream(page, "Read chunks");
     await addLane(page, "Media Store");

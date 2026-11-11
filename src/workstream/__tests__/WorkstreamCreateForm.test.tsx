@@ -107,4 +107,39 @@ describe("WorkstreamCreateForm", () => {
     expect(screen.getByRole("option", { name: "App" })).toBeTruthy();
     expect(screen.queryByRole("option", { name: "Archived" })).toBeNull();
   });
+
+  describe("work lane", () => {
+    const lanes = [{ id: "l2", name: "Waimea" }, { id: "l1", name: "Agency" }];
+    const fillStandalone = () => fireEvent.change(screen.getByTestId("ws-create-name"), { target: { value: "x" } });
+
+    it("defaults to no lane and lists the lanes by name", () => {
+      const onSubmit = vi.fn();
+      render(<WorkstreamCreateForm projects={projects} lanes={lanes} onSubmit={onSubmit} onCancel={vi.fn()} />);
+      const select = screen.getByTestId("ws-create-lane") as HTMLSelectElement;
+      expect([...select.options].map((o) => o.textContent)).toEqual(["No lane", "Agency", "Waimea", "New lane…"]);
+      fillStandalone();
+      fireEvent.click(screen.getByTestId("ws-create-submit"));
+      expect(onSubmit.mock.calls[0][2]).toMatchObject({ laneId: null, newLaneName: undefined });
+    });
+
+    it("files the workstream in the lane picked", () => {
+      const onSubmit = vi.fn();
+      render(<WorkstreamCreateForm projects={projects} lanes={lanes} onSubmit={onSubmit} onCancel={vi.fn()} />);
+      fireEvent.change(screen.getByTestId("ws-create-lane"), { target: { value: "l2" } });
+      fillStandalone();
+      fireEvent.click(screen.getByTestId("ws-create-submit"));
+      expect(onSubmit.mock.calls[0][2]).toMatchObject({ laneId: "l2", newLaneName: undefined });
+    });
+
+    it("can create a new lane, which needs a name", () => {
+      const onSubmit = vi.fn();
+      render(<WorkstreamCreateForm projects={projects} lanes={lanes} onSubmit={onSubmit} onCancel={vi.fn()} />);
+      fillStandalone();
+      fireEvent.change(screen.getByTestId("ws-create-lane"), { target: { value: "__new__" } });
+      expect(screen.getByTestId("ws-create-submit")).toBeDisabled();
+      fireEvent.change(screen.getByTestId("ws-create-new-lane"), { target: { value: "  Investigations  " } });
+      fireEvent.click(screen.getByTestId("ws-create-submit"));
+      expect(onSubmit.mock.calls[0][2]).toMatchObject({ laneId: null, newLaneName: "Investigations" });
+    });
+  });
 });

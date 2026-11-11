@@ -1067,6 +1067,9 @@ export default function App() {
     worktreeBranch?: string;
     baseBranch?: string;
     pullBaseFirst?: boolean;
+    /** The work lane to file it in, or a new lane's name. */
+    laneId?: string | null;
+    newLaneName?: string;
   };
   const [pendingCreate, setPendingCreate] = useState<PendingCreate | null>(
     null,
@@ -1257,6 +1260,21 @@ export default function App() {
         }
       }
 
+      // The lane first: a lane that can't be made stops the create, rather
+      // than leaving a workstream filed somewhere the user didn't pick.
+      let laneId = payload.laneId ?? null;
+      if (payload.newLaneName) {
+        try {
+          const lane = await backend.createWorkLane(payload.newLaneName);
+          laneId = lane.id;
+          setWorkLanes((prev) => (prev.some((l) => l.id === lane.id) ? prev : [...prev, lane]));
+        } catch (e) {
+          const msg = typeof e === "string" ? e : (e as Error)?.message || String(e);
+          alert(`Could not create the lane: ${msg}`);
+          return null;
+        }
+      }
+
       let result;
       try {
         result = await createWorkstreamFlow(backend, {
@@ -1279,6 +1297,14 @@ export default function App() {
       }
 
       const { workstream: ws, pinnedTile: tile } = result;
+      if (laneId) {
+        try {
+          await backend.assignWorkstreamLane(ws.id, laneId);
+          ws.lane_id = laneId;
+        } catch (e) {
+          console.error("Failed to file the new workstream in its lane:", e);
+        }
+      }
 
       // If a session was pre-selected, bake its id into the tile config now so
       // the tile mounts already linked and the poller takes the fast path.
@@ -1395,6 +1421,8 @@ export default function App() {
         baseBranch?: string;
         pullBaseFirst?: boolean;
         parentFolder?: string;
+        laneId?: string | null;
+        newLaneName?: string;
       },
     ) => {
       // No repo: the workstream gets a new empty folder of its own, like one
@@ -1425,6 +1453,8 @@ export default function App() {
         worktreeBranch: opts.worktreeBranch,
         baseBranch: opts.baseBranch,
         pullBaseFirst: opts.pullBaseFirst,
+        laneId: opts.laneId,
+        newLaneName: opts.newLaneName,
       };
 
       if (opts.sessionChoice === "existing") {
@@ -2973,6 +3003,7 @@ export default function App() {
           }
           projects={projects}
           standaloneRoot={standaloneRoot}
+          lanes={workLanes}
           onSubmit={handleCreateWorkstream}
           onCancel={() => setShowWsCreate({ show: false })}
         />
