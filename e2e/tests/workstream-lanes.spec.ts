@@ -193,6 +193,23 @@ test.describe("workstream lanes", () => {
     await expect(archived).toHaveAttribute("data-archived", "true");
   });
 
+  test("the actions menu closes on a click in the terminal, or on its own button", async ({ page }) => {
+    await createWorkstream(page, "Read chunks");
+    const row = page.locator('[data-testid="workstream-item"]', { hasText: "Read chunks" });
+    const menu = page.locator('[data-testid="workstream-action-menu"]');
+    await row.hover();
+    await row.locator('[data-testid^="ws-actions-"]').click();
+    await expect(menu).toBeVisible();
+    await page.locator(".xterm-screen").last().click();
+    await expect(menu).toHaveCount(0);
+
+    await row.hover();
+    await row.locator('[data-testid^="ws-actions-"]').click();
+    await expect(menu).toBeVisible();
+    await row.locator('[data-testid^="ws-actions-"]').click();
+    await expect(menu).toHaveCount(0);
+  });
+
   test("the actions menu of a row near the bottom stays fully on screen", async ({ page }) => {
     await createWorkstream(page, "Low row");
     const row = page.locator('[data-testid="workstream-item"]', { hasText: "Low row" });

@@ -614,6 +614,7 @@ export default function WorkstreamSidebar({
                   <button
                     type="button"
                     aria-label="Workstream actions"
+                    data-action-menu-trigger
                     data-testid={`ws-actions-${ws.id}`}
                     onClick={(e) => {
                       e.stopPropagation();

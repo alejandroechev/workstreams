@@ -149,6 +149,39 @@ describe("WorkstreamActionMenu", () => {
   });
 });
 
+describe("closing by clicking elsewhere", () => {
+  const settle = () => new Promise((r) => setTimeout(r, 5));
+
+  it("closes even when the clicked element stops the event (a terminal)", async () => {
+    const terminal = document.createElement("div");
+    terminal.addEventListener("mousedown", (e) => e.stopPropagation());
+    document.body.appendChild(terminal);
+    const handlers = renderMenu();
+    await settle();
+    fireEvent.mouseDown(terminal);
+    expect(handlers.onClose).toHaveBeenCalled();
+    terminal.remove();
+  });
+
+  it("closes when the window loses focus (a click into an embedded frame)", async () => {
+    const handlers = renderMenu();
+    await settle();
+    fireEvent.blur(window);
+    expect(handlers.onClose).toHaveBeenCalled();
+  });
+
+  it("leaves a click on its own trigger to the trigger, so it toggles closed", async () => {
+    const trigger = document.createElement("button");
+    trigger.setAttribute("data-action-menu-trigger", "");
+    document.body.appendChild(trigger);
+    const handlers = renderMenu();
+    await settle();
+    fireEvent.mouseDown(trigger);
+    expect(handlers.onClose).not.toHaveBeenCalled();
+    trigger.remove();
+  });
+});
+
 describe("create task action", () => {
   it("offers Create task when a handler is supplied", () => {
     renderMenu({ onCreateTask: vi.fn() });

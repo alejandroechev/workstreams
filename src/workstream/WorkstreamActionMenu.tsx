@@ -85,19 +85,31 @@ export function WorkstreamActionMenu({
 
   useEffect(() => {
     const handleClick = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) onClose();
+      const target = e.target as Element;
+      if (ref.current?.contains(target)) return;
+      // The `…` button toggles the menu itself; closing here too would make
+      // that click reopen it.
+      if (target.closest?.("[data-action-menu-trigger]")) return;
+      onClose();
     };
     const handleEsc = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    // A click into an iframe (Plan tile visuals, previews) never reaches the
+    // document; the window losing focus is the only sign of it.
+    const handleBlur = () => onClose();
     // Defer the listener install so the click that opened the menu doesn't
-    // immediately close it.
+    // immediately close it. Capture phase: terminals (xterm with mouse
+    // tracking) stop mousedown from bubbling, so a bubbling listener never
+    // heard clicks there.
     const t = setTimeout(() => {
-      document.addEventListener("mousedown", handleClick);
+      document.addEventListener("mousedown", handleClick, true);
       document.addEventListener("keydown", handleEsc);
+      window.addEventListener("blur", handleBlur);
     }, 0);
     return () => {
       clearTimeout(t);
-      document.removeEventListener("mousedown", handleClick);
+      document.removeEventListener("mousedown", handleClick, true);
       document.removeEventListener("keydown", handleEsc);
+      window.removeEventListener("blur", handleBlur);
     };
   }, [onClose]);
 
