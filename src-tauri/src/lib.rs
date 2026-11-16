@@ -20,6 +20,8 @@ mod file_io;
 mod fs_watcher;
 mod inbox_messages;
 mod inbox_retention;
+pub mod learning_jobs;
+pub mod learning_runner;
 mod loop_agent;
 mod loop_cli;
 mod loop_definition;
@@ -142,6 +144,7 @@ struct AppState {
     db: Arc<Mutex<Connection>>,
     _inbox_poller: pr_inbox::InboxPoller,
     _inbox_retention: inbox_retention::RetentionWorker,
+    _learning_worker: learning_jobs::LearningWorker,
     pty: PtyManager,
     loop_manager: Arc<loops::LoopManager>,
     session_poller: Arc<SessionPoller>,
@@ -6557,6 +6560,7 @@ pub fn run() {
     let app_state = AppState {
         _inbox_poller: pr_inbox::InboxPoller::start(Arc::clone(&db)),
         _inbox_retention: inbox_retention::RetentionWorker::start(Arc::clone(&db)),
+        _learning_worker: learning_jobs::LearningWorker::start(Arc::clone(&db)),
         db,
         pty: PtyManager::new(),
         loop_manager: Arc::new(loops::LoopManager::new()),

@@ -1190,3 +1190,19 @@ installed and on your `PATH`.
 
 See [ADR 016](adrs/016-macos-support.md) and
 [ADR 017](adrs/017-macos-gui-launch-path.md).
+
+## Rust Pocket learning service
+
+Workstreams compiles and tests answers from the Rust Pocket phone app
+([ADR 042](adrs/042-rust-pocket-learning-service.md)). Each check runs real
+`rustc`/`cargo test` in its own folder (not a sandbox), with timeouts and an
+output cap, and reports each test and each declared constraint. Agents can queue
+a check and read the result:
+
+```sh
+workstreams agent call learning.check request=@- <<'END_OF_REQUEST'
+{"card_id":"even","card_version":"1","harness":{"cases":[{"name":"evens","body":"assert!(is_even(2));"}]},"source":"pub fn is_even(n: i32) -> bool { n % 2 == 0 }"}
+END_OF_REQUEST
+workstreams agent call learning.jobs id=<job-id>
+```
+

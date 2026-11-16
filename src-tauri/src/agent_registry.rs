@@ -715,6 +715,22 @@ pub const COMMANDS: &[Command] = &[
         handler: diff_order_get,
     },
     Command {
+        id: "learning.check",
+        log_params: &[],
+        summary: "Queue a Rust Pocket check on this Mac (params: request = JSON {card_id, card_version, harness {before, after, cases|tests, constraints, serde}, source, toolchain?}; request=@- reads stdin). Returns the job; read its result with learning.jobs",
+        requires_identity: true,
+        destructive: false,
+        handler: learning_check,
+    },
+    Command {
+        id: "learning.jobs",
+        log_params: &["id"],
+        summary: "Rust Pocket check jobs, newest first, or one job with its result (params: id = a job id, optional)",
+        requires_identity: true,
+        destructive: false,
+        handler: learning_jobs,
+    },
+    Command {
         id: "inbox.message",
         // Never the body: it can be long, and it is the user's business.
         log_params: &["level", "title"],
@@ -2482,6 +2498,65 @@ fn companion_store_error(error: String) -> AgentError {
     )
 }
 
+fn learning_error(error: String) -> AgentError {
+    AgentError::new(
+        "LEARNING_FAILED",
+        error,
+        "Try again; if it persists, restart Workstreams.",
+    )
+}
+
+fn learning_check(
+    context: &CommandContext,
+    params: &serde_json::Value,
+) -> Result<CommandOutcome, AgentError> {
+    let raw = required_str(params, "request")?;
+    let mut value: serde_json::Value = serde_json::from_str(&raw).map_err(|e| {
+        AgentError::new(
+            "BAD_REQUEST",
+            format!("request is not JSON: {e}"),
+            "Pass request=@- with a JSON object.",
+        )
+    })?;
+    if value.get("id").is_none() {
+        value["id"] = serde_json::json!(uuid::Uuid::new_v4().to_string());
+    }
+    let request: crate::learning_jobs::CheckRequest = serde_json::from_value(value).map_err(|e| {
+        AgentError::new(
+            "BAD_REQUEST",
+            format!("request is not a check: {e}"),
+            "Send {card_id, card_version, harness: {before, after, cases or tests, constraints, serde}, source}.",
+        )
+    })?;
+    let job = crate::learning_jobs::enqueue(context.db, &request, "agent")
+        .map_err(|e| AgentError::new("BAD_REQUEST", e, "Use a new id for a different answer."))?;
+    let id = job.id.clone();
+    Ok(CommandOutcome::changed(
+        serde_json::json!(job),
+        StateChange::new("learning_job", id, "queued"),
+    ))
+}
+
+fn learning_jobs(
+    context: &CommandContext,
+    params: &serde_json::Value,
+) -> Result<CommandOutcome, AgentError> {
+    if let Some(id) = optional_str(params, "id") {
+        let job = crate::learning_jobs::get(context.db, &id)
+            .map_err(learning_error)?
+            .ok_or_else(|| {
+                AgentError::new(
+                    "NOT_FOUND",
+                    format!("No learning job {id}"),
+                    "Run learning.jobs to list them.",
+                )
+            })?;
+        return Ok(CommandOutcome::read(serde_json::json!(job)));
+    }
+    let jobs = crate::learning_jobs::list(context.db, 50).map_err(learning_error)?;
+    Ok(CommandOutcome::read(serde_json::json!({ "jobs": jobs })))
+}
+
 fn inbox_message(
     context: &CommandContext,
     params: &serde_json::Value,
@@ -3179,6 +3254,49 @@ mod tests {
         let sessions = crate::companion_messages::list(&db).unwrap();
         assert_eq!(sessions[0].messages[0].text, "# Done\n- a");
         assert_eq!(sessions[0].messages[0].kind, "result");
+    }
+
+    #[test]
+    fn learning_check_queues_a_job_and_learning_jobs_reports_it() {
+        let db = memory_db();
+        let caller = agent("t1", "w1");
+        let request = serde_json::json!({
+            "card_id": "even", "card_version": "2",
+            "harness": {"cases": [{"name": "even_numbers", "body": "assert!(is_even(2));"}]},
+            "source": "pub fn is_even(n: i32) -> bool { n % 2 == 0 }"
+        });
+        let queued = call(
+            &db,
+            &caller,
+            "learning.check",
+            serde_json::json!({"request": request.to_string()}),
+        )
+        .unwrap();
+        let id = queued.data["id"].as_str().unwrap().to_string();
+        assert_eq!(queued.data["status"], "queued");
+        assert_eq!(queued.data["card_version"], "2");
+
+        let one = call(&db, &caller, "learning.jobs", serde_json::json!({"id": id})).unwrap();
+        assert_eq!(one.data["id"], id);
+        let all = call(&db, &caller, "learning.jobs", serde_json::json!({})).unwrap();
+        assert_eq!(all.data["jobs"].as_array().unwrap().len(), 1);
+
+        let bad = call(
+            &db,
+            &caller,
+            "learning.check",
+            serde_json::json!({"request": "{\"source\": 1}"}),
+        )
+        .unwrap_err();
+        assert_eq!(bad.code, "BAD_REQUEST");
+        let missing = call(
+            &db,
+            &caller,
+            "learning.jobs",
+            serde_json::json!({"id": "nope"}),
+        )
+        .unwrap_err();
+        assert_eq!(missing.code, "NOT_FOUND");
     }
 
     #[test]

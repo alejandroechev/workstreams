@@ -553,6 +553,114 @@ fn inbox_configuration_and_read_state_survive_cli_connections() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+/// A Rust Pocket check end to end (C-AT-1): the real CLI queues it over the
+/// socket, the learning worker compiles it with the real rustc against the
+/// same database file, and learning.jobs reports the outcome.
+#[test]
+fn learning_checks_run_through_the_cli_and_report_real_compiler_results() {
+    use std::io::Write;
+    if std::process::Command::new("rustc")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        return;
+    }
+    let dir = scratch_dir("learn");
+    let path = socket_path_in(&dir, 11);
+    let db_path = dir.join("ws.db");
+    let shared = std::sync::Arc::new(std::sync::Mutex::new(
+        workstreams_lib::db::open_db(&db_path).unwrap(),
+    ));
+    let _worker = workstreams_lib::learning_jobs::LearningWorker::start_with(
+        shared.clone(),
+        dir.join("jobs"),
+        workstreams_lib::learning_runner::Limits {
+            toolchain: None,
+            ..Default::default()
+        },
+        None,
+        std::time::Duration::from_millis(50),
+        Box::new(|_| {}),
+    );
+    let identities = std::sync::Arc::new(IdentityRegistry::new());
+    let token = identities.issue("tile", "ws");
+    let server =
+        AgentSocketServer::start(path.clone(), serve_with_db(identities, db_path.clone())).unwrap();
+    let run = |args: &[&str], stdin: Option<&str>| {
+        let mut child = cli()
+            .args(args)
+            .env(SOCKET_ENV_VAR, &path)
+            .env(TOKEN_ENV_VAR, &token)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(stdin.unwrap_or("").as_bytes())
+            .unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()["data"].clone()
+    };
+    let check = |source: &str| {
+        let request = serde_json::json!({
+            "card_id": "even", "card_version": "2",
+            "harness": {"cases": [
+                {"name": "even_numbers", "body": "for n in [-2, 0, 2] { assert!(is_even(n)); }"},
+                {"name": "odd_numbers", "body": "for n in [-1, 1] { assert!(!is_even(n)); }"}
+            ]},
+            "source": source
+        });
+        let queued = run(
+            &["agent", "call", "learning.check", "request=@-"],
+            Some(&request.to_string()),
+        );
+        assert_eq!(queued["status"], "queued");
+        let id = format!("id={}", queued["id"].as_str().unwrap());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(90);
+        loop {
+            let job = run(&["agent", "call", "learning.jobs", &id], None);
+            if job["status"] == "finished" {
+                return job["result"].clone();
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the job never finished: {job}"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+    };
+    assert_eq!(
+        check("pub fn is_even(n: i32) -> bool { n % 2 == 0 }")["status"],
+        "passed"
+    );
+    let broken = check("pub fn is_even(n: i32) -> bool { n }");
+    assert_eq!(broken["status"], "compile_error");
+    assert!(broken["output"]
+        .as_str()
+        .unwrap()
+        .contains("mismatched types"));
+    let wrong = check("pub fn is_even(n: i32) -> bool { n >= 0 && n % 2 == 0 }");
+    assert_eq!(wrong["status"], "tests_failed");
+    assert_eq!(
+        wrong["tests"][0],
+        serde_json::json!({"name": "even_numbers", "passed": false})
+    );
+    let listed = run(&["agent", "call", "learning.jobs"], None);
+    assert_eq!(listed["jobs"].as_array().unwrap().len(), 3);
+    drop(server);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 /// A diff reading order end to end: real CLI, real socket, real git repo and
 /// a persistent database, with two sessions that must not cross over.
 #[test]

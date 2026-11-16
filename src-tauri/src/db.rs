@@ -594,6 +594,7 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
     }
 
     migrate_pr_inbox_events(conn)?;
+    crate::learning_jobs::init_schema(conn)?;
     crate::pr_inbox::backfill_mute_keys(conn)?;
 
     crate::loops::init_loop_schema(conn)?;
