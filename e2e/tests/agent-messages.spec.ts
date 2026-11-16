@@ -118,3 +118,18 @@ test("AT-5: the Agents filter, and the long Inbox description is gone", async ({
   await expect(page.getByTestId("inbox-section-agents")).toBeVisible();
   await expect(dialog).not.toContainText("ADO activity on the PRs each repo watches");
 });
+
+test("long agent messages wrap instead of widening the Inbox", async ({ page }) => {
+  await start(page);
+  const long = "rollout daily 11-14: wb volume -65% DoD (Saturday, no evening surge); wb 99.98% / cs 100%, p50 0.74s p99 0.93s";
+  await post(page, "Bench", "info", long.slice(0, 118),
+    `${"| 11-14 Santiago (11-14 03:20 to 11-15 03:20 UTC, hourly buckets). This run is late: it fired at 10:20 instead of 00:00. ".repeat(3)}\n| 11-14 (Sat) | pre-rollout baseline |`);
+  await page.getByTestId("pr-inbox-button").click();
+  await expect(page.locator('[data-testid^="agent-message-open-"]')).toBeVisible(SNAPSHOT);
+  const overflow = () => page.getByTestId("pr-inbox-scroll").evaluate((el) => el.scrollWidth - el.clientWidth);
+  expect(await overflow()).toBeLessThanOrEqual(1);
+  await page.locator('[data-testid^="agent-message-expand-"]').click();
+  await expect(page.locator('[data-testid^="agent-message-body-"]')).toBeVisible();
+  expect(await overflow()).toBeLessThanOrEqual(1);
+});
+

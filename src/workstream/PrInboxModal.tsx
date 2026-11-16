@@ -239,7 +239,7 @@ export function PrInboxModal({ snapshot, loading, error, onRead, onMute, onReset
           </div>
         )}
 
-        <div style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
+        <div data-testid="pr-inbox-scroll" style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
           {loading && <p role="status" style={emptyStyle}>Loading inbox...</p>}
           {(error || actionError) && (
             <p role="alert" style={{ ...emptyStyle, color: "#f38ba8", textAlign: "left" }}>{actionError ?? error}</p>
@@ -263,11 +263,11 @@ export function PrInboxModal({ snapshot, loading, error, onRead, onMute, onReset
                   style={{ border: "1px solid #313244", borderRadius: 6, padding: "8px 10px", margin: "8px 12px 0", background: "#181825" }}
                 >
                   <div style={{ fontSize: 12, fontWeight: 600, color: "#cdd6f4" }}>{group.workstream_name || "Workstream"}</div>
-                  <ul style={{ listStyle: "none", margin: "6px 0 0", padding: 0, display: "grid", gap: 6 }}>
+                  <ul style={{ listStyle: "none", margin: "6px 0 0", padding: 0, display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: 6 }}>
                     {group.messages.map((message) => {
                       const open = expanded.has(message.id);
                       return (
-                        <li key={message.id} data-testid={`agent-message-${message.id}`} data-read={message.is_read} style={{ fontSize: 11 }}>
+                        <li key={message.id} data-testid={`agent-message-${message.id}`} data-read={message.is_read} style={{ fontSize: 11, minWidth: 0 }}>
                           <div style={{ display: "flex", gap: 8, alignItems: "baseline" }}>
                             <span style={{ color: levelColor(message.level), fontWeight: 600, whiteSpace: "nowrap" }}>{levelLabel(message.level)}</span>
                             <button
@@ -277,6 +277,8 @@ export function PrInboxModal({ snapshot, loading, error, onRead, onMute, onReset
                               title={message.available ? "Go to the session that sent this" : "The workstream no longer exists"}
                               style={{
                                 flex: 1, minWidth: 0, background: "none", border: "none", padding: 0, textAlign: "left",
+                                // WebKit keeps button text on one line unless told otherwise.
+                                whiteSpace: "normal", overflow: "hidden",
                                 cursor: message.available ? "pointer" : "default", fontFamily: "inherit", fontSize: 11,
                                 color: message.is_read ? "#6c7086" : "#cdd6f4", opacity: message.available ? 1 : 0.6,
                               }}
@@ -313,7 +315,7 @@ export function PrInboxModal({ snapshot, loading, error, onRead, onMute, onReset
                             </button>
                           </div>
                           {open && (
-                            <div data-testid={`agent-message-body-${message.id}`} style={{ margin: "6px 0 0", padding: "6px 8px", background: "#11111b", borderRadius: 4 }}>
+                            <div data-testid={`agent-message-body-${message.id}`} style={{ margin: "6px 0 0", padding: "6px 8px", background: "#11111b", borderRadius: 4, overflowX: "auto", overflowWrap: "anywhere" }}>
                               <MarkdownView baseFontSize={12}>{message.body}</MarkdownView>
                             </div>
                           )}
