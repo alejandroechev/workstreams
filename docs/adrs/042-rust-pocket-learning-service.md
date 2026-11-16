@@ -52,7 +52,7 @@ bridge on localhost; this replaces it.
   `learning.jobs [id=]` lists jobs or returns one with its result. There is no
   desktop learning UI.
 
-The relay transport is added by a later amendment.
+The relay transport is described in its own amendment below.
 
 ### Amendment (2026-11-17): the tutor
 
@@ -89,6 +89,42 @@ The relay transport is added by a later amendment.
 - **No CLI for pairing.** The key is a secret that agents must not read, so
   pairing is a Settings action only.
 
+### Amendment (2026-11-17): the relay
+
+- **A learning document of its own** on the SyncEngine server, created at
+  setup and never shared with the companion:
+  `{ schemaVersion: 1, requests: {id: envelope}, results: {id: envelope},
+  laptop: {lastSeenAt} }`. The phone writes `requests`; Workstreams writes
+  `results` and `laptop`. Envelopes are JSON text stored as one immutable value
+  each, so the document's history does not grow by every character.
+- **Requests** are `{version, id, kind: check | help, createdAt, cardId,
+  cardVersion, source, harness?, toolchain?, level?, exercise?, summary?,
+  diagnostic?}`, signed with HMAC-SHA256 over canonical JSON (keys sorted,
+  undefined fields absent). The id is the attempt id. Both repositories test
+  the same fixture, which the phone's code produced.
+- **Admission** (`src/learning/protocol`): the entry must be filed under its own
+  id and well-formed, then signed with the learning key, then fresh (5 minutes,
+  1 minute of clock skew). A refused request gets an unsigned
+  `{refused, message}` result, so the phone can say why. An admitted one is
+  queued in the native ledger (`learning_enqueue`), which runs each attempt id
+  at most once.
+- **Results** (`{version, id, requestHash, at, result | reply | error}`) are
+  signed with the learning key and bound to the request by its SHA-256, so the
+  phone accepts only the result for the exact request it sent. A job
+  interrupted by a restart is reported as an error, never rerun. A job queued
+  before a restart is still published after it, though its request is no
+  longer fresh.
+- **Presence**: an ephemeral `{kind: "presence"}` every 10 s, and
+  `laptop.lastSeenAt` every 5 minutes. Requests and results older than 7 days
+  are pruned.
+- **Where it runs**: in the frontend (`src/learning/relay.ts`, started from
+  `main.tsx`), like the companion, with Automerge loaded lazily; the native
+  ledger and worker do the work. Development builds never connect unless
+  started with `VITE_WS_LEARNING_DEV=1`, and they have their own database.
+- **Phone side** (rust-pocket): the relay document lives in the phone's sync
+  worker; the page talks to it by messages. The HTTP bridge remains for
+  development, used only while Rust Pocket is unpaired.
+
 ## Consequences
 
 - The development Node bridge stays in rust-pocket for its own tests only.
@@ -97,6 +133,10 @@ The relay transport is added by a later amendment.
 - Its tests run in Workstreams CI; the Serde build test is ignored there.
 - The tutor needs the Copilot CLI on the Mac's `PATH`; tests use a fake
   assistant, never a real model.
+- Rust Pocket must use the same SyncEngine server as Workstreams; the pairing
+  code names it, and the phone refuses a mismatch.
+- A leaked learning document id lets someone fill `requests` with entries
+  Workstreams refuses, or delete results; it cannot run code without the key.
 
 ## References
 

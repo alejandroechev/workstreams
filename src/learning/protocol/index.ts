@@ -65,7 +65,8 @@ function canonical(value: unknown): string {
   if (value === null || typeof value !== "object") return JSON.stringify(value);
   if (Array.isArray(value)) return "[" + value.map(canonical).join(",") + "]";
   const record = value as Record<string, unknown>;
-  return "{" + Object.keys(record).sort().map((k) => JSON.stringify(k) + ":" + canonical(record[k])).join(",") + "}";
+  // Like JSON, an undefined field is absent: it must not change the signature.
+  return "{" + Object.keys(record).filter((k) => record[k] !== undefined).sort().map((k) => JSON.stringify(k) + ":" + canonical(record[k])).join(",") + "}";
 }
 
 const encode = (value: unknown) => new TextEncoder().encode(canonical(value));

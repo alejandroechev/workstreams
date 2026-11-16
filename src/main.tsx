@@ -69,6 +69,33 @@ if (isE2E && typeof window !== "undefined") {
   }
 }
 
+// The Rust Pocket relay (ADR 042) runs for the app's lifetime; it connects only
+// while paired, and never in development builds. E2E: a spec sets
+// __WS_LEARNING_E2E__ (settings entries) and gets an in-memory phone peer and
+// the signer; the native ledger is the spec's learning_enqueue/learning_job
+// invoke handlers.
+{
+  const seam = window as unknown as {
+    __WS_LEARNING_E2E__?: Record<string, string>;
+    __WS_LEARNING_PHONE__?: unknown;
+    __WS_LEARNING_SIGN__?: unknown;
+  };
+  const { startLearningService } = await import("./learning/service");
+  if (isE2E && seam.__WS_LEARNING_E2E__) {
+    const [{ createInMemoryLearningHub }, { createMemorySettingsStore }, { sign }] = await Promise.all([
+      import("./learning/doc"),
+      import("./companion/settings"),
+      import("./learning/protocol"),
+    ]);
+    const hub = createInMemoryLearningHub();
+    seam.__WS_LEARNING_PHONE__ = hub.peer();
+    seam.__WS_LEARNING_SIGN__ = sign;
+    startLearningService({ store: createMemorySettingsStore(seam.__WS_LEARNING_E2E__), connect: async () => hub.peer(), devBuild: false });
+  } else if (!isE2E) {
+    startLearningService();
+  }
+}
+
 // Dev/E2E-only component harness: `?harness=<caseId>` mounts a single component
 // under test in isolation (real Monaco) for fast, reliable UI-bug repro. The
 // dynamic import keeps harness code out of the production static graph.

@@ -77,6 +77,12 @@ describe("Rust Pocket settings", () => {
     expect(secret).not.toBe("a".repeat(64));
   });
 
+  it("shows the service's status while paired", async () => {
+    const store = createMemorySettingsStore({ "learning.doc_url": DOC, "learning.secret": "a".repeat(64) });
+    render(<LearningSettingsSection store={store} deps={deps()} status="Connected." />);
+    expect(await screen.findByTestId("learning-status")).toHaveTextContent("Connected.");
+  });
+
   it("cancels an unpair", async () => {
     const store = createMemorySettingsStore({ "learning.doc_url": DOC, "learning.secret": "a".repeat(64) });
     render(<LearningSettingsSection store={store} deps={deps()} />);

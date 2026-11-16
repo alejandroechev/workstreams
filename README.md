@@ -108,6 +108,12 @@ instead of buried behind tabs.
   the [shared gallery](https://alejandroechev.github.io/workstreams-artifacts/),
   and return a clickable link. Publishing is public and opt-in; the installer
   installs the skills globally (also `ws` and `ws-message`).
+- **Rust Pocket learning service** *(opt-in)* — pair the Rust Pocket phone
+  app from Settings → Phone with a key of its own, and Workstreams compiles and
+  tests its Rust answers with the real compiler and answers hint requests with
+  a tool-less `copilot -p`. Requests travel through a learning document on your
+  SyncEngine server, signed and run at most once
+  ([ADR 042](docs/adrs/042-rust-pocket-learning-service.md)).
 - **Answer grills one question at a time** — the Plan tile's Grill tab turns a
   `grill-me.md` into a focused view: importance-coloured questions you can
   filter to what matters, option buttons, the recommendation hidden until you

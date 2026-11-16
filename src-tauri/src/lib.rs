@@ -4199,6 +4199,26 @@ fn read_skill_description(path: &std::path::Path) -> Option<String> {
 
 // ── Settings ───────────────────────────────────────────────────────────
 
+/// Rust Pocket relay (ADR 042): queues a verified phone request.
+#[tauri::command]
+fn learning_enqueue(
+    state: State<'_, AppState>,
+    request: serde_json::Value,
+) -> Result<learning_jobs::Job, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    learning_jobs::enqueue_json(&db, request)
+}
+
+/// Rust Pocket relay: one job and its result, if it exists.
+#[tauri::command]
+fn learning_job(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<Option<learning_jobs::Job>, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    learning_jobs::get(&db, &id)
+}
+
 #[tauri::command]
 fn get_setting(state: State<'_, AppState>, key: String) -> Result<Option<String>, String> {
     let db = state.db.lock().map_err(|e| e.to_string())?;
@@ -6796,6 +6816,8 @@ pub fn run() {
             git_list_branches,
             // Settings
             get_setting,
+            learning_enqueue,
+            learning_job,
             set_setting,
             // Git hooks
             list_git_hooks,

@@ -23,6 +23,11 @@ describe("learning protocol", () => {
     expect(await verify(fixtures.request, fixtures.secret)).toBe(true);
   });
 
+  it("signs an undefined field as if it were absent, as JSON transmits it", async () => {
+    const signed = await sign({ ...body, toolchain: undefined }, fixtures.secret);
+    expect(await verify(JSON.parse(JSON.stringify(signed)), fixtures.secret)).toBe(true);
+  });
+
   it("admits a fresh request signed with the learning key", async () => {
     const admitted = await admitRequest("attempt-1", JSON.stringify(fixtures.request), fixtures.secret, NOW);
     expect(admitted).toEqual({ ok: true, request: body, hash: fixtures.requestHash });

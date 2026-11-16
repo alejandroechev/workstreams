@@ -1213,6 +1213,13 @@ of its own. *Unpair…* and *Pair a new phone…* change only that key; the
 companion stays paired either way, and a request signed with one app's key is
 refused by the other.
 
+**How the phone reaches the Mac.** Requests and results travel through a
+learning document of their own on your SyncEngine server, never the
+companion's. Workstreams accepts only requests signed with the Rust Pocket key
+and at most five minutes old; each attempt runs at most once, and each result
+is signed and bound to the exact request it answers. Rust Pocket must use the
+same sync server; the pairing code names it.
+
 The tutor answers help requests (`nudge`, `hint` or `solution`) with one
 `copilot -p` call that has no tools, so a help request can never run commands
 or edit files. Its reply is read the same way:

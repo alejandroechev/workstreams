@@ -160,6 +160,13 @@ pub fn enqueue(db: &Connection, request: &JobRequest, origin: &str) -> Result<Jo
     get(db, id)?.ok_or_else(|| "The job was not recorded".to_string())
 }
 
+/// Queues a job the Rust Pocket relay received (already verified and fresh).
+pub fn enqueue_json(db: &Connection, request: serde_json::Value) -> Result<Job, String> {
+    let request: JobRequest =
+        serde_json::from_value(request).map_err(|e| format!("Not a learning job: {e}"))?;
+    enqueue(db, &request, "phone")
+}
+
 /// The oldest queued job, now marked running, with its request.
 pub fn claim_next(db: &Connection) -> Result<Option<(Job, JobRequest)>, String> {
     let next: Option<(String, String)> = db
@@ -390,6 +397,28 @@ mod tests {
         assert!(enqueue(&db, &check("a1", "y"), "agent")
             .unwrap_err()
             .contains("different content"));
+    }
+
+    #[test]
+    fn a_relayed_job_arrives_as_json_and_is_queued_from_the_phone() {
+        let db = db();
+        let job = enqueue_json(
+            &db,
+            serde_json::json!({
+                "kind": "check", "id": "p1", "card_id": "even", "card_version": "2",
+                "harness": {"tests": "assert!(is_even(2));"}, "source": "x"
+            }),
+        )
+        .unwrap();
+        assert_eq!(
+            (job.id.as_str(), job.kind.as_str(), job.origin.as_str()),
+            ("p1", "check", "phone")
+        );
+        assert!(
+            enqueue_json(&db, serde_json::json!({"kind": "status", "id": "p2"}))
+                .unwrap_err()
+                .starts_with("Not a learning job")
+        );
     }
 
     #[test]

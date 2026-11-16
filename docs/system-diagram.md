@@ -81,7 +81,16 @@ graph TB
 
     subgraph SyncCloud["User's SyncEngine server"]
         CompanionDoc["Companion Automerge document<br/>laptop: workstreams, lanes, lastSeenAt<br/>laptop.tiles: session tiles (no transcript)<br/>requests: signed load / create / session / message<br/>sessions: phone-started sessions + agent messages<br/>+ ephemeral presence every 10s"]
+        LearningDoc["Rust Pocket learning document (ADR 042)<br/>requests: signed check / help, harness travels along<br/>results: signed, bound to the request hash<br/>laptop.lastSeenAt + ephemeral presence"]
     end
+
+    RustPocket["rust-pocket<br/>(Android, Tauri 2 + React)<br/>own pairing key; Automerge in a worker"]
+    RustPocket -- "Automerge sync over WebSocket" --> LearningDoc
+    LearningRelay["src/learning: relay + Settings section<br/>admit: shape, learning key, freshness<br/>never in dev builds"]
+    App --> LearningRelay
+    LearningDoc -- "requests" --> LearningRelay
+    LearningRelay -- "signed results + presence" --> LearningDoc
+    LearningRelay -- "learning_enqueue / learning_job" --> LearningRS
 
     PhoneApp["workstreams-companion<br/>(Android, Tauri 2 + React)<br/>signs requests with the pairing secret<br/>Messages + Sessions: threads, message any session"]
     ArtifactPages["workstreams-artifacts (public GitHub repo)<br/>self-contained HTML + gallery<br/>GitHub Actions deploys GitHub Pages"]

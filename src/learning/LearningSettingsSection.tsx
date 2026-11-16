@@ -5,6 +5,7 @@ import { tauriSettingsStore, type SettingsStore } from "../companion/settings";
 import { syncAuthRequired, registerSyncDevice, syncServerUrls } from "../companion/sync-server";
 import { openAutomergeDoc } from "../companion/automerge-doc";
 import { encodeLearningPairing, emptyLearningDocument } from "./protocol";
+import { getLearningStatus, learningStatusText, onLearningStatus } from "./service";
 import {
   loadLearningSettings,
   onLearningSettingsChanged,
@@ -50,13 +51,16 @@ const helpStyle: React.CSSProperties = { marginTop: 4, fontSize: 11, color: "#6c
 export function LearningSettingsSection({
   store = tauriSettingsStore,
   deps = realSetUpDeps,
-  status,
+  status: statusOverride,
 }: {
   store?: SettingsStore;
   deps?: SetUpDeps;
-  /** The running learning service's state, shown when paired. */
+  /** For tests; otherwise the running service's state, shown when paired. */
   status?: string;
 }) {
+  const [liveStatus, setLiveStatus] = useState(getLearningStatus);
+  useEffect(() => onLearningStatus(setLiveStatus), []);
+  const status = statusOverride ?? learningStatusText(liveStatus);
   const [settings, setSettings] = useState<LearningSettings | null>(null);
   const [serverUrl, setServerUrl] = useState("");
   const [registrationKey, setRegistrationKey] = useState("");
@@ -148,7 +152,7 @@ export function LearningSettingsSection({
         </>
       ) : (
         <>
-          {status && <div data-testid="learning-status" style={{ marginBottom: 10, fontSize: 12, color: "#a6adc8" }}>{status}</div>}
+          <div data-testid="learning-status" style={{ marginBottom: 10, fontSize: 12, color: "#a6adc8" }}>{status}</div>
           <div style={{ display: "flex", gap: 14, alignItems: "flex-start" }}>
             <div data-testid="learning-qr" role="img" aria-label="Rust Pocket pairing QR code"
               style={{ width: 160, height: 160, flexShrink: 0, background: "#cdd6f4", borderRadius: 4 }}
