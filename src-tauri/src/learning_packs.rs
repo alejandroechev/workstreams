@@ -122,6 +122,9 @@ pub fn parse_pack(reply: &str, request: &PackRequest) -> Result<Value, String> {
     let mut seen = std::collections::HashSet::new();
     let mut normalized = Vec::new();
     for (index, card) in cards.iter().enumerate() {
+        if !card.is_object() {
+            return Err(format!("The draft's card {} is not an object.", index + 1));
+        }
         let mut card = card.clone();
         let mut name = slug(
             card["slug"]
@@ -349,6 +352,10 @@ mod tests {
         assert!(parse_pack("{\"cards\": []}", &request(None))
             .unwrap_err()
             .contains("1 to 6"));
+        // Valid JSON with a card that is not an object must not panic.
+        assert!(parse_pack("{\"cards\": [\"bad\", 3]}", &request(None))
+            .unwrap_err()
+            .contains("card 1 is not an object"));
         let many = draft(Value::Array(vec![
             json!({"kind": "lesson", "lesson": ["a"]});
             7

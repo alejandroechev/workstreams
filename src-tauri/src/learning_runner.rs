@@ -432,17 +432,16 @@ pub(crate) fn run(
             Err(_) => break None,
         }
     };
-    if timed_out {
-        // A grandchild may still hold the pipes open; don't wait on readers forever.
-        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(500);
-        for reader in readers {
-            while !reader.is_finished() && std::time::Instant::now() < deadline {
-                std::thread::sleep(std::time::Duration::from_millis(10));
-            }
-        }
-    } else {
-        for reader in readers {
-            let _ = reader.join();
+    // Whatever the command left behind in its group goes too: a descendant
+    // holding the pipes open would otherwise keep the readers (and the only
+    // worker) waiting past the timeout.
+    if !timed_out {
+        kill_group(&mut child);
+    }
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(500);
+    for reader in readers {
+        while !reader.is_finished() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(10));
         }
     }
     let bytes = collected.lock().unwrap().clone();
@@ -470,6 +469,29 @@ fn kill_group(child: &mut std::process::Child) {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    #[test]
+    fn a_descendant_holding_the_output_cannot_outlive_the_job() {
+        let dir = std::env::temp_dir();
+        let started = std::time::Instant::now();
+        // The shell exits at once; its background child keeps stdout open.
+        let ran = run(
+            &dir,
+            "sh",
+            &["-c", "echo done; sleep 8 &"],
+            5_000,
+            1_000,
+            None,
+        );
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(3),
+            "waited {:?}",
+            started.elapsed()
+        );
+        assert_eq!((ran.code, ran.timeout), (Some(0), false));
+        assert!(ran.output.contains("done"));
+    }
+
     use super::*;
 
     fn even() -> Harness {

@@ -73,12 +73,12 @@ export function createLearningRelay(options: RelayOptions) {
     const admission = await admitRequest(id, raw, options.secret, at);
     if (stopped) return;
     if (!admission.ok) return refuse(id, admission.reason);
-    if (!known) {
-      try {
-        await ledger.enqueue(toJobRequest(admission.request));
-      } catch (error) {
-        return refuse(id, "invalid", error instanceof Error ? error.message : String(error));
-      }
+    // Always through the ledger, even for a job it already has: its content
+    // check is what stops a result being bound to another request's hash.
+    try {
+      await ledger.enqueue(toJobRequest(admission.request));
+    } catch (error) {
+      return refuse(id, "invalid", error instanceof Error ? error.message : String(error));
     }
     pending.set(id, admission.hash);
   }

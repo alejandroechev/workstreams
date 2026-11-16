@@ -8,11 +8,15 @@ const NOW = 1_700_000_000_000;
 
 function fakeLedger() {
   const jobs = new Map<string, LedgerJob>();
+  const contents = new Map<string, string>();
   const ledger: LedgerPort = {
     enqueue: vi.fn(async (job) => {
       const id = job.id as string;
       const existing = jobs.get(id);
+      // Like learning_jobs.rs: the same id with other content is refused.
+      if (existing && contents.get(id) !== JSON.stringify(job)) throw new Error(`Job ${id} already exists with different content`);
       if (existing) return existing;
+      contents.set(id, JSON.stringify(job));
       const created: LedgerJob = { id, kind: job.kind as "check" | "help", status: "queued", result: null };
       jobs.set(id, created);
       return created;
@@ -128,6 +132,17 @@ describe("learning relay", () => {
     const later = createLearningRelay({ doc: t.hub.peer(), ledger: t.ledger, secret: SECRET, now: () => NOW + 60 * 60_000 });
     await later.process();
     expect(t.result("a1")!.body.result).toEqual({ status: "passed", output: "", toolchain: "" });
+  });
+
+  it("never binds a job's result to a different request filed under the same id", async () => {
+    const t = await setup();
+    await t.send(check("a1"));
+    await t.relay.process();
+    await t.send(check("a1", { source: "fn other() {}" }));
+    t.finish("a1", "finished", { status: "passed", output: "", toolchain: "" });
+    const restarted = createLearningRelay({ doc: t.hub.peer(), ledger: t.ledger, secret: SECRET, now: () => NOW });
+    await restarted.process();
+    expect(t.result("a1")).toMatchObject({ refused: "invalid", message: "Job a1 already exists with different content" });
   });
 
   it("acts on nothing in a document from a newer version", async () => {
