@@ -1206,6 +1206,13 @@ END_OF_REQUEST
 workstreams agent call learning.jobs id=<job-id>
 ```
 
+**Pairing.** Settings → Phone has a **Rust Pocket** section under the phone
+companion. *Set up Rust Pocket* creates its document (reusing the companion's
+sync server enrolment when it's the same server) and shows a QR code with a key
+of its own. *Unpair…* and *Pair a new phone…* change only that key; the
+companion stays paired either way, and a request signed with one app's key is
+refused by the other.
+
 The tutor answers help requests (`nudge`, `hint` or `solution`) with one
 `copilot -p` call that has no tools, so a help request can never run commands
 or edit files. Its reply is read the same way:

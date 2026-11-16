@@ -117,7 +117,7 @@ describe("SettingsModal", () => {
       ["devlog", "Devlog export", "settings-devlog-directory"],
       ["rendering", "Rendering", "settings-disable-webgl"],
       ["app", "App behavior", "settings-confirm-close"],
-      ["companion", "Phone companion", "companion-settings"],
+      ["companion", "Phone", "companion-settings"],
     ] as const;
 
     it("hides Devlog export while the task board is off", () => {

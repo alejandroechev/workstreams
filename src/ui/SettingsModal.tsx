@@ -18,6 +18,7 @@ import {
 } from "../domain/app-settings";
 import { debounce } from "../domain/debounce";
 import { CompanionSettingsSection } from "../companion/CompanionSettingsSection";
+import { LearningSettingsSection } from "../learning/LearningSettingsSection";
 import { isFeatureEnabled } from "../domain/feature-flags";
 
 const SETTINGS_TABS = [
@@ -27,7 +28,7 @@ const SETTINGS_TABS = [
   { id: "devlog", label: "Devlog export" },
   { id: "rendering", label: "Rendering" },
   { id: "app", label: "App behavior" },
-  { id: "companion", label: "Phone companion" },
+  { id: "companion", label: "Phone" },
 ] as const;
 
 type SettingsTab = (typeof SETTINGS_TABS)[number]["id"];
@@ -392,7 +393,12 @@ export default function SettingsModal({ open, onClose }: Props) {
               </div>
               </>
             )}
-            {tab === "companion" && <CompanionSettingsSection />}
+            {tab === "companion" && (
+              <>
+                <CompanionSettingsSection />
+                <LearningSettingsSection />
+              </>
+            )}
           </div>
         </div>
           <div style={{ padding: "8px 14px", borderTop: "1px solid #313244", textAlign: "right" }}>

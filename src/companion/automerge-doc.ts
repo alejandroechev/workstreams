@@ -17,6 +17,8 @@ export interface OpenOptions {
    * token is reported at once instead of on the next start.
    */
   waitForNetworkMs?: number;
+  /** The new document's contents; defaults to an empty companion document. */
+  initial?: object;
 }
 
 /** Shuts a repo down without ever throwing: adapters may assert on state. */
@@ -63,7 +65,7 @@ export async function openAutomergeDoc(options: OpenOptions): Promise<{ doc: Com
   try {
     handle = options.docUrl
       ? await repo.find<CompanionDocument>(options.docUrl as Parameters<typeof repo.find>[0])
-      : repo.create<CompanionDocument>(emptyDocument());
+      : repo.create<CompanionDocument>((options.initial ?? emptyDocument()) as CompanionDocument);
     await handle.whenReady();
     if (options.waitForNetworkMs !== undefined) {
       let timer: ReturnType<typeof setTimeout> | undefined;

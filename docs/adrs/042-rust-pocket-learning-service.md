@@ -52,7 +52,7 @@ bridge on localhost; this replaces it.
   `learning.jobs [id=]` lists jobs or returns one with its result. There is no
   desktop learning UI.
 
-Pairing and the relay transport are added by later amendments.
+The relay transport is added by a later amendment.
 
 ### Amendment (2026-11-17): the tutor
 
@@ -68,6 +68,26 @@ Pairing and the relay transport are added by later amendments.
   failure is an error the phone can show, never a thrown job.
 - **Agents**: `learning.help request=@-` queues a help request; its reply is
   read with `learning.jobs`, like a check.
+
+### Amendment (2026-11-17): pairing of its own
+
+- **A learning key, apart from the companion's.** Settings → Phone shows a
+  Rust Pocket section under the companion's, with its own QR code
+  (`{v: 1, app: "rust-pocket", doc, secret, server}`). The key is 32 random
+  bytes as 64 hex characters, stored in `learning.secret`; the companion's is
+  base64url, so neither pairing code decodes as the other.
+- **Each service verifies with its own key only.** A learning request signed
+  with the companion's key is refused (`not-paired` or `bad-signature`), and a
+  companion request signed with the learning key fails the companion's
+  signature check.
+- **Unpair and re-pair alone.** *Unpair* clears only the learning key;
+  *Pair a new phone* replaces it. The learning document is kept, so pairing
+  again needs no network, and the companion's settings are never written.
+- **Shared enrolment only.** Setting up reuses the companion's SyncEngine
+  device token when both use the same server; otherwise it asks for the
+  server's registration key once, like the companion.
+- **No CLI for pairing.** The key is a secret that agents must not read, so
+  pairing is a Settings action only.
 
 ## Consequences
 

@@ -25,6 +25,13 @@ describe("Automerge companion document", () => {
     doc.close();
   });
 
+  it("creates a document with other initial contents when given them", async () => {
+    const [a] = pair();
+    const { doc } = await openAutomergeDoc({ network: [a], docUrl: null, storage: false, initial: { schemaVersion: 1, requests: {} } });
+    expect(doc.read()).toEqual({ schemaVersion: 1, requests: {} });
+    doc.close();
+  });
+
   it("syncs changes between two peers and notifies subscribers", async () => {
     const [a, b] = pair();
     const laptop = await openAutomergeDoc({ network: [a], docUrl: null, storage: false });
