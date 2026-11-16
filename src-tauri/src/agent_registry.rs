@@ -723,9 +723,17 @@ pub const COMMANDS: &[Command] = &[
         handler: learning_check,
     },
     Command {
+        id: "learning.help",
+        log_params: &[],
+        summary: "Queue a Rust Pocket tutor answer from Copilot, with no tools (params: request = JSON {card_id, card_version, level nudge|hint|solution, exercise, source, summary?, diagnostic?}; request=@- reads stdin). Returns the job; read its reply with learning.jobs",
+        requires_identity: true,
+        destructive: false,
+        handler: learning_help,
+    },
+    Command {
         id: "learning.jobs",
         log_params: &["id"],
-        summary: "Rust Pocket check jobs, newest first, or one job with its result (params: id = a job id, optional)",
+        summary: "Rust Pocket check and help jobs, newest first, or one job with its result (params: id = a job id, optional)",
         requires_identity: true,
         destructive: false,
         handler: learning_jobs,
@@ -2510,6 +2518,32 @@ fn learning_check(
     context: &CommandContext,
     params: &serde_json::Value,
 ) -> Result<CommandOutcome, AgentError> {
+    learning_enqueue(
+        context,
+        params,
+        "check",
+        "Send {card_id, card_version, harness: {before, after, cases or tests, constraints, serde}, source}.",
+    )
+}
+
+fn learning_help(
+    context: &CommandContext,
+    params: &serde_json::Value,
+) -> Result<CommandOutcome, AgentError> {
+    learning_enqueue(
+        context,
+        params,
+        "help",
+        "Send {card_id, card_version, level: nudge|hint|solution, exercise, source}.",
+    )
+}
+
+fn learning_enqueue(
+    context: &CommandContext,
+    params: &serde_json::Value,
+    kind: &str,
+    shape: &str,
+) -> Result<CommandOutcome, AgentError> {
     let raw = required_str(params, "request")?;
     let mut value: serde_json::Value = serde_json::from_str(&raw).map_err(|e| {
         AgentError::new(
@@ -2518,18 +2552,26 @@ fn learning_check(
             "Pass request=@- with a JSON object.",
         )
     })?;
+    if !value.is_object() {
+        return Err(AgentError::new(
+            "BAD_REQUEST",
+            "request is not a JSON object",
+            shape,
+        ));
+    }
     if value.get("id").is_none() {
         value["id"] = serde_json::json!(uuid::Uuid::new_v4().to_string());
     }
-    let request: crate::learning_jobs::CheckRequest = serde_json::from_value(value).map_err(|e| {
+    value["kind"] = serde_json::json!(kind);
+    let request: crate::learning_jobs::JobRequest = serde_json::from_value(value).map_err(|e| {
         AgentError::new(
             "BAD_REQUEST",
-            format!("request is not a check: {e}"),
-            "Send {card_id, card_version, harness: {before, after, cases or tests, constraints, serde}, source}.",
+            format!("request is not a {kind}: {e}"),
+            shape,
         )
     })?;
     let job = crate::learning_jobs::enqueue(context.db, &request, "agent")
-        .map_err(|e| AgentError::new("BAD_REQUEST", e, "Use a new id for a different answer."))?;
+        .map_err(|e| AgentError::new("BAD_REQUEST", e, "Use a new id for a different request."))?;
     let id = job.id.clone();
     Ok(CommandOutcome::changed(
         serde_json::json!(job),
@@ -3297,6 +3339,43 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(missing.code, "NOT_FOUND");
+    }
+
+    #[test]
+    fn learning_help_queues_a_help_job() {
+        let db = memory_db();
+        let caller = agent("t1", "w1");
+        let request = serde_json::json!({
+            "id": "h1", "card_id": "borrow", "card_version": "1", "level": "hint",
+            "exercise": {"prompt": "Borrow it"}, "source": "&name"
+        });
+        let queued = call(
+            &db,
+            &caller,
+            "learning.help",
+            serde_json::json!({"request": request.to_string()}),
+        )
+        .unwrap();
+        assert_eq!(
+            (
+                &queued.data["id"],
+                &queued.data["kind"],
+                &queued.data["status"]
+            ),
+            (
+                &serde_json::json!("h1"),
+                &serde_json::json!("help"),
+                &serde_json::json!("queued")
+            )
+        );
+        let bad = call(
+            &db,
+            &caller,
+            "learning.help",
+            serde_json::json!({"request": "{\"level\": 1}"}),
+        )
+        .unwrap_err();
+        assert_eq!(bad.code, "BAD_REQUEST");
     }
 
     #[test]

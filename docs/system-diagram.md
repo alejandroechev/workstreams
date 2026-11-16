@@ -44,7 +44,7 @@ graph TB
             DevlogRS["devlog.rs<br/>write + commit + push<br/>refuses to clobber hand-written pages"]
             AgentSocketRS["agent_socket.rs<br/>Unix socket in $TMPDIR, 0600<br/>newline-JSON frames<br/>connect-then-unlink stale reclaim"]
             AgentRegistryRS["agent_registry.rs<br/>named commands + app-issued tokens<br/>scope via created_by_session<br/>command_log (actor = what app can prove)"]
-            LearningRS["learning_jobs.rs + learning_runner.rs (ADR 042)<br/>Rust Pocket job ledger, one lock-free worker<br/>fixed rustc / cargo test --offline per job dir<br/>harness + content version travel with each request"]
+            LearningRS["learning_jobs.rs + learning_runner.rs (ADR 042)<br/>Rust Pocket job ledger, one lock-free worker<br/>fixed rustc / cargo test --offline per job dir<br/>harness + content version travel with each request<br/>learning_ai.rs: tutor via tool-less copilot -p"]
             CompanionMsgRS["companion_messages.rs (ADR 033)<br/>phone sessions + prompts + agent messages<br/>200 per session, pruned after 3 days"]
             DiffOrderRS["diff_order.rs (ADR 032)<br/>exact-file-set check<br/>file-set + content fingerprints<br/>freshness: current / content / files"]
             WorkLanesRS["work_lanes + lane_id<br/>named folders for related workstreams<br/>unique names, ON DELETE SET NULL"]
@@ -106,7 +106,7 @@ graph TB
     Sidebar --> PrInboxUI
     PrInboxUI -- "Tauri: configure / snapshot / read state" --> PrInboxRS
     AgentRegistryRS -- "inbox.configure / list / read / message / pipeline_*" --> PrInboxRS
-    AgentRegistryRS -- "learning.check / learning.jobs" --> LearningRS
+    AgentRegistryRS -- "learning.check / learning.help / learning.jobs" --> LearningRS
     App --> PlanningUI["Planning view (ADR 039)<br/>Sprint · Features · Plan sprint · Plan feature<br/>draft → Publish to ADO"]
     PlanningUI -- "Tauri: planning_*" --> PlanningRS["ado_planning.rs<br/>team link, WIQL + batch reads<br/>draft in settings; publish with test /rev"]
     AgentRegistryRS -- "planning.*" --> PlanningRS

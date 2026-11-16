@@ -52,7 +52,22 @@ bridge on localhost; this replaces it.
   `learning.jobs [id=]` lists jobs or returns one with its result. There is no
   desktop learning UI.
 
-Pairing, the relay transport and the tutor are added by later amendments.
+Pairing and the relay transport are added by later amendments.
+
+### Amendment (2026-11-17): the tutor
+
+- **Help requests are jobs too.** The ledger holds two kinds, `check` and
+  `help`, with the same attempt-id keying, retry and interruption rules. Older
+  rows without a kind are read as checks.
+- **`learning_ai`** answers a help request (level `nudge`, `hint` or
+  `solution`; the exercise, the learner's answer, the card summary and the last
+  compiler diagnostic) with one `copilot -p` call that has **no tools**: no
+  shell, no file writes, no built-in MCP servers, no custom instructions, and no
+  questions back. It runs in an empty temporary folder that is removed
+  afterwards, with a 90 s timeout. The job's result is `{reply, error}`; a
+  failure is an error the phone can show, never a thrown job.
+- **Agents**: `learning.help request=@-` queues a help request; its reply is
+  read with `learning.jobs`, like a check.
 
 ## Consequences
 
@@ -60,6 +75,8 @@ Pairing, the relay transport and the tutor are added by later amendments.
 - Serde checks need the pinned crates in the local cargo cache; without them the
   check reports an infrastructure error rather than a compile error.
 - Its tests run in Workstreams CI; the Serde build test is ignored there.
+- The tutor needs the Copilot CLI on the Mac's `PATH`; tests use a fake
+  assistant, never a real model.
 
 ## References
 

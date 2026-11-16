@@ -342,17 +342,17 @@ fn check_in(
     with(status, bounded(&output, limit), Some(tests))
 }
 
-struct Ran {
-    code: Option<i32>,
-    output: String,
-    timeout: bool,
-    spawn_error: bool,
+pub(crate) struct Ran {
+    pub(crate) code: Option<i32>,
+    pub(crate) output: String,
+    pub(crate) timeout: bool,
+    pub(crate) spawn_error: bool,
 }
 
 /// Runs a command with a timeout and a character cap on its combined output.
 /// On Unix it gets its own process group, so a timeout kills everything it
 /// started (a test binary, rustc's linker, cargo's children).
-fn run(
+pub(crate) fn run(
     dir: &Path,
     program: &str,
     args: &[&str],

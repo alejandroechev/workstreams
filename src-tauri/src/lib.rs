@@ -20,6 +20,7 @@ mod file_io;
 mod fs_watcher;
 mod inbox_messages;
 mod inbox_retention;
+pub mod learning_ai;
 pub mod learning_jobs;
 pub mod learning_runner;
 mod loop_agent;

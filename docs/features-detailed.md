@@ -1206,3 +1206,13 @@ END_OF_REQUEST
 workstreams agent call learning.jobs id=<job-id>
 ```
 
+The tutor answers help requests (`nudge`, `hint` or `solution`) with one
+`copilot -p` call that has no tools, so a help request can never run commands
+or edit files. Its reply is read the same way:
+
+```sh
+workstreams agent call learning.help request=@- <<'END_OF_REQUEST'
+{"card_id":"even","card_version":"1","level":"hint","exercise":{"prompt":"Return whether n is even"},"source":"pub fn is_even(n: i32) -> bool { n }"}
+END_OF_REQUEST
+```
+

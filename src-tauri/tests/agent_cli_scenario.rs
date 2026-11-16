@@ -559,6 +559,13 @@ fn inbox_configuration_and_read_state_survive_cli_connections() {
 #[test]
 fn learning_checks_run_through_the_cli_and_report_real_compiler_results() {
     use std::io::Write;
+    /// Stands in for Copilot: echoes whether the prompt carried the exercise.
+    struct Tutor;
+    impl workstreams_lib::learning_ai::Assistant for Tutor {
+        fn ask(&self, prompt: &str) -> Result<String, String> {
+            Ok(format!("saw exercise: {}", prompt.contains("Make it even")))
+        }
+    }
     if std::process::Command::new("rustc")
         .arg("--version")
         .output()
@@ -580,6 +587,7 @@ fn learning_checks_run_through_the_cli_and_report_real_compiler_results() {
             ..Default::default()
         },
         None,
+        std::sync::Arc::new(Tutor),
         std::time::Duration::from_millis(50),
         Box::new(|_| {}),
     );
@@ -611,17 +619,9 @@ fn learning_checks_run_through_the_cli_and_report_real_compiler_results() {
         );
         serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()["data"].clone()
     };
-    let check = |source: &str| {
-        let request = serde_json::json!({
-            "card_id": "even", "card_version": "2",
-            "harness": {"cases": [
-                {"name": "even_numbers", "body": "for n in [-2, 0, 2] { assert!(is_even(n)); }"},
-                {"name": "odd_numbers", "body": "for n in [-1, 1] { assert!(!is_even(n)); }"}
-            ]},
-            "source": source
-        });
+    let submit = |command: &str, request: serde_json::Value| {
         let queued = run(
-            &["agent", "call", "learning.check", "request=@-"],
+            &["agent", "call", command, "request=@-"],
             Some(&request.to_string()),
         );
         assert_eq!(queued["status"], "queued");
@@ -639,6 +639,30 @@ fn learning_checks_run_through_the_cli_and_report_real_compiler_results() {
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
     };
+    let check = |source: &str| {
+        submit(
+            "learning.check",
+            serde_json::json!({
+                "card_id": "even", "card_version": "2",
+                "harness": {"cases": [
+                    {"name": "even_numbers", "body": "for n in [-2, 0, 2] { assert!(is_even(n)); }"},
+                    {"name": "odd_numbers", "body": "for n in [-1, 1] { assert!(!is_even(n)); }"}
+                ]},
+                "source": source
+            }),
+        )
+    };
+    let help = submit(
+        "learning.help",
+        serde_json::json!({
+            "card_id": "even", "card_version": "2", "level": "hint",
+            "exercise": {"prompt": "Make it even"}, "source": "pub fn is_even(n: i32) -> bool { n }"
+        }),
+    );
+    assert_eq!(
+        help,
+        serde_json::json!({"reply": "saw exercise: true", "error": null})
+    );
     assert_eq!(
         check("pub fn is_even(n: i32) -> bool { n % 2 == 0 }")["status"],
         "passed"
@@ -656,7 +680,7 @@ fn learning_checks_run_through_the_cli_and_report_real_compiler_results() {
         serde_json::json!({"name": "even_numbers", "passed": false})
     );
     let listed = run(&["agent", "call", "learning.jobs"], None);
-    assert_eq!(listed["jobs"].as_array().unwrap().len(), 3);
+    assert_eq!(listed["jobs"].as_array().unwrap().len(), 4);
     drop(server);
     std::fs::remove_dir_all(&dir).ok();
 }

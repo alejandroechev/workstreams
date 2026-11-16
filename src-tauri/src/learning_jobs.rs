@@ -1,6 +1,6 @@
 //! The learning job ledger and its worker (ADR 042).
 //!
-//! A check is recorded first, then run by one worker thread *without* holding
+//! A job (an answer check, or a tutor help request) is recorded first, then run by one worker thread *without* holding
 //! the database lock (a Serde build takes up to two minutes). A job is keyed by
 //! the id of the attempt it grades, so a retried request returns the same job
 //! instead of running twice. A job that was running when the app stopped is
@@ -10,7 +10,8 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::learning_runner::{CheckResult, Harness, Limits};
+use crate::learning_ai::{Assistant, HelpRequest};
+use crate::learning_runner::{Harness, Limits};
 
 /// A request to check one answer, as the phone (or an agent) sends it.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -38,6 +39,44 @@ impl CheckRequest {
 
 const NOW: &str = "strftime('%Y-%m-%dT%H:%M:%fZ','now')";
 
+/// What a job does: check an answer, or answer a help request.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum JobRequest {
+    Check(CheckRequest),
+    Help(HelpRequest),
+}
+
+impl JobRequest {
+    pub fn id(&self) -> &str {
+        match self {
+            JobRequest::Check(r) => &r.id,
+            JobRequest::Help(r) => &r.id,
+        }
+    }
+    fn kind(&self) -> &'static str {
+        match self {
+            JobRequest::Check(_) => "check",
+            JobRequest::Help(_) => "help",
+        }
+    }
+    fn card(&self) -> (&str, &str) {
+        match self {
+            JobRequest::Check(r) => (&r.card_id, &r.card_version),
+            JobRequest::Help(r) => (&r.card_id, &r.card_version),
+        }
+    }
+    fn hash(&self) -> String {
+        match self {
+            // Keeps the hash of checks recorded before job kinds.
+            JobRequest::Check(r) => r.hash(),
+            JobRequest::Help(r) => hex(&Sha256::digest(
+                serde_json::to_string(r).unwrap_or_default().as_bytes(),
+            )),
+        }
+    }
+}
+
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
@@ -45,12 +84,15 @@ fn hex(bytes: &[u8]) -> String {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Job {
     pub id: String,
+    /// check | help
+    pub kind: String,
     pub card_id: String,
     pub card_version: String,
     /// queued | running | finished | interrupted
     pub status: String,
     pub origin: String,
-    pub result: Option<CheckResult>,
+    /// A check's `CheckResult`, or help's `{reply, error}`.
+    pub result: Option<serde_json::Value>,
     pub created_at: String,
     pub finished_at: Option<String>,
 }
@@ -71,44 +113,55 @@ pub fn init_schema(db: &Connection) -> rusqlite::Result<()> {
             finished_at TEXT
         );
         CREATE INDEX IF NOT EXISTS learning_jobs_status_idx ON learning_jobs (status, created_at);",
-    )
+    )?;
+    let has_kind: bool = db.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('learning_jobs') WHERE name='kind'",
+        [],
+        |r| r.get::<_, i64>(0).map(|n| n > 0),
+    )?;
+    if !has_kind {
+        db.execute(
+            "ALTER TABLE learning_jobs ADD COLUMN kind TEXT NOT NULL DEFAULT 'check'",
+            [],
+        )?;
+    }
+    Ok(())
 }
 
-/// Records a check, or returns the job already recorded for this id. The same
+/// Records a job, or returns the job already recorded for this id. The same
 /// id with different content is refused.
-pub fn enqueue(db: &Connection, request: &CheckRequest, origin: &str) -> Result<Job, String> {
+pub fn enqueue(db: &Connection, request: &JobRequest, origin: &str) -> Result<Job, String> {
     let hash = request.hash();
+    let id = request.id();
+    let (card_id, card_version) = request.card();
     let existing: Option<String> = db
         .query_row(
             "SELECT request_hash FROM learning_jobs WHERE id=?1",
-            [&request.id],
+            [id],
             |r| r.get(0),
         )
         .optional()
         .map_err(|e| e.to_string())?;
     match existing {
         Some(stored) if stored != hash => {
-            return Err(format!(
-                "Job {} already exists with different content",
-                request.id
-            ));
+            return Err(format!("Job {id} already exists with different content"));
         }
         Some(_) => {}
         None => {
             let json = serde_json::to_string(request).map_err(|e| e.to_string())?;
             db.execute(
-                "INSERT INTO learning_jobs (id, request_hash, request_json, card_id, card_version, origin, status, created_at)
-                VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'queued', NOW)".replace("NOW", NOW).as_str(),
-                params![request.id, hash, json, request.card_id, request.card_version, origin],
+                "INSERT INTO learning_jobs (id, request_hash, request_json, card_id, card_version, origin, status, created_at, kind)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'queued', NOW, ?7)".replace("NOW", NOW).as_str(),
+                params![id, hash, json, card_id, card_version, origin, request.kind()],
             )
             .map_err(|e| e.to_string())?;
         }
     }
-    get(db, &request.id)?.ok_or_else(|| "The job was not recorded".to_string())
+    get(db, id)?.ok_or_else(|| "The job was not recorded".to_string())
 }
 
 /// The oldest queued job, now marked running, with its request.
-pub fn claim_next(db: &Connection) -> Result<Option<(Job, CheckRequest)>, String> {
+pub fn claim_next(db: &Connection) -> Result<Option<(Job, JobRequest)>, String> {
     let next: Option<(String, String)> = db
         .query_row(
             "SELECT id, request_json FROM learning_jobs WHERE status='queued' ORDER BY created_at, rowid LIMIT 1",
@@ -126,12 +179,15 @@ pub fn claim_next(db: &Connection) -> Result<Option<(Job, CheckRequest)>, String
         [&id],
     )
     .map_err(|e| e.to_string())?;
-    let request: CheckRequest = serde_json::from_str(&json).map_err(|e| e.to_string())?;
+    // Rows from before job kinds hold a bare check.
+    let request: JobRequest = serde_json::from_str(&json)
+        .or_else(|_| serde_json::from_str::<CheckRequest>(&json).map(JobRequest::Check))
+        .map_err(|e| e.to_string())?;
     let job = get(db, &id)?.ok_or_else(|| "The job disappeared".to_string())?;
     Ok(Some((job, request)))
 }
 
-pub fn finish(db: &Connection, id: &str, result: &CheckResult) -> Result<(), String> {
+pub fn finish(db: &Connection, id: &str, result: &serde_json::Value) -> Result<(), String> {
     let json = serde_json::to_string(result).map_err(|e| e.to_string())?;
     db.execute(
         &"UPDATE learning_jobs SET status='finished', result_json=?2, finished_at=NOW WHERE id=?1"
@@ -158,12 +214,13 @@ pub fn get(db: &Connection, id: &str) -> Result<Option<Job>, String> {
         .map_err(|e| e.to_string())
 }
 
-const SELECT: &str = "SELECT id, card_id, card_version, status, origin, result_json, created_at, finished_at FROM learning_jobs";
+const SELECT: &str = "SELECT id, card_id, card_version, status, origin, result_json, created_at, finished_at, kind FROM learning_jobs";
 
 fn row_to_job(r: &rusqlite::Row) -> rusqlite::Result<Job> {
     let result: Option<String> = r.get(5)?;
     Ok(Job {
         id: r.get(0)?,
+        kind: r.get(8)?,
         card_id: r.get(1)?,
         card_version: r.get(2)?,
         status: r.get(3)?,
@@ -200,11 +257,18 @@ impl LearningWorker {
                 eprintln!("[learning] Could not mark interrupted jobs: {error}");
             }
         }
+        let path = crate::shell_env::resolved_path(&crate::pty::default_shell());
         Self::start_with(
             db,
             std::env::temp_dir().join("workstreams-learning"),
             Limits::default(),
-            crate::shell_env::resolved_path(&crate::pty::default_shell()),
+            path.clone(),
+            std::sync::Arc::new(crate::learning_ai::CopilotCli {
+                program: "copilot".into(),
+                path,
+                root: std::env::temp_dir().join("workstreams-learning").join("ai"),
+                timeout_ms: 90_000,
+            }),
             std::time::Duration::from_millis(500),
             Box::new(|_| {}),
         )
@@ -215,6 +279,7 @@ impl LearningWorker {
         root: std::path::PathBuf,
         limits: Limits,
         path: Option<String>,
+        assistant: std::sync::Arc<dyn Assistant>,
         poll: std::time::Duration,
         on_finished: Box<dyn Fn(&Job) + Send>,
     ) -> Self {
@@ -227,20 +292,28 @@ impl LearningWorker {
                 .and_then(|conn| claim_next(&conn));
             match claimed {
                 Ok(Some((job, request))) => {
-                    let limits = Limits {
-                        toolchain: request
-                            .toolchain
-                            .clone()
-                            .or_else(|| limits.toolchain.clone()),
-                        ..limits.clone()
-                    };
-                    let result = crate::learning_runner::run_check(
-                        &request.harness,
-                        &request.source,
-                        &root,
-                        &limits,
-                        path.as_deref(),
-                    );
+                    let result = match &request {
+                        JobRequest::Check(request) => {
+                            let limits = Limits {
+                                toolchain: request
+                                    .toolchain
+                                    .clone()
+                                    .or_else(|| limits.toolchain.clone()),
+                                ..limits.clone()
+                            };
+                            serde_json::to_value(crate::learning_runner::run_check(
+                                &request.harness,
+                                &request.source,
+                                &root,
+                                &limits,
+                                path.as_deref(),
+                            ))
+                        }
+                        JobRequest::Help(request) => serde_json::to_value(
+                            crate::learning_ai::help(assistant.as_ref(), request),
+                        ),
+                    }
+                    .unwrap_or_default();
                     let finished = db.lock().map_err(|e| e.to_string()).and_then(|conn| {
                         finish(&conn, &job.id, &result)?;
                         get(&conn, &job.id)
@@ -271,7 +344,7 @@ impl LearningWorker {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::learning_runner::TestCase;
+    use crate::learning_runner::{CheckResult, TestCase};
 
     fn db() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
@@ -296,17 +369,25 @@ mod tests {
         }
     }
 
+    fn check(id: &str, source: &str) -> JobRequest {
+        JobRequest::Check(request(id, source))
+    }
+
     #[test]
     fn a_request_is_recorded_once_and_a_reused_id_with_other_content_is_refused() {
         let db = db();
-        let first = enqueue(&db, &request("a1", "x"), "agent").unwrap();
+        let first = enqueue(&db, &check("a1", "x"), "agent").unwrap();
         assert_eq!(
-            (first.status.as_str(), first.card_version.as_str()),
-            ("queued", "2")
+            (
+                first.status.as_str(),
+                first.card_version.as_str(),
+                first.kind.as_str()
+            ),
+            ("queued", "2", "check")
         );
-        let again = enqueue(&db, &request("a1", "x"), "phone").unwrap();
+        let again = enqueue(&db, &check("a1", "x"), "phone").unwrap();
         assert_eq!(again, first, "a retried request is the same job");
-        assert!(enqueue(&db, &request("a1", "y"), "agent")
+        assert!(enqueue(&db, &check("a1", "y"), "agent")
             .unwrap_err()
             .contains("different content"));
     }
@@ -314,9 +395,12 @@ mod tests {
     #[test]
     fn jobs_are_claimed_oldest_first_and_finished_with_their_result() {
         let db = db();
-        enqueue(&db, &request("a1", "one"), "agent").unwrap();
-        enqueue(&db, &request("a2", "two"), "agent").unwrap();
+        enqueue(&db, &check("a1", "one"), "agent").unwrap();
+        enqueue(&db, &check("a2", "two"), "agent").unwrap();
         let (job, req) = claim_next(&db).unwrap().unwrap();
+        let JobRequest::Check(req) = req else {
+            panic!("a check")
+        };
         assert_eq!(
             (job.id.as_str(), job.status.as_str(), req.source.as_str()),
             ("a1", "running", "one")
@@ -328,6 +412,7 @@ mod tests {
             tests: None,
             constraints: None,
         };
+        let result = serde_json::to_value(&result).unwrap();
         finish(&db, "a1", &result).unwrap();
         let done = get(&db, "a1").unwrap().unwrap();
         assert_eq!(
@@ -349,7 +434,7 @@ mod tests {
     #[test]
     fn a_job_running_when_the_app_stopped_is_interrupted_not_rerun() {
         let db = db();
-        enqueue(&db, &request("a1", "x"), "agent").unwrap();
+        enqueue(&db, &check("a1", "x"), "agent").unwrap();
         claim_next(&db).unwrap();
         assert_eq!(interrupt_running(&db).unwrap(), 1);
         assert_eq!(get(&db, "a1").unwrap().unwrap().status, "interrupted");
@@ -368,7 +453,7 @@ mod tests {
         let shared = std::sync::Arc::new(std::sync::Mutex::new(db()));
         enqueue(
             &shared.lock().unwrap(),
-            &request("w1", "pub fn is_even(n: i32) -> bool { n % 2 == 0 }"),
+            &check("w1", "pub fn is_even(n: i32) -> bool { n % 2 == 0 }"),
             "agent",
         )
         .unwrap();
@@ -383,6 +468,10 @@ mod tests {
                 ..Default::default()
             },
             None,
+            std::sync::Arc::new(crate::learning_ai::tests::Recorder {
+                prompts: Default::default(),
+                answer: Ok("unused".into()),
+            }),
             std::time::Duration::from_millis(20),
             Box::new(move |job| {
                 let _ = tx.send(job.clone());
@@ -392,11 +481,53 @@ mod tests {
             .recv_timeout(std::time::Duration::from_secs(60))
             .expect("the worker finished the job");
         assert_eq!(job.id, "w1");
-        assert_eq!(job.result.unwrap().status, "passed");
+        assert_eq!(job.result.unwrap()["status"], "passed");
         assert_eq!(
             get(&shared.lock().unwrap(), "w1").unwrap().unwrap().status,
             "finished"
         );
         std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn the_worker_answers_help_through_the_assistant() {
+        let shared = std::sync::Arc::new(std::sync::Mutex::new(db()));
+        let help = crate::learning_ai::HelpRequest {
+            id: "h1".into(),
+            card_id: "borrow".into(),
+            card_version: "1".into(),
+            level: "nudge".into(),
+            exercise: serde_json::json!({"prompt": "Borrow it"}),
+            source: "&name".into(),
+            summary: String::new(),
+            diagnostic: String::new(),
+        };
+        let job = enqueue(&shared.lock().unwrap(), &JobRequest::Help(help), "phone").unwrap();
+        assert_eq!(job.kind, "help");
+        let assistant = std::sync::Arc::new(crate::learning_ai::tests::Recorder {
+            prompts: Default::default(),
+            answer: Ok("What does len take?".into()),
+        });
+        let (tx, rx) = std::sync::mpsc::channel();
+        let _worker = LearningWorker::start_with(
+            shared.clone(),
+            std::env::temp_dir().join("ws-learning-help"),
+            Limits {
+                toolchain: None,
+                ..Default::default()
+            },
+            None,
+            assistant.clone(),
+            std::time::Duration::from_millis(20),
+            Box::new(move |job| {
+                let _ = tx.send(job.clone());
+            }),
+        );
+        let done = rx.recv_timeout(std::time::Duration::from_secs(10)).unwrap();
+        assert_eq!(
+            done.result.unwrap(),
+            serde_json::json!({"reply": "What does len take?", "error": null})
+        );
+        assert!(assistant.prompts.lock().unwrap()[0].contains("Borrow it"));
     }
 }
