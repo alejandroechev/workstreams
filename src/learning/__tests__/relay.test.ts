@@ -80,6 +80,17 @@ describe("learning relay", () => {
     expect(t.result("h2")!.body).toMatchObject({ id: "h2", error: "Copilot timed out" });
   });
 
+  it("publishes a pack draft with its validation", async () => {
+    const t = await setup();
+    await t.send({ ...check("g1"), kind: "pack", harness: undefined, cardId: "", cardVersion: "", source: "", topic: "Slices" });
+    await t.relay.process();
+    const draft = { pack: { id: "pack-slices", version: 1, cards: [] }, validation: [{ card_id: "x", ok: false }], valid: false, error: null };
+    t.finish("g1", "finished", draft);
+    await t.relay.process();
+    expect(t.result("g1")!.body).toMatchObject({ id: "g1", pack: draft.pack, validation: draft.validation, valid: false });
+    expect(t.result("g1")!.body).not.toHaveProperty("error");
+  });
+
   it("reports a job interrupted by a restart instead of rerunning it", async () => {
     const t = await setup();
     await t.send(check("a1"));

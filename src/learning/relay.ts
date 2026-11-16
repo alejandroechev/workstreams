@@ -12,9 +12,9 @@ import {
 /** A job in the native ledger (`learning_jobs.rs`), as the relay sees it. */
 export interface LedgerJob {
   id: string;
-  kind: "check" | "help";
+  kind: "check" | "help" | "pack";
   status: "queued" | "running" | "finished" | "interrupted";
-  /** A check's CheckResult, or help's `{reply, error}`. */
+  /** A check's CheckResult, help's `{reply, error}`, or a pack's `{pack, validation, valid, error}`. */
   result: unknown;
 }
 
@@ -89,6 +89,12 @@ export function createLearningRelay(options: RelayOptions) {
     const response: LearningResponse = { version: 1, id, requestHash: hash, at: now() };
     if (job.status === "interrupted") {
       response.error = "Workstreams stopped while working on this. Send it again.";
+    } else if (job.kind === "pack") {
+      const { pack, validation, valid, error } = (job.result ?? {}) as { pack?: unknown; validation?: unknown; valid?: boolean; error?: string | null };
+      if (pack) response.pack = pack;
+      response.validation = validation ?? [];
+      response.valid = valid === true;
+      if (error) response.error = error;
     } else if (job.kind === "help") {
       const { reply, error } = (job.result ?? {}) as { reply?: string | null; error?: string | null };
       if (reply) response.reply = reply;

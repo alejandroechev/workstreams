@@ -69,6 +69,27 @@ The relay transport is described in its own amendment below.
 - **Agents**: `learning.help request=@-` queues a help request; its reply is
   read with `learning.jobs`, like a check.
 
+### Amendment (2026-11-17): packs
+
+- **A third job kind, `pack`** (`learning_packs.rs`): Copilot drafts a pack of
+  1–6 cards as one JSON object with the same tool-less `copilot -p`, then
+  Workstreams validates it automatically. The learner's Generate pack request
+  is the authorization to run the draft's code (original grill C5); the pack
+  joins the shelf only when the learner approves it on the phone.
+- **Validation is not self-certification.** Lesson cards need their text and
+  read cards valid choices. Every executable card must ship a reference
+  solution that **passes** and a plausible wrong answer that **fails**
+  (compile error, failed test or broken constraint) under the real compiler,
+  so its tests are shown to tell them apart. Any other outcome marks the card,
+  and the draft, invalid; a failure is reported with the compiler's output.
+- **Identity and versions.** A new pack's id is `pack-<topic slug>`; its cards
+  are `<pack id>/<slug>`. An update names the installed pack and its previous
+  version and gets the next version number; every card carries that version.
+  Workstreams stores no pack: the draft goes back to the phone in the result
+  (`{pack, validation, valid, error}`), and later checks carry each card's
+  harness as before.
+- **Agents**: `learning.pack request=@-`.
+
 ### Amendment (2026-11-17): pairing of its own
 
 - **A learning key, apart from the companion's.** Settings → Phone shows a

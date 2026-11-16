@@ -559,10 +559,18 @@ fn inbox_configuration_and_read_state_survive_cli_connections() {
 #[test]
 fn learning_checks_run_through_the_cli_and_report_real_compiler_results() {
     use std::io::Write;
-    /// Stands in for Copilot: echoes whether the prompt carried the exercise.
+    /// Stands in for Copilot: drafts a one-card pack when asked for one, and
+    /// otherwise echoes whether the prompt carried the exercise.
     struct Tutor;
     impl workstreams_lib::learning_ai::Assistant for Tutor {
         fn ask(&self, prompt: &str) -> Result<String, String> {
+            if prompt.contains("micro-learning packs") {
+                return Ok(serde_json::json!({"title": "Slices", "cards": [{"slug": "first", "kind": "write",
+                    "solution": "pub fn first(v: &[i32]) -> i32 { v[0] }",
+                    "wrong": "pub fn first(v: &[i32]) -> i32 { v[1] }",
+                    "harness": {"cases": [{"name": "first_of_two", "body": "assert_eq!(first(&[3, 4]), 3);"}]}}]})
+                .to_string());
+            }
             Ok(format!("saw exercise: {}", prompt.contains("Make it even")))
         }
     }
@@ -679,8 +687,21 @@ fn learning_checks_run_through_the_cli_and_report_real_compiler_results() {
         wrong["tests"][0],
         serde_json::json!({"name": "even_numbers", "passed": false})
     );
+    let pack = submit("learning.pack", serde_json::json!({"topic": "Slices"}));
+    assert_eq!(pack["valid"], true, "{pack}");
+    assert_eq!(pack["pack"]["cards"][0]["id"], "pack-slices/first");
+    assert_eq!(
+        (
+            &pack["validation"][0]["reference"],
+            &pack["validation"][0]["wrong"]
+        ),
+        (
+            &serde_json::json!("passed"),
+            &serde_json::json!("tests_failed")
+        )
+    );
     let listed = run(&["agent", "call", "learning.jobs"], None);
-    assert_eq!(listed["jobs"].as_array().unwrap().len(), 4);
+    assert_eq!(listed["jobs"].as_array().unwrap().len(), 5);
     drop(server);
     std::fs::remove_dir_all(&dir).ok();
 }

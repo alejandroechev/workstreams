@@ -74,6 +74,17 @@ describe("learning protocol", () => {
     });
   });
 
+  it("admits a pack request and turns it into a pack job", async () => {
+    const pack = { ...body, kind: "pack" as const, cardId: "", cardVersion: "", source: "", harness: undefined, toolchain: undefined,
+      topic: "Slices", packId: "pack-slices", previous: { id: "pack-slices", version: 1 }, notes: "fix" };
+    const signed = await sign(pack, fixtures.secret);
+    const admitted = await admitRequest("attempt-1", JSON.stringify(signed), fixtures.secret, NOW);
+    expect(admitted.ok).toBe(true);
+    expect(toJobRequest(pack)).toEqual({ kind: "pack", id: "attempt-1", topic: "Slices", pack_id: "pack-slices", previous: { id: "pack-slices", version: 1 }, notes: "fix" });
+    const noTopic = await sign({ ...pack, topic: "" }, fixtures.secret);
+    expect(await admitRequest("attempt-1", JSON.stringify(noTopic), fixtures.secret, NOW)).toEqual({ ok: false, reason: "invalid" });
+  });
+
   it("has a pairing code of its own that the companion format does not accept", () => {
     const secret = generateLearningSecret();
     expect(secret).toMatch(/^[a-f0-9]{64}$/);

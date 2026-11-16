@@ -731,9 +731,17 @@ pub const COMMANDS: &[Command] = &[
         handler: learning_help,
     },
     Command {
+        id: "learning.pack",
+        log_params: &[],
+        summary: "Queue a Rust Pocket pack draft: Copilot (no tools) writes it, then each card's reference solution must pass and its wrong answer must fail with the real compiler (params: request = JSON {topic, pack_id?, previous?, notes?}; request=@- reads stdin). Returns the job; read {pack, validation, valid, error} with learning.jobs",
+        requires_identity: true,
+        destructive: false,
+        handler: learning_pack,
+    },
+    Command {
         id: "learning.jobs",
         log_params: &["id"],
-        summary: "Rust Pocket check and help jobs, newest first, or one job with its result (params: id = a job id, optional)",
+        summary: "Rust Pocket check, help and pack jobs, newest first, or one job with its result (params: id = a job id, optional)",
         requires_identity: true,
         destructive: false,
         handler: learning_jobs,
@@ -2538,6 +2546,18 @@ fn learning_help(
     )
 }
 
+fn learning_pack(
+    context: &CommandContext,
+    params: &serde_json::Value,
+) -> Result<CommandOutcome, AgentError> {
+    learning_enqueue(
+        context,
+        params,
+        "pack",
+        "Send {topic}, or {topic, pack_id, previous, notes} to update an installed pack.",
+    )
+}
+
 fn learning_enqueue(
     context: &CommandContext,
     params: &serde_json::Value,
@@ -3339,6 +3359,34 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(missing.code, "NOT_FOUND");
+    }
+
+    #[test]
+    fn learning_pack_queues_a_pack_job() {
+        let db = memory_db();
+        let caller = agent("t1", "w1");
+        let queued = call(
+            &db,
+            &caller,
+            "learning.pack",
+            serde_json::json!({"request": "{\"topic\": \"Slices\"}"}),
+        )
+        .unwrap();
+        assert_eq!(
+            (&queued.data["kind"], &queued.data["card_id"]),
+            (
+                &serde_json::json!("pack"),
+                &serde_json::json!("pack-slices")
+            )
+        );
+        let bad = call(
+            &db,
+            &caller,
+            "learning.pack",
+            serde_json::json!({"request": "{\"topic\": 3}"}),
+        )
+        .unwrap_err();
+        assert_eq!(bad.code, "BAD_REQUEST");
     }
 
     #[test]

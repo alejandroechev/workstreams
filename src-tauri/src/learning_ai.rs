@@ -127,7 +127,8 @@ impl Assistant for CopilotCli {
             &self.program,
             &args,
             self.timeout_ms,
-            16_000,
+            // A pack draft is a JSON object of several cards.
+            64_000,
             self.path.as_deref(),
         );
         let _ = std::fs::remove_dir_all(&dir);

@@ -19,7 +19,7 @@ export const MAX_ENVELOPE = 200_000;
 export interface LearningRequest {
   version: 1;
   id: string;
-  kind: "check" | "help";
+  kind: "check" | "help" | "pack";
   createdAt: number;
   cardId: string;
   cardVersion: string;
@@ -32,6 +32,11 @@ export interface LearningRequest {
   exercise?: Record<string, unknown>;
   summary?: string;
   diagnostic?: string;
+  /** Pack only: what to draft, or the installed pack to update and why. */
+  topic?: string;
+  packId?: string;
+  previous?: Record<string, unknown>;
+  notes?: string;
 }
 
 export interface LearningResponse {
@@ -43,6 +48,10 @@ export interface LearningResponse {
   result?: unknown;
   reply?: string;
   error?: string;
+  /** Pack only: the draft, each card's validation, and whether all passed. */
+  pack?: unknown;
+  validation?: unknown;
+  valid?: boolean;
 }
 
 export interface Envelope<T> { body: T; signature: string }
@@ -104,19 +113,23 @@ export type Admission =
   | { ok: false; reason: RefusalReason };
 
 const ID = /^[\w-]{1,100}$/;
-const FIELDS = new Set(["version", "id", "kind", "createdAt", "cardId", "cardVersion", "source", "harness", "toolchain", "level", "exercise", "summary", "diagnostic"]);
+const FIELDS = new Set(["version", "id", "kind", "createdAt", "cardId", "cardVersion", "source", "harness", "toolchain", "level", "exercise", "summary", "diagnostic", "topic", "packId", "previous", "notes"]);
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 const shortText = (v: unknown, max: number) => v === undefined || (typeof v === "string" && v.length <= max);
 
 function wellFormed(r: Record<string, unknown>): boolean {
   if (r.version !== 1 || typeof r.id !== "string" || !ID.test(r.id)) return false;
-  if (r.kind !== "check" && r.kind !== "help") return false;
+  if (r.kind !== "check" && r.kind !== "help" && r.kind !== "pack") return false;
   if (typeof r.createdAt !== "number" || !Number.isFinite(r.createdAt)) return false;
   if (typeof r.cardId !== "string" || typeof r.cardVersion !== "string") return false;
   if (typeof r.source !== "string" || r.source.length > MAX_SOURCE) return false;
   if (Object.keys(r).some((k) => !FIELDS.has(k))) return false;
   if (!shortText(r.toolchain, 40) || !shortText(r.summary, MAX_CONTEXT) || !shortText(r.diagnostic, MAX_CONTEXT)) return false;
   if (r.kind === "check") return isObject(r.harness);
+  if (r.kind === "pack") {
+    return typeof r.topic === "string" && r.topic.trim() !== "" && r.topic.length <= 200
+      && shortText(r.packId, 100) && shortText(r.notes, 2000) && (r.previous === undefined || isObject(r.previous));
+  }
   return ["nudge", "hint", "solution"].includes(r.level as string) && (r.exercise === undefined || isObject(r.exercise));
 }
 
@@ -150,6 +163,15 @@ export function refusalMessage(reason: RefusalReason): string {
 
 /** The ledger's `JobRequest` (src-tauri/src/learning_jobs.rs). */
 export function toJobRequest(r: LearningRequest): Record<string, unknown> {
+  if (r.kind === "pack") {
+    return {
+      kind: "pack", id: r.id, topic: r.topic,
+      ...(r.packId ? { pack_id: r.packId } : {}),
+      ...(r.previous ? { previous: r.previous } : {}),
+      ...(r.notes ? { notes: r.notes } : {}),
+      ...(r.toolchain ? { toolchain: r.toolchain } : {}),
+    };
+  }
   const card = { id: r.id, card_id: r.cardId, card_version: r.cardVersion };
   if (r.kind === "check") {
     return { kind: "check", ...card, harness: r.harness, source: r.source, ...(r.toolchain ? { toolchain: r.toolchain } : {}) };

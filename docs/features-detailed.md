@@ -1213,6 +1213,18 @@ of its own. *Unpair…* and *Pair a new phone…* change only that key; the
 companion stays paired either way, and a request signed with one app's key is
 refused by the other.
 
+**Packs.** Rust Pocket's *Generate pack* asks Workstreams to draft new cards on
+a topic with the same tool-less Copilot, then validates them at once with the
+real compiler: each exercise's reference solution must pass and a deliberately
+wrong answer must fail. The draft, with each card's validation, goes back to
+the phone for review; nothing joins the shelf until you approve it there.
+
+```sh
+workstreams agent call learning.pack request=@- <<'END_OF_REQUEST'
+{"topic":"Slices and arrays"}
+END_OF_REQUEST
+```
+
 **How the phone reaches the Mac.** Requests and results travel through a
 learning document of their own on your SyncEngine server, never the
 companion's. Workstreams accepts only requests signed with the Rust Pocket key

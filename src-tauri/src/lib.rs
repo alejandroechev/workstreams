@@ -22,6 +22,7 @@ mod inbox_messages;
 mod inbox_retention;
 pub mod learning_ai;
 pub mod learning_jobs;
+pub mod learning_packs;
 pub mod learning_runner;
 mod loop_agent;
 mod loop_cli;

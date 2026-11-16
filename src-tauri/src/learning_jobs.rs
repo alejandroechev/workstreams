@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::learning_ai::{Assistant, HelpRequest};
+use crate::learning_packs::PackRequest;
 use crate::learning_runner::{Harness, Limits};
 
 /// A request to check one answer, as the phone (or an agent) sends it.
@@ -39,12 +40,14 @@ impl CheckRequest {
 
 const NOW: &str = "strftime('%Y-%m-%dT%H:%M:%fZ','now')";
 
-/// What a job does: check an answer, or answer a help request.
+/// What a job does: check an answer, answer a help request, or draft and
+/// validate a pack.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum JobRequest {
     Check(CheckRequest),
     Help(HelpRequest),
+    Pack(PackRequest),
 }
 
 impl JobRequest {
@@ -52,18 +55,29 @@ impl JobRequest {
         match self {
             JobRequest::Check(r) => &r.id,
             JobRequest::Help(r) => &r.id,
+            JobRequest::Pack(r) => &r.id,
         }
     }
     fn kind(&self) -> &'static str {
         match self {
             JobRequest::Check(_) => "check",
             JobRequest::Help(_) => "help",
+            JobRequest::Pack(_) => "pack",
         }
     }
-    fn card(&self) -> (&str, &str) {
+    fn card(&self) -> (String, String) {
         match self {
-            JobRequest::Check(r) => (&r.card_id, &r.card_version),
-            JobRequest::Help(r) => (&r.card_id, &r.card_version),
+            JobRequest::Check(r) => (r.card_id.clone(), r.card_version.clone()),
+            JobRequest::Help(r) => (r.card_id.clone(), r.card_version.clone()),
+            // Listed under the pack it drafts.
+            JobRequest::Pack(r) => (
+                if r.pack_id.is_empty() {
+                    crate::learning_packs::pack_id_for(&r.topic)
+                } else {
+                    r.pack_id.clone()
+                },
+                String::new(),
+            ),
         }
     }
     fn hash(&self) -> String {
@@ -71,6 +85,9 @@ impl JobRequest {
             // Keeps the hash of checks recorded before job kinds.
             JobRequest::Check(r) => r.hash(),
             JobRequest::Help(r) => hex(&Sha256::digest(
+                serde_json::to_string(r).unwrap_or_default().as_bytes(),
+            )),
+            JobRequest::Pack(r) => hex(&Sha256::digest(
                 serde_json::to_string(r).unwrap_or_default().as_bytes(),
             )),
         }
@@ -84,7 +101,7 @@ fn hex(bytes: &[u8]) -> String {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Job {
     pub id: String,
-    /// check | help
+    /// check | help | pack
     pub kind: String,
     pub card_id: String,
     pub card_version: String,
@@ -319,6 +336,29 @@ impl LearningWorker {
                         JobRequest::Help(request) => serde_json::to_value(
                             crate::learning_ai::help(assistant.as_ref(), request),
                         ),
+                        JobRequest::Pack(request) => {
+                            let limits = Limits {
+                                toolchain: request
+                                    .toolchain
+                                    .clone()
+                                    .or_else(|| limits.toolchain.clone()),
+                                ..limits.clone()
+                            };
+                            let check = |harness: &Harness, source: &str| {
+                                crate::learning_runner::run_check(
+                                    harness,
+                                    source,
+                                    &root,
+                                    &limits,
+                                    path.as_deref(),
+                                )
+                            };
+                            Ok(crate::learning_packs::generate(
+                                assistant.as_ref(),
+                                request,
+                                &check,
+                            ))
+                        }
                     }
                     .unwrap_or_default();
                     let finished = db.lock().map_err(|e| e.to_string()).and_then(|conn| {
@@ -558,5 +598,58 @@ mod tests {
             serde_json::json!({"reply": "What does len take?", "error": null})
         );
         assert!(assistant.prompts.lock().unwrap()[0].contains("Borrow it"));
+    }
+
+    #[test]
+    fn the_worker_drafts_and_validates_a_pack() {
+        if std::process::Command::new("rustc")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            return;
+        }
+        let shared = std::sync::Arc::new(std::sync::Mutex::new(db()));
+        let request = crate::learning_packs::PackRequest {
+            id: "g1".into(),
+            topic: "slices".into(),
+            pack_id: String::new(),
+            previous: None,
+            notes: String::new(),
+            toolchain: None,
+        };
+        let job = enqueue(&shared.lock().unwrap(), &JobRequest::Pack(request), "phone").unwrap();
+        assert_eq!(
+            (job.kind.as_str(), job.card_id.as_str()),
+            ("pack", "pack-slices")
+        );
+        let draft = serde_json::json!({"title": "Slices", "cards": [{"slug": "first", "kind": "write",
+            "solution": "pub fn first(v: &[i32]) -> i32 { v[0] }", "wrong": "pub fn first(v: &[i32]) -> i32 { v[1] }",
+            "harness": {"cases": [{"name": "first_of_two", "body": "assert_eq!(first(&[3, 4]), 3);"}]}}]});
+        let assistant = std::sync::Arc::new(crate::learning_ai::tests::Recorder {
+            prompts: Default::default(),
+            answer: Ok(draft.to_string()),
+        });
+        let (tx, rx) = std::sync::mpsc::channel();
+        let root = std::env::temp_dir().join(format!("ws-learning-pack-{}", uuid::Uuid::new_v4()));
+        let _worker = LearningWorker::start_with(
+            shared.clone(),
+            root.clone(),
+            Limits {
+                toolchain: None,
+                ..Default::default()
+            },
+            None,
+            assistant,
+            std::time::Duration::from_millis(20),
+            Box::new(move |job| {
+                let _ = tx.send(job.clone());
+            }),
+        );
+        let done = rx.recv_timeout(std::time::Duration::from_secs(60)).unwrap();
+        let result = done.result.unwrap();
+        assert_eq!(result["valid"], true, "{result}");
+        assert_eq!(result["pack"]["cards"][0]["id"], "pack-slices/first");
+        std::fs::remove_dir_all(root).ok();
     }
 }
