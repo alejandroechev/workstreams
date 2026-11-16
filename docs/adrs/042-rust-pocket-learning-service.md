@@ -136,8 +136,9 @@ The relay transport is described in its own amendment below.
   before a restart is still published after it, though its request is no
   longer fresh.
 - **Presence**: an ephemeral `{kind: "presence"}` every 10 s, and
-  `laptop.lastSeenAt` every 5 minutes. Requests and results older than 7 days
-  are pruned.
+  `laptop.lastSeenAt` every 5 minutes. An answered request is pruned, with its
+  result, a week after the result was published; a retrieval of an older job
+  is answered again (the ledger keeps it) and starts a new week.
 - **Where it runs**: in the frontend (`src/learning/relay.ts`, started from
   `main.tsx`), like the companion, with Automerge loaded lazily; the native
   ledger and worker do the work. Development builds never connect unless

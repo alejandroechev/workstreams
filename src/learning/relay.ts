@@ -47,6 +47,17 @@ function bodyCreatedAt(raw: string): number | null {
   }
 }
 
+/** When a result (signed, or an unsigned refusal) was published. */
+function publishedAt(raw: string): number | null {
+  try {
+    const parsed = JSON.parse(raw) as { at?: unknown; body?: { at?: unknown } };
+    const at = parsed?.body?.at ?? parsed?.at;
+    return typeof at === "number" ? at : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Carries Rust Pocket's requests from the learning document to the native
  * ledger and its results back (ADR 042). The phone writes `requests`; only
@@ -63,7 +74,7 @@ export function createLearningRelay(options: RelayOptions) {
   let stopped = false;
 
   const refuse = (id: string, reason: RefusalReason, message = refusalMessage(reason)) =>
-    doc.change((d) => { d.results[id] = doc.text(JSON.stringify({ refused: reason, message })); });
+    doc.change((d) => { d.results[id] = doc.text(JSON.stringify({ refused: reason, message, at: now() })); });
 
   async function admit(id: string, raw: string): Promise<void> {
     const known = await ledger.get(id);
@@ -108,11 +119,16 @@ export function createLearningRelay(options: RelayOptions) {
     pending.delete(id);
   }
 
+  /**
+   * Only answered requests are pruned, a week after their answer was
+   * published: an unanswered one (even a retrieval of an old job) is first
+   * handled, and its re-published result starts a new week.
+   */
   function prune(): void {
     const cutoff = now() - PRUNE_AFTER_MS;
     const current = doc.read();
-    const old = Object.entries(current.requests).filter(([, raw]) => {
-      const at = bodyCreatedAt(raw);
+    const old = Object.entries(current.results).filter(([, raw]) => {
+      const at = publishedAt(raw);
       return at !== null && at < cutoff;
     }).map(([id]) => id);
     if (old.length === 0) return;

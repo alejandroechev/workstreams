@@ -157,14 +157,28 @@ describe("learning relay", () => {
     expect(status).toHaveBeenCalledWith("update-needed");
   });
 
-  it("prunes requests and results older than a week", async () => {
+  it("prunes an answered request a week after its result was published", async () => {
     const t = await setup();
-    await t.send(check("old", { createdAt: NOW - 8 * 24 * 60 * 60_000 }));
-    t.phone.change((d) => { d.results.old = "{}"; d.requests.junk = "not json"; });
+    const WEEK = 7 * 24 * 60 * 60_000;
+    t.phone.change((d) => {
+      d.requests.old = "x"; d.results.old = JSON.stringify({ body: { at: NOW - WEEK - 1 }, signature: "s" });
+      d.requests.recent = "x"; d.results.recent = JSON.stringify({ body: { at: NOW - 1000 }, signature: "s" });
+      d.requests.refused = "x"; d.results.refused = JSON.stringify({ refused: "invalid", message: "m", at: NOW - WEEK - 1 });
+      d.requests.junk = "not json";
+    });
     await t.relay.process();
-    expect(t.phone.read().requests).not.toHaveProperty("old");
-    expect(t.phone.read().results).not.toHaveProperty("old");
-    expect(t.result("junk")).toMatchObject({ refused: "invalid" });
+    expect(Object.keys(t.phone.read().requests).sort()).toEqual(["junk", "recent"]);
+    expect(t.result("junk")).toMatchObject({ refused: "invalid", at: NOW });
+  });
+
+  it("answers a retrieval of an old finished job instead of pruning it", async () => {
+    const t = await setup();
+    const old = check("a1", { createdAt: NOW - 8 * 24 * 60 * 60_000 });
+    await t.ledger.enqueue({ kind: "check", id: "a1", card_id: "even", card_version: "2", harness: old.harness, source: old.source });
+    t.finish("a1", "finished", { status: "passed", output: "", toolchain: "" });
+    await t.send(old);
+    await t.relay.process();
+    expect(t.result("a1")!.body).toMatchObject({ id: "a1", result: { status: "passed" }, at: NOW });
   });
 
   it("runs on changes and on a timer, announces presence, and stops cleanly", async () => {

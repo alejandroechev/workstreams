@@ -126,6 +126,7 @@ pub fn parse_pack(reply: &str, request: &PackRequest) -> Result<Value, String> {
             return Err(format!("The draft's card {} is not an object.", index + 1));
         }
         let mut card = card.clone();
+        normalize_card(&mut card, index, &request.topic)?;
         let mut name = slug(
             card["slug"]
                 .as_str()
@@ -148,6 +149,54 @@ pub fn parse_pack(reply: &str, request: &PackRequest) -> Result<Value, String> {
         "notes": draft["notes"].as_str().unwrap_or(""),
         "cards": normalized,
     }))
+}
+
+/// Makes a card safe for the phone to render: missing text gets a default,
+/// a field of the wrong type refuses the draft (it would crash the review).
+fn normalize_card(card: &mut Value, index: usize, topic: &str) -> Result<(), String> {
+    let n = index + 1;
+    let fallback_title = card["slug"].as_str().unwrap_or("").to_string();
+    for (field, default) in [
+        (
+            "title",
+            if fallback_title.is_empty() {
+                format!("Card {n}")
+            } else {
+                fallback_title
+            },
+        ),
+        ("concept", topic.to_string()),
+        ("kind", String::new()),
+        ("prompt", String::new()),
+        ("code", String::new()),
+        ("explanation", String::new()),
+        ("hint", String::new()),
+    ] {
+        match &card[field] {
+            Value::Null => card[field] = json!(default),
+            Value::String(_) => {}
+            _ => return Err(format!("Card {n}: {field} must be text.")),
+        }
+    }
+    for field in ["solution", "wrong"] {
+        if !matches!(card[field], Value::Null | Value::String(_)) {
+            return Err(format!("Card {n}: {field} must be text."));
+        }
+    }
+    for field in ["lesson", "choices"] {
+        match &card[field] {
+            Value::Null => {}
+            Value::Array(items) if items.iter().all(Value::is_string) => {}
+            _ => return Err(format!("Card {n}: {field} must be a list of text.")),
+        }
+    }
+    if !matches!(card["answer"], Value::Null) && card["answer"].as_u64().is_none() {
+        return Err(format!("Card {n}: answer must be a choice number."));
+    }
+    if !matches!(card["harness"], Value::Null | Value::Object(_)) {
+        return Err(format!("Card {n}: harness must be an object."));
+    }
+    Ok(())
 }
 
 const FAILING: [&str; 3] = ["compile_error", "tests_failed", "constraint_failed"];
@@ -352,6 +401,38 @@ mod tests {
         assert!(parse_pack("{\"cards\": []}", &request(None))
             .unwrap_err()
             .contains("1 to 6"));
+        // A card the phone could not render is refused, not validated.
+        let lesson_objects = draft(
+            json!([{"title": "t", "concept": "c", "kind": "lesson", "prompt": "p", "lesson": [{"text": "x"}]}]),
+        );
+        assert!(parse_pack(&lesson_objects, &request(None))
+            .unwrap_err()
+            .contains("lesson must be a list of text"));
+        let bad_title = draft(json!([{"title": 5, "kind": "lesson", "lesson": ["x"]}]));
+        assert!(parse_pack(&bad_title, &request(None))
+            .unwrap_err()
+            .contains("title must be text"));
+        let bad_choices = draft(
+            json!([{"title": "t", "concept": "c", "kind": "read", "prompt": "p", "choices": [1, 2], "answer": 0}]),
+        );
+        assert!(parse_pack(&bad_choices, &request(None))
+            .unwrap_err()
+            .contains("choices must be a list of text"));
+        let defaults = parse_pack(
+            &draft(json!([{"slug": "s", "kind": "lesson", "lesson": ["x"]}])),
+            &request(None),
+        )
+        .unwrap();
+        let card = &defaults["cards"][0];
+        assert_eq!(
+            (
+                card["title"].as_str(),
+                card["concept"].as_str(),
+                card["code"].as_str(),
+                card["hint"].as_str()
+            ),
+            (Some("s"), Some("Slices & arrays"), Some(""), Some(""))
+        );
         // Valid JSON with a card that is not an object must not panic.
         assert!(parse_pack("{\"cards\": [\"bad\", 3]}", &request(None))
             .unwrap_err()
