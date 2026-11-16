@@ -2,7 +2,9 @@ import type { LearningDoc } from "./doc";
 import {
   admitRequest,
   refusalMessage,
+  requestHash,
   sign,
+  verify,
   toJobRequest,
   SCHEMA_VERSION,
   type LearningResponse,
@@ -68,13 +70,44 @@ function publishedAt(raw: string): number | null {
 export function createLearningRelay(options: RelayOptions) {
   const now = options.now ?? Date.now;
   const { doc, ledger } = options;
-  /** id → the hash of the request it answers. */
-  const pending = new Map<string, string>();
+  /** id → the request being worked on, and its hash. */
+  const pending = new Map<string, { hash: string; raw: string }>();
+  /**
+   * id → the request text its current result answers. A result counts only
+   * for the request it is bound to (by hash, and for signed results by the
+   * current key): a re-signed request (after re-pairing) or a corrected one
+   * is answered again rather than left with a stale answer.
+   */
+  const bound = new Map<string, string>();
+
+  async function hashOf(raw: string): Promise<string | null> {
+    try {
+      const body = (JSON.parse(raw) as { body?: unknown })?.body;
+      return body && typeof body === "object" ? await requestHash(body) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  async function isBound(id: string, raw: string, resultRaw: string): Promise<boolean> {
+    if (bound.get(id) === raw) return true;
+    let answer: { refused?: unknown; requestHash?: unknown; body?: { requestHash?: unknown }; signature?: unknown };
+    try { answer = JSON.parse(resultRaw); } catch { return false; }
+    const hash = await hashOf(raw);
+    const ok = typeof answer.refused === "string"
+      ? (answer.requestHash ?? null) === hash
+      : answer.body?.requestHash === hash && (await verify(answer as never, options.secret).catch(() => false));
+    if (ok) bound.set(id, raw);
+    return ok;
+  }
   let chain = Promise.resolve();
   let stopped = false;
 
-  const refuse = (id: string, reason: RefusalReason, message = refusalMessage(reason)) =>
-    doc.change((d) => { d.results[id] = doc.text(JSON.stringify({ refused: reason, message, at: now() })); });
+  async function refuse(id: string, raw: string, reason: RefusalReason, message = refusalMessage(reason)): Promise<void> {
+    const hash = await hashOf(raw);
+    doc.change((d) => { d.results[id] = doc.text(JSON.stringify({ refused: reason, message, at: now(), ...(hash ? { requestHash: hash } : {}) })); });
+    bound.set(id, raw);
+  }
 
   async function admit(id: string, raw: string): Promise<void> {
     const known = await ledger.get(id);
@@ -83,18 +116,18 @@ export function createLearningRelay(options: RelayOptions) {
     const at = known ? bodyCreatedAt(raw) ?? now() : now();
     const admission = await admitRequest(id, raw, options.secret, at);
     if (stopped) return;
-    if (!admission.ok) return refuse(id, admission.reason);
+    if (!admission.ok) return refuse(id, raw, admission.reason);
     // Always through the ledger, even for a job it already has: its content
     // check is what stops a result being bound to another request's hash.
     try {
       await ledger.enqueue(toJobRequest(admission.request));
     } catch (error) {
-      return refuse(id, "invalid", error instanceof Error ? error.message : String(error));
+      return refuse(id, raw, "invalid", error instanceof Error ? error.message : String(error));
     }
-    pending.set(id, admission.hash);
+    pending.set(id, { hash: admission.hash, raw });
   }
 
-  async function publish(id: string, hash: string): Promise<void> {
+  async function publish(id: string, { hash, raw }: { hash: string; raw: string }): Promise<void> {
     const job = await ledger.get(id);
     if (!job || job.status === "queued" || job.status === "running") return;
     const response: LearningResponse = { version: 1, id, requestHash: hash, at: now() };
@@ -117,6 +150,7 @@ export function createLearningRelay(options: RelayOptions) {
     if (stopped) return;
     doc.change((d) => { d.results[id] = doc.text(JSON.stringify(envelope)); });
     pending.delete(id);
+    bound.set(id, raw);
   }
 
   /**
@@ -152,12 +186,22 @@ export function createLearningRelay(options: RelayOptions) {
     const snapshot = doc.read();
     for (const [id, raw] of Object.entries(snapshot.requests)) {
       if (stopped) return;
-      if (snapshot.results[id] !== undefined || pending.has(id)) continue;
+      if (pending.has(id)) continue;
+      const answered = snapshot.results[id];
+      if (answered !== undefined) {
+        if (await isBound(id, raw, answered)) continue;
+        // A request this key can't authenticate keeps whatever answer it has.
+        const check = await admitRequest(id, raw, options.secret, bodyCreatedAt(raw) ?? now());
+        if (!check.ok && (check.reason === "bad-signature" || check.reason === "not-paired")) {
+          bound.set(id, raw);
+          continue;
+        }
+      }
       await admit(id, raw);
     }
-    for (const [id, hash] of [...pending]) {
+    for (const [id, work] of [...pending]) {
       if (stopped) return;
-      await publish(id, hash);
+      await publish(id, work);
     }
   }
 

@@ -145,6 +145,36 @@ describe("learning relay", () => {
     expect(t.result("a1")).toMatchObject({ refused: "invalid", message: "Job a1 already exists with different content" });
   });
 
+  it("after re-pairing, republishes a finished job under the new key once the phone re-signs it", async () => {
+    const t = await setup();
+    await t.send(check("a1"));
+    await t.relay.process();
+    t.finish("a1", "finished", { status: "passed", output: "", toolchain: "" });
+    await t.relay.process();
+    expect(await verify(t.result("a1")!, SECRET)).toBe(true);
+    const NEW = generateLearningSecret();
+    const repaired = createLearningRelay({ doc: t.hub.peer(), ledger: t.ledger, secret: NEW, now: () => NOW + 60 * 60_000 });
+    // Not re-signed yet: the old answer is left alone.
+    await repaired.process();
+    expect(await verify(t.result("a1")!, SECRET)).toBe(true);
+    await t.send(check("a1"), NEW);
+    await repaired.process();
+    await repaired.process();
+    const republished = t.result("a1")!;
+    expect(await verify(republished, NEW)).toBe(true);
+    expect(republished.body).toMatchObject({ id: "a1", result: { status: "passed" }, requestHash: await requestHash(check("a1")) });
+  });
+
+  it("binds refusals to the request they refuse, and answers a corrected request", async () => {
+    const t = await setup();
+    await t.send(check("b1"), generateLearningSecret());
+    await t.relay.process();
+    expect(t.result("b1")).toMatchObject({ refused: "bad-signature", requestHash: await requestHash(check("b1")) });
+    await t.send(check("b1", { source: "fn fixed() {}" }));
+    await t.relay.process();
+    expect(t.ledger.enqueue).toHaveBeenCalledWith(expect.objectContaining({ id: "b1", source: "fn fixed() {}" }));
+  });
+
   it("acts on nothing in a document from a newer version", async () => {
     const t = await setup();
     await t.send(check("a1"));

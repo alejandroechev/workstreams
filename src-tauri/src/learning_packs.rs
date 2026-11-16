@@ -93,6 +93,9 @@ fn json_object(reply: &str) -> Result<Value, String> {
     let end = reply
         .rfind('}')
         .ok_or("The draft contained no JSON object.")?;
+    if end < start {
+        return Err("The draft contained no JSON object.".into());
+    }
     serde_json::from_str(&reply[start..=end])
         .map_err(|e| format!("The draft was not valid JSON: {e}"))
 }
@@ -134,8 +137,15 @@ pub fn parse_pack(reply: &str, request: &PackRequest) -> Result<Value, String> {
                 .unwrap_or(""),
         );
         if name.is_empty() || !seen.insert(name.clone()) {
-            name = format!("card-{}", index + 1);
-            seen.insert(name.clone());
+            // The first free fallback name: it may itself be another card's slug.
+            let mut k = index + 1;
+            loop {
+                name = format!("card-{k}");
+                if seen.insert(name.clone()) {
+                    break;
+                }
+                k += 1;
+            }
         }
         card["id"] = json!(format!("{pack_id}/{name}"));
         card["version"] = json!(version.to_string());
@@ -401,6 +411,30 @@ mod tests {
         assert!(parse_pack("{\"cards\": []}", &request(None))
             .unwrap_err()
             .contains("1 to 6"));
+        // Braces in the wrong order are an error, not a panic.
+        assert!(parse_pack("} invalid {", &request(None))
+            .unwrap_err()
+            .contains("no JSON"));
+        // A fallback name never collides with another card's slug.
+        let clash = parse_pack(
+            &draft(json!([
+                {"slug": "card-2", "kind": "lesson", "lesson": ["a"]},
+                {"slug": "card-2", "kind": "lesson", "lesson": ["b"]},
+            ])),
+            &request(None),
+        )
+        .unwrap();
+        let ids: Vec<&str> = clash["cards"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            ids.len(),
+            ids.iter().collect::<std::collections::HashSet<_>>().len(),
+            "{ids:?}"
+        );
         // A card the phone could not render is refused, not validated.
         let lesson_objects = draft(
             json!([{"title": "t", "concept": "c", "kind": "lesson", "prompt": "p", "lesson": [{"text": "x"}]}]),

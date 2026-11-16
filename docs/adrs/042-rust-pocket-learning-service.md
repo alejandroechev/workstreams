@@ -135,6 +135,12 @@ The relay transport is described in its own amendment below.
   interrupted by a restart is reported as an error, never rerun. A job queued
   before a restart is still published after it, though its request is no
   longer fresh.
+- **A result answers one exact request.** Signed results and unsigned
+  refusals both carry the request's hash. An entry whose result is not bound to
+  the request filed now (the phone re-signed it after re-pairing, or corrected
+  it) is handled again: a known job is republished under the current key,
+  anything else goes through admission, freshness included. A request the
+  current key cannot authenticate keeps whatever answer it has.
 - **Presence**: an ephemeral `{kind: "presence"}` every 10 s, and
   `laptop.lastSeenAt` every 5 minutes. An answered request is pruned, with its
   result, a week after the result was published; a retrieval of an older job
