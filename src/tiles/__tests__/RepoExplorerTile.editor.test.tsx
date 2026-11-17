@@ -207,6 +207,32 @@ describe("RepoExplorerTile editor wiring", () => {
     expect(lastCall[0].renderMarkdownPreview).toEqual(expect.any(Function));
   });
 
+  it("Go to folder opens the shown tab's own folder, not the last browsed one", async () => {
+    const backend = createBackend();
+    (backend.listDirectory as ReturnType<typeof vi.fn>).mockImplementation(async (dir: string) =>
+      dir.endsWith("src")
+        ? [{ name: "deep.ts", is_dir: false, modified_epoch: 1, size: 12 }]
+        : [
+            { name: "src", is_dir: true, modified_epoch: 1, size: 0 },
+            { name: "app.ts", is_dir: false, modified_epoch: 1, size: 12 },
+          ]);
+    renderTile(backend);
+    await openFile("app.ts");
+    await screen.findByTestId("file-editor-view");
+    fireEvent.doubleClick(screen.getAllByTestId("open-file-tab")[0]);
+    fireEvent.click(screen.getAllByTestId("repo-explorer-go-to-folder")[0]);
+    fireEvent.click(await screen.findByText("src"));
+    await openFile("deep.ts");
+    await screen.findByTestId("file-editor-view");
+    fireEvent.click(screen.getAllByTestId("open-file-tab").find((t) => t.getAttribute("data-path")?.endsWith("app.ts"))!);
+    await waitFor(() => expect(screen.getByTestId("file-editor-view")).toHaveAttribute("data-path", "C:\\repo\\app.ts"));
+    fireEvent.click(screen.getAllByTestId("repo-explorer-go-to-folder")[0]);
+    await waitFor(() => {
+      const item = screen.getAllByTestId("file-tree-item").find((el) => el.textContent?.includes("app.ts"));
+      expect(item).toHaveAttribute("data-revealed", "true");
+    });
+  });
+
   it("keeps onViewStateChange stable across re-renders so the editor cannot loop", async () => {
     renderTile();
     await openFile("README.md");

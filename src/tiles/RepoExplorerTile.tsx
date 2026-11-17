@@ -487,6 +487,7 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
   }, [pdfUrl]);
 
   const openSeqRef = useRef(0);
+  const pendingOpenRef = useRef<{ seq: number; path: string } | null>(null);
   const openFile = useCallback(async (
     path: string,
     navMode: "push" | "replace" | "none" = "push",
@@ -499,6 +500,12 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
     // Only the latest open may publish what is shown; slower earlier reads are dropped.
     const seq = ++openSeqRef.current;
     const stale = () => seq !== openSeqRef.current;
+    pendingOpenRef.current = { seq, path: trimmedPath };
+    // A one-shot line reveal (search, walkthrough) belongs to its file; leaving the file spends it.
+    if (pendingRevealLineRef.current && pendingRevealLineRef.current.path !== trimmedPath) {
+      pendingRevealLineRef.current = null;
+      setWalkthroughLine(null);
+    }
     if (intent === "activate") setOpenTabs((t) => (t.tabs.some((x) => x.path === trimmedPath) ? activateTab(t, trimmedPath) : t));
     else if (intent !== "none") setOpenTabs((t) => openTab(t, trimmedPath, intent));
     if (navMode === "push") {
@@ -727,19 +734,40 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
     (mode === "view" || mode === "image" || mode === "audio" || mode === "pdf" || mode === "sqlite")
       ? filePath
       : null;
-  const latest = useRef({ openTabs, shownPath, switcher });
-  useEffect(() => { latest.current = { openTabs, shownPath, switcher }; });
+  const latest = useRef({ openTabs, shownPath, switcher, activeDiffMode });
+  useEffect(() => { latest.current = { openTabs, shownPath, switcher, activeDiffMode }; });
 
   const selectOpenTab = useCallback((path: string) => {
     setRevealedPath(null);
+    // Returning to a tab restores its own place, not an old reveal request.
+    pendingRevealLineRef.current = null;
+    setWalkthroughLine(null);
+    // Tab keys work from Diff too: leave it, dropping any diff load in flight.
+    if (latest.current.activeDiffMode) {
+      diffRequestEpochRef.current += 1;
+      setActiveDiffMode(null);
+      setDiffBefore(""); setDiffAfter("");
+      setDiffFiles([]);
+      setDiffFilePath("");
+    }
     void openFile(path, "push", "preview");
-  }, [openFile]);
+  }, [openFile, setDiffFilePath]);
 
   /** Applies a tab change; if the file on screen lost its tab, shows the next one (or the tree). */
   const changeTabs = useCallback((change: (t: OpenTabs) => OpenTabs) => {
     const { openTabs: before, shownPath: shown } = latest.current;
     const after = change(before);
     setOpenTabs(after);
+    // Closing a tab whose file is still loading cancels that load.
+    const pending = pendingOpenRef.current;
+    if (
+      pending && pending.seq === openSeqRef.current && pending.path !== shown &&
+      before.tabs.some((t) => t.path === pending.path) && !after.tabs.some((t) => t.path === pending.path)
+    ) {
+      openSeqRef.current += 1;
+      pendingOpenRef.current = null;
+      setFileLoading(false);
+    }
     if (!shown || after.tabs.some((t) => t.path === shown)) return;
     if (after.active) void openFile(after.active, "push", "none");
     else handleBackToBrowse();
@@ -751,6 +779,12 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
     setRevealedPath(path);
     void loadDir(dirnameOf(path));
   }, [handleBackToBrowse, loadDir]);
+
+  // "Go to folder" opens the shown file's own folder, with the file highlighted.
+  const goToFileFolder = useCallback(() => {
+    if (filePath && !filePath.startsWith("commit:")) revealInTree(filePath);
+    else handleBackToBrowse();
+  }, [filePath, revealInTree, handleBackToBrowse]);
 
   // Editing a preview keeps it.
   useEffect(() => {
@@ -2191,7 +2225,7 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
     const viewToolbar = (
       <div style={toolbarStyle}>
         <button
-          onClick={handleBackToBrowse}
+          onClick={goToFileFolder}
           style={{ ...toolbarButtonStyle, display: "flex", alignItems: "center" }}
           title="Go to folder"
           data-testid="repo-explorer-go-to-folder"
@@ -2382,7 +2416,7 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
         {tabBar}
         <div style={toolbarStyle}>
           <button
-            onClick={handleBackToBrowse}
+            onClick={goToFileFolder}
             style={{ ...toolbarButtonStyle, display: "flex", alignItems: "center" }}
             title="Go to folder"
             data-testid="repo-explorer-go-to-folder"
@@ -2409,7 +2443,7 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
         {tabBar}
         <div style={toolbarStyle}>
           <button
-            onClick={handleBackToBrowse}
+            onClick={goToFileFolder}
             style={{ ...toolbarButtonStyle, display: "flex", alignItems: "center" }}
             title="Go to folder"
             data-testid="repo-explorer-go-to-folder"
@@ -2475,7 +2509,7 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
         {tabBar}
         <div style={toolbarStyle}>
           <button
-            onClick={handleBackToBrowse}
+            onClick={goToFileFolder}
             style={{ ...toolbarButtonStyle, display: "flex", alignItems: "center" }}
             title="Go to folder"
             data-testid="repo-explorer-go-to-folder"
@@ -2511,7 +2545,7 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
         {tabBar}
         <div style={toolbarStyle}>
           <button
-            onClick={handleBackToBrowse}
+            onClick={goToFileFolder}
             style={{ ...toolbarButtonStyle, display: "flex", alignItems: "center" }}
             title="Go to folder"
             data-testid="repo-explorer-go-to-folder"
@@ -3046,7 +3080,7 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
             data-testid="file-tree-item"
             data-path={entry.fullPath}
             data-revealed={entry.fullPath === revealedPath ? "true" : undefined}
-            ref={entry.fullPath === revealedPath ? (el) => el?.scrollIntoView({ block: "nearest" }) : undefined}
+            ref={entry.fullPath === revealedPath ? (el) => el?.scrollIntoView?.({ block: "nearest" }) : undefined}
             onClick={() => handleEntryClick(entry)}
             onContextMenu={(e) => {
               e.preventDefault();

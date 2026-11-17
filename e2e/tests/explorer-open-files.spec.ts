@@ -56,7 +56,8 @@ async function start(page: Page, opts: { explorers?: number; terminal?: boolean;
       },
     });
   }, { root: ROOT, names: NAMES, tiles, bodies: NAMES.map(body), png: PNG_1PX, slowImageMs: opts.slowImageMs ?? 0, otherWorkstream: opts.otherWorkstream ?? false });
-  page.on("pageerror", (e) => pageErrors.push(e.message));
+  // Monaco rejects in-flight work with "Canceled" when an editor is disposed; not an app error.
+  page.on("pageerror", (e) => { if (e.message !== "Canceled") pageErrors.push(e.message); });
   await page.goto("/");
   await page.getByTestId("workstream-item").filter({ hasText: "Tabs" }).click();
   await expect(page.locator("[data-tile-id]").filter({ hasText: "Explorer 1" }).first()).toBeVisible();
@@ -308,6 +309,49 @@ test.describe("Repo Explorer open files — review regressions", () => {
     await page.keyboard.press("Control+w");
     await page.getByTestId("workstream-item").filter({ hasText: "Tabs" }).click();
     expect(await tabNames(page)).toEqual(["a.ts"]);
+  });
+
+  test("closing a tab whose file is still loading cancels the load", async ({ page }) => {
+    await start(page, { slowImageMs: 1000 });
+    const ex = explorer(page);
+    await openFromTree(page, "a.ts");
+    await tab(page, "a.ts").dblclick();
+    await ex.getByTestId("repo-explorer-go-to-folder").click();
+    await ex.getByTestId("file-tree-item").filter({ hasText: /^\s*pic\.png\s*$/ }).click();
+    await tab(page, "pic.png").getByTestId("open-file-tab-close").click();
+    await page.waitForTimeout(1300);
+    await expect(ex.getByTestId("image-preview")).toHaveCount(0);
+    expect(await tabNames(page)).toEqual(["a.ts"]);
+  });
+
+  test("tab keys leave the Diff view and show the file", async ({ page }) => {
+    await start(page);
+    const ex = explorer(page);
+    await openFromTree(page, "a.ts");
+    await tab(page, "a.ts").dblclick();
+    await ex.getByTestId("repo-explorer-tab-diff").click();
+    await expect(ex.getByTestId("open-file-tabs")).toHaveCount(0);
+    await page.keyboard.press("Meta+1");
+    await expect(tab(page, "a.ts")).toHaveAttribute("data-active", "true");
+    await expect(ex.getByTestId("file-editor-view")).toBeVisible();
+  });
+
+  test("returning to a tab opened from search keeps its own place, not the match line", async ({ page }) => {
+    await start(page);
+    const ex = explorer(page);
+    await ex.getByTestId("repo-explorer-tab-search").click();
+    await ex.getByTestId("content-search-input").fill("x.ts line 250");
+    await ex.locator('[data-testid^="content-search-match-"][data-testid$="-250"]').first().click();
+    await expect(tab(page, "x.ts")).toHaveAttribute("data-active", "true");
+    await expect.poll(async () => (await editorState(page)).cursorLine).toBe(250);
+    await tab(page, "x.ts").dblclick();
+    await editorEval(page, (ed) => { ed.setPosition({ lineNumber: 10, column: 1 }); ed.setScrollTop(0); });
+    await page.waitForTimeout(700);
+    await openFromTree(page, "y.ts");
+    await tab(page, "x.ts").click();
+    await expect.poll(async () => (await editorState(page)).value).toContain("x.ts line 1");
+    await page.waitForTimeout(400);
+    expect((await editorState(page)).cursorLine).toBe(10);
   });
 
   test("an active image tab comes back after a restart", async ({ page }) => {
