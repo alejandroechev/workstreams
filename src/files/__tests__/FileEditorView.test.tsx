@@ -47,6 +47,12 @@ type FakeEditor = {
   dispose: ReturnType<typeof vi.fn>;
   revealLineInCenter: ReturnType<typeof vi.fn>;
   setPosition: ReturnType<typeof vi.fn>;
+  saveViewState: ReturnType<typeof vi.fn>;
+  restoreViewState: ReturnType<typeof vi.fn>;
+  setScrollTop: ReturnType<typeof vi.fn>;
+  getTopForLineNumber: ReturnType<typeof vi.fn>;
+  getPosition: ReturnType<typeof vi.fn>;
+  getVisibleRanges: ReturnType<typeof vi.fn>;
   createDecorationsCollection: ReturnType<typeof vi.fn>;
   /** Decorations currently applied via the collection returned above. */
   decorations: unknown[];
@@ -150,6 +156,12 @@ beforeEach(() => {
           dispose: vi.fn(),
           revealLineInCenter: vi.fn(),
           setPosition: vi.fn(),
+          saveViewState: vi.fn(() => ({ saved: true })),
+          restoreViewState: vi.fn(),
+          setScrollTop: vi.fn(),
+          getTopForLineNumber: vi.fn((line: number) => (line - 1) * 19),
+          getPosition: vi.fn(() => ({ lineNumber: 125, column: 4 })),
+          getVisibleRanges: vi.fn(() => [{ startLineNumber: 120 }]),
           decorations: [],
           createDecorationsCollection: vi.fn((decorations: unknown[] = []) => {
             editor.decorations = decorations;
@@ -210,6 +222,22 @@ describe("FileEditorView", () => {
     await waitFor(() => expect(fakeEditors).toHaveLength(1));
     await waitFor(() => expect(fakeEditors[0].revealLineInCenter).toHaveBeenCalledWith(7));
     expect(fakeEditors[0].setPosition).toHaveBeenCalledWith({ lineNumber: 7, column: 1 });
+  });
+
+  it("restores a saved editor view state, and reports it with its place when unmounting", async () => {
+    const onEditorViewStateChange = vi.fn();
+    const view = renderEditor(createRegistryHarness(), { initialEditorViewState: { kept: 1 }, onEditorViewStateChange });
+    await waitFor(() => expect(fakeEditors).toHaveLength(1));
+    await waitFor(() => expect(fakeEditors[0].restoreViewState).toHaveBeenCalledWith({ kept: 1 }));
+    view.unmount();
+    expect(onEditorViewStateChange).toHaveBeenLastCalledWith({ saved: true }, { line: 120, cursorLine: 125, cursorColumn: 4 });
+  });
+
+  it("restores a remembered place: first visible line and cursor", async () => {
+    renderEditor(createRegistryHarness(), { initialPlace: { line: 120, cursorLine: 125, cursorColumn: 3 } });
+    await waitFor(() => expect(fakeEditors).toHaveLength(1));
+    await waitFor(() => expect(fakeEditors[0].setPosition).toHaveBeenCalledWith({ lineNumber: 125, column: 3 }));
+    expect(fakeEditors[0].setScrollTop).toHaveBeenCalledWith(119 * 19);
   });
 
   it("does not reveal a line when initialRevealLine is omitted", async () => {

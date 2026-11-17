@@ -1,3 +1,4 @@
+import { parseTabs, type OpenTabs } from "./open-tabs";
 /**
  * Tile view-state — pure helpers for serializing/deserializing the
  * per-tile "where the user was" state (active tab, opened file, etc.)
@@ -31,6 +32,8 @@ export interface RepoExplorerViewState {
   mdViewMode?: "preview" | "edit" | "present";
   /** Current slide when mdViewMode === "present". */
   slideIndex?: number;
+  /** Open file tabs, their order, preview, active file and places. */
+  openTabs?: OpenTabs;
 }
 
 export interface SessionMetaViewState {
@@ -146,6 +149,7 @@ function sanitize<K extends AnyViewState["kind"]>(
         out.diffLayout = raw.diffLayout;
       }
       mdPresentFields();
+      if (isJsonObject(raw.openTabs) && Array.isArray(raw.openTabs.tabs)) out.openTabs = parseTabs(raw.openTabs);
       break;
     case "session_meta":
       str("activeTab");

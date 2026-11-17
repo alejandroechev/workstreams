@@ -57,6 +57,26 @@ export const EXTERNAL_KEY_BINDINGS: readonly ExternalKeyBinding[] = [
     surface: "Repo Explorer",
   },
   {
+    id: "open-file-switcher",
+    combo: "Ctrl+Tab",
+    description:
+      "Cycle through the explorer's open files, most recently used first; release Ctrl to open the highlighted one (add Shift to go backwards)",
+    surface: "Repo Explorer",
+  },
+  {
+    id: "close-open-file",
+    combo: "Ctrl+W",
+    description: "Close the open file tab shown in the focused explorer; terminals still receive Ctrl+W",
+    surface: "Repo Explorer",
+  },
+  {
+    id: "jump-to-open-file",
+    combo: "Ctrl+1…9",
+    macCombo: "Cmd+1…9",
+    description: "Show the first to ninth open file tab of the focused explorer",
+    surface: "Repo Explorer",
+  },
+  {
     id: "find-in-file",
     combo: "Ctrl+F",
     description: "Find and highlight text inside the file currently open in the editor",

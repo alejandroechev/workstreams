@@ -53,7 +53,9 @@ instead of buried behind tabs.
   [poster](docs/assets/demos/local-code-review.png)).
 - **Repo browser that edits in place** — Files / Diff / Log / Hooks / Search.
   The unstaged diff is editable directly, audio, images, PDFs and SQLite files
-  preview inline, and git hooks open in a real editor.
+  preview inline, and git hooks open in a real editor. Open files stay as tabs
+  (a VS Code-style preview tab, pins, `Ctrl+Tab` switcher), keep their undo,
+  cursor and scroll, and come back after a restart.
 - **Search that never freezes the app** — `.gitignore`-aware content search
   across the repo, off the UI thread, with regex and case toggles.
 - **One list, grouped into lanes** — related workstreams share a collapsible

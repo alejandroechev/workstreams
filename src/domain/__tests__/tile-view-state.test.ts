@@ -275,3 +275,13 @@ describe("repo_explorer comments tab view-state", () => {
     expect(vs.commentStatus).toBeUndefined();
   });
 });
+
+describe("repo explorer open tabs", () => {
+  it("keeps valid open tabs and drops a malformed list", () => {
+    const openTabs = { tabs: [{ path: "/r/a.ts", preview: false, pinned: false }], active: "/r/a.ts", recent: ["/r/a.ts"], places: {} };
+    const json = JSON.stringify({ viewState: { openTabs } });
+    expect(parseViewState(json, "repo_explorer").openTabs).toEqual(openTabs);
+    const bad = JSON.stringify({ viewState: { openTabs: "nope" } });
+    expect(parseViewState(bad, "repo_explorer").openTabs).toBeUndefined();
+  });
+});

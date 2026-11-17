@@ -63,6 +63,9 @@ tile's own handler, or the OS — so they never reach `parseKeyAction`.
 | --- | --- | --- | --- |
 | `Ctrl+S` | `Cmd+S` | Save the file you are editing, whether that is a file editor tab or an unstaged diff edit, straight to the working file | File editor |
 | `Ctrl+P` | — | Jump to a file by typing part of its name, without walking the folder tree | Repo Explorer |
+| `Ctrl+Tab` | — | Cycle through the explorer's open files, most recently used first; release Ctrl to open the highlighted one (add Shift to go backwards) | Repo Explorer |
+| `Ctrl+W` | — | Close the open file tab shown in the focused explorer; terminals still receive Ctrl+W | Repo Explorer |
+| `Ctrl+1…9` | `Cmd+1…9` | Show the first to ninth open file tab of the focused explorer | Repo Explorer |
 | `Ctrl+F` | — | Find and highlight text inside the file currently open in the editor | Monaco editor |
 | `Ctrl+Shift+F` | — | Search the whole repository for a string, with optional case-sensitive or regular expression matching | Repo Explorer |
 | `Ctrl+Shift+V` | — | Flip a markdown file between the rendered preview and the raw editor, matching VS Code | File editor |

@@ -100,6 +100,18 @@ export interface FileEditorViewProps extends FileCommentActions {
    */
   initialRevealLine?: number | null;
   /**
+   * Monaco view state (scroll, cursor, selections) to restore once the editor
+   * exists: an open file's tab coming back into view. A reveal line wins over it.
+   */
+  initialEditorViewState?: unknown;
+  /** A remembered place (after a restart, when no view state exists): top line and cursor. */
+  initialPlace?: { line: number; cursorLine: number; cursorColumn: number };
+  /**
+   * The editor's view state and a small serializable place, reported when the
+   * editor goes away and (throttled) while the user scrolls or moves the cursor.
+   */
+  onEditorViewStateChange?: (viewState: unknown, place: { line: number; cursorLine: number; cursorColumn: number }) => void;
+  /**
    * Line to mark as the code walkthrough's current step. Distinct from
    * `initialRevealLine`, which only scrolls: the highlight persists while the
    * user scrolls away, so they can see where the trace is when they come back.
@@ -215,6 +227,9 @@ export function FileEditorView({
   initialViewMode,
   initialSlideIndex,
   initialRevealLine,
+  initialEditorViewState,
+  initialPlace,
+  onEditorViewStateChange,
   highlightLine = null,
   comments = [],
   commentsEnabled = false,
@@ -227,6 +242,22 @@ export function FileEditorView({
 }: FileEditorViewProps): ReactElement {
   const editorHostRef = useRef<HTMLDivElement | null>(null);
   const editorRef = useRef<MonacoNs.editor.IStandaloneCodeEditor | null>(null);
+  // Latest values, read by the editor lifecycle effect without re-creating Monaco.
+  const viewStateInRef = useRef(initialEditorViewState);
+  const placeInRef = useRef(initialPlace);
+  const viewStateOutRef = useRef(onEditorViewStateChange);
+  useEffect(() => { viewStateOutRef.current = onEditorViewStateChange; });
+  const reportViewState = (editor: MonacoNs.editor.IStandaloneCodeEditor) => {
+    const report = viewStateOutRef.current;
+    if (!report || typeof editor.saveViewState !== "function") return;
+    const position = editor.getPosition?.();
+    const visible = editor.getVisibleRanges?.()[0];
+    report(editor.saveViewState(), {
+      line: visible?.startLineNumber ?? position?.lineNumber ?? 1,
+      cursorLine: position?.lineNumber ?? 1,
+      cursorColumn: position?.column ?? 1,
+    });
+  };
   const canonicalPathRef = useRef<string | null>(null);
 
   const [snapshotState, setSnapshotState] = useState<{ inputPath: string; snapshot: BufferSnapshot | null }>({
@@ -393,6 +424,23 @@ export function FileEditorView({
           fontSize: getAppSettings().textFontSize,
         });
         editorRef.current = editor;
+        if (viewStateInRef.current && typeof editor.restoreViewState === "function") {
+          editor.restoreViewState(viewStateInRef.current as MonacoNs.editor.ICodeEditorViewState);
+        } else if (placeInRef.current) {
+          const place = placeInRef.current;
+          editor.setPosition({ lineNumber: place.cursorLine, column: place.cursorColumn });
+          editor.setScrollTop(editor.getTopForLineNumber(place.line));
+        }
+        if (typeof editor.onDidChangeCursorPosition === "function") {
+          let timer: ReturnType<typeof setTimeout> | null = null;
+          const later = () => {
+            if (timer) return;
+            timer = setTimeout(() => { timer = null; reportViewState(editor); }, 500);
+          };
+          editor.onDidChangeCursorPosition(later);
+          editor.onDidScrollChange?.(later);
+          editor.onDidDispose?.(() => { if (timer) clearTimeout(timer); });
+        }
         setEditorReadyToken((v) => v + 1);
 
         resizeObserver = new ResizeObserver(() => editor.layout());
@@ -413,6 +461,7 @@ export function FileEditorView({
       disposed = true;
       resizeObserver?.disconnect();
       visibilityObserver?.disconnect();
+      if (editorRef.current) reportViewState(editorRef.current);
       editorRef.current?.dispose();
       editorRef.current = null;
       setEditorReadyToken(0);

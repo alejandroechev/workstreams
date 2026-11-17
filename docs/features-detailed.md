@@ -354,6 +354,23 @@ Multi-tab repo browser (Files / Diff / Log / Hooks / Search):
 
 - Alphabetical sort with folders first
 - Ctrl+P filename search, Monaco find-in-file (Ctrl+F)
+- **Open file tabs**: every file you open becomes a tab above the editor, per
+  explorer tile. Casual opens (tree click, link, Ctrl+P, search result) share
+  one italic **preview** tab that the next casual open replaces; a tab is
+  **kept** once you double-click it, edit the file, or pin it. Any kind of file
+  can be a tab (code, markdown, image, PDF, SQLite), there is no tab limit and
+  the strip scrolls. Switching tabs keeps each text file's undo history,
+  cursor, scroll position and markdown view mode. The tabs, their order, the
+  preview flag, the active tab and each file's first visible line and cursor
+  are saved in the tile's view state and come back after a restart.
+  `Ctrl+Tab` / `Ctrl+Shift+Tab` opens a most-recently-used switcher (release
+  Ctrl to open), `Ctrl+W` closes the shown tab and `Cmd/Ctrl+1…9` jumps to a
+  tab; these only act while the explorer is focused, so terminals keep their
+  own `Ctrl+W`. Back / Forward walk the history across tabs without adding or
+  closing any. Middle-click closes a tab; right-click offers Close others,
+  Close to the right, Close all, Pin / Unpin and Reveal in tree (shows the
+  file highlighted in the folder tree). Pinned tabs survive Close others and
+  Close all.
 - Inline previews for audio and image files (png, jpg, gif, webp, bmp, ico,
   svg, avif)
 - SQLite databases (`.db`, `.sqlite`, `.sqlite3`, `.db3`, or any file with

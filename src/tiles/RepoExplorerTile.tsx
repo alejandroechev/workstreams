@@ -1,5 +1,6 @@
 // @test-skip: pre-existing tile shell, individual subcomponents tested separately
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { FileIcon } from "../ui/components/FileIcon";
 import Editor, { DiffEditor } from "@monaco-editor/react";
 import type * as MonacoNs from "monaco-editor";
 import { MarkdownView } from "../ui/MarkdownView";
@@ -24,7 +25,6 @@ import {
   FolderIcon,
   DocumentIcon,
   DocumentTextIcon,
-  CodeBracketIcon,
   ChevronUpIcon,
   ArrowPathIcon,
   FolderOpenIcon,
@@ -70,6 +70,12 @@ import { RepoContentSearch } from "./RepoContentSearch";
 import { debounce } from "../domain/debounce";
 import { getAppSettings, subscribeAppSettings } from "../domain/app-settings";
 import { parseViewState } from "../domain/tile-view-state";
+import {
+  closeAll as closeAllTabs, closeOthers as closeOtherTabs, closeRight as closeRightTabs,
+  closeTab as closeOneTab, emptyTabs, jumpTo as jumpToTab, keep as keepTab, openTab, setPlace, switcherOrder,
+  togglePin as togglePinTab, type OpenIntent, type OpenTabs, type Place,
+} from "../domain/open-tabs";
+import { OpenTabsBar, TabSwitcher } from "./OpenTabsBar";
 import { useTileViewStatePersist } from "../domain/useTileViewStatePersist";
 
 interface Props {
@@ -140,21 +146,6 @@ function formatBytes(bytes: number): string {
   return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
 }
 
-function FileIcon({ name, isDir }: { name: string; isDir: boolean }) {
-  if (isDir) return <FolderIcon style={{ width: 16, height: 16, color: "#89b4fa" }} />;
-  const ext = name.split(".").pop()?.toLowerCase() || "";
-  switch (ext) {
-    case "ts": case "tsx": case "js": case "jsx": case "rs": case "py":
-      return <CodeBracketIcon style={{ width: 16, height: 16, color: "#a6adc8" }} />;
-    case "md": case "mdx": case "markdown":
-      return <DocumentTextIcon style={{ width: 16, height: 16, color: "#a6adc8" }} />;
-    case "mp3": case "wav": case "ogg": case "flac": case "m4a": case "aac": case "opus": case "webm":
-      return <MusicalNoteIcon style={{ width: 16, height: 16, color: "#cba6f7" }} />;
-    default:
-      return <DocumentIcon style={{ width: 16, height: 16, color: "#6c7086" }} />;
-  }
-}
-
 /**
  * Parse a unified diff to extract old (original) and new (modified) content.
  */
@@ -219,6 +210,16 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
   // File-viewer navigation history: each entry is an absolute file path.
   // Empty when not in a file/image/audio view (i.e. we're browsing).
   const [navStack, setNavStack] = useState<NavigationStack | null>(null);
+  // Open files as tabs (preview + kept), per tile; persisted in view state.
+  const [openTabs, setOpenTabs] = useState<OpenTabs>(emptyTabs);
+  // Each open file's Monaco view state and markdown mode, so a tab comes back
+  // exactly as it was left (its buffer, with undo history, stays acquired).
+  const [editorStates, setEditorStates] = useState<Record<string, unknown>>({});
+  const [mdModes, setMdModes] = useState<Record<string, "preview" | "edit" | "present">>({});
+  // A file shown by "Reveal in tree", highlighted in the listing.
+  const [revealedPath, setRevealedPath] = useState<string | null>(null);
+  // Ctrl+Tab switcher: candidates (most recent first) and the highlighted one.
+  const [switcher, setSwitcher] = useState<{ paths: string[]; index: number } | null>(null);
   const [imageSizeBytes, setImageSizeBytes] = useState(0);
   // Ctrl+P search overlay
   const [showFileSearch, setShowFileSearch] = useState(false);
@@ -485,9 +486,15 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
     return () => { if (prev) URL.revokeObjectURL(prev); };
   }, [pdfUrl]);
 
-  const openFile = useCallback(async (path: string, navMode: "push" | "replace" | "none" = "push") => {
+  const openFile = useCallback(async (
+    path: string,
+    navMode: "push" | "replace" | "none" = "push",
+    // Casual opens (tree, links, Ctrl+P, search, walkthroughs) reuse the preview tab.
+    intent: OpenIntent | "none" = "preview",
+  ) => {
     const trimmedPath = path.trim();
     if (!trimmedPath) return;
+    if (intent !== "none") setOpenTabs((t) => openTab(t, trimmedPath, intent));
     if (navMode === "push") {
       setNavStack((prev) => (prev ? navPush(prev, trimmedPath) : createNavigationStack(trimmedPath)));
     }
@@ -688,6 +695,92 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
       .catch(() => setCurrentBranch(null));
   }, [rootDir, currentDir, backend]);
 
+  const handleBackToBrowse = useCallback(() => {
+    setContent(null);
+    setFilePath("");
+    setFileError(null);
+    setEditorSnapshot(null);
+    setAudioUrl(null);
+    setAudioBytes(null);
+    setAudioTooLarge(false);
+    setPdfUrl(null);
+    setNavStack(null);
+    setMode("browse");
+  }, []);
+
+  // ─── Open file tabs ───
+  // The file a tab stands for while it is on screen (none while browsing).
+  const shownPath =
+    mode !== "browse" && !activeDiffMode && filePath && !filePath.startsWith("commit:") &&
+    (mode === "view" || mode === "image" || mode === "audio" || mode === "pdf" || mode === "sqlite")
+      ? filePath
+      : null;
+  const latest = useRef({ openTabs, shownPath, switcher });
+  useEffect(() => { latest.current = { openTabs, shownPath, switcher }; });
+
+  const selectOpenTab = useCallback((path: string) => {
+    setRevealedPath(null);
+    void openFile(path, "push", "preview");
+  }, [openFile]);
+
+  /** Applies a tab change; if the file on screen lost its tab, shows the next one (or the tree). */
+  const changeTabs = useCallback((change: (t: OpenTabs) => OpenTabs) => {
+    const { openTabs: before, shownPath: shown } = latest.current;
+    const after = change(before);
+    setOpenTabs(after);
+    if (!shown || after.tabs.some((t) => t.path === shown)) return;
+    if (after.active) void openFile(after.active, "push", "none");
+    else handleBackToBrowse();
+  }, [openFile, handleBackToBrowse]);
+
+  const revealInTree = useCallback((path: string) => {
+    handleBackToBrowse();
+    setSearchFilter("");
+    setRevealedPath(path);
+    void loadDir(dirnameOf(path));
+  }, [handleBackToBrowse, loadDir]);
+
+  // Editing a preview keeps it.
+  useEffect(() => {
+    if (editorSnapshot?.dirty && filePath) setOpenTabs((t) => keepTab(t, filePath));
+  }, [editorSnapshot?.dirty, filePath]);
+
+  // Text files stay loaded while their tab is open, so undo history survives
+  // switching away. The editor itself releases its own hold on unmount.
+  const heldBuffers = useRef(new Map<string, string>());
+  useEffect(() => {
+    const held = heldBuffers.current;
+    const want = new Set(
+      openTabs.tabs.map((t) => t.path).filter((p) => shouldUseFileEditor(p) && !isAudioFile(p) && !isImageFile(p) && !isPdfFile(p) && !isSqliteByExt(p)),
+    );
+    for (const [path, canonical] of held) {
+      if (want.has(path)) continue;
+      held.delete(path);
+      if (canonical) fileBufferRegistry.release(canonical);
+    }
+    for (const path of want) {
+      if (held.has(path)) continue;
+      held.set(path, "");
+      fileBufferRegistry.acquire(path).then(
+        (snapshot) => {
+          // Closed while loading: hand the hold straight back.
+          if (held.get(path) === "") held.set(path, snapshot.path);
+          else fileBufferRegistry.release(snapshot.path);
+        },
+        () => { if (held.get(path) === "") held.delete(path); },
+      );
+    }
+  }, [openTabs.tabs]);
+  useEffect(() => () => {
+    for (const canonical of heldBuffers.current.values()) if (canonical) fileBufferRegistry.release(canonical);
+    heldBuffers.current.clear();
+  }, []);
+
+  const rememberEditorState = useCallback((path: string, viewState: unknown, place: Place) => {
+    setEditorStates((m) => ({ ...m, [path]: viewState }));
+    setOpenTabs((t) => setPlace(t, path, place));
+  }, []);
+
   // Ctrl+P handler
   useEffect(() => {
     if (!isFocused) return;
@@ -698,6 +791,33 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
         setShowFileSearch(true);
         setFileSearchQuery("");
         setFileSearchResults([]);
+      } else if (e.ctrlKey && e.key === "Tab") {
+        // Ctrl+Tab / Ctrl+Shift+Tab: switch open files, most recent first.
+        e.preventDefault();
+        e.stopPropagation();
+        const { openTabs: tabs, shownPath: shown, switcher: open } = latest.current;
+        if (open) {
+          const n = open.paths.length;
+          setSwitcher({ ...open, index: (open.index + (e.shiftKey ? n - 1 : 1)) % n });
+        } else {
+          const paths = switcherOrder(tabs);
+          if (paths.length === 0) return;
+          const first = paths[0] === shown ? 1 : 0;
+          setSwitcher({ paths, index: e.shiftKey ? paths.length - 1 : Math.min(first, paths.length - 1) });
+        }
+      } else if (e.ctrlKey && !e.shiftKey && !e.altKey && (e.key === "w" || e.key === "W")) {
+        const { shownPath: shown } = latest.current;
+        if (!shown) return;
+        e.preventDefault();
+        e.stopPropagation();
+        changeTabs((t) => closeOneTab(t, shown));
+      } else if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && /^[1-9]$/.test(e.key)) {
+        const { openTabs: tabs } = latest.current;
+        if (tabs.tabs.length === 0) return;
+        e.preventDefault();
+        e.stopPropagation();
+        const next = jumpToTab(tabs, Number(e.key));
+        if (next.active) selectOpenTab(next.active);
       } else if (e.ctrlKey && e.shiftKey && (e.key === "F" || e.key === "f")) {
         // Ctrl+Shift+F: open the content-search ("search all files") tab.
         e.preventDefault();
@@ -709,9 +829,22 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
         setMode("search");
       }
     };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [isFocused]);
+    // Releasing Ctrl opens the file highlighted in the switcher.
+    const release = (e: KeyboardEvent) => {
+      if (e.key !== "Control") return;
+      const { switcher: open } = latest.current;
+      if (!open) return;
+      setSwitcher(null);
+      selectOpenTab(open.paths[open.index]);
+    };
+    // Capture: the editor must not swallow these first.
+    window.addEventListener("keydown", handler, true);
+    window.addEventListener("keyup", release, true);
+    return () => {
+      window.removeEventListener("keydown", handler, true);
+      window.removeEventListener("keyup", release, true);
+    };
+  }, [isFocused, changeTabs, selectOpenTab]);
 
   // Focus search input when overlay opens
   useEffect(() => {
@@ -764,6 +897,7 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
   };
 
   const handleEntryClick = (entry: DirEntry) => {
+    setRevealedPath(null);
     if (entry.isDir) {
       loadDir(entry.fullPath);
       setSearchFilter("");
@@ -776,18 +910,6 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
     }
   };
 
-  const handleBackToBrowse = useCallback(() => {
-    setContent(null);
-    setFilePath("");
-    setFileError(null);
-    setEditorSnapshot(null);
-    setAudioUrl(null);
-    setAudioBytes(null);
-    setAudioTooLarge(false);
-    setPdfUrl(null);
-    setNavStack(null);
-    setMode("browse");
-  }, []);
 
   const handleLinkClick = useCallback(async (absPath: string, kind: LinkTargetKind) => {
     if (kind === "markdown" || kind === "image" || kind === "audio" || kind === "pdf" || kind === "file") {
@@ -1349,6 +1471,7 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
     hydratedRef.current = true;
     const vs = parseViewState(configJson, "repo_explorer");
     if (vs.currentDir) setCurrentDir(vs.currentDir);
+    if (vs.openTabs) setOpenTabs(vs.openTabs);
     if (vs.diffLayout) setDiffLayout(vs.diffLayout);
     const tab = vs.activeTab as TabId | undefined;
     if (tab && tab !== "files") {
@@ -1415,6 +1538,7 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
       commentText: activeTab === "comments" && commentFilters.text ? commentFilters.text : undefined,
       mdViewMode: editorViewState?.mode,
       slideIndex: editorViewState?.mode === "present" ? editorViewState?.slideIndex : undefined,
+      openTabs: openTabs.tabs.length > 0 ? openTabs : undefined,
     },
     onConfigChange,
     { enabled: hydratedRef.current },
@@ -1437,7 +1561,7 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
     { id: "search", label: "Search", icon: MagnifyingGlassIcon },
     { id: "comments", label: "Comments", icon: ChatBubbleLeftRightIcon },
   ];
-  const tabBar = (
+  const tabStrip = (
     <div style={tabBarStyle} data-testid="repo-explorer-tabs">
       {TABS.map((t) => {
         const Icon = t.icon;
@@ -1462,6 +1586,26 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
       })}
       <div style={{ flex: 1 }} />
     </div>
+  );
+  const tabBar = (
+    <>
+      {tabStrip}
+      {activeTab === "files" && (
+        <OpenTabsBar
+          tabs={openTabs}
+          shownPath={shownPath}
+          dirtyPath={editorSnapshot?.dirty ? filePath : null}
+          onSelect={selectOpenTab}
+          onKeep={(path) => setOpenTabs((t) => keepTab(t, path))}
+          onClose={(path) => changeTabs((t) => closeOneTab(t, path))}
+          onCloseOthers={(path) => { changeTabs((t) => closeOtherTabs(t, path)); if (shownPath !== path) selectOpenTab(path); }}
+          onCloseRight={(path) => changeTabs((t) => closeRightTabs(t, path))}
+          onCloseAll={() => changeTabs(closeAllTabs)}
+          onTogglePin={(path) => setOpenTabs((t) => togglePinTab(t, path))}
+          onReveal={revealInTree}
+        />
+      )}
+    </>
   );
 
   // ─── Ctrl+P Search Overlay (filename search, scoped to tile) ───
@@ -1530,6 +1674,7 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
   const overlays = (
     <>
       {fileSearchOverlay}
+      {switcher && <TabSwitcher paths={switcher.paths} index={switcher.index} />}
       {contextMenu && (
         <FileContextMenu
           x={contextMenu.x}
@@ -2139,7 +2284,10 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
               path={filePath}
               onBack={handleBackToBrowse}
               showHeader={false}
-              initialViewMode={restoredMdRef.current?.path === filePath ? restoredMdRef.current.mode : undefined}
+              initialEditorViewState={editorStates[filePath]}
+              initialPlace={editorStates[filePath] ? undefined : openTabs.places[filePath]}
+              onEditorViewStateChange={(viewState, place) => rememberEditorState(filePath, viewState, place)}
+              initialViewMode={mdModes[filePath] ?? (restoredMdRef.current?.path === filePath ? restoredMdRef.current.mode : undefined)}
               initialSlideIndex={restoredMdRef.current?.path === filePath ? restoredMdRef.current.slideIndex : undefined}
               initialRevealLine={pendingRevealLineRef.current?.path === filePath ? pendingRevealLineRef.current.line : undefined}
               highlightLine={pendingRevealLineRef.current?.path === filePath ? walkthroughLine : null}
@@ -2151,7 +2299,10 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
                 >{markdownContent}</MarkdownView>
               )}
               onSnapshotChange={setEditorSnapshot}
-              onViewStateChange={setEditorViewState}
+              onViewStateChange={(state) => {
+                setEditorViewState(state);
+                if (state) setMdModes((m) => (m[filePath] === state.mode ? m : { ...m, [filePath]: state.mode }));
+              }}
               comments={visibleFileComments}
               commentsEnabled={commentsEnabled && commentsAvailable}
               onAddComment={fileComments.add}
@@ -2877,6 +3028,8 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
             key={entry.name}
             data-testid="file-tree-item"
             data-path={entry.fullPath}
+            data-revealed={entry.fullPath === revealedPath ? "true" : undefined}
+            ref={entry.fullPath === revealedPath ? (el) => el?.scrollIntoView({ block: "nearest" }) : undefined}
             onClick={() => handleEntryClick(entry)}
             onContextMenu={(e) => {
               e.preventDefault();
@@ -2892,9 +3045,11 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
               color: entry.isDir ? "#89b4fa" : "#cdd6f4",
               fontWeight: entry.isDir ? 500 : 400,
               fontSize: 13,
+              background: entry.fullPath === revealedPath ? "#313244" : "transparent",
+              boxShadow: entry.fullPath === revealedPath ? "inset 2px 0 0 #cba6f7" : undefined,
             }}
             onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "#313244"; }}
-            onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "transparent"; }}
+            onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = entry.fullPath === revealedPath ? "#313244" : "transparent"; }}
           >
             <span style={{ width: 20, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
               <FileIcon name={entry.name} isDir={entry.isDir} />
