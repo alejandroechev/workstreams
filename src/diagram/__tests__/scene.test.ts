@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   appendElements,
   emptyScene,
+  expandSelection,
   liveElements,
   nextBoardName,
   parseExcalidrawFile,
@@ -75,6 +76,29 @@ describe("diagram scenes", () => {
     expect((out[4].startBinding as { elementId: string }).elementId).toBe(renamed.id);
     expect((out[4].endBinding as { elementId: string }).elementId).toBe("c");
     expect(out[5].id).toBe("c");
+  });
+
+  it("gives every appended batch its own groups, so two imports never join", () => {
+    const first = appendElements([], [rect("a", 0, 0, { groupIds: ["subgraph_G"] }), rect("b", 0, 0, { groupIds: ["subgraph_G", "outer"] })]);
+    const second = appendElements(first, [rect("c", 0, 0, { groupIds: ["subgraph_G"] })]);
+    const groupsOf = (id: string) => second.find((e) => e.id === id)!.groupIds!;
+    expect(groupsOf("a")[0]).toBe(groupsOf("b")[0]);
+    expect(groupsOf("b")).toHaveLength(2);
+    expect(groupsOf("c")[0]).not.toBe(groupsOf("a")[0]);
+    expect(second.slice(0, 2)).toEqual(first);
+  });
+
+  it("copies a selected shape with its label and a selected frame with its contents", () => {
+    const els = [
+      rect("box", 0, 0),
+      { id: "label", type: "text", x: 0, y: 0, width: 1, height: 1, containerId: "box" } as SceneElement,
+      { id: "frame", type: "frame", x: 0, y: 0, width: 1, height: 1 } as SceneElement,
+      rect("inside", 0, 0, { frameId: "frame" }),
+      rect("other", 0, 0),
+    ];
+    expect(expandSelection(els, ["box"]).sort()).toEqual(["box", "label"]);
+    expect(expandSelection(els, ["frame"]).sort()).toEqual(["frame", "inside"]);
+    expect(JSON.parse(toExcalidrawClipboard({ elements: els, files: {} }, ["box"])).elements.map((e: SceneElement) => e.id)).toEqual(["box", "label"]);
   });
 
   it("names new boards Board N after the highest existing number", () => {

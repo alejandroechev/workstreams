@@ -98,10 +98,23 @@ export function parseExcalidrawFile(text: string): ParsedFile {
   return scene ? { ok: true, scene } : { ok: false, error: "The file has no elements list" };
 }
 
+/**
+ * The selection as copied: Excalidraw selects a labelled shape without its
+ * bound text, and a frame without its contents, so both come along.
+ */
+export function expandSelection(elements: readonly SceneElement[], selectedIds: readonly string[]): string[] {
+  const ids = new Set(selectedIds);
+  for (const e of liveElements(elements)) {
+    if ((e.containerId && ids.has(e.containerId)) || (e.frameId && ids.has(e.frameId))) ids.add(e.id);
+  }
+  return [...ids];
+}
+
 /** What excalidraw.com accepts on paste: the board, or just the selected elements. */
 export function toExcalidrawClipboard(scene: DiagramScene, selectedIds?: readonly string[]): string {
   const live = liveElements(scene.elements);
-  const picked = selectedIds && selectedIds.length > 0 ? live.filter((e) => selectedIds.includes(e.id)) : live;
+  const wanted = selectedIds && selectedIds.length > 0 ? new Set(expandSelection(live, selectedIds)) : null;
+  const picked = wanted ? live.filter((e) => wanted.has(e.id)) : live;
   return JSON.stringify({ type: "excalidraw/clipboard", elements: picked, files: usedFiles(picked, scene.files) });
 }
 
@@ -143,9 +156,17 @@ const freshId = () => `ws-${Date.now().toString(36)}-${(counter++).toString(36)}
 /**
  * `existing` followed by `added`. An added element whose id is already taken
  * gets a new id (and every reference to it inside `added` follows), so
- * appending can never replace one of the user's elements.
+ * appending can never replace one of the user's elements. The batch's groups
+ * get fresh ids too: Mermaid reuses names like `subgraph_group_G`, and two
+ * imports must not become one group.
  */
-export function appendElements(existing: readonly SceneElement[], added: readonly SceneElement[]): SceneElement[] {
+export function appendElements(existing: readonly SceneElement[], addedIn: readonly SceneElement[]): SceneElement[] {
+  const groups = new Map<string, string>();
+  const regroup = (g: string) => {
+    if (!groups.has(g)) groups.set(g, `${g}-${freshId()}`);
+    return groups.get(g)!;
+  };
+  const added = addedIn.map((e) => (e.groupIds && e.groupIds.length > 0 ? { ...e, groupIds: e.groupIds.map(regroup) } : e));
   const taken = new Set(existing.map((e) => e.id));
   const rename = new Map<string, string>();
   for (const e of added) {

@@ -20,6 +20,7 @@ import { loadExcalidraw, mermaidToScene, paletteElements } from "../diagram/exca
 import { PALETTE, type PaletteItem, type PaletteKind } from "../diagram/palette";
 import {
   appendElements,
+  expandSelection,
   liveElements,
   nextBoardName,
   parseScene,
@@ -69,10 +70,17 @@ async function blobToBase64(blob: Blob): Promise<string> {
  * in flight, so a remount (or React's double-run effects) never creates two.
  */
 const loading = new Map<string, Promise<DiagramBoard[]>>();
+/**
+ * Agent additions are applied one at a time per tile, across mounts: a tile
+ * that closes and reopens waits for the old mount's last write before it
+ * loads, so it never starts from a scene that is about to change.
+ */
+const additionChains = new Map<string, Promise<void>>();
 function loadBoards(backend: ReturnType<typeof useBackend>, tileId: string): Promise<DiagramBoard[]> {
   let p = loading.get(tileId);
   if (!p) {
     p = (async () => {
+      await additionChains.get(tileId);
       const list = await backend.diagramListBoards(tileId);
       return list.length > 0 ? list : [await backend.diagramCreateBoard(tileId, nextBoardName([]))];
     })().finally(() => loading.delete(tileId));
@@ -97,10 +105,16 @@ export default function DiagramTile({ tileId, workstreamDir, configJson, onConfi
   const [mermaid, setMermaid] = useState<{ text: string; error: string | null; busy: boolean } | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [notice, setNotice] = useState<Notice>(null);
-  const [api, setApi] = useState<ExcalidrawImperativeAPI | null>(null);
+  // The canvas on screen and the board it belongs to.
+  const [canvas, setCanvas] = useState<{ boardId: string; api: ExcalidrawImperativeAPI } | null>(null);
   const scenes = useRef(new Map<string, DiagramScene>());
-  const latest = useRef({ boards, activeId, api, configJson });
-  useEffect(() => { latest.current = { boards, activeId, api, configJson }; });
+  const latest = useRef({ boards, activeId, canvas, configJson });
+  useEffect(() => { latest.current = { boards, activeId, canvas, configJson }; });
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
 
   // Load the tile's boards; a new tile starts with "Board 1".
   useEffect(() => {
@@ -120,35 +134,43 @@ export default function DiagramTile({ tileId, workstreamDir, configJson, onConfi
   }, [backend, tileId]);
 
   const activate = useCallback((id: string) => {
+    // Known at once, so an addition in flight never writes to a board that is opening.
+    latest.current = { ...latest.current, activeId: id };
     setActiveId(id);
     setConfirmDelete(null);
     const cfg = readConfig(latest.current.configJson);
     if (cfg.activeBoardId !== id) onConfigChange?.(JSON.stringify({ ...cfg, activeBoardId: id }));
   }, [onConfigChange]);
 
-  const saveScene = useCallback((boardId: string, scene: DiagramScene) => {
+  /** Stores a board's scene; rejects when it was not saved. */
+  const persistScene = useCallback((boardId: string, scene: DiagramScene) => {
     scenes.current.set(boardId, scene);
-    return backend.diagramSaveScene(boardId, serializeScene(scene)).catch((e) => {
+    return backend.diagramSaveScene(boardId, serializeScene(scene));
+  }, [backend]);
+
+  const saveScene = useCallback((boardId: string, scene: DiagramScene) => {
+    return persistScene(boardId, scene).catch((e) => {
       setNotice({ kind: "error", text: `Could not save the board: ${errorText(e)}` });
     });
-  }, [backend]);
+  }, [persistScene]);
 
   /** The drawing on screen for the active board, or the stored one. */
   const currentScene = useCallback((): DiagramScene => {
-    const { api: a, activeId: id } = latest.current;
+    const { canvas: c, activeId: id } = latest.current;
+    const a = c && c.boardId === id ? c.api : null;
     if (a) return { elements: a.getSceneElements() as unknown as SceneElement[], files: a.getFiles() as Record<string, unknown> };
     return (id && scenes.current.get(id)) || { elements: [], files: {} };
   }, []);
 
   const selectedIds = useCallback((): string[] => {
-    const a = latest.current.api;
+    const a = latest.current.canvas?.api;
     if (!a) return [];
     return Object.entries(a.getAppState().selectedElementIds ?? {}).filter(([, on]) => on).map(([id]) => id);
   }, []);
 
   /** Appends shapes to the active canvas (undoable), selecting them. */
   const addToCanvas = useCallback(async (added: DiagramScene, place: "beside" | "center") => {
-    const a = latest.current.api;
+    const a = latest.current.canvas?.api;
     if (!a) throw new Error("The canvas is still loading");
     const ex = await loadExcalidraw();
     const existing = a.getSceneElementsIncludingDeleted() as unknown as SceneElement[];
@@ -177,41 +199,49 @@ export default function DiagramTile({ tileId, workstreamDir, configJson, onConfi
     return { elements: next, files: { ...(a.getFiles() as Record<string, unknown>), ...added.files } } as DiagramScene;
   }, []);
 
-  // Agent additions: convert queued Mermaid and append it, one batch at a time.
-  const processing = useRef<Promise<void>>(Promise.resolve());
+  // Agent additions: convert queued Mermaid and append it. An addition is
+  // resolved only once the scene holding it is saved; until then it stays
+  // pending and is tried again on the next event or mount.
   const processAdditions = useCallback(() => {
-    processing.current = processing.current.then(async () => {
-      const { boards: list, activeId: active, api: a } = latest.current;
-      if (!list) return;
+    const run = async () => {
+      const list = latest.current.boards;
+      if (!list || !mounted.current) return;
       for (const board of list) {
-        // The active board waits for its canvas, so the canvas never saves over an addition.
-        if (board.id === active && !a) continue;
         const pending = (await backend.diagramAdditions(board.id)).filter((x) => x.status === "pending");
         for (const addition of pending) {
+          if (!mounted.current) return;
           let added: DiagramScene;
           try {
             added = await mermaidToScene(addition.mermaid);
           } catch (e) {
-            await backend.diagramResolveAddition(addition.id, errorText(e)).catch(() => {});
+            if (mounted.current) await backend.diagramResolveAddition(addition.id, errorText(e)).catch(() => {});
             continue;
           }
-          if (board.id === latest.current.activeId && latest.current.api) {
-            const scene = await addToCanvas(added, "beside");
-            await saveScene(board.id, scene);
+          if (!mounted.current) return;
+          const { activeId: active, canvas: c } = latest.current;
+          if (board.id === active) {
+            // The open board takes it through its canvas, or waits for the canvas to be ready.
+            if (!c || c.boardId !== board.id) break;
+            await persistScene(board.id, await addToCanvas(added, "beside"));
           } else {
+            // A board that is not on screen: its stored scene (the cache is never older) gains the shapes.
             const stored = scenes.current.get(board.id) ?? parseScene(board.scene_json);
             const elements = appendElements(stored.elements, placeBeside(liveElements(stored.elements), added.elements));
-            await saveScene(board.id, { elements, files: { ...stored.files, ...added.files } });
+            await persistScene(board.id, { elements, files: { ...stored.files, ...added.files } });
           }
-          await backend.diagramResolveAddition(addition.id, null).catch(() => {});
+          await backend.diagramResolveAddition(addition.id, null);
         }
       }
-    }).catch((e) => setNotice({ kind: "error", text: `Could not draw an agent's addition: ${errorText(e)}` }));
-  }, [backend, addToCanvas, saveScene]);
+    };
+    const next = (additionChains.get(tileId) ?? Promise.resolve())
+      .then(run)
+      .catch((e) => { if (mounted.current) setNotice({ kind: "error", text: `Could not draw an agent's addition: ${errorText(e)}` }); });
+    additionChains.set(tileId, next);
+  }, [backend, tileId, addToCanvas, persistScene]);
 
   useEffect(() => {
     if (boards) processAdditions();
-  }, [boards, api, processAdditions]);
+  }, [boards, canvas, processAdditions]);
 
   useEffect(() => {
     const unlisten = listen<{ entity?: string; id?: string }>("state-changed", (event) => {
@@ -324,7 +354,9 @@ export default function DiagramTile({ tileId, workstreamDir, configJson, onConfi
   const pickedScene = (): DiagramScene => {
     const scene = currentScene();
     const ids = selectedIds();
-    return ids.length > 0 ? { ...scene, elements: scene.elements.filter((e) => ids.includes(e.id)) } : scene;
+    if (ids.length === 0) return scene;
+    const wanted = new Set(expandSelection(scene.elements, ids));
+    return { ...scene, elements: scene.elements.filter((e) => wanted.has(e.id)) };
   };
 
   const copyPng = async () => {
@@ -388,7 +420,8 @@ export default function DiagramTile({ tileId, workstreamDir, configJson, onConfi
 
   return (
     <div data-testid="diagram-tile" style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0, background: "#1e1e2e" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 4, padding: "4px 6px", borderBottom: "1px solid #313244", flexShrink: 0, overflowX: "auto" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 4, padding: "4px 6px", borderBottom: "1px solid #313244", flexShrink: 0 }}>
+        <div data-testid="diagram-board-tabs" style={{ display: "flex", alignItems: "center", gap: 4, overflowX: "auto", minWidth: 0, flex: 1 }}>
         {(boards ?? []).map((b) => {
           const active = b.id === activeId;
           return renaming?.id === b.id ? (
@@ -443,7 +476,7 @@ export default function DiagramTile({ tileId, workstreamDir, configJson, onConfi
         <button data-testid="diagram-board-add" title="New board" onClick={() => void addBoard()} style={{ ...pill, padding: "2px 5px" }}>
           <PlusIcon style={{ width: 13, height: 13 }} />
         </button>
-        <span style={{ flex: 1 }} />
+        </div>
         <button data-testid="diagram-mermaid-open" onClick={() => setMermaid({ text: "", error: null, busy: false })} style={pill} title="Turn Mermaid text into editable shapes">
           <CodeBracketIcon style={{ width: 13, height: 13 }} /> Import Mermaid
         </button>
@@ -474,7 +507,10 @@ export default function DiagramTile({ tileId, workstreamDir, configJson, onConfi
             registryKey={`${tileId}:${activeId}`}
             initialScene={() => sceneFor(activeId)}
             onSceneChange={(scene) => void saveScene(activeId, scene)}
-            onApi={setApi}
+            onApi={(a) => {
+              const boardId = activeId;
+              setCanvas((current) => (a ? { boardId, api: a } : current?.boardId === boardId ? null : current));
+            }}
           />
         )}
         {paletteOpen && (

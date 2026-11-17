@@ -1,4 +1,4 @@
-import { StrictMode, useEffect, type ComponentProps } from "react";
+import { StrictMode, useEffect, useState, type ComponentProps } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BackendProvider } from "../../backend/context";
@@ -46,12 +46,16 @@ interface FakeApi {
   updateScene: ReturnType<typeof vi.fn>;
   addFiles: ReturnType<typeof vi.fn>;
 }
+/** When set, a canvas mounts (reading its scene) but hands over its API only on `release()`. */
+const hold = { on: false, release: [] as Array<() => void> };
 const canvases: Array<{ props: ComponentProps<typeof import("../../diagram/DiagramCanvas").DiagramCanvas>; api: FakeApi }> = [];
 vi.mock("../../diagram/DiagramCanvas", () => ({
   DiagramCanvas: (props: ComponentProps<typeof import("../../diagram/DiagramCanvas").DiagramCanvas>) => {
+    // Read once at mount, like Excalidraw's initialData.
+    const [initial] = useState(() => sceneOf(props.initialScene));
     useEffect(() => {
       const api: FakeApi = {
-        elements: [...(sceneOf(props.initialScene).elements as SceneElement[])],
+        elements: [...(initial.elements as SceneElement[])],
         getSceneElements() { return this.elements.filter((e) => !e.isDeleted); },
         getSceneElementsIncludingDeleted() { return this.elements; },
         getFiles: () => ({}),
@@ -61,7 +65,8 @@ vi.mock("../../diagram/DiagramCanvas", () => ({
       };
       api.updateScene.mockImplementation((scene: { elements: SceneElement[] }) => { api.elements = scene.elements; });
       canvases.push({ props, api });
-      props.onApi?.(api as never);
+      if (hold.on) hold.release.push(() => props.onApi?.(api as never));
+      else props.onApi?.(api as never);
       return () => props.onApi?.(null);
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
@@ -91,6 +96,8 @@ describe("DiagramTile", () => {
   beforeEach(() => {
     canvases.length = 0;
     listeners.length = 0;
+    hold.on = false;
+    hold.release.length = 0;
     mermaidToScene.mockReset();
     paletteElements.mockReset();
     invokeMock.mockClear();
@@ -152,6 +159,76 @@ describe("DiagramTile", () => {
     expect(api.elements[0]).toEqual(rect("mine", 0));
     expect(api.elements[1].x).toBeGreaterThan(100);
     expect(JSON.parse((await backend.diagramListBoards("t1"))[0].scene_json).elements.map((e: SceneElement) => e.id)).toEqual(["mine", "new"]);
+  });
+
+  it("keeps an addition pending when its scene could not be saved", async () => {
+    const backend = new MemoryBackend();
+    const board = await backend.diagramCreateBoard("t1", "Ideas");
+    await renderTile(backend);
+    mermaidToScene.mockResolvedValue({ elements: [rect("new")], files: {} });
+    const save = vi.spyOn(backend, "diagramSaveScene").mockRejectedValue(new Error("disk full"));
+    backend.queueDiagramAddition(board.id, "flowchart LR\nA-->B");
+    act(() => listeners.forEach((l) => l({ payload: { entity: "diagram", id: board.id } })));
+    expect((await screen.findByTestId("diagram-notice")).textContent).toContain("disk full");
+    expect((await backend.diagramAdditions(board.id)).map((a) => a.status)).toEqual(["pending"]);
+    save.mockRestore();
+  });
+
+  it("waits for a board's canvas when the board opens while an addition is converting", async () => {
+    const backend = new MemoryBackend();
+    await backend.diagramCreateBoard("t1", "Shown");
+    const other = await backend.diagramCreateBoard("t1", "Other");
+    await backend.diagramSaveScene(other.id, JSON.stringify({ elements: [rect("user")], files: {} }));
+    let finish!: (s: DiagramScene) => void;
+    mermaidToScene.mockReturnValue(new Promise<DiagramScene>((r) => { finish = r; }));
+    backend.queueDiagramAddition(other.id, "flowchart LR\nA-->B");
+    await renderTile(backend);
+    await waitFor(() => expect(mermaidToScene).toHaveBeenCalled());
+    // The board opens mid-conversion; its canvas captures the scene as it is and is still loading.
+    hold.on = true;
+    fireEvent.click(screen.getAllByTestId("diagram-board-tab")[1]);
+    await waitFor(() => expect(lastCanvas().props.registryKey).toBe(`t1:${other.id}`));
+    await act(async () => { finish({ elements: [rect("agent", 0)], files: {} }); });
+    await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+    expect(await backend.diagramAdditions(other.id)).toHaveLength(1);
+    hold.on = false;
+    act(() => hold.release.splice(0).forEach((f) => f()));
+    await waitFor(async () => expect(await backend.diagramAdditions(other.id)).toEqual([]));
+    const api = lastCanvas().api;
+    expect(lastCanvas().props.registryKey).toBe(`t1:${other.id}`);
+    expect(api.elements.map((e) => e.id)).toEqual(["user", "agent"]);
+    // The user's next edit keeps the addition.
+    act(() => lastCanvas().props.onSceneChange({ elements: [...api.elements, rect("edit", 900)], files: {} }));
+    await waitFor(async () => expect(JSON.parse((await backend.diagramListBoards("t1"))[1].scene_json).elements.map((e: SceneElement) => e.id)).toEqual(["user", "agent", "edit"]));
+  });
+
+  it("drops an addition's work when the tile closes mid-conversion, and the reopened tile applies it once", async () => {
+    const backend = new MemoryBackend();
+    await backend.diagramCreateBoard("t1", "Shown");
+    const hidden = await backend.diagramCreateBoard("t1", "Hidden");
+    let finish!: (s: DiagramScene) => void;
+    mermaidToScene.mockReturnValueOnce(new Promise<DiagramScene>((r) => { finish = r; }));
+    backend.queueDiagramAddition(hidden.id, "flowchart LR\nA-->B");
+    await renderTile(backend);
+    await waitFor(() => expect(mermaidToScene).toHaveBeenCalledTimes(1));
+    cleanup();
+    await backend.diagramSaveScene(hidden.id, JSON.stringify({ elements: [rect("new-user-edit")], files: {} }));
+    await act(async () => { finish({ elements: [rect("stale")], files: {} }); });
+    expect(JSON.parse((await backend.diagramListBoards("t1"))[1].scene_json).elements.map((e: SceneElement) => e.id)).toEqual(["new-user-edit"]);
+    expect(await backend.diagramAdditions(hidden.id)).toHaveLength(1);
+
+    mermaidToScene.mockResolvedValue({ elements: [rect("agent")], files: {} });
+    await renderTile(backend);
+    await waitFor(async () => expect(await backend.diagramAdditions(hidden.id)).toEqual([]));
+    expect(JSON.parse((await backend.diagramListBoards("t1"))[1].scene_json).elements.map((e: SceneElement) => e.id)).toEqual(["new-user-edit", "agent"]);
+  });
+
+  it("keeps the actions menu out of the scrolling board tabs", async () => {
+    await renderTile(new MemoryBackend());
+    const tabs = screen.getByTestId("diagram-board-tabs");
+    expect(tabs.style.overflowX).toBe("auto");
+    expect(tabs.contains(screen.getByTestId("diagram-menu"))).toBe(false);
+    expect(screen.getByTestId("diagram-menu").closest('[style*="overflow"]')).toBeNull();
   });
 
   it("adds a queued addition for a board that is not on screen into its stored scene", async () => {
