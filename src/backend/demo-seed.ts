@@ -21,6 +21,8 @@ export interface DemoMemorySeed {
       type: TileType;
       title: string;
       config?: Record<string, unknown>;
+      /** Diagram tile boards, in order; `scene` is `{elements, files}`. */
+      boards?: Array<{ name: string; scene?: unknown }>;
     }>;
   }>;
   files?: Array<{ path: string; content: string }>;
@@ -61,6 +63,10 @@ export async function applyDemoSeed(
         JSON.stringify(tile.config ?? {}),
       );
       tileIds.push(created.id);
+      for (const board of tile.boards ?? []) {
+        const made = await backend.diagramCreateBoard(created.id, board.name);
+        if (board.scene !== undefined) await backend.diagramSaveScene(made.id, JSON.stringify(board.scene));
+      }
     }
     await backend.updateLayout(workstream.id, {
       tile_order_json: JSON.stringify(tileIds),

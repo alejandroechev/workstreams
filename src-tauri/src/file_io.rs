@@ -312,6 +312,31 @@ pub fn write_text_file(args: WriteTextFileArgs) -> Result<WriteTextFileResult, W
     )
 }
 
+/// Writes bytes sent as base64 (exported PNG images), replacing any file there.
+#[tauri::command]
+pub fn write_binary_file(path: String, base64: String) -> Result<(), WriteError> {
+    write_binary_file_with(&OsFileSystemProvider, Path::new(&path), &base64)
+}
+
+pub fn write_binary_file_with(
+    provider: &dyn FileSystemProvider,
+    path: &Path,
+    base64: &str,
+) -> Result<(), WriteError> {
+    use base64::Engine;
+    if provider.is_dir(path) {
+        return Err(WriteError::IsADirectory);
+    }
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(base64.trim())
+        .map_err(|e| WriteError::Other {
+            message: format!("invalid base64: {e}"),
+        })?;
+    provider
+        .write_atomic(path, &bytes)
+        .map_err(write_error_from_fs_error)
+}
+
 pub fn write_text_file_with(
     provider: &dyn FileSystemProvider,
     path: &Path,
@@ -715,6 +740,23 @@ mod tests {
         fs.write_atomic(&path, b"hello").unwrap();
         assert_eq!(fs.read(&path).unwrap(), b"hello");
         assert!(fs.exists(&path));
+    }
+
+    #[test]
+    fn write_binary_file_decodes_base64_and_rejects_bad_input() {
+        let fs = InMemoryFileSystemProvider::new();
+        let path = PathBuf::from("/out/board.png");
+        write_binary_file_with(&fs, &path, "iVBORw0KGgo=").unwrap();
+        assert_eq!(fs.read(&path).unwrap(), b"\x89PNG\r\n\x1a\n");
+        assert!(matches!(
+            write_binary_file_with(&fs, &path, "%%%"),
+            Err(WriteError::Other { .. })
+        ));
+        fs.add_dir(PathBuf::from("/out"));
+        assert_eq!(
+            write_binary_file_with(&fs, Path::new("/out"), "AA=="),
+            Err(WriteError::IsADirectory)
+        );
     }
 
     #[test]

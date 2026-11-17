@@ -1858,6 +1858,7 @@ export default function App() {
         code_review: "Code Review",
         debug_walkthrough: "Walkthrough",
         loop_control: "Goal Loop",
+        diagram: "Diagram",
       };
       // Count by sub-shell (PowerShell vs WSL) so each gets its own
       // numbered sequence.
@@ -2798,6 +2799,7 @@ export default function App() {
           onAddCodeReview={() => addTile("code_review")}
           onAddWalkthrough={() => addTile("debug_walkthrough")}
           onAddLoop={() => addTile("loop_control")}
+          onAddDiagram={() => addTile("diagram")}
           onOpenSettings={() => setShowSettings(true)}
           onToggleFullscreen={() => {
             if (orderedTiles.length > 0 && orderedTiles[focusedIndex]) {

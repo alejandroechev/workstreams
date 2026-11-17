@@ -71,6 +71,11 @@ instead of buried behind tabs.
 - **Agents that can drive the app** — a session can create and update its own
   workstreams through a local CLI, so the agent does not stop at the edge of the
   worktree. It acts only on what it owns, and asks before destroying anything.
+- **A whiteboard for thinking** — a Diagram tile (`Alt+G`) built on Excalidraw,
+  with several boards per tile, Mermaid import into editable shapes, a software
+  shape palette, copy/export as PNG, SVG or Excalidraw, and `.excalidraw` files
+  opening as a canvas in the Repo Explorer. Boards stay out of your repos until
+  you save one, and Copilot sessions can read a board and add to it.
 - **Diffs in a reading order** — ask the workstream's agent to "order my diff"
   and the Repo Explorer diff sorts by its recommendation, numbered, with a
   Recommended / Name toggle. The app checks the order covers every changed file
@@ -180,7 +185,7 @@ startup. See [macOS environment](docs/features-detailed.md#macos-environment).
    work runs in the background, so the app stays responsive.
 2. The workstream opens with an empty canvas. Add tiles from the `+ Add tile`
    menu or with a shortcut — `Alt+C` Copilot session, `Alt+R` Repo Explorer,
-   `Alt+T` Terminal, `Alt+P` Plan, `Alt+B` Workbench.
+   `Alt+T` Terminal, `Alt+P` Plan, `Alt+B` Workbench, `Alt+G` Diagram.
 3. Move between tiles with `Alt+Arrows`, and fullscreen the focused one with
    `Alt+F`.
 4. Open settings (gear icon) to tune font sizes, terminal scroll speed, the

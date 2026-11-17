@@ -13,6 +13,7 @@
     "core:event:allow-listen",
     "clipboard-manager:allow-read-text",
     "clipboard-manager:allow-write-text",
+    "clipboard-manager:allow-write-image",
     "notification:default"
   ]
 }

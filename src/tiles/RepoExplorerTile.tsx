@@ -42,6 +42,7 @@ import {
   PencilSquareIcon,
 } from "@heroicons/react/24/outline";
 import { SqliteTableView, fileSqliteOps } from "../ui/components/SqliteTableView";
+import { ExcalidrawFileView } from "../diagram/ExcalidrawFileView";
 import { FileContextMenu } from "../ui/components/FileContextMenu";
 import { ZoomableImage } from "../ui/components/ZoomableImage";
 import { PdfViewer } from "../ui/components/PdfViewer";
@@ -97,12 +98,13 @@ interface DirEntry {
   size: number;
 }
 
-type Mode = "browse" | "view" | "audio" | "image" | "pdf" | "log" | "hooks" | "sqlite" | "search" | "comments";
+type Mode = "browse" | "view" | "audio" | "image" | "pdf" | "log" | "hooks" | "sqlite" | "search" | "comments" | "diagram";
 type DiffMode = "unstaged" | "last_commit" | "branch_vs_master" | "custom_branch";
 
 const MARKDOWN_EXTS = new Set(["md", "mdx", "markdown"]);
 const SQLITE_EXTS = new Set(["db", "sqlite", "sqlite3", "db3"]);
 const FILE_EDITOR_EXCLUDED_EXTS = new Set([
+  "excalidraw",
   "wav", "mp3", "ogg", "flac",
   "png", "jpg", "jpeg", "gif", "webp", "bmp", "ico",
   "mp4", "mov", "webm",
@@ -612,6 +614,15 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
 
     // SQLite branch — try by extension first, then sniff the magic header
     // to catch non-standard names (e.g. Copilot's session.db).
+    // Excalidraw drawings open as a canvas (ADR 043), which reads the file itself.
+    if (extensionFor(trimmedPath) === "excalidraw") {
+      setFilePath(trimmedPath);
+      setContent(null);
+      setMode("diagram");
+      setFileLoading(false);
+      return;
+    }
+
     const isSqlite = isSqliteByExt(trimmedPath) || await invoke<boolean>("is_sqlite_file", { path: trimmedPath }).catch(() => false);
     if (stale()) return;
     if (isSqlite) {
@@ -737,7 +748,7 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
   // The file a tab stands for while it is on screen (none while browsing).
   const shownPath =
     mode !== "browse" && !activeDiffMode && filePath && !filePath.startsWith("commit:") &&
-    (mode === "view" || mode === "image" || mode === "audio" || mode === "pdf" || mode === "sqlite")
+    (mode === "view" || mode === "image" || mode === "audio" || mode === "pdf" || mode === "sqlite" || mode === "diagram")
       ? filePath
       : null;
   const latest = useRef({ openTabs, shownPath, switcher, activeDiffMode });
@@ -2420,6 +2431,32 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
   }
 
   // ─── SQLite mode ───
+  if (mode === "diagram") {
+    return (
+      <div ref={containerRef} style={containerStyle}>
+        {tabBar}
+        <div style={toolbarStyle}>
+          <button
+            onClick={goToFileFolder}
+            style={{ ...toolbarButtonStyle, display: "flex", alignItems: "center" }}
+            title="Go to folder"
+            data-testid="repo-explorer-go-to-folder"
+          >
+            <ChevronUpIcon style={{ width: 16, height: 16 }} />
+          </button>
+          <span style={{ ...pathTextStyle, display: "flex", alignItems: "center", gap: 4, flex: 1 }}>
+            <PencilSquareIcon style={{ width: 14, height: 14, flexShrink: 0, color: "#cba6f7" }} />
+            {filePath}
+          </span>
+        </div>
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0, position: "relative" }}>
+          <ExcalidrawFileView key={filePath} path={filePath} />
+        </div>
+        {overlays}
+      </div>
+    );
+  }
+
   if (mode === "sqlite") {
     return (
       <div ref={containerRef} style={containerStyle}>

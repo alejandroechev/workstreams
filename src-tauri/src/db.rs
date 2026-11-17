@@ -330,6 +330,31 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
             PRIMARY KEY (workstream_id, mode, target)
         );
 
+        -- Diagram tile boards (ADR 043): the scene (Excalidraw elements and
+        -- image files) lives here, not in the workstream folder, until the
+        -- user saves a board to a file. Deleting the tile deletes its boards.
+        CREATE TABLE IF NOT EXISTS diagram_boards (
+            id TEXT PRIMARY KEY,
+            tile_id TEXT NOT NULL REFERENCES tiles(id) ON DELETE CASCADE,
+            name TEXT NOT NULL,
+            position INTEGER NOT NULL DEFAULT 0,
+            scene_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS diagram_boards_tile_idx ON diagram_boards (tile_id);
+        -- Mermaid an agent asked to add to a board, waiting for the open tile to
+        -- convert it into shapes (only the browser can). Applied ones are
+        -- deleted; failed ones keep the parse error for the agent.
+        CREATE TABLE IF NOT EXISTS diagram_additions (
+            id TEXT PRIMARY KEY,
+            board_id TEXT NOT NULL REFERENCES diagram_boards(id) ON DELETE CASCADE,
+            mermaid TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            error TEXT,
+            created_at TEXT NOT NULL
+        );
+
         -- Copilot sessions the phone companion started (ADR 033), keyed by tile.
         -- Only these may send messages to the phone. Times are ms epoch.
         CREATE TABLE IF NOT EXISTS companion_sessions (
@@ -782,6 +807,8 @@ mod tests {
             "workstream_pull_requests",
             "work_lanes",
             "diff_orders",
+            "diagram_boards",
+            "diagram_additions",
             "companion_sessions",
             "companion_messages",
             "sync_checks",

@@ -715,6 +715,31 @@ pub const COMMANDS: &[Command] = &[
         handler: diff_order_get,
     },
     Command {
+        id: "diagram.list",
+        log_params: &[],
+        summary: "List this workstream's Diagram boards (id, name, tile, shape count, pending additions)",
+        requires_identity: true,
+        destructive: false,
+        handler: diagram_list,
+    },
+    Command {
+        id: "diagram.get",
+        log_params: &["board"],
+        summary: "Read a Diagram board as text: labelled shapes and connections (params: board = id or name)",
+        requires_identity: true,
+        destructive: false,
+        handler: diagram_get,
+    },
+    Command {
+        id: "diagram.add",
+        log_params: &["board"],
+        summary: "Add a Mermaid diagram (flowchart, sequence, class, state) to a board as editable shapes, next to what is there (params: board = id or name, mermaid; mermaid=@- reads stdin). Never deletes or moves existing shapes",
+        requires_identity: true,
+        // Only appends shapes; the user's own shapes are never touched.
+        destructive: false,
+        handler: diagram_add,
+    },
+    Command {
         id: "learning.check",
         log_params: &[],
         summary: "Queue a Rust Pocket check on this Mac (params: request = JSON {card_id, card_version, harness {before, after, cases|tests, constraints, serde}, source, toolchain?}; request=@- reads stdin). Returns the job; read its result with learning.jobs",
@@ -2721,6 +2746,115 @@ fn companion_send(
     Ok(CommandOutcome::changed(
         serde_json::json!({ "id": id, "kind": kind, "sent": true }),
         StateChange::new("companion_message", tile_id.clone(), "added"),
+    ))
+}
+
+/// The caller's own workstream: diagram commands never reach another one.
+fn own_workstream(context: &CommandContext) -> Result<String, AgentError> {
+    let caller = context.caller()?;
+    caller.workstream_id().map(str::to_string).ok_or_else(|| {
+        AgentError::new(
+            "NO_WORKSTREAM",
+            "Only a session tile of a workstream can use its diagrams",
+            "Run this from the workstream's Copilot session.",
+        )
+    })
+}
+
+fn diagram_error(message: String) -> AgentError {
+    AgentError::new(
+        "DIAGRAM",
+        message,
+        "Run diagram.list for this workstream's boards.",
+    )
+}
+
+fn own_board(
+    context: &CommandContext,
+    params: &serde_json::Value,
+) -> Result<crate::diagrams::BoardRef, AgentError> {
+    let workstream_id = own_workstream(context)?;
+    let board = required_str(params, "board")?;
+    crate::diagrams::find_board(context.db, &workstream_id, &board).map_err(diagram_error)
+}
+
+fn diagram_list(
+    context: &CommandContext,
+    _params: &serde_json::Value,
+) -> Result<CommandOutcome, AgentError> {
+    let workstream_id = own_workstream(context)?;
+    let boards =
+        crate::diagrams::workstream_boards(context.db, &workstream_id).map_err(diagram_error)?;
+    let mut out = Vec::new();
+    for b in boards {
+        let board = crate::diagrams::get_board(context.db, &b.id).map_err(diagram_error)?;
+        let summary =
+            crate::diagrams::summarize(board.map(|x| x.scene_json).as_deref().unwrap_or("{}"));
+        let additions = crate::diagrams::additions(context.db, &b.id).map_err(diagram_error)?;
+        out.push(serde_json::json!({
+            "id": b.id,
+            "name": b.name,
+            "tile_id": b.tile_id,
+            "tile_title": b.tile_title,
+            "shapes": summary.shapes.len(),
+            "connections": summary.connections.len(),
+            "pending_additions": additions.iter().filter(|a| a.status == "pending").count(),
+        }));
+    }
+    Ok(CommandOutcome::read(serde_json::json!({ "boards": out })))
+}
+
+fn diagram_get(
+    context: &CommandContext,
+    params: &serde_json::Value,
+) -> Result<CommandOutcome, AgentError> {
+    let b = own_board(context, params)?;
+    let board = crate::diagrams::get_board(context.db, &b.id)
+        .map_err(diagram_error)?
+        .ok_or_else(|| diagram_error(format!("No board {}", b.id)))?;
+    let summary = crate::diagrams::summarize(&board.scene_json);
+    let additions = crate::diagrams::additions(context.db, &b.id).map_err(diagram_error)?;
+    let pending = additions.iter().filter(|a| a.status == "pending").count();
+    let failed: Vec<_> = additions
+        .iter()
+        .filter(|a| a.status == "failed")
+        .cloned()
+        .collect();
+    Ok(CommandOutcome::read(serde_json::json!({
+        "id": board.id,
+        "name": board.name,
+        "text": crate::diagrams::summary_text(&board.name, &summary, pending, &failed),
+        "shapes": summary.shapes,
+        "connections": summary.connections,
+        "images": summary.images,
+        "pending_additions": pending,
+        "failed_additions": failed,
+    })))
+}
+
+fn diagram_add(
+    context: &CommandContext,
+    params: &serde_json::Value,
+) -> Result<CommandOutcome, AgentError> {
+    let b = own_board(context, params)?;
+    let mermaid = required_str(params, "mermaid")?;
+    let id = uuid::Uuid::new_v4().to_string();
+    let addition = crate::diagrams::queue_addition(context.db, &id, &b.id, &mermaid, &crate::now())
+        .map_err(|e| {
+            AgentError::new(
+                "BAD_MERMAID",
+                e,
+                "Send the diagram text as mermaid=@- on stdin.",
+            )
+        })?;
+    Ok(CommandOutcome::changed(
+        serde_json::json!({
+            "addition_id": addition.id,
+            "board": b.id,
+            "status": "pending",
+            "note": "Drawn when the board's Diagram tile is open; diagram.get shows it pending until then, or the parse error if the Mermaid is invalid.",
+        }),
+        StateChange::new("diagram", b.id, "addition_queued"),
     ))
 }
 
@@ -5849,6 +5983,96 @@ mod tests {
                 command.id
             );
         }
+    }
+
+    // ── diagram.* ─────────────────────────────────────────────────────────
+
+    fn diagram_fixture() -> Connection {
+        let db = memory_db();
+        seed_workstream(&db, "w1", None);
+        seed_workstream(&db, "w2", None);
+        db.execute_batch(
+            "INSERT INTO tiles (id, workstream_id, tile_type, title, created_at, updated_at) VALUES ('d1','w1','diagram','Diagram','t','t');
+             INSERT INTO tiles (id, workstream_id, tile_type, title, created_at, updated_at) VALUES ('d2','w2','diagram','Theirs','t','t');",
+        )
+        .unwrap();
+        crate::diagrams::create_board(&db, "b1", "d1", "Flow", "1").unwrap();
+        crate::diagrams::create_board(&db, "b2", "d2", "Secret", "1").unwrap();
+        crate::diagrams::save_scene(
+            &db,
+            "b1",
+            r#"{"elements":[{"id":"a","type":"rectangle"},{"id":"ta","type":"text","containerId":"a","text":"API"}],"files":{}}"#,
+            "2",
+        )
+        .unwrap();
+        db
+    }
+
+    #[test]
+    fn diagram_list_and_get_read_only_the_callers_workstream() {
+        let db = diagram_fixture();
+        let me = agent("tile-1", "w1");
+        let list = call(&db, &me, "diagram.list", serde_json::json!({})).unwrap();
+        assert_eq!(list.data["boards"].as_array().unwrap().len(), 1);
+        assert_eq!(list.data["boards"][0]["name"], "Flow");
+        assert_eq!(list.data["boards"][0]["shapes"], 1);
+        let got = call(
+            &db,
+            &me,
+            "diagram.get",
+            serde_json::json!({"board": "flow"}),
+        )
+        .unwrap();
+        assert_eq!(got.data["shapes"][0]["label"], "API");
+        assert!(got.data["text"]
+            .as_str()
+            .unwrap()
+            .contains("rectangle \"API\""));
+        let err = call(&db, &me, "diagram.get", serde_json::json!({"board": "b2"})).unwrap_err();
+        assert_eq!(err.code, "DIAGRAM");
+    }
+
+    #[test]
+    fn diagram_add_queues_mermaid_for_the_tile_and_announces_it() {
+        let db = diagram_fixture();
+        let me = agent("tile-1", "w1");
+        let added = call(
+            &db,
+            &me,
+            "diagram.add",
+            serde_json::json!({"board": "b1", "mermaid": "flowchart LR\nA-->B"}),
+        )
+        .unwrap();
+        assert_eq!(added.data["status"], "pending");
+        let change = added.change.expect("the open tile must hear about it");
+        assert_eq!(
+            (change.entity.as_str(), change.id.as_str()),
+            ("diagram", "b1")
+        );
+        let got = call(&db, &me, "diagram.get", serde_json::json!({"board": "b1"})).unwrap();
+        assert_eq!(got.data["pending_additions"], 1);
+        assert!(got.data["text"].as_str().unwrap().contains("pending"));
+        let scene = crate::diagrams::get_board(&db, "b1")
+            .unwrap()
+            .unwrap()
+            .scene_json;
+        assert!(scene.contains("\"API\""), "queueing never edits the scene");
+        let empty = call(
+            &db,
+            &me,
+            "diagram.add",
+            serde_json::json!({"board": "b1", "mermaid": " "}),
+        )
+        .unwrap_err();
+        assert!(["MISSING_PARAM", "BAD_MERMAID"].contains(&empty.code.as_str()));
+        let foreign = call(
+            &db,
+            &me,
+            "diagram.add",
+            serde_json::json!({"board": "Secret", "mermaid": "flowchart LR\nA-->B"}),
+        )
+        .unwrap_err();
+        assert_eq!(foreign.code, "DIAGRAM");
     }
 
     // ── diff.order.* ──────────────────────────────────────────────────────

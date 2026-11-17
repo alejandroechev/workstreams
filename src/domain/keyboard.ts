@@ -18,7 +18,8 @@ export type StatusBarMenuKey =
   | "plan"
   | "code-review"
   | "walkthrough"
-  | "loop";
+  | "loop"
+  | "diagram";
 
 export type KeyAction =
   | { type: "escape" }
@@ -257,6 +258,15 @@ export const APP_KEY_BINDINGS: readonly KeyBinding[] = [
     tileCreation: true,
     menuKey: "loop",
     featureFlag: "goal-loop",
+  },
+  {
+    key: "g",
+    altKey: true,
+    combo: "Alt+G",
+    description: "Add a Diagram tile to sketch boxes, arrows and software diagrams",
+    action: { type: "addTile", tileType: "diagram" },
+    tileCreation: true,
+    menuKey: "diagram",
   },
   {
     key: "q",

@@ -1,5 +1,6 @@
 // @test-skip: Type-only interface; behaviour covered by MemoryBackend + TauriBackend tests.
 import type { DiffOrderView } from "../domain/diff-reading-order";
+import type { DiagramAddition, DiagramBoard } from "../diagram/types";
 import type { WorkLane } from "../domain/work-lanes";
 import type { PrInboxMute, PrInboxSnapshot, PrWatchMode } from "../domain/pr-inbox";
 import type { PipelineMode, PipelineStatus } from "../domain/pipeline-inbox";
@@ -254,6 +255,16 @@ export interface Backend {
   companionPruneSessions(now: number, retentionMs: number): Promise<number>;
   /** The saved reading order for a diff and its freshness, or null (ADR 032). */
   getDiffOrder(workstreamId: string, directory: string, mode: string, baseRef?: string | null): Promise<DiffOrderView | null>;
+  // Diagram tile boards (ADR 043)
+  diagramListBoards(tileId: string): Promise<DiagramBoard[]>;
+  diagramCreateBoard(tileId: string, name: string): Promise<DiagramBoard>;
+  diagramRenameBoard(id: string, name: string): Promise<void>;
+  diagramDeleteBoard(id: string): Promise<void>;
+  diagramSaveScene(id: string, sceneJson: string): Promise<void>;
+  /** Agent additions still waiting for this board (and failed ones, with their error). */
+  diagramAdditions(boardId: string): Promise<DiagramAddition[]>;
+  /** Marks an addition drawn (`error` null: it is removed) or failed. */
+  diagramResolveAddition(id: string, error: string | null): Promise<void>;
   // Git log & branch
   gitLog(directory: string, limit?: number): Promise<Array<{ hash: string; short_hash: string; message: string; author: string; date: string }>>;
   gitShowCommit(directory: string, hash: string): Promise<string>;

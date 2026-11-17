@@ -35,6 +35,7 @@ combos are typed with Option.
 | `Alt+A` | Add a code review tile to inspect pending changes _(feature-flagged: `code-review`)_ | `addTile (code_review)` |
 | `Alt+D` | Add a debug walkthrough tile to step through a recorded trace _(feature-flagged: `debug-walkthrough`)_ | `addTile (debug_walkthrough)` |
 | `Alt+L` | Add a loop control tile to drive an automated agent loop _(feature-flagged: `goal-loop`)_ | `addTile (loop_control)` |
+| `Alt+G` | Add a Diagram tile to sketch boxes, arrows and software diagrams | `addTile (diagram)` |
 | `Alt+Q` | Close the focused tile | `closeTile` |
 | `Alt+F` | Expand the focused tile to fill the workspace, or restore it | `toggleFullscreen` |
 | `Alt+S` | Show the two selected tiles side by side, or restore the layout | `toggleSideBySide` |

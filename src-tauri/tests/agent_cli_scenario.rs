@@ -1065,6 +1065,117 @@ fn read_skill() -> Option<String> {
         .map(|(_, body)| body)
 }
 
+/// Diagram boards (ADR 043): an agent lists its workstream's boards, reads one
+/// as text, and queues Mermaid for the open tile, through the real binary.
+#[test]
+fn diagram_boards_are_listed_read_and_added_to_through_the_cli() {
+    let dir = scratch_dir("diagram");
+    let path = socket_path_in(&dir, 12);
+    let db_path = dir.join("ws.db");
+    let db = workstreams_lib::db::open_db(&db_path).unwrap();
+    db.execute_batch(
+        "INSERT INTO workstreams (id, name, created_at, updated_at) VALUES ('w1','Mine','t','t'), ('w2','Theirs','t','t');
+         INSERT INTO tiles (id, workstream_id, tile_type, title, created_at, updated_at) VALUES ('d1','w1','diagram','Diagram','t','t'), ('d2','w2','diagram','Diagram','t','t');",
+    )
+    .unwrap();
+    workstreams_lib::diagrams::create_board(&db, "b1", "d1", "Ideas", "1").unwrap();
+    workstreams_lib::diagrams::create_board(&db, "b2", "d2", "Private", "1").unwrap();
+    let scene = r#"{"elements":[
+        {"id":"api","type":"rectangle","x":0,"y":0},{"id":"api-t","type":"text","containerId":"api","text":"API"},
+        {"id":"db","type":"rectangle","x":300,"y":0},{"id":"db-t","type":"text","containerId":"db","text":"DB"},
+        {"id":"link","type":"arrow","startBinding":{"elementId":"api"},"endBinding":{"elementId":"db"}}
+    ],"files":{}}"#;
+    workstreams_lib::diagrams::save_scene(&db, "b1", scene, "2").unwrap();
+    drop(db);
+
+    let identities = std::sync::Arc::new(IdentityRegistry::new());
+    let mine = identities.issue("tile-1", "w1");
+    let server =
+        AgentSocketServer::start(path.clone(), serve_with_db(identities, db_path.clone())).unwrap();
+    let run = |args: &[&str], stdin: Option<&str>| {
+        use std::io::Write;
+        let mut command = cli();
+        command
+            .args(args)
+            .env(SOCKET_ENV_VAR, &path)
+            .env(TOKEN_ENV_VAR, &mine)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped());
+        let mut child = command.spawn().unwrap();
+        if let Some(text) = stdin {
+            child
+                .stdin
+                .take()
+                .unwrap()
+                .write_all(text.as_bytes())
+                .unwrap();
+        }
+        drop(child.stdin.take());
+        let output = child.wait_with_output().unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        (output.status.success(), json)
+    };
+
+    let (ok, list) = run(&["agent", "call", "diagram.list"], None);
+    assert!(ok, "{list}");
+    let boards = list["data"]["boards"].as_array().unwrap();
+    assert_eq!(boards.len(), 1, "only this workstream's boards: {list}");
+    assert_eq!(boards[0]["name"], "Ideas");
+
+    let (ok, got) = run(&["agent", "call", "diagram.get", "board=Ideas"], None);
+    assert!(ok, "{got}");
+    let text = got["data"]["text"].as_str().unwrap();
+    assert!(
+        text.contains("\"API\"") && text.contains("\"DB\""),
+        "{text}"
+    );
+    assert!(text.contains("- \"API\" -> \"DB\""), "{text}");
+
+    let (ok, added) = run(
+        &["agent", "call", "diagram.add", "board=Ideas", "mermaid=@-"],
+        Some("flowchart LR\n  Q[Queue] --> W[Worker]\n"),
+    );
+    assert!(ok, "{added}");
+    assert_eq!(added["data"]["status"], "pending");
+    let (_, after) = run(&["agent", "call", "diagram.get", "board=b1"], None);
+    assert_eq!(after["data"]["pending_additions"], 1);
+    assert!(after["data"]["text"].as_str().unwrap().contains("pending"));
+
+    // The user's shapes are untouched by queueing; the tile appends later.
+    let db = workstreams_lib::db::open_db(&db_path).unwrap();
+    let stored = workstreams_lib::diagrams::get_board(&db, "b1")
+        .unwrap()
+        .unwrap()
+        .scene_json;
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&stored).unwrap(),
+        serde_json::from_str::<serde_json::Value>(scene).unwrap()
+    );
+
+    let (ok, foreign) = run(&["agent", "call", "diagram.get", "board=Private"], None);
+    assert!(!ok);
+    assert_eq!(foreign["code"], "DIAGRAM");
+    drop(server);
+}
+
+/// The diagram skill ships in this repository (skills/diagram) and must teach
+/// all three commands it exists for.
+#[test]
+fn the_diagram_skill_documents_its_commands() {
+    let body = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../skills/diagram/SKILL.md"),
+    )
+    .expect("skills/diagram/SKILL.md");
+    for command in ["diagram.list", "diagram.get", "diagram.add"] {
+        assert!(
+            body.contains(&format!("workstreams agent call {command}")),
+            "the diagram skill must show `{command}`"
+        );
+        assert!(workstreams_lib::agent_registry::find(command).is_some());
+    }
+    assert!(body.contains("$WORKSTREAMS_SOCKET"));
+}
+
 /// The diff-order skill must teach the two commands it exists for, so a
 /// rename of either breaks here rather than in an agent's terminal.
 #[test]

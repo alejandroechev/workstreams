@@ -18,6 +18,7 @@ graph TB
             AcceptanceReview["AcceptanceReviewView (ADR 037)<br/>domain/acceptance: parse + one-line mark writers<br/>storyboards from acceptance-assets/ (sandboxed)<br/>validation screenshots read-only; no writes once approved"]
             GrillAnswer["GrillAnswerView (ADR 034)<br/>domain/grill: parse + one-slot writers<br/>CAS write + 2s poll; sandboxed srcdoc prototypes<br/>assets only from grill-assets/"]
             CodeReview["CodeReviewTile — hidden by default (ADR 035)<br/>diff-first PR-style review (ADR 014)<br/>inline comments + in-place edit<br/>reviewer↔agent via session.db, no MCP<br/>manual Sync (no poll)"]
+            DiagramTile["DiagramTile (ADR 043)<br/>Excalidraw boards, lazy-loaded<br/>Mermaid import + software palette<br/>Save to file / export / copy<br/>draws queued agent additions"]
             LoopControl["LoopControlTile (ADR 021/022/023) — hidden by default (ADR 035)<br/>Definitions: shared YAML editor<br/>Run: catalog + controls/evidence<br/>human Approve/Revise/Reject"]
             InlineComments["Inline File Comments (ADR 009)<br/>view zones in FileEditorView + comments-toggle<br/>reviewer↔agent via session.db, no MCP<br/>requires a linked session"]
             TaskBoard["TaskBoard (ADR 020, sunset by ADR 028)<br/>hidden behind the tasks flag; code + data kept<br/>global board, not a tile<br/>7 columns + label swimlanes<br/>subtasks / labels / event feed"]
@@ -57,7 +58,7 @@ graph TB
     end
 
     subgraph Storage["Persistence"]
-        AppDB["workstreams.db<br/>(SQLite — workstreams, tiles, layouts, scrollback<br/>+ command_log audit/telemetry<br/>+ workstream_pull_requests N:M links<br/>+ work_lanes<br/>+ diff_orders)"]
+        AppDB["workstreams.db<br/>(SQLite — workstreams, tiles, layouts, scrollback<br/>+ command_log audit/telemetry<br/>+ workstream_pull_requests N:M links<br/>+ work_lanes<br/>+ diff_orders<br/>+ diagram_boards / diagram_additions)"]
         PrInboxDB["workstreams.db inbox state<br/>pr_inbox_config / baselines / seen / events<br/>pipeline_watches / pipeline_events<br/>agent_messages / inbox_tombstones (ADR 041)<br/>read entries expire after 5 days, startup + hourly<br/>role-scoped baselines + per-PR sub-state<br/>account-scoped dedup + durable read state"]
         LoopDB["workstreams.db loop ledger<br/>specs / runs / tasks / verifications<br/>evaluations / human approvals / events"]
         LoopYAML["bound session-state/files/loops/*.loop.yaml<br/>loop definition authority"]
@@ -148,6 +149,10 @@ graph TB
     GrillAnswer -- "invoke: read_text_file, write_text_file (expected hash),<br/>read_file_base64, get/set_setting" --> LibRS
     TileGrid --> CodeReview
     TileGrid --> LoopControl
+    TileGrid --> DiagramTile
+    RepoExplorer -- ".excalidraw files as a canvas" --> DiagramTile
+    DiagramTile -- "diagram_list/save_scene/additions" --> AppDB
+    AgentRegistryRS -- "diagram.list/get/add (queue Mermaid)" --> AppDB
     App --> StatusBar
     App -- "close-requested / switch guard" --> FileBuffers
 

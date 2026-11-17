@@ -293,6 +293,12 @@ describe("APP_KEY_BINDINGS registry", () => {
     getMonacoIfLoadedMock.mockReturnValue(null);
   });
 
+  it("Alt+G adds a Diagram tile", () => {
+    const binding = APP_KEY_BINDINGS.find((b) => b.combo === "Alt+G");
+    expect(binding?.action).toEqual({ type: "addTile", tileType: "diagram" });
+    expect(binding?.menuKey).toBe("diagram");
+  });
+
   it("covers every combo the app handles, exactly once", () => {
     const combos = APP_KEY_BINDINGS.map((b) => b.combo);
     expect(new Set(combos).size).toBe(combos.length);
@@ -313,6 +319,7 @@ describe("APP_KEY_BINDINGS registry", () => {
         "Alt+A",
         "Alt+D",
         "Alt+L",
+        "Alt+G",
         "Alt+Q",
         "Alt+F",
         "Alt+K",

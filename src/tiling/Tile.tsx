@@ -10,6 +10,7 @@ import PlanTile from "../tiles/PlanTile";
 import CodeReviewTile from "../tiles/CodeReviewTile";
 import DebugWalkthroughTile from "../tiles/DebugWalkthroughTile";
 import LoopControlTile from "../tiles/LoopControlTile";
+import DiagramTile from "../tiles/DiagramTile";
 import { featureDescriptor, isTileTypeEnabled, tileTypeFeature } from "../domain/feature-flags";
 import { shortcutLabel, defaultRootDir } from "../domain/platform";
 
@@ -354,6 +355,16 @@ function TileWrapperImpl({
       }
       break;
     }
+    case "diagram":
+      content = (
+        <DiagramTile
+          tileId={tile.id}
+          workstreamDir={workstreamDir}
+          configJson={tile.config_json}
+          onConfigChange={(c) => onUpdateTileConfig?.(tile.id, c)}
+        />
+      );
+      break;
     default:
       content = <div>Unknown tile type: {tile.tile_type}</div>;
   }

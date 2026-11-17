@@ -21,6 +21,9 @@ vi.mock("@monaco-editor/react", () => ({
   default: () => <div data-testid="monaco-editor" />,
   DiffEditor: () => <div data-testid="diff-editor" />,
 }));
+vi.mock("../../diagram/ExcalidrawFileView", () => ({
+  ExcalidrawFileView: ({ path }: { path: string }) => <div data-testid="excalidraw-file-view" data-path={path} />,
+}));
 vi.mock("../AudioPlayer", () => ({
   default: ({ path }: { path: string }) => <div data-testid="audio-player" data-path={path} />,
 }));
@@ -87,6 +90,7 @@ function createBackend(): Backend {
     { name: "tone.wav", is_dir: false, modified_epoch: 1, size: 12 },
     { name: "logo.png", is_dir: false, modified_epoch: 1, size: 12 },
     { name: "spec.pdf", is_dir: false, modified_epoch: 1, size: 2048 },
+    { name: "flow.excalidraw", is_dir: false, modified_epoch: 1, size: 64 },
   ];
 
   return {
@@ -173,6 +177,14 @@ describe("RepoExplorerTile editor wiring", () => {
     renderTile();
     await openFile("app.ts");
     expect(await screen.findByTestId("file-editor-view")).toHaveAttribute("data-path", "C:\\repo\\app.ts");
+  });
+
+  it("opens .excalidraw files as a canvas, as a tab, not in the text editor", async () => {
+    renderTile();
+    await openFile("flow.excalidraw");
+    expect(await screen.findByTestId("excalidraw-file-view")).toHaveAttribute("data-path", "C:\\repo\\flow.excalidraw");
+    expect(screen.queryByTestId("file-editor-view")).toBeNull();
+    expect(screen.getAllByTestId("open-file-tab").map((t) => t.getAttribute("data-path"))).toEqual(["C:\\repo\\flow.excalidraw"]);
   });
 
   it("does not render FileEditorView for wav audio files", async () => {

@@ -1,4 +1,5 @@
 import type { DiffOrderView } from "../domain/diff-reading-order";
+import type { DiagramAddition, DiagramBoard } from "../diagram/types";
 import { invoke } from "@tauri-apps/api/core";
 import type { WorkLane } from "../domain/work-lanes";
 import type { PrInboxSnapshot, PrWatchMode, PrInboxMute } from "../domain/pr-inbox";
@@ -569,6 +570,34 @@ export class TauriBackend implements Backend {
 
   async companionPruneSessions(now: number, retentionMs: number): Promise<number> {
     return invoke<number>("companion_prune_sessions", { now, retentionMs });
+  }
+
+  async diagramListBoards(tileId: string): Promise<DiagramBoard[]> {
+    return invoke<DiagramBoard[]>("diagram_list_boards", { tileId });
+  }
+
+  async diagramCreateBoard(tileId: string, name: string): Promise<DiagramBoard> {
+    return invoke<DiagramBoard>("diagram_create_board", { tileId, name });
+  }
+
+  async diagramRenameBoard(id: string, name: string): Promise<void> {
+    await invoke("diagram_rename_board", { id, name });
+  }
+
+  async diagramDeleteBoard(id: string): Promise<void> {
+    await invoke("diagram_delete_board", { id });
+  }
+
+  async diagramSaveScene(id: string, sceneJson: string): Promise<void> {
+    await invoke("diagram_save_scene", { id, sceneJson });
+  }
+
+  async diagramAdditions(boardId: string): Promise<DiagramAddition[]> {
+    return invoke<DiagramAddition[]>("diagram_additions", { boardId });
+  }
+
+  async diagramResolveAddition(id: string, error: string | null): Promise<void> {
+    await invoke("diagram_resolve_addition", { id, error });
   }
 
   async getDiffOrder(workstreamId: string, directory: string, mode: string, baseRef?: string | null): Promise<DiffOrderView | null> {

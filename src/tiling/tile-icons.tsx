@@ -20,6 +20,7 @@ import {
   CogIcon,
   ClipboardDocumentListIcon,
   ArrowPathRoundedSquareIcon,
+  PencilSquareIcon,
 } from "@heroicons/react/24/outline";
 import type { ComponentType, SVGProps } from "react";
 import type { TileType } from "../domain/types";
@@ -38,7 +39,8 @@ export type TileIconKey =
   | "bug"
   | "cog"
   | "plan"
-  | "loop";
+  | "loop"
+  | "diagram";
 
 type IconComponent = ComponentType<SVGProps<SVGSVGElement>>;
 
@@ -57,6 +59,7 @@ export const TILE_ICONS: Record<TileIconKey, IconComponent> = {
   cog: CogIcon,
   plan: ClipboardDocumentListIcon,
   loop: ArrowPathRoundedSquareIcon,
+  diagram: PencilSquareIcon,
 };
 
 export const TILE_ICON_LABELS: Record<TileIconKey, string> = {
@@ -74,6 +77,7 @@ export const TILE_ICON_LABELS: Record<TileIconKey, string> = {
   cog: "Cog",
   plan: "Plan",
   loop: "Loop",
+  diagram: "Diagram",
 };
 
 export function defaultIconForType(tileType: TileType): TileIconKey {
@@ -99,6 +103,8 @@ export function defaultIconForType(tileType: TileType): TileIconKey {
       return "code";
     case "loop_control":
       return "loop";
+    case "diagram":
+      return "diagram";
     default:
       return "puzzle";
   }

@@ -532,6 +532,43 @@ The Acceptance tab opens in **Review** mode, for approving the feature's
 
 CLI parity: `node scripts/acceptance-cli.mjs parse|mark|missing|request <acceptance.md>`.
 
+## Diagram tile
+
+A whiteboard for thinking next to your sessions and code, built on Excalidraw
+(ADR 043). Add one from **+ Add tile → Diagram** or with `Alt+G`.
+
+- **Boards.** One tile holds several named boards: `+` adds one, double-click a
+  board's name to rename it, `×` on the active board deletes it (after a
+  confirm; the last board stays). Each board keeps its own drawing.
+- **Drawing** is Excalidraw: rectangles, diamonds, ellipses, arrows that stay
+  attached to shapes when they move, lines, free-hand, text and images, with
+  its own tool shortcuts while the canvas has focus.
+- **Kept out of your repos.** Boards are stored in the app database, not the
+  workstream folder, so drawing never shows up in `git status`.
+  **⋯ → Save to file…** opens the system Save dialog (any folder; the
+  workstream folder is suggested) and writes a `.excalidraw` file that opens at
+  excalidraw.com.
+- **Import Mermaid** turns a flowchart, sequence, class or state diagram into
+  ordinary shapes, arrows and text beside your drawing — edit or move any part.
+  Invalid Mermaid shows its error and adds nothing.
+- **Palette** offers hand-drawn starting shapes in four groups: Flow
+  (component, database, decision, actor, note), Sequence (actor with lifeline,
+  message, reply, activation), Class (class box, interface, inheritance,
+  association) and State (state, initial, final, transition). Placed shapes are
+  ordinary shapes; inserting a message moves nothing else.
+- **Getting it out:** ⋯ → **Copy as PNG** (the selection, or the whole board),
+  **Copy as Excalidraw** (pastes into excalidraw.com as editable shapes), and
+  **Export** as SVG, PNG or Excalidraw. Paste a screenshot onto the board to
+  annotate it.
+- **`.excalidraw` files** in the Repo Explorer open as the same canvas, as a
+  tab like any file, and edits are saved back to the file.
+- **Agents** read and add to boards with the `diagram` skill:
+  `workstreams agent call diagram.list`, `diagram.get board=<name>` (the board
+  as text: labelled shapes and connections) and
+  `diagram.add board=<name> mermaid=@-`. An addition is drawn beside your
+  shapes when the board's tile is open; agents never delete or move what you
+  drew.
+
 ## Workbench tile
 
 A per-workstream scratch list of files you're actively working on. Right-click

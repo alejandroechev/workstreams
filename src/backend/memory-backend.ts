@@ -1,4 +1,5 @@
 import type { DiffOrderView } from "../domain/diff-reading-order";
+import type { DiagramAddition, DiagramBoard } from "../diagram/types";
 import { linkedSessionId } from "../domain/linked-sessions";
 import type { WorkLane } from "../domain/work-lanes";
 import { MAX_MESSAGES_PER_SESSION } from "../companion/protocol";
@@ -1254,6 +1255,8 @@ export class MemoryBackend implements Backend {
     const tile = this.tiles.get(id);
     this.tiles.delete(id);
     this.terminals.delete(id);
+    // Boards (and their additions) go with their tile, as ON DELETE CASCADE does.
+    for (const board of [...this.diagramBoards.values()]) if (board.tile_id === id) this.dropDiagramBoard(board.id);
     // As delete_tile in lib.rs: the tile also leaves its layout order.
     if (tile) {
       const order = this.layoutOrder(tile.workstream_id);
@@ -2098,6 +2101,69 @@ export class MemoryBackend implements Backend {
 
   // Diff reading orders, keyed like the real table: workstream, mode, target.
   private diffOrders = new Map<string, DiffOrderView>();
+  private diagramBoards = new Map<string, DiagramBoard>();
+  private diagramAdditionList: DiagramAddition[] = [];
+  private diagramSeq = 0;
+
+  private dropDiagramBoard(id: string): void {
+    this.diagramBoards.delete(id);
+    this.diagramAdditionList = this.diagramAdditionList.filter((a) => a.board_id !== id);
+  }
+
+  async diagramListBoards(tileId: string): Promise<DiagramBoard[]> {
+    return [...this.diagramBoards.values()].filter((b) => b.tile_id === tileId).sort((a, b) => a.position - b.position).map((b) => ({ ...b }));
+  }
+
+  async diagramCreateBoard(tileId: string, name: string): Promise<DiagramBoard> {
+    if (!name.trim()) throw new Error("A board needs a name");
+    const siblings = await this.diagramListBoards(tileId);
+    const board: DiagramBoard = {
+      id: `board-${++this.diagramSeq}`,
+      tile_id: tileId,
+      name: name.trim(),
+      position: siblings.length ? Math.max(...siblings.map((b) => b.position)) + 1 : 0,
+      scene_json: '{"elements":[],"files":{}}',
+      updated_at: new Date().toISOString(),
+    };
+    this.diagramBoards.set(board.id, board);
+    return { ...board };
+  }
+
+  async diagramRenameBoard(id: string, name: string): Promise<void> {
+    const board = this.diagramBoards.get(id);
+    if (!board) throw new Error(`No board ${id}`);
+    if (!name.trim()) throw new Error("A board needs a name");
+    board.name = name.trim();
+  }
+
+  async diagramDeleteBoard(id: string): Promise<void> {
+    this.dropDiagramBoard(id);
+  }
+
+  async diagramSaveScene(id: string, sceneJson: string): Promise<void> {
+    const board = this.diagramBoards.get(id);
+    if (!board) throw new Error(`No board ${id}`);
+    JSON.parse(sceneJson);
+    board.scene_json = sceneJson;
+    board.updated_at = new Date().toISOString();
+  }
+
+  async diagramAdditions(boardId: string): Promise<DiagramAddition[]> {
+    return this.diagramAdditionList.filter((a) => a.board_id === boardId).map((a) => ({ ...a }));
+  }
+
+  async diagramResolveAddition(id: string, error: string | null): Promise<void> {
+    if (error === null) this.diagramAdditionList = this.diagramAdditionList.filter((a) => a.id !== id);
+    else this.diagramAdditionList = this.diagramAdditionList.map((a) => (a.id === id ? { ...a, status: "failed", error } : a));
+  }
+
+  /** E2E seam for `diagram.add`: queue Mermaid for a board and announce it, as the agent socket does. */
+  queueDiagramAddition(boardId: string, mermaid: string): DiagramAddition {
+    const addition: DiagramAddition = { id: `add-${++this.diagramSeq}`, board_id: boardId, mermaid, status: "pending", error: null, created_at: new Date().toISOString() };
+    this.diagramAdditionList.push(addition);
+    (window as unknown as { __WS_EMIT__?: (e: string, p?: unknown) => void }).__WS_EMIT__?.("state-changed", { entity: "diagram", id: boardId, action: "addition_queued" });
+    return { ...addition };
+  }
 
   private diffOrderKey(workstreamId: string, mode: string, target: string | null | undefined): string {
     return JSON.stringify([workstreamId, mode, target ?? ""]);

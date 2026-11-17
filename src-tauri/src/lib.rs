@@ -15,6 +15,7 @@ mod code_review;
 pub mod companion_messages;
 pub mod db;
 mod devlog;
+pub mod diagrams;
 pub mod diff_order;
 mod file_io;
 mod fs_watcher;
@@ -409,6 +410,76 @@ fn companion_prune_sessions(
 ) -> Result<usize, String> {
     let db = state.db.lock().map_err(|e| e.to_string())?;
     companion_messages::prune(&db, now, retention_ms)
+}
+
+#[tauri::command]
+fn diagram_list_boards(
+    state: State<'_, AppState>,
+    tile_id: String,
+) -> Result<Vec<diagrams::Board>, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    diagrams::list_boards(&db, &tile_id)
+}
+
+#[tauri::command]
+fn diagram_create_board(
+    state: State<'_, AppState>,
+    tile_id: String,
+    name: String,
+) -> Result<diagrams::Board, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    diagrams::create_board(
+        &db,
+        &uuid::Uuid::new_v4().to_string(),
+        &tile_id,
+        &name,
+        &now(),
+    )
+}
+
+#[tauri::command]
+fn diagram_rename_board(
+    state: State<'_, AppState>,
+    id: String,
+    name: String,
+) -> Result<(), String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    diagrams::rename_board(&db, &id, &name, &now())
+}
+
+#[tauri::command]
+fn diagram_delete_board(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    diagrams::delete_board(&db, &id)
+}
+
+#[tauri::command]
+fn diagram_save_scene(
+    state: State<'_, AppState>,
+    id: String,
+    scene_json: String,
+) -> Result<(), String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    diagrams::save_scene(&db, &id, &scene_json, &now())
+}
+
+#[tauri::command]
+fn diagram_additions(
+    state: State<'_, AppState>,
+    board_id: String,
+) -> Result<Vec<diagrams::Addition>, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    diagrams::additions(&db, &board_id)
+}
+
+#[tauri::command]
+fn diagram_resolve_addition(
+    state: State<'_, AppState>,
+    id: String,
+    error: Option<String>,
+) -> Result<(), String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    diagrams::resolve_addition(&db, &id, error.as_deref())
 }
 
 #[tauri::command]
@@ -6767,6 +6838,14 @@ pub fn run() {
             git_diff_files_with_status,
             git_diff_file_sides,
             get_diff_order,
+            diagram_list_boards,
+            diagram_create_board,
+            diagram_rename_board,
+            diagram_delete_board,
+            diagram_save_scene,
+            diagram_additions,
+            diagram_resolve_addition,
+            file_io::write_binary_file,
             companion_record_session,
             companion_list_sessions,
             companion_revoke_session,

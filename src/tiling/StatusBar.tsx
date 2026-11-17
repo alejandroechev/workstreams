@@ -31,6 +31,7 @@ interface Props {
   onAddCodeReview?: () => void;
   onAddWalkthrough?: () => void;
   onAddLoop?: () => void;
+  onAddDiagram?: () => void;
   onToggleFullscreen?: () => void;
   onToggleSideBySide?: () => void;
   /** The stacked (horizontal) side-by-side button, next to the vertical one. */
@@ -81,6 +82,7 @@ export default function StatusBar({
   onAddCodeReview,
   onAddWalkthrough,
   onAddLoop,
+  onAddDiagram,
   onToggleFullscreen,
   onToggleSideBySide,
   onToggleSideBySideHorizontal,
@@ -139,6 +141,7 @@ export default function StatusBar({
     { key: "code-review", label: "Code Review", icon: "code", shortcut: shortcutForMenuKey("code-review"), onSelect: onAddCodeReview, gated: !isTileTypeEnabled("code_review") },
     { key: "walkthrough", label: "Code Walkthrough", icon: "code", shortcut: shortcutForMenuKey("walkthrough"), onSelect: onAddWalkthrough, gated: !isTileTypeEnabled("debug_walkthrough") },
     { key: "loop", label: "Goal Loop", icon: "loop", shortcut: shortcutForMenuKey("loop"), onSelect: onAddLoop, gated: !isTileTypeEnabled("loop_control") },
+    { key: "diagram", label: "Diagram", icon: "diagram", shortcut: shortcutForMenuKey("diagram"), onSelect: onAddDiagram },
   ];
   const menuItems = rawItems
     .filter((it) => typeof it.onSelect === "function" && !it.gated)
