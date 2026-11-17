@@ -68,6 +68,21 @@ embedded as a React component. It is not a mode of an existing tile.
   fallback font is left out.
 - **Shortcut:** `Alt+G` adds a Diagram tile.
 
+### Amendment (2026-11-17): review hardening
+
+- **Applying an agent addition is idempotent and loss-free.** Its shapes carry
+  the addition id (`customData.wsAdditionId`); the addition is resolved only
+  after the scene holding it is saved, and a retry re-saves rather than
+  re-adds. Additions are applied one at a time per tile, across mounts: a tile
+  that closes stops before writing, and a reopened tile loads after the last
+  write. The open board takes an addition only through its own canvas.
+- **Appended batches get fresh group ids**, so two Mermaid imports never join.
+- **Copying a selection** brings labels bound to selected shapes and the
+  contents of selected frames.
+- **`.excalidraw` files are read by `read_diagram_file`** (64 MiB cap, same
+  hash as the text reader) rather than the 1 MiB text reader, since pasted
+  images make drawings large. A reload drops edits queued for the old copy.
+
 ## Consequences
 
 - The app bundle gains Excalidraw and Mermaid as lazy chunks (a few MB).

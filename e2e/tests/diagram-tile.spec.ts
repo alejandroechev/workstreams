@@ -26,7 +26,7 @@ async function start(page: Page, opts: { tiles?: SeedTile[]; files?: Record<stri
       __WS_INVOKE_HANDLERS__: {
         get_setting: () => null,
         set_setting: () => null,
-        read_text_file: ({ path }: { path: string }) => {
+        read_diagram_file: ({ path }: { path: string }) => {
           const key = norm(path);
           if (!(key in disk)) throw new Error(`not found: ${path}`);
           return { content: disk[key], hash_hex: String(disk[key].length), line_ending: "lf", has_trailing_newline: true };

@@ -6846,6 +6846,7 @@ pub fn run() {
             diagram_additions,
             diagram_resolve_addition,
             file_io::write_binary_file,
+            file_io::read_diagram_file,
             companion_record_session,
             companion_list_sessions,
             companion_revoke_session,

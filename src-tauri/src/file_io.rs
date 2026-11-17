@@ -34,6 +34,9 @@ pub trait FileSystemProvider: Send + Sync {
 }
 
 const MAX_TEXT_FILE_BYTES: u64 = 1_048_576;
+/// `.excalidraw` drawings embed pasted images as data URLs, so they are read
+/// with a far larger allowance than editable text (ADR 043).
+const MAX_DIAGRAM_FILE_BYTES: u64 = 64 * 1_048_576;
 const BINARY_SNIFF_BYTES: usize = 4_096;
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -211,11 +214,29 @@ pub fn read_text_file_with(
     provider: &dyn FileSystemProvider,
     path: &Path,
 ) -> Result<ReadTextFileResult, String> {
+    read_text_file_capped(provider, path, MAX_TEXT_FILE_BYTES)
+}
+
+/// Reads a `.excalidraw` file like `read_text_file`, with the diagram size cap.
+#[tauri::command]
+pub fn read_diagram_file(path: String) -> Result<ReadTextFileResult, String> {
+    read_text_file_capped(
+        &OsFileSystemProvider,
+        Path::new(&path),
+        MAX_DIAGRAM_FILE_BYTES,
+    )
+}
+
+fn read_text_file_capped(
+    provider: &dyn FileSystemProvider,
+    path: &Path,
+    max_bytes: u64,
+) -> Result<ReadTextFileResult, String> {
     if provider.is_dir(path) {
         return Err("is_directory".to_string());
     }
     let meta = provider.metadata(path).map_err(fs_error_to_string)?;
-    if meta.size_bytes > MAX_TEXT_FILE_BYTES {
+    if meta.size_bytes > max_bytes {
         return Err("too_large".to_string());
     }
 
@@ -784,6 +805,21 @@ mod tests {
         let path = PathBuf::from("C:\\repo");
         fs.add_dir(path.clone());
         assert_eq!(fs.read(&path), Err(FsError::IsADirectory));
+    }
+
+    #[test]
+    fn diagram_files_are_read_past_the_text_cap_but_not_past_their_own() {
+        let fs = InMemoryFileSystemProvider::new();
+        let path = PathBuf::from("/repo/big.excalidraw");
+        let big = vec![b'a'; (MAX_TEXT_FILE_BYTES + 1) as usize];
+        fs.write_atomic(&path, &big).unwrap();
+        let read = read_text_file_capped(&fs, &path, MAX_DIAGRAM_FILE_BYTES).unwrap();
+        assert_eq!(read.size_bytes, MAX_TEXT_FILE_BYTES + 1);
+        assert_eq!(read.hash_hex, hash_bytes_hex(&big));
+        assert_eq!(
+            read_text_file_capped(&fs, &path, MAX_TEXT_FILE_BYTES),
+            Err("too_large".to_string())
+        );
     }
 
     #[test]

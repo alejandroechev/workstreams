@@ -41,7 +41,7 @@ export function ExcalidrawFileView({ path }: { path: string }) {
     setSaveError(null);
     // Read only after the write in flight settles, so the hash is the file's last.
     writing.current
-      .then(() => invoke<ReadResult>("read_text_file", { path }))
+      .then(() => invoke<ReadResult>("read_diagram_file", { path }))
       .then((read) => {
         if (!alive) return;
         hash.current = read?.hash_hex ?? null;

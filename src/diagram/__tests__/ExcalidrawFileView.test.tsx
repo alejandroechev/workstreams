@@ -29,7 +29,7 @@ describe("ExcalidrawFileView", () => {
   afterEach(() => cleanup());
 
   it("shows the file as a canvas and writes edits back, keeping the file's own fields and checking the hash", async () => {
-    invokeMock.mockImplementation(async (cmd: string) => (cmd === "read_text_file" ? { content: FILE, hash_hex: "h1" } : { hash_hex: "h2" }));
+    invokeMock.mockImplementation(async (cmd: string) => (cmd === "read_diagram_file" ? { content: FILE, hash_hex: "h1" } : { hash_hex: "h2" }));
     render(<ExcalidrawFileView path="/r/flow.excalidraw" />);
     expect((await screen.findByTestId("fake-canvas")).getAttribute("data-count")).toBe("1");
     const props = canvases[canvases.length - 1];
@@ -51,7 +51,7 @@ describe("ExcalidrawFileView", () => {
     let writes = 0;
     const writtenContent: string[] = [];
     invokeMock.mockImplementation(async (cmd: string, payload: { args?: { content: string; expected_hash_hex: string } }) => {
-      if (cmd === "read_text_file") return { content: FILE, hash_hex: `read-${writes}` };
+      if (cmd === "read_diagram_file") return { content: FILE, hash_hex: `read-${writes}` };
       writes += 1;
       if (writes === 1) throw JSON.stringify({ kind: "ExternalModified" });
       if (writes === 2) await new Promise<void>((r) => { releaseWrite = r; });
@@ -81,7 +81,7 @@ describe("ExcalidrawFileView", () => {
   it("does not overwrite a file changed on disk, and offers to reload it", async () => {
     let reads = 0;
     invokeMock.mockImplementation(async (cmd: string) => {
-      if (cmd === "read_text_file") { reads += 1; return { content: FILE, hash_hex: "h1" }; }
+      if (cmd === "read_diagram_file") { reads += 1; return { content: FILE, hash_hex: "h1" }; }
       throw JSON.stringify({ kind: "ExternalModified", current_hash_hex: "zz" });
     });
     render(<ExcalidrawFileView path="/r/flow.excalidraw" />);
