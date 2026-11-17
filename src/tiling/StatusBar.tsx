@@ -12,6 +12,8 @@ interface Props {
   focusedLabel: string;
   fullscreen: boolean;
   sideBySide: boolean;
+  /** Which split is active or being picked (vertical = next to each other). */
+  sideBySideOrientation?: "vertical" | "horizontal";
   /** @deprecated kept for prop compatibility; the button is always enabled now. */
   canEnterSideBySide: boolean;
   /** When true the SBS selection checkboxes are visible across tiles. */
@@ -31,6 +33,8 @@ interface Props {
   onAddLoop?: () => void;
   onToggleFullscreen?: () => void;
   onToggleSideBySide?: () => void;
+  /** The stacked (horizontal) side-by-side button, next to the vertical one. */
+  onToggleSideBySideHorizontal?: () => void;
   onOpenSettings?: () => void;
   /**
    * Slot for the active workstream's quick-note bar.
@@ -62,6 +66,7 @@ export default function StatusBar({
   focusedLabel,
   fullscreen,
   sideBySide,
+  sideBySideOrientation = "vertical",
   canEnterSideBySide: _canEnterSideBySide,
   sbsSelectionMode = false,
   disabled = false,
@@ -78,9 +83,50 @@ export default function StatusBar({
   onAddLoop,
   onToggleFullscreen,
   onToggleSideBySide,
+  onToggleSideBySideHorizontal,
   onOpenSettings,
   quickNote,
 }: Props) {
+  // One button per orientation: highlighted only when its orientation is the
+  // active split, or the one being picked.
+  const sbsButton = (orientation: "vertical" | "horizontal", onToggle: () => void) => {
+    const mine = sideBySideOrientation === orientation;
+    const active = sideBySide && mine;
+    const picking = sbsSelectionMode && mine;
+    const what = orientation === "vertical" ? "side-by-side" : "one above the other";
+    const title = disabled
+      ? "Select a workstream to use side-by-side"
+      : active
+        ? `Exit ${what}${orientation === "vertical" ? ` (${shortcutLabel("S")})` : ""}`
+        : sideBySide
+          ? `Show the two tiles ${what}`
+          : picking
+            ? `Cancel ${what} selection${orientation === "vertical" ? ` (${shortcutLabel("S")})` : ""}`
+            : orientation === "vertical"
+              ? `Pick two tiles for side-by-side (${shortcutLabel("S")}, or Shift-click a tile)`
+              : "Pick two tiles to show one above the other (or Option-click a tile)";
+    return (
+      <button
+        data-testid={orientation === "vertical" ? "toggle-sbs" : "toggle-sbs-horizontal"}
+        disabled={disabled}
+        aria-pressed={active}
+        style={{
+          ...iconBtnStyle,
+          color: active ? "#cba6f7" : picking ? "#f9e2af" : "#cdd6f4",
+          borderColor: active ? "#cba6f7" : picking ? "#f9e2af" : "#585b70",
+          background: active ? "#3a2f4f" : picking ? "#3a3520" : iconBtnStyle.background,
+          cursor: disabled ? "not-allowed" : "pointer",
+          opacity: disabled ? 0.4 : 1,
+        }}
+        onClick={disabled ? undefined : onToggle}
+        title={title}
+      >
+        <ViewColumnsIcon
+          style={{ width: 13, height: 13, display: "block", transform: orientation === "horizontal" ? "rotate(90deg)" : undefined }}
+        />
+      </button>
+    );
+  };
   const rawItems: Array<{ key: string; label: string; icon: TileIconKey; shortcut?: string; onSelect?: () => void; gated?: boolean }> = [
     { key: "session", label: "Copilot Session", icon: "session", shortcut: shortcutForMenuKey("session"), onSelect: onAddSession },
     { key: "terminal", label: terminalTileLabel(), icon: "terminal", shortcut: shortcutForMenuKey("terminal"), onSelect: onAddTerminal },
@@ -125,7 +171,7 @@ export default function StatusBar({
           <span style={{ color: "#f9e2af" }}>⛶ Full</span>
         )}
         {sideBySide && (
-          <span style={{ color: "#cba6f7" }}>⊟ Side-by-side</span>
+          <span style={{ color: "#cba6f7" }}>{sideBySideOrientation === "horizontal" ? "⊟ Stacked" : "◫ Side-by-side"}</span>
         )}
       </div>
       {/* Rendered directly, with no wrapper. A wrapper would be truthy even
@@ -145,32 +191,8 @@ export default function StatusBar({
             ⚙
           </button>
         )}
-        {onToggleSideBySide && (
-          <button
-            data-testid="toggle-sbs"
-            disabled={disabled}
-            style={{
-              ...iconBtnStyle,
-              color: sideBySide ? "#cba6f7" : sbsSelectionMode ? "#f9e2af" : "#cdd6f4",
-              borderColor: sideBySide ? "#cba6f7" : sbsSelectionMode ? "#f9e2af" : "#585b70",
-              background: sideBySide ? "#3a2f4f" : sbsSelectionMode ? "#3a3520" : iconBtnStyle.background,
-              cursor: disabled ? "not-allowed" : "pointer",
-              opacity: disabled ? 0.4 : 1,
-            }}
-            onClick={disabled ? undefined : onToggleSideBySide}
-            title={
-              disabled
-                ? "Select a workstream to use side-by-side"
-                : sideBySide
-                  ? `Exit side-by-side (${shortcutLabel("S")})`
-                  : sbsSelectionMode
-                    ? `Cancel side-by-side selection (${shortcutLabel("S")})`
-                    : `Pick two tiles for side-by-side (${shortcutLabel("S")})`
-            }
-          >
-            <ViewColumnsIcon style={{ width: 13, height: 13, display: "block" }} />
-          </button>
-        )}
+        {onToggleSideBySide && sbsButton("vertical", onToggleSideBySide)}
+        {onToggleSideBySideHorizontal && sbsButton("horizontal", onToggleSideBySideHorizontal)}
         <button
           data-testid="toggle-fullscreen"
           disabled={disabled}

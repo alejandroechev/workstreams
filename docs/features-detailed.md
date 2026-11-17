@@ -304,7 +304,13 @@ override via config) and a double-click on the title renames it inline.
 ![Four-tile adaptive grid: Copilot session + Repo Explorer + Session Meta + Terminal](assets/feature-tiling-grid.png)
 
 A **side-by-side** mode is available when exactly two tiles are selected
-(`Alt+S`) for focused compare workflows:
+(`Alt+S`) for focused compare workflows. It has two orientations, each with its
+status-bar button: next to each other (the original), or **one above the
+other**, each tile taking the full width. The button of the other orientation
+switches an active split; its own button exits. Drag the divider between the
+two tiles to resize them (or focus it and use the arrow keys); double-click it
+to split evenly. Neither tile can shrink below 15%, and the split is kept while
+the workstream is open:
 
 ![Side-by-side mode: Repo Explorer + Session Meta](assets/feature-side-by-side.png)
 
@@ -1169,6 +1175,8 @@ Mouse:
 - **Double-click a tile's header bar** to toggle fullscreen for that tile.
 - **Shift-click another tile** while one is focused to compare the two
   side-by-side; the focused tile becomes the left pane.
+- **Option-click (Alt-click) another tile** to show the two one above the
+  other; the focused tile is on top.
 
 ## macOS environment
 

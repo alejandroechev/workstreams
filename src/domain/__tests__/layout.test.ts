@@ -57,11 +57,19 @@ describe("computeLayout", () => {
 });
 
 describe("computeSideBySideLayout", () => {
-  it("returns a 50/50 two-column grid with named slots", () => {
+  it("defaults to a 50/50 two-column grid with a divider between the named slots", () => {
     const result = computeSideBySideLayout();
-    expect(result.columns).toBe("1fr 1fr");
+    expect(result.columns).toBe("50fr 8px 50fr");
     expect(result.rows).toBe("1fr");
-    expect(result.areas).toBe('"sbs-left sbs-right"');
+    expect(result.areas).toBe('"sbs-left sbs-divider sbs-right"');
+  });
+
+  it("stacks the two tiles for a horizontal split, sized by the split", () => {
+    const result = computeSideBySideLayout("horizontal", 0.3);
+    expect(result.columns).toBe("1fr");
+    expect(result.rows).toBe("30fr 8px 70fr");
+    expect(result.areas).toBe('"sbs-left" "sbs-divider" "sbs-right"');
+    expect(computeSideBySideLayout("vertical", 0.25).columns).toBe("25fr 8px 75fr");
   });
 });
 

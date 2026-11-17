@@ -42,6 +42,9 @@ import { navigateFocus } from "./domain/layout";
 import {
   toggleFullscreenForTile as toggleFullscreenForTileState,
   shiftSelectTile as shiftSelectTileState,
+  toggleSideBySideMode,
+  resizeSideBySide as resizeSideBySideState,
+  type SideBySideOrientation,
 } from "./domain/tile-layout-mode";
 import { computeSessionNameSync } from "./domain/session-name-sync";
 import { deriveLinkedSessionIds } from "./domain/linked-sessions";
@@ -164,6 +167,10 @@ export default function App() {
      * button (or Alt+S). Auto-clears once 2 tiles are selected and SBS
      * activates, and on explicit cancel. */
     sbsSelectionMode: boolean;
+    /** Next to each other (vertical) or one above the other (horizontal). */
+    sideBySideOrientation?: SideBySideOrientation;
+    /** The first side-by-side tile's share; kept while the workstream is open. */
+    sideBySideSplit?: number;
   };
   const EMPTY_STATE: WsState = {
     tiles: [],
@@ -264,8 +271,15 @@ export default function App() {
    * clicked tile is already the focused one, this is a no-op focus change.
    */
   const shiftSelectTile = useCallback(
-    (tileId: string) => {
-      updateActiveState((s) => shiftSelectTileState(s, tileId));
+    (tileId: string, orientation: SideBySideOrientation) => {
+      updateActiveState((s) => shiftSelectTileState(s, tileId, orientation));
+    },
+    [updateActiveState],
+  );
+
+  const resizeSideBySide = useCallback(
+    (split: number) => {
+      updateActiveState((s) => resizeSideBySideState(s, split));
     },
     [updateActiveState],
   );
@@ -312,24 +326,12 @@ export default function App() {
    *   toggleSideBySideSelect when the 2nd tile is checked.
    */
   const toggleSideBySide = useCallback(() => {
-    updateActiveState((s) => {
-      if (s.sideBySideTileIds) {
-        return {
-          ...s,
-          sideBySideTileIds: null,
-          selectedForSideBySide: new Set(),
-          sbsSelectionMode: false,
-        };
-      }
-      return {
-        ...s,
-        sbsSelectionMode: !s.sbsSelectionMode,
-        // Drop any half-baked selection if the user cancels.
-        selectedForSideBySide: !s.sbsSelectionMode
-          ? s.selectedForSideBySide
-          : new Set(),
-      };
-    });
+    updateActiveState((s) => toggleSideBySideMode(s, "vertical"));
+  }, [updateActiveState]);
+
+  /** The second status-bar button: the two tiles one above the other. */
+  const toggleSideBySideHorizontal = useCallback(() => {
+    updateActiveState((s) => toggleSideBySideMode(s, "horizontal"));
   }, [updateActiveState]);
 
   // Idempotently insert/replace a tile in its workstream's state, deduped by id.
@@ -2409,7 +2411,8 @@ export default function App() {
           break;
         case "toggleSideBySide":
           e.preventDefault();
-          toggleSideBySide();
+          // Exits whichever split is active; otherwise picks side by side.
+          updateActiveState((st) => toggleSideBySideMode(st, st.sideBySideTileIds ? (st.sideBySideOrientation ?? "vertical") : "vertical"));
           break;
         case "focusTile":
           if (action.index < count) setFocusedIndex(action.index);
@@ -2625,6 +2628,9 @@ export default function App() {
                   focusToken={focusToken}
                   fullscreenTileId={st.fullscreenTileId}
                   sideBySideTileIds={st.sideBySideTileIds}
+                  sideBySideOrientation={st.sideBySideOrientation}
+                  sideBySideSplit={st.sideBySideSplit}
+                  onResizeSideBySide={isActive ? resizeSideBySide : undefined}
                   selectedForSideBySide={st.selectedForSideBySide}
                   sbsSelectionMode={st.sbsSelectionMode}
                   isVisible={isActive}
@@ -2775,6 +2781,7 @@ export default function App() {
           focusedLabel={focusedTile?.title || focusedTile?.tile_type || "none"}
           fullscreen={fullscreenTileId !== null}
           sideBySide={sideBySideTileIds !== null}
+          sideBySideOrientation={activeState.sideBySideOrientation ?? "vertical"}
           canEnterSideBySide={selectedForSideBySide.size === 2}
           sbsSelectionMode={sbsSelectionMode}
           disabled={!activeWsId}
@@ -2799,6 +2806,7 @@ export default function App() {
             }
           }}
           onToggleSideBySide={toggleSideBySide}
+          onToggleSideBySideHorizontal={toggleSideBySideHorizontal}
         />
       </div>
 

@@ -77,16 +77,21 @@ export function computeLayout(tileCount: number): GridConfig {
 }
 
 /**
- * Side-by-side layout: exactly two visible cells split 50/50 horizontally.
- * Cell areas are named `sbs-left` and `sbs-right` so it's obvious the
- * grid is a different mode from the adaptive one (which uses t0..tN).
+ * Side-by-side layout: two visible cells, `sbs-left` and `sbs-right` (named
+ * so it's obvious the grid is a different mode from the adaptive t0..tN),
+ * with a draggable `sbs-divider` track between them. `vertical` places them
+ * next to each other, `horizontal` stacks them; `split` is the first one's
+ * share.
  */
-export function computeSideBySideLayout(): GridConfig {
-  return {
-    columns: "1fr 1fr",
-    rows: "1fr",
-    areas: '"sbs-left sbs-right"',
-  };
+export function computeSideBySideLayout(
+  orientation: "vertical" | "horizontal" = "vertical",
+  split = 0.5,
+): GridConfig {
+  const first = Math.round(split * 1000) / 10;
+  const tracks = `${first}fr 8px ${Math.round((100 - first) * 10) / 10}fr`;
+  return orientation === "vertical"
+    ? { columns: tracks, rows: "1fr", areas: '"sbs-left sbs-divider sbs-right"' }
+    : { columns: "1fr", rows: tracks, areas: '"sbs-left" "sbs-divider" "sbs-right"' };
 }
 
 /**

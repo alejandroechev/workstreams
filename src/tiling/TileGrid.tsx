@@ -1,5 +1,6 @@
 // @test-skip: Thin React rendering wrapper; layout logic tested in layout.test.ts
-import { memo, useMemo } from "react";
+import { memo, useMemo, useRef } from "react";
+import { DEFAULT_SPLIT, splitFromPointer, type SideBySideOrientation } from "../domain/tile-layout-mode";
 import type { Tile } from "../workstream/types";
 import { computeLayout, computeSideBySideLayout } from "../domain/layout";
 import TileWrapper from "./Tile";
@@ -12,6 +13,12 @@ interface Props {
   fullscreenTileId: string | null;
   /** When non-null, exactly these tile ids render visibly in a 50/50 split. */
   sideBySideTileIds: string[] | null;
+  /** Next to each other (vertical) or one above the other (horizontal). */
+  sideBySideOrientation?: SideBySideOrientation;
+  /** The first tile's share of the space. */
+  sideBySideSplit?: number;
+  /** Dragging the divider between the two tiles. */
+  onResizeSideBySide?: (split: number) => void;
   /** Tile ids currently selected for entering side-by-side. */
   selectedForSideBySide: Set<string>;
   /** When true, render the per-tile SBS selection checkboxes. */
@@ -25,7 +32,7 @@ interface Props {
   isVisible: boolean;
   onToggleSideBySideSelect: (tileId: string) => void;
   onToggleFullscreen?: (tileId: string) => void;
-  onShiftSelectTile?: (tileId: string) => void;
+  onShiftSelectTile?: (tileId: string, orientation: SideBySideOrientation) => void;
   onFocusTile: (index: number) => void;
   onCloseTile: (tileId: string) => void;
   onOpenFile?: (path: string) => void;
@@ -46,6 +53,9 @@ function TileGridImpl({
   focusToken,
   fullscreenTileId,
   sideBySideTileIds,
+  sideBySideOrientation = "vertical",
+  sideBySideSplit = DEFAULT_SPLIT,
+  onResizeSideBySide,
   selectedForSideBySide,
   sbsSelectionMode,
   isVisible,
@@ -77,8 +87,18 @@ function TileGridImpl({
   const layout = fullscreenActive
     ? computeLayout(1)
     : sideBySideActive
-      ? computeSideBySideLayout()
+      ? computeSideBySideLayout(sideBySideOrientation, sideBySideSplit)
       : computeLayout(orderedTiles.length);
+  const gridRef = useRef<HTMLDivElement>(null);
+  const resizeTo = (e: { clientX: number; clientY: number }) => {
+    const rect = gridRef.current?.getBoundingClientRect();
+    if (!rect || !onResizeSideBySide) return;
+    onResizeSideBySide(
+      sideBySideOrientation === "vertical"
+        ? splitFromPointer(e.clientX, rect.left, rect.width)
+        : splitFromPointer(e.clientY, rect.top, rect.height),
+    );
+  };
 
   // Repo Explorer tiles are the only valid targets a walkthrough can drive.
   // Derived here rather than threaded from App because TileGrid already knows
@@ -111,18 +131,68 @@ function TileGridImpl({
 
   return (
     <div
+      ref={gridRef}
+      data-testid="tile-grid"
       style={{
         display: "grid",
         gridTemplateColumns: layout.columns,
         gridTemplateRows: layout.rows,
         gridTemplateAreas: layout.areas,
-        gap: 4,
+        // In side-by-side the divider track is the gap, so it can be grabbed.
+        gap: sideBySideActive ? 0 : 4,
         width: "100%",
         height: "100%",
         padding: 4,
         boxSizing: "border-box",
       }}
     >
+      {sideBySideActive && (
+        <div
+          data-testid="sbs-divider"
+          role="separator"
+          aria-orientation={sideBySideOrientation === "vertical" ? "vertical" : "horizontal"}
+          aria-valuenow={Math.round(sideBySideSplit * 100)}
+          aria-valuemin={15}
+          aria-valuemax={85}
+          tabIndex={0}
+          title="Drag to resize · double-click to split evenly"
+          style={{
+            gridArea: "sbs-divider",
+            cursor: sideBySideOrientation === "vertical" ? "col-resize" : "row-resize",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            touchAction: "none",
+          }}
+          onPointerDown={(e) => {
+            e.preventDefault();
+            // Captured, so terminals and editors under the pointer can't steal the drag.
+            e.currentTarget.setPointerCapture(e.pointerId);
+          }}
+          onPointerMove={(e) => {
+            if (e.currentTarget.hasPointerCapture(e.pointerId)) resizeTo(e);
+          }}
+          onPointerUp={(e) => e.currentTarget.releasePointerCapture(e.pointerId)}
+          onDoubleClick={() => onResizeSideBySide?.(DEFAULT_SPLIT)}
+          onKeyDown={(e) => {
+            const back = sideBySideOrientation === "vertical" ? "ArrowLeft" : "ArrowUp";
+            const forward = sideBySideOrientation === "vertical" ? "ArrowRight" : "ArrowDown";
+            if (e.key === back || e.key === forward) {
+              e.preventDefault();
+              onResizeSideBySide?.(sideBySideSplit + (e.key === forward ? 0.05 : -0.05));
+            }
+          }}
+        >
+          <div
+            style={{
+              background: "#45475a",
+              borderRadius: 2,
+              width: sideBySideOrientation === "vertical" ? 2 : 32,
+              height: sideBySideOrientation === "vertical" ? 32 : 2,
+            }}
+          />
+        </div>
+      )}
       {orderedTiles.map((tile, i) => {
         const isFs = fullscreenTileId === tile.id;
         let hidden: boolean;

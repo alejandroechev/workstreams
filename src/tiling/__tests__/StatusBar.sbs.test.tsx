@@ -50,3 +50,32 @@ describe("StatusBar side-by-side button", () => {
     expect(btn.title).toContain("Pick two tiles");
   });
 });
+
+describe("StatusBar horizontal side-by-side button", () => {
+  afterEach(() => cleanup());
+
+  it("sits next to the vertical one and toggles the stacked split", () => {
+    const onToggleSideBySideHorizontal = vi.fn();
+    render(<StatusBar {...commonProps({ onToggleSideBySideHorizontal })} />);
+    const btn = screen.getByTestId("toggle-sbs-horizontal");
+    expect(btn.previousElementSibling?.getAttribute("data-testid")).toBe("toggle-sbs");
+    expect(btn.getAttribute("title")).toMatch(/one above the other/);
+    fireEvent.click(btn);
+    expect(onToggleSideBySideHorizontal).toHaveBeenCalledOnce();
+  });
+
+  it("only the active orientation's button is highlighted", () => {
+    render(<StatusBar {...commonProps({ sideBySide: true, sideBySideOrientation: "horizontal", onToggleSideBySideHorizontal: vi.fn() })} />);
+    expect(screen.getByTestId("toggle-sbs-horizontal").getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByTestId("toggle-sbs").getAttribute("aria-pressed")).toBe("false");
+    expect(screen.getByTestId("toggle-sbs-horizontal").getAttribute("title")).toMatch(/Exit/);
+    expect(screen.getByText(/Stacked/)).toBeTruthy();
+  });
+
+  it("is disabled without a workstream", () => {
+    const onToggleSideBySideHorizontal = vi.fn();
+    render(<StatusBar {...commonProps({ disabled: true, onToggleSideBySideHorizontal })} />);
+    fireEvent.click(screen.getByTestId("toggle-sbs-horizontal"));
+    expect(onToggleSideBySideHorizontal).not.toHaveBeenCalled();
+  });
+});

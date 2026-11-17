@@ -1,6 +1,7 @@
 // @test-skip: Thin React wrapper; pure border logic in tile-border.ts is tested
 import { ReactNode, createElement, memo, useEffect, useMemo, useRef, useState } from "react";
 import TerminalTile from "../tiles/TerminalTile";
+import { sideBySideForClick, type SideBySideOrientation } from "../domain/tile-layout-mode";
 import CopilotSessionTile from "../tiles/CopilotSessionTile";
 import RepoExplorerTile from "../tiles/RepoExplorerTile";
 import SessionMetaTile from "../tiles/SessionMetaTile";
@@ -66,7 +67,7 @@ interface TileProps {
   /** Toggle fullscreen for this tile (double-click on the header bar). */
   onToggleFullscreen?: (tileId: string) => void;
   /** Shift-click handler: enter side-by-side with the focused tile + this one. */
-  onShiftSelect?: (tileId: string) => void;
+  onShiftSelect?: (tileId: string, orientation: SideBySideOrientation) => void;
   onFocus: () => void;
   onClose: () => void;
   onOpenFile?: (path: string) => void;
@@ -402,12 +403,13 @@ function TileWrapperImpl({
         transition: "border-color 0.15s",
       }}
       onMouseDownCapture={(e) => {
-        // Shift-click → enter side-by-side with the currently-focused tile
-        // and this one. We deliberately skip the normal focus change so the
-        // previously-focused tile becomes the left pane.
-        if (e.shiftKey && onShiftSelect) {
+        // Shift-click → side-by-side with the currently-focused tile and
+        // this one; Option-click → the same, one above the other. We skip the
+        // normal focus change so the previously-focused tile comes first.
+        const orientation = sideBySideForClick(e);
+        if (orientation && onShiftSelect) {
           e.preventDefault();
-          onShiftSelect(tile.id);
+          onShiftSelect(tile.id, orientation);
           return;
         }
         // Focus this tile on any click within it (capture phase fires before children)

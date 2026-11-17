@@ -127,7 +127,9 @@ instead of buried behind tabs.
 - **Everything persists** — workstreams, tile layouts, terminal scrollback,
   open files and per-tile view state all survive a restart.
 - **Keyboard-driven** — `Alt+<letter>` opens any tile type, `Alt+Arrows` moves
-  focus, `Alt+S` compares two tiles side by side.
+  focus, `Alt+S` compares two tiles side by side. Shift-click a second tile to
+  put it next to the focused one, Option-click to stack it below; drag the
+  divider to resize.
 - **Code walkthrough** *(experimental; hidden by default,
   `VITE_ENABLE_WALKTHROUGH=1`)* — record a Rust test's real execution
   and step through it forwards *and* backwards to understand the code.
