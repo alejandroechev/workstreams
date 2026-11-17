@@ -31,12 +31,17 @@ export function ExcalidrawFileView({ path }: { path: string }) {
   const [saveError, setSaveError] = useState<{ message: string; conflict: boolean } | null>(null);
   const hash = useRef<string | null>(null);
   const writing = useRef<Promise<void>>(Promise.resolve());
+  // Bumped by every (re)load: edits queued for an older copy of the file are dropped.
+  const generation = useRef(0);
 
   useEffect(() => {
     let alive = true;
+    generation.current += 1;
     setState({ kind: "loading" });
     setSaveError(null);
-    invoke<ReadResult>("read_text_file", { path })
+    // Read only after the write in flight settles, so the hash is the file's last.
+    writing.current
+      .then(() => invoke<ReadResult>("read_text_file", { path }))
       .then((read) => {
         if (!alive) return;
         hash.current = read?.hash_hex ?? null;
@@ -55,7 +60,9 @@ export function ExcalidrawFileView({ path }: { path: string }) {
 
   const raw = state.kind === "ready" ? state.raw : null;
   const save = useCallback((scene: DiagramScene) => {
+    const mine = generation.current;
     writing.current = writing.current.then(async () => {
+      if (mine !== generation.current) return;
       const elements = liveElements(scene.elements);
       const used = new Set(elements.map((e) => e.fileId).filter((id): id is string => typeof id === "string"));
       // Keep the file's own fields (appState, source, …); only the drawing changes.
@@ -87,7 +94,7 @@ export function ExcalidrawFileView({ path }: { path: string }) {
         <div data-testid="excalidraw-file-save-error" style={{ position: "absolute", left: 8, bottom: 8, zIndex: 5, padding: "4px 8px", borderRadius: 4, fontSize: 12, background: "#181825", border: "1px solid #f38ba8", color: "#f38ba8", display: "flex", gap: 8, alignItems: "center" }}>
           {saveError.message}
           {saveError.conflict && (
-            <button onClick={() => setReloadToken((n) => n + 1)} style={{ background: "#313244", color: "#cdd6f4", border: "1px solid #45475a", borderRadius: 4, fontSize: 12, cursor: "pointer" }}>
+            <button onClick={() => { generation.current += 1; setReloadToken((n) => n + 1); }} style={{ background: "#313244", color: "#cdd6f4", border: "1px solid #45475a", borderRadius: 4, fontSize: 12, cursor: "pointer" }}>
               Reload from disk
             </button>
           )}

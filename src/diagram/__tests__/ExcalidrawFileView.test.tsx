@@ -46,6 +46,32 @@ describe("ExcalidrawFileView", () => {
     expect(invokeMock.mock.calls.filter(([cmd]) => cmd === "write_text_file")[1][1].args.expected_hash_hex).toBe("h2");
   });
 
+  it("drops edits queued before a reload, so they cannot overwrite the reloaded file", async () => {
+    let releaseWrite!: () => void;
+    let writes = 0;
+    const writtenContent: string[] = [];
+    invokeMock.mockImplementation(async (cmd: string, payload: { args?: { content: string; expected_hash_hex: string } }) => {
+      if (cmd === "read_text_file") return { content: FILE, hash_hex: `read-${writes}` };
+      writes += 1;
+      if (writes === 1) throw JSON.stringify({ kind: "ExternalModified" });
+      if (writes === 2) await new Promise<void>((r) => { releaseWrite = r; });
+      writtenContent.push(payload.args!.content);
+      return { hash_hex: "after" };
+    });
+    render(<ExcalidrawFileView path="/r/flow.excalidraw" />);
+    await screen.findByTestId("fake-canvas");
+    const props = canvases[canvases.length - 1];
+    act(() => props.onSceneChange({ elements: [], files: {} }));
+    await screen.findByTestId("excalidraw-file-save-error");
+    act(() => props.onSceneChange({ elements: [], files: {} }));
+    act(() => props.onSceneChange({ elements: [], files: {} }));
+    await waitFor(() => expect(writes).toBe(2));
+    fireEvent.click(screen.getByText("Reload from disk"));
+    await act(async () => { releaseWrite(); await new Promise((r) => setTimeout(r, 20)); });
+    // The write in flight finished; the third (queued before the reload) never ran.
+    expect(writes).toBe(2);
+  });
+
   it("refuses a file that is not an Excalidraw drawing", async () => {
     invokeMock.mockResolvedValue({ content: '{"hello":1}', hash_hex: "h" });
     render(<ExcalidrawFileView path="/r/x.excalidraw" />);

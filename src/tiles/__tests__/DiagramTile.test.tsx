@@ -174,6 +174,22 @@ describe("DiagramTile", () => {
     save.mockRestore();
   });
 
+  it("applies an addition once even when its first save failed and it is retried", async () => {
+    const backend = new MemoryBackend();
+    const board = await backend.diagramCreateBoard("t1", "Ideas");
+    await renderTile(backend);
+    mermaidToScene.mockImplementation(async () => ({ elements: [rect(`new-${Math.random()}`)], files: {} }));
+    const save = vi.spyOn(backend, "diagramSaveScene").mockRejectedValueOnce(new Error("disk full"));
+    backend.queueDiagramAddition(board.id, "flowchart LR\nA-->B");
+    act(() => listeners.forEach((l) => l({ payload: { entity: "diagram", id: board.id } })));
+    await screen.findByTestId("diagram-notice");
+    act(() => listeners.forEach((l) => l({ payload: { entity: "diagram", id: board.id } })));
+    await waitFor(async () => expect(await backend.diagramAdditions(board.id)).toEqual([]));
+    expect(lastCanvas().api.elements).toHaveLength(1);
+    expect(JSON.parse((await backend.diagramListBoards("t1"))[0].scene_json).elements).toHaveLength(1);
+    save.mockRestore();
+  });
+
   it("waits for a board's canvas when the board opens while an addition is converting", async () => {
     const backend = new MemoryBackend();
     await backend.diagramCreateBoard("t1", "Shown");

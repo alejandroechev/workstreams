@@ -218,15 +218,19 @@ export default function DiagramTile({ tileId, workstreamDir, configJson, onConfi
             continue;
           }
           if (!mounted.current) return;
+          // Its shapes carry the addition's id, so a retry after a failed save re-saves rather than re-adds.
+          const tagged = { ...added, elements: added.elements.map((e) => ({ ...e, customData: { ...(e.customData as object | undefined), wsAdditionId: addition.id } })) };
+          const has = (els: readonly SceneElement[]) => els.some((e) => (e.customData as { wsAdditionId?: string } | undefined)?.wsAdditionId === addition.id);
           const { activeId: active, canvas: c } = latest.current;
           if (board.id === active) {
             // The open board takes it through its canvas, or waits for the canvas to be ready.
             if (!c || c.boardId !== board.id) break;
-            await persistScene(board.id, await addToCanvas(added, "beside"));
+            const onCanvas = currentScene();
+            await persistScene(board.id, has(onCanvas.elements) ? onCanvas : await addToCanvas(tagged, "beside"));
           } else {
             // A board that is not on screen: its stored scene (the cache is never older) gains the shapes.
             const stored = scenes.current.get(board.id) ?? parseScene(board.scene_json);
-            const elements = appendElements(stored.elements, placeBeside(liveElements(stored.elements), added.elements));
+            const elements = has(stored.elements) ? [...stored.elements] : appendElements(stored.elements, placeBeside(liveElements(stored.elements), tagged.elements));
             await persistScene(board.id, { elements, files: { ...stored.files, ...added.files } });
           }
           await backend.diagramResolveAddition(addition.id, null);
@@ -237,7 +241,7 @@ export default function DiagramTile({ tileId, workstreamDir, configJson, onConfi
       .then(run)
       .catch((e) => { if (mounted.current) setNotice({ kind: "error", text: `Could not draw an agent's addition: ${errorText(e)}` }); });
     additionChains.set(tileId, next);
-  }, [backend, tileId, addToCanvas, persistScene]);
+  }, [backend, tileId, addToCanvas, persistScene, currentScene]);
 
   useEffect(() => {
     if (boards) processAdditions();
