@@ -139,6 +139,11 @@ export function shouldUseFileEditor(path: string): boolean {
   return !FILE_EDITOR_EXCLUDED_EXTS.has(extensionFor(path));
 }
 
+/** Files whose view is a loaded object URL (cleared at the start of every open). */
+function isMediaPath(path: string): boolean {
+  return (isImageFile(path) && !isSvgFile(path)) || isAudioFile(path) || isPdfFile(path);
+}
+
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
@@ -488,6 +493,7 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
 
   const openSeqRef = useRef(0);
   const pendingOpenRef = useRef<{ seq: number; path: string } | null>(null);
+  const [focusEditorPath, setFocusEditorPath] = useState<string | null>(null);
   const openFile = useCallback(async (
     path: string,
     navMode: "push" | "replace" | "none" = "push",
@@ -737,8 +743,9 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
   const latest = useRef({ openTabs, shownPath, switcher, activeDiffMode });
   useEffect(() => { latest.current = { openTabs, shownPath, switcher, activeDiffMode }; });
 
-  const selectOpenTab = useCallback((path: string) => {
+  const selectOpenTab = useCallback((path: string, opts: { focus?: boolean } = {}) => {
     setRevealedPath(null);
+    setFocusEditorPath(opts.focus ? path : null);
     // Returning to a tab restores its own place, not an old reveal request.
     pendingRevealLineRef.current = null;
     setWalkthroughLine(null);
@@ -767,6 +774,8 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
       openSeqRef.current += 1;
       pendingOpenRef.current = null;
       setFileLoading(false);
+      // Starting that open cleared the shown media; load it again.
+      if (shown && after.tabs.some((t) => t.path === shown) && isMediaPath(shown)) void openFile(shown, "none", "activate");
     }
     if (!shown || after.tabs.some((t) => t.path === shown)) return;
     if (after.active) void openFile(after.active, "push", "none");
@@ -869,7 +878,7 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
         e.preventDefault();
         e.stopPropagation();
         const next = jumpToTab(tabs, Number(e.key));
-        if (next.active) selectOpenTab(next.active);
+        if (next.active) selectOpenTab(next.active, { focus: true });
       } else if (e.ctrlKey && e.shiftKey && (e.key === "F" || e.key === "f")) {
         // Ctrl+Shift+F: open the content-search ("search all files") tab.
         e.preventDefault();
@@ -887,7 +896,7 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
       const { switcher: open } = latest.current;
       if (!open) return;
       setSwitcher(null);
-      selectOpenTab(open.paths[open.index]);
+      selectOpenTab(open.paths[open.index], { focus: true });
     };
     // Capture: the editor must not swallow these first.
     window.addEventListener("keydown", handler, true);
@@ -2339,6 +2348,7 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
               onBack={handleBackToBrowse}
               showHeader={false}
               initialEditorViewState={editorStates[filePath]}
+              autoFocus={focusEditorPath === filePath}
               initialPlace={editorStates[filePath] ? undefined : openTabs.places[filePath]}
               onEditorViewStateChange={(viewState, place) => rememberEditorState(filePath, viewState, place)}
               initialViewMode={mdModes[filePath] ?? (restoredMdRef.current?.path === filePath ? restoredMdRef.current.mode : undefined)}

@@ -354,6 +354,38 @@ test.describe("Repo Explorer open files — review regressions", () => {
     expect((await editorState(page)).cursorLine).toBe(10);
   });
 
+  test("switching tabs with the keyboard keeps typing in the editor", async ({ page }) => {
+    await start(page);
+    for (const name of ["x.ts", "y.ts"]) {
+      await openFromTree(page, name);
+      await tab(page, name).dblclick();
+    }
+    await expect.poll(async () => (await editorState(page)).value).toContain("y.ts line 1");
+    await editorEval(page, (ed) => { ed.setPosition({ lineNumber: 1, column: 1 }); ed.focus(); });
+    await page.keyboard.press("Meta+1");
+    await expect(tab(page, "x.ts")).toHaveAttribute("data-active", "true");
+    await expect.poll(async () => (await editorState(page)).value).toContain("x.ts line 1");
+    await expect.poll(() => page.evaluate(() => document.activeElement?.closest(".monaco-editor") !== null)).toBe(true);
+    await page.keyboard.type("typed");
+    await expect.poll(async () => (await editorState(page)).value).toContain("typed");
+  });
+
+  test("closing a loading tab leaves the shown PDF intact", async ({ page }) => {
+    await start(page, { slowImageMs: 800 });
+    const ex = explorer(page);
+    for (const name of ["pic.png", "doc.pdf"]) {
+      await openFromTree(page, name);
+      await tab(page, name).dblclick();
+    }
+    await expect(ex.getByTestId("pdf-preview")).toBeVisible();
+    await tab(page, "pic.png").click();
+    await tab(page, "pic.png").getByTestId("open-file-tab-close").click();
+    await page.waitForTimeout(1200);
+    await expect(ex.getByTestId("pdf-preview")).toBeVisible();
+    await expect(ex.getByTestId("image-preview")).toHaveCount(0);
+    expect(await tabNames(page)).toEqual(["doc.pdf"]);
+  });
+
   test("an active image tab comes back after a restart", async ({ page }) => {
     await start(page);
     await openFromTree(page, "a.ts");

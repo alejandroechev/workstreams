@@ -49,6 +49,7 @@ type FakeEditor = {
   setPosition: ReturnType<typeof vi.fn>;
   saveViewState: ReturnType<typeof vi.fn>;
   restoreViewState: ReturnType<typeof vi.fn>;
+  focus: ReturnType<typeof vi.fn>;
   setScrollTop: ReturnType<typeof vi.fn>;
   getTopForLineNumber: ReturnType<typeof vi.fn>;
   getPosition: ReturnType<typeof vi.fn>;
@@ -158,6 +159,7 @@ beforeEach(() => {
           setPosition: vi.fn(),
           saveViewState: vi.fn(() => ({ saved: true })),
           restoreViewState: vi.fn(),
+          focus: vi.fn(),
           setScrollTop: vi.fn(),
           getTopForLineNumber: vi.fn((line: number) => (line - 1) * 19),
           getPosition: vi.fn(() => ({ lineNumber: 125, column: 4 })),
@@ -231,6 +233,15 @@ describe("FileEditorView", () => {
     await waitFor(() => expect(fakeEditors[0].restoreViewState).toHaveBeenCalledWith({ kept: 1 }));
     view.unmount();
     expect(onEditorViewStateChange).toHaveBeenLastCalledWith({ saved: true }, { line: 120, cursorLine: 125, cursorColumn: 4 });
+  });
+
+  it("focuses the editor on mount only when asked", async () => {
+    const view = renderEditor(createRegistryHarness(), { autoFocus: true });
+    await waitFor(() => expect(fakeEditors[0]?.focus).toHaveBeenCalled());
+    view.unmount();
+    renderEditor(createRegistryHarness());
+    await waitFor(() => expect(fakeEditors).toHaveLength(2));
+    expect(fakeEditors[1].focus).not.toHaveBeenCalled();
   });
 
   it("restores a remembered place: first visible line and cursor", async () => {

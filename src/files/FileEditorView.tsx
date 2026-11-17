@@ -104,6 +104,8 @@ export interface FileEditorViewProps extends FileCommentActions {
    * exists: an open file's tab coming back into view. A reveal line wins over it.
    */
   initialEditorViewState?: unknown;
+  /** Focus the editor once it mounts (keyboard tab switching keeps typing in the editor). */
+  autoFocus?: boolean;
   /** A remembered place (after a restart, when no view state exists): top line and cursor. */
   initialPlace?: { line: number; cursorLine: number; cursorColumn: number };
   /**
@@ -228,6 +230,7 @@ export function FileEditorView({
   initialSlideIndex,
   initialRevealLine,
   initialEditorViewState,
+  autoFocus = false,
   initialPlace,
   onEditorViewStateChange,
   highlightLine = null,
@@ -245,6 +248,7 @@ export function FileEditorView({
   // Latest values, read by the editor lifecycle effect without re-creating Monaco.
   const viewStateInRef = useRef(initialEditorViewState);
   const placeInRef = useRef(initialPlace);
+  const autoFocusRef = useRef(autoFocus);
   const viewStateOutRef = useRef(onEditorViewStateChange);
   useEffect(() => { viewStateOutRef.current = onEditorViewStateChange; });
   const reportViewState = (editor: MonacoNs.editor.IStandaloneCodeEditor) => {
@@ -431,6 +435,7 @@ export function FileEditorView({
           editor.setPosition({ lineNumber: place.cursorLine, column: place.cursorColumn });
           editor.setScrollTop(editor.getTopForLineNumber(place.line));
         }
+        if (autoFocusRef.current) editor.focus?.();
         if (typeof editor.onDidChangeCursorPosition === "function") {
           let timer: ReturnType<typeof setTimeout> | null = null;
           const later = () => {
