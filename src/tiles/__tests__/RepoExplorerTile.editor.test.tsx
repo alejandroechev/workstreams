@@ -207,6 +207,17 @@ describe("RepoExplorerTile editor wiring", () => {
     expect(lastCall[0].renderMarkdownPreview).toEqual(expect.any(Function));
   });
 
+  it("keeps onViewStateChange stable across re-renders so the editor cannot loop", async () => {
+    renderTile();
+    await openFile("README.md");
+    await screen.findByTestId("file-editor-view");
+    const before = fileEditorMock.mock.calls.length;
+    fireEvent.click(screen.getByTestId("emit-md-viewstate"));
+    await waitFor(() => expect(fileEditorMock.mock.calls.length).toBeGreaterThan(before));
+    const callbacks = new Set(fileEditorMock.mock.calls.slice(before - 1).map((c) => c[0].onViewStateChange));
+    expect(callbacks.size).toBe(1);
+  });
+
   it("shows the Present button only when the editor reports canPresent (markdown)", async () => {
     renderTile();
     await openFile("README.md");

@@ -71,7 +71,7 @@ import { debounce } from "../domain/debounce";
 import { getAppSettings, subscribeAppSettings } from "../domain/app-settings";
 import { parseViewState } from "../domain/tile-view-state";
 import {
-  closeAll as closeAllTabs, closeOthers as closeOtherTabs, closeRight as closeRightTabs,
+  activate as activateTab, closeAll as closeAllTabs, closeOthers as closeOtherTabs, closeRight as closeRightTabs,
   closeTab as closeOneTab, emptyTabs, jumpTo as jumpToTab, keep as keepTab, openTab, setPlace, switcherOrder,
   togglePin as togglePinTab, type OpenIntent, type OpenTabs, type Place,
 } from "../domain/open-tabs";
@@ -486,15 +486,21 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
     return () => { if (prev) URL.revokeObjectURL(prev); };
   }, [pdfUrl]);
 
+  const openSeqRef = useRef(0);
   const openFile = useCallback(async (
     path: string,
     navMode: "push" | "replace" | "none" = "push",
     // Casual opens (tree, links, Ctrl+P, search, walkthroughs) reuse the preview tab.
-    intent: OpenIntent | "none" = "preview",
+    // "activate" selects an existing tab without adding, replacing or closing any.
+    intent: OpenIntent | "activate" | "none" = "preview",
   ) => {
     const trimmedPath = path.trim();
     if (!trimmedPath) return;
-    if (intent !== "none") setOpenTabs((t) => openTab(t, trimmedPath, intent));
+    // Only the latest open may publish what is shown; slower earlier reads are dropped.
+    const seq = ++openSeqRef.current;
+    const stale = () => seq !== openSeqRef.current;
+    if (intent === "activate") setOpenTabs((t) => (t.tabs.some((x) => x.path === trimmedPath) ? activateTab(t, trimmedPath) : t));
+    else if (intent !== "none") setOpenTabs((t) => openTab(t, trimmedPath, intent));
     if (navMode === "push") {
       setNavStack((prev) => (prev ? navPush(prev, trimmedPath) : createNavigationStack(trimmedPath)));
     }
@@ -513,6 +519,7 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
     if (isImageFile(trimmedPath) && !isSvgFile(trimmedPath)) {
       try {
         const b64 = await invoke<string>("read_file_base64", { path: trimmedPath });
+        if (stale()) return;
         const r = makeImageBlobUrl(trimmedPath, b64);
         setImageUrl(r.url);
         setImageSizeBytes(r.size);
@@ -521,10 +528,10 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
         setMode("image");
         return;
       } catch (e) {
-        setFileError(String(e));
+        if (!stale()) setFileError(String(e));
         return;
       } finally {
-        setFileLoading(false);
+        if (!stale()) setFileLoading(false);
       }
     }
 
@@ -544,6 +551,7 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
           return;
         }
         const { url, bytes, size } = await loadAudioFile(trimmedPath);
+        if (stale()) { URL.revokeObjectURL(url); return; }
         // Defensive: if size came back larger than the limit anyway, abort.
         if (size > AUDIO_SIZE_LIMIT_BYTES) {
           URL.revokeObjectURL(url);
@@ -561,10 +569,10 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
         setMode("audio");
         return;
       } catch (e) {
-        setFileError(String(e));
+        if (!stale()) setFileError(String(e));
         return;
       } finally {
-        setFileLoading(false);
+        if (!stale()) setFileLoading(false);
       }
     }
 
@@ -573,6 +581,7 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
       try {
         const found = entries.find((e) => e.fullPath === trimmedPath);
         const b64 = await invoke<string>("read_file_base64", { path: trimmedPath });
+        if (stale()) return;
         const r = makePdfBlobUrl(trimmedPath, b64);
         setPdfUrl(r.url);
         setPdfSizeBytes(found?.size ?? r.size);
@@ -581,16 +590,18 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
         setMode("pdf");
         return;
       } catch (e) {
-        setFileError(String(e));
+        if (!stale()) setFileError(String(e));
         return;
       } finally {
-        setFileLoading(false);
+        if (!stale()) setFileLoading(false);
       }
     }
 
     // SQLite branch — try by extension first, then sniff the magic header
     // to catch non-standard names (e.g. Copilot's session.db).
-    if (isSqliteByExt(trimmedPath) || await invoke<boolean>("is_sqlite_file", { path: trimmedPath }).catch(() => false)) {
+    const isSqlite = isSqliteByExt(trimmedPath) || await invoke<boolean>("is_sqlite_file", { path: trimmedPath }).catch(() => false);
+    if (stale()) return;
+    if (isSqlite) {
       setFilePath(trimmedPath);
       setContent(null);
       setMode("sqlite");
@@ -696,6 +707,7 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
   }, [rootDir, currentDir, backend]);
 
   const handleBackToBrowse = useCallback(() => {
+    openSeqRef.current += 1;
     setContent(null);
     setFilePath("");
     setFileError(null);
@@ -751,7 +763,7 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
   useEffect(() => {
     const held = heldBuffers.current;
     const want = new Set(
-      openTabs.tabs.map((t) => t.path).filter((p) => shouldUseFileEditor(p) && !isAudioFile(p) && !isImageFile(p) && !isPdfFile(p) && !isSqliteByExt(p)),
+      openTabs.tabs.map((t) => t.path).filter((p) => shouldUseFileEditor(p) && !isAudioFile(p) && (!isImageFile(p) || isSvgFile(p)) && !isPdfFile(p) && !isSqliteByExt(p)),
     );
     for (const [path, canonical] of held) {
       if (want.has(path)) continue;
@@ -776,6 +788,11 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
     heldBuffers.current.clear();
   }, []);
 
+  const handleEditorViewState = useCallback((state: MarkdownViewState | null) => {
+    setEditorViewState(state);
+    if (state && filePath) setMdModes((m) => (m[filePath] === state.mode ? m : { ...m, [filePath]: state.mode }));
+  }, [filePath]);
+
   const rememberEditorState = useCallback((path: string, viewState: unknown, place: Place) => {
     setEditorStates((m) => ({ ...m, [path]: viewState }));
     setOpenTabs((t) => setPlace(t, path, place));
@@ -783,7 +800,8 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
 
   // Ctrl+P handler
   useEffect(() => {
-    if (!isFocused) return;
+    // Hidden workstreams stay mounted with their focused tile; they must not steal keys.
+    if (!isFocused || !workstreamVisible) return;
     const handler = (e: KeyboardEvent) => {
       if (e.ctrlKey && e.key === "p") {
         e.preventDefault();
@@ -843,8 +861,10 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
     return () => {
       window.removeEventListener("keydown", handler, true);
       window.removeEventListener("keyup", release, true);
+      // Losing focus or visibility mid-switch cancels the switcher.
+      setSwitcher(null);
     };
-  }, [isFocused, changeTabs, selectOpenTab]);
+  }, [isFocused, workstreamVisible, changeTabs, selectOpenTab]);
 
   // Focus search input when overlay opens
   useEffect(() => {
@@ -924,14 +944,14 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
     if (!navStack || !navCanBack(navStack)) return;
     const next = navBack(navStack);
     setNavStack(next);
-    await openFile(navCurrent(next), "none");
+    await openFile(navCurrent(next), "none", "activate");
   }, [navStack, openFile]);
 
   const handleNavForward = useCallback(async () => {
     if (!navStack || !navCanFwd(navStack)) return;
     const next = navFwd(navStack);
     setNavStack(next);
-    await openFile(navCurrent(next), "none");
+    await openFile(navCurrent(next), "none", "activate");
   }, [navStack, openFile]);
 
   const handleBrowseDialog = async () => {
@@ -1523,7 +1543,7 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
     {
       activeTab,
       currentDir,
-      filePath: mode === "view" && filePath && !filePath.startsWith("commit:") ? filePath : undefined,
+      filePath: shownPath ?? undefined,
       diffMode: activeTab === "diff" && activeDiffMode ? activeDiffMode : undefined,
       customDiffBranch:
         activeTab === "diff" && activeDiffMode === "custom_branch" && customDiffBranch
@@ -2299,10 +2319,7 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
                 >{markdownContent}</MarkdownView>
               )}
               onSnapshotChange={setEditorSnapshot}
-              onViewStateChange={(state) => {
-                setEditorViewState(state);
-                if (state) setMdModes((m) => (m[filePath] === state.mode ? m : { ...m, [filePath]: state.mode }));
-              }}
+              onViewStateChange={handleEditorViewState}
               comments={visibleFileComments}
               commentsEnabled={commentsEnabled && commentsAvailable}
               onAddComment={fileComments.add}

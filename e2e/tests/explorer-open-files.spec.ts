@@ -18,21 +18,21 @@ function body(name: string): string {
   return Array.from({ length: 300 }, (_, i) => `// ${name} line ${i + 1}`).join("\n");
 }
 
-async function start(page: Page, opts: { explorers?: number; terminal?: boolean; config?: Record<string, unknown> } = {}) {
+async function start(page: Page, opts: { explorers?: number; terminal?: boolean; config?: Record<string, unknown>; slowImageMs?: number; otherWorkstream?: boolean } = {}) {
   const tiles: Array<{ type: string; title: string; config: Record<string, unknown> }> = Array.from({ length: opts.explorers ?? 1 }, (_, i) => ({
     type: "file_explorer",
     title: `Explorer ${i + 1}`,
     config: i === 0 && opts.config ? opts.config : {},
   }));
   if (opts.terminal) tiles.push({ type: "terminal", title: "Shell", config: {} });
-  await page.addInitScript(({ root, names, tiles, bodies, png }) => {
+  await page.addInitScript(({ root, names, tiles, bodies, png, slowImageMs, otherWorkstream }) => {
     const contents: Record<string, string> = {};
     names.forEach((n: string, i: number) => { contents[n] = bodies[i]; });
     Object.assign(window, {
       __WS_INVOKE_HANDLERS__: {
         get_setting: () => null,
         set_setting: () => null,
-        read_file_base64: () => png,
+        read_file_base64: () => new Promise((r) => setTimeout(() => r(png), slowImageMs)),
         is_sqlite_file: () => false,
         list_db_tables: () => [],
         read_text_file: (a: { path: string }) => ({ content: contents[a.path.split(/[\\/]/).pop() ?? ""] ?? "", line_ending: "lf", has_trailing_newline: true }),
@@ -48,11 +48,14 @@ async function start(page: Page, opts: { explorers?: number; terminal?: boolean;
         search_files: () => [],
       },
       __WS_DEMO_SEED__: {
-        workstreams: [{ name: "Tabs", directory: root, loaded: true, tiles }],
+        workstreams: [
+          { name: "Tabs", directory: root, loaded: true, tiles },
+          ...(otherWorkstream ? [{ name: "Other", directory: "/demo/other", loaded: true, tiles: [{ type: "terminal", title: "Other shell" }] }] : []),
+        ],
         files: names.map((n: string, i: number) => ({ path: `${root}/${n}`, content: bodies[i] })),
       },
     });
-  }, { root: ROOT, names: NAMES, tiles, bodies: NAMES.map(body), png: PNG_1PX });
+  }, { root: ROOT, names: NAMES, tiles, bodies: NAMES.map(body), png: PNG_1PX, slowImageMs: opts.slowImageMs ?? 0, otherWorkstream: opts.otherWorkstream ?? false });
   page.on("pageerror", (e) => pageErrors.push(e.message));
   await page.goto("/");
   await page.getByTestId("workstream-item").filter({ hasText: "Tabs" }).click();
@@ -267,6 +270,63 @@ test.describe("Repo Explorer open files", () => {
     expect(await tabNames(page)).toEqual(["b.ts"]);
     await menu("b.ts", "Close all");
     await expect(tabs(page)).toHaveCount(0);
+  });
+});
+
+
+test.describe("Repo Explorer open files — review regressions", () => {
+  test("Back/Forward never add or replace tabs, even the preview", async ({ page }) => {
+    await start(page);
+    const ex = explorer(page);
+    await openFromTree(page, "x.md");
+    await ex.getByTestId("repo-explorer-mode-preview").click();
+    await ex.getByRole("link", { name: "z" }).click();
+    await expect(tab(page, "z.ts")).toHaveAttribute("data-active", "true");
+    expect(await tabNames(page)).toEqual(["z.ts"]);
+    await ex.getByTestId("repo-explorer-nav-back").click();
+    await expect(ex.getByText("Go to")).toBeVisible();
+    expect(await tabNames(page)).toEqual(["z.ts"]);
+  });
+
+  test("a slow earlier open cannot replace the file of a later one", async ({ page }) => {
+    await start(page, { slowImageMs: 1000 });
+    const ex = explorer(page);
+    await ex.getByTestId("file-tree-item").filter({ hasText: /^\s*pic\.png\s*$/ }).click();
+    await ex.getByTestId("file-tree-item").filter({ hasText: /^\s*a\.ts\s*$/ }).click();
+    await expect.poll(async () => (await editorState(page)).value).toContain("a.ts line 1");
+    await page.waitForTimeout(1300);
+    await expect(ex.getByTestId("image-preview")).toHaveCount(0);
+    await expect(tab(page, "a.ts")).toHaveAttribute("data-active", "true");
+  });
+
+  test("an explorer in a hidden workstream does not take Ctrl+W", async ({ page }) => {
+    await start(page, { otherWorkstream: true });
+    await openFromTree(page, "a.ts");
+    await tab(page, "a.ts").dblclick();
+    await page.getByTestId("workstream-item").filter({ hasText: "Other" }).click();
+    await page.locator("[data-tile-id]").filter({ hasText: "Other shell" }).first().click();
+    await page.keyboard.press("Control+w");
+    await page.getByTestId("workstream-item").filter({ hasText: "Tabs" }).click();
+    expect(await tabNames(page)).toEqual(["a.ts"]);
+  });
+
+  test("an active image tab comes back after a restart", async ({ page }) => {
+    await start(page);
+    await openFromTree(page, "a.ts");
+    await tab(page, "a.ts").dblclick();
+    await openFromTree(page, "pic.png");
+    await expect(explorer(page).getByTestId("image-preview")).toBeVisible();
+    await page.waitForTimeout(1200);
+    const config = await page.evaluate(async () => {
+      const b = (window as unknown as { __WS_BACKEND__: { listWorkstreams(): Promise<Array<{ id: string; name: string }>>; listTiles(id: string): Promise<Array<{ tile_type: string; config_json?: string; config?: string }>> } }).__WS_BACKEND__;
+      const ws = (await b.listWorkstreams()).find((w) => w.name === "Tabs")!;
+      const t = (await b.listTiles(ws.id)).find((x) => x.tile_type === "file_explorer")!;
+      return JSON.parse(t.config_json ?? t.config ?? "{}");
+    });
+    const fresh = await page.context().newPage();
+    await start(fresh, { config });
+    await expect(explorer(fresh).getByTestId("image-preview")).toBeVisible();
+    await expect(tab(fresh, "pic.png")).toHaveAttribute("data-active", "true");
   });
 });
 
