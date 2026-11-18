@@ -121,6 +121,8 @@ describe("starting investigation sessions", () => {
     backend.seedPipelineDefinition({ organization: "skype", project: "SCC", definition_id: 812, name: "media_components-CI",
       repository: { id: "g", kind: "azure", organization: "skype", project: "SCC", name: "media_components" } });
     const watch = await backend.addPipelineWatch("https://dev.azure.com/skype/SCC/_build?definitionId=812", "failures");
+    // PR runs notify only with all branches watched.
+    await backend.setPipelineWatchBranches(watch.id, "all");
     backend.finishPipelineRun(watch.id, { id: 9, number: "9", result: "failed", branch: "refs/pull/1/merge", finished_at: "2100-01-01T00:00:00Z" });
     const item = (await backend.getPrInbox()).pipeline_items![0];
     const first = await backend.startPipelineInvestigation(item.id);

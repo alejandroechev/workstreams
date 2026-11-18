@@ -9,7 +9,7 @@ vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: vi.fn().mockResolvedValue
 
 const pipeline = (over: Partial<PipelineStatus> = {}): PipelineStatus => ({
   id: "p1", organization: "skype", project: "SCC", definition_id: 33995, name: "Agency NgcServer Update",
-  url: "https://dev.azure.com/skype/SCC/_build?definitionId=33995", mode: "both",
+  url: "https://dev.azure.com/skype/SCC/_build?definitionId=33995", mode: "both", branches: "default", default_branch: "main",
   last_result: "failed", last_run_number: "81724709", last_run_url: "https://dev.azure.com/skype/SCC/_build/results?buildId=81724709",
   last_finished_at: "2026-10-26T08:10:44Z", last_checked: "2026-10-26T09:00:00Z", error: null,
   ado_repo: { id: "g", kind: "azure", organization: "skype", project: "SCC", name: "media_components" },
@@ -23,6 +23,7 @@ function setup(pipelines: PipelineStatus[] = [pipeline()], overrides: Partial<Re
     pipelines,
     onAdd: vi.fn().mockResolvedValue(undefined),
     onSetMode: vi.fn().mockResolvedValue(undefined),
+    onSetBranches: vi.fn().mockResolvedValue(undefined),
     onRemove: vi.fn().mockResolvedValue(undefined),
     onSetRepo: vi.fn().mockResolvedValue(undefined),
     repos: REPOS,
@@ -60,6 +61,17 @@ describe("Pipelines manager", () => {
     fireEvent.keyDown(input, { key: "Enter" });
     expect(await screen.findByTestId("pipeline-add-error")).toHaveTextContent("Already watching");
     expect(input).toHaveValue("https://x");
+  });
+
+  it("notifies the default branch by default, naming it, and can switch to all branches", async () => {
+    const props = setup([pipeline(), pipeline({ id: "p2", name: "watchdog", branches: "all", default_branch: null })]);
+    const scope = screen.getByTestId("pipeline-branches-p1");
+    expect(scope).toHaveValue("default");
+    expect(scope).toHaveTextContent("Default branch (main)");
+    expect(screen.getByTestId("pipeline-branches-p2")).toHaveValue("all");
+    expect(screen.getByTestId("pipeline-branches-p2")).toHaveTextContent("Default branch");
+    fireEvent.change(scope, { target: { value: "all" } });
+    await waitFor(() => expect(props.onSetBranches).toHaveBeenCalledWith("p1", "all"));
   });
 
   it("changes the mode, removes, opens the pipeline and its last run", async () => {

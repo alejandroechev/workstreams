@@ -87,6 +87,34 @@ test("AT-1/AT-2/AT-3: add by link in either host form, refuse bad links, change 
   await expect(page.locator('[data-testid^="pipeline-notification-"]')).toHaveCount(0);
 });
 
+test("only the default branch's failures notify, until the pipeline is set to all branches", async ({ page }) => {
+  await backendCall(page, (b) => b.seedPipelineDefinition({ organization: "skype", project: "SCC", definition_id: 4242, name: "engAIne - Shared Agency Compute", default_branch: "main" }));
+  await page.getByTestId("pipelines-button").click();
+  await addPipeline(page, "https://dev.azure.com/skype/SCC/_build?definitionId=4242");
+  const row = rows(page).filter({ hasText: "engAIne" });
+  const id = (await row.getAttribute("data-testid"))!.replace("pipeline-row-", "");
+  const scope = page.getByTestId(`pipeline-branches-${id}`);
+  await expect(scope).toHaveValue("default");
+  await expect(scope.locator("option:checked")).toHaveText("Default branch (main)");
+
+  const fail = (run: number, branch: string, at: string) =>
+    backendCall(page, (b, arg) => { const [pid, n, br, t] = JSON.parse(arg); b.finishPipelineRun(pid, { id: n, number: String(n), result: "failed", branch: br, trigger: "Manual · Ana", finished_at: t }); }, JSON.stringify([id, run, branch, at]));
+  await fail(1, "users/elavarasidc/weekly-audit-compute-pilot", "2100-01-01T00:00:00Z");
+  await fail(2, "main", "2100-01-01T01:00:00Z");
+
+  await scope.selectOption("all");
+  await expect(scope).toHaveValue("all");
+  await fail(3, "users/elavarasidc/weekly-audit-compute-pilot", "2100-01-01T02:00:00Z");
+  await page.getByTestId("pipelines-close").click();
+  await page.getByTestId("pr-inbox-button").click();
+  await page.getByTestId("inbox-kind-pipelines").click();
+  const notified = page.locator('[data-testid^="pipeline-notification-"]');
+  await expect(notified).toHaveCount(2, { timeout: 10_000 });
+  await expect(notified.nth(0)).toContainText("#3");
+  await expect(notified.nth(1)).toContainText("#2");
+  await expect(page.getByTestId("inbox-section-pipelines")).not.toContainText("#1");
+});
+
 test("AT-6/AT-8/AT-9: no history replay; one Inbox with PRs and pipelines; opening a run reads it", async ({ page }) => {
   await page.getByTestId("pipelines-button").click();
   await addPipeline(page, WATCHDOG_RUN);
@@ -109,6 +137,8 @@ test("AT-6/AT-8/AT-9: no history replay; one Inbox with PRs and pipelines; openi
       title: "Add lane toggle", author: "Maria", summary: "Maria: nice", url: "https://dev.azure.com/o/p/_git/r/pullrequest/412",
       is_read: false, discovered_at: new Date().toISOString(), subject: "Maria", outcome: "" }]);
     const id = (await backend.getPrInbox()).pipelines![0].id;
+    // Feature-branch runs notify only with all branches watched.
+    await backend.setPipelineWatchBranches(id, "all");
     backend.finishPipelineRun(id, { id: 90001, number: "90001", result: "failed", branch: "main", trigger: "Scheduled", finished_at: "2100-01-01T07:06:00Z" });
     backend.finishPipelineRun(id, { id: 90002, number: "90002", result: "failed", branch: "feature/x", trigger: "Manual · Ana", finished_at: "2100-01-01T19:08:00Z" });
   });

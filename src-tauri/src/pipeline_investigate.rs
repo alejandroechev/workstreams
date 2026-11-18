@@ -465,6 +465,7 @@ mod tests {
             definition_id: 812,
             name: "media_components-CI".into(),
             repository: None,
+            default_branch: None,
         };
         p.repository = Some(AdoRepoRef {
             id: "g".into(),

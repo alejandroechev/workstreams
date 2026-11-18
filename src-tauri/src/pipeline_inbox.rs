@@ -52,6 +52,51 @@ impl PipelineMode {
     }
 }
 
+/// Which branches' runs notify: by default only the repo's default branch, so
+/// experiments on feature branches stay out of the Inbox.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum BranchScope {
+    Default,
+    All,
+}
+
+impl BranchScope {
+    pub fn parse(value: &str) -> Result<Self, String> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "default" | "default_branch" => Ok(Self::Default),
+            "all" | "any" => Ok(Self::All),
+            other => Err(format!(
+                "Unknown branch scope '{other}'; expected default or all"
+            )),
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Default => "default",
+            Self::All => "all",
+        }
+    }
+
+    /// Without a known default branch, `main` and `master` count as default.
+    fn includes(self, branch: &str, default_branch: Option<&str>) -> bool {
+        match (self, default_branch) {
+            (Self::All, _) => true,
+            (Self::Default, Some(default)) => branch == default,
+            (Self::Default, None) => branch == "main" || branch == "master",
+        }
+    }
+}
+
+/// `refs/heads/main` as `main`.
+fn short_branch(branch: &str) -> String {
+    branch
+        .strip_prefix("refs/heads/")
+        .unwrap_or(branch)
+        .to_string()
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LinkTarget {
     Run(u64),
@@ -144,6 +189,9 @@ pub struct ResolvedPipeline {
     /// The repo its definition builds, when ADO says.
     #[serde(default)]
     pub repository: Option<AdoRepoRef>,
+    /// That repo's default branch (`main`), when ADO says.
+    #[serde(default)]
+    pub default_branch: Option<String>,
 }
 
 // ── Repos ───────────────────────────────────────────────────────────────
@@ -466,6 +514,7 @@ pub(crate) fn resolve(
             org,
             &text(&definition["project"]["name"]).unwrap_or_else(|| project.clone()),
         ),
+        default_branch: text(&definition["repository"]["defaultBranch"]).map(|b| short_branch(&b)),
     })
 }
 
@@ -500,6 +549,10 @@ pub struct PipelineStatus {
     /// The pipeline's page in ADO.
     pub url: String,
     pub mode: PipelineMode,
+    /// Whose runs notify: the default branch's, or every branch's.
+    pub branches: BranchScope,
+    /// The repo's default branch, when ADO has said.
+    pub default_branch: Option<String>,
     pub last_result: Option<String>,
     pub last_run_number: Option<String>,
     pub last_run_url: Option<String>,
@@ -584,8 +637,8 @@ pub fn add(
     let id = uuid::Uuid::new_v4().to_string();
     db.execute(
         &format!(
-            "INSERT INTO pipeline_watches(id,organization,project_id,project_name,definition_id,name,mode,created_at,notify_after,ado_repo)
-            VALUES (?1,?2,?3,?4,?5,?6,?7,{NOW},{NOW},?8)"
+            "INSERT INTO pipeline_watches(id,organization,project_id,project_name,definition_id,name,mode,created_at,notify_after,ado_repo,default_branch)
+            VALUES (?1,?2,?3,?4,?5,?6,?7,{NOW},{NOW},?8,?9)"
         ),
         params![
             id,
@@ -598,7 +651,8 @@ pub fn add(
             pipeline
                 .repository
                 .as_ref()
-                .and_then(|r| serde_json::to_string(r).ok())
+                .and_then(|r| serde_json::to_string(r).ok()),
+            pipeline.default_branch
         ],
     )
     .map_err(|e| e.to_string())?;
@@ -625,6 +679,23 @@ pub fn set_mode(db: &Connection, id: &str, mode: PipelineMode) -> Result<(), Str
     Ok(())
 }
 
+/// Changes whose runs notify. Like a mode change it restarts the quiet period,
+/// so switching to all branches never replays runs that already finished.
+pub fn set_branches(db: &Connection, id: &str, branches: BranchScope) -> Result<(), String> {
+    let changed = db
+        .execute(
+            &format!(
+                "UPDATE pipeline_watches SET branches=?2, notify_after={NOW}, revision=revision+1, error=NULL WHERE id=?1"
+            ),
+            params![id, branches.as_str()],
+        )
+        .map_err(|e| e.to_string())?;
+    if changed == 0 {
+        return Err("That pipeline isn't watched".into());
+    }
+    Ok(())
+}
+
 /// Stops watching a pipeline and drops its notifications.
 pub fn remove(db: &Connection, id: &str) -> Result<(), String> {
     db.execute("DELETE FROM pipeline_events WHERE watch_id=?1", [id])
@@ -643,7 +714,7 @@ pub fn list(db: &Connection) -> Result<Vec<PipelineStatus>, String> {
     let mut stmt = db
         .prepare(
             "SELECT id,organization,project_name,definition_id,name,mode,last_result,last_run_number,
-            last_run_id,last_finished_at,last_checked,error,ado_repo,repo_override
+            last_run_id,last_finished_at,last_checked,error,ado_repo,repo_override,branches,default_branch
             FROM pipeline_watches ORDER BY name COLLATE NOCASE, id",
         )
         .map_err(|e| e.to_string())?;
@@ -668,6 +739,9 @@ pub fn list(db: &Connection) -> Result<Vec<PipelineStatus>, String> {
                     definition_id,
                     name: r.get(4)?,
                     mode: PipelineMode::parse(&mode).unwrap_or(PipelineMode::Failures),
+                    branches: BranchScope::parse(&r.get::<_, String>(14)?)
+                        .unwrap_or(BranchScope::Default),
+                    default_branch: r.get(15)?,
                     last_result: r.get(6)?,
                     last_run_number: r.get(7)?,
                     last_finished_at: r.get(9)?,
@@ -805,9 +879,16 @@ pub struct PipelineTarget {
     project_name: String,
     /// No repo stored and its definition not yet asked.
     needs_backfill: bool,
+    /// No default branch stored and its definition not yet asked for one.
+    needs_default_branch: bool,
 }
 
 impl PipelineTarget {
+    /// Whether the next check reads the pipeline's definition (once).
+    pub fn needs_definition(&self) -> bool {
+        self.needs_backfill || self.needs_default_branch
+    }
+
     /// What the poller compares to notice a change within seconds.
     pub fn fingerprint(&self) -> (String, String, i64) {
         (
@@ -823,7 +904,8 @@ pub fn targets(db: &Connection) -> Result<Vec<PipelineTarget>, String> {
     let mut stmt = db
         .prepare(
             "SELECT id,organization,project_id,definition_id,revision,project_name,
-            ado_repo IS NULL AND repo_backfilled = 0 FROM pipeline_watches ORDER BY id",
+            ado_repo IS NULL AND repo_backfilled = 0,
+            default_branch IS NULL AND default_branch_checked = 0 FROM pipeline_watches ORDER BY id",
         )
         .map_err(|e| e.to_string())?;
     let rows = stmt
@@ -836,6 +918,7 @@ pub fn targets(db: &Connection) -> Result<Vec<PipelineTarget>, String> {
                 revision: r.get(4)?,
                 project_name: r.get(5)?,
                 needs_backfill: r.get(6)?,
+                needs_default_branch: r.get(7)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -898,15 +981,11 @@ pub(crate) fn fetch_runs(
             if result.is_empty() || finished_at.is_empty() {
                 return None;
             }
-            let branch = text("sourceBranch");
             Some(Run {
                 id: run["id"].as_u64()?,
                 number: text("buildNumber"),
                 result,
-                branch: branch
-                    .strip_prefix("refs/heads/")
-                    .unwrap_or(&branch)
-                    .to_string(),
+                branch: short_branch(&text("sourceBranch")),
                 trigger: trigger_label(
                     &text("reason"),
                     run["requestedFor"]["displayName"].as_str(),
@@ -952,14 +1031,15 @@ pub fn apply_runs(db: &Connection, target: &PipelineTarget, runs: &[Run]) -> Res
     if !still_current(db, target)? {
         return Ok(0);
     }
-    let mode: String = db
+    let (mode, branches, default_branch): (String, String, Option<String>) = db
         .query_row(
-            "SELECT mode FROM pipeline_watches WHERE id=?1",
+            "SELECT mode,branches,default_branch FROM pipeline_watches WHERE id=?1",
             [&target.id],
-            |r| r.get(0),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )
         .map_err(|e| e.to_string())?;
     let mode = PipelineMode::parse(&mode).unwrap_or(PipelineMode::Failures);
+    let branches = BranchScope::parse(&branches).unwrap_or(BranchScope::Default);
     let tx = db.unchecked_transaction().map_err(|e| e.to_string())?;
     let newest = runs.iter().max_by(|a, b| {
         time_key(&a.finished_at)
@@ -984,7 +1064,11 @@ pub fn apply_runs(db: &Connection, target: &PipelineTarget, runs: &[Run]) -> Res
     )
     .map_err(|e| e.to_string())?;
     let mut added = 0;
-    for run in runs.iter().filter(|run| mode.watches(&run.result)) {
+    for run in runs
+        .iter()
+        .filter(|run| mode.watches(&run.result))
+        .filter(|run| branches.includes(&run.branch, default_branch.as_deref()))
+    {
         // An expired notification is not reported again (ADR 041).
         if crate::inbox_retention::tombstoned(
             &tx,
@@ -1039,12 +1123,15 @@ pub(crate) fn check_all(
         let result = http
             .map_err(str::to_owned)
             .and_then(|http| fetch_runs(http, target));
-        // A pipeline watched before repos were detected, whose runs don't say:
-        // its definition is asked, once. Whatever comes back (a repo, none, an
-        // error) it isn't asked again; a later run naming a repo still sets it.
-        let backfill = match (&result, http) {
-            (Ok(runs), Ok(http))
-                if target.needs_backfill && runs.iter().all(|r| r.repository.is_none()) =>
+        // A pipeline watched before repos (or default branches) were read, whose
+        // runs don't say: its definition is asked, once. Whatever comes back
+        // (a repo, none, an error) it isn't asked again; a later run naming a
+        // repo still sets it.
+        let wants_repo = target.needs_backfill
+            && matches!(&result, Ok(runs) if runs.iter().all(|r| r.repository.is_none()));
+        let definition = match (&result, http) {
+            (Ok(_), Ok(http))
+                if target.needs_definition() && (wants_repo || target.needs_default_branch) =>
             {
                 Some(
                     api_get(
@@ -1060,25 +1147,40 @@ pub(crate) fn check_all(
                             ],
                         ),
                     )
-                    .ok()
-                    .and_then(|d| {
-                        repository_of(&d["repository"], &target.organization, &target.project_name)
-                    }),
+                    .ok(),
                 )
             }
             _ => None,
         };
-        if let Some(found) = &backfill {
+        if let Some(found) = &definition {
             let saved = db.lock().map_err(|e| e.to_string()).and_then(|db| {
-                if let Some(repo) = found {
-                    save_detected(&db, target, repo)?;
+                if wants_repo {
+                    let repo = found.as_ref().and_then(|d| {
+                        repository_of(&d["repository"], &target.organization, &target.project_name)
+                    });
+                    if let Some(repo) = &repo {
+                        save_detected(&db, target, repo)?;
+                    }
+                    db.execute(
+                        "UPDATE pipeline_watches SET repo_backfilled = 1 WHERE id = ?1 AND revision = ?2",
+                        params![target.id, target.revision],
+                    )
+                    .map_err(|e| e.to_string())?;
                 }
-                db.execute(
-                    "UPDATE pipeline_watches SET repo_backfilled = 1 WHERE id = ?1 AND revision = ?2",
-                    params![target.id, target.revision],
-                )
-                .map(|_| ())
-                .map_err(|e| e.to_string())
+                if target.needs_default_branch {
+                    let branch = found
+                        .as_ref()
+                        .and_then(|d| d["repository"]["defaultBranch"].as_str())
+                        .filter(|b| !b.is_empty())
+                        .map(short_branch);
+                    // Not tied to the revision: the default branch doesn't depend on settings.
+                    db.execute(
+                        "UPDATE pipeline_watches SET default_branch = COALESCE(?2, default_branch), default_branch_checked = 1 WHERE id = ?1",
+                        params![target.id, branch],
+                    )
+                    .map_err(|e| e.to_string())?;
+                }
+                Ok(())
             });
             if let Err(error) = saved {
                 eprintln!("[pipeline-inbox] Could not save a pipeline's repo: {error}");
@@ -1224,6 +1326,7 @@ mod tests {
                 definition_id: 33770,
                 name: "agency_pipeline_watchdog".into(),
                 repository: None,
+                default_branch: None,
             }
         );
         // Requests go to dev.azure.com whatever the link's host form.
@@ -1568,6 +1671,7 @@ mod tests {
             definition_id: id,
             name: name.into(),
             repository: None,
+            default_branch: None,
         }
     }
 
@@ -1754,33 +1858,122 @@ mod tests {
     }
 
     #[test]
-    fn every_failure_notifies_whatever_the_branch_or_trigger() {
+    fn by_default_only_runs_of_the_default_branch_notify_whatever_the_trigger() {
+        let db = db();
+        let mut p = resolved(1, "p");
+        p.default_branch = Some("develop".into());
+        add(&db, &p, None).unwrap();
+        make_old(&db);
+        let target = targets(&db).unwrap().remove(0);
+        let mut feature = run(1, "failed", NEW);
+        feature.branch = "users/ana/experiment".into();
+        let mut main = run(2, "failed", NEW);
+        main.branch = "main".into();
+        let mut develop = run(3, "failed", NEW);
+        develop.branch = "develop".into();
+        develop.trigger = "Manual · Ana".into();
+        apply_runs(&db, &target, &[feature, main, develop]).unwrap();
+        let notified = items(&db).unwrap();
+        assert_eq!(notified.len(), 1);
+        assert_eq!(
+            (
+                notified[0].run_id,
+                notified[0].branch.as_str(),
+                notified[0].trigger.as_str()
+            ),
+            (3, "develop", "Manual · Ana")
+        );
+        assert_eq!(
+            notified[0].url,
+            "https://dev.azure.com/skype/SCC/_build/results?buildId=3"
+        );
+        let status = list(&db).unwrap().remove(0);
+        assert_eq!(
+            (status.branches, status.default_branch.as_deref()),
+            (BranchScope::Default, Some("develop"))
+        );
+    }
+
+    #[test]
+    fn without_a_known_default_branch_main_and_master_count_as_default() {
         let db = db();
         add(&db, &resolved(1, "p"), None).unwrap();
         make_old(&db);
         let target = targets(&db).unwrap().remove(0);
-        let mut a = run(1, "failed", NEW);
-        a.branch = "feature/x".into();
-        a.trigger = "Manual · Ana".into();
-        apply_runs(&db, &target, &[a]).unwrap();
-        let mut b = run(2, "failed", NEW);
-        b.trigger = "CI".into();
-        let c = run(3, "failed", NEW);
-        apply_runs(&db, &target, &[c, b, run(1, "failed", NEW)]).unwrap();
-        assert_eq!(notified(&db).len(), 3);
-        let first = items(&db)
-            .unwrap()
-            .into_iter()
-            .find(|i| i.run_id == 1)
-            .unwrap();
+        let runs: Vec<Run> = ["main", "master", "feature/x"]
+            .iter()
+            .enumerate()
+            .map(|(i, branch)| Run {
+                branch: (*branch).into(),
+                ..run(i as u64 + 1, "failed", NEW)
+            })
+            .collect();
+        apply_runs(&db, &target, &runs).unwrap();
+        let mut ids: Vec<u64> = items(&db).unwrap().iter().map(|i| i.run_id).collect();
+        ids.sort();
+        assert_eq!(ids, vec![1, 2]);
+    }
+
+    #[test]
+    fn all_branches_notifies_every_branch_and_switching_never_replays_old_runs() {
+        let db = db();
+        add(&db, &resolved(1, "p"), None).unwrap();
+        make_old(&db);
+        let id = list(&db).unwrap()[0].id.clone();
+        let feature = |n: u64, at: &str| Run {
+            branch: "feature/x".into(),
+            ..run(n, "failed", at)
+        };
+        let target = targets(&db).unwrap().remove(0);
+        apply_runs(&db, &target, &[feature(1, NEW)]).unwrap();
+        assert!(items(&db).unwrap().is_empty());
+
+        set_branches(&db, &id, BranchScope::All).unwrap();
+        assert_eq!(list(&db).unwrap()[0].branches, BranchScope::All);
+        let target = targets(&db).unwrap().remove(0);
+        // A run that finished before the switch is not replayed.
+        apply_runs(&db, &target, &[feature(1, "2020-01-01T00:00:00Z")]).unwrap();
+        assert!(items(&db).unwrap().is_empty());
+        apply_runs(&db, &target, &[feature(2, "2100-06-01T00:00:00Z")]).unwrap();
+        assert_eq!(items(&db).unwrap().len(), 1);
+
+        assert!(set_branches(&db, "nope", BranchScope::All).is_err());
+        assert_eq!(BranchScope::parse("ALL").unwrap(), BranchScope::All);
+        assert_eq!(BranchScope::parse("default").unwrap(), BranchScope::Default);
+        assert!(BranchScope::parse("feature").is_err());
+    }
+
+    #[test]
+    fn the_default_branch_is_read_from_the_definition_once_for_older_watches() {
+        let db = db();
+        let mut p = resolved(1, "p");
+        p.repository = Some(AdoRepoRef {
+            id: "r".into(),
+            kind: "azure".into(),
+            organization: "skype".into(),
+            project: "SCC".into(),
+            name: "repo".into(),
+        });
+        add(&db, &p, None).unwrap();
+        let target = targets(&db).unwrap().remove(0);
+        assert!(target.needs_definition());
+        let http = Stub::new(vec![
+            ("/_apis/build/builds", Ok(json!({"value": []}))),
+            (
+                "/_apis/build/definitions/1",
+                Ok(
+                    json!({"repository": {"id": "r", "type": "TfsGit", "name": "repo", "defaultBranch": "refs/heads/trunk"}}),
+                ),
+            ),
+        ]);
+        let mutex = std::sync::Mutex::new(db);
+        check_all(&mutex, Ok(&http), &[target]);
+        let db = mutex.into_inner().unwrap();
         assert_eq!(
-            (first.branch.as_str(), first.trigger.as_str()),
-            ("feature/x", "Manual · Ana")
+            list(&db).unwrap()[0].default_branch.as_deref(),
+            Some("trunk")
         );
-        assert_eq!(
-            first.url,
-            "https://dev.azure.com/skype/SCC/_build/results?buildId=1"
-        );
+        assert!(!targets(&db).unwrap().remove(0).needs_definition());
     }
 
     #[test]

@@ -3,7 +3,7 @@ import type { DiffOrderView } from "../domain/diff-reading-order";
 import type { DiagramAddition, DiagramBoard } from "../diagram/types";
 import type { WorkLane } from "../domain/work-lanes";
 import type { PrInboxMute, PrInboxSnapshot, PrWatchMode } from "../domain/pr-inbox";
-import type { PipelineMode, PipelineStatus } from "../domain/pipeline-inbox";
+import type { BranchScope, PipelineMode, PipelineStatus } from "../domain/pipeline-inbox";
 import type { SyncCheck, SyncEvent, SyncMonitorState, SyncProblem, SyncThresholds } from "../domain/sync-monitor";
 import type { InvestigationStarted, PendingInvestigation } from "../domain/pipeline-investigate";
 import type { Change, KtloFeature, OrphanHidden, OrphanReport, PlanningConnection, PlanningData, PlanningState, PublishResult } from "../domain/planning";
@@ -78,6 +78,8 @@ export interface Backend {
   addPipelineWatch(url: string, mode?: PipelineMode): Promise<PipelineStatus>;
   /** Changes what a watched pipeline notifies; runs that finished before never replay. */
   setPipelineWatchMode(id: string, mode: PipelineMode): Promise<void>;
+  /** Whose runs notify: the repo's default branch, or every branch. */
+  setPipelineWatchBranches(id: string, branches: BranchScope): Promise<void>;
   /** Stops watching a pipeline and drops its notifications. */
   removePipelineWatch(id: string): Promise<void>;
   /** Sets a pipeline's repo by hand: a repo id, "none", or "auto" to follow what ADO says again. */

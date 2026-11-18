@@ -872,6 +872,17 @@ fn set_pipeline_watch_mode(
     pipeline_inbox::set_mode(&db, &id, mode)
 }
 
+#[tauri::command]
+fn set_pipeline_watch_branches(
+    state: State<'_, AppState>,
+    id: String,
+    branches: String,
+) -> Result<(), String> {
+    let branches = pipeline_inbox::BranchScope::parse(&branches)?;
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    pipeline_inbox::set_branches(&db, &id, branches)
+}
+
 /// Starts investigating a failed pipeline run, or returns its investigation.
 /// The git work runs off the IPC thread and without the database lock.
 #[tauri::command]
@@ -6749,6 +6760,7 @@ pub fn run() {
             planning_hide_orphan,
             planning_unhide_orphan,
             set_pipeline_watch_mode,
+            set_pipeline_watch_branches,
             set_pipeline_watch_repo,
             start_pipeline_investigation,
             pipeline_investigation_pending,

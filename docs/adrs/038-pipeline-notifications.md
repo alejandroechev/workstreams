@@ -161,6 +161,24 @@ and the notification's read state doesn't change.
   path holds the database lock that the UI path needs to finish.
 - Not on the phone companion.
 
+## Amendment (2026-11-18): only the default branch by default
+
+Every run counting, whatever its branch (Decision, above), flooded the Inbox
+with failures of experiment and feature branches. **By default only runs of the
+repo's default branch notify**; each pipeline can be switched to **All
+branches** in the Pipelines manager (or `inbox.pipeline_branches
+branches=default|all`).
+
+- The default branch comes from the pipeline definition's
+  `repository.defaultBranch`, read when the pipeline is added. Pipelines added
+  before this read their definition once on the next check, whatever comes
+  back. If ADO never says, `main` and `master` count as the default branch.
+- Switching scope, like switching mode, restarts the quiet period: runs that
+  already finished are never replayed.
+- The last result shown for a pipeline is still its newest run on any branch.
+- Investigations from release or PR branches need **All branches** (their runs
+  otherwise don't notify).
+
 ## References
 
 - [ADR 030: ADO PR inbox](030-ado-pr-inbox.md)

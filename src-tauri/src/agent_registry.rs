@@ -567,6 +567,14 @@ pub const COMMANDS: &[Command] = &[
         handler: inbox_pipeline_mode,
     },
     Command {
+        id: "inbox.pipeline_branches",
+        log_params: &["id", "branches"],
+        summary: "Choose whose runs of a watched pipeline notify: the repo's default branch, or every branch (params: id, branches=default|all)",
+        requires_identity: true,
+        destructive: false,
+        handler: inbox_pipeline_branches,
+    },
+    Command {
         id: "inbox.investigate",
         log_params: &["item"],
         summary: "Investigate a failed pipeline run (params: item = its notification id): makes a workstream for it (a worktree of its repo from the run's branch, else standalone) whose Copilot session the app starts with the run's context; returns {workstream_id, created}, or the existing investigation",
@@ -939,6 +947,22 @@ fn inbox_pipeline_mode(
     Ok(CommandOutcome::changed(
         serde_json::json!({"id":id,"mode":mode}),
         StateChange::new("pr_inbox", id, "pipeline_mode"),
+    ))
+}
+
+fn inbox_pipeline_branches(
+    context: &CommandContext,
+    params: &serde_json::Value,
+) -> Result<CommandOutcome, AgentError> {
+    let id = required_str(params, "id")?;
+    let branches = crate::pipeline_inbox::BranchScope::parse(&required_str(params, "branches")?)
+        .map_err(|e| {
+            AgentError::new("INVALID_PARAM", e, "Pass branches=default or branches=all.")
+        })?;
+    crate::pipeline_inbox::set_branches(context.db, &id, branches).map_err(inbox_error)?;
+    Ok(CommandOutcome::changed(
+        serde_json::json!({"id":id,"branches":branches}),
+        StateChange::new("pr_inbox", id, "pipeline_branches"),
     ))
 }
 
@@ -3160,6 +3184,7 @@ mod tests {
                 project_name: link.project,
                 definition_id,
                 name: format!("pipeline-{definition_id}"),
+                default_branch: None,
             })
         }
     }
@@ -4635,12 +4660,31 @@ mod tests {
             serde_json::json!({"id":id,"mode":"sometimes"})
         )
         .is_err());
+        let scoped = call(
+            &db,
+            &caller,
+            "inbox.pipeline_branches",
+            serde_json::json!({"id":id,"branches":"all"}),
+        )
+        .unwrap();
+        assert!(scoped.change.is_some());
+        let bad_scope = call(
+            &db,
+            &caller,
+            "inbox.pipeline_branches",
+            serde_json::json!({"id":id,"branches":"feature/x"}),
+        )
+        .unwrap_err();
+        assert_eq!(bad_scope.code, "INVALID_PARAM");
         let listed = call(&db, &caller, "inbox.pipelines", serde_json::Value::Null).unwrap();
         let rows = listed.data.as_array().unwrap();
         assert_eq!(rows.len(), 2);
         assert!(rows
             .iter()
-            .any(|r| r["id"] == id.as_str() && r["mode"] == "successes"));
+            .any(|r| r["id"] == id.as_str() && r["mode"] == "successes" && r["branches"] == "all"));
+        assert!(rows
+            .iter()
+            .any(|r| r["id"] != id.as_str() && r["branches"] == "default"));
 
         // A notification for it shows in inbox.list and can be read.
         db.execute(

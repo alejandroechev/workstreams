@@ -1641,6 +1641,7 @@ mod tests {
                 definition_id: 1,
                 name: "nightly".into(),
                 repository: None,
+                default_branch: None,
             },
             None,
         )

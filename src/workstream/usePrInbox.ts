@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import type { Backend } from "../backend/types";
 import type { PrInboxSnapshot, PrWatchMode } from "../domain/pr-inbox";
-import type { PipelineMode } from "../domain/pipeline-inbox";
+import type { BranchScope, PipelineMode } from "../domain/pipeline-inbox";
 
 export function usePrInbox(backend: Backend) {
   const [snapshot, setSnapshot] = useState<PrInboxSnapshot>({ items: [], repos: [], mutes: [] });
@@ -66,6 +66,11 @@ export function usePrInbox(backend: Backend) {
     setRevision((value) => value + 1);
   }, [backend]);
 
+  const setPipelineBranches = useCallback(async (id: string, branches: BranchScope) => {
+    await backend.setPipelineWatchBranches(id, branches);
+    setRevision((value) => value + 1);
+  }, [backend]);
+
   const setPipelineRepo = useCallback(async (id: string, repo: string) => {
     await backend.setPipelineWatchRepo(id, repo);
     setRevision((value) => value + 1);
@@ -86,5 +91,5 @@ export function usePrInbox(backend: Backend) {
   /** Re-reads now, e.g. when an agent posted a message (ADR 041). */
   const refresh = useCallback(() => setRevision((value) => value + 1), []);
 
-  return { snapshot, error, loading, refresh, configure, setRead, mute, resetMutes, addPipeline, setPipelineMode, setPipelineRepo, removePipeline, investigate };
+  return { snapshot, error, loading, refresh, configure, setRead, mute, resetMutes, addPipeline, setPipelineMode, setPipelineBranches, setPipelineRepo, removePipeline, investigate };
 }

@@ -2467,7 +2467,7 @@ export default function App() {
       {showSync && <SyncPanel monitor={syncMonitor} onClose={() => setShowSync(false)} />}
       {showPipelines && (
         <PipelinesModal pipelines={inbox.snapshot.pipelines ?? []}
-          onAdd={inbox.addPipeline} onSetMode={inbox.setPipelineMode} onRemove={inbox.removePipeline}
+          onAdd={inbox.addPipeline} onSetMode={inbox.setPipelineMode} onSetBranches={inbox.setPipelineBranches} onRemove={inbox.removePipeline}
           onSetRepo={inbox.setPipelineRepo}
           repos={projects.filter((p) => !p.archived).map((p) => ({ id: p.id, name: p.name }))}
           onClose={() => setShowPipelines(false)} />

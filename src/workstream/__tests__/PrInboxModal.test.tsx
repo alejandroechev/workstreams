@@ -382,7 +382,7 @@ describe("Inbox, pipelines (ADR 038)", () => {
 
   it("shows a pipeline whose check failed", () => {
     renderInbox({ snapshot: { ...both, pipelines: [{
-      id: "w", organization: "skype", project: "SCC", definition_id: 1, name: "agency_pipeline_watchdog", url: "u", mode: "failures",
+      id: "w", organization: "skype", project: "SCC", definition_id: 1, name: "agency_pipeline_watchdog", url: "u", mode: "failures", branches: "default", default_branch: null,
       last_result: null, last_run_number: null, last_run_url: null, last_finished_at: null, last_checked: null, error: "ADO access denied.",
       ado_repo: null, repos: [], auto_repos: [], repo_source: "auto", repo_label: null,
     }] } });

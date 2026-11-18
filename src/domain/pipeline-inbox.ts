@@ -16,6 +16,21 @@ export function isPipelineMode(value: string): value is PipelineMode {
   return (PIPELINE_MODES as string[]).includes(value);
 }
 
+/** Whose runs notify: the repo's default branch (the default), or every branch. */
+export type BranchScope = "default" | "all";
+
+export const BRANCH_SCOPES: BranchScope[] = ["default", "all"];
+
+export function isBranchScope(value: string): value is BranchScope {
+  return (BRANCH_SCOPES as string[]).includes(value);
+}
+
+/** Without a known default branch, `main` and `master` count as default (as on the native side). */
+export function branchScopeIncludes(scope: BranchScope, branch: string, defaultBranch: string | null): boolean {
+  if (scope === "all") return true;
+  return defaultBranch ? branch === defaultBranch : branch === "main" || branch === "master";
+}
+
 /**
  * Only `failed` is a failure and only `succeeded` a success: partial successes
  * and cancels never notify, though they still show as a pipeline's last result.
@@ -109,6 +124,10 @@ export interface PipelineStatus {
   name: string;
   url: string;
   mode: PipelineMode;
+  /** Whose runs notify: the default branch's, or every branch's. */
+  branches: BranchScope;
+  /** The repo's default branch, when ADO has said. */
+  default_branch: string | null;
   last_result: string | null;
   last_run_number: string | null;
   last_run_url: string | null;

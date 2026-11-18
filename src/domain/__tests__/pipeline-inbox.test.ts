@@ -1,5 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
+  branchScopeIncludes,
+  isBranchScope,
   compareTimes,
   countUnreadInbox,
   groupPipelineItems,
@@ -39,6 +41,19 @@ describe("pipeline modes", () => {
   it("names results the way the inbox shows them", () => {
     expect(["failed", "succeeded", "partiallySucceeded", "canceled", "weird"].map(resultLabel))
       .toEqual(["Failed", "Succeeded", "Partially succeeded", "Canceled", "weird"]);
+  });
+});
+
+describe("pipeline branch scope", () => {
+  it("notifies only the default branch by default, falling back to main and master", () => {
+    expect(branchScopeIncludes("default", "develop", "develop")).toBe(true);
+    expect(branchScopeIncludes("default", "main", "develop")).toBe(false);
+    expect(branchScopeIncludes("default", "users/ana/experiment", null)).toBe(false);
+    expect(branchScopeIncludes("default", "main", null)).toBe(true);
+    expect(branchScopeIncludes("default", "master", null)).toBe(true);
+    expect(branchScopeIncludes("all", "users/ana/experiment", "main")).toBe(true);
+    expect(isBranchScope("all")).toBe(true);
+    expect(isBranchScope("feature")).toBe(false);
   });
 });
 

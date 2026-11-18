@@ -39,6 +39,9 @@ async function start(page: Page, seed: Seed) {
     b.seedPipelineDefinition({ organization: "skype", project: "SCC", definition_id: 918, name: "engaine-watchdog", repository: null });
     const mcWatch = await b.addPipelineWatch("https://dev.azure.com/skype/SCC/_build?definitionId=812", "both");
     const other = await b.addPipelineWatch("https://dev.azure.com/skype/SCC/_build?definitionId=918", "both");
+    // Investigations start from release and PR branches too, so every branch notifies here.
+    await b.setPipelineWatchBranches(mcWatch.id, "all");
+    await b.setPipelineWatchBranches(other.id, "all");
     seed.mcRuns.forEach((r, i) => b.finishPipelineRun(mcWatch.id, { ...r, finished_at: `2100-01-0${i + 1}T08:10:44Z`, trigger: "Scheduled" }));
     (seed.otherRuns ?? []).forEach((r, i) => b.finishPipelineRun(other.id, { ...r, finished_at: `2100-02-0${i + 1}T08:10:44Z` }));
   }, { mc: MC, seed });

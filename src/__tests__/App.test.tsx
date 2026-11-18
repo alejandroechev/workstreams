@@ -303,6 +303,7 @@ function createBackend(): Backend {
     clearStaleSessionLocks: vi.fn(async () => 0),
     addPipelineWatch: vi.fn(),
     setPipelineWatchMode: vi.fn(async () => {}),
+    setPipelineWatchBranches: vi.fn(async () => {}),
     removePipelineWatch: vi.fn(async () => {}),
     setPipelineWatchRepo: vi.fn(async () => {}),
     startPipelineInvestigation: vi.fn(),

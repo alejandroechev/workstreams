@@ -612,6 +612,11 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
         // Whether a pipeline without a stored repo has had its one definition
         // read, so one whose definition names none isn't asked every check.
         "ALTER TABLE pipeline_watches ADD COLUMN repo_backfilled INTEGER NOT NULL DEFAULT 0",
+        // Whose runs notify (`default` or `all`), and the repo's default branch
+        // as ADO reports it, read once for pipelines watched before this.
+        "ALTER TABLE pipeline_watches ADD COLUMN branches TEXT NOT NULL DEFAULT 'default'",
+        "ALTER TABLE pipeline_watches ADD COLUMN default_branch TEXT",
+        "ALTER TABLE pipeline_watches ADD COLUMN default_branch_checked INTEGER NOT NULL DEFAULT 0",
     ];
     for sql in &migrations {
         // SQLite errors if column already exists — ignore that error

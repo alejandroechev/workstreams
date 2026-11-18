@@ -6,8 +6,10 @@ import {
   adoRepoDisplay,
   PIPELINE_MODES,
   PIPELINE_MODE_LABELS,
+  isBranchScope,
   isPipelineMode,
   resultLabel,
+  type BranchScope,
   type PipelineMode,
   type PipelineStatus,
   type RepoRef,
@@ -18,6 +20,8 @@ interface Props {
   pipelines: PipelineStatus[];
   onAdd: (url: string) => Promise<unknown>;
   onSetMode: (id: string, mode: PipelineMode) => Promise<void>;
+  /** Chooses whose runs notify: the default branch's, or every branch's. */
+  onSetBranches: (id: string, branches: BranchScope) => Promise<void>;
   onRemove: (id: string) => Promise<void>;
   /** Sets a pipeline's repo: a repo id, "none", or "auto". */
   onSetRepo: (id: string, repo: string) => Promise<void>;
@@ -129,7 +133,7 @@ function RepoChip({ pipeline, repos, disabled, onSet }: { pipeline: PipelineStat
  * runs to add it, pick what notifies, remove it. Chrome mirrors the Inbox and
  * the Repo manager.
  */
-export function PipelinesModal({ pipelines, onAdd, onSetMode, onRemove, onSetRepo, repos, onClose }: Props) {
+export function PipelinesModal({ pipelines, onAdd, onSetMode, onSetBranches, onRemove, onSetRepo, repos, onClose }: Props) {
   const [url, setUrl] = useState("");
   const [adding, setAdding] = useState(false);
   const [addError, setAddError] = useState<string | null>(null);
@@ -271,6 +275,21 @@ export function PipelinesModal({ pipelines, onAdd, onSetMode, onRemove, onSetRep
                 {PIPELINE_MODES.map((mode) => (
                   <option key={mode} value={mode}>{PIPELINE_MODE_LABELS[mode]}</option>
                 ))}
+              </select>
+              <select
+                data-testid={`pipeline-branches-${pipeline.id}`}
+                aria-label={`Branches that notify for ${pipeline.name}`}
+                title="Whose runs notify: only the repo's default branch, or every branch (feature and experiment branches included)"
+                value={pipeline.branches}
+                disabled={busy}
+                onChange={(event) => {
+                  const next = event.target.value;
+                  if (isBranchScope(next)) void act(() => onSetBranches(pipeline.id, next));
+                }}
+                style={{ ...inputStyle, flex: "none", width: "auto" }}
+              >
+                <option value="default">{pipeline.default_branch ? `Default branch (${pipeline.default_branch})` : "Default branch"}</option>
+                <option value="all">All branches</option>
               </select>
               <button
                 data-testid={`pipeline-remove-${pipeline.id}`}

@@ -180,9 +180,12 @@ Workstreams.
 | Successes | Runs that finish `succeeded` |
 | Both | Either |
 
-Partially succeeded and canceled runs never notify. Every run counts, whatever
-its branch or trigger. Only runs that finish after you add a pipeline (or change
-its mode) notify. A retried run that changes to a watched result notifies once
+Partially succeeded and canceled runs never notify. By default only runs of the
+repo's **default branch** notify (the branch menu on each row names it, e.g.
+"Default branch (main)"), so failures on experiment and feature branches stay
+out of the Inbox; pick **All branches** to hear about every branch. Any trigger
+counts. Only runs that finish after you add a pipeline (or change its mode or
+branches) notify. A retried run that changes to a watched result notifies once
 more. Pipelines are checked with the PRs, every two minutes while Workstreams is
 open, with your Azure CLI login. A pipeline whose check fails shows the error
 on its row, and on the sidebar's Pipelines entry. Each run in the Inbox shows

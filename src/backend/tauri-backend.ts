@@ -3,7 +3,7 @@ import type { DiagramAddition, DiagramBoard } from "../diagram/types";
 import { invoke } from "@tauri-apps/api/core";
 import type { WorkLane } from "../domain/work-lanes";
 import type { PrInboxSnapshot, PrWatchMode, PrInboxMute } from "../domain/pr-inbox";
-import type { PipelineMode, PipelineStatus } from "../domain/pipeline-inbox";
+import type { BranchScope, PipelineMode, PipelineStatus } from "../domain/pipeline-inbox";
 import type { SyncCheck, SyncEvent, SyncMonitorState, SyncProblem, SyncThresholds } from "../domain/sync-monitor";
 import type { InvestigationStarted, PendingInvestigation } from "../domain/pipeline-investigate";
 import type { Change, KtloFeature, OrphanHidden, OrphanReport, PlanningConnection, PlanningData, PlanningState, PublishResult } from "../domain/planning";
@@ -150,6 +150,10 @@ export class TauriBackend implements Backend {
 
   async setPipelineWatchMode(id: string, mode: PipelineMode): Promise<void> {
     await invoke("set_pipeline_watch_mode", { id, mode });
+  }
+
+  async setPipelineWatchBranches(id: string, branches: BranchScope): Promise<void> {
+    await invoke("set_pipeline_watch_branches", { id, branches });
   }
 
   async startPipelineInvestigation(item: string): Promise<InvestigationStarted> {

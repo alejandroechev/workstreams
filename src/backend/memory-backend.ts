@@ -7,8 +7,10 @@ import { supportsPrInbox, type PrInboxItem, type PrInboxMute, type PrInboxSnapsh
 import {
   compareTimes,
   parsePipelineLink,
+  branchScopeIncludes,
   pipelineModeWatches,
   type PipelineItem,
+  type BranchScope,
   type PipelineMode,
   type PipelineStatus,
   pipelineRepoView,
@@ -600,13 +602,13 @@ export class MemoryBackend implements Backend {
   }
 
   // ── Pipelines (ADR 038) ──
-  private pipelineDefinitions: Array<{ organization: string; project: string; definition_id: number; name: string; runs: MemoryPipelineRun[]; repository?: AdoRepoRef | null }> = [];
+  private pipelineDefinitions: Array<{ organization: string; project: string; definition_id: number; name: string; runs: MemoryPipelineRun[]; repository?: AdoRepoRef | null; default_branch?: string | null }> = [];
   private pipelineWatches: Array<{ status: PipelineStatus; notifyAfter: string; adoRepo: AdoRepoRef | null; override: string | null }> = [];
   private pipelineItems: PipelineItem[] = [];
   private pipelineAuthError = false;
 
   /** A pipeline the in-memory ADO can resolve, with its finished runs (newest last or any order). */
-  seedPipelineDefinition(definition: { organization: string; project: string; definition_id: number; name: string; runs?: MemoryPipelineRun[]; repository?: AdoRepoRef | null }): void {
+  seedPipelineDefinition(definition: { organization: string; project: string; definition_id: number; name: string; runs?: MemoryPipelineRun[]; repository?: AdoRepoRef | null; default_branch?: string | null }): void {
     this.pipelineDefinitions.push({ ...definition, runs: [...(definition.runs ?? [])] });
   }
 
@@ -742,6 +744,8 @@ export class MemoryBackend implements Backend {
       name: definition.name,
       url: `${base}?definitionId=${definition.definition_id}`,
       mode,
+      branches: "default",
+      default_branch: definition.default_branch ?? null,
       last_result: last?.result ?? null,
       last_run_number: last?.number ?? null,
       last_run_url: last ? `${base}/results?buildId=${last.id}` : null,
@@ -760,6 +764,13 @@ export class MemoryBackend implements Backend {
     const watch = this.pipelineWatches.find((w) => w.status.id === id);
     if (!watch) throw new Error("That pipeline isn't watched");
     watch.status.mode = mode;
+    watch.notifyAfter = new Date().toISOString();
+  }
+
+  async setPipelineWatchBranches(id: string, branches: BranchScope): Promise<void> {
+    const watch = this.pipelineWatches.find((w) => w.status.id === id);
+    if (!watch) throw new Error("That pipeline isn't watched");
+    watch.status.branches = branches;
     watch.notifyAfter = new Date().toISOString();
   }
 
@@ -793,6 +804,7 @@ export class MemoryBackend implements Backend {
     }
     status.last_checked = new Date().toISOString();
     if (!pipelineModeWatches(status.mode, run.result) || compareTimes(run.finished_at, watch.notifyAfter) <= 0) return;
+    if (!branchScopeIncludes(status.branches, run.branch ?? "main", status.default_branch)) return;
     if (this.pipelineItems.some((i) => i.pipeline_id === id && i.run_id === run.id && i.result === run.result)) return;
     this.pipelineItems.push({
       id: crypto.randomUUID(),

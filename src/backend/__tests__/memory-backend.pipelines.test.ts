@@ -54,4 +54,18 @@ describe("MemoryBackend pipelines", () => {
     await expect(b.removePipelineWatch(p.id)).rejects.toThrow();
     await expect(b.setPipelineWatchMode(p.id, "both")).rejects.toThrow();
   });
+
+  it("notifies only the default branch until switched to all branches", async () => {
+    const b = new MemoryBackend();
+    b.seedPipelineDefinition({ organization: "skype", project: "SCC", definition_id: 9, name: "engAIne", default_branch: "develop" });
+    const p = await b.addPipelineWatch("https://dev.azure.com/skype/SCC/_build?definitionId=9");
+    expect(p).toMatchObject({ branches: "default", default_branch: "develop" });
+    b.finishPipelineRun(p.id, { id: 1, number: "1", result: "failed", branch: "users/ana/pilot", finished_at: "2100-01-01T00:00:00Z" });
+    b.finishPipelineRun(p.id, { id: 2, number: "2", result: "failed", branch: "develop", finished_at: "2100-01-01T01:00:00Z" });
+    expect((await b.getPrInbox()).pipeline_items!.map((i) => i.run_id)).toEqual([2]);
+    await b.setPipelineWatchBranches(p.id, "all");
+    b.finishPipelineRun(p.id, { id: 3, number: "3", result: "failed", branch: "users/ana/pilot", finished_at: "2100-01-01T02:00:00Z" });
+    expect((await b.getPrInbox()).pipeline_items!.map((i) => i.run_id).sort()).toEqual([2, 3]);
+    await expect(b.setPipelineWatchBranches("nope", "all")).rejects.toThrow();
+  });
 });
