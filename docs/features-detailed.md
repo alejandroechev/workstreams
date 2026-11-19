@@ -251,6 +251,7 @@ Each watched pull request reports these events:
 | Read/unread | Persist locally, per event; a group can be marked read in one click, and opening the PR reads all of its events |
 | Read filter | The inbox shows only unread events by default and drops PRs with nothing unread; **All** reveals read history. Reopening the inbox returns to **Unread** |
 | Duplicates | Never report the same comment, vote transition, gate outcome or closure twice |
+| Closed right away | A comment whose thread was resolved (closed, fixed, won't fix, by design) within **1 minute** of being posted, such as an AI reviewer's "no feedback", is kept but arrives **already read**: no badge, no bell, still visible under **All**. If a check lands between the post and the close, the notification is marked read on the next check |
 | Disable | Stop polling that repo; keep its history and baselines |
 | Archive repo | Keep notifications enabled until explicitly switched off |
 | Connection failure | Show the repo error and keep the last successful snapshot; auth failures include `az login` guidance |

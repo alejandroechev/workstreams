@@ -200,6 +200,48 @@ pub struct PrComment {
     /// ADO writes vote changes, pushes and policy prose into the same thread
     /// list as human discussion. Those are reported through their own events.
     pub is_system: bool,
+    /// When the comment's thread is resolved (fixed, closed, won't fix, by
+    /// design): the thread's last update, which is when it was resolved.
+    pub thread_resolved_at: Option<String>,
+}
+
+/// A thread resolved this soon after a comment was posted was never meant to
+/// need anyone: AI reviewers post "no feedback" and close it straight away.
+const CLOSED_QUICKLY_SECS: i64 = 60;
+
+fn is_resolved_status(status: &str) -> bool {
+    matches!(
+        status.to_ascii_lowercase().as_str(),
+        "fixed" | "closed" | "wontfix" | "bydesign"
+    )
+}
+
+/// Seconds since the epoch for ADO's `2026-01-02T10:00:00.1234567Z` (UTC).
+fn epoch_secs(timestamp: &str) -> Option<i64> {
+    let t = timestamp.trim().trim_end_matches('Z');
+    let (date, time) = t.split_once('T')?;
+    let mut d = date.split('-').map(|p| p.parse::<i64>().ok());
+    let (y, m, day) = (d.next()??, d.next()??, d.next()??);
+    let time = time.split('.').next()?;
+    let mut tt = time.split(':').map(|p| p.parse::<i64>().ok());
+    let (hh, mm, ss) = (tt.next()??, tt.next()??, tt.next()??);
+    // Days from civil (Howard Hinnant).
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let mp = (m + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe - 719_468;
+    Some(days * 86_400 + hh * 3_600 + mm * 60 + ss)
+}
+
+/// Whether a comment's thread was resolved within the grace after it was posted.
+fn closed_within_grace(published_at: &str, resolved_at: Option<&str>) -> bool {
+    match (epoch_secs(published_at), resolved_at.and_then(epoch_secs)) {
+        (Some(posted), Some(resolved)) => (0..=CLOSED_QUICKLY_SECS).contains(&(resolved - posted)),
+        _ => false,
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -369,6 +411,26 @@ fn record_event(
     summary: &str,
     rule: (&str, &str),
 ) -> Result<(), String> {
+    record_event_read(
+        tx, target, source, identity, pr, url, kind, dedupe_key, summary, rule, false,
+    )
+}
+
+/// As [`record_event`], recording the event already read when `is_read`.
+#[allow(clippy::too_many_arguments)]
+fn record_event_read(
+    tx: &rusqlite::Transaction<'_>,
+    target: &Target,
+    source: &str,
+    identity: &str,
+    pr: &WatchedPr,
+    url: &str,
+    kind: &str,
+    dedupe_key: &str,
+    summary: &str,
+    rule: (&str, &str),
+    is_read: bool,
+) -> Result<(), String> {
     let (subject, outcome) = rule;
     // A muted event is never recorded. Its PR's watermarks still advance (the
     // caller does that), so lifting the mute later does not replay a backlog.
@@ -396,8 +458,8 @@ fn record_event(
     }
     tx.execute(
         "INSERT INTO pr_inbox_events
-        (id,project_id,source,identity,pr_id,kind,title,author,summary,url,created_at,dedupe_key,subject,outcome)
-        VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,strftime('%Y-%m-%dT%H:%M:%SZ','now'),?11,?12,?13)
+        (id,project_id,source,identity,pr_id,kind,title,author,summary,url,created_at,dedupe_key,subject,outcome,is_read)
+        VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,strftime('%Y-%m-%dT%H:%M:%SZ','now'),?11,?12,?13,?14)
         ON CONFLICT(project_id,source,identity,pr_id,kind,dedupe_key) DO NOTHING",
         params![
             uuid::Uuid::new_v4().to_string(),
@@ -412,7 +474,8 @@ fn record_event(
             url,
             dedupe_key,
             subject,
-            outcome
+            outcome,
+            is_read
         ],
     )
     .map_err(|e| e.to_string())?;
@@ -587,7 +650,13 @@ pub fn apply_snapshot(
                     && !comment.is_system
                     && !comment.author_id.eq_ignore_ascii_case(&identity)
                 {
-                    record_event(
+                    // Closed straight after posting ("no feedback" from an AI
+                    // reviewer): kept, but already read, so nothing rings.
+                    let closed_quickly = closed_within_grace(
+                        &comment.published_at,
+                        comment.thread_resolved_at.as_deref(),
+                    );
+                    record_event_read(
                         &tx,
                         target,
                         &source,
@@ -598,8 +667,37 @@ pub fn apply_snapshot(
                         &format!("{}:{}", comment.thread_id, comment.id),
                         &format!("{} commented: {}", comment.author, excerpt(&comment.text)),
                         (&comment.author, ""),
+                        closed_quickly,
                     )?;
                 }
+            }
+            // A check that landed between the post and the close notified;
+            // once the thread shows it was closed within the grace, that
+            // notification is marked read. Only recent events, so a thread
+            // the user later marks unread again stays unread.
+            for comment in &detail.comments {
+                if comment.is_system
+                    || !closed_within_grace(
+                        &comment.published_at,
+                        comment.thread_resolved_at.as_deref(),
+                    )
+                {
+                    continue;
+                }
+                tx.execute(
+                    "UPDATE pr_inbox_events SET is_read=1
+                    WHERE project_id=?1 AND source=?2 AND identity=?3 AND pr_id=?4 AND kind='comment'
+                    AND dedupe_key=?5 AND is_read=0
+                    AND julianday(created_at) > julianday('now') - (10.0 / 1440)",
+                    params![
+                        target.project_id,
+                        source,
+                        identity,
+                        pr.id,
+                        format!("{}:{}", comment.thread_id, comment.id)
+                    ],
+                )
+                .map_err(|e| e.to_string())?;
             }
             for vote in &detail.votes {
                 let key = vote.reviewer_id.to_lowercase();
@@ -1147,6 +1245,10 @@ struct WireThread {
     #[serde(default)]
     is_deleted: bool,
     #[serde(default)]
+    status: String,
+    #[serde(default)]
+    last_updated_date: String,
+    #[serde(default)]
     comments: Vec<WireComment>,
 }
 
@@ -1283,6 +1385,9 @@ fn fetch_comments(
         if thread.is_deleted {
             continue;
         }
+        let resolved_at = (is_resolved_status(&thread.status)
+            && !thread.last_updated_date.is_empty())
+        .then(|| thread.last_updated_date.clone());
         for comment in thread.comments {
             if comment.is_deleted || comment.published_date.is_empty() {
                 continue;
@@ -1304,6 +1409,7 @@ fn fetch_comments(
                 // them as discussion would notify twice for one thing.
                 is_system: !comment.comment_type.is_empty()
                     && !comment.comment_type.eq_ignore_ascii_case("text"),
+                thread_resolved_at: resolved_at.clone(),
             });
         }
     }
@@ -1914,7 +2020,7 @@ mod tests {
             Ok(json!({"value":[wire_pr(1,"me",false,false)]})),
             Ok(json!({"value":[]})),
             Ok(json!({"value":[
-                {"id":4,"isDeleted":false,"comments":[
+                {"id":4,"isDeleted":false,"status":"closed","lastUpdatedDate":"2026-01-02T00:00:30Z","comments":[
                     {"id":1,"commentType":"text","content":"Looks good","publishedDate":"2026-01-02T00:00:00Z",
                         "author":{"id":"dev","displayName":"Dev"}},
                     {"id":2,"commentType":"system","content":"Dev voted 10","publishedDate":"2026-01-03T00:00:00Z",
@@ -1942,6 +2048,10 @@ mod tests {
         let detail = prs[0].deep.as_ref().unwrap();
         assert_eq!(detail.comments.len(), 2);
         assert_eq!(detail.comments[0].thread_id, 4);
+        assert_eq!(
+            detail.comments[0].thread_resolved_at.as_deref(),
+            Some("2026-01-02T00:00:30Z")
+        );
         assert!(!detail.comments[0].is_system);
         assert!(detail.comments[1].is_system);
         assert_eq!(detail.votes.len(), 1);
@@ -2116,7 +2226,26 @@ mod tests {
             author: format!("{author} display"),
             text: format!("Comment {id}"),
             is_system: false,
+            thread_resolved_at: None,
         }
+    }
+
+    /// A comment whose thread was resolved at `resolved` (ISO time).
+    fn resolved(c: PrComment, resolved: &str) -> PrComment {
+        PrComment {
+            thread_resolved_at: Some(resolved.into()),
+            ..c
+        }
+    }
+
+    fn comment_items(db: &Connection) -> Vec<(String, bool)> {
+        snapshot(db)
+            .unwrap()
+            .items
+            .into_iter()
+            .filter(|i| i.kind == "comment")
+            .map(|i| (i.summary, i.is_read))
+            .collect()
     }
 
     fn with_detail(pr: WatchedPr, detail: PrDetail) -> WatchedPr {
@@ -2255,6 +2384,126 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    #[test]
+    fn a_comment_closed_within_a_minute_of_posting_arrives_already_read() {
+        let mut db = db();
+        configure(&db, "p", WatchMode::Reviewer).unwrap();
+        let target = targets(&db).unwrap().remove(0);
+        apply_snapshot(&mut db, &target, "me", &[]).unwrap();
+        let empty = with_detail(pr(1), PrDetail::default());
+        apply_snapshot(&mut db, &target, "me", std::slice::from_ref(&empty)).unwrap();
+
+        let page = with_detail(
+            pr(1),
+            PrDetail {
+                comments: vec![
+                    // An AI reviewer: "no feedback", thread closed 20 s later.
+                    resolved(
+                        comment(1, 1, "bot", "2026-01-02T10:00:00.1234567Z"),
+                        "2026-01-02T10:00:20Z",
+                    ),
+                    // A person's thread resolved an hour later still notifies.
+                    resolved(
+                        comment(2, 1, "dev", "2026-01-02T11:00:00Z"),
+                        "2026-01-02T12:00:00Z",
+                    ),
+                    // An open thread notifies as before.
+                    comment(3, 1, "dev", "2026-01-02T13:00:00Z"),
+                ],
+                ..Default::default()
+            },
+        );
+        apply_snapshot(&mut db, &target, "me", &[page]).unwrap();
+        let mut items = comment_items(&db);
+        items.sort();
+        assert_eq!(
+            items,
+            vec![
+                ("bot display commented: Comment 1".into(), true),
+                ("dev display commented: Comment 1".into(), false),
+                ("dev display commented: Comment 1".into(), false),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_comment_seen_open_is_marked_read_once_its_thread_closes_within_a_minute() {
+        let mut db = db();
+        configure(&db, "p", WatchMode::Reviewer).unwrap();
+        let target = targets(&db).unwrap().remove(0);
+        apply_snapshot(&mut db, &target, "me", &[]).unwrap();
+        apply_snapshot(
+            &mut db,
+            &target,
+            "me",
+            &[with_detail(pr(1), PrDetail::default())],
+        )
+        .unwrap();
+        // The check lands between the bot's post and its close.
+        let open = comment(1, 1, "bot", "2026-01-02T10:00:00Z");
+        let late = comment(2, 1, "dev", "2026-01-02T10:00:00Z");
+        apply_snapshot(
+            &mut db,
+            &target,
+            "me",
+            &[with_detail(
+                pr(1),
+                PrDetail {
+                    comments: vec![open.clone(), late.clone()],
+                    ..Default::default()
+                },
+            )],
+        )
+        .unwrap();
+        assert!(comment_items(&db).iter().all(|(_, read)| !read));
+
+        apply_snapshot(
+            &mut db,
+            &target,
+            "me",
+            &[with_detail(
+                pr(1),
+                PrDetail {
+                    comments: vec![
+                        resolved(open, "2026-01-02T10:00:45Z"),
+                        resolved(late, "2026-01-02T10:05:00Z"),
+                    ],
+                    ..Default::default()
+                },
+            )],
+        )
+        .unwrap();
+        let read = comment_items(&db).iter().filter(|(_, read)| *read).count();
+        assert_eq!(read, 1, "only the thread closed within a minute");
+    }
+
+    #[test]
+    fn closed_within_reads_ado_times_and_resolved_statuses() {
+        assert!(closed_within_grace(
+            "2026-01-02T10:00:00.1234567Z",
+            Some("2026-01-02T10:00:59.9Z")
+        ));
+        assert!(!closed_within_grace(
+            "2026-01-02T10:00:00Z",
+            Some("2026-01-02T10:01:01Z")
+        ));
+        assert!(!closed_within_grace("2026-01-02T10:00:00Z", None));
+        assert!(closed_within_grace(
+            "2026-01-02T23:59:50Z",
+            Some("2026-01-03T00:00:20Z")
+        ));
+        assert!(!closed_within_grace(
+            "garbage",
+            Some("2026-01-03T00:00:20Z")
+        ));
+        for status in ["fixed", "closed", "wontFix", "byDesign"] {
+            assert!(is_resolved_status(status), "{status}");
+        }
+        for status in ["active", "pending", "unknown", ""] {
+            assert!(!is_resolved_status(status), "{status}");
+        }
     }
 
     #[test]

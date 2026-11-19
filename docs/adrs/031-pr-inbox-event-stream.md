@@ -106,6 +106,17 @@ precedence, suppression rules and migration are covered by native unit tests;
 grouping and the watch-mode selector by Vitest and browser E2E; the live ADO
 response shapes only by the opt-in ignored `inbox_live_provider` test.
 
+## Amendment (2026-11-19): comments closed right away arrive read
+
+AI reviewers often post "no feedback" and resolve the thread at once. A comment
+whose thread is resolved (`fixed`, `closed`, `wontFix`, `byDesign`) within 60 s
+of the comment's publication is recorded **already read**, so it neither counts
+nor rings, yet stays in the history. The resolution time is the thread's
+`lastUpdatedDate`. When a poll lands between post and close and notifies, a
+later poll that sees the thread resolved within the grace marks that event read
+(only events recorded in the last 10 minutes, so a thread the user deliberately
+marked unread is left alone). Applies to any author.
+
 ## References
 
 - [ADR 030: the original reviewer inbox](030-ado-pr-inbox.md)
