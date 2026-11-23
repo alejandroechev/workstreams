@@ -104,4 +104,20 @@ describe("useSyncMonitor", () => {
     await tick(0);
     expect(Object.keys(result.current.state?.mutes ?? {})).toEqual(["disk"]);
   });
+
+  it("names the phone companion's current and retired documents from this laptop's settings", async () => {
+    const b = new MemoryBackend();
+    const docs = [
+      { docId: "3VX8", appName: null, sizeBytes: 27_000, growthBytes24h: 0, modifiedAt: "" },
+      { docId: "2kBad", appName: "Workstreams Companion", sizeBytes: 3_400_000, growthBytes24h: 0, modifiedAt: "" },
+    ];
+    b.seedSyncServer({ url: "https://sync.example", monitorKey: "m", vitals: vitals({ docs }) });
+    const companionDocs = vi.fn(async () => ({ current: "automerge:3VX8", retired: ["automerge:2kBad"] }));
+    const { result } = renderHook(() => useSyncMonitor(b, { companionDocs }));
+    await act(async () => { await result.current.setKey("m"); });
+    expect(result.current.state?.checks[result.current.state.checks.length - 1]?.vitals?.docs.map((d) => d.appName)).toEqual([
+      "Workstreams Companion", "Workstreams Companion (retired)",
+    ]);
+  });
 });
+

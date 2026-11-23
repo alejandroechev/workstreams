@@ -165,6 +165,36 @@ const VITALS_KINDS = new Set(["cpu", "memory", "disk", "logins", "doc_size", "do
  * failed), nothing is known about them, so they stay open rather than read as
  * recovered.
  */
+export const COMPANION_APP_NAME = "Workstreams Companion";
+
+/** The phone companion's document now and the ones it rotated away from (ADR 033). */
+export interface CompanionDocs {
+  current: string | null;
+  retired: string[];
+}
+
+const bareId = (url: string) => url.replace(/^automerge:/, "");
+
+/**
+ * Names the companion's documents in the server's list. The server knows them
+ * only by the id registered in apps.json, which rotation leaves behind: the
+ * current document would read "unknown app" and a retired one as the
+ * companion. This laptop knows which is which.
+ */
+export function labelCompanionDocs(checks: SyncCheck[], companion: CompanionDocs): SyncCheck[] {
+  const current = companion.current ? bareId(companion.current) : null;
+  const retired = new Set(companion.retired.map(bareId));
+  if (!current && retired.size === 0) return checks;
+  const name = (doc: SyncDoc): string | null => {
+    if (doc.docId === current) return COMPANION_APP_NAME;
+    if (retired.has(doc.docId)) return `${COMPANION_APP_NAME} (retired)`;
+    return doc.appName;
+  };
+  return checks.map((check) => (check.vitals
+    ? { ...check, vitals: { ...check.vitals, docs: check.vitals.docs.map((doc) => ({ ...doc, appName: name(doc) })) } }
+    : check));
+}
+
 export function activeProblems(checks: SyncCheck[], t: SyncThresholds, open: SyncProblem[] = []): ProblemDraft[] {
   const run = recentRun(checks);
   if (run.length === 0) return [];

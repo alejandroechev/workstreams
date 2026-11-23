@@ -76,6 +76,14 @@ nothing is recorded or notified.
 - Agents get `sync.status`, `sync.history [hours]` and
   `sync.mute kind=<kind> hours=<n>`.
 
+**Companion documents rotate (2026-11-23, ADR 033).** The server names a
+document by the id registered in `apps.json`, which a rotation leaves behind:
+the current companion document would read "unknown app" and the retired one
+as the companion. The laptop relabels them from its own settings before the
+rules run and before the panel renders (`labelCompanionDocs`): the current
+`companion.doc_url` is "Workstreams Companion", each `companion.retired_docs`
+entry is "Workstreams Companion (retired)".
+
 ## Consequences
 
 - **Watched only while Workstreams runs:** nothing watches while the laptop is

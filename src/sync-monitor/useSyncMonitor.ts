@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import type { Backend } from "../backend/types";
+import { tauriSettingsStore } from "../companion/settings";
 import {
   activeProblems,
   CHECK_INTERVAL_MS,
+  labelCompanionDocs,
+  type CompanionDocs,
   thresholdsFrom,
   transition,
   type SyncMonitorState,
@@ -12,12 +15,27 @@ import {
 
 const message = (error: unknown) => String(error instanceof Error ? error.message : error);
 
+/** The companion's documents from this laptop's settings (they rotate; ADR 033). */
+async function storedCompanionDocs(): Promise<CompanionDocs> {
+  const [current, retired] = await Promise.all([
+    tauriSettingsStore.get("companion.doc_url"),
+    tauriSettingsStore.get("companion.retired_docs"),
+  ]);
+  let list: unknown;
+  try { list = JSON.parse(retired ?? "[]"); } catch { list = []; }
+  return {
+    current: current || null,
+    retired: Array.isArray(list) ? list.filter((url): url is string => typeof url === "string") : [],
+  };
+}
+
 /**
  * Watches the sync server while the app runs (ADR 040): a check every two
  * minutes, the rules applied to the stored checks, and new or resolved
  * problems saved as Inbox entries and desktop notifications.
  */
-export function useSyncMonitor(backend: Backend) {
+export function useSyncMonitor(backend: Backend, deps: { companionDocs?: () => Promise<CompanionDocs> } = {}) {
+  const companionDocsRef = useRef(deps.companionDocs ?? storedCompanionDocs);
   const [state, setState] = useState<SyncMonitorState | null>(null);
   const [error, setError] = useState<string | null>(null);
   // Every check and evaluation runs one at a time: two reading the same open
@@ -30,18 +48,25 @@ export function useSyncMonitor(backend: Backend) {
   }, []);
 
   /** Applies the rules to what's stored, without a new check. */
-  const evaluateNow = useCallback(async () => {
+  /** The stored state with the companion's documents named (the server names them by a fixed id). */
+  const read = useCallback(async (): Promise<SyncMonitorState> => {
     const stored = await backend.syncMonitorState();
+    const companion = await companionDocsRef.current().catch(() => ({ current: null, retired: [] }));
+    return { ...stored, checks: labelCompanionDocs(stored.checks, companion) };
+  }, [backend]);
+
+  const evaluateNow = useCallback(async () => {
+    const stored = await read();
     if (stored.configured && stored.checks.length > 0) {
       const now = Date.now();
       const active = activeProblems(stored.checks, thresholdsFrom(stored.thresholds), stored.problems);
       const next = transition(stored.problems, active, stored.mutes, now);
       await backend.syncMonitorApply(next.problems, next.events, next.notify);
-      setState(await backend.syncMonitorState());
+      setState(await read());
     } else {
       setState(stored);
     }
-  }, [backend]);
+  }, [backend, read]);
 
   const evaluate = useCallback(() => serial(evaluateNow), [serial, evaluateNow]);
 
@@ -81,13 +106,13 @@ export function useSyncMonitor(backend: Backend) {
 
   const mute = useCallback(async (kind: string, hours = 24) => {
     await backend.syncMonitorMute(kind, hours);
-    setState(await backend.syncMonitorState());
-  }, [backend]);
+    setState(await read());
+  }, [backend, read]);
 
   const setRead = useCallback(async (id: string, isRead: boolean) => {
     await backend.syncMonitorSetRead(id, isRead);
-    setState(await backend.syncMonitorState());
-  }, [backend]);
+    setState(await read());
+  }, [backend, read]);
 
   return { state, error, check: cycle, setKey, setThresholds, mute, setRead };
 }

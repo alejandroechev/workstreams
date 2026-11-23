@@ -1,7 +1,9 @@
 import { describe, it, expect } from "vitest";
 import {
   activeProblems,
+  COMPANION_APP_NAME,
   DEFAULT_THRESHOLDS,
+  labelCompanionDocs,
   statusLevel,
   thresholdsFrom,
   transition,
@@ -148,3 +150,32 @@ describe("the status dot and settings", () => {
     expect(thresholdsFrom({ cpuPercent: 90, maxDocMB: "x" })).toEqual({ ...DEFAULT_THRESHOLDS, cpuPercent: 90 });
   });
 });
+
+describe("naming the phone companion's documents, which rotate", () => {
+  const docs = [
+    { docId: "3VX8", appName: null, sizeBytes: 27_000, growthBytes24h: 0, modifiedAt: "" },
+    { docId: "2kBad", appName: "Workstreams Companion", sizeBytes: 3_400_000, growthBytes24h: 0, modifiedAt: "" },
+    { docId: "9Vioi", appName: "Pagos+", sizeBytes: 132_000, growthBytes24h: 0, modifiedAt: "" },
+  ];
+  const companion = { current: "automerge:3VX8", retired: ["automerge:2kBad"] };
+
+  it("names the current document and marks retired ones, leaving other apps alone", () => {
+    const labelled = labelCompanionDocs([ok(0, vitals({ docs }))], companion);
+    expect(labelled[0].vitals!.docs.map((d) => d.appName)).toEqual([
+      COMPANION_APP_NAME, `${COMPANION_APP_NAME} (retired)`, "Pagos+",
+    ]);
+  });
+
+  it("alerts about the current document under the companion's name", () => {
+    const big = [{ ...docs[0], sizeBytes: 60 * 2 ** 20 }];
+    const [problem] = activeProblems(labelCompanionDocs([ok(0, vitals({ docs: big }))], companion), DEFAULT_THRESHOLDS);
+    expect(problem.message).toMatch(new RegExp(`^${COMPANION_APP_NAME} document is`));
+  });
+
+  it("changes nothing without a companion document, and keeps checks without vitals", () => {
+    const checks = [ok(0, vitals({ docs })), down(1)];
+    expect(labelCompanionDocs(checks, { current: null, retired: [] })).toEqual(checks);
+    expect(labelCompanionDocs(checks, companion)[1]).toEqual(checks[1]);
+  });
+});
+
