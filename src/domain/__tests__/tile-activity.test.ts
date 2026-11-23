@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bumpTileGeneration, forgetTileActivity, isTileBusy, setTileActivity, tileGeneration, tileTurnCount } from "../tile-activity";
+import { bumpTileGeneration, forgetTileActivity, isTileBusy, setTileActivity, tileGeneration } from "../tile-activity";
 
 describe("tile activity registry", () => {
   it("is busy only while the agent is mid-turn", () => {
@@ -21,7 +21,7 @@ describe("tile activity registry", () => {
   });
 });
 
-describe("tile process generations and turn counts (findings 5 and 7)", () => {
+describe("tile process generations (finding 5)", () => {
   it("counts each process change, and keeps it after the tile forgets its activity", () => {
     const before = tileGeneration("g");
     bumpTileGeneration("g");
@@ -29,16 +29,6 @@ describe("tile process generations and turn counts (findings 5 and 7)", () => {
     forgetTileActivity("g");
     expect(tileGeneration("g")).toBe(before + 2);
     expect(tileGeneration("never")).toBe(0);
-  });
-
-  it("remembers the last reported turn count until forgotten", () => {
-    expect(tileTurnCount("c")).toBeUndefined();
-    setTileActivity("c", "idle", 7);
-    expect(tileTurnCount("c")).toBe(7);
-    setTileActivity("c", "thinking");
-    expect(tileTurnCount("c")).toBe(7);
-    forgetTileActivity("c");
-    expect(tileTurnCount("c")).toBeUndefined();
   });
 
   it("the backends bump a tile's generation on every spawn and close", async () => {

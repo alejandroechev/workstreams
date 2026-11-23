@@ -19,11 +19,13 @@ async function setup(opts: { frequency?: ScheduleFrequency; prompt?: string; cre
   const busy = new Set<string>();
   const archived = new Set<string>();
   const generations = new Map<string, number>();
-  const turns = new Map<string, number>();
+  /** The session's turn cursor (events file), per tile. */
+  const cursor = new Map<string, { starts: number; ends: number }>();
   const spawns: Array<{ tileId: string; prompt: string }> = [];
   const interrupts: string[] = [];
   let failResume: string | null = null;
   let duringResume: (() => Promise<void>) | null = null;
+  let beforeLock: (() => Promise<void>) | null = null;
   const deps: ScheduleRunnerDeps = {
     list: () => backend.listSchedules(),
     update: (id, patch, expected) => backend.updateSchedule(id, patch, expected),
@@ -31,14 +33,15 @@ async function setup(opts: { frequency?: ScheduleFrequency; prompt?: string; cre
     workstreamName: (id) => (id === ws.id ? "Courses" : undefined),
     isArchived: (id) => archived.has(id),
     isBusy: (tileId) => busy.has(tileId),
-    turnCount: (tileId) => turns.get(tileId),
+    turnState: async (s) => ({ ...(cursor.get(s.tile_id) ?? { starts: 0, ends: 0 }) }),
     generation: (tileId) => generations.get(tileId) ?? 0,
-    // Like resumeScheduledSession: revalidate before the stop and before the spawn.
+    // Like resumeScheduledSession: wait for the tile, revalidate before the stop and before the spawn.
     resume: vi.fn(async (s, prompt, revalidate) => {
+      await beforeLock?.();
       if (failResume) throw new Error(failResume);
-      await revalidate();
+      await revalidate("before-stop");
       await duringResume?.();
-      await revalidate();
+      await revalidate("before-spawn");
       generations.set(s.tile_id, (generations.get(s.tile_id) ?? 0) + 1);
       spawns.push({ tileId: s.tile_id, prompt });
     }),
@@ -49,15 +52,20 @@ async function setup(opts: { frequency?: ScheduleFrequency; prompt?: string; cre
   const runner = createScheduleRunner(deps, { maxGapMs: Infinity, ...opts.runner });
   const read = async () => (await backend.listSchedules()).find((s) => s.id === schedule.id)!;
   return {
-    backend, ws, tile, schedule, busy, archived, generations, turns, spawns, interrupts, deps, runner, read,
+    backend, ws, tile, schedule, busy, archived, generations, cursor, spawns, interrupts, deps, runner, read,
     failWith: (e: string | null) => { failResume = e; },
     whileResuming: (fn: (() => Promise<void>) | null) => { duringResume = fn; },
+    beforeTheLock: (fn: (() => Promise<void>) | null) => { beforeLock = fn; },
   };
 }
 
-/** The resumed turn runs and ends, as the poller would report it. */
-function turn(env: { busy: Set<string>; tile: { id: string } }) {
-  return { start: () => env.busy.add(env.tile.id), end: () => env.busy.delete(env.tile.id) };
+/** A turn runs and ends in the tile's session: its events file and the poller's activity. */
+function turn(env: { busy: Set<string>; tile: { id: string }; cursor: Map<string, { starts: number; ends: number }> }) {
+  const at = () => env.cursor.get(env.tile.id) ?? { starts: 0, ends: 0 };
+  return {
+    start: () => { env.busy.add(env.tile.id); env.cursor.set(env.tile.id, { ...at(), starts: at().starts + 1 }); },
+    end: () => { env.busy.delete(env.tile.id); env.cursor.set(env.tile.id, { ...at(), ends: at().ends + 1 }); },
+  };
 }
 
 describe("schedule runner", () => {
@@ -86,25 +94,44 @@ describe("schedule runner", () => {
     expect(deps.onChange).toHaveBeenCalled();
   });
 
-  it("(finding 7) takes a turn too short to be seen busy from the turn count rising", async () => {
+  it("(round 2, finding 2) sees a turn that finished before the first poll, from the cursor read before launching", async () => {
     const env = await setup();
     await env.runner.tick(at(2026, 11, 23, 8, 30));
-    env.turns.set(env.tile.id, 4);
+    // The session already had 5 turns; nothing about it was polled before (background mount).
+    env.cursor.set(env.tile.id, { starts: 5, ends: 5 });
     await env.runner.tick(NINE);
+    env.cursor.set(env.tile.id, { starts: 6, ends: 6 });
     await env.runner.tick(NINE + 10_000);
-    expect((await env.read()).last_result).toBe("running");
-    env.turns.set(env.tile.id, 5);
-    await env.runner.tick(NINE + 20_000);
-    expect((await env.read()).last_result).toBe("ok");
+    expect(await env.read()).toMatchObject({ last_result: "ok", failures: 0 });
   });
 
-  it("(finding 7) never takes the first count reported after a background mount as a turn", async () => {
+  it("(round 2, finding 1) once the scheduled turn ended, a manual turn after it is never interrupted", async () => {
     const env = await setup();
     await env.runner.tick(at(2026, 11, 23, 8, 30));
     await env.runner.tick(NINE);
-    env.turns.set(env.tile.id, 12);
-    await env.runner.tick(NINE + 10_000);
-    expect((await env.read()).last_result).toBe("running");
+    // Between two ticks the scheduled turn ends and the user starts another.
+    turn(env).start();
+    turn(env).end();
+    turn(env).start();
+    await env.runner.tick(NINE + RUN_TIMEOUT_MS + 1);
+    await env.runner.tick(NINE + 2 * RUN_TIMEOUT_MS);
+    expect(env.interrupts).toEqual([]);
+    expect(await env.read()).toMatchObject({ last_result: "ok", failures: 0 });
+  });
+
+  it("(round 2, finding 3) skips the slot when the tile was relaunched or became busy while the run waited for it", async () => {
+    for (const what of ["relaunched", "busy"] as const) {
+      const env = await setup();
+      await env.runner.tick(at(2026, 11, 23, 8, 30));
+      env.beforeTheLock(async () => {
+        // A phone message holds the tile, and launches its own turn.
+        if (what === "relaunched") env.generations.set(env.tile.id, 7);
+        else env.busy.add(env.tile.id);
+      });
+      await env.runner.tick(NINE);
+      expect(env.spawns, what).toEqual([]);
+      expect(await env.read(), what).toMatchObject({ last_result: "skipped", failures: 0, next_run_at: at(2026, 11, 24, 9, 0) });
+    }
   });
 
   it("(finding 7) a run whose turn never starts is a failure, not ok", async () => {
@@ -208,17 +235,17 @@ describe("schedule runner", () => {
   });
 
   it("(AT-9) interrupts a run still going after 60 minutes, then auto-pauses after 3 consecutive failures, ignoring a skip", async () => {
-    const { backend, runner, read, busy, tile, interrupts, failWith, spawns, schedule } = await setup({ frequency: { kind: "interval", minutes: 120 }, created: 0 });
+    const { backend, runner, read, busy, tile, interrupts, failWith, spawns, schedule, cursor } = await setup({ frequency: { kind: "interval", minutes: 120 }, created: 0 });
     const due = (n: number) => n * 120 * MIN;
     await runner.tick(0);
     await runner.tick(due(1));
-    busy.add(tile.id);
+    turn({ busy, tile, cursor }).start();
     await runner.tick(due(1) + 30 * MIN);
     expect(interrupts).toEqual([]);
     await runner.tick(due(1) + RUN_TIMEOUT_MS);
     expect(interrupts).toEqual([tile.id]);
     expect(await read()).toMatchObject({ last_result: "timed out", failures: 1, paused: false });
-    busy.delete(tile.id);
+    turn({ busy, tile, cursor }).end();
     expect((await backend.listTiles(schedule.workstream_id)).map((t) => t.id)).toEqual([tile.id]);
     failWith("This tile isn't linked to a Copilot session yet");
     await runner.tick(due(2));
@@ -245,8 +272,8 @@ describe("schedule runner", () => {
     await env.runner.tick(at(2026, 11, 23, 8, 30));
     await env.runner.tick(NINE);
     // A phone message restarted the tile; its own turn runs past the hour.
+    turn(env).start();
     env.generations.set(env.tile.id, (env.generations.get(env.tile.id) ?? 0) + 2);
-    env.busy.add(env.tile.id);
     await env.runner.tick(NINE + RUN_TIMEOUT_MS + 1);
     expect(env.interrupts).toEqual([]);
     expect(await env.read()).toMatchObject({ last_result: "interrupted", failures: 0 });
@@ -268,6 +295,66 @@ describe("schedule runner", () => {
     expect(message.body.length).toBeLessThan(2_000);
     await env.runner.tick(62 * MIN);
     expect((await env.backend.getPrInbox()).agent_messages).toHaveLength(1);
+  });
+
+  it("(round 2, finding 6) a slow tick keeps the heartbeat, so a slot that fell during it still runs", async () => {
+    const env = await setup({ frequency: { kind: "interval", minutes: 60 }, created: NINE - 60 * MIN, runner: { maxGapMs: 2 * MIN } });
+    const other = await env.backend.createTile(env.ws.id, "copilot_session", "Other", JSON.stringify({ copilot_session_id: "O" }));
+    const second = await env.backend.createSchedule({
+      tileId: other.id, workstreamId: env.ws.id, prompt: "Other chore", frequency: { kind: "interval", minutes: 60 },
+      notifyInbox: false, notifyPhone: false, nextRunAt: NINE + MIN, createdAt: 0,
+    });
+    await env.backend.updateSchedule(env.schedule.id, { next_run_at: NINE });
+    let release!: () => void;
+    const held = new Promise<void>((r) => { release = r; });
+    env.whileResuming(async () => { env.whileResuming(null); await held; });
+    await env.runner.tick(NINE - 10_000);
+    const slow = env.runner.tick(NINE + 1_000);
+    // The timer keeps firing while the first run waits for its tile.
+    for (let t = NINE + 15_000; t < NINE + 3 * MIN; t += 15_000) void env.runner.tick(t);
+    await new Promise((r) => setTimeout(r, 5));
+    release();
+    await slow;
+    await env.runner.tick(NINE + 3 * MIN);
+    expect(env.spawns.map((x) => x.prompt)).toEqual(["Check for new videos", "Other chore"]);
+    expect((await env.backend.listSchedules()).find((x) => x.id === second.id)?.last_result).toBe("running");
+  });
+
+  it("(round 2, finding 6) one tile's slow resume doesn't hold back another schedule due at the same tick", async () => {
+    const env = await setup({ frequency: { kind: "interval", minutes: 60 }, created: 0 });
+    const other = await env.backend.createTile(env.ws.id, "copilot_session", "Other", "{}");
+    await env.backend.createSchedule({
+      tileId: other.id, workstreamId: env.ws.id, prompt: "Other chore", frequency: { kind: "interval", minutes: 60 },
+      notifyInbox: false, notifyPhone: false, nextRunAt: NINE, createdAt: 0,
+    });
+    await env.backend.updateSchedule(env.schedule.id, { next_run_at: NINE });
+    let release!: () => void;
+    const held = new Promise<void>((r) => { release = r; });
+    env.whileResuming(async () => { env.whileResuming(null); await held; });
+    await env.runner.tick(NINE - 10_000);
+    const slow = env.runner.tick(NINE);
+    await vi.waitFor(() => expect(env.spawns.map((x) => x.prompt)).toContain("Other chore"));
+    release();
+    await slow;
+    expect(env.spawns).toHaveLength(2);
+  });
+
+  it("(round 2, finding 7) keeps an outcome until it is stored, without repeating its side effects", async () => {
+    const env = await setup();
+    await env.runner.tick(at(2026, 11, 23, 8, 30));
+    await env.runner.tick(NINE);
+    turn(env).start();
+    const update = env.deps.update;
+    let failed = false;
+    env.deps.update = async (id, patch, expected) => {
+      if (!failed && patch.last_result === "timed out") { failed = true; throw new Error("db locked"); }
+      return update(id, patch, expected);
+    };
+    await env.runner.tick(NINE + RUN_TIMEOUT_MS);
+    expect((await env.read()).last_result).toBe("running");
+    await env.runner.tick(NINE + RUN_TIMEOUT_MS + 15_000);
+    expect(await env.read()).toMatchObject({ last_result: "timed out", failures: 1 });
+    expect(env.interrupts).toHaveLength(1);
   });
 
   it("(AT-5) Run now resumes at once; a paused schedule doesn't run at its due time; the edit is used next", async () => {

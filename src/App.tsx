@@ -83,6 +83,7 @@ import { ScheduleEditor } from "./schedules/ScheduleEditor";
 import { SchedulesModal } from "./schedules/SchedulesModal";
 import { TileSchedulesContext, type TileSchedules } from "./schedules/context";
 import { isTileBusy } from "./domain/tile-activity";
+import { linkedSessionId } from "./domain/linked-sessions";
 import type { PeriodicSchedule } from "./domain/periodic-schedules";
 import { stopSession } from "./companion/stop-session";
 import { postTileNotice } from "./domain/tile-notices";
@@ -2325,6 +2326,11 @@ export default function App() {
       return status === "archived" || status === "archiving";
     },
     isBusy: isTileBusy,
+    turnState: async (schedule) => {
+      const tile = (await backend.listTiles(schedule.workstream_id)).find((t) => t.id === schedule.tile_id);
+      const sessionId = tile ? linkedSessionId(tile.config_json) : null;
+      return sessionId ? backend.sessionTurnState(sessionId) : null;
+    },
     resume: (schedule, prompt, revalidate) =>
       resumeScheduledSession(
         { ...resumeDeps(), companionOn: isCompanionEnabled },

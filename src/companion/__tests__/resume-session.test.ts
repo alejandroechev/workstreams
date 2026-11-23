@@ -367,3 +367,17 @@ describe("a scheduled resume revalidates before stopping and before spawning (re
     expect(log.filter((l) => l === "stop" || l.startsWith("spawn"))).toEqual(["stop", "spawn:/repo/alpha/sub:c:session-s:null"]);
   });
 });
+
+describe("recovery never relaunches an archived workstream's tile (round 2, finding 4)", () => {
+  it("leaves the tile stopped when the workstream was archived while it stopped", async () => {
+    const { ws, tile, deps, log, spawned } = await setup();
+    deps.stop = vi.fn(async () => { log.push("stop"); (ws as { status: string }).status = "archiving"; return { forced: false }; });
+    const revalidate = vi.fn(async (phase: "before-stop" | "before-spawn") => { if (phase === "before-spawn") throw new Error("The workstream was archived."); });
+    await expect(resumeScheduledSession({ ...deps, companionOn: async () => false }, {
+      workstreamId: ws.id, tileId: tile.id, prompt: "P", command: "c", scheduleId: "s", now: 1, revalidate,
+    })).rejects.toThrow("archived");
+    expect(revalidate.mock.calls.map((c) => c[0])).toEqual(["before-stop", "before-spawn"]);
+    expect(log.filter((l) => l.startsWith("spawn"))).toEqual([]);
+    expect(spawned.has(tile.id)).toBe(false);
+  });
+});

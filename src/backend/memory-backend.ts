@@ -2283,9 +2283,25 @@ export class MemoryBackend implements Backend {
 
   async companionRevokeSession(tileId: string, requestId?: string): Promise<void> {
     const session = this.companionSessions.get(tileId);
-    if (requestId !== undefined && session?.requestId !== requestId) return;
+    if (requestId !== undefined) {
+      // A rollback: only the thread its own claim created, never the process.
+      if (session?.requestId === requestId) this.companionRevoked.add(tileId);
+      return;
+    }
     if (session) this.companionRevoked.add(tileId);
     this.phoneBarred.add(tileId);
+  }
+
+  private sessionTurns = new Map<string, { starts: number; ends: number }>();
+
+  /** As session_turn_state: turns the session's events file started and ended. */
+  async sessionTurnState(sessionId: string): Promise<{ starts: number; ends: number }> {
+    return { ...(this.sessionTurns.get(sessionId) ?? { starts: 0, ends: 0 }) };
+  }
+
+  /** E2E seam: what a session's events file holds (the CLI writing turns). */
+  setSessionTurnsForTests(sessionId: string, starts: number, ends: number): void {
+    this.sessionTurns.set(sessionId, { starts, ends });
   }
 
   async companionDeleteSession(tileId: string): Promise<void> {

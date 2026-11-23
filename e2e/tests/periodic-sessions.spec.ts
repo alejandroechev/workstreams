@@ -64,13 +64,10 @@ async function tickThrough(page: Page, due: number) {
   await tick(page, due - 1_000);
   await tick(page, due + 1_000);
 }
-/** The run's turn starts and ends, as the session poller reports it (finding 7). */
-async function finishTurn(page: Page, tileId: string, at: number) {
-  const emit = (status: string) => page.evaluate(({ id, status }) => (window as unknown as SpecWindow).__WS_EMIT__(`copilot-stats-${id}`, { activity_status: status }), { id: tileId, status });
-  await emit("thinking");
+/** The run's turn starts and ends in the session's events file (the CLI writing it). */
+async function finishTurn(page: Page, sessionId: string, turns: number, at: number) {
+  await call(page, "setSessionTurnsForTests", sessionId, turns, turns);
   await tick(page, at);
-  await emit("idle");
-  await tick(page, at + 1_000);
 }
 const row = (page: Page, id: string) => page.locator(`[data-testid="workstream-item"][data-workstream-id="${id}"]`);
 
@@ -178,7 +175,7 @@ test("AT-5: Run now, Pause, Edit and Delete from the Schedules modal; clock icon
 
   await page.getByTestId(`schedule-run-${courses.created.id}`).click();
   await expect.poll(() => spawns(page, courses.tile.id)).toEqual([expect.objectContaining({ session: "s-videos", prompt: "Check for new videos" })]);
-  await finishTurn(page, courses.tile.id, Date.now() + 60_000);
+  await finishTurn(page, "s-videos", 1, Date.now() + 60_000);
 
   await page.getByTestId(`schedule-pause-${infra.created.id}`).click();
   await expect(page.getByTestId(`schedule-row-${infra.created.id}`)).toHaveAttribute("data-paused", "true");

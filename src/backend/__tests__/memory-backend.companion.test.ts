@@ -43,6 +43,26 @@ describe("MemoryBackend phone sessions", () => {
     expect(session.messages[0].text).toBe("m1");
   });
 
+  it("a rollback revokes only its own claim and never bars the running process (round 2, finding 5)", async () => {
+    const backend = new MemoryBackend();
+    const ws = await backend.createWorkstream("W", "/w");
+    const tile = await backend.createTile(ws.id, "copilot_session", "T", "{}");
+    await backend.companionRecordSession({ tileId: tile.id, workstreamId: ws.id, requestId: "newer", prompt: "p", createdAt: 0 });
+    await backend.companionRevokeSession(tile.id, "stale");
+    backend.companionSendForTests(tile.id, "result", "still allowed", 1);
+    await backend.companionRevokeSession(tile.id, "newer");
+    expect((await backend.companionListSessions())[0].canSend).toBe(false);
+    // Its process isn't barred: its next message opens a fresh thread.
+    backend.companionSendForTests(tile.id, "result", "fresh", 2);
+  });
+
+  it("reports a session's turn cursor, zero until set (round 2, findings 1-2)", async () => {
+    const backend = new MemoryBackend();
+    expect(await backend.sessionTurnState("s")).toEqual({ starts: 0, ends: 0 });
+    backend.setSessionTurnsForTests("s", 3, 2);
+    expect(await backend.sessionTurnState("s")).toEqual({ starts: 3, ends: 2 });
+  });
+
   it("refuses a terminal tile, as companion.send does", async () => {
     const backend = new MemoryBackend();
     const ws = await backend.createWorkstream("W", "/w");

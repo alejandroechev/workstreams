@@ -582,6 +582,10 @@ export class TauriBackend implements Backend {
     return invoke<number>("companion_prune_sessions", { now, retentionMs });
   }
 
+  async sessionTurnState(sessionId: string): Promise<{ starts: number; ends: number }> {
+    return invoke<{ starts: number; ends: number }>("session_turn_state", { sessionId });
+  }
+
   async listSchedules(): Promise<PeriodicSchedule[]> {
     return invoke<PeriodicSchedule[]>("schedule_list");
   }

@@ -332,6 +332,7 @@ function createBackend(): Backend {
     companionDeleteSession: vi.fn(async () => {}),
     companionPruneSessions: vi.fn(async () => 0),
     listSchedules: vi.fn(async () => []),
+    sessionTurnState: vi.fn(async () => ({ starts: 0, ends: 0 })),
     createSchedule: vi.fn(),
     updateSchedule: vi.fn(),
     deleteSchedule: vi.fn(async () => {}),

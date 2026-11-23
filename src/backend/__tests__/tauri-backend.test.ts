@@ -48,6 +48,7 @@ describe("TauriBackend", () => {
     await backend.deleteSchedule("s");
     await backend.postAppInboxMessage("w", "t", "error", "Paused", "why");
     await backend.companionRevokeSession("t", "r1");
+    await backend.sessionTurnState("sid");
     expect(invoke.mock.calls).toEqual([
       ["schedule_list"],
       ["schedule_create", { tileId: "t", workstreamId: "w", prompt: "P", frequency, notifyInbox: true, notifyPhone: false, nextRunAt: 5, createdAt: 1 }],
@@ -56,6 +57,7 @@ describe("TauriBackend", () => {
       ["schedule_delete", { id: "s" }],
       ["inbox_post_app_message", { workstreamId: "w", tileId: "t", level: "error", title: "Paused", body: "why" }],
       ["companion_revoke_session", { tileId: "t", requestId: "r1" }],
+      ["session_turn_state", { sessionId: "sid" }],
     ]);
   });
 

@@ -100,20 +100,20 @@ test("AT-8: a scheduled tile's thread reads prompt, reply, prompt, reply, and th
   }), { tileId: videos.id, wsId: ws.id, due }) as PeriodicSchedule;
   const tick = (now: number) => page.evaluate((at) => (window as unknown as PhoneWindow).__WS_SCHEDULER__.tick(at), now);
 
-  const emit = (status: string) => page.evaluate(({ id, status }) => (window as unknown as PhoneWindow).__WS_EMIT__(`copilot-stats-${id}`, { activity_status: status }), { id: videos.id, status });
-  // Awake before each slot (missed slots never run), and each run's turn seen to start and end.
+  // The CLI writing each run's turn into the session's events file.
+  const turns = (n: number) => page.evaluate((n) => (window as unknown as PhoneWindow).__WS_BACKEND__.setSessionTurnsForTests("s-videos", n, n), n);
+  // Awake before each slot (missed slots never run), and each run's turn seen to end.
   await tick(due - 1_000);
   await tick(due + 1_000);
   await expect.poll(() => spawns(page, videos.id)).toHaveLength(1);
-  await emit("thinking");
-  await tick(due + 60_000);
   await agentReplies(page, videos.id, "Run 1: 2 new videos");
-  await emit("idle");
+  await turns(1);
   await tick(due + 2 * 60_000);
   await tick(due + 3_600_000 - 1_000);
   await tick(due + 3_600_000 + 1_000);
   await expect.poll(() => spawns(page, videos.id)).toHaveLength(2);
   await agentReplies(page, videos.id, "Run 2: nothing new");
+  await turns(2);
 
   await expect.poll(async () => (await verified(page)).find((s) => s.title === "Videos")?.messages.map((m) => m.kind))
     .toEqual(["prompt", "result", "prompt", "result"]);

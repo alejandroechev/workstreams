@@ -280,7 +280,7 @@ export default function CopilotSessionTile({
       // Detect active→idle transition → notify user
       const newActivity = event.payload.activity_status || "idle";
       // Read by the periodic schedule runner (ADR 044): no run while mid-turn.
-      setTileActivity(tileId, newActivity, event.payload.turn_count);
+      setTileActivity(tileId, newActivity);
       const wasActive = ["thinking", "tool_use", "responding"].includes(prevActivityRef.current);
       const nowIdle = newActivity === "idle";
       if (wasActive && nowIdle) {

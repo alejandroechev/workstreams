@@ -2,8 +2,8 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import { listen } from "@tauri-apps/api/event";
 import type { Backend } from "../backend/types";
 import { nextRunAfter, type PeriodicSchedule, type ScheduleFrequency } from "../domain/periodic-schedules";
-import { createScheduleRunner, type ScheduleRunner } from "../domain/schedule-runner";
-import { tileGeneration, tileTurnCount } from "../domain/tile-activity";
+import { createScheduleRunner, type ResumePhase, type ScheduleRunner, type TurnCursor } from "../domain/schedule-runner";
+import { tileGeneration } from "../domain/tile-activity";
 
 /** What the schedule editor produces. */
 export interface ScheduleDraft {
@@ -21,11 +21,12 @@ export interface UseSchedulesOptions {
   /** Archived workstreams' schedules never run, and can't be run now or resumed. */
   isArchived(workstreamId: string): boolean;
   isBusy(tileId: string): boolean;
+  /** The schedule's session's turn cursor (its events file), or null. */
+  turnState(schedule: PeriodicSchedule): Promise<TurnCursor | null>;
   /** Defaults to the app-wide tile registry (`tile-activity.ts`). */
-  turnCount?(tileId: string): number | undefined;
   generation?(tileId: string): number;
   /** Resumes the tile's session; `revalidate` must run before the stop and before the spawn. */
-  resume(schedule: PeriodicSchedule, prompt: string, revalidate: () => Promise<void>): Promise<void>;
+  resume(schedule: PeriodicSchedule, prompt: string, revalidate: (phase: ResumePhase) => Promise<void>): Promise<void>;
   interrupt(tileId: string): Promise<void>;
   /** Changes when tiles or workstreams may have changed (closed, archived): re-read. */
   refreshKey?: unknown;
@@ -65,7 +66,7 @@ function runnerFor(ref: OptionsRef, onChange: () => void, startedAt: number): Sc
     workstreamName: (id) => ref.current.workstreamName(id),
     isArchived: (id) => ref.current.isArchived(id),
     isBusy: (tileId) => ref.current.isBusy(tileId),
-    turnCount: (tileId) => (ref.current.turnCount ?? tileTurnCount)(tileId),
+    turnState: (schedule) => ref.current.turnState(schedule),
     generation: (tileId) => (ref.current.generation ?? tileGeneration)(tileId),
     resume: (schedule, prompt, revalidate) => ref.current.resume(schedule, prompt, revalidate),
     interrupt: (tileId) => ref.current.interrupt(tileId),

@@ -57,7 +57,7 @@ interface ResumeTileRequest {
   /** The line written in the terminal before the session restarts. */
   noticeText: string;
   /** Re-checks what asked for the resume (a schedule) right before the stop and the spawn; throws to cancel. */
-  revalidate?: () => Promise<void>;
+  revalidate?: (phase: ResumePhase) => Promise<void>;
   /** Why an unlinked tile can't be resumed. */
   unlinkedError: string;
 }
@@ -136,7 +136,7 @@ async function resumeTileSessionNow(deps: ResumeSessionDeps, request: ResumeTile
       recorded = true;
       await hooks.record(tile, sessionId);
     }
-    await request.revalidate?.();
+    await request.revalidate?.("before-stop");
     await stillLinked();
     guard();
     deps.notice(tile.id, request.noticeText);
@@ -148,7 +148,7 @@ async function resumeTileSessionNow(deps: ResumeSessionDeps, request: ResumeTile
     await clearLocks();
     // Recording and stopping take time: the tile may have been re-linked, or the
     // request expired, meanwhile. Checked last, with nothing awaited before launching.
-    await request.revalidate?.();
+    await request.revalidate?.("before-spawn");
     await stillLinked();
     guard();
     const ws = deps.workstream(request.workstreamId);
@@ -163,8 +163,11 @@ async function resumeTileSessionNow(deps: ResumeSessionDeps, request: ResumeTile
     }
     const relaunch = mounted && (!running || touched);
     if (relaunch) await clearLocks();
-    // Read last, right before relaunching, so recovery never starts a session the tile no longer names.
+    // Read last, right before relaunching, so recovery never starts a session the tile no longer names,
+    // nor one in a workstream being archived.
     const current = await currentSession().catch(() => null);
+    const status = deps.workstream(request.workstreamId)?.status;
+    const archived = status === "archived" || status === "archiving";
     if (!running && !mounted) {
       // The mount never ran, so it will start the tile itself when it does.
       deps.unmarkSpawned(tile.id);
@@ -173,7 +176,7 @@ async function resumeTileSessionNow(deps: ResumeSessionDeps, request: ResumeTile
       // whatever session it is linked to now, without the message.
       const ws = deps.workstream(request.workstreamId);
       const cwd = (typeof config.cwd === "string" && config.cwd) || ws?.directory || deps.defaultCwd();
-      if (current) await deps.spawn(tile.id, cwd, request.command, current, null).catch(() => deps.unmarkSpawned(tile.id));
+      if (current && !archived) await deps.spawn(tile.id, cwd, request.command, current, null).catch(() => deps.unmarkSpawned(tile.id));
       else deps.unmarkSpawned(tile.id);
     }
     throw error;
@@ -220,6 +223,9 @@ export async function resumePhoneSession(deps: ResumeSessionDeps, request: Resum
   );
 }
 
+/** When a scheduled resume re-checks its schedule: under the tile lock before stopping, and before spawning. */
+export type ResumePhase = "before-stop" | "before-spawn";
+
 export interface ScheduledResumeRequest {
   workstreamId: string;
   tileId: string;
@@ -229,7 +235,7 @@ export interface ScheduledResumeRequest {
   scheduleId: string;
   now: number;
   /** Throws when the schedule was paused, edited, deleted or archived since the run was claimed. */
-  revalidate?: () => Promise<void>;
+  revalidate?: (phase: ResumePhase) => Promise<void>;
 }
 
 /**

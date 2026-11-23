@@ -277,6 +277,8 @@ export interface Backend {
   /** Drops sessions with no activity for `retentionMs`; returns how many. */
   companionPruneSessions(now: number, retentionMs: number): Promise<number>;
   // Periodic Copilot sessions (ADR 044)
+  /** How many turns the session's events file has started and ended. */
+  sessionTurnState(sessionId: string): Promise<{ starts: number; ends: number }>;
   listSchedules(): Promise<PeriodicSchedule[]>;
   /** Refuses a second schedule on a tile, a non-session tile, and runs under 5 minutes apart. */
   createSchedule(input: NewPeriodicSchedule): Promise<PeriodicSchedule>;

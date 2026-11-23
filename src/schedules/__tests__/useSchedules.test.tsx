@@ -16,7 +16,7 @@ async function setup(over: Partial<UseSchedulesOptions> = {}) {
   let now = at(16, 42);
   const resume = vi.fn(async () => {});
   const options: UseSchedulesOptions = {
-    backend, ready: true, workstreamName: () => "Courses", isArchived: () => false, isBusy: () => false, resume, interrupt: vi.fn(async () => {}),
+    backend, ready: true, workstreamName: () => "Courses", isArchived: () => false, isBusy: () => false, turnState: async () => ({ starts: 0, ends: 0 }), resume, interrupt: vi.fn(async () => {}),
     clock: () => now, tickMs: 60_000, ...over,
   };
   const hook = renderHook(() => useSchedules(options));
