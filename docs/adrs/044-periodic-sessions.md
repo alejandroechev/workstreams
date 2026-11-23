@@ -79,7 +79,8 @@ button in the sidebar footer opens a modal listing every schedule
 (workstream, tile, the prompt's first line, frequency, next run, last result)
 with Run now, Pause/Resume, Edit and Delete (the tile stays). Workstreams with
 schedules show a clock on their sidebar row. Run now is skipped, like a due
-run, while the agent is mid-turn.
+run, while the agent is mid-turn; it runs a paused schedule once without
+resuming it.
 
 **Agent commands** (CLI parity): `schedule.create` (`prompt`, `frequency =
 hourly | every:<N>h | every:<N>m | daily:HH:MM | weekly:<day>:HH:MM`, optional

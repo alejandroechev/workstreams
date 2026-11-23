@@ -111,8 +111,9 @@ export type DueDecision =
  * being mid-turn; typing in the tile doesn't count.
  */
 export function decideDue(schedule: PeriodicSchedule, context: { now: number; busy: boolean }): DueDecision {
-  if (schedule.paused) return { action: "wait" };
+  // Run now is explicit, so it runs even a paused schedule; a paused one never runs by itself.
   if (schedule.run_requested) return context.busy ? { action: "skip", manual: true } : { action: "run", manual: true };
+  if (schedule.paused) return { action: "wait" };
   if (schedule.next_run_at === null) return { action: "plan" };
   if (context.now < schedule.next_run_at) return { action: "wait" };
   if (context.now - schedule.next_run_at > MISSED_GRACE_MS) return { action: "missed" };

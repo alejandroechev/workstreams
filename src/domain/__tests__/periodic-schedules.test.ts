@@ -137,9 +137,9 @@ describe("decideDue", () => {
     expect(decideDue(schedule({ next_run_at: due }), { now: due + 60 * 60 * 1000, busy: false })).toEqual({ action: "missed" });
   });
 
-  it("never runs a paused schedule, even when due or requested", () => {
+  it("never runs a paused schedule at its due time, but Run now still runs it", () => {
     expect(decideDue(schedule({ next_run_at: due, paused: true }), { now: due, busy: false })).toEqual({ action: "wait" });
-    expect(decideDue(schedule({ run_requested: true, paused: true }), { now: due, busy: false })).toEqual({ action: "wait" });
+    expect(decideDue(schedule({ run_requested: true, paused: true }), { now: due, busy: false })).toEqual({ action: "run", manual: true });
   });
 
   it("runs now when asked, unless mid-turn", () => {
