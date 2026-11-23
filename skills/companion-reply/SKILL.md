@@ -72,6 +72,8 @@ did not get it.
 | Code | Meaning |
 | --- | --- |
 | `COMPANION_OFF` | The user turned the phone companion off. Answer in the terminal. |
+| `SESSION_RELINKED` | The user linked this tile to another Copilot session while you kept running; you can no longer reach the phone. Answer in the terminal. |
+| `NOT_A_SESSION` | This is not a Copilot session tile (a plain terminal, say). Answer in the terminal. |
 | `RATE_LIMITED` | This session already sent 20 messages to the phone in the last hour. Put the rest in the terminal, or wait. |
 | `BAD_MESSAGE` | Wrong kind, empty text, or more than 20000 characters. Fix it and send again. |
 | `MISSING_PARAM` | `kind` was not given. Add `kind=result` or `kind=progress`. |

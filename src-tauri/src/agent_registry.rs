@@ -30,6 +30,10 @@ pub enum Caller {
     Agent {
         tile_id: String,
         workstream_id: String,
+        /// False once the tile was re-linked to another Copilot session while
+        /// this process kept running (ADR 044): it still runs the old session,
+        /// so it may no longer message the phone. A respawn issues a new token.
+        may_message_phone: bool,
     },
 }
 
@@ -46,6 +50,7 @@ pub fn may_act_on(db: &Connection, caller: &Caller, workstream_id: &str) -> Resu
     let Caller::Agent {
         tile_id,
         workstream_id: own,
+        ..
     } = caller
     else {
         return Ok(()); // The UI is not fenced.
@@ -128,9 +133,27 @@ impl IdentityRegistry {
             Caller::Agent {
                 tile_id: tile_id.to_string(),
                 workstream_id: workstream_id.to_string(),
+                may_message_phone: true,
             },
         );
         token
+    }
+
+    /// The tile was re-linked: its running process may no longer message the
+    /// phone. The next process spawned for the tile gets a fresh token that may.
+    pub fn revoke_phone(&self, tile_id: &str) {
+        for caller in self.tokens.lock().unwrap().values_mut() {
+            if let Caller::Agent {
+                tile_id: existing,
+                may_message_phone,
+                ..
+            } = caller
+            {
+                if existing == tile_id {
+                    *may_message_phone = false;
+                }
+            }
+        }
     }
 
     /// Resolves a presented token, or explains that it is not usable.
@@ -1805,6 +1828,7 @@ fn ws_list(
     let Caller::Agent {
         tile_id,
         workstream_id,
+        ..
     } = caller
     else {
         return Ok(CommandOutcome::read(
@@ -2725,6 +2749,7 @@ fn inbox_message(
     let Caller::Agent {
         tile_id,
         workstream_id,
+        ..
     } = context.caller()?
     else {
         return Err(AgentError::new(
@@ -2776,6 +2801,7 @@ fn companion_send(
     let Caller::Agent {
         tile_id,
         workstream_id,
+        may_message_phone,
     } = context.caller()?
     else {
         return Err(AgentError::new(
@@ -2788,6 +2814,31 @@ fn companion_send(
         return Err(AgentError::new(
             "COMPANION_OFF",
             "The phone companion is off, so nothing was sent",
+            FALLBACK,
+        ));
+    }
+    // Terminal tiles get a token too: only a Copilot session tile of the
+    // caller's own workstream may message the phone.
+    let tile: Option<(String, String)> = context
+        .db
+        .query_row(
+            "SELECT workstream_id, tile_type FROM tiles WHERE id = ?1",
+            [tile_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .map_err(|e| companion_store_error(e.to_string()))?;
+    if !matches!(&tile, Some((ws, kind)) if ws == workstream_id && kind == "copilot_session") {
+        return Err(AgentError::new(
+            "NOT_A_SESSION",
+            "Only a Copilot session tile can send to the phone",
+            FALLBACK,
+        ));
+    }
+    if !may_message_phone {
+        return Err(AgentError::new(
+            "SESSION_RELINKED",
+            "This tile was linked to another Copilot session, so this session can no longer send to the phone",
             FALLBACK,
         ));
     }
@@ -2809,23 +2860,20 @@ fn companion_send(
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or_default();
-    let cap = crate::companion_messages::PHONE_HOURLY_CAP;
-    if crate::companion_messages::sent_last_hour(context.db, tile_id, at)
-        .map_err(companion_store_error)?
-        >= cap
-    {
-        return Err(AgentError::new(
-            "RATE_LIMITED",
-            format!("This session has sent {cap} messages to your phone in the last hour"),
-            "Wait, or put the rest in one message; give anything urgent in the terminal.",
-        ));
-    }
     // Any session may message the phone (ADR 044): a laptop tile's first
-    // message opens its thread, which the phone can then message back.
-    crate::companion_messages::open_laptop_thread(context.db, tile_id, workstream_id, at)
-        .map_err(companion_store_error)?;
-    crate::companion_messages::add_message(context.db, tile_id, &id, &kind, &text, at)
-        .map_err(companion_store_error)?;
+    // message opens its thread, which the phone can then message back. The
+    // cap is checked and counted in the same transaction as the send.
+    use crate::companion_messages::{send_from_agent, SendRefusal};
+    send_from_agent(context.db, tile_id, workstream_id, &id, &kind, &text, at).map_err(
+        |refusal| match refusal {
+            SendRefusal::RateLimited(cap) => AgentError::new(
+                "RATE_LIMITED",
+                format!("This session has sent {cap} messages to your phone in the last hour"),
+                "Wait, or put the rest in one message; give anything urgent in the terminal.",
+            ),
+            SendRefusal::Store(error) => companion_store_error(error),
+        },
+    )?;
     Ok(CommandOutcome::changed(
         serde_json::json!({ "id": id, "kind": kind, "sent": true }),
         StateChange::new("companion_message", tile_id.clone(), "added"),
@@ -2903,6 +2951,30 @@ fn schedule_target(
     Ok(found)
 }
 
+/// Run now and Resume wait for the workstream to be unarchived.
+fn refuse_archived(
+    context: &CommandContext,
+    schedule: &crate::periodic_schedules::Schedule,
+) -> Result<(), AgentError> {
+    let status: Option<String> = context
+        .db
+        .query_row(
+            "SELECT status FROM workstreams WHERE id = ?1",
+            [&schedule.workstream_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|e| schedule_store_error(e.to_string()))?;
+    if matches!(status.as_deref(), Some("archived" | "archiving")) {
+        return Err(AgentError::new(
+            "WORKSTREAM_ARCHIVED",
+            "This schedule's workstream is archived",
+            "Unarchive the workstream first; its schedules stay paused until resumed.",
+        ));
+    }
+    Ok(())
+}
+
 fn schedule_create(
     context: &CommandContext,
     params: &serde_json::Value,
@@ -2964,13 +3036,23 @@ fn schedule_create(
     ))
 }
 
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or_default()
+}
+
 fn schedule_list(
     context: &CommandContext,
     _: &serde_json::Value,
 ) -> Result<CommandOutcome, AgentError> {
+    let caller = context.caller()?;
     let schedules = crate::periodic_schedules::list(context.db).map_err(schedule_store_error)?;
+    // Only schedules the caller may act on: another workstream's prompts are not its business.
     let views: Vec<_> = schedules
         .iter()
+        .filter(|schedule| may_act_on(context.db, caller, &schedule.workstream_id).is_ok())
         .map(|schedule| schedule_view(context.db, schedule))
         .collect();
     Ok(CommandOutcome::read(
@@ -2985,6 +3067,9 @@ fn schedule_patch(
     action: &str,
 ) -> Result<CommandOutcome, AgentError> {
     let target = schedule_target(context, params)?;
+    if action == "run" || action == "resumed" {
+        refuse_archived(context, &target)?;
+    }
     let updated = crate::periodic_schedules::update(context.db, &target.id, &patch)
         .map_err(schedule_store_error)?;
     Ok(CommandOutcome::changed(
@@ -3001,7 +3086,7 @@ fn schedule_run(
     schedule_patch(
         context,
         params,
-        serde_json::json!({"run_requested": true}),
+        serde_json::json!({"run_requested": true, "run_requested_at": now_ms()}),
         "run",
     )
 }
@@ -3706,6 +3791,7 @@ mod tests {
         Caller::Agent {
             tile_id: tile.to_string(),
             workstream_id: workstream.to_string(),
+            may_message_phone: true,
         }
     }
 
@@ -3860,6 +3946,71 @@ mod tests {
     }
 
     #[test]
+    fn schedule_list_shows_only_the_callers_workstreams() {
+        let db = schedule_db();
+        call(
+            &db,
+            &agent("me", "w1"),
+            "schedule.create",
+            serde_json::json!({"prompt":"mine","frequency":"hourly"}),
+        )
+        .unwrap();
+        call(
+            &db,
+            &agent("far", "w2"),
+            "schedule.create",
+            serde_json::json!({"prompt":"secret plan","frequency":"hourly"}),
+        )
+        .unwrap();
+        let listed = call(
+            &db,
+            &agent("me", "w1"),
+            "schedule.list",
+            serde_json::json!({}),
+        )
+        .unwrap();
+        let prompts: Vec<_> = listed.data["schedules"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s["prompt"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(prompts, vec!["mine"]);
+    }
+
+    #[test]
+    fn schedule_run_and_resume_are_refused_for_an_archived_workstream_and_run_is_timestamped() {
+        let db = schedule_db();
+        let me = agent("me", "w1");
+        let created = call(
+            &db,
+            &me,
+            "schedule.create",
+            serde_json::json!({"prompt":"x","frequency":"hourly"}),
+        )
+        .unwrap();
+        let id = created.data["id"].as_str().unwrap().to_string();
+        let ran = call(&db, &me, "schedule.run", serde_json::json!({"id": id})).unwrap();
+        assert!(ran.data["run_requested_at"].as_i64().unwrap() > 1_700_000_000_000);
+        db.execute(
+            "UPDATE workstreams SET status = 'archived' WHERE id = 'w1'",
+            [],
+        )
+        .unwrap();
+        for cmd in ["schedule.run", "schedule.resume"] {
+            assert_eq!(
+                call(&db, &me, cmd, serde_json::json!({"id": id}))
+                    .unwrap_err()
+                    .code,
+                "WORKSTREAM_ARCHIVED",
+                "{cmd}"
+            );
+        }
+        // Pausing and deleting stay possible.
+        call(&db, &me, "schedule.pause", serde_json::json!({"id": id})).unwrap();
+    }
+
+    #[test]
     fn schedule_controls_ask_for_a_run_pause_resume_and_delete() {
         let db = schedule_db();
         let me = agent("me", "w1");
@@ -3928,9 +4079,124 @@ mod tests {
             [if enabled { "1" } else { "0" }],
         )
         .unwrap();
+        db.execute_batch(
+            "INSERT INTO workstreams (id, name, created_at, updated_at) VALUES ('w2', 'Other', 'x', 'x');
+             INSERT INTO tiles (id, workstream_id, tile_type, title, config_json, created_at, updated_at) VALUES
+               ('phone-tile', 'w1', 'copilot_session', 'Phone', '{}', 'x', 'x'),
+               ('laptop-tile', 'w1', 'copilot_session', 'Laptop', '{}', 'x', 'x'),
+               ('term', 'w1', 'terminal', 'Shell', '{}', 'x', 'x'),
+               ('elsewhere', 'w2', 'copilot_session', 'Elsewhere', '{}', 'x', 'x');",
+        )
+        .unwrap();
         crate::companion_messages::record_session(&db, "phone-tile", "w1", "r1", "Do x", 1)
             .unwrap();
         db
+    }
+
+    fn relinked_agent(tile: &str, workstream: &str) -> Caller {
+        Caller::Agent {
+            tile_id: tile.to_string(),
+            workstream_id: workstream.to_string(),
+            may_message_phone: false,
+        }
+    }
+
+    #[test]
+    fn companion_send_refuses_a_terminal_tile_or_a_tile_outside_the_callers_workstream() {
+        let db = phone_session_db(true);
+        for caller in [
+            agent("term", "w1"),
+            agent("elsewhere", "w1"),
+            agent("gone", "w1"),
+        ] {
+            let error = call(
+                &db,
+                &caller,
+                "companion.send",
+                serde_json::json!({"kind":"result","text":"x"}),
+            )
+            .unwrap_err();
+            assert_eq!(error.code, "NOT_A_SESSION");
+        }
+        let threads: Vec<_> = crate::companion_messages::list(&db)
+            .unwrap()
+            .into_iter()
+            .map(|s| s.tile_id)
+            .collect();
+        assert_eq!(threads, vec!["phone-tile"]);
+    }
+
+    #[test]
+    fn companion_send_refuses_the_old_process_of_a_relinked_tile() {
+        let db = phone_session_db(true);
+        for tile in ["phone-tile", "laptop-tile"] {
+            crate::companion_messages::revoke(&db, tile).unwrap();
+            let error = call(
+                &db,
+                &relinked_agent(tile, "w1"),
+                "companion.send",
+                serde_json::json!({"kind":"result","text":"from the old session"}),
+            )
+            .unwrap_err();
+            assert_eq!(error.code, "SESSION_RELINKED", "{tile}");
+        }
+        let sessions = crate::companion_messages::list(&db).unwrap();
+        assert_eq!(sessions.len(), 1, "no thread opened for the laptop tile");
+        assert!(!sessions[0].can_send && sessions[0].messages.is_empty());
+    }
+
+    #[test]
+    fn the_phone_cap_survives_a_thread_being_replaced() {
+        let db = phone_session_db(true);
+        for i in 0..20 {
+            call(
+                &db,
+                &agent("phone-tile", "w1"),
+                "companion.send",
+                serde_json::json!({"kind":"progress","text":format!("m{i}")}),
+            )
+            .unwrap();
+        }
+        // Re-linked, then a fresh process: the thread is replaced, the count is not.
+        crate::companion_messages::revoke(&db, "phone-tile").unwrap();
+        let error = call(
+            &db,
+            &agent("phone-tile", "w1"),
+            "companion.send",
+            serde_json::json!({"kind":"result","text":"x"}),
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "RATE_LIMITED");
+        crate::companion_messages::prune(&db, i64::MAX / 2, 0).unwrap();
+        assert_eq!(
+            crate::companion_messages::sent_last_hour(&db, "phone-tile", now_ms()).unwrap(),
+            20
+        );
+    }
+
+    fn now_ms() -> i64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64
+    }
+
+    #[test]
+    fn revoking_phone_rights_bars_the_current_process_but_not_the_next() {
+        let registry = IdentityRegistry::new();
+        let old = registry.issue("tile-1", "ws");
+        registry.revoke_phone("tile-1");
+        assert_eq!(
+            registry.resolve(Some(&old)).unwrap(),
+            relinked_agent("tile-1", "ws")
+        );
+        let fresh = registry.issue("tile-1", "ws");
+        assert_eq!(
+            registry.resolve(Some(&fresh)).unwrap(),
+            agent("tile-1", "ws")
+        );
+        // Unknown tiles are a no-op.
+        registry.revoke_phone("nobody");
     }
 
     #[test]
@@ -4157,8 +4423,7 @@ mod tests {
     fn companion_send_from_a_laptop_tile_opens_a_phone_thread_named_after_the_tile() {
         let db = phone_session_db(true);
         db.execute(
-            "INSERT INTO tiles (id, workstream_id, tile_type, title, config_json, created_at, updated_at)
-             VALUES ('laptop-tile', 'w1', 'copilot_session', 'Summarise videos', '{}', 'x', 'x')",
+            "UPDATE tiles SET title = 'Summarise videos' WHERE id = 'laptop-tile'",
             [],
         )
         .unwrap();
@@ -4292,7 +4557,7 @@ mod tests {
     }
 
     #[test]
-    fn companion_send_from_a_relinked_tile_starts_a_fresh_thread() {
+    fn companion_send_from_a_relinked_tile_respawned_on_its_new_session_starts_a_fresh_thread() {
         let db = phone_session_db(true);
         crate::companion_messages::add_message(
             &db,

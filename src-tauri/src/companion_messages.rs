@@ -119,13 +119,13 @@ pub fn open_laptop_thread(
         .flatten()
         .filter(|t| !t.trim().is_empty())
         .unwrap_or_else(|| "Copilot session".to_string());
-    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
-    tx.execute(
+    // Run inside the caller's transaction (send_from_agent), or on its own.
+    conn.execute(
         "DELETE FROM companion_sessions WHERE tile_id = ?1 AND can_send = 0",
         [tile_id],
     )
     .map_err(|e| e.to_string())?;
-    tx.execute(
+    conn.execute(
         "INSERT OR IGNORE INTO companion_sessions (tile_id, workstream_id, request_id, prompt, created_at)
          VALUES (?1, ?2, ?3, ?4, ?5)",
         params![
@@ -137,16 +137,71 @@ pub fn open_laptop_thread(
         ],
     )
     .map_err(|e| e.to_string())?;
-    tx.commit().map_err(|e| e.to_string())
+    Ok(())
 }
 
-/// How many messages (not prompts) this tile's agent sent the phone in the hour before `now`.
+const HOUR_MS: i64 = 60 * 60_000;
+
+/// How many messages this tile's agent sent the phone in the hour before
+/// `now`, from the send ledger: replacing or pruning a thread doesn't reset it.
 pub fn sent_last_hour(conn: &Connection, tile_id: &str, now: i64) -> Result<i64, String> {
     conn.query_row(
-        "SELECT COUNT(*) FROM companion_messages WHERE tile_id = ?1 AND kind != 'prompt' AND at > ?2",
-        params![tile_id, now - 60 * 60_000],
+        "SELECT COUNT(*) FROM companion_send_log WHERE tile_id = ?1 AND at > ?2",
+        params![tile_id, now - HOUR_MS],
         |row| row.get(0),
     )
+    .map_err(|e| e.to_string())
+}
+
+/// Why an agent's message to the phone was refused.
+#[derive(Debug, PartialEq)]
+pub enum SendRefusal {
+    RateLimited(i64),
+    Store(String),
+}
+
+/// An agent's message to the phone, in one transaction: the hourly cap is
+/// checked against the send ledger, the tile's thread opened if it has none
+/// (named after the tile), the message stored, and the send logged.
+pub fn send_from_agent(
+    conn: &Connection,
+    tile_id: &str,
+    workstream_id: &str,
+    id: &str,
+    kind: &str,
+    text: &str,
+    at: i64,
+) -> Result<(), SendRefusal> {
+    check_message(kind, text).map_err(SendRefusal::Store)?;
+    let store = |e: rusqlite::Error| SendRefusal::Store(e.to_string());
+    let tx = conn.unchecked_transaction().map_err(store)?;
+    tx.execute(
+        "DELETE FROM companion_send_log WHERE tile_id = ?1 AND at <= ?2",
+        params![tile_id, at - HOUR_MS],
+    )
+    .map_err(store)?;
+    if sent_last_hour(&tx, tile_id, at).map_err(SendRefusal::Store)? >= PHONE_HOURLY_CAP {
+        return Err(SendRefusal::RateLimited(PHONE_HOURLY_CAP));
+    }
+    open_laptop_thread(&tx, tile_id, workstream_id, at).map_err(SendRefusal::Store)?;
+    insert_message_in(&tx, tile_id, id, kind, text, at).map_err(SendRefusal::Store)?;
+    tx.execute(
+        "INSERT INTO companion_send_log (tile_id, at) VALUES (?1, ?2)",
+        params![tile_id, at],
+    )
+    .map_err(store)?;
+    tx.commit().map_err(store)
+}
+
+/// Revokes a tile's thread only if it is still the one `request_id` claimed:
+/// a resume rolling back must not revoke a thread a newer claim created.
+/// Returns whether it revoked.
+pub fn revoke_claim(conn: &Connection, tile_id: &str, request_id: &str) -> Result<bool, String> {
+    conn.execute(
+        "UPDATE companion_sessions SET can_send = 0 WHERE tile_id = ?1 AND request_id = ?2",
+        params![tile_id, request_id],
+    )
+    .map(|n| n > 0)
     .map_err(|e| e.to_string())
 }
 
@@ -242,6 +297,19 @@ fn insert_message(
     at: i64,
 ) -> Result<(), String> {
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    insert_message_in(&tx, tile_id, id, kind, text, at)?;
+    tx.commit().map_err(|e| e.to_string())
+}
+
+/// Stores a message inside the caller's transaction.
+fn insert_message_in(
+    tx: &Connection,
+    tile_id: &str,
+    id: &str,
+    kind: &str,
+    text: &str,
+    at: i64,
+) -> Result<(), String> {
     let exists: Option<i64> = tx
         .query_row(
             "SELECT 1 FROM companion_sessions WHERE tile_id = ?1 AND can_send = 1",
@@ -264,7 +332,7 @@ fn insert_message(
         params![tile_id, MAX_MESSAGES_PER_SESSION],
     )
     .map_err(|e| e.to_string())?;
-    tx.commit().map_err(|e| e.to_string())
+    Ok(())
 }
 
 /// Stops a tile from messaging the phone, keeping what it already sent: the
@@ -654,16 +722,44 @@ mod tests {
     }
 
     #[test]
-    fn counts_only_the_agents_messages_of_the_last_hour() {
+    fn the_send_ledger_counts_the_agents_sends_of_the_last_hour_whatever_happens_to_the_thread() {
         let conn = db();
-        record_session(&conn, "t1", "w", "r1", "Do x", 0).unwrap();
-        let now = 10 * 60 * 60_000;
-        add_message(&conn, "t1", "old", "result", "x", now - 60 * 60_000).unwrap();
+        conn.execute(
+            "INSERT INTO tiles (id, workstream_id, tile_type, title, config_json, created_at, updated_at)
+             VALUES ('t1', 'w', 'copilot_session', 'T', '{}', 'x', 'x')",
+            [],
+        )
+        .unwrap();
+        let now = 10 * HOUR_MS;
+        send_from_agent(&conn, "t1", "w", "old", "result", "x", now - HOUR_MS).unwrap();
         add_prompt(&conn, "t1", "p", "x", now - 1).unwrap();
-        add_message(&conn, "t1", "a", "progress", "x", now - 59 * 60_000).unwrap();
-        add_message(&conn, "t1", "b", "result", "x", now).unwrap();
+        send_from_agent(&conn, "t1", "w", "a", "progress", "x", now - 59 * 60_000).unwrap();
+        send_from_agent(&conn, "t1", "w", "b", "result", "x", now).unwrap();
         assert_eq!(sent_last_hour(&conn, "t1", now).unwrap(), 2);
         assert_eq!(sent_last_hour(&conn, "nobody", now).unwrap(), 0);
+        // Replacing and pruning the thread keeps the count.
+        revoke(&conn, "t1").unwrap();
+        open_laptop_thread(&conn, "t1", "w", now).unwrap();
+        prune(&conn, now * 10, 0).unwrap();
+        assert_eq!(sent_last_hour(&conn, "t1", now).unwrap(), 2);
+        for i in 0..18 {
+            send_from_agent(&conn, "t1", "w", &format!("m{i}"), "progress", "x", now).unwrap();
+        }
+        assert_eq!(
+            send_from_agent(&conn, "t1", "w", "over", "result", "x", now),
+            Err(SendRefusal::RateLimited(PHONE_HOURLY_CAP))
+        );
+        assert!(send_from_agent(&conn, "t1", "w", "bad", "question", "x", now + HOUR_MS).is_err());
+    }
+
+    #[test]
+    fn a_rollback_revokes_only_the_thread_it_claimed() {
+        let conn = db();
+        record_session(&conn, "t1", "w", "newer", "Do y", 5).unwrap();
+        assert!(!revoke_claim(&conn, "t1", "stale").unwrap());
+        assert!(list(&conn).unwrap()[0].can_send);
+        assert!(revoke_claim(&conn, "t1", "newer").unwrap());
+        assert!(!list(&conn).unwrap()[0].can_send);
     }
 
     #[test]

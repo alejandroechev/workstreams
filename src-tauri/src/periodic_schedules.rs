@@ -28,7 +28,11 @@ pub struct Schedule {
     pub last_error: Option<String>,
     pub failures: i64,
     pub run_requested: bool,
+    /// When "Run now" was asked for (ms epoch); an old request expires.
+    pub run_requested_at: Option<i64>,
     pub created_at: i64,
+    /// Bumped on every change, so the runner can claim a run against the row it read.
+    pub revision: i64,
 }
 
 /// What creating a schedule needs; the rest starts empty.
@@ -153,7 +157,8 @@ fn check_prompt(prompt: &str) -> Result<(), String> {
 
 const COLUMNS: &str =
     "id, tile_id, workstream_id, prompt, frequency, notify_inbox, notify_phone, paused,
-    next_run_at, last_run_at, last_result, last_error, failures, run_requested, created_at";
+    next_run_at, last_run_at, last_result, last_error, failures, run_requested, created_at,
+    run_requested_at, revision";
 
 fn from_row(row: &Row) -> rusqlite::Result<Schedule> {
     let frequency: String = row.get(4)?;
@@ -173,6 +178,8 @@ fn from_row(row: &Row) -> rusqlite::Result<Schedule> {
         failures: row.get(12)?,
         run_requested: row.get(13)?,
         created_at: row.get(14)?,
+        run_requested_at: row.get(15)?,
+        revision: row.get(16)?,
     })
 }
 
@@ -261,6 +268,18 @@ pub fn for_tile(conn: &Connection, tile_id: &str) -> Result<Option<Schedule>, St
 
 /// Applies the named fields of `patch` (a JSON object); unknown keys are refused.
 pub fn update(conn: &Connection, id: &str, patch: &Value) -> Result<Schedule, String> {
+    update_if(conn, id, patch, None)
+}
+
+/// As `update`, but only while the stored revision is still `expected`: a
+/// run is claimed against the row the runner decided on, so a pause, edit or
+/// archive in between wins.
+pub fn update_if(
+    conn: &Connection,
+    id: &str,
+    patch: &Value,
+    expected: Option<i64>,
+) -> Result<Schedule, String> {
     let fields = patch
         .as_object()
         .ok_or("The change must be a JSON object.")?;
@@ -287,7 +306,7 @@ pub fn update(conn: &Connection, id: &str, patch: &Value) -> Result<Schedule, St
                     .ok_or(format!("{key} must be true or false"))? as i64,
             ),
             "failures" => Sql::Integer(value.as_i64().ok_or("failures must be a number")?),
-            "next_run_at" | "last_run_at" => match value {
+            "next_run_at" | "last_run_at" | "run_requested_at" => match value {
                 Value::Null => Sql::Null,
                 _ => Sql::Integer(value.as_i64().ok_or(format!("{key} must be a time"))?),
             },
@@ -305,17 +324,22 @@ pub fn update(conn: &Connection, id: &str, patch: &Value) -> Result<Schedule, St
         sets.push(format!("{key} = ?{}", values.len() + 1));
         values.push(sql);
     }
-    if !sets.is_empty() {
-        values.push(Sql::Text(id.to_string()));
-        conn.execute(
-            &format!(
-                "UPDATE periodic_schedules SET {} WHERE id = ?{}",
-                sets.join(", "),
-                values.len()
-            ),
-            rusqlite::params_from_iter(values),
-        )
+    sets.push("revision = revision + 1".to_string());
+    values.push(Sql::Text(id.to_string()));
+    let mut sql = format!(
+        "UPDATE periodic_schedules SET {} WHERE id = ?{}",
+        sets.join(", "),
+        values.len()
+    );
+    if let Some(expected) = expected {
+        values.push(Sql::Integer(expected));
+        sql.push_str(&format!(" AND revision = ?{}", values.len()));
+    }
+    let changed = conn
+        .execute(&sql, rusqlite::params_from_iter(values))
         .map_err(|e| e.to_string())?;
+    if changed == 0 {
+        return Err("The schedule changed since it was read.".into());
     }
     get(conn, id)?.ok_or_else(|| format!("No schedule {id}"))
 }
@@ -330,7 +354,7 @@ pub fn delete(conn: &Connection, id: &str) -> Result<bool, String> {
 /// Archiving a workstream pauses its schedules; unarchiving leaves them paused.
 pub fn pause_workstream(conn: &Connection, workstream_id: &str) -> Result<usize, String> {
     conn.execute(
-        "UPDATE periodic_schedules SET paused = 1 WHERE workstream_id = ?1",
+        "UPDATE periodic_schedules SET paused = 1, revision = revision + 1 WHERE workstream_id = ?1",
         [workstream_id],
     )
     .map_err(|e| e.to_string())
@@ -503,6 +527,30 @@ mod tests {
         assert!(update(&conn, &s.id, &json!([])).is_err());
         assert!(update(&conn, "nope", &json!({})).is_err());
         assert_eq!(update(&conn, &s.id, &json!({})).unwrap().prompt, "New");
+    }
+
+    #[test]
+    fn every_change_moves_the_revision_and_a_stale_revision_is_refused() {
+        let conn = db();
+        let freq = json!({"kind":"daily","time":"09:00"});
+        let s = create(&conn, &new("t1", "w1", &freq)).unwrap();
+        assert_eq!(s.revision, 0);
+        let claimed = update_if(&conn, &s.id, &json!({"last_result":"running"}), Some(0)).unwrap();
+        assert_eq!(claimed.revision, 1);
+        // A user's pause between the runner's read and its claim wins.
+        update(&conn, &s.id, &json!({"paused":true})).unwrap();
+        let err = update_if(&conn, &s.id, &json!({"last_result":"running"}), Some(1)).unwrap_err();
+        assert!(err.contains("changed"), "{err}");
+        assert!(get(&conn, &s.id).unwrap().unwrap().paused);
+        pause_workstream(&conn, "w1").unwrap();
+        assert_eq!(get(&conn, &s.id).unwrap().unwrap().revision, 3);
+        let stamped = update(
+            &conn,
+            &s.id,
+            &json!({"run_requested":true,"run_requested_at":1234}),
+        )
+        .unwrap();
+        assert_eq!(stamped.run_requested_at, Some(1234));
     }
 
     #[test]

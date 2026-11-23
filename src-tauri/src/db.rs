@@ -374,6 +374,13 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
             at INTEGER NOT NULL
         );
         CREATE INDEX IF NOT EXISTS companion_messages_tile_idx ON companion_messages (tile_id, at);
+        -- Every agent send to the phone, for the 20/hour cap per tile (ADR 044).
+        -- No foreign key: replacing or pruning a thread must not reset the count.
+        CREATE TABLE IF NOT EXISTS companion_send_log (
+            tile_id TEXT NOT NULL,
+            at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS companion_send_log_tile_idx ON companion_send_log (tile_id, at);
 
         -- Periodic Copilot sessions (ADR 044): one schedule per session tile,
         -- gone with its tile. Times are ms epoch; next_run_at NULL means the
@@ -393,7 +400,9 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
             last_error TEXT,
             failures INTEGER NOT NULL DEFAULT 0,
             run_requested INTEGER NOT NULL DEFAULT 0,
-            created_at INTEGER NOT NULL
+            created_at INTEGER NOT NULL,
+            run_requested_at INTEGER,
+            revision INTEGER NOT NULL DEFAULT 0
         );
 
         CREATE TABLE IF NOT EXISTS pr_inbox_config (
@@ -638,6 +647,10 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
         "ALTER TABLE pipeline_watches ADD COLUMN branches TEXT NOT NULL DEFAULT 'default'",
         "ALTER TABLE pipeline_watches ADD COLUMN default_branch TEXT",
         "ALTER TABLE pipeline_watches ADD COLUMN default_branch_checked INTEGER NOT NULL DEFAULT 0",
+        // Periodic schedules (ADR 044): when Run now was asked, and a revision
+        // the runner claims runs against.
+        "ALTER TABLE periodic_schedules ADD COLUMN run_requested_at INTEGER",
+        "ALTER TABLE periodic_schedules ADD COLUMN revision INTEGER NOT NULL DEFAULT 0",
     ];
     for sql in &migrations {
         // SQLite errors if column already exists — ignore that error

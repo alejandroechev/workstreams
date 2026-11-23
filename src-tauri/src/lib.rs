@@ -380,10 +380,24 @@ fn companion_add_prompt(
 }
 
 /// Stops a tile from messaging the phone: it was re-linked to another session.
+/// With `request_id` (a resume rolling back), only the thread that request
+/// claimed is revoked. Either way the tile's running process loses the right
+/// to send (ADR 044); its next process gets it back.
 #[tauri::command]
-fn companion_revoke_session(state: State<'_, AppState>, tile_id: String) -> Result<(), String> {
+fn companion_revoke_session(
+    state: State<'_, AppState>,
+    tile_id: String,
+    request_id: Option<String>,
+) -> Result<(), String> {
     let db = state.db.lock().map_err(|e| e.to_string())?;
-    companion_messages::revoke(&db, &tile_id)
+    let revoked = match request_id {
+        Some(request_id) => companion_messages::revoke_claim(&db, &tile_id, &request_id)?,
+        None => companion_messages::revoke(&db, &tile_id).map(|_| true)?,
+    };
+    if revoked {
+        state.agent_identities.revoke_phone(&tile_id);
+    }
+    Ok(())
 }
 
 /// Forgets a phone session whose launch was refused before the agent started.
@@ -455,9 +469,10 @@ fn schedule_update(
     state: State<'_, AppState>,
     id: String,
     patch: serde_json::Value,
+    expected_revision: Option<i64>,
 ) -> Result<periodic_schedules::Schedule, String> {
     let db = state.db.lock().map_err(|e| e.to_string())?;
-    periodic_schedules::update(&db, &id, &patch)
+    periodic_schedules::update_if(&db, &id, &patch, expected_revision)
 }
 
 #[tauri::command]
@@ -8793,6 +8808,7 @@ Body here.
             crate::agent_registry::Caller::Agent {
                 tile_id: "tile-1".to_string(),
                 workstream_id: "ws-abc".to_string(),
+                may_message_phone: true,
             }
         );
 
