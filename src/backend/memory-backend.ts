@@ -1436,6 +1436,8 @@ export class MemoryBackend implements Backend {
 
   async spawnCopilotSession(tileId: string, cwd: string, resumeSessionId?: string | null, rows?: number, cols?: number, command?: string | null, initialPrompt?: string | null): Promise<number | null> {
     this.terminals.add(tileId);
+    // A new process gets a new token, which may message the phone again.
+    this.phoneBarred.delete(tileId);
     if (typeof window !== "undefined") {
       const w = window as unknown as { __WS_INVOKE_LOG__?: Array<{ cmd: string; args: Record<string, unknown> }> };
       if (!w.__WS_INVOKE_LOG__) w.__WS_INVOKE_LOG__ = [];
@@ -2269,8 +2271,14 @@ export class MemoryBackend implements Backend {
     return 0;
   }
 
-  async companionRevokeSession(tileId: string): Promise<void> {
-    if (this.companionSessions.has(tileId)) this.companionRevoked.add(tileId);
+  /** Tiles whose running process was re-linked away (lib.rs: IdentityRegistry::revoke_phone). */
+  private phoneBarred = new Set<string>();
+
+  async companionRevokeSession(tileId: string, requestId?: string): Promise<void> {
+    const session = this.companionSessions.get(tileId);
+    if (requestId !== undefined && session?.requestId !== requestId) return;
+    if (session) this.companionRevoked.add(tileId);
+    this.phoneBarred.add(tileId);
   }
 
   async companionDeleteSession(tileId: string): Promise<void> {
@@ -2327,6 +2335,11 @@ export class MemoryBackend implements Backend {
    * after it, a revoked one starts afresh, and 20 an hour is the cap.
    */
   companionSendForTests(tileId: string, kind: "progress" | "result", text: string, at = Date.now()): void {
+    const caller = this.tiles.get(tileId);
+    if (caller && caller.tile_type !== "copilot_session") throw new Error("Only a Copilot session tile can send to the phone");
+    if (this.phoneBarred.has(tileId)) {
+      throw new Error("This tile was linked to another Copilot session, so this session can no longer send to the phone");
+    }
     let session = this.companionSessions.get(tileId);
     if (!session || this.companionRevoked.has(tileId)) {
       const tile = this.tiles.get(tileId);

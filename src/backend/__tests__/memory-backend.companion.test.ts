@@ -43,6 +43,14 @@ describe("MemoryBackend phone sessions", () => {
     expect(session.messages[0].text).toBe("m1");
   });
 
+  it("refuses a terminal tile, as companion.send does", async () => {
+    const backend = new MemoryBackend();
+    const ws = await backend.createWorkstream("W", "/w");
+    const term = await backend.createTile(ws.id, "terminal", "Shell", "{}");
+    expect(() => backend.companionSendForTests(term.id, "result", "x")).toThrow("Only a Copilot session tile");
+    expect(await backend.companionListSessions()).toEqual([]);
+  });
+
   it("caps a tile at 20 phone messages an hour, not counting prompts", async () => {
     const backend = new MemoryBackend();
     await backend.companionRecordSession({ tileId: "t", workstreamId: "w", requestId: "r", prompt: "p", createdAt: 0 });
@@ -89,6 +97,9 @@ describe("MemoryBackend phone session permissions", () => {
     backend.companionSendForTests(tile.id, "result", "kept", 1);
     await backend.companionRevokeSession(tile.id);
     expect((await backend.companionListSessions())[0]).toMatchObject({ canSend: false, messages: [expect.objectContaining({ text: "kept" })] });
+    // The process still running the old session is barred; one spawned since may send.
+    expect(() => backend.companionSendForTests(tile.id, "result", "old session", 2)).toThrow("linked to another Copilot session");
+    await backend.spawnCopilotSession(tile.id, "/w", "s-new");
     backend.companionSendForTests(tile.id, "result", "new session", 2);
     expect((await backend.companionListSessions())[0]).toMatchObject({ canSend: true, prompt: "T", messages: [expect.objectContaining({ text: "new session" })] });
   });

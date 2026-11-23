@@ -259,8 +259,12 @@ export interface Backend {
   companionClaimSession(session: Omit<CompanionStoredSession, "messages" | "canSend">, expectedSessionId: string): Promise<void>;
   /** Records what the phone sent to a phone session, for its thread. */
   companionAddPrompt(tileId: string, id: string, text: string, at: number): Promise<void>;
-  /** Stops a tile messaging the phone (it now runs another session); keeps its history. */
-  companionRevokeSession(tileId: string): Promise<void>;
+  /**
+   * Stops a tile messaging the phone (it now runs another session); keeps its
+   * history and bars the tile's running process. With `requestId`, only the
+   * thread that request claimed is revoked (a resume rolling back).
+   */
+  companionRevokeSession(tileId: string, requestId?: string): Promise<void>;
   /**
    * Removes the `inuse.<pid>` lock files a dead Copilot CLI left in a session's
    * folder, so resuming it doesn't stop to ask about "another CLI". Returns how many.

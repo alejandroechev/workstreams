@@ -56,6 +56,8 @@ interface ResumeTileRequest {
   guard: RequestGuard;
   /** The line written in the terminal before the session restarts. */
   noticeText: string;
+  /** Re-checks what asked for the resume (a schedule) right before the stop and the spawn; throws to cancel. */
+  revalidate?: () => Promise<void>;
   /** Why an unlinked tile can't be resumed. */
   unlinkedError: string;
 }
@@ -70,7 +72,30 @@ interface ResumeTileRequest {
  * the tile meanwhile. A tile in a workstream that isn't mounted is marked as
  * ours before mounting, so the mount doesn't start it only for us to stop it.
  */
-async function resumeTileSession(deps: ResumeSessionDeps, request: ResumeTileRequest, hooks: ResumeHooks): Promise<void> {
+/** The resume holding each tile; phone messages and scheduled runs queue behind it. */
+const tileLocks = new Map<string, Promise<void>>();
+
+/** Runs `work` once no other resume holds `tileId`; everything it reads is read after that. */
+async function withTileLock<T>(tileId: string, work: () => Promise<T>): Promise<T> {
+  const previous = tileLocks.get(tileId) ?? Promise.resolve();
+  let release!: () => void;
+  const mine = new Promise<void>((r) => { release = r; });
+  const chained = previous.then(() => mine);
+  tileLocks.set(tileId, chained);
+  await previous;
+  try {
+    return await work();
+  } finally {
+    release();
+    if (tileLocks.get(tileId) === chained) tileLocks.delete(tileId);
+  }
+}
+
+function resumeTileSession(deps: ResumeSessionDeps, request: ResumeTileRequest, hooks: ResumeHooks): Promise<void> {
+  return withTileLock(request.tileId, () => resumeTileSessionNow(deps, request, hooks));
+}
+
+async function resumeTileSessionNow(deps: ResumeSessionDeps, request: ResumeTileRequest, hooks: ResumeHooks): Promise<void> {
   const { backend } = deps;
   const { guard } = request;
   const tiles = await backend.listTiles(request.workstreamId);
@@ -111,6 +136,7 @@ async function resumeTileSession(deps: ResumeSessionDeps, request: ResumeTileReq
       recorded = true;
       await hooks.record(tile, sessionId);
     }
+    await request.revalidate?.();
     await stillLinked();
     guard();
     deps.notice(tile.id, request.noticeText);
@@ -122,6 +148,7 @@ async function resumeTileSession(deps: ResumeSessionDeps, request: ResumeTileReq
     await clearLocks();
     // Recording and stopping take time: the tile may have been re-linked, or the
     // request expired, meanwhile. Checked last, with nothing awaited before launching.
+    await request.revalidate?.();
     await stillLinked();
     guard();
     const ws = deps.workstream(request.workstreamId);
@@ -186,7 +213,8 @@ export async function resumePhoneSession(deps: ResumeSessionDeps, request: Resum
         deps.onRecorded();
       },
       async undoRecord(tileId) {
-        if (claimed) await backend.companionRevokeSession(tileId);
+        // Only the thread this request claimed: a newer claim since must stand.
+        if (claimed) await backend.companionRevokeSession(tileId, request.requestId);
       },
     },
   );
@@ -200,6 +228,8 @@ export interface ScheduledResumeRequest {
   command: string;
   scheduleId: string;
   now: number;
+  /** Throws when the schedule was paused, edited, deleted or archived since the run was claimed. */
+  revalidate?: () => Promise<void>;
 }
 
 /**
@@ -215,6 +245,7 @@ export async function resumeScheduledSession(
 ): Promise<void> {
   const { backend } = deps;
   let claimed = false;
+  const claimId = `schedule-${request.scheduleId}-${request.now}`;
   await resumeTileSession(
     deps,
     {
@@ -223,6 +254,7 @@ export async function resumeScheduledSession(
       prompt: request.prompt,
       command: request.command,
       guard: () => {},
+      revalidate: request.revalidate,
       noticeText: `Scheduled run: ${firstLine(request.prompt)}`,
       unlinkedError: "This tile isn't linked to a Copilot session yet, so there is nothing to resume.",
     },
@@ -230,7 +262,7 @@ export async function resumeScheduledSession(
       async record(tile, sessionId) {
         try {
           if (!(await deps.companionOn())) return;
-          const id = `schedule-${request.scheduleId}-${request.now}`;
+          const id = claimId;
           await backend.companionClaimSession({
             tileId: tile.id, workstreamId: request.workstreamId, requestId: id, prompt: tile.title || "Copilot session", createdAt: request.now,
           }, sessionId);
@@ -242,7 +274,7 @@ export async function resumeScheduledSession(
         }
       },
       async undoRecord(tileId) {
-        if (claimed) await backend.companionRevokeSession(tileId);
+        if (claimed) await backend.companionRevokeSession(tileId, claimId);
       },
     },
   );

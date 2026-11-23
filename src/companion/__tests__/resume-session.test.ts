@@ -295,3 +295,75 @@ describe("resuming a session for a scheduled run (ADR 044)", () => {
     expect(log).toEqual([]);
   });
 });
+
+describe("one resume per tile at a time (review finding 3)", () => {
+  it("queues a scheduled run behind a phone message for the same tile, and the queued one revalidates", async () => {
+    const { ws, tile, deps, log, request, backend } = await setup();
+    let release!: () => void;
+    const held = new Promise<void>((r) => { release = r; });
+    let stops = 0;
+    deps.stop = vi.fn(async () => { stops += 1; log.push(`stop${stops}`); if (stops === 1) await held; return { forced: false }; });
+    const phone = resumePhoneSession(deps, request({ prompt: "From phone" }));
+    await vi.waitFor(() => expect(log).toContain("stop1"));
+    // Re-linked while the phone's resume holds the tile.
+    const scheduled = resumeScheduledSession({ ...deps, companionOn: async () => false }, {
+      workstreamId: ws.id, tileId: tile.id, prompt: "Scheduled", command: "copilot", scheduleId: "s", now: 1,
+    });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(log.filter((l) => l.startsWith("spawn") || l.startsWith("stop"))).toEqual(["stop1"]);
+    release();
+    await phone;
+    await backend.updateTileConfig(tile.id, JSON.stringify({ cwd: "/repo/alpha/sub", copilot_session_id: "session-z" }));
+    await scheduled;
+    expect(log.filter((l) => l.startsWith("spawn") || l.startsWith("stop"))).toEqual([
+      "stop1", "spawn:/repo/alpha/sub:copilot --yolo:session-s:From phone",
+      "stop2", "spawn:/repo/alpha/sub:copilot:session-z:Scheduled",
+    ]);
+  });
+
+  it("releases the tile after a failure", async () => {
+    const { ws, tile, deps, log } = await setup({ failAt: "stop" });
+    const scheduled = { workstreamId: ws.id, tileId: tile.id, prompt: "P", command: "c", scheduleId: "s", now: 1 };
+    await expect(resumeScheduledSession({ ...deps, companionOn: async () => false }, scheduled)).rejects.toThrow("stuck");
+    deps.stop = vi.fn(async () => ({ forced: false }));
+    await resumeScheduledSession({ ...deps, companionOn: async () => false }, scheduled);
+    expect(log[log.length - 1]).toBe("spawn:/repo/alpha/sub:c:session-s:P");
+  });
+});
+
+describe("a rollback revokes only what it claimed (review finding 2)", () => {
+  it("leaves a newer claim made after a re-link alone", async () => {
+    const { backend, deps, request, tile } = await setup();
+    deps.stop = vi.fn(async () => {
+      // Re-linked meanwhile, and the phone then messaged the new session.
+      await backend.companionRevokeSession(tile.id);
+      await backend.updateTileConfig(tile.id, JSON.stringify({ cwd: "/repo/alpha/sub", copilot_session_id: "session-t" }));
+      await backend.companionClaimSession({ tileId: tile.id, workstreamId: "w", requestId: "newer", prompt: "p", createdAt: 2 }, "session-t");
+      return { forced: false };
+    });
+    await expect(resumePhoneSession(deps, request())).rejects.toThrow("different Copilot session");
+    const [session] = await backend.companionListSessions();
+    expect(session).toMatchObject({ requestId: "newer", canSend: true });
+  });
+});
+
+describe("a scheduled resume revalidates before stopping and before spawning (review finding 4)", () => {
+  it("stops nothing when the schedule changed before the stop", async () => {
+    const { ws, tile, deps, log } = await setup();
+    const revalidate = vi.fn(async () => { throw new Error("The schedule was paused."); });
+    await expect(resumeScheduledSession({ ...deps, companionOn: async () => false }, {
+      workstreamId: ws.id, tileId: tile.id, prompt: "P", command: "c", scheduleId: "s", now: 1, revalidate,
+    })).rejects.toThrow("paused");
+    expect(log.filter((l) => l === "stop" || l.startsWith("spawn"))).toEqual([]);
+  });
+
+  it("restarts the session plainly when the schedule changed while it was stopping", async () => {
+    const { ws, tile, deps, log } = await setup();
+    let calls = 0;
+    const revalidate = vi.fn(async () => { calls += 1; if (calls === 2) throw new Error("The schedule was deleted."); });
+    await expect(resumeScheduledSession({ ...deps, companionOn: async () => false }, {
+      workstreamId: ws.id, tileId: tile.id, prompt: "P", command: "c", scheduleId: "s", now: 1, revalidate,
+    })).rejects.toThrow("deleted");
+    expect(log.filter((l) => l === "stop" || l.startsWith("spawn"))).toEqual(["stop", "spawn:/repo/alpha/sub:c:session-s:null"]);
+  });
+});
