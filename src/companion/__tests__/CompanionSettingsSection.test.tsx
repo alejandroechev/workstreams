@@ -124,5 +124,28 @@ describe("Phone companion settings", () => {
     render(<CompanionSettingsSection store={store} deps={deps()} status={status} />);
     expect(await screen.findByTestId("companion-status")).toHaveTextContent(text);
   });
+
+  describe("Rotate now", () => {
+    const enabled = () => createMemorySettingsStore({
+      "companion.enabled": "1", "companion.doc_url": "automerge:2CNt9qhcehE1jm8fNB88b6PzuuWh", "companion.secret": "s".repeat(43),
+    });
+
+    it.each([
+      [{ ok: true, url: "automerge:3New" }, /Moved to a new document/],
+      [{ ok: false, reason: "queued" }, /once it finishes/],
+      [{ ok: false, reason: "error", message: "server down" }, /server down/],
+    ] as const)("reports %j", async (result, text) => {
+      const rotate = vi.fn(async () => result);
+      render(<CompanionSettingsSection store={enabled()} deps={deps()} status={{ state: "on" }} rotate={rotate} />);
+      fireEvent.click(await screen.findByTestId("companion-rotate"));
+      expect(await screen.findByTestId("companion-rotate-result")).toHaveTextContent(text);
+      expect(rotate).toHaveBeenCalledTimes(1);
+    });
+
+    it("is only offered while connected", async () => {
+      render(<CompanionSettingsSection store={enabled()} deps={deps()} status={{ state: "connecting" }} rotate={vi.fn()} />);
+      expect(await screen.findByTestId("companion-rotate")).toBeDisabled();
+    });
+  });
 });
 

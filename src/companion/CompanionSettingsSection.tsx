@@ -15,7 +15,8 @@ import {
 import { encodePairing, generateSecret } from "./protocol";
 import { registerSyncDevice, syncAuthRequired, syncServerUrls } from "./sync-server";
 import { openAutomergeDoc } from "./automerge-doc";
-import { getCompanionStatus, onCompanionStatus, type CompanionStatus } from "./useCompanionService";
+import { getCompanionStatus, onCompanionStatus, rotateCompanionNow, type CompanionStatus } from "./useCompanionService";
+import type { RotationResult } from "./rotation";
 
 const STATUS_COLOR: Record<CompanionStatus["state"], string> = {
   off: "#6c7086",
@@ -34,6 +35,16 @@ function statusText(status: CompanionStatus): string {
     case "dev-disabled": return "Not available in development builds, so a dev instance never runs the phone's requests.";
     case "update-needed": return "The phone uses a newer format. Update Workstreams to keep using it.";
     case "error": return `Not connected: ${status.error}`;
+  }
+}
+
+function rotationText(result: RotationResult): string {
+  if (result.ok) return "Moved to a new document. The phone follows by itself.";
+  switch (result.reason) {
+    case "queued": return "A phone request is running. Rotating once it finishes.";
+    case "busy": return "Already rotating.";
+    case "not-connected": return "Connect the companion first.";
+    case "error": return `Could not rotate: ${result.message ?? "unknown error"}`;
   }
 }
 
@@ -88,11 +99,14 @@ export function CompanionSettingsSection({
   store = tauriSettingsStore,
   deps = realEnableDeps,
   status: statusOverride,
+  rotate = rotateCompanionNow,
 }: {
   store?: SettingsStore;
   deps?: EnableDeps;
   /** For tests; otherwise the running service's status. */
   status?: CompanionStatus;
+  /** For tests; otherwise the running service's Rotate now. */
+  rotate?: () => Promise<RotationResult>;
 }) {
   const [liveStatus, setLiveStatus] = useState<CompanionStatus>(getCompanionStatus);
   useEffect(() => onCompanionStatus(setLiveStatus), []);
@@ -104,6 +118,8 @@ export function CompanionSettingsSection({
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [confirmRepair, setConfirmRepair] = useState(false);
+  const [rotation, setRotation] = useState<string | null>(null);
+  const [rotatingNow, setRotatingNow] = useState(false);
   const [folderRoot, setFolderRoot] = useState("");
   const [qr, setQr] = useState<{ code: string; svg: string } | null>(null);
 
@@ -281,6 +297,21 @@ export function CompanionSettingsSection({
               </button>
             )}
             <button
+              data-testid="companion-rotate"
+              disabled={status.state !== "on" || rotatingNow}
+              title="Start a fresh, small sync document; the phone follows by itself"
+              onClick={() => {
+                setRotatingNow(true);
+                setRotation(null);
+                void rotate()
+                  .then((result) => setRotation(rotationText(result)))
+                  .finally(() => setRotatingNow(false));
+              }}
+              style={buttonStyle}
+            >
+              Rotate now
+            </button>
+            <button
               data-testid="companion-disable"
               onClick={() => void disableCompanion(store).then(reload)}
               style={buttonStyle}
@@ -289,6 +320,10 @@ export function CompanionSettingsSection({
             </button>
           </div>
         </>
+      )}
+
+      {rotation && (
+        <div data-testid="companion-rotate-result" role="status" style={{ ...helpStyle, color: "#a6adc8" }}>{rotation}</div>
       )}
 
       {error && (

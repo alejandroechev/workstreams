@@ -59,11 +59,21 @@ if (isE2E && typeof window !== "undefined") {
         import("./companion/useCompanionService"),
       ]);
     const hub = createInMemoryHub();
+    // Documents by URL, so a rotation (ADR 033) can make new ones; any
+    // unknown URL is the seeded document.
+    const hubs = new Map<string, ReturnType<typeof createInMemoryHub>>();
+    let created = 0;
     seam.__WS_COMPANION_PHONE__ = hub.peer();
     seam.__WS_COMPANION_SIGN__ = signRequest;
+    (seam as { __WS_COMPANION_DOC__?: (url: string) => unknown }).__WS_COMPANION_DOC__ = (url) => (hubs.get(url) ?? hub).peer().read();
     _setCompanionServiceDepsForTests({
       store: createMemorySettingsStore(seam.__WS_COMPANION_E2E__),
-      connect: async () => hub.peer(),
+      connect: async (settings) => (hubs.get(settings.docUrl) ?? hub).peer(),
+      createDocument: async () => {
+        const url = `automerge:3RotatedDoc${++created}`;
+        hubs.set(url, createInMemoryHub());
+        return url;
+      },
       devBuild: false,
     });
   }

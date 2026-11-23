@@ -9,12 +9,14 @@ import { createUniqueFolder, expandHome } from "./folders";
 import {
   loadCompanionSettings,
   onCompanionSettingsChanged,
+  saveCompanionSettings,
   tauriSettingsStore,
   type CompanionSettings,
   type SettingsStore,
 } from "./settings";
 import { syncServerUrls } from "./sync-server";
-import { isKnownSchema, SESSION_RETENTION_MS } from "./protocol";
+import { isKnownSchema, SCHEMA_VERSION, SESSION_RETENTION_MS, signMove } from "./protocol";
+import { DEFAULT_ROTATION, hasOpenRequest, type RotationOptions, type RotationResult } from "./rotation";
 import type { Tile, Workstream } from "../domain/types";
 import type { WorkLane } from "../domain/work-lanes";
 
@@ -61,6 +63,10 @@ export type CompanionStatus =
 export interface CompanionServiceDeps {
   store?: SettingsStore;
   connect?: (settings: CompanionSettings) => Promise<CompanionDoc>;
+  /** Creates an empty companion document on the sync server; returns its URL (rotation). */
+  createDocument?: (settings: CompanionSettings) => Promise<string>;
+  /** Size limit and timings for rotating the document; the defaults in production. */
+  rotation?: Partial<RotationOptions>;
   /**
    * Development builds never connect (ADR 033): a dev instance running next
    * to the production app must not execute the same requests.
@@ -91,9 +97,30 @@ export function onCompanionStatus(listener: (status: CompanionStatus) => void): 
   return () => statusListeners.delete(listener);
 }
 
+let rotateHandler: (() => Promise<RotationResult>) | null = null;
+/** When the document was last rotated (ms epoch), so automatic rotation cannot loop. */
+const ROTATED_AT_KEY = "companion.rotated_at";
+
+/**
+ * Moves the phone companion to a fresh document now (Settings, "Rotate now").
+ * Refused while a request is pending or running.
+ */
+export function rotateCompanionNow(): Promise<RotationResult> {
+  return rotateHandler ? rotateHandler() : Promise.resolve({ ok: false, reason: "not-connected" });
+}
+
+async function createAutomergeDocument(settings: CompanionSettings): Promise<string> {
+  const { ws } = syncServerUrls(settings.serverUrl, settings.token || null);
+  // Waits for the server, so the new document exists there before the old one points at it.
+  const { doc, url, flush } = await openAutomergeDoc({ docUrl: null, wsUrl: ws, storage: true, waitForNetworkMs: 15_000 });
+  await flush();
+  doc.close();
+  return url;
+}
+
 async function connectAutomerge(settings: CompanionSettings): Promise<CompanionDoc> {
   const { ws } = syncServerUrls(settings.serverUrl, settings.token || null);
-  const { doc } = await openAutomergeDoc({ docUrl: settings.docUrl, wsUrl: ws, storage: true });
+  const { doc } = await openAutomergeDoc({ docUrl: settings.docUrl, wsUrl: ws, storage: true, immutableStrings: true });
   return doc;
 }
 
@@ -108,6 +135,8 @@ export function useCompanionService(bindings: CompanionBindings, explicitDeps?: 
   // on every render does not reconnect on every render.
   const storeRef = useRef(deps.store ?? tauriSettingsStore);
   const connectRef = useRef(deps.connect ?? connectAutomerge);
+  const createDocumentRef = useRef(deps.createDocument ?? createAutomergeDocument);
+  const rotationRef = useRef<RotationOptions>({ ...DEFAULT_ROTATION, ...deps.rotation });
   const devBuild = deps.devBuild ?? import.meta.env.DEV;
 
   const bindingsRef = useRef(bindings);
@@ -133,6 +162,11 @@ export function useCompanionService(bindings: CompanionBindings, explicitDeps?: 
     if (!settings || !connection || devBuild || !bindings.ready) return;
     let cancelled = false;
     let opened: CompanionDoc | null = null;
+    let runtime: ReturnType<typeof startCompanionRuntime> | null = null;
+    /** Set once this document has been retired: its requests are still answered for a while. */
+    let retired = false;
+    let rotating = false;
+    const graceMs = rotationRef.current.graceMs;
     const stops: Array<() => void> = [];
 
     const ops: CompanionOps = {
@@ -174,14 +208,66 @@ export function useCompanionService(bindings: CompanionBindings, explicitDeps?: 
         return openConsumedLedger(storeRef.current).then((ledger) => {
           if (cancelled) return;
           stops.push(startPresence(connected));
-          const runtime = startCompanionRuntime({
+          runtime = startCompanionRuntime({
             doc: connected,
             secret: settings.secret,
             ops,
             ledger,
             onStatus: (runtimeStatus) => setStatus(runtimeStatus.state === "ok" ? { state: "on" } : runtimeStatus),
           });
-          stops.push(() => runtime.stop());
+
+          /** Retires this document for a fresh one (schema 2), leaving a signed pointer for the phone. */
+          let queued = false;
+          const rotate = async (manual = false): Promise<RotationResult> => {
+            if (cancelled || retired) return { ok: false, reason: "not-connected" };
+            if (rotating) return { ok: false, reason: "busy" };
+            if (hasOpenRequest(connected.read(), Date.now())) {
+              // Rotate now waits for the request; an automatic check just tries again next time.
+              if (!manual) return { ok: false, reason: "busy" };
+              queued = true;
+              return { ok: false, reason: "queued" };
+            }
+            queued = false;
+            rotating = true;
+            try {
+              const url = await createDocumentRef.current(settings);
+              if (cancelled) return { ok: false, reason: "not-connected" };
+              const movedTo = await signMove(settings.secret, settings.docUrl, url, Date.now());
+              retired = true;
+              connected.change((draft) => {
+                draft.movedTo = movedTo;
+                // An outdated phone, which cannot follow the pointer, says "update" instead of going stale.
+                draft.schemaVersion = SCHEMA_VERSION;
+              });
+              await storeRef.current.set(ROTATED_AT_KEY, String(Date.now()));
+              await saveCompanionSettings(storeRef.current, { docUrl: url });
+              return { ok: true, url };
+            } catch (error) {
+              return { ok: false, reason: "error", message: error instanceof Error ? error.message : String(error) };
+            } finally {
+              rotating = false;
+            }
+          };
+          const checkSize = () => {
+            if (retired || connected.size() <= rotationRef.current.aboveBytes) return;
+            // At most one automatic rotation per check interval, across restarts,
+            // so a document that is large even when fresh cannot loop.
+            void storeRef.current.get(ROTATED_AT_KEY).then(async (last) => {
+              if (last && Date.now() - Number(last) < rotationRef.current.everyMs) return;
+              const outcome = await rotate();
+              if (!outcome.ok && outcome.reason === "error") console.error("Could not rotate the companion document:", outcome.message);
+            });
+          };
+          stops.push(connected.subscribe(() => {
+            if (queued && !rotating && !hasOpenRequest(connected.read(), Date.now())) void rotate(true);
+          }));
+          rotateHandler = () => rotate(true);
+          const handler = rotateHandler;
+          stops.push(() => { if (rotateHandler === handler) rotateHandler = null; });
+          const timer = setInterval(checkSize, rotationRef.current.everyMs);
+          stops.push(() => clearInterval(timer));
+          checkSize();
+
           setStatus({ state: "on" });
           setDoc(connected);
         });
@@ -193,7 +279,16 @@ export function useCompanionService(bindings: CompanionBindings, explicitDeps?: 
     return () => {
       cancelled = true;
       for (const stop of stops.splice(0)) stop();
-      opened?.close();
+      const closing = opened;
+      const closingRuntime = runtime;
+      if (retired && closing) {
+        // Retired by a rotation: keep answering requests the phone sent before
+        // it switched, then stop. Nothing else is published here any more.
+        setTimeout(() => { closingRuntime?.stop(); closing.close(); }, graceMs);
+      } else {
+        closingRuntime?.stop();
+        closing?.close();
+      }
       setDoc(null);
       setStatus({ state: "connecting" });
     };
