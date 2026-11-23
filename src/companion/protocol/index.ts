@@ -432,7 +432,10 @@ export function immutableWriter<T extends object>(draft: T, strings: ImmutableSt
   // document read that throws. Every trap forwards to the real object.
   const view = (real: object): object => {
     const list = Array.isArray(real);
-    return new Proxy(list ? [] : {}, {
+    const items = real as unknown[];
+    // Chainable list writes (`insertAt`) return the list itself: hand back this view, not the raw draft.
+    const result = (value: unknown): unknown => (value === real ? proxy : Array.isArray(value) ? value.map(read) : read(value));
+    const proxy: object = new Proxy(list ? [] : {}, {
       get(_, prop) {
         if (prop === "toJSON") return undefined;
         const value = Reflect.get(real, prop);
@@ -440,9 +443,8 @@ export function immutableWriter<T extends object>(draft: T, strings: ImmutableSt
         if (!list) return (value as (...a: unknown[]) => unknown).bind(real);
         const call = (args: unknown[]) => (real as unknown as Record<PropertyKey, (...a: unknown[]) => unknown>)[prop](...args);
         const insert = typeof prop === "string" ? LIST_INSERTS[prop] : undefined;
-        if (insert) return (...args: unknown[]) => call(insert(args, wrap));
-        if (LIST_REMOVES.has(prop)) return (...args: unknown[]) => call(args);
-        const items = real as unknown[];
+        if (insert) return (...args: unknown[]) => result(call(insert(args, wrap)));
+        if (LIST_REMOVES.has(prop)) return (...args: unknown[]) => result(call(args));
         const standard = (Array.prototype as unknown as Record<PropertyKey, unknown>)[prop];
         return (...args: unknown[]) => {
           const elements = Array.from({ length: items.length }, (_, i) => read(items[i]));
@@ -461,17 +463,22 @@ export function immutableWriter<T extends object>(draft: T, strings: ImmutableSt
         return Reflect.has(real, prop);
       },
       ownKeys() {
-        const keys = Reflect.ownKeys(real);
-        return list && !keys.includes("length") ? [...keys, "length"] : keys;
+        // Automerge's list proxy reports only `length`; enumerate the indices.
+        if (list) return [...Array.from({ length: items.length }, (_, i) => String(i)), "length"];
+        return Reflect.ownKeys(real);
       },
       getOwnPropertyDescriptor(stand, prop) {
-        if (list && prop === "length") return { value: (real as unknown[]).length, writable: true, enumerable: false, configurable: false };
+        if (list && prop === "length") return { value: items.length, writable: true, enumerable: false, configurable: false };
+        if (list && typeof prop === "string" && /^\d+$/.test(prop)) {
+          return Number(prop) < items.length ? { value: read(items[Number(prop)]), writable: true, enumerable: true, configurable: true } : undefined;
+        }
         const own = Reflect.getOwnPropertyDescriptor(real, prop);
         if (!own) return undefined;
         void stand;
         return { value: read((real as Record<PropertyKey, unknown>)[prop]), writable: true, enumerable: own.enumerable ?? true, configurable: true };
       },
     });
+    return proxy;
   };
   return view(draft) as T;
 }

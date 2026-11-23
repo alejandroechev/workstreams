@@ -15,7 +15,7 @@ import {
   type SettingsStore,
 } from "./settings";
 import { syncServerUrls } from "./sync-server";
-import { isKnownSchema, SCHEMA_VERSION, SESSION_RETENTION_MS, signMove } from "./protocol";
+import { isKnownSchema, SCHEMA_VERSION, SESSION_RETENTION_MS, signMove, verifyMove } from "./protocol";
 import { DEFAULT_ROTATION, hasOpenRequest, type RotationOptions, type RotationResult } from "./rotation";
 import type { Tile, Workstream } from "../domain/types";
 import type { WorkLane } from "../domain/work-lanes";
@@ -100,6 +100,34 @@ export function onCompanionStatus(listener: (status: CompanionStatus) => void): 
 let rotateHandler: (() => Promise<RotationResult>) | null = null;
 /** When the document was last rotated (ms epoch), so automatic rotation cannot loop. */
 const ROTATED_AT_KEY = "companion.rotated_at";
+/**
+ * The document last retired, until the phone shows up on its successor: its
+ * pointer may not have reached the server yet (the laptop went offline or
+ * quit right after rotating), so it is reopened at start to send it again.
+ */
+const RETIRED_DOC_KEY = "companion.retired_doc";
+
+/** Retired documents still open (grace, or re-sending a pointer), by the secret they answer with. */
+const retiredDocs = new Set<{ secret: string; stop: () => void }>();
+
+function stopRetired(keepSecret: string | null): void {
+  for (const entry of [...retiredDocs]) {
+    if (entry.secret !== keepSecret) {
+      retiredDocs.delete(entry);
+      entry.stop();
+    }
+  }
+}
+
+/** Keeps a retired document open for `ms`, stoppable at once if pairing changes. */
+function holdRetired(secret: string, ms: number, close: () => void): void {
+  const entry = {
+    secret,
+    stop: () => { clearTimeout(timer); retiredDocs.delete(entry); close(); },
+  };
+  const timer = setTimeout(() => entry.stop(), ms);
+  retiredDocs.add(entry);
+}
 
 /**
  * Moves the phone companion to a fresh document now (Settings, "Rotate now").
@@ -158,6 +186,11 @@ export function useCompanionService(bindings: CompanionBindings, explicitDeps?: 
   const connection = settings?.enabled && settings.docUrl && settings.secret
     ? JSON.stringify([settings.serverUrl, settings.token, settings.docUrl, settings.secret, settings.folderRoot])
     : null;
+  // A retired document answers with the pairing it was retired under: turning
+  // the companion off or pairing a new phone stops it at once.
+  const activeSecret = connection && !devBuild ? settings?.secret ?? null : null;
+  useEffect(() => { if (settings) stopRetired(activeSecret); }, [activeSecret, settings]);
+  useEffect(() => () => stopRetired(null), []);
   useEffect(() => {
     if (!settings || !connection || devBuild || !bindings.ready) return;
     let cancelled = false;
@@ -196,6 +229,35 @@ export function useCompanionService(bindings: CompanionBindings, explicitDeps?: 
       messageSession: (target, guard, requestId) => bindingsRef.current.messageSession(target, guard, requestId),
     };
 
+    /**
+     * After a restart, the last retired document's pointer may never have
+     * reached the server. Reopen it so its local change syncs (writing the
+     * pointer again if it is missing), until the phone shows up here.
+     */
+    const resendRetiredPointer = async (current: CompanionDoc) => {
+      const retiredUrl = await storeRef.current.get(RETIRED_DOC_KEY);
+      if (!retiredUrl || retiredUrl === settings.docUrl || cancelled) return;
+      const arrived = () => Object.keys(current.read().requests ?? {}).length > 0;
+      if (arrived()) { await storeRef.current.set(RETIRED_DOC_KEY, ""); return; }
+      const offArrival = current.subscribe(() => {
+        if (arrived()) { offArrival(); void storeRef.current.set(RETIRED_DOC_KEY, ""); }
+      });
+      stops.push(offArrival);
+      let old: CompanionDoc;
+      try {
+        old = await connectRef.current({ ...settings, docUrl: retiredUrl });
+      } catch (error) {
+        console.error("Could not reopen the retired companion document:", error);
+        return;
+      }
+      if (cancelled) { old.close(); return; }
+      if (await verifyMove(old.read(), retiredUrl, settings.secret) !== settings.docUrl && isKnownSchema(old.read())) {
+        const movedTo = await signMove(settings.secret, retiredUrl, settings.docUrl, Date.now());
+        old.change((draft) => { draft.movedTo = movedTo; draft.schemaVersion = SCHEMA_VERSION; });
+      }
+      holdRetired(settings.secret, graceMs, () => old.close());
+    };
+
     connectRef.current(settings)
       .then((connected) => {
         if (cancelled) { connected.close(); return; }
@@ -205,8 +267,18 @@ export function useCompanionService(bindings: CompanionBindings, explicitDeps?: 
           setStatus({ state: "update-needed" });
           return;
         }
-        return openConsumedLedger(storeRef.current).then((ledger) => {
+        return verifyMove(connected.read(), settings.docUrl, settings.secret).then(async (successor) => {
           if (cancelled) return;
+          if (successor) {
+            // This laptop already retired this document (it quit before saving
+            // the successor): follow its own pointer instead of using it.
+            await saveCompanionSettings(storeRef.current, { docUrl: successor });
+            return;
+          }
+          await resendRetiredPointer(connected);
+          return openConsumedLedger(storeRef.current);
+        }).then((ledger) => {
+          if (cancelled || !ledger) return;
           stops.push(startPresence(connected));
           runtime = startCompanionRuntime({
             doc: connected,
@@ -231,14 +303,24 @@ export function useCompanionService(bindings: CompanionBindings, explicitDeps?: 
             rotating = true;
             try {
               const url = await createDocumentRef.current(settings);
-              if (cancelled) return { ok: false, reason: "not-connected" };
               const movedTo = await signMove(settings.secret, settings.docUrl, url, Date.now());
+              // Checked again with no await before the write: the document may
+              // have changed, or a request arrived, while the successor was made.
+              if (cancelled || retired) return { ok: false, reason: "not-connected" };
+              const snapshot = connected.read();
+              if (!isKnownSchema(snapshot)) return { ok: false, reason: "error", message: "The document belongs to a newer version." };
+              if (hasOpenRequest(snapshot, Date.now())) {
+                if (!manual) return { ok: false, reason: "busy" };
+                queued = true;
+                return { ok: false, reason: "queued" };
+              }
               retired = true;
               connected.change((draft) => {
                 draft.movedTo = movedTo;
                 // An outdated phone, which cannot follow the pointer, says "update" instead of going stale.
                 draft.schemaVersion = SCHEMA_VERSION;
               });
+              await storeRef.current.set(RETIRED_DOC_KEY, settings.docUrl);
               await storeRef.current.set(ROTATED_AT_KEY, String(Date.now()));
               await saveCompanionSettings(storeRef.current, { docUrl: url });
               return { ok: true, url };
@@ -284,7 +366,7 @@ export function useCompanionService(bindings: CompanionBindings, explicitDeps?: 
       if (retired && closing) {
         // Retired by a rotation: keep answering requests the phone sent before
         // it switched, then stop. Nothing else is published here any more.
-        setTimeout(() => { closingRuntime?.stop(); closing.close(); }, graceMs);
+        holdRetired(settings.secret, graceMs, () => { closingRuntime?.stop(); closing.close(); });
       } else {
         closingRuntime?.stop();
         closing?.close();
@@ -323,12 +405,15 @@ export function useCompanionService(bindings: CompanionBindings, explicitDeps?: 
   const publishSeq = useRef(0);
   useEffect(() => {
     if (!doc) return;
+    let active = true;
     const seq = ++publishSeq.current;
     const names = new Map(JSON.parse(workstreamNames) as Array<[string, string]>);
     void bindingsRef.current.listSessions()
       .then((stored) => buildSessions(stored, names, secret))
-      .then((sessions) => { if (seq === publishSeq.current) publishSessions(doc, sessions); })
+      // Not after a disconnect: the document may have been retired meanwhile.
+      .then((sessions) => { if (active && seq === publishSeq.current) publishSessions(doc, sessions); })
       .catch((error: unknown) => console.error("Could not publish phone sessions:", error));
+    return () => { active = false; };
   }, [doc, bindings.sessionsVersion, pruned, workstreamNames, secret]);
 
   // Every Copilot session tile the phone may message, republished when the
@@ -336,12 +421,14 @@ export function useCompanionService(bindings: CompanionBindings, explicitDeps?: 
   const tilesSeq = useRef(0);
   useEffect(() => {
     if (!doc) return;
+    let active = true;
     const seq = ++tilesSeq.current;
     const b = bindingsRef.current;
     void b.listSessions()
       .then((stored) => buildSessionTiles({ workstreams: b.workstreams, tilesByWorkstream: b.sessionTiles ?? new Map(), stored }))
-      .then((tiles) => { if (seq === tilesSeq.current && isKnownSchema(doc.read())) publishSessionTiles(doc, tiles); })
+      .then((tiles) => { if (active && seq === tilesSeq.current && isKnownSchema(doc.read())) publishSessionTiles(doc, tiles); })
       .catch((error: unknown) => console.error("Could not publish session tiles:", error));
+    return () => { active = false; };
   }, [doc, bindings.sessionTiles, bindings.workstreams, bindings.sessionsVersion]);
 
   // Publish whenever what the phone would see changes.

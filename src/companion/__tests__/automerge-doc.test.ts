@@ -172,5 +172,29 @@ describe("Automerge companion document", () => {
       opened.doc.close();
     });
   });
+  describe("immutableWriter on real Automerge lists", () => {
+    it("keeps chained list writes, removed values and enumeration in the wrapped view", async () => {
+      const [a] = pair();
+      const opened = await openAutomergeDoc({ network: [a], docUrl: null, storage: false, immutableStrings: true });
+      let removed: unknown[] = [];
+      let keys: string[] = [];
+      let spread: unknown[] = [];
+      opened.doc.change((d) => {
+        const lanes = d.laptop.lanes as unknown as { insertAt(i: number, ...v: unknown[]): { push(...v: unknown[]): number } };
+        lanes.insertAt(0, { id: "a", name: "A" }).push({ id: "b", name: "B" }, { id: "c", name: "C" });
+        removed = (d.laptop.lanes as unknown as unknown[]).splice(2, 1);
+        keys = Object.keys(d.laptop.lanes);
+        spread = [...d.laptop.lanes].map((lane) => ({ ...lane }));
+      });
+      expect(removed).toEqual([{ id: "c", name: "C" }]);
+      expect(keys).toEqual(["0", "1"]);
+      expect(spread).toEqual([{ id: "a", name: "A" }, { id: "b", name: "B" }]);
+      const loaded = Automerge.load(opened.bytes()) as unknown as { laptop: { lanes: Array<Record<string, unknown>> } };
+      for (const lane of loaded.laptop.lanes) {
+        expect(Automerge.isImmutableString(lane.id)).toBe(true);
+        expect(Automerge.isImmutableString(lane.name)).toBe(true);
+      }
+      opened.doc.close();
+    });
+  });
 });
-

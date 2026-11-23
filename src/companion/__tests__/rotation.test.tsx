@@ -2,8 +2,8 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import { renderHook, waitFor, act, cleanup } from "@testing-library/react";
 import { rotateCompanionNow, useCompanionService, type CompanionBindings } from "../useCompanionService";
 import { createInMemoryHub } from "../doc";
-import { createMemorySettingsStore, loadCompanionSettings } from "../settings";
-import { emptyDocument, signRequest, verifyMove, type CompanionDocument, type UnsignedRequest } from "../protocol";
+import { createMemorySettingsStore, loadCompanionSettings, saveCompanionSettings } from "../settings";
+import { emptyDocument, signMove, signRequest, verifyMove, type CompanionDocument, type UnsignedRequest } from "../protocol";
 import fixtures from "../protocol/fixtures.json";
 import { hasOpenRequest } from "../rotation";
 import type { Workstream } from "../../domain/types";
@@ -176,6 +176,109 @@ describe("rotating the companion document", () => {
     await phoneSends(oldPeer, "late");
     await act(async () => { await new Promise((r) => setTimeout(r, 100)); });
     expect(oldPeer.read().requests.late.outcome).toBeUndefined();
+  });
+});
+
+describe("rotation, failure cases", () => {
+  it("does not retire the document when a request arrives while the successor is being made", async () => {
+    const s = server();
+    const settings = store();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const createDocument = vi.fn(async () => {
+      await phoneSends(s.hubs.get(OLD)!.peer(), "mid");
+      return s.createDocument();
+    });
+    const { result } = renderHook(() => useCompanionService(bindings({ loadInBackground: vi.fn(() => gate) }), {
+      store: settings, connect: s.connect, createDocument, rotation: big, devBuild: false,
+    }));
+    await waitFor(() => expect(result.current.state).toBe("on"));
+    let outcome: Awaited<ReturnType<typeof rotateCompanionNow>> | undefined;
+    await act(async () => { outcome = await rotateCompanionNow(); });
+    expect(outcome).toEqual({ ok: false, reason: "queued" });
+    expect(s.hubs.get(OLD)!.peer().read().movedTo).toBeUndefined();
+    expect((await loadCompanionSettings(settings)).docUrl).toBe(OLD);
+    release();
+    await waitFor(async () => expect((await loadCompanionSettings(settings)).docUrl).not.toBe(OLD));
+  });
+
+  it("follows its own pointer when it restarts on a document it already retired", async () => {
+    const s = server();
+    s.hubs.set("automerge:3Successor", createInMemoryHub(emptyDocument()));
+    const movedTo = await signMove(SECRET, OLD, "automerge:3Successor", Date.now());
+    s.hubs.get(OLD)!.peer().change((d) => { d.movedTo = movedTo; d.schemaVersion = 2; });
+    const settings = store();
+    renderHook(() => useCompanionService(bindings(), { store: settings, connect: s.connect, createDocument: s.createDocument, rotation: big, devBuild: false }));
+    await waitFor(async () => expect((await loadCompanionSettings(settings)).docUrl).toBe("automerge:3Successor"));
+    await waitFor(() => expect(s.hubs.get("automerge:3Successor")!.peer().read().laptop.workstreams).toHaveLength(2));
+    expect(s.createDocument).not.toHaveBeenCalled();
+  });
+
+  it("re-sends the pointer from a retired document after a restart, until the phone arrives", async () => {
+    const s = server();
+    s.hubs.set("automerge:3Successor", createInMemoryHub(emptyDocument()));
+    const settings = createMemorySettingsStore({
+      "companion.enabled": "1", "companion.doc_url": "automerge:3Successor", "companion.secret": SECRET,
+      "companion.folder_root": "~/Phone", "companion.retired_doc": OLD,
+    });
+    renderHook(() => useCompanionService(bindings(), { store: settings, connect: s.connect, createDocument: s.createDocument, rotation: big, devBuild: false }));
+    // The pointer never reached the server: it is written again.
+    await waitFor(async () => expect(await verifyMove(s.hubs.get(OLD)!.peer().read(), OLD, SECRET)).toBe("automerge:3Successor"));
+    expect(await settings.get("companion.retired_doc")).toBe(OLD);
+    await phoneSends(s.hubs.get("automerge:3Successor")!.peer(), "arrived");
+    await waitFor(async () => expect(await settings.get("companion.retired_doc")).toBe(""));
+  });
+
+  it("stops answering the retired document as soon as the companion is turned off", async () => {
+    const s = server();
+    const settings = store();
+    const { result } = renderHook(() => useCompanionService(bindings(), {
+      store: settings, connect: s.connect, createDocument: s.createDocument,
+      rotation: { aboveBytes: 10_000_000, everyMs: 60_000, graceMs: 60_000 }, devBuild: false,
+    }));
+    await waitFor(() => expect(result.current.state).toBe("on"));
+    await act(async () => { await rotateCompanionNow(); });
+    await act(async () => { await saveCompanionSettings(settings, { enabled: false }); });
+    await waitFor(() => expect(result.current.state).toBe("off"));
+    const oldPeer = s.hubs.get(OLD)!.peer();
+    await phoneSends(oldPeer, "after-off");
+    await act(async () => { await new Promise((r) => setTimeout(r, 100)); });
+    expect(oldPeer.read().requests["after-off"].outcome).toBeUndefined();
+  });
+
+  it("never lets a slow publish started before the rotation write into the retired document", async () => {
+    const s = server();
+    const settings = store();
+    let slowNext = false;
+    let slow: ((value: unknown[]) => void) | null = null;
+    const listSessions = vi.fn(() => {
+      if (!slowNext) return Promise.resolve([]);
+      slowNext = false;
+      return new Promise<unknown[]>((resolve) => { slow = resolve; });
+    }) as unknown as CompanionBindings["listSessions"];
+    let b = bindings({ listSessions });
+    // The successor connects only after the stale publish has resolved.
+    let releaseConnect!: () => void;
+    const connectGate = new Promise<void>((resolve) => { releaseConnect = resolve; });
+    const connect = vi.fn(async (settings: { docUrl: string }) => {
+      if (settings.docUrl !== OLD) await connectGate;
+      return s.connect(settings);
+    });
+    const { result, rerender } = renderHook(() => useCompanionService(b, {
+      store: settings, connect, createDocument: s.createDocument, rotation: big, devBuild: false,
+    }));
+    await waitFor(() => expect(result.current.state).toBe("on"));
+    await act(async () => { await new Promise((r) => setTimeout(r, 30)); });
+    slowNext = true;
+    b = bindings({ listSessions, sessionsVersion: 1 });
+    rerender();
+    await waitFor(() => expect(slow).not.toBeNull());
+    await act(async () => { await rotateCompanionNow(); });
+    const before = JSON.stringify(s.hubs.get(OLD)!.peer().read().sessions ?? null);
+    const stored = [{ tileId: "t1", workstreamId: "a", requestId: "r", prompt: "late", createdAt: Date.now(), canSend: true, messages: [] }];
+    await act(async () => { slow!(stored); await new Promise((r) => setTimeout(r, 50)); });
+    expect(JSON.stringify(s.hubs.get(OLD)!.peer().read().sessions ?? null)).toBe(before);
+    releaseConnect();
   });
 });
 
