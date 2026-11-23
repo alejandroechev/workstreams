@@ -197,7 +197,7 @@ describe("the companion runtime on the laptop", () => {
 
   it("touches nothing in a document from a newer major version", async () => {
     const seeded = emptyDocument();
-    seeded.schemaVersion = 2;
+    seeded.schemaVersion = 3;
     const unsigned = { id: "v2", kind: "load" as const, args: { workstreamId: "idle" }, createdAt: NOW };
     seeded.requests.v2 = { ...unsigned, signature: await signRequest(SECRET, unsigned) };
     const laptop = createInMemoryHub(seeded).peer();
@@ -289,7 +289,7 @@ describe("the companion runtime on the laptop", () => {
       const { ops, calls } = fakeOps({
         world: () => {
           // The first read happens after verification starts: upgrade the document now.
-          phone.change((d) => { d.schemaVersion = 2; });
+          phone.change((d) => { d.schemaVersion = 3; });
           return { workstreams: [{ id: "idle", name: "Idle", archived: false, loaded: false, copilotCommand: "c" }], globalCopilotCommand: "c" };
         },
       });
@@ -375,7 +375,7 @@ describe("the companion runtime on the laptop", () => {
       const laptop = hub.peer();
       const phone = hub.peer();
       const { ops, calls } = fakeOps({
-        loadInBackground: vi.fn(async () => { phone.change((d) => { d.schemaVersion = 2; }); }),
+        loadInBackground: vi.fn(async () => { phone.change((d) => { d.schemaVersion = 3; }); }),
       });
       await phoneRequest(phone, { kind: "session", args: { workstreamId: "idle", prompt: "go" } });
       const runtime = startCompanionRuntime({ doc: laptop, secret: SECRET, ops, now: () => NOW });

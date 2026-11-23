@@ -60,7 +60,7 @@ export function buildLaptopState(input: {
  * change grows the history the sync server loads on each reconnect.
  */
 function syncList<T extends object>(list: T[], wanted: readonly T[], key: keyof T): void {
-  const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+  const same = (a: unknown, b: unknown) => stableJson(a) === stableJson(b);
   for (let i = 0; i < wanted.length; i += 1) {
     const next = wanted[i];
     const current = list[i];
@@ -85,8 +85,8 @@ export function publishLaptopState(doc: CompanionDoc, state: LaptopState): boole
   // A newer version's document gets no writes at all (ADR 033).
   if (!isKnownSchema(snapshot)) return false;
   const current = snapshot.laptop;
-  if (JSON.stringify(current.workstreams) === JSON.stringify(state.workstreams)
-    && JSON.stringify(current.lanes) === JSON.stringify(state.lanes)) {
+  if (stableJson(current.workstreams) === stableJson(state.workstreams)
+    && stableJson(current.lanes) === stableJson(state.lanes)) {
     return false;
   }
   doc.change((draft) => {
@@ -145,8 +145,20 @@ export async function buildSessions(
   return sessions;
 }
 
+/**
+ * JSON with object keys sorted. Automerge returns a map's keys sorted, so a
+ * plain `JSON.stringify` of what is published never equals the same value
+ * built in insertion order, and every comparison read as "changed".
+ */
+export function stableJson(value: unknown): string {
+  return JSON.stringify(value, (_key, v: unknown) =>
+    v && typeof v === "object" && !Array.isArray(v)
+      ? Object.fromEntries(Object.keys(v as Record<string, unknown>).sort().map((k) => [k, (v as Record<string, unknown>)[k]]))
+      : v);
+}
+
 const canonical = (sessions: Record<string, PhoneSession> | undefined) =>
-  JSON.stringify(Object.keys(sessions ?? {}).sort().map((id) => sessions![id]));
+  stableJson(Object.keys(sessions ?? {}).sort().map((id) => sessions![id]));
 
 const header = (session: PhoneSession) =>
   JSON.stringify([session.id, session.workstreamId, session.workstreamName, session.requestId, session.title, session.createdAt, session.signature]);
@@ -178,7 +190,7 @@ export function publishSessions(doc: CompanionDoc, sessions: Record<string, Phon
       }
       const have = new Set(existing.messages.map((m) => m.id));
       for (const message of session.messages) if (!have.has(message.id)) existing.messages.push({ ...message });
-      if (JSON.stringify(existing.messages) !== JSON.stringify(session.messages)) {
+      if (stableJson(existing.messages) !== stableJson(session.messages)) {
         existing.messages.splice(0, existing.messages.length, ...session.messages.map((m) => ({ ...m })));
       }
     }
@@ -231,7 +243,7 @@ export async function buildSessionTiles(input: {
 export function publishSessionTiles(doc: CompanionDoc, tiles: PublishedSessionTile[]): boolean {
   const snapshot = doc.read();
   if (!isKnownSchema(snapshot)) return false;
-  if (JSON.stringify(snapshot.laptop.tiles ?? null) === JSON.stringify(tiles)) return false;
+  if (stableJson(snapshot.laptop.tiles ?? null) === stableJson(tiles)) return false;
   doc.change((draft) => {
     if (!isKnownSchema(draft)) return;
     if (!Array.isArray(draft.laptop.tiles)) draft.laptop.tiles = [];

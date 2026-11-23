@@ -122,7 +122,7 @@ describe("the security gate comes first", () => {
   });
 
   it("refuses everything when the document's schema is unknown", async () => {
-    const result = await planRequest(await req({}), world, { secret: SECRET, now: NOW, schemaVersion: 2 });
+    const result = await planRequest(await req({}), world, { secret: SECRET, now: NOW, schemaVersion: 3 });
     expect(result).toEqual({ ok: false, error: expect.stringMatching(/update Workstreams/i) });
   });
 

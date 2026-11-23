@@ -1,8 +1,8 @@
 import { folderSlug } from "./folders";
 import {
   checkRequest,
+  isKnownSchema,
   rejectMessage,
-  SCHEMA_VERSION,
   type CompanionDocument,
   type CompanionRequest,
   type CreateArgs,
@@ -52,7 +52,7 @@ export async function planRequest(
   world: ExecutorWorld,
   options: { secret: string; now: number; schemaVersion: unknown },
 ): Promise<Plan> {
-  if (options.schemaVersion !== SCHEMA_VERSION) {
+  if (!isKnownSchema({ schemaVersion: options.schemaVersion })) {
     return { ok: false, error: "The companion document is from a newer version. Update Workstreams." };
   }
   const check = await checkRequest(request, { secret: options.secret, now: options.now });

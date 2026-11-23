@@ -110,7 +110,7 @@ describe("presence", () => {
     const laptop = hub.peer();
     const phone = hub.peer();
     const stop = startPresence(laptop);
-    phone.change((d) => { d.schemaVersion = 2; });
+    phone.change((d) => { d.schemaVersion = 3; });
     const writes = vi.fn();
     phone.subscribe(writes);
     vi.advanceTimersByTime(LAST_SEEN_WRITE_MS * 2);
@@ -122,7 +122,7 @@ describe("presence", () => {
   it("never publishes into a document from a newer version", () => {
     const hub = createInMemoryHub();
     const laptop = hub.peer();
-    laptop.change((d) => { d.schemaVersion = 2; });
+    laptop.change((d) => { d.schemaVersion = 3; });
     expect(publishLaptopState(laptop, { workstreams: [{ id: "a", name: "A", laneId: null, loaded: false, sessionCount: 0 }], lanes: [] })).toBe(false);
     expect(laptop.read().laptop.workstreams).toEqual([]);
   });
@@ -183,7 +183,7 @@ describe("publishing phone sessions", () => {
   it("never writes sessions into a document from a newer version", async () => {
     const hub = createInMemoryHub();
     const laptop = hub.peer();
-    laptop.change((d) => { d.schemaVersion = 2; });
+    laptop.change((d) => { d.schemaVersion = 3; });
     expect(publishSessions(laptop, await buildSessions([stored()], names, SECRET))).toBe(false);
     expect(laptop.read().sessions).toBeUndefined();
   });
@@ -246,7 +246,7 @@ describe("publishing the laptop's session tiles", () => {
     expect(publishSessionTiles(laptop, t)).toBe(true);
     expect(publishSessionTiles(laptop, t)).toBe(false);
     expect(hub.peer().read().laptop.tiles).toEqual(t);
-    laptop.change((d) => { d.schemaVersion = 2; });
+    laptop.change((d) => { d.schemaVersion = 3; });
     expect(publishSessionTiles(laptop, [])).toBe(false);
   });
 });

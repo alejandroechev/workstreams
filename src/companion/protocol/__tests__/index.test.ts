@@ -1,6 +1,11 @@
 import { describe, it, expect } from "vitest";
 import {
   SCHEMA_VERSION,
+  SIGNED_FORMAT,
+  signMove,
+  verifyMove,
+  immutableWriter,
+  usesImmutableStrings,
   canonicalRequest,
   signRequest,
   checkRequest,
@@ -73,7 +78,7 @@ describe("canonical request form", () => {
     expect(canonicalRequest(load({ id: "r2" }))).not.toBe(base);
     expect(canonicalRequest(load({ createdAt: NOW + 1 }))).not.toBe(base);
     expect(canonicalRequest(load({ args: { workstreamId: "ws-2" } }))).not.toBe(base);
-    expect(base).toContain(String(SCHEMA_VERSION));
+    expect(base).toContain(String(SIGNED_FORMAT));
   });
 });
 
@@ -160,6 +165,7 @@ describe("request shapes", () => {
 describe("versioning, freshness and presence", () => {
   it("knows only its own major schema version", () => {
     expect(isKnownSchema({ schemaVersion: SCHEMA_VERSION })).toBe(true);
+    expect(isKnownSchema({ schemaVersion: 1 })).toBe(true);
     expect(isKnownSchema({ schemaVersion: SCHEMA_VERSION + 1 })).toBe(false);
     expect(isKnownSchema({})).toBe(false);
   });
@@ -262,7 +268,7 @@ describe("phone sessions and messages", () => {
 
   it("reads nothing from a document without sessions, or from another version", () => {
     expect(readSessions(emptyDocument())).toEqual([]);
-    const doc = { ...emptyDocument(), schemaVersion: 2, sessions: fixtures.sessions.document } as unknown as CompanionDocument;
+    const doc = { ...emptyDocument(), schemaVersion: SCHEMA_VERSION + 1, sessions: fixtures.sessions.document } as unknown as CompanionDocument;
     expect(readSessions(doc)).toEqual([]);
     expect(readSessions({ ...emptyDocument(), sessions: "nope" } as unknown as CompanionDocument)).toEqual([]);
   });
@@ -341,7 +347,83 @@ describe("the laptop's session tiles", () => {
 
   it("is empty for an older laptop or another version", () => {
     expect(readSessionTiles(emptyDocument())).toEqual([]);
-    const doc = { ...emptyDocument(), schemaVersion: 2, laptop: { ...emptyDocument().laptop, tiles: [tile] } } as unknown as CompanionDocument;
+    const doc = { ...emptyDocument(), schemaVersion: SCHEMA_VERSION + 1, laptop: { ...emptyDocument().laptop, tiles: [tile] } } as unknown as CompanionDocument;
     expect(readSessionTiles(doc)).toEqual([]);
   });
 });
+
+describe("schema v2", () => {
+  it("creates v2 documents that use immutable strings, and still reads v1", () => {
+    expect(emptyDocument().schemaVersion).toBe(2);
+    expect(usesImmutableStrings(emptyDocument())).toBe(true);
+    expect(usesImmutableStrings({ schemaVersion: 1 })).toBe(false);
+    expect(isKnownSchema({ schemaVersion: 1 })).toBe(true);
+  });
+
+  it("signs the same bytes whatever the document's version, so v1 signatures stay valid", async () => {
+    const vector = fixtures.vectors[0].request as unknown as CompanionRequest;
+    const { signature, ...unsigned } = vector;
+    expect(await signRequest(SECRET, unsigned)).toBe(signature);
+  });
+});
+
+describe("movedTo", () => {
+  const FROM = "automerge:2kBadwcavXSL4JAwz7XGuumVr2ob";
+  const TO = "automerge:4fQxMoved1111111111111111111";
+
+  it("follows a pointer signed with the pairing secret", async () => {
+    const movedTo = await signMove(SECRET, FROM, TO, NOW);
+    expect(await verifyMove({ ...emptyDocument(), movedTo }, FROM, SECRET)).toBe(TO);
+  });
+
+  it("ignores a pointer that is missing, forged, for another document or malformed", async () => {
+    const movedTo = await signMove(SECRET, FROM, TO, NOW);
+    expect(await verifyMove(emptyDocument(), FROM, SECRET)).toBeNull();
+    expect(await verifyMove({ ...emptyDocument(), movedTo }, FROM, "A".repeat(43))).toBeNull();
+    expect(await verifyMove({ ...emptyDocument(), movedTo: { ...movedTo, doc: "automerge:4Other" } }, FROM, SECRET)).toBeNull();
+    expect(await verifyMove({ ...emptyDocument(), movedTo }, "automerge:3Another", SECRET)).toBeNull();
+    const bad = await signMove(SECRET, FROM, "https://evil.example", NOW);
+    expect(await verifyMove({ ...emptyDocument(), movedTo: bad }, FROM, SECRET)).toBeNull();
+    expect(await verifyMove({ ...emptyDocument(), movedTo: { doc: TO } } as unknown as CompanionDocument, FROM, SECRET)).toBeNull();
+    expect(await verifyMove({ ...emptyDocument(), movedTo: { ...movedTo, doc: FROM } }, FROM, SECRET)).toBeNull();
+  });
+});
+
+/* eslint-disable @typescript-eslint/no-explicit-any -- the writer is exercised through untyped drafts */
+describe("immutableWriter", () => {
+  class Frozen { constructor(public val: string) {} toJSON() { return this.val; } }
+  const strings = { make: (v: string) => new Frozen(v), is: (v: unknown) => v instanceof Frozen, text: (v: unknown) => (v as Frozen).val };
+
+  it("wraps every string written, at any depth, and reads them back as text", () => {
+    const target: Record<string, unknown> = { list: [] as unknown[], nested: { a: "plain" } };
+    const draft = immutableWriter(target, strings) as Record<string, any>;
+    draft.name = "x";
+    draft.obj = { id: "1", deep: ["a", { b: "c" }], n: 3, nil: null };
+    draft.list.push({ id: "p" }, "q");
+    draft.list.splice(1, 0, "inserted");
+    draft.list[3] = "set";
+    expect(target.name).toBeInstanceOf(Frozen);
+    const obj = target.obj as Record<string, any>;
+    expect(obj.id).toBeInstanceOf(Frozen);
+    expect(obj.deep[0]).toBeInstanceOf(Frozen);
+    expect(obj.deep[1].b).toBeInstanceOf(Frozen);
+    expect(obj.n).toBe(3);
+    expect(obj.nil).toBeNull();
+    const list = target.list as any[];
+    expect(list.map((v) => (v instanceof Frozen ? "F" : typeof v))).toEqual(["object", "F", "F", "F"]);
+    expect(list[0].id).toBeInstanceOf(Frozen);
+    expect(draft.name).toBe("x");
+    expect(draft.obj.deep[1].b).toBe("c");
+    expect(draft.list.map((v: unknown) => (typeof v === "string" ? v : "obj"))).toEqual(["obj", "inserted", "q", "set"]);
+    expect(draft.nested.a).toBe("plain");
+  });
+
+  it("does not wrap a value twice", () => {
+    const target: Record<string, unknown> = {};
+    const draft = immutableWriter(target, strings) as Record<string, unknown>;
+    const already = new Frozen("v");
+    draft.v = already;
+    expect(target.v).toBe(already);
+  });
+});
+/* eslint-enable @typescript-eslint/no-explicit-any */

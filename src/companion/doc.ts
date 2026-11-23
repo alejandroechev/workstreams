@@ -13,6 +13,8 @@ export interface CompanionDoc {
   subscribe(listener: (doc: CompanionDocument) => void): () => void;
   /** The only way to write. `mutate` may change the draft in place. */
   change(mutate: (draft: CompanionDocument) => void): void;
+  /** Bytes the document takes when saved: its whole history. Drives rotation (schema 2). */
+  size(): number;
   /** Sends an ephemeral message to the other peers; never stored. */
   broadcast(message: PresenceMessage): void;
   onEphemeral(listener: (message: unknown) => void): () => void;
@@ -45,6 +47,7 @@ export function createInMemoryHub(initial: CompanionDocument = emptyDocument()) 
           state = draft;
           for (const peer of peers) for (const listener of peer.changes) listener(clone(state));
         },
+        size: () => new TextEncoder().encode(JSON.stringify(state)).byteLength,
         broadcast(message) {
           for (const peer of peers) {
             if (peer === self) continue;

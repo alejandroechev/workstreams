@@ -1,6 +1,6 @@
 import type { NetworkAdapterInterface } from "@automerge/automerge-repo/slim";
 import type { CompanionDoc } from "./doc";
-import { emptyDocument, type CompanionDocument } from "./protocol";
+import { emptyDocument, immutableWriter, usesImmutableStrings, type CompanionDocument } from "./protocol";
 
 export interface OpenOptions {
   /** `null` creates a new document (done once, when the companion is enabled). */
@@ -19,6 +19,11 @@ export interface OpenOptions {
   waitForNetworkMs?: number;
   /** The new document's contents; defaults to an empty companion document. */
   initial?: object;
+  /**
+   * Write every string as one immutable value in a schema 2 document (the
+   * companion). Off for other documents sharing this adapter (learning).
+   */
+  immutableStrings?: boolean;
 }
 
 /** Shuts a repo down without ever throwing: adapters may assert on state. */
@@ -41,8 +46,8 @@ const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
  * ~5 MB of Automerge only reaches users who enable the companion, and Vite
  * needs no wasm plugin.
  */
-export async function openAutomergeDoc(options: OpenOptions): Promise<{ doc: CompanionDoc; url: string; flush(): Promise<void> }> {
-  const [{ Repo, initializeBase64Wasm }, { automergeWasmBase64 }] = await Promise.all([
+export async function openAutomergeDoc(options: OpenOptions): Promise<{ doc: CompanionDoc; url: string; flush(): Promise<void>; bytes(): Uint8Array }> {
+  const [{ Repo, initializeBase64Wasm, Automerge, ImmutableString, isImmutableString }, { automergeWasmBase64 }] = await Promise.all([
     import("@automerge/automerge-repo/slim"),
     import("@automerge/automerge/automerge.wasm.base64"),
   ]);
@@ -84,6 +89,14 @@ export async function openAutomergeDoc(options: OpenOptions): Promise<{ doc: Com
     throw error;
   }
 
+  const strings = {
+    make: (value: string) => new ImmutableString(value),
+    // isImmutableString() also answers true for Automerge list proxies.
+    is: (value: unknown) => isImmutableString(value) && !Array.isArray(value),
+    // Inside a change the value's toString() is not callable; `.val` is the text.
+    text: (value: unknown) => String((value as { val?: unknown }).val ?? ""),
+  };
+  const bytes = () => Automerge.save(handle.doc());
   const offs: Array<() => void> = [];
   const doc: CompanionDoc = {
     read: () => clone(handle.doc() as CompanionDocument),
@@ -95,8 +108,14 @@ export async function openAutomergeDoc(options: OpenOptions): Promise<{ doc: Com
       return off;
     },
     change(mutate) {
-      handle.change((draft) => mutate(draft as CompanionDocument));
+      handle.change((draft) => {
+        const target = options.immutableStrings && usesImmutableStrings(draft as CompanionDocument)
+          ? immutableWriter(draft as CompanionDocument, strings)
+          : (draft as CompanionDocument);
+        mutate(target);
+      });
     },
+    size: () => bytes().byteLength,
     broadcast(message) {
       handle.broadcast(message);
     },
@@ -112,5 +131,5 @@ export async function openAutomergeDoc(options: OpenOptions): Promise<{ doc: Com
       void shutdownQuietly(repo);
     },
   };
-  return { doc, url: handle.url, flush: () => repo.flush() };
+  return { doc, url: handle.url, flush: () => repo.flush(), bytes };
 }

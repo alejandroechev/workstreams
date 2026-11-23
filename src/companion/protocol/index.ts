@@ -7,8 +7,21 @@
  * it runs in the Workstreams webview, the Android webview, Node and jsdom.
  */
 
-/** Major version of the document format. Bump only for breaking changes. */
-export const SCHEMA_VERSION = 1;
+/**
+ * Major version of the document format. Bump only for breaking changes.
+ * Version 2 (2026-11) stores every string as one immutable value instead of a
+ * character-by-character text, so the document's history no longer grows by
+ * every character written. Both versions are read; new documents are v2.
+ */
+export const SCHEMA_VERSION = 2;
+const KNOWN_SCHEMAS: readonly number[] = [1, 2];
+
+/**
+ * The version written into every signed canonical form. It names the signing
+ * format, not the document format, so a signature means the same in a v1 and
+ * a v2 document.
+ */
+export const SIGNED_FORMAT = 1;
 
 /** A request older than this is never executed. */
 export const REQUEST_TTL_MS = 5 * 60_000;
@@ -107,6 +120,22 @@ export interface CompanionDocument {
    * by the laptop.
    */
   sessions?: Record<string, PhoneSession>;
+  /**
+   * Set once, when the laptop retires this document for a fresh one (schema
+   * 2). Signed with the pairing secret: the phone follows it only if it
+   * verifies, so a document writer cannot redirect the phone.
+   */
+  movedTo?: MovedTo;
+}
+
+/** Where a retired document's successor lives. */
+export interface MovedTo {
+  /** The successor's automerge URL. */
+  doc: string;
+  /** ms epoch, laptop clock. */
+  at: number;
+  /** HMAC-SHA256 hex of `canonicalMove`, by the laptop with the pairing secret. */
+  signature: string;
 }
 
 /** Ephemeral presence message (never stored in the document). */
@@ -121,7 +150,12 @@ export function emptyDocument(): CompanionDocument {
 }
 
 export function isKnownSchema(doc: { schemaVersion?: unknown }): boolean {
-  return doc.schemaVersion === SCHEMA_VERSION;
+  return typeof doc.schemaVersion === "number" && KNOWN_SCHEMAS.includes(doc.schemaVersion);
+}
+
+/** Whether strings written to this document must be immutable values (v2 and later). */
+export function usesImmutableStrings(doc: { schemaVersion?: unknown }): boolean {
+  return typeof doc.schemaVersion === "number" && doc.schemaVersion >= 2;
 }
 
 // ── Shape ──────────────────────────────────────────────────────────────
@@ -178,7 +212,7 @@ function sortedArgs(args: RequestArgs): Record<string, string> {
 
 /** The exact bytes that are signed: version, id, kind, sorted args, time. */
 export function canonicalRequest(request: UnsignedRequest): string {
-  return JSON.stringify([SCHEMA_VERSION, request.id, request.kind, sortedArgs(request.args), request.createdAt]);
+  return JSON.stringify([SIGNED_FORMAT, request.id, request.kind, sortedArgs(request.args), request.createdAt]);
 }
 
 function base64urlDecode(text: string): Uint8Array {
@@ -302,6 +336,8 @@ export function laneColor(laneId: string | null | undefined): string {
 
 // ── Pairing ────────────────────────────────────────────────────────────
 
+const DOC_URL = /^automerge:[1-9A-HJ-NP-Za-km-z]+$/;
+
 export interface Pairing { doc: string; secret: string }
 
 export function generateSecret(): string {
@@ -317,12 +353,127 @@ export function decodePairing(text: string): Pairing | null {
   try {
     const parsed = JSON.parse(text) as Record<string, unknown>;
     if (parsed?.v !== 1) return null;
-    if (typeof parsed.doc !== "string" || !/^automerge:[1-9A-HJ-NP-Za-km-z]+$/.test(parsed.doc)) return null;
+    if (typeof parsed.doc !== "string" || !DOC_URL.test(parsed.doc)) return null;
     if (typeof parsed.secret !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(parsed.secret)) return null;
     return { doc: parsed.doc, secret: parsed.secret };
   } catch {
     return null;
   }
+}
+
+// ── Rotation ───────────────────────────────────────────────────────────
+
+/** The exact bytes signed for a move: bound to the retired document and its successor. */
+export function canonicalMove(from: string, to: string, at: number): string {
+  return JSON.stringify([SIGNED_FORMAT, "moved", from, to, at]);
+}
+
+/** Signs the pointer the laptop writes into a document it retires. */
+export async function signMove(secret: string, from: string, to: string, at: number): Promise<MovedTo> {
+  const key = await hmacKey(secret);
+  const signature = hex(await globalThis.crypto.subtle.sign("HMAC", key, new TextEncoder().encode(canonicalMove(from, to, at))));
+  return { doc: to, at, signature };
+}
+
+/**
+ * The successor of `fromUrl`, if the document carries a pointer the paired
+ * laptop signed for exactly this document; otherwise null.
+ */
+export async function verifyMove(doc: CompanionDocument, fromUrl: string, secret: string): Promise<string | null> {
+  const moved = doc?.movedTo as Partial<MovedTo> | undefined;
+  if (!secret || !moved || typeof moved !== "object") return null;
+  if (typeof moved.doc !== "string" || !DOC_URL.test(moved.doc) || moved.doc === fromUrl) return null;
+  if (typeof moved.at !== "number" || !Number.isFinite(moved.at) || typeof moved.signature !== "string") return null;
+  const key = await hmacKey(secret);
+  const expected = hex(await globalThis.crypto.subtle.sign("HMAC", key, new TextEncoder().encode(canonicalMove(fromUrl, moved.doc, moved.at))));
+  return constantTimeEqual(expected, moved.signature) ? moved.doc : null;
+}
+
+// ── Immutable strings ──────────────────────────────────────────────────
+
+/** How a document stores immutable strings; Automerge's `ImmutableString`, passed in to keep this module dependency-free. */
+export interface ImmutableStrings {
+  make(value: string): unknown;
+  is(value: unknown): boolean;
+  text(value: unknown): string;
+}
+
+/** List methods that write: their inserted values are wrapped. */
+const LIST_INSERTS: Record<string, (args: unknown[], wrap: (v: unknown) => unknown) => unknown[]> = {
+  push: (args, wrap) => args.map(wrap),
+  unshift: (args, wrap) => args.map(wrap),
+  splice: (args, wrap) => (args.length <= 2 ? args : [args[0], args[1], ...args.slice(2).map(wrap)]),
+  insertAt: (args, wrap) => [args[0], ...args.slice(1).map(wrap)],
+  fill: (args, wrap) => [wrap(args[0]), ...args.slice(1)],
+};
+/** List methods that write without inserting anything. */
+const LIST_REMOVES = new Set<PropertyKey>(["pop", "shift", "reverse", "sort", "copyWithin", "deleteAt"]);
+
+/**
+ * A view of a draft in which every string written, at any depth, becomes an
+ * immutable value, and every immutable value read comes back as plain text,
+ * so writers stay unaware of the encoding (schema 2). Reading list methods
+ * (`map`, `find`, iteration, …) see the same unwrapped view.
+ */
+export function immutableWriter<T extends object>(draft: T, strings: ImmutableStrings): T {
+  const wrap = (value: unknown): unknown => {
+    if (typeof value === "string") return strings.make(value);
+    if (value === null || typeof value !== "object" || strings.is(value)) return value;
+    if (Array.isArray(value)) return value.map(wrap);
+    return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([k, v]) => [k, wrap(v)]));
+  };
+  const read = (value: unknown): unknown => {
+    if (strings.is(value)) return strings.text(value);
+    return value !== null && typeof value === "object" ? view(value) : value;
+  };
+  // The proxy's own target is a plain stand-in, never the draft: the engine
+  // checks every trapped read against its target's own properties, and on an
+  // Automerge list that check (`getOwnPropertyDescriptor("splice")`) is a
+  // document read that throws. Every trap forwards to the real object.
+  const view = (real: object): object => {
+    const list = Array.isArray(real);
+    return new Proxy(list ? [] : {}, {
+      get(_, prop) {
+        if (prop === "toJSON") return undefined;
+        const value = Reflect.get(real, prop);
+        if (typeof value !== "function") return read(value);
+        if (!list) return (value as (...a: unknown[]) => unknown).bind(real);
+        const call = (args: unknown[]) => (real as unknown as Record<PropertyKey, (...a: unknown[]) => unknown>)[prop](...args);
+        const insert = typeof prop === "string" ? LIST_INSERTS[prop] : undefined;
+        if (insert) return (...args: unknown[]) => call(insert(args, wrap));
+        if (LIST_REMOVES.has(prop)) return (...args: unknown[]) => call(args);
+        const items = real as unknown[];
+        const standard = (Array.prototype as unknown as Record<PropertyKey, unknown>)[prop];
+        return (...args: unknown[]) => {
+          const elements = Array.from({ length: items.length }, (_, i) => read(items[i]));
+          return typeof standard === "function"
+            ? (standard as (...a: unknown[]) => unknown).apply(elements, args)
+            : call(args);
+        };
+      },
+      set(_, prop, value) {
+        return Reflect.set(real, prop, wrap(value));
+      },
+      deleteProperty(_, prop) {
+        return Reflect.deleteProperty(real, prop);
+      },
+      has(_, prop) {
+        return Reflect.has(real, prop);
+      },
+      ownKeys() {
+        const keys = Reflect.ownKeys(real);
+        return list && !keys.includes("length") ? [...keys, "length"] : keys;
+      },
+      getOwnPropertyDescriptor(stand, prop) {
+        if (list && prop === "length") return { value: (real as unknown[]).length, writable: true, enumerable: false, configurable: false };
+        const own = Reflect.getOwnPropertyDescriptor(real, prop);
+        if (!own) return undefined;
+        void stand;
+        return { value: read((real as Record<PropertyKey, unknown>)[prop]), writable: true, enumerable: own.enumerable ?? true, configurable: true };
+      },
+    });
+  };
+  return view(draft) as T;
 }
 
 // ── Phone sessions and messages ────────────────────────────────────────
@@ -478,12 +629,12 @@ export function checkMessage(kind: string, text: string): MessageCheck {
 
 /** The exact bytes signed for a session's header. */
 export function canonicalSession(session: Pick<PhoneSession, "id" | "workstreamId" | "workstreamName" | "requestId" | "title" | "createdAt">): string {
-  return JSON.stringify([SCHEMA_VERSION, "session", session.id, session.workstreamId, session.workstreamName, session.requestId, session.title, session.createdAt]);
+  return JSON.stringify([SIGNED_FORMAT, "session", session.id, session.workstreamId, session.workstreamName, session.requestId, session.title, session.createdAt]);
 }
 
 /** The exact bytes signed for one message, bound to its session. */
 export function canonicalMessage(sessionId: string, message: Pick<SessionMessage, "id" | "kind" | "text" | "at">): string {
-  return JSON.stringify([SCHEMA_VERSION, "message", sessionId, message.id, message.kind, message.text, message.at]);
+  return JSON.stringify([SIGNED_FORMAT, "message", sessionId, message.id, message.kind, message.text, message.at]);
 }
 
 type Unsigned<T> = Omit<T, "signature">;

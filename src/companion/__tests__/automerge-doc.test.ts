@@ -1,7 +1,9 @@
 import { describe, it, expect, vi } from "vitest";
 import { MessageChannelNetworkAdapter } from "@automerge/automerge-repo-network-messagechannel";
 import { openAutomergeDoc } from "../automerge-doc";
-import { emptyDocument, type CompanionDocument } from "../protocol";
+import { Automerge } from "@automerge/automerge-repo/slim";
+import { buildSessions, publishSessions } from "../publisher";
+import { emptyDocument, SCHEMA_VERSION, type CompanionDocument } from "../protocol";
 
 /** Two real Automerge repos joined by an in-process channel. */
 function pair() {
@@ -105,9 +107,70 @@ describe("Automerge companion document", () => {
     const [a, b] = pair();
     const other = await openAutomergeDoc({ docUrl: null, network: [b], storage: false });
     const { doc } = await openAutomergeDoc({ docUrl: null, network: [a], storage: false, waitForNetworkMs: 2000 });
-    expect(doc.read().schemaVersion).toBe(1);
+    expect(doc.read().schemaVersion).toBe(SCHEMA_VERSION);
     doc.close();
     other.doc.close();
+  });
+
+  describe("immutable strings (schema 2)", () => {
+    const SECRET = "dGVzdC1zZWNyZXQtZm9yLWNvbXBhbmlvbi1maXh0dXI";
+
+    function strings(value: unknown, path = "", out: Array<[string, string]> = []): Array<[string, string]> {
+      if (Automerge.isImmutableString(value)) out.push([path, "immutable"]);
+      else if (typeof value === "string") out.push([path, "text"]);
+      else if (value && typeof value === "object") for (const [k, v] of Object.entries(value)) strings(v, `${path}/${k}`, out);
+      return out;
+    }
+
+    async function publishFifty(initial: CompanionDocument) {
+      const [a] = pair();
+      const opened = await openAutomergeDoc({ network: [a], docUrl: null, storage: false, initial, immutableStrings: true });
+      const stored = [{
+        tileId: "tile-1", workstreamId: "ws-1", requestId: "r-1", prompt: "Do the thing", createdAt: 1, canSend: true,
+        messages: Array.from({ length: 50 }, (_, i) => ({ id: `m-${i}`, kind: "progress" as const, text: "x".repeat(1000), at: 10 + i })),
+      }];
+      publishSessions(opened.doc, await buildSessions(stored, new Map([["ws-1", "Alpha"]]), SECRET));
+      opened.doc.change((d) => { d.requests["r-9"] = { id: "r-9", kind: "load", args: { workstreamId: "ws-1" }, createdAt: 5, signature: "ab" }; });
+      return opened;
+    }
+
+    it("stores every string in a v2 document as one immutable value", async () => {
+      const opened = await publishFifty(emptyDocument());
+      const loaded = Automerge.load(opened.bytes());
+      const found = strings(loaded);
+      expect(found.length).toBeGreaterThan(100);
+      expect(found.filter(([, kind]) => kind === "text")).toEqual([]);
+      const ops = Automerge.getAllChanges(loaded).reduce((n, c) => n + Automerge.decodeChange(c).ops.length, 0);
+      expect(ops).toBeLessThan(5_000);
+      // Readers still get plain text.
+      expect(opened.doc.read().sessions?.["tile-1"].messages[0].text).toBe("x".repeat(1000));
+      expect(opened.doc.size()).toBe(opened.bytes().byteLength);
+      opened.doc.close();
+    });
+
+    it("never writes immutable strings into a v1 document", async () => {
+      const opened = await publishFifty({ ...emptyDocument(), schemaVersion: 1 });
+      const found = strings(Automerge.load(opened.bytes()));
+      expect(found.filter(([, kind]) => kind === "immutable")).toEqual([]);
+      opened.doc.close();
+    });
+
+    it.each([["v2", 20], ["v1", 1_200]] as const)("publishes only the new message when one is appended (%s)", async (version, budget) => {
+      const opened = await publishFifty(version === "v1" ? { ...emptyDocument(), schemaVersion: 1 } : emptyDocument());
+      const before = Automerge.getAllChanges(Automerge.load(opened.bytes())).length;
+      const stored = [{
+        tileId: "tile-1", workstreamId: "ws-1", requestId: "r-1", prompt: "Do the thing", createdAt: 1, canSend: true,
+        messages: Array.from({ length: 51 }, (_, i) => ({ id: `m-${i}`, kind: "progress" as const, text: "x".repeat(1000), at: 10 + i })),
+      }];
+      const ops = (bytes: Uint8Array) => Automerge.getAllChanges(Automerge.load(bytes)).reduce((n, c) => n + Automerge.decodeChange(c).ops.length, 0);
+      const opsBefore = ops(opened.bytes());
+      publishSessions(opened.doc, await buildSessions(stored, new Map([["ws-1", "Alpha"]]), SECRET));
+      expect(Automerge.getAllChanges(Automerge.load(opened.bytes())).length).toBe(before + 1);
+      // One ~1 KB message: a handful of ops as immutable strings, about one per
+      // character as v1 text. Rewriting the session's 50 messages would be ~55,000.
+      expect(ops(opened.bytes()) - opsBefore).toBeLessThan(budget);
+      opened.doc.close();
+    });
   });
 });
 

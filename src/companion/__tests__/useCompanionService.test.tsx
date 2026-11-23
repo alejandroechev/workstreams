@@ -143,7 +143,7 @@ describe("the companion service in the app", () => {
 
   it("says Workstreams needs updating when the document is from a newer version", async () => {
     const seeded = emptyDocument();
-    seeded.schemaVersion = 2;
+    seeded.schemaVersion = 3;
     const hub = createInMemoryHub(seeded);
     const { result } = renderHook(() => useCompanionService(bindings(), { store: enabledStore(), connect: async () => hub.peer(), devBuild: false }));
     await waitFor(() => expect(result.current).toEqual({ state: "update-needed" }));
