@@ -15,6 +15,7 @@ import { getAppSettings, subscribeAppSettings, createWheelLineAccumulator } from
 import { writeTextToClipboard, readTextFromClipboard } from "../domain/clipboard";
 import { handleOsc52 } from "../domain/osc52";
 import { playBell, notifySessionIdle } from "../domain/notifications";
+import { forgetTileActivity, setTileActivity } from "../domain/tile-activity";
 import type { CopilotSessionStats } from "../domain/types";
 
 interface Props {
@@ -278,6 +279,8 @@ export default function CopilotSessionTile({
 
       // Detect active→idle transition → notify user
       const newActivity = event.payload.activity_status || "idle";
+      // Read by the periodic schedule runner (ADR 044): no run while mid-turn.
+      setTileActivity(tileId, newActivity);
       const wasActive = ["thinking", "tool_use", "responding"].includes(prevActivityRef.current);
       const nowIdle = newActivity === "idle";
       if (wasActive && nowIdle) {
@@ -373,6 +376,7 @@ export default function CopilotSessionTile({
       unlistenExit.then((u) => u());
       unsubscribeNotices();
       unlistenStats.then((u) => u());
+      forgetTileActivity(tileId);
       oscDisposable?.dispose?.();
       term.dispose();
     };

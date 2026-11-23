@@ -1,5 +1,5 @@
 import type { Backend } from "../backend/types";
-import type { Workstream } from "../domain/types";
+import type { Tile, Workstream } from "../domain/types";
 import { linkedSessionId } from "../domain/linked-sessions";
 import { linkRevision } from "./link-revision";
 import type { RequestGuard } from "./runtime";
@@ -39,19 +39,38 @@ const firstLine = (text: string) => text.split("\n").map((l) => l.trim()).find((
 
 const RELINKED = "This tile now runs a different Copilot session, so the message was not delivered and nothing was restarted.";
 
+interface ResumeHooks {
+  /** Before anything is touched, with the tile's linked session; throws to refuse. */
+  verify?(sessionId: string): Promise<void>;
+  /** After the mount, once the tile is known to still run the session: records the prompt. */
+  record?(tile: Tile, sessionId: string): Promise<void>;
+  /** The resume failed after `record` and the tile now runs another session. */
+  undoRecord?(tileId: string): Promise<void>;
+}
+
+interface ResumeTileRequest {
+  workstreamId: string;
+  tileId: string;
+  prompt: string;
+  command: string;
+  guard: RequestGuard;
+  /** The line written in the terminal before the session restarts. */
+  noticeText: string;
+  /** Why an unlinked tile can't be resumed. */
+  unlinkedError: string;
+}
+
 /**
- * Delivers a phone message to an existing session (companion conversations):
- * records it in the session's thread, stops the tile's process, and resumes
- * the same Copilot session in the same tile with the message as its new
- * interactive prompt.
+ * Stops a tile's process and resumes the same Copilot session in the same
+ * tile with `prompt` as its new interactive prompt. Shared by phone messages
+ * and scheduled runs (ADR 044).
  *
- * Nothing is touched until the tile is known to still run the session the
- * phone saw, and that is checked again after every wait: the user may re-link
- * the tile meanwhile. The claim checks it atomically with the tile's config.
- * A tile in a workstream that isn't mounted is marked as ours before
- * mounting, so the mount doesn't start it only for us to stop it.
+ * Nothing is touched until the tile is known to still run the session it was
+ * read with, and that is checked again after every wait: the user may re-link
+ * the tile meanwhile. A tile in a workstream that isn't mounted is marked as
+ * ours before mounting, so the mount doesn't start it only for us to stop it.
  */
-export async function resumePhoneSession(deps: ResumeSessionDeps, request: ResumeRequest): Promise<void> {
+async function resumeTileSession(deps: ResumeSessionDeps, request: ResumeTileRequest, hooks: ResumeHooks): Promise<void> {
   const { backend } = deps;
   const { guard } = request;
   const tiles = await backend.listTiles(request.workstreamId);
@@ -62,8 +81,8 @@ export async function resumePhoneSession(deps: ResumeSessionDeps, request: Resum
     try { return JSON.parse(tile.config_json || "{}") as Record<string, unknown>; } catch { return {}; }
   })();
   const sessionId = linkedSessionId(tile.config_json);
-  if (!sessionId) throw new Error("This session can't be resumed yet: it isn't linked to a Copilot session.");
-  if ((await linkRevision(tile.id, sessionId)) !== request.linkRevision) throw new Error(RELINKED);
+  if (!sessionId) throw new Error(request.unlinkedError);
+  await hooks.verify?.(sessionId);
   guard();
 
   /** The session the tile is linked to now, re-read from the store. */
@@ -82,21 +101,19 @@ export async function resumePhoneSession(deps: ResumeSessionDeps, request: Resum
   let mounted = false;
   /** From here a failure would leave the tile without its process. */
   let touched = false;
-  let claimed = false;
+  let recorded = false;
   try {
     await deps.mount(request.workstreamId);
     mounted = true;
     guard();
     await stillLinked();
-    await backend.companionClaimSession({
-      tileId: tile.id, workstreamId: request.workstreamId, requestId: request.requestId, prompt: request.prompt, createdAt: request.now,
-    }, sessionId);
-    claimed = true;
-    await backend.companionAddPrompt(tile.id, request.requestId, request.prompt, request.now);
-    deps.onRecorded();
+    if (hooks.record) {
+      recorded = true;
+      await hooks.record(tile, sessionId);
+    }
     await stillLinked();
     guard();
-    deps.notice(tile.id, `Resumed from phone: ${firstLine(request.prompt)}`);
+    deps.notice(tile.id, request.noticeText);
     if (running) {
       deps.markIntentionalRestart(tile.id);
       touched = true;
@@ -113,9 +130,9 @@ export async function resumePhoneSession(deps: ResumeSessionDeps, request: Resum
     touched = true;
     await deps.spawn(tile.id, cwd, request.command, sessionId, request.prompt);
   } catch (error) {
-    // A claim made for a session the tile no longer runs must not let that tile message the phone.
-    if (claimed && (await currentSession().catch(() => null)) !== sessionId) {
-      await backend.companionRevokeSession(tile.id).catch(() => {});
+    // A record made for a session the tile no longer runs must not let that tile message the phone.
+    if (recorded && hooks.undoRecord && (await currentSession().catch(() => null)) !== sessionId) {
+      await hooks.undoRecord(tile.id).catch(() => {});
     }
     const relaunch = mounted && (!running || touched);
     if (relaunch) await clearLocks();
@@ -134,4 +151,99 @@ export async function resumePhoneSession(deps: ResumeSessionDeps, request: Resum
     }
     throw error;
   }
+}
+
+/**
+ * Delivers a phone message to an existing session (companion conversations):
+ * records it in the session's thread, stops the tile's process, and resumes
+ * the same Copilot session in the same tile with the message as its new
+ * interactive prompt. The claim checks the link atomically with the tile's config.
+ */
+export async function resumePhoneSession(deps: ResumeSessionDeps, request: ResumeRequest): Promise<void> {
+  const { backend } = deps;
+  let claimed = false;
+  await resumeTileSession(
+    deps,
+    {
+      workstreamId: request.workstreamId,
+      tileId: request.tileId,
+      prompt: request.prompt,
+      command: request.command,
+      guard: request.guard,
+      noticeText: `Resumed from phone: ${firstLine(request.prompt)}`,
+      unlinkedError: "This session can't be resumed yet: it isn't linked to a Copilot session.",
+    },
+    {
+      async verify(sessionId) {
+        if ((await linkRevision(request.tileId, sessionId)) !== request.linkRevision) throw new Error(RELINKED);
+      },
+      async record(tile, sessionId) {
+        await backend.companionClaimSession({
+          tileId: tile.id, workstreamId: request.workstreamId, requestId: request.requestId, prompt: request.prompt, createdAt: request.now,
+        }, sessionId);
+        claimed = true;
+        await backend.companionAddPrompt(tile.id, request.requestId, request.prompt, request.now);
+        deps.onRecorded();
+      },
+      async undoRecord(tileId) {
+        if (claimed) await backend.companionRevokeSession(tileId);
+      },
+    },
+  );
+}
+
+export interface ScheduledResumeRequest {
+  workstreamId: string;
+  tileId: string;
+  /** What the run sends: the schedule's prompt plus any notify instructions. */
+  prompt: string;
+  command: string;
+  scheduleId: string;
+  now: number;
+}
+
+/**
+ * Starts a periodic schedule's run (ADR 044): resumes the session the tile is
+ * linked to *now* (a re-linked tile runs its new session) with the prompt.
+ * With the phone companion on, the prompt is also recorded in the tile's phone
+ * thread (created, named after the tile, on first use) so the thread reads
+ * run by run; that record never stops the run.
+ */
+export async function resumeScheduledSession(
+  deps: ResumeSessionDeps & { companionOn(): Promise<boolean> },
+  request: ScheduledResumeRequest,
+): Promise<void> {
+  const { backend } = deps;
+  let claimed = false;
+  await resumeTileSession(
+    deps,
+    {
+      workstreamId: request.workstreamId,
+      tileId: request.tileId,
+      prompt: request.prompt,
+      command: request.command,
+      guard: () => {},
+      noticeText: `Scheduled run: ${firstLine(request.prompt)}`,
+      unlinkedError: "This tile isn't linked to a Copilot session yet, so there is nothing to resume.",
+    },
+    {
+      async record(tile, sessionId) {
+        try {
+          if (!(await deps.companionOn())) return;
+          const id = `schedule-${request.scheduleId}-${request.now}`;
+          await backend.companionClaimSession({
+            tileId: tile.id, workstreamId: request.workstreamId, requestId: id, prompt: tile.title || "Copilot session", createdAt: request.now,
+          }, sessionId);
+          claimed = true;
+          await backend.companionAddPrompt(tile.id, id, request.prompt, request.now);
+          deps.onRecorded();
+        } catch (error) {
+          console.warn("Could not record the scheduled prompt in the phone thread:", error);
+        }
+      },
+      async undoRecord(tileId) {
+        if (claimed) await backend.companionRevokeSession(tileId);
+      },
+    },
+  );
 }

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { resumePhoneSession, type ResumeSessionDeps } from "../resume-session";
+import { resumePhoneSession, resumeScheduledSession, type ResumeSessionDeps } from "../resume-session";
 import { linkRevision } from "../link-revision";
 import { MemoryBackend } from "../../backend/memory-backend";
 
@@ -240,5 +240,58 @@ describe("resuming a session with a message from the phone", () => {
     const { deps, log, request } = await setup({ failAt: "spawn" });
     await expect(resumePhoneSession(deps, request())).rejects.toThrow("spawn failed");
     expect(log.slice(-2)).toEqual(["clear:session-s", "spawn:/repo/alpha/sub:copilot --yolo:session-s:null"]);
+  });
+});
+
+describe("resuming a session for a scheduled run (ADR 044)", () => {
+  const scheduled = (over: Record<string, unknown> = {}) => ({ prompt: "Check videos\nthen summarise", command: "copilot", scheduleId: "sch", now: 500, ...over });
+
+  it("resumes the tile's session with the prompt, unchanged command, and says so, without touching the phone while it is off", async () => {
+    const { backend, ws, tile, deps, log } = await setup();
+    await resumeScheduledSession({ ...deps, companionOn: async () => false }, { workstreamId: ws.id, tileId: tile.id, ...scheduled() });
+    expect(log).toEqual([
+      "mount:ws:marked",
+      "notice:Scheduled run: Check videos",
+      "intentional",
+      "stop",
+      "clear:session-s",
+      "spawn:/repo/alpha/sub:copilot:session-s:Check videos\nthen summarise",
+    ]);
+    expect(await backend.companionListSessions()).toEqual([]);
+  });
+
+  it("with the companion on, records the prompt in a phone thread named after the tile", async () => {
+    const { backend, ws, tile, deps, log } = await setup({ running: false });
+    await resumeScheduledSession({ ...deps, companionOn: async () => true }, { workstreamId: ws.id, tileId: tile.id, ...scheduled() });
+    expect(log).toContain("recorded");
+    const [session] = await backend.companionListSessions();
+    expect(session).toMatchObject({ tileId: tile.id, prompt: "Alpha/1", canSend: true });
+    expect(session.messages.map((m) => [m.kind, m.text])).toEqual([["prompt", "Check videos\nthen summarise"]]);
+    await resumeScheduledSession({ ...deps, companionOn: async () => true }, { workstreamId: ws.id, tileId: tile.id, ...scheduled({ now: 900 }) });
+    expect((await backend.companionListSessions())[0].messages).toHaveLength(2);
+  });
+
+  it("still runs when recording the prompt fails", async () => {
+    const { backend, ws, tile, deps, log } = await setup();
+    backend.companionAddPrompt = vi.fn(async () => { throw new Error("db"); });
+    await resumeScheduledSession({ ...deps, companionOn: async () => true }, { workstreamId: ws.id, tileId: tile.id, ...scheduled() });
+    expect(log[log.length - 1]).toMatch(/^spawn:.*:session-s:Check videos/);
+  });
+
+  it("resumes the session the tile is linked to at run time, so a re-linked tile runs its new session", async () => {
+    const { backend, ws, tile, deps, log } = await setup();
+    await backend.updateTileConfig(tile.id, JSON.stringify({ cwd: "/repo/alpha/sub", copilot_session_id: "session-new" }));
+    await resumeScheduledSession({ ...deps, companionOn: async () => false }, { workstreamId: ws.id, tileId: tile.id, ...scheduled() });
+    expect(log[log.length - 1]).toBe("spawn:/repo/alpha/sub:copilot:session-new:Check videos\nthen summarise");
+  });
+
+  it("cannot start a tile that is gone or not linked to a session", async () => {
+    const { ws, deps, log } = await setup({ linked: null });
+    const unlinked = (await deps.backend.listTiles(ws.id))[0];
+    await expect(resumeScheduledSession({ ...deps, companionOn: async () => false }, { workstreamId: ws.id, tileId: unlinked.id, ...scheduled() }))
+      .rejects.toThrow("isn't linked");
+    await expect(resumeScheduledSession({ ...deps, companionOn: async () => false }, { workstreamId: ws.id, tileId: "gone", ...scheduled() }))
+      .rejects.toThrow("no longer");
+    expect(log).toEqual([]);
   });
 });
