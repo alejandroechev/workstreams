@@ -656,6 +656,69 @@ fn schedules_are_created_validated_and_controlled_through_the_cli() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
+/// Any session may message the phone (ADR 044, AT-7): a laptop tile the phone
+/// never touched sends through the real binary and gets a thread named after
+/// it; sends 21 to 25 in the hour are refused and add nothing; with the
+/// companion off the send fails as before; the Inbox is untouched.
+#[test]
+fn any_session_messages_the_phone_through_the_cli_within_its_hourly_cap() {
+    let dir = scratch_dir("phone");
+    let path = socket_path_in(&dir, 45);
+    let db_path = dir.join("ws.db");
+    let db = workstreams_lib::db::open_db(&db_path).unwrap();
+    db.execute_batch(
+        "INSERT INTO workstreams (id, name, created_at, updated_at) VALUES ('ws', 'Courses', 't', 't');
+         INSERT INTO tiles (id, workstream_id, tile_type, title, config_json, created_at, updated_at)
+           VALUES ('tile', 'ws', 'copilot_session', 'Summarise videos', '{}', 't', 't');
+         INSERT INTO settings (key, value) VALUES ('companion.enabled', '1');",
+    )
+    .unwrap();
+    let identities = std::sync::Arc::new(IdentityRegistry::new());
+    let token = identities.issue("tile", "ws");
+    let server =
+        AgentSocketServer::start(path.clone(), serve_with_db(identities, db_path.clone())).unwrap();
+    let send = |text: &str| {
+        let output = cli()
+            .args(["agent", "call", "companion.send", "kind=result"])
+            .arg(format!("text={text}"))
+            .env(SOCKET_ENV_VAR, &path)
+            .env(TOKEN_ENV_VAR, &token)
+            .output()
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        (output.status.success(), body)
+    };
+    for i in 1..=25 {
+        let (ok, body) = send(&format!("result {i}"));
+        if i <= 20 {
+            assert!(ok, "send {i}: {body}");
+        } else {
+            assert!(!ok, "send {i} should be refused");
+            assert_eq!(body["code"], "RATE_LIMITED", "{body}");
+        }
+    }
+    let sessions = workstreams_lib::companion_messages::list(&db).unwrap();
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(sessions[0].prompt, "Summarise videos");
+    assert_eq!(sessions[0].messages.len(), 20);
+    assert_eq!(sessions[0].messages[0].text, "result 1");
+    let inbox: i64 = db
+        .query_row("SELECT COUNT(*) FROM agent_messages", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(inbox, 0);
+    db.execute(
+        "UPDATE settings SET value = '0' WHERE key = 'companion.enabled'",
+        [],
+    )
+    .unwrap();
+    let (ok, off) = send("while off");
+    assert!(!ok);
+    assert_eq!(off["code"], "COMPANION_OFF");
+    drop(db);
+    drop(server);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 /// A Rust Pocket check end to end (C-AT-1): the real CLI queues it over the
 /// socket, the learning worker compiles it with the real rustc against the
 /// same database file, and learning.jobs reports the outcome.

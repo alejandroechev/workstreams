@@ -792,7 +792,7 @@ pub const COMMANDS: &[Command] = &[
         id: "companion.send",
         // Never the text: it can be long, and it is the user's business.
         log_params: &["kind"],
-        summary: "Send a message to the phone that started this session (params: kind=progress|result, text; text=@- reads stdin)",
+        summary: "Send a message to your phone from this session; a session the phone didn't start gets its own thread, named after the tile (params: kind=progress|result, text; text=@- reads stdin). At most 20 per session per hour; needs the phone companion on",
         requires_identity: true,
         destructive: false,
         handler: companion_send,
@@ -2600,7 +2600,7 @@ fn order_paths(params: &serde_json::Value) -> Result<Vec<String>, AgentError> {
     Ok(paths)
 }
 
-/// Sends a message from a phone-started session to the phone (ADR 033).
+/// Sends a message from any Copilot session tile to the phone (ADR 033, widened by ADR 044).
 ///
 /// The session is always the caller's own tile, resolved from the token the
 /// app issued: there is no parameter naming a session.
@@ -2773,7 +2773,11 @@ fn companion_send(
     params: &serde_json::Value,
 ) -> Result<CommandOutcome, AgentError> {
     const FALLBACK: &str = "Give your result in the terminal instead.";
-    let Caller::Agent { tile_id, .. } = context.caller()? else {
+    let Caller::Agent {
+        tile_id,
+        workstream_id,
+    } = context.caller()?
+    else {
         return Err(AgentError::new(
             "NOT_A_SESSION",
             "Only a Copilot session can send to the phone",
@@ -2784,15 +2788,6 @@ fn companion_send(
         return Err(AgentError::new(
             "COMPANION_OFF",
             "The phone companion is off, so nothing was sent",
-            FALLBACK,
-        ));
-    }
-    if !crate::companion_messages::is_phone_session(context.db, tile_id)
-        .map_err(companion_store_error)?
-    {
-        return Err(AgentError::new(
-            "NOT_A_PHONE_SESSION",
-            "This session was not started from your phone, so it cannot send to it",
             FALLBACK,
         ));
     }
@@ -2814,6 +2809,21 @@ fn companion_send(
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or_default();
+    let cap = crate::companion_messages::PHONE_HOURLY_CAP;
+    if crate::companion_messages::sent_last_hour(context.db, tile_id, at)
+        .map_err(companion_store_error)?
+        >= cap
+    {
+        return Err(AgentError::new(
+            "RATE_LIMITED",
+            format!("This session has sent {cap} messages to your phone in the last hour"),
+            "Wait, or put the rest in one message; give anything urgent in the terminal.",
+        ));
+    }
+    // Any session may message the phone (ADR 044): a laptop tile's first
+    // message opens its thread, which the phone can then message back.
+    crate::companion_messages::open_laptop_thread(context.db, tile_id, workstream_id, at)
+        .map_err(companion_store_error)?;
     crate::companion_messages::add_message(context.db, tile_id, &id, &kind, &text, at)
         .map_err(companion_store_error)?;
     Ok(CommandOutcome::changed(
@@ -4144,20 +4154,84 @@ mod tests {
     }
 
     #[test]
-    fn companion_send_refuses_sessions_the_phone_did_not_start() {
+    fn companion_send_from_a_laptop_tile_opens_a_phone_thread_named_after_the_tile() {
         let db = phone_session_db(true);
-        let error = call(
+        db.execute(
+            "INSERT INTO tiles (id, workstream_id, tile_type, title, config_json, created_at, updated_at)
+             VALUES ('laptop-tile', 'w1', 'copilot_session', 'Summarise videos', '{}', 'x', 'x')",
+            [],
+        )
+        .unwrap();
+        let sent = call(
             &db,
             &agent("laptop-tile", "w1"),
             "companion.send",
-            serde_json::json!({"kind":"result","text":"x"}),
+            serde_json::json!({"kind":"result","text":"3 new videos"}),
         )
-        .unwrap_err();
-        assert_eq!(error.code, "NOT_A_PHONE_SESSION");
-        assert!(error.message.contains("not started from your phone"));
-        assert!(crate::companion_messages::list(&db).unwrap()[0]
+        .unwrap();
+        assert_eq!(sent.data["sent"], true);
+        let sessions = crate::companion_messages::list(&db).unwrap();
+        let thread = sessions
+            .iter()
+            .find(|s| s.tile_id == "laptop-tile")
+            .expect("a thread for the laptop tile");
+        assert_eq!(
+            (
+                thread.workstream_id.as_str(),
+                thread.prompt.as_str(),
+                thread.can_send
+            ),
+            ("w1", "Summarise videos", true)
+        );
+        assert_eq!(thread.messages.len(), 1);
+        assert_eq!(thread.messages[0].text, "3 new videos");
+        // The phone session is untouched, and the Inbox too.
+        assert!(sessions
+            .iter()
+            .find(|s| s.tile_id == "phone-tile")
+            .unwrap()
             .messages
             .is_empty());
+        assert!(crate::inbox_messages::list(&db).unwrap().is_empty());
+    }
+
+    #[test]
+    fn companion_send_caps_a_tile_at_20_phone_messages_an_hour_apart_from_the_inbox_cap() {
+        let db = phone_session_db(true);
+        let me = agent("phone-tile", "w1");
+        // The Inbox's own cap is used up; the phone's is separate.
+        for i in 0..20 {
+            crate::inbox_messages::send(&db, "w1", "phone-tile", "info", &format!("i{i}"), "")
+                .unwrap();
+        }
+        // What the phone sent (prompts) doesn't count.
+        crate::companion_messages::add_prompt(&db, "phone-tile", "p1", "Do x", 1).unwrap();
+        for i in 0..20 {
+            call(
+                &db,
+                &me,
+                "companion.send",
+                serde_json::json!({"kind":"progress","text":format!("m{i}")}),
+            )
+            .unwrap();
+        }
+        for _ in 20..25 {
+            let error = call(
+                &db,
+                &me,
+                "companion.send",
+                serde_json::json!({"kind":"result","text":"too many"}),
+            )
+            .unwrap_err();
+            assert_eq!(error.code, "RATE_LIMITED");
+            assert!(error.message.contains("20"), "{}", error.message);
+        }
+        let messages = &crate::companion_messages::list(&db).unwrap()[0].messages;
+        assert_eq!(
+            messages.len(),
+            21,
+            "20 sent plus the prompt; refused ones add nothing"
+        );
     }
 
     #[test]
@@ -4218,30 +4292,59 @@ mod tests {
     }
 
     #[test]
-    fn companion_send_refuses_a_tile_relinked_to_another_session() {
+    fn companion_send_from_a_relinked_tile_starts_a_fresh_thread() {
         let db = phone_session_db(true);
+        crate::companion_messages::add_message(
+            &db,
+            "phone-tile",
+            "old",
+            "result",
+            "old session",
+            1,
+        )
+        .unwrap();
         crate::companion_messages::revoke(&db, "phone-tile").unwrap();
-        let error = call(
+        call(
             &db,
             &agent("phone-tile", "w1"),
             "companion.send",
-            serde_json::json!({"kind":"result","text":"x"}),
+            serde_json::json!({"kind":"result","text":"new session"}),
         )
-        .unwrap_err();
-        assert_eq!(error.code, "NOT_A_PHONE_SESSION");
+        .unwrap();
+        let sessions = crate::companion_messages::list(&db).unwrap();
+        assert!(sessions[0].can_send);
+        assert_eq!(
+            sessions[0]
+                .messages
+                .iter()
+                .map(|m| m.text.as_str())
+                .collect::<Vec<_>>(),
+            vec!["new session"]
+        );
     }
 
     #[test]
     fn companion_send_ignores_any_session_named_in_the_request() {
         let db = phone_session_db(true);
-        let error = call(
+        call(
             &db,
             &agent("laptop-tile", "w1"),
             "companion.send",
             serde_json::json!({"kind":"result","text":"x","tile":"phone-tile","session":"phone-tile"}),
         )
-        .unwrap_err();
-        assert_eq!(error.code, "NOT_A_PHONE_SESSION");
+        .unwrap();
+        let sessions = crate::companion_messages::list(&db).unwrap();
+        let phone = sessions.iter().find(|s| s.tile_id == "phone-tile").unwrap();
+        assert!(phone.messages.is_empty(), "sent as the caller's own tile");
+        assert_eq!(
+            sessions
+                .iter()
+                .find(|s| s.tile_id == "laptop-tile")
+                .unwrap()
+                .messages
+                .len(),
+            1
+        );
     }
 
     #[test]

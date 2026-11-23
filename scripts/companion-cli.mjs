@@ -14,8 +14,9 @@
 //   check     whether the laptop would execute a request now, and why not
 //   pairing   the payload the Settings QR code carries
 //   messages  a phone session asking for its result: the laptop records it,
-//             its agent sends progress and a result, another session and a
-//             bad kind are refused, and the published sessions are printed
+//             its agent sends progress and a result; a laptop session's first
+//             message opens its own thread, its 21st in an hour and a bad kind
+//             are refused, and the published sessions are printed
 //   scenario  a laptop run against an in-memory document: signed, unsigned,
 //             stale and replayed requests, a create with a prompt, a session;
 //             prints each request's outcome and what the app was asked to do
@@ -164,12 +165,20 @@ async function messages(companion) {
       store.set(tileId, { tileId, workstreamId, requestId, prompt: sentPrompt, createdAt: NOW, messages: [] });
     },
   };
+  // Laptop tiles the phone never touched, by title (ADR 044: any session may message the phone).
+  const laptopTiles = new Map([["laptop-tile", { workstreamId: "alpha", title: "Summarise videos" }]]);
   // What `workstreams agent call companion.send` does for a tile.
   const sends = [];
   const send = (from, kind, text) => {
     const check = checkMessage(kind, text);
+    const sent = store.get(from)?.messages.filter((m) => m.kind !== "prompt").length ?? 0;
+    const error = !check.ok ? check.error : sent >= 20 ? "This session has sent 20 messages to your phone in the last hour" : undefined;
+    if (!error && !store.has(from)) {
+      // Its first message opens a thread named after the tile.
+      const tile = laptopTiles.get(from);
+      store.set(from, { tileId: from, workstreamId: tile.workstreamId, requestId: `laptop-${from}-${NOW}`, prompt: tile.title, createdAt: NOW, messages: [] });
+    }
     const session = store.get(from);
-    const error = !session ? "This session was not started from your phone." : check.ok ? undefined : check.error;
     if (!error) session.messages.push({ id: `m${session.messages.length + 1}`, kind, text, at: NOW + session.messages.length + 1 });
     sends.push(error ? { from, kind, ok: false, error } : { from, kind, ok: true });
   };
@@ -184,8 +193,10 @@ async function messages(companion) {
 
   send("tile-1", "progress", "Counting…");
   send("tile-1", "result", "# 3 files");
-  send("laptop-tile", "result", "not mine to send");
+  send("laptop-tile", "result", "3 new videos");
   send("tile-1", "question", "?");
+  for (let i = 0; i < 19; i++) send("laptop-tile", "progress", `update ${i}`);
+  send("laptop-tile", "result", "the 21st");
 
   publishSessions(laptop, await buildSessions([...store.values()], new Map([["alpha", "Alpha"]]), secret));
   return {

@@ -23,7 +23,7 @@ describe("install-skills", () => {
     expect(skillNames()).toContain("companion-reply");
     const text = fs.readFileSync(repoSkill, "utf8");
     expect(text).toMatch(/^---\nname: companion-reply\n/);
-    for (const needle of ["kind=result", "kind=progress", "text=@-", "in the terminal", "NOT_A_PHONE_SESSION", "COMPANION_OFF", "20000", "$WORKSTREAMS_SOCKET"]) {
+    for (const needle of ["kind=result", "kind=progress", "text=@-", "in the terminal", "RATE_LIMITED", "COMPANION_OFF", "any Copilot session", "20000", "$WORKSTREAMS_SOCKET"]) {
       expect(text).toContain(needle);
     }
   });

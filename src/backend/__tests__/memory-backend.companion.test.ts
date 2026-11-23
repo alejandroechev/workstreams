@@ -26,14 +26,31 @@ describe("MemoryBackend phone sessions", () => {
     expect((await backend.companionListSessions())[0].messages).toEqual([]);
   });
 
-  it("refuses to send from a tile the phone did not start, and keeps the latest 200", async () => {
+  it("opens a thread named after a laptop tile on its first message, and keeps the latest 200 (ADR 044)", async () => {
     const backend = new MemoryBackend();
-    expect(() => backend.companionSendForTests("nope", "result", "x")).toThrow("not started from your phone");
+    expect(() => backend.companionSendForTests("nope", "result", "x")).toThrow("No tile nope");
+    const ws = await backend.createWorkstream("W", "/w");
+    const lap = await backend.createTile(ws.id, "copilot_session", "Summarise videos", "{}");
+    backend.companionSendForTests(lap.id, "result", "3 new videos", 5);
+    expect(await backend.companionListSessions()).toEqual([expect.objectContaining({
+      tileId: lap.id, workstreamId: ws.id, prompt: "Summarise videos", canSend: true,
+      messages: [expect.objectContaining({ kind: "result", text: "3 new videos" })],
+    })]);
     await backend.companionRecordSession({ tileId: "t", workstreamId: "w", requestId: "r", prompt: "p", createdAt: 0 });
-    for (let i = 0; i <= 200; i += 1) backend.companionSendForTests("t", "progress", `m${i}`, i);
-    const [session] = await backend.companionListSessions();
+    for (let i = 0; i <= 200; i += 1) backend.companionSendForTests("t", "progress", `m${i}`, i * 3_600_000);
+    const session = (await backend.companionListSessions()).find((s) => s.tileId === "t")!;
     expect(session.messages).toHaveLength(200);
     expect(session.messages[0].text).toBe("m1");
+  });
+
+  it("caps a tile at 20 phone messages an hour, not counting prompts", async () => {
+    const backend = new MemoryBackend();
+    await backend.companionRecordSession({ tileId: "t", workstreamId: "w", requestId: "r", prompt: "p", createdAt: 0 });
+    for (let i = 0; i < 20; i += 1) backend.companionSendForTests("t", "progress", `m${i}`, 1_000 + i);
+    expect(() => backend.companionSendForTests("t", "result", "x", 2_000)).toThrow("20 messages to your phone");
+    // An hour after the first ones, there is room again.
+    backend.companionSendForTests("t", "result", "later", 1_000 + 3_600_000);
+    expect((await backend.companionListSessions())[0].messages).toHaveLength(21);
   });
 
   it("claims a laptop tile, restarts a revoked one fresh, and records prompts", async () => {
@@ -64,13 +81,16 @@ describe("MemoryBackend phone sessions", () => {
 });
 
 describe("MemoryBackend phone session permissions", () => {
-  it("a revoked tile keeps its messages but can no longer send", async () => {
+  it("a revoked tile keeps its history until its agent sends again, which starts a fresh thread", async () => {
     const backend = new MemoryBackend();
-    await backend.companionRecordSession({ tileId: "t", workstreamId: "w", requestId: "r", prompt: "p", createdAt: 0 });
-    backend.companionSendForTests("t", "result", "kept", 1);
-    await backend.companionRevokeSession("t");
-    expect(() => backend.companionSendForTests("t", "result", "x", 2)).toThrow("not started from your phone");
-    expect((await backend.companionListSessions())[0].messages).toHaveLength(1);
+    const ws = await backend.createWorkstream("W", "/w");
+    const tile = await backend.createTile(ws.id, "copilot_session", "T", "{}");
+    await backend.companionRecordSession({ tileId: tile.id, workstreamId: ws.id, requestId: "r", prompt: "p", createdAt: 0 });
+    backend.companionSendForTests(tile.id, "result", "kept", 1);
+    await backend.companionRevokeSession(tile.id);
+    expect((await backend.companionListSessions())[0]).toMatchObject({ canSend: false, messages: [expect.objectContaining({ text: "kept" })] });
+    backend.companionSendForTests(tile.id, "result", "new session", 2);
+    expect((await backend.companionListSessions())[0]).toMatchObject({ canSend: true, prompt: "T", messages: [expect.objectContaining({ text: "new session" })] });
   });
 
   it("forgets a session whose launch was refused", async () => {

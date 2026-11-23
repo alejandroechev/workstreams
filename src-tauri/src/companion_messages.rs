@@ -10,6 +10,9 @@ use serde::Serialize;
 
 pub const MAX_MESSAGE_LENGTH: usize = 20_000;
 pub const MAX_MESSAGES_PER_SESSION: i64 = 200;
+/// Messages one tile's agent may send the phone per rolling hour (ADR 044),
+/// counted apart from the Inbox's cap.
+pub const PHONE_HOURLY_CAP: i64 = 20;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -91,6 +94,60 @@ pub fn claim_session(
     )
     .map_err(|e| e.to_string())?;
     tx.commit().map_err(|e| e.to_string())
+}
+
+/// Gives a laptop-started tile a phone thread on its agent's first message
+/// (ADR 044: any session may message the phone), named after the tile. A
+/// tile that already has one keeps it; a revoked one (re-linked since) starts
+/// afresh, like a phone claim does.
+pub fn open_laptop_thread(
+    conn: &Connection,
+    tile_id: &str,
+    workstream_id: &str,
+    created_at: i64,
+) -> Result<(), String> {
+    if is_phone_session(conn, tile_id)? {
+        return Ok(());
+    }
+    let title: Option<Option<String>> = conn
+        .query_row("SELECT title FROM tiles WHERE id = ?1", [tile_id], |row| {
+            row.get(0)
+        })
+        .optional()
+        .map_err(|e| e.to_string())?;
+    let title = title
+        .flatten()
+        .filter(|t| !t.trim().is_empty())
+        .unwrap_or_else(|| "Copilot session".to_string());
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    tx.execute(
+        "DELETE FROM companion_sessions WHERE tile_id = ?1 AND can_send = 0",
+        [tile_id],
+    )
+    .map_err(|e| e.to_string())?;
+    tx.execute(
+        "INSERT OR IGNORE INTO companion_sessions (tile_id, workstream_id, request_id, prompt, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![
+            tile_id,
+            workstream_id,
+            format!("laptop-{tile_id}-{created_at}"),
+            title,
+            created_at
+        ],
+    )
+    .map_err(|e| e.to_string())?;
+    tx.commit().map_err(|e| e.to_string())
+}
+
+/// How many messages (not prompts) this tile's agent sent the phone in the hour before `now`.
+pub fn sent_last_hour(conn: &Connection, tile_id: &str, now: i64) -> Result<i64, String> {
+    conn.query_row(
+        "SELECT COUNT(*) FROM companion_messages WHERE tile_id = ?1 AND kind != 'prompt' AND at > ?2",
+        params![tile_id, now - 60 * 60_000],
+        |row| row.get(0),
+    )
+    .map_err(|e| e.to_string())
 }
 
 /// The Copilot session a tile's config links it to, as the app reads it.
@@ -543,6 +600,70 @@ mod tests {
         record_session(&conn, "t1", "w", "r1", "Do x", 1000).unwrap();
         delete(&conn, "t1").unwrap();
         assert!(list(&conn).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_laptop_tile_gets_a_thread_named_after_it_on_its_first_message() {
+        let conn = db();
+        conn.execute(
+            "INSERT INTO tiles (id, workstream_id, tile_type, title, config_json, created_at, updated_at)
+             VALUES ('lap', 'w', 'copilot_session', 'Summarise videos', '{}', 'x', 'x'),
+                    ('blank', 'w', 'copilot_session', '', '{}', 'x', 'x')",
+            [],
+        )
+        .unwrap();
+        open_laptop_thread(&conn, "lap", "w", 10).unwrap();
+        open_laptop_thread(&conn, "blank", "w", 11).unwrap();
+        let sessions = list(&conn).unwrap();
+        let lap = sessions.iter().find(|s| s.tile_id == "lap").unwrap();
+        assert_eq!(
+            (lap.prompt.as_str(), lap.request_id.as_str(), lap.can_send),
+            ("Summarise videos", "laptop-lap-10", true)
+        );
+        assert_eq!(
+            sessions
+                .iter()
+                .find(|s| s.tile_id == "blank")
+                .unwrap()
+                .prompt,
+            "Copilot session"
+        );
+        // An existing thread is kept as it is.
+        add_message(&conn, "lap", "m1", "result", "x", 12).unwrap();
+        open_laptop_thread(&conn, "lap", "w", 20).unwrap();
+        assert_eq!(
+            list(&conn)
+                .unwrap()
+                .iter()
+                .find(|s| s.tile_id == "lap")
+                .unwrap()
+                .messages
+                .len(),
+            1
+        );
+        // A revoked one starts afresh.
+        revoke(&conn, "lap").unwrap();
+        open_laptop_thread(&conn, "lap", "w", 30).unwrap();
+        let fresh = list(&conn)
+            .unwrap()
+            .into_iter()
+            .find(|s| s.tile_id == "lap")
+            .unwrap();
+        assert!(fresh.can_send && fresh.messages.is_empty());
+        assert_eq!(fresh.created_at, 30);
+    }
+
+    #[test]
+    fn counts_only_the_agents_messages_of_the_last_hour() {
+        let conn = db();
+        record_session(&conn, "t1", "w", "r1", "Do x", 0).unwrap();
+        let now = 10 * 60 * 60_000;
+        add_message(&conn, "t1", "old", "result", "x", now - 60 * 60_000).unwrap();
+        add_prompt(&conn, "t1", "p", "x", now - 1).unwrap();
+        add_message(&conn, "t1", "a", "progress", "x", now - 59 * 60_000).unwrap();
+        add_message(&conn, "t1", "b", "result", "x", now).unwrap();
+        assert_eq!(sent_last_hour(&conn, "t1", now).unwrap(), 2);
+        assert_eq!(sent_last_hour(&conn, "nobody", now).unwrap(), 0);
     }
 
     #[test]

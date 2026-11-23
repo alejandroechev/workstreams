@@ -2322,11 +2322,22 @@ export class MemoryBackend implements Backend {
 
   /**
    * Test/harness helper: what `companion.send` does for an agent in `tileId`
-   * (the real command is Rust; see companion_messages.rs).
+   * (the real command is Rust; see companion_messages.rs): any session tile
+   * may send (ADR 044); a laptop tile's first message opens a thread named
+   * after it, a revoked one starts afresh, and 20 an hour is the cap.
    */
   companionSendForTests(tileId: string, kind: "progress" | "result", text: string, at = Date.now()): void {
-    const session = this.companionSessions.get(tileId);
-    if (!session || this.companionRevoked.has(tileId)) throw new Error("This session was not started from your phone.");
+    let session = this.companionSessions.get(tileId);
+    if (!session || this.companionRevoked.has(tileId)) {
+      const tile = this.tiles.get(tileId);
+      if (!tile) throw new Error(`No tile ${tileId}`);
+      this.companionRevoked.delete(tileId);
+      session = { tileId, workstreamId: tile.workstream_id, requestId: `laptop-${tileId}-${at}`, prompt: tile.title || "Copilot session", createdAt: at, canSend: true, messages: [] };
+      this.companionSessions.set(tileId, session);
+    }
+    if (session.messages.filter((m) => m.kind !== "prompt" && m.at > at - 3_600_000).length >= 20) {
+      throw new Error("This session has sent 20 messages to your phone in the last hour");
+    }
     session.messages.push({ id: `m-${session.messages.length}-${at}`, kind, text, at });
     if (session.messages.length > MAX_MESSAGES_PER_SESSION) session.messages.splice(0, session.messages.length - MAX_MESSAGES_PER_SESSION);
   }

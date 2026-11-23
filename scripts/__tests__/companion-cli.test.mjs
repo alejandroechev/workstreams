@@ -55,16 +55,24 @@ describe("companion-cli", () => {
     expect(result.stderr).toMatch(/usage/i);
   });
 
-  it("runs the messages scenario: a phone session is recorded, and only it can message the phone", () => {
+  it("runs the messages scenario: a phone session is recorded, and any session can message the phone, 20 an hour", () => {
     const report = JSON.parse(run("messages"));
     expect(report.prompt).toBe("Count the files" + fixtures.resultSuffix);
-    expect(report.recorded).toEqual([{ tileId: "tile-1", workstreamId: "alpha", requestId: "ask" }]);
-    expect(report.sends).toEqual([
+    expect(report.recorded).toEqual([
+      { tileId: "tile-1", workstreamId: "alpha", requestId: "ask" },
+      { tileId: "laptop-tile", workstreamId: "alpha", requestId: expect.stringMatching(/^laptop-laptop-tile-/) },
+    ]);
+    expect(report.sends.slice(0, 4)).toEqual([
       { from: "tile-1", kind: "progress", ok: true },
       { from: "tile-1", kind: "result", ok: true },
-      { from: "laptop-tile", kind: "result", ok: false, error: "This session was not started from your phone." },
+      { from: "laptop-tile", kind: "result", ok: true },
       { from: "tile-1", kind: "question", ok: false, error: 'The kind must be "progress" or "result".' },
     ]);
+    expect(report.sends.slice(4, 23).every((s) => s.ok)).toBe(true);
+    expect(report.sends[23]).toEqual({ from: "laptop-tile", kind: "result", ok: false, error: "This session has sent 20 messages to your phone in the last hour" });
+    expect(report.published["laptop-tile"]).toMatchObject({ title: "Summarise videos", workstreamName: "Alpha" });
+    expect(report.published["laptop-tile"].messages).toHaveLength(20);
+    expect(report.published["laptop-tile"].messages[0]).toMatchObject({ kind: "result", text: "3 new videos" });
     expect(report.published["tile-1"]).toMatchObject({
       title: "Count the files",
       workstreamName: "Alpha",

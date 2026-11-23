@@ -1,15 +1,21 @@
 ---
 name: companion-reply
-description: 'Send progress updates and the final result to the user''s phone, from a Copilot session that the Workstreams phone companion started or messaged. Uses the `workstreams agent` CLI over a local socket; no MCP, no network setup, no secrets. Only works inside a Workstreams session tile started or messaged from the phone, gated on $WORKSTREAMS_SOCKET. Trigger phrases - "send me the result", "use the companion-reply skill", "reply to my phone", "send it to my phone", "/companion-reply".'
+description: 'Send progress updates and the final result to the user''s phone, from any Copilot session in a Workstreams tile — one the phone companion started or messaged, one started on the laptop, or a periodic (scheduled) run. Uses the `workstreams agent` CLI over a local socket; no MCP, no network setup, no secrets. Works inside any Workstreams session tile while the phone companion is on, gated on $WORKSTREAMS_SOCKET. Trigger phrases - "send me the result", "use the companion-reply skill", "reply to my phone", "send it to my phone", "/companion-reply".'
 ---
 
 # Reply to the phone (agent side)
 
-The user started this session from the **Workstreams companion app** on their
-phone and asked you to send the result back. You send messages with one
-command; Workstreams delivers them to the phone, which shows them under this
-session. You never name the session, and you need no URL, token or secret:
-the app knows which session is calling.
+The user wants the result on their phone, in the **Workstreams companion
+app**. This works from any Copilot session in a Workstreams tile: one the phone
+started or messaged, one started on the laptop, or a periodic (scheduled) run.
+You send messages with one command; Workstreams delivers them to the phone,
+which shows them under this session. A session the phone never saw gets its
+own thread on its first message, named after its tile, and the user can reply
+to it from the phone. You never name the session, and you need no URL, token
+or secret: the app knows which session is calling.
+
+This is for the phone only. For the Workstreams Inbox on the laptop, use the
+`ws-message` skill instead.
 
 ## First: are you inside Workstreams?
 
@@ -65,8 +71,8 @@ did not get it.
 
 | Code | Meaning |
 | --- | --- |
-| `NOT_A_PHONE_SESSION` | This session was not started or messaged from the phone. Answer in the terminal. |
 | `COMPANION_OFF` | The user turned the phone companion off. Answer in the terminal. |
+| `RATE_LIMITED` | This session already sent 20 messages to the phone in the last hour. Put the rest in the terminal, or wait. |
 | `BAD_MESSAGE` | Wrong kind, empty text, or more than 20000 characters. Fix it and send again. |
 | `MISSING_PARAM` | `kind` was not given. Add `kind=result` or `kind=progress`. |
 | exit code 3 or 4 | Workstreams is not running, or this is not a Workstreams session. Answer in the terminal. |
