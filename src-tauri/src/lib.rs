@@ -31,6 +31,7 @@ mod loop_definition;
 mod loop_verifier;
 mod loops;
 mod orphan_prs;
+pub mod periodic_schedules;
 mod pipeline_inbox;
 mod pipeline_investigate;
 mod pty;
@@ -410,6 +411,73 @@ fn companion_prune_sessions(
 ) -> Result<usize, String> {
     let db = state.db.lock().map_err(|e| e.to_string())?;
     companion_messages::prune(&db, now, retention_ms)
+}
+
+// ── Periodic Copilot sessions (ADR 044) ─────────────────────────────
+
+#[tauri::command]
+fn schedule_list(state: State<'_, AppState>) -> Result<Vec<periodic_schedules::Schedule>, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    periodic_schedules::list(&db)
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+fn schedule_create(
+    state: State<'_, AppState>,
+    tile_id: String,
+    workstream_id: String,
+    prompt: String,
+    frequency: serde_json::Value,
+    notify_inbox: bool,
+    notify_phone: bool,
+    next_run_at: Option<i64>,
+    created_at: i64,
+) -> Result<periodic_schedules::Schedule, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    periodic_schedules::create(
+        &db,
+        &periodic_schedules::NewSchedule {
+            tile_id: &tile_id,
+            workstream_id: &workstream_id,
+            prompt: &prompt,
+            frequency: &frequency,
+            notify_inbox,
+            notify_phone,
+            next_run_at,
+            created_at,
+        },
+    )
+}
+
+#[tauri::command]
+fn schedule_update(
+    state: State<'_, AppState>,
+    id: String,
+    patch: serde_json::Value,
+) -> Result<periodic_schedules::Schedule, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    periodic_schedules::update(&db, &id, &patch)
+}
+
+#[tauri::command]
+fn schedule_delete(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    periodic_schedules::delete(&db, &id).map(|_| ())
+}
+
+/// An Inbox entry the app raises itself (a schedule pausing after failures).
+#[tauri::command]
+fn inbox_post_app_message(
+    state: State<'_, AppState>,
+    workstream_id: String,
+    tile_id: String,
+    level: String,
+    title: String,
+    body: String,
+) -> Result<(), String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    inbox_messages::post_from_app(&db, &workstream_id, &tile_id, &level, &title, &body).map(|_| ())
 }
 
 #[tauri::command]
@@ -1444,6 +1512,10 @@ fn update_workstream(
             (&s, &ts, &id),
         )
         .map_err(|e| format!("DB error: {e}"))?;
+        // Archiving pauses its schedules (ADR 044); unarchiving leaves them paused.
+        if s == "archived" {
+            periodic_schedules::pause_workstream(&db, &id)?;
+        }
     }
     if let Some(d) = description {
         db.execute(
@@ -6867,6 +6939,11 @@ pub fn run() {
             companion_add_prompt,
             companion_delete_session,
             companion_prune_sessions,
+            schedule_list,
+            schedule_create,
+            schedule_update,
+            schedule_delete,
+            inbox_post_app_message,
             // Copilot config
             discover_copilot_config,
             // Session files & todos & DB

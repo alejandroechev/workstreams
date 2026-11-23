@@ -104,6 +104,32 @@ pub fn send(
         .expect("just inserted"))
 }
 
+/// Stores an Inbox entry the app itself raises about a tile (a periodic
+/// schedule pausing itself, ADR 044). Validated like an agent's message but
+/// not rate limited: the app sends at most one per event.
+pub fn post_from_app(
+    db: &Connection,
+    workstream_id: &str,
+    tile_id: &str,
+    level: &str,
+    title: &str,
+    body: &str,
+) -> Result<AgentMessage, String> {
+    check(level, title, body)?;
+    let id = uuid::Uuid::new_v4().to_string();
+    db.execute(
+        "INSERT INTO agent_messages (id, workstream_id, workstream_name, tile_id, level, title, body, is_read, created_at)
+        VALUES (?1, ?2, COALESCE((SELECT name FROM workstreams WHERE id=?2), ''), ?3, ?4, ?5, ?6, 0,
+          strftime('%Y-%m-%dT%H:%M:%fZ','now'))",
+        params![id, workstream_id, tile_id, level, title.trim(), body],
+    )
+    .map_err(|e| e.to_string())?;
+    list(db)?
+        .into_iter()
+        .find(|m| m.id == id)
+        .ok_or_else(|| "The message was not stored.".into())
+}
+
 /// Every message, newest first.
 pub fn list(db: &Connection) -> Result<Vec<AgentMessage>, String> {
     let mut stmt = db
@@ -159,6 +185,24 @@ mod tests {
         )
         .unwrap();
         conn
+    }
+
+    #[test]
+    fn the_app_posts_entries_past_the_agent_cap_but_still_validated() {
+        let db = db();
+        for i in 0..HOURLY_CAP {
+            send(&db, "w1", "t1", "info", &format!("m{i}"), "").unwrap();
+        }
+        let m = post_from_app(&db, "w1", "t1", "error", "Schedule paused", "3 failures").unwrap();
+        assert_eq!(
+            (
+                m.workstream_name.as_str(),
+                m.level.as_str(),
+                m.title.as_str()
+            ),
+            ("Bench", "error", "Schedule paused")
+        );
+        assert!(post_from_app(&db, "w1", "t1", "urgent", "x", "").is_err());
     }
 
     #[test]

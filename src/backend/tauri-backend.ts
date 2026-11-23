@@ -1,4 +1,5 @@
 import type { DiffOrderView } from "../domain/diff-reading-order";
+import type { PeriodicSchedule } from "../domain/periodic-schedules";
 import type { DiagramAddition, DiagramBoard } from "../diagram/types";
 import { invoke } from "@tauri-apps/api/core";
 import type { WorkLane } from "../domain/work-lanes";
@@ -18,6 +19,8 @@ import type {
   TraceStaleness,
   TaskUpdate,
   DevlogExportResult,
+  NewPeriodicSchedule,
+  PeriodicSchedulePatch,
 } from "./types";
 import type {
   Task,
@@ -574,6 +577,26 @@ export class TauriBackend implements Backend {
 
   async companionPruneSessions(now: number, retentionMs: number): Promise<number> {
     return invoke<number>("companion_prune_sessions", { now, retentionMs });
+  }
+
+  async listSchedules(): Promise<PeriodicSchedule[]> {
+    return invoke<PeriodicSchedule[]>("schedule_list");
+  }
+
+  async createSchedule(input: NewPeriodicSchedule): Promise<PeriodicSchedule> {
+    return invoke<PeriodicSchedule>("schedule_create", { ...input });
+  }
+
+  async updateSchedule(id: string, patch: PeriodicSchedulePatch): Promise<PeriodicSchedule> {
+    return invoke<PeriodicSchedule>("schedule_update", { id, patch });
+  }
+
+  async deleteSchedule(id: string): Promise<void> {
+    await invoke("schedule_delete", { id });
+  }
+
+  async postAppInboxMessage(workstreamId: string, tileId: string, level: string, title: string, body: string): Promise<void> {
+    await invoke("inbox_post_app_message", { workstreamId, tileId, level, title, body });
   }
 
   async diagramListBoards(tileId: string): Promise<DiagramBoard[]> {

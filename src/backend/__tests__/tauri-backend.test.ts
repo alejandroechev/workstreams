@@ -29,6 +29,23 @@ describe("TauriBackend", () => {
     expect(invoke).toHaveBeenNthCalledWith(5, "reset_pr_inbox_mutes");
   });
 
+  it("maps periodic schedule commands (ADR 044)", async () => {
+    invoke.mockResolvedValue([]);
+    const frequency = { kind: "daily", time: "09:00" } as const;
+    await backend.listSchedules();
+    await backend.createSchedule({ tileId: "t", workstreamId: "w", prompt: "P", frequency, notifyInbox: true, notifyPhone: false, nextRunAt: 5, createdAt: 1 });
+    await backend.updateSchedule("s", { paused: true });
+    await backend.deleteSchedule("s");
+    await backend.postAppInboxMessage("w", "t", "error", "Paused", "why");
+    expect(invoke.mock.calls).toEqual([
+      ["schedule_list"],
+      ["schedule_create", { tileId: "t", workstreamId: "w", prompt: "P", frequency, notifyInbox: true, notifyPhone: false, nextRunAt: 5, createdAt: 1 }],
+      ["schedule_update", { id: "s", patch: { paused: true } }],
+      ["schedule_delete", { id: "s" }],
+      ["inbox_post_app_message", { workstreamId: "w", tileId: "t", level: "error", title: "Paused", body: "why" }],
+    ]);
+  });
+
   it("maps loop setup and lifecycle commands", async () => {
     invoke
       .mockResolvedValueOnce({

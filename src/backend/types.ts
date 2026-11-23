@@ -1,5 +1,6 @@
 // @test-skip: Type-only interface; behaviour covered by MemoryBackend + TauriBackend tests.
 import type { DiffOrderView } from "../domain/diff-reading-order";
+import type { PeriodicSchedule, ScheduleFrequency } from "../domain/periodic-schedules";
 import type { DiagramAddition, DiagramBoard } from "../diagram/types";
 import type { WorkLane } from "../domain/work-lanes";
 import type { PrInboxMute, PrInboxSnapshot, PrWatchMode } from "../domain/pr-inbox";
@@ -65,6 +66,22 @@ export interface CompanionStoredSession {
   canSend: boolean;
   messages: Array<{ id: string; kind: "progress" | "result" | "prompt"; text: string; at: number }>;
 }
+
+/** What creating a periodic schedule takes (ADR 044); the run state starts empty. */
+export interface NewPeriodicSchedule {
+  tileId: string;
+  workstreamId: string;
+  prompt: string;
+  frequency: ScheduleFrequency;
+  notifyInbox: boolean;
+  notifyPhone: boolean;
+  /** Null: planned by the runner at its first scheduled time. */
+  nextRunAt: number | null;
+  createdAt: number;
+}
+
+/** Fields of a schedule that can change after it is created. */
+export type PeriodicSchedulePatch = Partial<Omit<PeriodicSchedule, "id" | "tile_id" | "workstream_id" | "created_at">>;
 
 export interface Backend {
   getPrInbox(): Promise<PrInboxSnapshot>;
@@ -255,6 +272,15 @@ export interface Backend {
   companionListSessions(): Promise<CompanionStoredSession[]>;
   /** Drops sessions with no activity for `retentionMs`; returns how many. */
   companionPruneSessions(now: number, retentionMs: number): Promise<number>;
+  // Periodic Copilot sessions (ADR 044)
+  listSchedules(): Promise<PeriodicSchedule[]>;
+  /** Refuses a second schedule on a tile, a non-session tile, and runs under 5 minutes apart. */
+  createSchedule(input: NewPeriodicSchedule): Promise<PeriodicSchedule>;
+  updateSchedule(id: string, patch: PeriodicSchedulePatch): Promise<PeriodicSchedule>;
+  /** Removes the schedule; the tile stays. */
+  deleteSchedule(id: string): Promise<void>;
+  /** An Inbox entry the app raises itself about a tile (not rate limited). */
+  postAppInboxMessage(workstreamId: string, tileId: string, level: string, title: string, body: string): Promise<void>;
   /** The saved reading order for a diff and its freshness, or null (ADR 032). */
   getDiffOrder(workstreamId: string, directory: string, mode: string, baseRef?: string | null): Promise<DiffOrderView | null>;
   // Diagram tile boards (ADR 043)

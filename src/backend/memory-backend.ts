@@ -73,6 +73,7 @@ import type { SessionFileComment } from "../domain/file-comments";
 import type { Review, ReviewComment, ChangedFile, DiffSides } from "../domain/code-review";
 import { CONTENT_SEARCH_MAX_PER_FILE } from "../domain/content-search";
 import { compareByCreatedAt } from "../domain/comment-order";
+import { validateFrequency, type PeriodicSchedule } from "../domain/periodic-schedules";
 import type {
   Backend,
   CodeTrace,
@@ -80,6 +81,8 @@ import type {
   TraceStaleness,
   TaskUpdate,
   DevlogExportResult,
+  NewPeriodicSchedule,
+  PeriodicSchedulePatch,
 } from "./types";
 import type {
   Task,
@@ -201,6 +204,79 @@ export class MemoryBackend implements Backend {
     };
     this.agentMessages.push(message);
     return structuredClone(message);
+  }
+
+  /** As inbox_messages::post_from_app: validated, not rate limited. */
+  async postAppInboxMessage(workstreamId: string, tileId: string, level: string, title: string, body: string): Promise<void> {
+    const problem = checkAgentMessage(level, title, body);
+    if (problem) throw new Error(problem);
+    this.agentMessages.push({
+      id: generateId(), workstream_id: workstreamId, workstream_name: this.workstreams.get(workstreamId)?.name ?? "",
+      tile_id: tileId, level, title: title.trim(), body, is_read: false, created_at: new Date().toISOString(), available: true,
+    });
+  }
+
+  // ── Periodic schedules (mirror of src-tauri/src/periodic_schedules.rs, ADR 044) ──
+  private schedules = new Map<string, PeriodicSchedule>();
+
+  async listSchedules(): Promise<PeriodicSchedule[]> {
+    return [...this.schedules.values()].sort((a, b) => a.created_at - b.created_at).map((s) => structuredClone(s));
+  }
+
+  private checkSchedulePrompt(prompt: string): void {
+    if (!prompt.trim()) throw new Error("The prompt is empty.");
+    if ([...prompt].length > 20_000) throw new Error("The prompt is longer than 20000 characters.");
+  }
+
+  async createSchedule(input: NewPeriodicSchedule): Promise<PeriodicSchedule> {
+    this.checkSchedulePrompt(input.prompt);
+    const problem = validateFrequency(input.frequency);
+    if (problem) throw new Error(problem);
+    const tile = this.tiles.get(input.tileId);
+    if (!tile) throw new Error(`No tile ${input.tileId}`);
+    if (tile.tile_type !== "copilot_session") throw new Error("Only a Copilot session tile can run periodically.");
+    if (tile.workstream_id !== input.workstreamId) throw new Error(`Tile ${input.tileId} is not in workstream ${input.workstreamId}`);
+    if ([...this.schedules.values()].some((s) => s.tile_id === input.tileId)) throw new Error("This tile already has a schedule; edit it instead.");
+    const schedule: PeriodicSchedule = {
+      id: generateId(), tile_id: input.tileId, workstream_id: input.workstreamId, prompt: input.prompt,
+      frequency: structuredClone(input.frequency), notify_inbox: input.notifyInbox, notify_phone: input.notifyPhone,
+      paused: false, next_run_at: input.nextRunAt, last_run_at: null, last_result: null, last_error: null,
+      failures: 0, run_requested: false, created_at: input.createdAt,
+    };
+    this.schedules.set(schedule.id, schedule);
+    return structuredClone(schedule);
+  }
+
+  async updateSchedule(id: string, patch: PeriodicSchedulePatch): Promise<PeriodicSchedule> {
+    const schedule = this.schedules.get(id);
+    if (!schedule) throw new Error(`No schedule ${id}`);
+    if (patch.prompt !== undefined) this.checkSchedulePrompt(patch.prompt);
+    if (patch.frequency !== undefined) {
+      const problem = validateFrequency(patch.frequency);
+      if (problem) throw new Error(problem);
+    }
+    Object.assign(schedule, structuredClone(patch));
+    return structuredClone(schedule);
+  }
+
+  async deleteSchedule(id: string): Promise<void> {
+    this.schedules.delete(id);
+  }
+
+  /**
+   * E2E seam for the agent commands (the real ones are Rust): what
+   * `schedule.run` / `schedule.pause` / `schedule.resume` store, announced as
+   * the agent socket does.
+   */
+  agentScheduleForTests(id: string, action: "run" | "pause" | "resume"): void {
+    const schedule = this.schedules.get(id);
+    if (!schedule) throw new Error(`No schedule ${id}`);
+    if (action === "run") schedule.run_requested = true;
+    else if (action === "pause") schedule.paused = true;
+    else Object.assign(schedule, { paused: false, failures: 0, next_run_at: null });
+    if (typeof window !== "undefined") {
+      (window as unknown as { __WS_EMIT__?: (e: string, p?: unknown) => void }).__WS_EMIT__?.("state-changed", { entity: "schedule", id, action });
+    }
   }
 
   // ── Planning (ADR 039): an in-memory ADO team for E2E ──
@@ -1151,6 +1227,8 @@ export class MemoryBackend implements Backend {
     const ws = this.workstreams.get(id);
     if (!ws) throw new Error(`Workstream not found: ${id}`);
     Object.assign(ws, updates, { updated_at: now() });
+    // As update_workstream in lib.rs: archiving pauses its schedules (ADR 044).
+    if (updates.status === "archived") for (const s of this.schedules.values()) if (s.workstream_id === id) s.paused = true;
   }
 
   /**
@@ -1231,6 +1309,7 @@ export class MemoryBackend implements Backend {
         this.tiles.delete(tileId);
       }
     }
+    for (const s of [...this.schedules.values()]) if (s.workstream_id === id) this.schedules.delete(s.id);
   }
 
   async listTiles(workstreamId: string): Promise<Tile[]> {
@@ -1267,7 +1346,8 @@ export class MemoryBackend implements Backend {
     const tile = this.tiles.get(id);
     this.tiles.delete(id);
     this.terminals.delete(id);
-    // Boards (and their additions) go with their tile, as ON DELETE CASCADE does.
+    // Schedules (ADR 044), boards and their additions go with their tile, as ON DELETE CASCADE does.
+    for (const s of [...this.schedules.values()]) if (s.tile_id === id) this.schedules.delete(s.id);
     for (const board of [...this.diagramBoards.values()]) if (board.tile_id === id) this.dropDiagramBoard(board.id);
     // As delete_tile in lib.rs: the tile also leaves its layout order.
     if (tile) {

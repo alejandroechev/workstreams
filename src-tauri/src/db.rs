@@ -375,6 +375,27 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
         );
         CREATE INDEX IF NOT EXISTS companion_messages_tile_idx ON companion_messages (tile_id, at);
 
+        -- Periodic Copilot sessions (ADR 044): one schedule per session tile,
+        -- gone with its tile. Times are ms epoch; next_run_at NULL means the
+        -- app plans the next run. failures counts consecutive failed runs.
+        CREATE TABLE IF NOT EXISTS periodic_schedules (
+            id TEXT PRIMARY KEY,
+            tile_id TEXT NOT NULL UNIQUE REFERENCES tiles(id) ON DELETE CASCADE,
+            workstream_id TEXT NOT NULL REFERENCES workstreams(id) ON DELETE CASCADE,
+            prompt TEXT NOT NULL,
+            frequency TEXT NOT NULL,
+            notify_inbox INTEGER NOT NULL DEFAULT 0,
+            notify_phone INTEGER NOT NULL DEFAULT 0,
+            paused INTEGER NOT NULL DEFAULT 0,
+            next_run_at INTEGER,
+            last_run_at INTEGER,
+            last_result TEXT,
+            last_error TEXT,
+            failures INTEGER NOT NULL DEFAULT 0,
+            run_requested INTEGER NOT NULL DEFAULT 0,
+            created_at INTEGER NOT NULL
+        );
+
         CREATE TABLE IF NOT EXISTS pr_inbox_config (
             project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
             enabled INTEGER NOT NULL DEFAULT 0,
@@ -816,6 +837,7 @@ mod tests {
             "diagram_additions",
             "companion_sessions",
             "companion_messages",
+            "periodic_schedules",
             "sync_checks",
             "sync_problems",
             "sync_events",
