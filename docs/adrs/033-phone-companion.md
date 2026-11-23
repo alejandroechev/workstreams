@@ -10,7 +10,9 @@ date: 2026-10-02
 
 Accepted (2026-10-02). Amended 2026-10-24: conversations with any session
 (see *Conversations*). Amended 2026-11-23: schema 2 and document rotation
-(see *Keeping the document small*).
+(see *Keeping the document small*). Amended 2026-11-23 by
+[ADR 044](044-periodic-sessions.md): any Copilot session may message the
+phone (see *Messages from any session*).
 
 ## Context
 
@@ -176,6 +178,15 @@ phone; the phone cannot reply.
   latest 200 messages (50 before conversations); pruning runs in SQLite and the published copy follows.
 - **On the phone.** A Messages view lists the sessions newest first, with unread counts; read state lives
   only on the phone. Message text is markdown rendered as text, never as HTML.
+
+### Messages from any session (2026-11-23, ADR 044)
+
+The "phone sessions only" rule above is lifted. While the companion is on, any Copilot session tile may
+run `companion.send`: a tile without a thread gets one on its first message, titled by the tile (stored
+in `companion_sessions.prompt`), and the phone can message it back like any session. A revoked thread is
+replaced by a fresh one. Each tile may send 20 messages to the phone per rolling hour (`RATE_LIMITED`,
+prompts don't count), apart from the Inbox's cap; `NOT_A_PHONE_SESSION` is gone. Periodic schedules
+record each run's prompt in their tile's thread. See [ADR 044](044-periodic-sessions.md).
 
 ### Conversations (2026-10-24)
 

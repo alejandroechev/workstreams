@@ -637,9 +637,11 @@ respond* if nothing answered within five minutes.
 
 **Messages back to the phone.** The prompt and create sheets on the phone have
 a **Send me the result** toggle, on by default. It adds a fixed line to the
-prompt asking the agent to use the `companion-reply` skill. Workstreams records
-every Copilot session the phone starts; only those sessions can message the
-phone. The agent sends a `progress` update or its final `result` with:
+prompt asking the agent to use the `companion-reply` skill. Any Copilot
+session in Workstreams can message the phone while the companion is on
+(ADR 044): one the phone started or messaged replies in its thread, and a
+laptop session's first message opens a thread named after its tile, which you
+can then message back. The agent sends a `progress` update or its final `result` with:
 
 ```sh
 workstreams agent call companion.send kind=result text=@- <<'END'
@@ -650,9 +652,10 @@ END
 
 `text=@-` reads the message from stdin, so markdown and quotes survive the
 shell. The app knows which session is calling, so the agent needs no
-session id, URL or secret. It refuses, and queues nothing, when the session
-wasn't started from the phone, when the companion is off, for any kind but
-`progress` or `result`, and for empty text or more than 20 000 characters; the
+session id, URL or secret. It refuses, and queues nothing, when the companion
+is off, when the session already sent 20 messages to the phone in the last hour
+(counted apart from the Inbox's cap), for any kind but `progress` or `result`,
+and for empty text or more than 20 000 characters; the
 skill then tells the agent to answer in the terminal. On the phone, **Messages**
 lists those sessions newest first with unread counts; a session with a result
 shows **Done**. Sessions and messages are pruned 3 days after the last message,
@@ -706,6 +709,42 @@ browser; Messages stays open in the companion.
   requests.
 - The window keeps running while minimised (`backgroundThrottling` is
   disabled), so requests are answered with the window in the background.
+
+## Periodic Copilot sessions
+
+A Copilot session can run a prompt on a schedule while Workstreams is open
+([ADR 044](adrs/044-periodic-sessions.md)). Each run resumes the **same**
+session in its own tile with the prompt — `--resume=<session> -i <prompt>`,
+with the tile's configured Copilot command unchanged — so the agent remembers
+earlier runs.
+
+| Do | What happens |
+|---|---|
+| Tile menu (⋮) → **Run periodically…** | Opens the form: the prompt (sent verbatim), a frequency, and **Notify in Inbox** / **Notify my phone** (both off). Saving plans the first run at its first scheduled time; nothing runs now. |
+| Add tile → **Periodic Copilot Session** | Adds a new session tile (clock icon) and its schedule in one step. |
+| Click the tile's badge, or ⋮ → **Edit schedule…** | Edits the prompt, frequency and toggles; the next run is re-planned. |
+| Sidebar → **Schedules** | Every schedule: workstream, tile, the prompt's first line, frequency, next run, last result; **Run now**, **Pause/Resume**, **Edit**, **Delete** (the tile stays). |
+| `workstreams agent call schedule.create prompt=@- frequency=daily:09:00` | The same from an agent (also `schedule.list/run/pause/resume/delete`). |
+
+- **Frequencies:** hourly, every N hours, every N minutes, daily at HH:MM,
+  weekly on a day at HH:MM, in the laptop's local time (DST-correct). Anything
+  more often than every 5 minutes is refused.
+- **Toggles:** **Notify in Inbox** appends an instruction to use `ws-message`;
+  **Notify my phone** one to use `companion-reply`. With the companion on, each
+  run's prompt also shows in the tile's phone thread, before its replies.
+- **Busy and missed runs:** a run due while the agent is mid-turn is skipped
+  (last result *skipped*); typing in the tile doesn't stop a run. Runs missed
+  while the app was closed or the laptop slept are skipped, never caught up. A
+  workstream that isn't loaded is loaded in the background and stays loaded.
+- **Failures:** a run still busy after 60 minutes gets Ctrl+C (*timed out*); a
+  run that can't start — tile gone, not linked to a session, spawn error — is
+  *could not start*. Three in a row pause the schedule and post one Inbox
+  entry. Resume clears the count.
+- **Lifecycle:** closing the tile deletes its schedule; archiving the workstream
+  pauses its schedules (unarchiving leaves them paused); re-linking the tile to
+  another session keeps the schedule, which then resumes the new session.
+  Schedules and their state survive restarts. Workstreams with schedules show a
+  clock in the sidebar.
 
 ## Session persistence
 

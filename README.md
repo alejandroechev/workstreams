@@ -100,6 +100,19 @@ instead of buried behind tabs.
   unread pill in the sidebar footer flags new assignments without opening it.
   Mute a kind of event you don't care about ("Comment requirements passed") and
   it stops being tracked in every repo.
+- **Periodic Copilot sessions** — put a Copilot session on a schedule (hourly,
+  every N hours, daily or weekly at a time, never more often than every 5
+  minutes): from a session tile's menu (**Run periodically…**), the add-tile
+  menu (**Periodic Copilot Session**), or an agent's `schedule.create`. At each
+  due time Workstreams resumes that same session with your prompt, in its own
+  tile, loading its workstream in the background if needed. A run due while the
+  agent is busy is skipped, runs missed while the app was closed are never
+  caught up, a run still going after an hour is interrupted, and three failures
+  in a row pause the schedule with an Inbox entry. Optional **Notify in Inbox**
+  and **Notify my phone** toggles ask the agent to report with `ws-message` or
+  `companion-reply`. The tile shows the next run and last result; the sidebar's
+  **Schedules** lists them all with Run now, Pause, Edit and Delete
+  ([ADR 044](docs/adrs/044-periodic-sessions.md)).
 - **Phone companion** *(opt-in)* — pair the
   [Android companion](https://github.com/alejandroechev/workstreams-companion)
   by QR code to see your workstreams from your phone, load one in the
@@ -113,7 +126,10 @@ instead of buried behind tabs.
   laptop moves to a fresh document that the phone follows by itself
   (**Settings → Companion → Rotate now** does it on demand). Ask for the result and the
   agent sends it back to the phone's **Messages** with the `companion-reply`
-  skill (`npm run install-skills`). The phone's **Publish HTML artifacts**
+  skill (`npm run install-skills`) — from any Copilot session, not only ones the
+  phone started: a laptop session's first message opens its own thread, which
+  you can reply to (at most 20 phone messages an hour per session,
+  [ADR 044](docs/adrs/044-periodic-sessions.md)). The phone's **Publish HTML artifacts**
   toggle asks agents to use `/ws-artifact` for requested HTML, publish it to
   the [shared gallery](https://alejandroechev.github.io/workstreams-artifacts/),
   and return a clickable link. Publishing is public and opt-in; the installer
