@@ -9,7 +9,8 @@ date: 2026-10-02
 ## Status
 
 Accepted (2026-10-02). Amended 2026-10-24: conversations with any session
-(see *Conversations*).
+(see *Conversations*). Amended 2026-11-23: schema 2 and document rotation
+(see *Keeping the document small*).
 
 ## Context
 
@@ -253,6 +254,41 @@ security checks are unit-tested without Automerge. The shared protocol module
 (schema, canonical form, signing, freshness, versioning, `laneColor`) is copied
 verbatim into the companion repository, and both repositories test it against
 the same fixture file.
+
+## Keeping the document small (2026-11-23)
+
+An Automerge document keeps every write forever. After a few weeks the
+companion document held 9 M operations (99% single characters) for 80 KB of
+content: 6.1 MB on the server, loaded on every reconnect by a 1-vCPU host.
+
+- **The main cause was a bug.** The publisher compared what it published with
+  a plain `JSON.stringify`, but Automerge returns a map's keys sorted, so the
+  comparison always read "changed" and every new message rewrote the whole
+  session (56 k operations for one 1 KB message). Comparisons now sort keys
+  (`stableJson`).
+- **Schema 2 stores every string as one value.** Both apps write through
+  `immutableWriter` (shared protocol): a view of the Automerge draft that turns
+  each string written into an `ImmutableString` and reads them back as text, so
+  the publisher, executor and phone controller stay encoding-agnostic. It only
+  applies to schema 2 documents; a v1 document is never written with immutable
+  strings. Signatures use a fixed `SIGNED_FORMAT` (1), so they mean the same in
+  both versions. Both versions are read.
+- **Rotation caps the history.** At start and every 24 h the laptop checks the
+  saved size; above 2 MB, and only while no request is pending or running, it
+  creates a fresh schema 2 document, republishes from SQLite, and writes a
+  signed `movedTo` (HMAC over `[1, "moved", from, to, at]` with the pairing
+  secret) into the old one. The phone verifies it, re-pairs itself to the
+  successor with the same secret and reconnects; chains are followed and a
+  forged pointer is ignored. **Settings → Companion → Rotate now** does the same
+  on demand, waiting for a running request. Automatic rotation runs at most once
+  per check interval (`companion.rotated_at`), so a document that is large even
+  when fresh cannot loop.
+- **The retired document is marked schema 2** when it gets its pointer, so an
+  outdated phone, which cannot follow it, shows "Update the companion app"
+  instead of a list that silently stops changing. For 10 minutes the laptop
+  still answers the old document's requests; it publishes nothing else there.
+- **Retired documents are never deleted.** They stop growing, and a phone that
+  was offline for any length of time still finds its way through the pointers.
 
 ## Consequences
 

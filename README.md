@@ -108,7 +108,10 @@ instead of buried behind tabs.
   number of turns, in the same tile). Requests
   travel through your own SyncEngine server, are signed with a secret only the
   laptop and the phone hold, expire after five minutes and run at most once
-  ([ADR 033](docs/adrs/033-phone-companion.md)). Ask for the result and the
+  ([ADR 033](docs/adrs/033-phone-companion.md)). The shared document stays
+  small: every string is stored as one value, and above 2 MB of history the
+  laptop moves to a fresh document that the phone follows by itself
+  (**Settings → Companion → Rotate now** does it on demand). Ask for the result and the
   agent sends it back to the phone's **Messages** with the `companion-reply`
   skill (`npm run install-skills`). The phone's **Publish HTML artifacts**
   toggle asks agents to use `/ws-artifact` for requested HTML, publish it to

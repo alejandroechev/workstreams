@@ -81,7 +81,7 @@ graph TB
     end
 
     subgraph SyncCloud["User's SyncEngine server"]
-        CompanionDoc["Companion Automerge document<br/>laptop: workstreams, lanes, lastSeenAt<br/>laptop.tiles: session tiles (no transcript)<br/>requests: signed load / create / session / message<br/>sessions: phone-started sessions + agent messages<br/>+ ephemeral presence every 10s"]
+        CompanionDoc["Companion Automerge document (schema 2: immutable strings)<br/>laptop: workstreams, lanes, lastSeenAt<br/>laptop.tiles: session tiles (no transcript)<br/>requests: signed load / create / session / message<br/>sessions: phone-started sessions + agent messages<br/>movedTo: signed pointer when rotated (> 2 MB)<br/>+ ephemeral presence every 10s"]
         LearningDoc["Rust Pocket learning document (ADR 042)<br/>requests: signed check / help, harness travels along<br/>results: signed, bound to the request hash<br/>laptop.lastSeenAt + ephemeral presence"]
     end
 
