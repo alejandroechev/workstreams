@@ -43,17 +43,25 @@ from Workstreams, and can't wake a session whose workstream isn't loaded.
   mid-turn (its session's `activity_status` is thinking / tool_use /
   responding, read from a small app-wide registry fed by the session poller)
   is **skipped** and recorded as such; typing in the tile doesn't count, so a
-  run still happens then. A due time more than 2 minutes old when first seen
-  (the app was closed or the laptop asleep) is skipped silently and the next
-  one planned. A new schedule first runs at its first scheduled time, never on
-  creation. There is no sleep prevention.
+  run still happens then. Only a slot that fell while the scheduler was
+  running runs: one due before the first tick after the app starts, or inside
+  a gap of more than 2 minutes between ticks (the laptop slept), is skipped
+  silently and the next one planned. A Run now request expires after 5 minutes
+  or when it predates this app start. A new schedule first runs at its first
+  scheduled time, never on creation. There is no sleep prevention.
 - **The prompt is sent verbatim.** Two per-schedule toggles, **Notify in
   Inbox** and **Notify my phone** (both off by default), append one fixed
   instruction each, naming `ws-message` and `companion-reply`.
-- **Runaway protection.** A run whose agent is still mid-turn after **60
-  minutes** gets one Ctrl+C (the turn is interrupted, the session left idle)
-  and counts as a failure ("timed out"). A run that cannot start (tile gone,
-  not linked, spawn error) is a failure ("could not start"); a skip is not.
+- **Runaway protection.** A run is *ok* only once its turn was seen to start
+  (busy, or the turn count rising) and then end. A run whose agent is still
+  mid-turn after **60 minutes** gets one Ctrl+C (the turn is interrupted, the
+  session left idle) and counts as a failure ("timed out") — but only if the
+  tile still runs the process the schedule launched: every spawn and close
+  bumps a per-tile generation, and a run whose tile was restarted since (a
+  phone message, by hand) is recorded *interrupted* instead. A run that cannot
+  start (tile gone, not linked, spawn error, or no turn seen within 5 minutes)
+  is a failure ("could not start"); a skip is not. A run still marked running
+  when the app starts is recorded *interrupted*, which is not a failure.
   After **3 consecutive failures** the schedule pauses itself and posts one
   Inbox entry (an app-raised `agent_messages` row, not rate limited) naming
   the schedule and the reason. Resuming clears the count.
@@ -67,7 +75,12 @@ from Workstreams, and can't wake a session whose workstream isn't loaded.
 decision, failure counting, prompt composition) and a runner
 (`src/domain/schedule-runner.ts`) driven by a timer every 15 s next to the
 companion runtime (`src/schedules/useSchedules.ts`). Ticks never overlap, so a
-due run starts once. Rust stores and validates (`periodic_schedules.rs`).
+due run starts once. Each schedule has a revision bumped on every change; the
+runner writes its decisions against the revision it read, so a pause, edit,
+delete or archive in between wins, and re-checks the schedule (still there,
+same revision, workstream not archived) before stopping the tile and before
+spawning. A changed schedule cancels the run without counting a failure.
+Phone messages and scheduled runs resume one at a time per tile. Rust stores and validates (`periodic_schedules.rs`).
 `next_run_at = NULL` means "the app plans it from now", which is how agent-
 created and agent-resumed schedules get their first time without Rust knowing
 the calendar rules. No feature flag.
@@ -85,21 +98,28 @@ resuming it.
 **Agent commands** (CLI parity): `schedule.create` (`prompt`, `frequency =
 hourly | every:<N>h | every:<N>m | daily:HH:MM | weekly:<day>:HH:MM`, optional
 `tile` in the caller's workstreams, `notify_inbox`, `notify_phone`),
-`schedule.list`, `schedule.run`, `schedule.pause`, `schedule.resume`,
-`schedule.delete` (by `id` or `tile`). Each raises `state-changed`
+`schedule.list` (only the workstreams the caller may act on), `schedule.run`,
+`schedule.pause`, `schedule.resume`, `schedule.delete` (by `id` or `tile`).
+Run now and Resume are refused for an archived workstream (UI, runner and
+`WORKSTREAM_ARCHIVED`). Each raises `state-changed`
 (`schedule`), and the runner acts on it at once; `schedule.run` sets
 `run_requested`, which the next tick consumes.
 
 **Phone messages from any session** (amends ADR 033).
 
-- `companion.send` works from any Copilot session tile while the companion is
-  on. A tile without a phone thread gets one on its agent's first message,
+- `companion.send` works from any Copilot session tile of the caller's
+  workstream while the companion is on (terminal tiles, which carry a token
+  too, get `NOT_A_SESSION`). Re-linking a tile bars its running process, which
+  still runs the old session (`SESSION_RELINKED`); a process spawned since gets
+  a fresh token that may send. A resume rolling back revokes only the thread
+  its own request claimed. A tile without a phone thread gets one on its agent's first message,
   titled by the tile (`companion_sessions.prompt` holds the title); the phone
   can then message it like any session. A revoked thread (the tile was
   re-linked) is replaced by a fresh one, as a phone claim already did.
 - At most **20 phone messages per tile per rolling hour** (`RATE_LIMITED`),
-  counting the agent's `progress`/`result` messages only, separately from the
-  Inbox's 20/hour. Refused sends add nothing. Companion off is unchanged
+  counting the agent's `progress`/`result` messages in a send ledger
+  (`companion_send_log`, written in the send's transaction) that thread
+  replacement and pruning don't touch, separately from the Inbox's 20/hour. Refused sends add nothing. Companion off is unchanged
   (`COMPANION_OFF`). `NOT_A_PHONE_SESSION` no longer exists.
 - For a scheduled tile, with the companion on, each run records its prompt as
   a `prompt` message in the tile's thread before resuming (creating the thread

@@ -1,4 +1,5 @@
 import type { DiffOrderView } from "../domain/diff-reading-order";
+import { bumpTileGeneration } from "../domain/tile-activity";
 import type { DiagramAddition, DiagramBoard } from "../diagram/types";
 import { linkedSessionId } from "../domain/linked-sessions";
 import type { WorkLane } from "../domain/work-lanes";
@@ -241,21 +242,22 @@ export class MemoryBackend implements Backend {
       id: generateId(), tile_id: input.tileId, workstream_id: input.workstreamId, prompt: input.prompt,
       frequency: structuredClone(input.frequency), notify_inbox: input.notifyInbox, notify_phone: input.notifyPhone,
       paused: false, next_run_at: input.nextRunAt, last_run_at: null, last_result: null, last_error: null,
-      failures: 0, run_requested: false, created_at: input.createdAt,
+      failures: 0, run_requested: false, run_requested_at: null, created_at: input.createdAt, revision: 0,
     };
     this.schedules.set(schedule.id, schedule);
     return structuredClone(schedule);
   }
 
-  async updateSchedule(id: string, patch: PeriodicSchedulePatch): Promise<PeriodicSchedule> {
+  async updateSchedule(id: string, patch: PeriodicSchedulePatch, expectedRevision?: number): Promise<PeriodicSchedule> {
     const schedule = this.schedules.get(id);
     if (!schedule) throw new Error(`No schedule ${id}`);
+    if (expectedRevision !== undefined && schedule.revision !== expectedRevision) throw new Error("The schedule changed since it was read.");
     if (patch.prompt !== undefined) this.checkSchedulePrompt(patch.prompt);
     if (patch.frequency !== undefined) {
       const problem = validateFrequency(patch.frequency);
       if (problem) throw new Error(problem);
     }
-    Object.assign(schedule, structuredClone(patch));
+    Object.assign(schedule, structuredClone(patch), { revision: schedule.revision + 1 });
     return structuredClone(schedule);
   }
 
@@ -271,9 +273,10 @@ export class MemoryBackend implements Backend {
   agentScheduleForTests(id: string, action: "run" | "pause" | "resume"): void {
     const schedule = this.schedules.get(id);
     if (!schedule) throw new Error(`No schedule ${id}`);
-    if (action === "run") schedule.run_requested = true;
+    if (action === "run") Object.assign(schedule, { run_requested: true, run_requested_at: Date.now() });
     else if (action === "pause") schedule.paused = true;
     else Object.assign(schedule, { paused: false, failures: 0, next_run_at: null });
+    schedule.revision += 1;
     if (typeof window !== "undefined") {
       (window as unknown as { __WS_EMIT__?: (e: string, p?: unknown) => void }).__WS_EMIT__?.("state-changed", { entity: "schedule", id, action });
     }
@@ -1228,7 +1231,9 @@ export class MemoryBackend implements Backend {
     if (!ws) throw new Error(`Workstream not found: ${id}`);
     Object.assign(ws, updates, { updated_at: now() });
     // As update_workstream in lib.rs: archiving pauses its schedules (ADR 044).
-    if (updates.status === "archived") for (const s of this.schedules.values()) if (s.workstream_id === id) s.paused = true;
+    if (updates.status === "archived") {
+      for (const s of this.schedules.values()) if (s.workstream_id === id) Object.assign(s, { paused: true, revision: s.revision + 1 });
+    }
   }
 
   /**
@@ -1438,6 +1443,7 @@ export class MemoryBackend implements Backend {
     this.terminals.add(tileId);
     // A new process gets a new token, which may message the phone again.
     this.phoneBarred.delete(tileId);
+    bumpTileGeneration(tileId);
     if (typeof window !== "undefined") {
       const w = window as unknown as { __WS_INVOKE_LOG__?: Array<{ cmd: string; args: Record<string, unknown> }> };
       if (!w.__WS_INVOKE_LOG__) w.__WS_INVOKE_LOG__ = [];
@@ -1480,6 +1486,7 @@ export class MemoryBackend implements Backend {
   }
 
   async closeTerminal(tileId: string): Promise<void> {
+    bumpTileGeneration(tileId);
     this.terminals.delete(tileId);
     this.ctrlCs.delete(tileId);
     if (typeof window !== "undefined") {

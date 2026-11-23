@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import type { Backend } from "../backend/types";
 import { nextRunAfter, type PeriodicSchedule, type ScheduleFrequency } from "../domain/periodic-schedules";
 import { createScheduleRunner, type ScheduleRunner } from "../domain/schedule-runner";
+import { tileGeneration, tileTurnCount } from "../domain/tile-activity";
 
 /** What the schedule editor produces. */
 export interface ScheduleDraft {
@@ -17,8 +18,14 @@ export interface UseSchedulesOptions {
   /** The app has loaded its workstreams; nothing runs before. */
   ready: boolean;
   workstreamName(workstreamId: string): string | undefined;
+  /** Archived workstreams' schedules never run, and can't be run now or resumed. */
+  isArchived(workstreamId: string): boolean;
   isBusy(tileId: string): boolean;
-  resume(schedule: PeriodicSchedule, prompt: string): Promise<void>;
+  /** Defaults to the app-wide tile registry (`tile-activity.ts`). */
+  turnCount?(tileId: string): number | undefined;
+  generation?(tileId: string): number;
+  /** Resumes the tile's session; `revalidate` must run before the stop and before the spawn. */
+  resume(schedule: PeriodicSchedule, prompt: string, revalidate: () => Promise<void>): Promise<void>;
   interrupt(tileId: string): Promise<void>;
   /** Changes when tiles or workstreams may have changed (closed, archived): re-read. */
   refreshKey?: unknown;
@@ -50,18 +57,23 @@ type SchedulerWindow = {
 type OptionsRef = { readonly current: UseSchedulesOptions };
 
 /** The runner's view of the app, read fresh from the latest options on every call. */
-function runnerFor(ref: OptionsRef, onChange: () => void): ScheduleRunner {
+function runnerFor(ref: OptionsRef, onChange: () => void, startedAt: number): ScheduleRunner {
   return createScheduleRunner({
     list: () => ref.current.backend.listSchedules(),
-    update: (id, patch) => ref.current.backend.updateSchedule(id, patch),
+    update: (id, patch, expected) => ref.current.backend.updateSchedule(id, patch, expected),
     postInbox: (wsId, tileId, title, body) => ref.current.backend.postAppInboxMessage(wsId, tileId, "error", title, body),
     workstreamName: (id) => ref.current.workstreamName(id),
+    isArchived: (id) => ref.current.isArchived(id),
     isBusy: (tileId) => ref.current.isBusy(tileId),
-    resume: (schedule, prompt) => ref.current.resume(schedule, prompt),
+    turnCount: (tileId) => (ref.current.turnCount ?? tileTurnCount)(tileId),
+    generation: (tileId) => (ref.current.generation ?? tileGeneration)(tileId),
+    resume: (schedule, prompt, revalidate) => ref.current.resume(schedule, prompt, revalidate),
     interrupt: (tileId) => ref.current.interrupt(tileId),
     onChange,
-  });
+  }, { startedAt });
 }
+
+const ARCHIVED = "This schedule's workstream is archived; unarchive it first.";
 
 /**
  * Periodic Copilot sessions in the app (ADR 044): the stored schedules for the
@@ -73,6 +85,8 @@ export function useSchedules(options: UseSchedulesOptions): SchedulesApi {
   const clock = useCallback(() => (optionsRef.current.clock ?? Date.now)(), []);
   const [schedules, setSchedules] = useState<PeriodicSchedule[]>([]);
   const [now, setNow] = useState(() => (options.clock ?? Date.now)());
+  // This app instance's start: Run now requests from before it expire.
+  const [startedAt] = useState(() => (options.clock ?? Date.now)());
 
   const refresh = useCallback(async () => {
     const list = await optionsRef.current.backend.listSchedules();
@@ -82,8 +96,8 @@ export function useSchedules(options: UseSchedulesOptions): SchedulesApi {
   // Made on first use, outside render: it reads the latest options on every call.
   const runnerRef = useRef<ScheduleRunner | null>(null);
   const getRunner = useCallback(
-    () => (runnerRef.current ??= runnerFor(optionsRef, () => { void refresh().catch(() => {}); })),
-    [refresh],
+    () => (runnerRef.current ??= runnerFor(optionsRef, () => { void refresh().catch(() => {}); }, startedAt)),
+    [refresh, startedAt],
   );
 
   const { ready, refreshKey } = options;
@@ -138,6 +152,7 @@ export function useSchedules(options: UseSchedulesOptions): SchedulesApi {
     pause: (id) => after(backend().updateSchedule(id, { paused: true })),
     resume: (id) => {
       const schedule = schedules.find((s) => s.id === id);
+      if (schedule && optionsRef.current.isArchived(schedule.workstream_id)) return Promise.reject(new Error(ARCHIVED));
       const at = clock();
       return after(backend().updateSchedule(id, {
         paused: false, failures: 0, next_run_at: schedule ? nextRunAfter(schedule.frequency, at, at) : null,

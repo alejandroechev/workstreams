@@ -9,6 +9,7 @@ import {
   frequencyMinutes,
   INBOX_INSTRUCTION,
   MAX_CONSECUTIVE_FAILURES,
+  RUN_REQUEST_TTL_MS,
   nextRunAfter,
   PHONE_INSTRUCTION,
   promptFirstLine,
@@ -42,7 +43,9 @@ function schedule(overrides: Partial<PeriodicSchedule> = {}): PeriodicSchedule {
     last_error: null,
     failures: 0,
     run_requested: false,
+    run_requested_at: null,
     created_at: 0,
+    revision: 0,
     ...overrides,
   };
 }
@@ -116,35 +119,51 @@ describe("nextRunAfter", () => {
 
 describe("decideDue", () => {
   const due = at(2026, 11, 23, 9, 0);
+  // The scheduler ticked 15 s before the due time: it was awake when the slot fell.
+  const awake = (now: number, over: Partial<{ busy: boolean; archived: boolean; activeSince: number | null; startedAt: number }> = {}) =>
+    ({ now, busy: false, archived: false, activeSince: due - 15_000, startedAt: 0, ...over });
 
   it("waits until the due time", () => {
-    expect(decideDue(schedule({ next_run_at: due }), { now: due - 1, busy: false })).toEqual({ action: "wait" });
+    expect(decideDue(schedule({ next_run_at: due }), awake(due - 1))).toEqual({ action: "wait" });
   });
 
   it("asks for a next run when none is set", () => {
-    expect(decideDue(schedule(), { now: due, busy: false })).toEqual({ action: "plan" });
+    expect(decideDue(schedule(), awake(due))).toEqual({ action: "plan" });
   });
 
   it("runs when due and idle, even if the user typed recently", () => {
-    expect(decideDue(schedule({ next_run_at: due }), { now: due + 1000, busy: false })).toEqual({ action: "run", manual: false });
+    expect(decideDue(schedule({ next_run_at: due }), awake(due + 1000))).toEqual({ action: "run", manual: false });
   });
 
   it("skips a run due while the agent is mid-turn", () => {
-    expect(decideDue(schedule({ next_run_at: due }), { now: due + 1000, busy: true })).toEqual({ action: "skip" });
+    expect(decideDue(schedule({ next_run_at: due }), awake(due + 1000, { busy: true }))).toEqual({ action: "skip" });
   });
 
-  it("treats a run long overdue (app closed, laptop asleep) as missed, never caught up", () => {
-    expect(decideDue(schedule({ next_run_at: due }), { now: due + 60 * 60 * 1000, busy: false })).toEqual({ action: "missed" });
+  it("treats a slot that fell while the scheduler wasn't running (start, sleep) as missed, however recent (finding 8)", () => {
+    expect(decideDue(schedule({ next_run_at: due }), awake(due + 1000, { activeSince: null }))).toEqual({ action: "missed" });
+    expect(decideDue(schedule({ next_run_at: due }), awake(due + 1000, { activeSince: due }))).toEqual({ action: "missed" });
+    expect(decideDue(schedule({ next_run_at: due }), awake(due + 60 * 60 * 1000, { activeSince: due - 60 * 60 * 1000 }))).toEqual({ action: "run", manual: false });
   });
 
   it("never runs a paused schedule at its due time, but Run now still runs it", () => {
-    expect(decideDue(schedule({ next_run_at: due, paused: true }), { now: due, busy: false })).toEqual({ action: "wait" });
-    expect(decideDue(schedule({ run_requested: true, paused: true }), { now: due, busy: false })).toEqual({ action: "run", manual: true });
+    expect(decideDue(schedule({ next_run_at: due, paused: true }), awake(due))).toEqual({ action: "wait" });
+    expect(decideDue(schedule({ run_requested: true, run_requested_at: due - 1, paused: true }), awake(due))).toEqual({ action: "run", manual: true });
   });
 
   it("runs now when asked, unless mid-turn", () => {
-    expect(decideDue(schedule({ run_requested: true, next_run_at: due + 999_999 }), { now: due, busy: false })).toEqual({ action: "run", manual: true });
-    expect(decideDue(schedule({ run_requested: true }), { now: due, busy: true })).toEqual({ action: "skip", manual: true });
+    expect(decideDue(schedule({ run_requested: true, run_requested_at: due, next_run_at: due + 999_999 }), awake(due))).toEqual({ action: "run", manual: true });
+    expect(decideDue(schedule({ run_requested: true, run_requested_at: due }), awake(due, { busy: true }))).toEqual({ action: "skip", manual: true });
+  });
+
+  it("expires a Run now without a time, older than the TTL, or from before the app started (finding 8)", () => {
+    expect(decideDue(schedule({ run_requested: true }), awake(due))).toEqual({ action: "expire" });
+    expect(decideDue(schedule({ run_requested: true, run_requested_at: due - RUN_REQUEST_TTL_MS - 1 }), awake(due))).toEqual({ action: "expire" });
+    expect(decideDue(schedule({ run_requested: true, run_requested_at: due - 1 }), awake(due, { startedAt: due }))).toEqual({ action: "expire" });
+  });
+
+  it("does nothing for an archived workstream but drop its Run now (finding 4)", () => {
+    expect(decideDue(schedule({ next_run_at: due }), awake(due, { archived: true }))).toEqual({ action: "wait" });
+    expect(decideDue(schedule({ run_requested: true, run_requested_at: due }), awake(due, { archived: true }))).toEqual({ action: "expire" });
   });
 });
 
@@ -175,6 +194,12 @@ describe("applyRunResult", () => {
     const third = applyRunResult(s, { result: "could not start", error: "tile gone" }, now);
     expect(third.patch).toMatchObject({ failures: MAX_CONSECUTIVE_FAILURES, paused: true });
     expect(third.autoPaused).toBe(true);
+  });
+
+  it("records an interrupted run without counting or resetting failures", () => {
+    const { patch, autoPaused } = applyRunResult(schedule({ failures: 2 }), { result: "interrupted" }, now);
+    expect(patch).toEqual({ last_result: "interrupted" });
+    expect(autoPaused).toBe(false);
   });
 
   it("does not re-announce a pause on a schedule already paused", () => {

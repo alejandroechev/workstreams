@@ -81,7 +81,7 @@ export interface NewPeriodicSchedule {
 }
 
 /** Fields of a schedule that can change after it is created. */
-export type PeriodicSchedulePatch = Partial<Omit<PeriodicSchedule, "id" | "tile_id" | "workstream_id" | "created_at">>;
+export type PeriodicSchedulePatch = Partial<Omit<PeriodicSchedule, "id" | "tile_id" | "workstream_id" | "created_at" | "revision">>;
 
 export interface Backend {
   getPrInbox(): Promise<PrInboxSnapshot>;
@@ -280,7 +280,8 @@ export interface Backend {
   listSchedules(): Promise<PeriodicSchedule[]>;
   /** Refuses a second schedule on a tile, a non-session tile, and runs under 5 minutes apart. */
   createSchedule(input: NewPeriodicSchedule): Promise<PeriodicSchedule>;
-  updateSchedule(id: string, patch: PeriodicSchedulePatch): Promise<PeriodicSchedule>;
+  /** With `expectedRevision`, refuses ("changed") unless the stored row is still that revision. */
+  updateSchedule(id: string, patch: PeriodicSchedulePatch, expectedRevision?: number): Promise<PeriodicSchedule>;
   /** Removes the schedule; the tile stays. */
   deleteSchedule(id: string): Promise<void>;
   /** An Inbox entry the app raises itself about a tile (not rate limited). */

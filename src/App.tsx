@@ -2320,13 +2320,17 @@ export default function App() {
     ready: companionReady,
     refreshKey: scheduleRefreshKey,
     workstreamName: (id) => workstreamsRef.current.find((w) => w.id === id)?.name,
+    isArchived: (id) => {
+      const status = workstreamsRef.current.find((w) => w.id === id)?.status;
+      return status === "archived" || status === "archiving";
+    },
     isBusy: isTileBusy,
-    resume: (schedule, prompt) =>
+    resume: (schedule, prompt, revalidate) =>
       resumeScheduledSession(
         { ...resumeDeps(), companionOn: isCompanionEnabled },
         {
           workstreamId: schedule.workstream_id, tileId: schedule.tile_id, prompt,
-          command: commandForWsId(schedule.workstream_id), scheduleId: schedule.id, now: Date.now(),
+          command: commandForWsId(schedule.workstream_id), scheduleId: schedule.id, now: Date.now(), revalidate,
         },
       ),
     interrupt: (tileId) => backend.writeToTerminal(tileId, "\u0003"),

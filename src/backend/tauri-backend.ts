@@ -1,4 +1,5 @@
 import type { DiffOrderView } from "../domain/diff-reading-order";
+import { bumpTileGeneration } from "../domain/tile-activity";
 import type { PeriodicSchedule } from "../domain/periodic-schedules";
 import type { DiagramAddition, DiagramBoard } from "../diagram/types";
 import { invoke } from "@tauri-apps/api/core";
@@ -338,6 +339,7 @@ export class TauriBackend implements Backend {
   }
 
   async spawnCopilotSession(tileId: string, cwd: string, resumeSessionId?: string | null, rows?: number, cols?: number, command?: string | null, initialPrompt?: string | null): Promise<number | null> {
+    bumpTileGeneration(tileId);
     const pid = await invoke<number | null>("spawn_copilot_session", {
       tileId,
       cwd,
@@ -359,6 +361,7 @@ export class TauriBackend implements Backend {
   }
 
   async closeTerminal(tileId: string): Promise<void> {
+    bumpTileGeneration(tileId);
     await invoke("close_terminal", { tileId });
   }
 
@@ -587,8 +590,8 @@ export class TauriBackend implements Backend {
     return invoke<PeriodicSchedule>("schedule_create", { ...input });
   }
 
-  async updateSchedule(id: string, patch: PeriodicSchedulePatch): Promise<PeriodicSchedule> {
-    return invoke<PeriodicSchedule>("schedule_update", { id, patch });
+  async updateSchedule(id: string, patch: PeriodicSchedulePatch, expectedRevision?: number): Promise<PeriodicSchedule> {
+    return invoke<PeriodicSchedule>("schedule_update", { id, patch, expectedRevision: expectedRevision ?? null });
   }
 
   async deleteSchedule(id: string): Promise<void> {

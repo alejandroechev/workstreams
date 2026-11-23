@@ -43,6 +43,20 @@ describe("periodic schedules in the in-memory backend (mirror of periodic_schedu
     expect((await backend.listSchedules())[0].prompt).toBe("New");
   });
 
+  it("bumps a revision on every change and refuses a stale expected one (finding 4)", async () => {
+    const { backend, ws, tile } = await seed();
+    const { id, revision } = await backend.createSchedule(input(tile.id, ws.id));
+    expect(revision).toBe(0);
+    const claimed = await backend.updateSchedule(id, { last_result: "running" }, 0);
+    expect(claimed.revision).toBe(1);
+    await backend.updateSchedule(id, { paused: true });
+    await expect(backend.updateSchedule(id, { last_result: "running" }, 1)).rejects.toThrow("changed");
+    await backend.updateWorkstream(ws.id, { status: "archived" });
+    expect((await backend.listSchedules())[0].revision).toBe(3);
+    backend.agentScheduleForTests(id, "run");
+    expect((await backend.listSchedules())[0].run_requested_at).toEqual(expect.any(Number));
+  });
+
   it("follows its tile and workstream: close deletes, archive pauses, delete keeps the tile", async () => {
     const { backend, ws, other, tile, second } = await seed();
     await backend.createSchedule(input(tile.id, ws.id));

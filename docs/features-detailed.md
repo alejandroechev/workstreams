@@ -734,11 +734,14 @@ earlier runs.
   run's prompt also shows in the tile's phone thread, before its replies.
 - **Busy and missed runs:** a run due while the agent is mid-turn is skipped
   (last result *skipped*); typing in the tile doesn't stop a run. Runs missed
-  while the app was closed or the laptop slept are skipped, never caught up. A
+  while the app was closed or the laptop slept are skipped, never caught up,
+  even if the app comes back a few seconds late. A
   workstream that isn't loaded is loaded in the background and stays loaded.
 - **Failures:** a run still busy after 60 minutes gets Ctrl+C (*timed out*); a
-  run that can't start — tile gone, not linked to a session, spawn error — is
-  *could not start*. Three in a row pause the schedule and post one Inbox
+  run that can't start — tile gone, not linked to a session, spawn error, or
+  no turn seen within 5 minutes — is *could not start*. A run cut short by a
+  phone message, a restart of the tile or the app closing is *interrupted*,
+  which doesn't count. Three in a row pause the schedule and post one Inbox
   entry. Resume clears the count.
 - **Lifecycle:** closing the tile deletes its schedule; archiving the workstream
   pauses its schedules (unarchiving leaves them paused); re-linking the tile to

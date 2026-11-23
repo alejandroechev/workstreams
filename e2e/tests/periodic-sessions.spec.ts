@@ -1,7 +1,8 @@
 /**
  * Periodic Copilot sessions (ADR 044), in the real app on the in-memory
  * backend. The scheduler's timer is off (__WS_SCHEDULER_MANUAL__); the spec
- * drives it with a fake clock through __WS_SCHEDULER__.tick(now), and reads
+ * drives it with a fake clock through __WS_SCHEDULER__.tick(now) (awake just
+ * before each slot, as the runner requires), and reads
  * what it spawned from __WS_INVOKE_LOG__. Covers AT-1, AT-2 (UI half), AT-3,
  * AT-4 (busy), AT-5 and AT-10 (UI half) of
  * files/features/periodic-sessions/acceptance.md; the rest are unit and
@@ -58,6 +59,19 @@ const spawns = (page: Page, tileId?: string) =>
   page.evaluate((id) => ((window as unknown as SpecWindow).__WS_INVOKE_LOG__ ?? [])
     .filter((e) => e.cmd === "spawn_copilot_session" && (!id || e.args.tileId === id) && e.args.initialPrompt !== null)
     .map((e) => ({ tileId: e.args.tileId as string, command: e.args.command as string, session: e.args.resumeSessionId as string, prompt: e.args.initialPrompt as string })), tileId);
+/** The scheduler is awake just before `due`, then reaches it: only then does a slot run (finding 8). */
+async function tickThrough(page: Page, due: number) {
+  await tick(page, due - 1_000);
+  await tick(page, due + 1_000);
+}
+/** The run's turn starts and ends, as the session poller reports it (finding 7). */
+async function finishTurn(page: Page, tileId: string, at: number) {
+  const emit = (status: string) => page.evaluate(({ id, status }) => (window as unknown as SpecWindow).__WS_EMIT__(`copilot-stats-${id}`, { activity_status: status }), { id: tileId, status });
+  await emit("thinking");
+  await tick(page, at);
+  await emit("idle");
+  await tick(page, at + 1_000);
+}
 const row = (page: Page, id: string) => page.locator(`[data-testid="workstream-item"][data-workstream-id="${id}"]`);
 
 async function schedule(page: Page, wsName: string, prompt: string, nextRunAt: number) {
@@ -142,6 +156,7 @@ test("AT-4: a run due while the agent is mid-turn is skipped without interruptin
   const { ws, tile } = await schedule(page, "Infra", "Check CI health", due);
   await row(page, ws.id).click();
   await expect(page.locator(`[data-tile-id="${tile.id}"]`)).toBeVisible();
+  await tick(page, due - 1_000);
   await page.evaluate((id) => (window as unknown as SpecWindow).__WS_EMIT__(`copilot-stats-${id}`, { activity_status: "thinking" }), tile.id);
   await tick(page, due + 1_000);
   expect(await spawns(page, tile.id)).toEqual([]);
@@ -163,11 +178,12 @@ test("AT-5: Run now, Pause, Edit and Delete from the Schedules modal; clock icon
 
   await page.getByTestId(`schedule-run-${courses.created.id}`).click();
   await expect.poll(() => spawns(page, courses.tile.id)).toEqual([expect.objectContaining({ session: "s-videos", prompt: "Check for new videos" })]);
+  await finishTurn(page, courses.tile.id, Date.now() + 60_000);
 
   await page.getByTestId(`schedule-pause-${infra.created.id}`).click();
   await expect(page.getByTestId(`schedule-row-${infra.created.id}`)).toHaveAttribute("data-paused", "true");
   await expect(page.getByTestId(`schedule-row-${infra.created.id}`).getByTestId("schedule-row-next")).toHaveText("paused");
-  await tick(page, due + 1_000);
+  await tickThrough(page, due);
   expect(await spawns(page, infra.tile.id)).toEqual([]);
 
   await page.getByTestId(`schedule-edit-${courses.created.id}`).click();
@@ -177,7 +193,7 @@ test("AT-5: Run now, Pause, Edit and Delete from the Schedules modal; clock icon
   await page.getByTestId("schedule-save").click();
   const edited = (await schedules(page)).find((s) => s.id === courses.created.id)!;
   expect(edited.frequency).toEqual({ kind: "interval", minutes: 180 });
-  await tick(page, edited.next_run_at! + 1_000);
+  await tickThrough(page, edited.next_run_at!);
   await expect.poll(async () => (await spawns(page, courses.tile.id)).map((s) => s.prompt))
     .toEqual(["Check for new videos", "Check for new videos and summarise"]);
 
@@ -193,7 +209,7 @@ test("AT-10: closing the tile deletes its schedule; a re-linked tile's next run 
   const courses = await schedule(page, "Courses", "Check for new videos", due);
   const infra = await schedule(page, "Infra", "Check CI health", due);
   await call(page, "updateTileConfig", infra.tile.id, JSON.stringify({ copilot_session_id: "s-ci-2", cwd: "/infra" }));
-  await tick(page, due + 1_000);
+  await tickThrough(page, due);
   await expect.poll(() => spawns(page, infra.tile.id)).toEqual([expect.objectContaining({ session: "s-ci-2" })]);
 
   await row(page, courses.ws.id).click();

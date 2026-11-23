@@ -13,7 +13,11 @@ export type ScheduleFrequency =
   | { kind: "daily"; time: string }
   | { kind: "weekly"; day: number; time: string };
 
-export type ScheduleResult = "ok" | "running" | "skipped" | "could not start" | "timed out";
+/**
+ * "interrupted": the run was cut short by something else (the app quit, or
+ * the tile was restarted by a phone message or by hand). Not a failure.
+ */
+export type ScheduleResult = "ok" | "running" | "skipped" | "interrupted" | "could not start" | "timed out";
 
 export interface PeriodicSchedule {
   id: string;
@@ -33,14 +37,20 @@ export interface PeriodicSchedule {
   failures: number;
   /** "Run now" asked for (UI or `schedule.run`); the runner clears it. */
   run_requested: boolean;
+  /** When Run now was asked for; an old request, or one from before this app started, expires. */
+  run_requested_at: number | null;
   created_at: number;
+  /** Bumped on every stored change; the runner claims a run against the revision it read. */
+  revision: number;
 }
 
 export const MIN_INTERVAL_MINUTES = 5;
 export const MAX_CONSECUTIVE_FAILURES = 3;
 export const RUN_TIMEOUT_MS = 60 * 60 * 1000;
-/** A due time older than this when first seen was missed (app closed, laptop asleep). */
-export const MISSED_GRACE_MS = 2 * 60 * 1000;
+/** Ticks further apart than this mean the scheduler wasn't running in between (laptop asleep). */
+export const MAX_TICK_GAP_MS = 2 * 60 * 1000;
+/** A Run now not picked up within this long is dropped. */
+export const RUN_REQUEST_TTL_MS = 5 * 60 * 1000;
 
 export const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"] as const;
 
@@ -103,26 +113,46 @@ export type DueDecision =
   | { action: "wait" }
   | { action: "plan" }
   | { action: "missed" }
+  | { action: "expire" }
   | { action: "skip"; manual?: true }
   | { action: "run"; manual: boolean };
 
-/**
- * What the runner should do with a schedule now. `busy` is the tile's agent
- * being mid-turn; typing in the tile doesn't count.
- */
-export function decideDue(schedule: PeriodicSchedule, context: { now: number; busy: boolean }): DueDecision {
-  // Run now is explicit, so it runs even a paused schedule; a paused one never runs by itself.
-  if (schedule.run_requested) return context.busy ? { action: "skip", manual: true } : { action: "run", manual: true };
-  if (schedule.paused) return { action: "wait" };
+export interface DueContext {
+  now: number;
+  /** The tile's agent is mid-turn; typing in the tile doesn't count. */
+  busy: boolean;
+  /** The workstream is archived: nothing runs. */
+  archived: boolean;
+  /**
+   * The previous tick, when the scheduler has been running since then; null
+   * on the first tick after the app started or after a gap (asleep). Only a
+   * slot that fell after it runs; anything older was missed.
+   */
+  activeSince: number | null;
+  /** When this app instance started: older Run now requests expire. */
+  startedAt: number;
+}
+
+/** What the runner should do with a schedule now. */
+export function decideDue(schedule: PeriodicSchedule, context: DueContext): DueDecision {
+  if (schedule.run_requested) {
+    const at = schedule.run_requested_at;
+    const fresh = at !== null && at >= context.startedAt && context.now - at <= RUN_REQUEST_TTL_MS;
+    if (!fresh || context.archived) return { action: "expire" };
+    // Run now is explicit, so it runs even a paused schedule; a paused one never runs by itself.
+    return context.busy ? { action: "skip", manual: true } : { action: "run", manual: true };
+  }
+  if (schedule.paused || context.archived) return { action: "wait" };
   if (schedule.next_run_at === null) return { action: "plan" };
   if (context.now < schedule.next_run_at) return { action: "wait" };
-  if (context.now - schedule.next_run_at > MISSED_GRACE_MS) return { action: "missed" };
+  if (context.activeSince === null || schedule.next_run_at <= context.activeSince) return { action: "missed" };
   return context.busy ? { action: "skip" } : { action: "run", manual: false };
 }
 
 export type RunOutcome =
   | { result: "ok" }
   | { result: "skipped" }
+  | { result: "interrupted" }
   | { result: "could not start"; error: string }
   | { result: "timed out" };
 
@@ -135,6 +165,7 @@ export function applyRunResult(
   if (outcome.result === "skipped") {
     return { patch: { last_result: "skipped", last_run_at: now }, autoPaused: false };
   }
+  if (outcome.result === "interrupted") return { patch: { last_result: "interrupted" }, autoPaused: false };
   if (outcome.result === "ok") {
     return { patch: { last_result: "ok", last_error: null, failures: 0 }, autoPaused: false };
   }

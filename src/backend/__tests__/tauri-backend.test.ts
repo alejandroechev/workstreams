@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { TauriBackend } from "../tauri-backend";
+import { tileGeneration } from "../../domain/tile-activity";
 
 // Mock @tauri-apps/api/core
 const invoke = vi.fn();
@@ -29,20 +30,32 @@ describe("TauriBackend", () => {
     expect(invoke).toHaveBeenNthCalledWith(5, "reset_pr_inbox_mutes");
   });
 
+  it("counts a tile's process changes on spawn and close (ADR 044)", async () => {
+    invoke.mockResolvedValue(null);
+    const start = tileGeneration("gen-tile");
+    await backend.spawnCopilotSession("gen-tile", "/", null);
+    await backend.closeTerminal("gen-tile");
+    expect(tileGeneration("gen-tile")).toBe(start + 2);
+  });
+
   it("maps periodic schedule commands (ADR 044)", async () => {
     invoke.mockResolvedValue([]);
     const frequency = { kind: "daily", time: "09:00" } as const;
     await backend.listSchedules();
     await backend.createSchedule({ tileId: "t", workstreamId: "w", prompt: "P", frequency, notifyInbox: true, notifyPhone: false, nextRunAt: 5, createdAt: 1 });
     await backend.updateSchedule("s", { paused: true });
+    await backend.updateSchedule("s", { paused: true }, 3);
     await backend.deleteSchedule("s");
     await backend.postAppInboxMessage("w", "t", "error", "Paused", "why");
+    await backend.companionRevokeSession("t", "r1");
     expect(invoke.mock.calls).toEqual([
       ["schedule_list"],
       ["schedule_create", { tileId: "t", workstreamId: "w", prompt: "P", frequency, notifyInbox: true, notifyPhone: false, nextRunAt: 5, createdAt: 1 }],
-      ["schedule_update", { id: "s", patch: { paused: true } }],
+      ["schedule_update", { id: "s", patch: { paused: true }, expectedRevision: null }],
+      ["schedule_update", { id: "s", patch: { paused: true }, expectedRevision: 3 }],
       ["schedule_delete", { id: "s" }],
       ["inbox_post_app_message", { workstreamId: "w", tileId: "t", level: "error", title: "Paused", body: "why" }],
+      ["companion_revoke_session", { tileId: "t", requestId: "r1" }],
     ]);
   });
 

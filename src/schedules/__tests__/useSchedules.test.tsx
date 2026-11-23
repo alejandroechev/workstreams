@@ -16,7 +16,7 @@ async function setup(over: Partial<UseSchedulesOptions> = {}) {
   let now = at(16, 42);
   const resume = vi.fn(async () => {});
   const options: UseSchedulesOptions = {
-    backend, ready: true, workstreamName: () => "Courses", isBusy: () => false, resume, interrupt: vi.fn(async () => {}),
+    backend, ready: true, workstreamName: () => "Courses", isArchived: () => false, isBusy: () => false, resume, interrupt: vi.fn(async () => {}),
     clock: () => now, tickMs: 60_000, ...over,
   };
   const hook = renderHook(() => useSchedules(options));
@@ -49,7 +49,7 @@ describe("useSchedules", () => {
     await act(() => hook.result.current.resume(id));
     expect(hook.result.current.schedules[0]).toMatchObject({ paused: false, failures: 0, next_run_at: new Date(2026, 10, 24, 18, 0).getTime() });
     await act(() => hook.result.current.runNow(id));
-    expect(resume).toHaveBeenCalledWith(expect.objectContaining({ id }), "Edited");
+    expect(resume).toHaveBeenCalledWith(expect.objectContaining({ id }), "Edited", expect.any(Function));
     await act(() => hook.result.current.remove(id));
     expect(hook.result.current.schedules).toEqual([]);
     expect(await backend.listTiles(ws.id)).toHaveLength(1);
@@ -61,6 +61,20 @@ describe("useSchedules", () => {
     const id = hook.result.current.schedules[0].id;
     await act(async () => { backend.agentScheduleForTests(id, "run"); });
     await waitFor(() => expect(resume).toHaveBeenCalledTimes(1));
+  });
+
+  it("refuses Run now and Resume for an archived workstream (finding 4)", async () => {
+    const archived = new Set<string>();
+    const { hook, tile, ws, resume } = await setup({ isArchived: (id) => archived.has(id) });
+    await act(() => hook.result.current.create(tile.id, ws.id, draft));
+    const id = hook.result.current.schedules[0].id;
+    await act(() => hook.result.current.pause(id));
+    archived.add(ws.id);
+    await expect(hook.result.current.runNow(id)).rejects.toThrow("archived");
+    await expect(hook.result.current.resume(id)).rejects.toThrow("archived");
+    await act(() => hook.result.current.refresh());
+    expect(hook.result.current.schedules[0].paused).toBe(true);
+    expect(resume).not.toHaveBeenCalled();
   });
 
   it("does nothing until the app is ready", async () => {
