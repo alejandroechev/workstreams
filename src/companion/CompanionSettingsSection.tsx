@@ -304,7 +304,11 @@ export function CompanionSettingsSection({
                 setRotatingNow(true);
                 setRotation(null);
                 void rotate()
-                  .then((result) => setRotation(rotationText(result)))
+                  .then(async (result) => {
+                    setRotation(rotationText(result));
+                    // The pairing code now names the new document.
+                    if (result.ok) await reload();
+                  })
                   .finally(() => setRotatingNow(false));
               }}
               style={buttonStyle}

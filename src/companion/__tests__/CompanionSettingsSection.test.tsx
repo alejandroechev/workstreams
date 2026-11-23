@@ -142,6 +142,17 @@ describe("Phone companion settings", () => {
       expect(rotate).toHaveBeenCalledTimes(1);
     });
 
+    it("shows the new document's pairing code after rotating", async () => {
+      const store = enabled();
+      const rotate = vi.fn(async () => {
+        await store.set("companion.doc_url", "automerge:3NewDoc1");
+        return { ok: true as const, url: "automerge:3NewDoc1" };
+      });
+      render(<CompanionSettingsSection store={store} deps={deps()} status={{ state: "on" }} rotate={rotate} />);
+      fireEvent.click(await screen.findByTestId("companion-rotate"));
+      await waitFor(() => expect(decodePairing((screen.getByTestId("companion-pairing-code") as HTMLInputElement).value)?.doc).toBe("automerge:3NewDoc1"));
+    });
+
     it("is only offered while connected", async () => {
       render(<CompanionSettingsSection store={enabled()} deps={deps()} status={{ state: "connecting" }} rotate={vi.fn()} />);
       expect(await screen.findByTestId("companion-rotate")).toBeDisabled();
