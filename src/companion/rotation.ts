@@ -1,11 +1,10 @@
-import { isFresh, type CompanionDocument } from "./protocol";
+import { isFresh, RETIRED_GRACE_MS, type CompanionDocument } from "./protocol";
 
 /** Rotate once the saved document (its whole history) is bigger than this. */
 export const ROTATE_ABOVE_BYTES = 2 * 1024 * 1024;
 /** How often the size is checked after the check at connection. */
 export const ROTATION_CHECK_MS = 24 * 60 * 60_000;
-/** How long a retired document's requests are still answered after rotating. */
-export const RETIRED_GRACE_MS = 10 * 60_000;
+export { RETIRED_GRACE_MS };
 
 export interface RotationOptions {
   aboveBytes: number;

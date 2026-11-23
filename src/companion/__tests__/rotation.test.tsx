@@ -219,14 +219,14 @@ describe("rotation, failure cases", () => {
     s.hubs.set("automerge:3Successor", createInMemoryHub(emptyDocument()));
     const settings = createMemorySettingsStore({
       "companion.enabled": "1", "companion.doc_url": "automerge:3Successor", "companion.secret": SECRET,
-      "companion.folder_root": "~/Phone", "companion.retired_doc": OLD,
+      "companion.folder_root": "~/Phone", "companion.retired_docs": JSON.stringify([OLD]),
     });
     renderHook(() => useCompanionService(bindings(), { store: settings, connect: s.connect, createDocument: s.createDocument, rotation: big, devBuild: false }));
     // The pointer never reached the server: it is written again.
     await waitFor(async () => expect(await verifyMove(s.hubs.get(OLD)!.peer().read(), OLD, SECRET)).toBe("automerge:3Successor"));
-    expect(await settings.get("companion.retired_doc")).toBe(OLD);
+    expect(JSON.parse((await settings.get("companion.retired_docs")) ?? "[]")).toEqual([OLD]);
     await phoneSends(s.hubs.get("automerge:3Successor")!.peer(), "arrived");
-    await waitFor(async () => expect(await settings.get("companion.retired_doc")).toBe(""));
+    await waitFor(async () => expect(JSON.parse((await settings.get("companion.retired_docs")) ?? "[]")).toEqual([]));
   });
 
   it("stops answering the retired document as soon as the companion is turned off", async () => {
@@ -279,6 +279,84 @@ describe("rotation, failure cases", () => {
     await act(async () => { slow!(stored); await new Promise((r) => setTimeout(r, 50)); });
     expect(JSON.stringify(s.hubs.get(OLD)!.peer().read().sessions ?? null)).toBe(before);
     releaseConnect();
+  });
+});
+
+describe("rotation, recovery", () => {
+  it("records the retired document before publishing its pointer, and retires nothing if it cannot", async () => {
+    const s = server();
+    const base = store();
+    const failing = { get: base.get, set: async (key: string, value: string) => {
+      if (key === "companion.retired_docs") throw new Error("disk full");
+      await base.set(key, value);
+    } };
+    const { result } = renderHook(() => useCompanionService(bindings(), {
+      store: failing, connect: s.connect, createDocument: s.createDocument, rotation: big, devBuild: false,
+    }));
+    await waitFor(() => expect(result.current.state).toBe("on"));
+    let outcome: Awaited<ReturnType<typeof rotateCompanionNow>> | undefined;
+    await act(async () => { outcome = await rotateCompanionNow(); });
+    expect(outcome).toMatchObject({ ok: false, reason: "error", message: "disk full" });
+    expect(s.hubs.get(OLD)!.peer().read().movedTo).toBeUndefined();
+    expect((await loadCompanionSettings(base)).docUrl).toBe(OLD);
+  });
+
+  it("keeps every retired document until the phone arrives, and repairs each one", async () => {
+    const s = server();
+    const settings = store();
+    const { result } = renderHook(() => useCompanionService(bindings(), {
+      store: settings, connect: s.connect, createDocument: s.createDocument, rotation: big, devBuild: false,
+    }));
+    await waitFor(() => expect(result.current.state).toBe("on"));
+    await act(async () => { await rotateCompanionNow(); });
+    await waitFor(() => expect(result.current.state).toBe("on"));
+    await waitFor(async () => expect((await loadCompanionSettings(settings)).docUrl).toBe("automerge:3NewDoc1"));
+    await act(async () => { await new Promise((r) => setTimeout(r, 20)); await rotateCompanionNow(); });
+    await waitFor(async () => expect((await loadCompanionSettings(settings)).docUrl).toBe("automerge:3NewDoc2"));
+    expect(JSON.parse((await settings.get("companion.retired_docs")) ?? "[]")).toEqual([OLD, "automerge:3NewDoc1"]);
+    expect(await verifyMove(s.hubs.get(OLD)!.peer().read(), OLD, SECRET)).toBe("automerge:3NewDoc1");
+    expect(await verifyMove(s.hubs.get("automerge:3NewDoc1")!.peer().read(), "automerge:3NewDoc1", SECRET)).toBe("automerge:3NewDoc2");
+  });
+
+  it("follows a move that syncs in after it connected", async () => {
+    const s = server();
+    s.hubs.set("automerge:3Successor", createInMemoryHub(emptyDocument()));
+    const settings = store();
+    const { result } = renderHook(() => useCompanionService(bindings(), { store: settings, connect: s.connect, createDocument: s.createDocument, rotation: big, devBuild: false }));
+    await waitFor(() => expect(result.current.state).toBe("on"));
+    const movedTo = await signMove(SECRET, OLD, "automerge:3Successor", Date.now());
+    s.hubs.get(OLD)!.peer().change((d) => { d.movedTo = movedTo; d.schemaVersion = 2; });
+    await waitFor(async () => expect((await loadCompanionSettings(settings)).docUrl).toBe("automerge:3Successor"));
+  });
+
+  it("starts the current document without waiting for a retired one that does not open", async () => {
+    const s = server();
+    s.hubs.set("automerge:3Successor", createInMemoryHub(emptyDocument()));
+    const connect = vi.fn(async (settings: { docUrl: string }) => {
+      if (settings.docUrl === OLD) return new Promise<never>(() => {});
+      return s.connect(settings);
+    });
+    const settings = createMemorySettingsStore({
+      "companion.enabled": "1", "companion.doc_url": "automerge:3Successor", "companion.secret": SECRET,
+      "companion.folder_root": "~/Phone", "companion.retired_docs": JSON.stringify([OLD]),
+    });
+    const { result } = renderHook(() => useCompanionService(bindings(), { store: settings, connect, createDocument: s.createDocument, rotation: big, devBuild: false }));
+    await waitFor(() => expect(result.current.state).toBe("on"));
+    await waitFor(() => expect(s.hubs.get("automerge:3Successor")!.peer().read().laptop.workstreams).toHaveLength(2));
+  });
+
+  it("never writes a pointer into a retired document from a newer version", async () => {
+    const s = server({ ...emptyDocument(), schemaVersion: 3 });
+    s.hubs.set("automerge:3Successor", createInMemoryHub(emptyDocument()));
+    const settings = createMemorySettingsStore({
+      "companion.enabled": "1", "companion.doc_url": "automerge:3Successor", "companion.secret": SECRET,
+      "companion.folder_root": "~/Phone", "companion.retired_docs": JSON.stringify([OLD]),
+    });
+    const { result } = renderHook(() => useCompanionService(bindings(), { store: settings, connect: s.connect, createDocument: s.createDocument, rotation: big, devBuild: false }));
+    await waitFor(() => expect(result.current.state).toBe("on"));
+    await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
+    expect(s.hubs.get(OLD)!.peer().read()).toMatchObject({ schemaVersion: 3 });
+    expect(s.hubs.get(OLD)!.peer().read().movedTo).toBeUndefined();
   });
 });
 

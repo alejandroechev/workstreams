@@ -363,6 +363,12 @@ export function decodePairing(text: string): Pairing | null {
 
 // ── Rotation ───────────────────────────────────────────────────────────
 
+/**
+ * How long the laptop still answers a retired document's requests. The phone
+ * waits at most this long for its own requests there before following.
+ */
+export const RETIRED_GRACE_MS = 10 * 60_000;
+
 /** The exact bytes signed for a move: bound to the retired document and its successor. */
 export function canonicalMove(from: string, to: string, at: number): string {
   return JSON.stringify([SIGNED_FORMAT, "moved", from, to, at]);

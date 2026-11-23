@@ -101,11 +101,25 @@ let rotateHandler: (() => Promise<RotationResult>) | null = null;
 /** When the document was last rotated (ms epoch), so automatic rotation cannot loop. */
 const ROTATED_AT_KEY = "companion.rotated_at";
 /**
- * The document last retired, until the phone shows up on its successor: its
- * pointer may not have reached the server yet (the laptop went offline or
- * quit right after rotating), so it is reopened at start to send it again.
+ * Documents retired since the phone last showed up, as a JSON list of URLs.
+ * Recorded before each pointer is written: the pointer may not have reached
+ * the server (the laptop went offline or quit right after rotating), so each
+ * one is reopened at start, in the background, to send it again.
  */
-const RETIRED_DOC_KEY = "companion.retired_doc";
+const RETIRED_DOCS_KEY = "companion.retired_docs";
+/** At most this many retired documents are kept for repair. */
+const MAX_RETIRED_DOCS = 5;
+/** How long reopening a retired document may take before the repair gives up. */
+const RETIRED_OPEN_TIMEOUT_MS = 30_000;
+
+async function readRetiredDocs(store: SettingsStore): Promise<string[]> {
+  try {
+    const parsed = JSON.parse((await store.get(RETIRED_DOCS_KEY)) ?? "[]") as unknown;
+    return Array.isArray(parsed) ? parsed.filter((url): url is string => typeof url === "string") : [];
+  } catch {
+    return [];
+  }
+}
 
 /** Retired documents still open (grace, or re-sending a pointer), by the secret they answer with. */
 const retiredDocs = new Set<{ secret: string; stop: () => void }>();
@@ -230,32 +244,46 @@ export function useCompanionService(bindings: CompanionBindings, explicitDeps?: 
     };
 
     /**
-     * After a restart, the last retired document's pointer may never have
-     * reached the server. Reopen it so its local change syncs (writing the
-     * pointer again if it is missing), until the phone shows up here.
+     * After a restart, a retired document's pointer may never have reached the
+     * server. Reopen each one in the background (the current document does not
+     * wait) so its local change syncs, writing the pointer again if it is
+     * missing, until the phone shows up on the current document.
      */
-    const resendRetiredPointer = async (current: CompanionDoc) => {
-      const retiredUrl = await storeRef.current.get(RETIRED_DOC_KEY);
-      if (!retiredUrl || retiredUrl === settings.docUrl || cancelled) return;
+    const repairRetired = async (current: CompanionDoc) => {
+      const retiredUrls = (await readRetiredDocs(storeRef.current)).filter((url) => url !== settings.docUrl);
+      if (retiredUrls.length === 0 || cancelled) return;
       const arrived = () => Object.keys(current.read().requests ?? {}).length > 0;
-      if (arrived()) { await storeRef.current.set(RETIRED_DOC_KEY, ""); return; }
-      const offArrival = current.subscribe(() => {
-        if (arrived()) { offArrival(); void storeRef.current.set(RETIRED_DOC_KEY, ""); }
-      });
+      const clear = () => { void storeRef.current.set(RETIRED_DOCS_KEY, "[]"); };
+      if (arrived()) { clear(); return; }
+      const offArrival = current.subscribe(() => { if (arrived()) { offArrival(); clear(); } });
       stops.push(offArrival);
-      let old: CompanionDoc;
-      try {
-        old = await connectRef.current({ ...settings, docUrl: retiredUrl });
-      } catch (error) {
-        console.error("Could not reopen the retired companion document:", error);
-        return;
-      }
-      if (cancelled) { old.close(); return; }
-      if (await verifyMove(old.read(), retiredUrl, settings.secret) !== settings.docUrl && isKnownSchema(old.read())) {
-        const movedTo = await signMove(settings.secret, retiredUrl, settings.docUrl, Date.now());
-        old.change((draft) => { draft.movedTo = movedTo; draft.schemaVersion = SCHEMA_VERSION; });
-      }
-      holdRetired(settings.secret, graceMs, () => old.close());
+      await Promise.all(retiredUrls.map(async (url) => {
+        let old: CompanionDoc | null = null;
+        let held = false;
+        try {
+          old = await Promise.race([
+            connectRef.current({ ...settings, docUrl: url }),
+            new Promise<never>((_, reject) => setTimeout(() => reject(new Error("timed out")), RETIRED_OPEN_TIMEOUT_MS)),
+          ]);
+          // A retired document that already points somewhere keeps its pointer (a chain).
+          if (cancelled || await verifyMove(old.read(), url, settings.secret)) return;
+          const movedTo = await signMove(settings.secret, url, settings.docUrl, Date.now());
+          if (cancelled) return;
+          old.change((draft) => {
+            // Never into a document from a newer version, nor over a pointer that appeared meanwhile.
+            if (!isKnownSchema(draft) || draft.movedTo) return;
+            draft.movedTo = movedTo;
+            draft.schemaVersion = SCHEMA_VERSION;
+          });
+          const opened = old;
+          holdRetired(settings.secret, graceMs, () => opened.close());
+          held = true;
+        } catch (error) {
+          console.error("Could not repair a retired companion document:", error);
+        } finally {
+          if (!held) old?.close();
+        }
+      }));
     };
 
     connectRef.current(settings)
@@ -267,15 +295,27 @@ export function useCompanionService(bindings: CompanionBindings, explicitDeps?: 
           setStatus({ state: "update-needed" });
           return;
         }
-        return verifyMove(connected.read(), settings.docUrl, settings.secret).then(async (successor) => {
-          if (cancelled) return;
-          if (successor) {
-            // This laptop already retired this document (it quit before saving
-            // the successor): follow its own pointer instead of using it.
-            await saveCompanionSettings(storeRef.current, { docUrl: successor });
-            return;
+        /**
+         * This laptop already retired this document (it quit before saving the
+         * successor, or the pointer synced in later): follow its own pointer.
+         * Never back to a document it retired, so pointers cannot loop.
+         */
+        const followMove = async (): Promise<boolean> => {
+          const successor = await verifyMove(connected.read(), settings.docUrl, settings.secret);
+          if (!successor || cancelled || retired) return false;
+          const visited = await readRetiredDocs(storeRef.current);
+          if (visited.includes(successor)) return false;
+          retired = true;
+          if (!visited.includes(settings.docUrl)) {
+            await storeRef.current.set(RETIRED_DOCS_KEY, JSON.stringify([...visited, settings.docUrl]));
           }
-          await resendRetiredPointer(connected);
+          await saveCompanionSettings(storeRef.current, { docUrl: successor });
+          return true;
+        };
+        return followMove().then((moved) => {
+          if (moved || cancelled) return null;
+          stops.push(connected.subscribe(() => { void followMove(); }));
+          void repairRetired(connected);
           return openConsumedLedger(storeRef.current);
         }).then((ledger) => {
           if (cancelled || !ledger) return;
@@ -314,13 +354,18 @@ export function useCompanionService(bindings: CompanionBindings, explicitDeps?: 
                 queued = true;
                 return { ok: false, reason: "queued" };
               }
+              // Recorded before the pointer is published, so a crash in between
+              // still leaves this document to reopen and repair at start.
+              const retiredList = await readRetiredDocs(storeRef.current);
+              // The latest few: a phone that never arrives must not make every start reopen more documents.
+              await storeRef.current.set(RETIRED_DOCS_KEY, JSON.stringify([...retiredList.filter((u) => u !== settings.docUrl), settings.docUrl].slice(-MAX_RETIRED_DOCS)));
+              if (cancelled || retired) return { ok: false, reason: "not-connected" };
               retired = true;
               connected.change((draft) => {
                 draft.movedTo = movedTo;
                 // An outdated phone, which cannot follow the pointer, says "update" instead of going stale.
                 draft.schemaVersion = SCHEMA_VERSION;
               });
-              await storeRef.current.set(RETIRED_DOC_KEY, settings.docUrl);
               await storeRef.current.set(ROTATED_AT_KEY, String(Date.now()));
               await saveCompanionSettings(storeRef.current, { docUrl: url });
               return { ok: true, url };
