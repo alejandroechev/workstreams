@@ -261,20 +261,35 @@ export function useCompanionService(bindings: CompanionBindings, explicitDeps?: 
         let old: CompanionDoc | null = null;
         let held = false;
         try {
-          old = await Promise.race([
-            connectRef.current({ ...settings, docUrl: url }),
-            new Promise<never>((_, reject) => setTimeout(() => reject(new Error("timed out")), RETIRED_OPEN_TIMEOUT_MS)),
-          ]);
-          // A retired document that already points somewhere keeps its pointer (a chain).
-          if (cancelled || await verifyMove(old.read(), url, settings.secret)) return;
-          const movedTo = await signMove(settings.secret, url, settings.docUrl, Date.now());
+          let timedOut = false;
+          let timer: ReturnType<typeof setTimeout> | undefined;
+          const opening = connectRef.current({ ...settings, docUrl: url });
+          // A handle that arrives after the deadline is closed, not leaked.
+          void opening.then((late) => { if (timedOut) late.close(); }, () => {});
+          try {
+            old = await Promise.race([
+              opening,
+              new Promise<never>((_, reject) => {
+                timer = setTimeout(() => { timedOut = true; reject(new Error("timed out")); }, RETIRED_OPEN_TIMEOUT_MS);
+              }),
+            ]);
+          } finally {
+            clearTimeout(timer);
+          }
           if (cancelled) return;
-          old.change((draft) => {
-            // Never into a document from a newer version, nor over a pointer that appeared meanwhile.
-            if (!isKnownSchema(draft) || draft.movedTo) return;
-            draft.movedTo = movedTo;
-            draft.schemaVersion = SCHEMA_VERSION;
-          });
+          // A pointer already there (a chain, or one saved locally before a
+          // crash) is kept, but the document still stays open for the sync
+          // window below: a local pointer is no proof that it was uploaded.
+          if (!(await verifyMove(old.read(), url, settings.secret))) {
+            const movedTo = await signMove(settings.secret, url, settings.docUrl, Date.now());
+            if (cancelled) return;
+            old.change((draft) => {
+              // Never into a document from a newer version, nor over a pointer that appeared meanwhile.
+              if (!isKnownSchema(draft) || draft.movedTo) return;
+              draft.movedTo = movedTo;
+              draft.schemaVersion = SCHEMA_VERSION;
+            });
+          }
           const opened = old;
           holdRetired(settings.secret, graceMs, () => opened.close());
           held = true;
@@ -304,7 +319,8 @@ export function useCompanionService(bindings: CompanionBindings, explicitDeps?: 
           const successor = await verifyMove(connected.read(), settings.docUrl, settings.secret);
           if (!successor || cancelled || retired) return false;
           const visited = await readRetiredDocs(storeRef.current);
-          if (visited.includes(successor)) return false;
+          // The pairing may have changed during the read: only this connection's settings may move.
+          if (cancelled || retired || visited.includes(successor)) return false;
           retired = true;
           if (!visited.includes(settings.docUrl)) {
             await storeRef.current.set(RETIRED_DOCS_KEY, JSON.stringify([...visited, settings.docUrl]));
@@ -359,15 +375,36 @@ export function useCompanionService(bindings: CompanionBindings, explicitDeps?: 
               const retiredList = await readRetiredDocs(storeRef.current);
               // The latest few: a phone that never arrives must not make every start reopen more documents.
               await storeRef.current.set(RETIRED_DOCS_KEY, JSON.stringify([...retiredList.filter((u) => u !== settings.docUrl), settings.docUrl].slice(-MAX_RETIRED_DOCS)));
+              await storeRef.current.set(ROTATED_AT_KEY, String(Date.now()));
+              // Checked again after those awaits, with none before the write.
               if (cancelled || retired) return { ok: false, reason: "not-connected" };
-              retired = true;
+              const latest = connected.read();
+              if (!isKnownSchema(latest) || latest.movedTo) return { ok: false, reason: "error", message: "The document changed while rotating." };
+              if (hasOpenRequest(latest, Date.now())) {
+                if (!manual) return { ok: false, reason: "busy" };
+                queued = true;
+                return { ok: false, reason: "queued" };
+              }
+              let written = false;
               connected.change((draft) => {
+                if (!isKnownSchema(draft) || draft.movedTo) return;
                 draft.movedTo = movedTo;
                 // An outdated phone, which cannot follow the pointer, says "update" instead of going stale.
                 draft.schemaVersion = SCHEMA_VERSION;
+                written = true;
               });
-              await storeRef.current.set(ROTATED_AT_KEY, String(Date.now()));
-              await saveCompanionSettings(storeRef.current, { docUrl: url });
+              if (!written) return { ok: false, reason: "error", message: "The document changed while rotating." };
+              retired = true;
+              try {
+                await saveCompanionSettings(storeRef.current, { docUrl: url });
+              } catch (error) {
+                // The phone may already follow the pointer: keep trying to move
+                // with it (on every change, and at the next start) rather than
+                // stay behind on the retired document.
+                retired = false;
+                void followMove();
+                throw error;
+              }
               return { ok: true, url };
             } catch (error) {
               return { ok: false, reason: "error", message: error instanceof Error ? error.message : String(error) };

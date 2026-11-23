@@ -360,6 +360,44 @@ describe("rotation, recovery", () => {
   });
 });
 
+describe("rotation, last checks", () => {
+  it("does not publish the pointer when a request arrives while the settings are written", async () => {
+    const s = server();
+    const base = store();
+    const racing = { get: base.get, set: async (key: string, value: string) => {
+      if (key === "companion.retired_docs") await phoneSends(s.hubs.get(OLD)!.peer(), "during-settings");
+      await base.set(key, value);
+    } };
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const { result } = renderHook(() => useCompanionService(bindings({ loadInBackground: vi.fn(() => gate) }), {
+      store: racing, connect: s.connect, createDocument: s.createDocument, rotation: big, devBuild: false,
+    }));
+    await waitFor(() => expect(result.current.state).toBe("on"));
+    let outcome: Awaited<ReturnType<typeof rotateCompanionNow>> | undefined;
+    await act(async () => { outcome = await rotateCompanionNow(); });
+    expect(outcome).toEqual({ ok: false, reason: "queued" });
+    expect(s.hubs.get(OLD)!.peer().read().movedTo).toBeUndefined();
+    release();
+  });
+
+  it("still moves with the phone when saving the new document fails once", async () => {
+    const s = server();
+    const base = store();
+    let failOnce = true;
+    const flaky = { get: base.get, set: async (key: string, value: string) => {
+      if (key === "companion.doc_url" && failOnce) { failOnce = false; throw new Error("locked"); }
+      await base.set(key, value);
+    } };
+    const { result } = renderHook(() => useCompanionService(bindings(), {
+      store: flaky, connect: s.connect, createDocument: s.createDocument, rotation: big, devBuild: false,
+    }));
+    await waitFor(() => expect(result.current.state).toBe("on"));
+    await act(async () => { await rotateCompanionNow(); });
+    await waitFor(async () => expect((await loadCompanionSettings(base)).docUrl).toBe("automerge:3NewDoc1"));
+  });
+});
+
 describe("hasOpenRequest", () => {
   const NOW = 1_800_000_000_000;
   const doc = (requests: Record<string, unknown>) => ({ ...emptyDocument(), requests } as unknown as CompanionDocument);
