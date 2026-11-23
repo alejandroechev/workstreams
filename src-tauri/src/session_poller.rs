@@ -342,6 +342,31 @@ fn status_priority(s: &str) -> u8 {
 
 // ── Events.jsonl parsing ───────────────────────────────────────────────
 
+/// How many turns a session's events file has started and ended, over the
+/// whole file. A periodic run (ADR 044) reads it before launching, so the
+/// first turn after that is its own, whenever the poller gets to see it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct TurnCursor {
+    pub starts: u64,
+    pub ends: u64,
+}
+
+pub fn turn_cursor(session_dir: &std::path::Path) -> TurnCursor {
+    use std::io::BufRead;
+    let mut cursor = TurnCursor { starts: 0, ends: 0 };
+    let Ok(file) = std::fs::File::open(session_dir.join("events.jsonl")) else {
+        return cursor;
+    };
+    for line in std::io::BufReader::new(file).lines().map_while(Result::ok) {
+        if line.contains("\"assistant.turn_start\"") {
+            cursor.starts += 1;
+        } else if line.contains("\"assistant.turn_end\"") {
+            cursor.ends += 1;
+        }
+    }
+    cursor
+}
+
 /// Whether the latest turn marker in `lines` (oldest first) opened a turn that
 /// nothing has closed yet. With no marker in the window (a turn longer than
 /// the tail), tool or assistant activity means one is open.
@@ -914,6 +939,30 @@ mod tests {
             ],
         );
         assert_eq!(subagent.status, "thinking");
+    }
+
+    #[test]
+    fn counts_every_turn_start_and_end_in_the_whole_events_file() {
+        let tmp = std::env::temp_dir().join(format!("ws_turns_{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).ok();
+        assert_eq!(turn_cursor(&tmp), TurnCursor { starts: 0, ends: 0 });
+        let mut f = std::fs::File::create(tmp.join("events.jsonl")).unwrap();
+        for _ in 0..40 {
+            writeln!(f, r#"{{"type":"assistant.turn_start"}}"#).unwrap();
+            writeln!(f, r#"{{"type":"tool.execution_complete"}}"#).unwrap();
+            writeln!(f, r#"{{"type":"assistant.turn_end"}}"#).unwrap();
+        }
+        writeln!(f, r#"{{"type":"assistant.turn_start"}}"#).unwrap();
+        writeln!(f, "not json").unwrap();
+        drop(f);
+        assert_eq!(
+            turn_cursor(&tmp),
+            TurnCursor {
+                starts: 41,
+                ends: 40
+            }
+        );
+        std::fs::remove_dir_all(&tmp).ok();
     }
 
     #[test]

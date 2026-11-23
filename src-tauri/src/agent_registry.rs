@@ -30,10 +30,10 @@ pub enum Caller {
     Agent {
         tile_id: String,
         workstream_id: String,
-        /// False once the tile was re-linked to another Copilot session while
-        /// this process kept running (ADR 044): it still runs the old session,
-        /// so it may no longer message the phone. A respawn issues a new token.
-        may_message_phone: bool,
+        /// Names the process this token was issued to (a respawn gets a new
+        /// one). Re-linking the tile bars its running processes from the phone
+        /// in the database (ADR 044), checked under the lock at send time.
+        process_key: String,
     },
 }
 
@@ -133,27 +133,27 @@ impl IdentityRegistry {
             Caller::Agent {
                 tile_id: tile_id.to_string(),
                 workstream_id: workstream_id.to_string(),
-                may_message_phone: true,
+                process_key: uuid::Uuid::new_v4().to_string(),
             },
         );
         token
     }
 
-    /// The tile was re-linked: its running process may no longer message the
-    /// phone. The next process spawned for the tile gets a fresh token that may.
-    pub fn revoke_phone(&self, tile_id: &str) {
-        for caller in self.tokens.lock().unwrap().values_mut() {
-            if let Caller::Agent {
-                tile_id: existing,
-                may_message_phone,
-                ..
-            } = caller
-            {
-                if existing == tile_id {
-                    *may_message_phone = false;
-                }
-            }
-        }
+    /// The processes currently holding a token for `tile_id` (normally one).
+    pub fn process_keys(&self, tile_id: &str) -> Vec<String> {
+        self.tokens
+            .lock()
+            .unwrap()
+            .values()
+            .filter_map(|caller| match caller {
+                Caller::Agent {
+                    tile_id: t,
+                    process_key,
+                    ..
+                } if t == tile_id => Some(process_key.clone()),
+                _ => None,
+            })
+            .collect()
     }
 
     /// Resolves a presented token, or explains that it is not usable.
@@ -2801,7 +2801,7 @@ fn companion_send(
     let Caller::Agent {
         tile_id,
         workstream_id,
-        may_message_phone,
+        process_key,
     } = context.caller()?
     else {
         return Err(AgentError::new(
@@ -2835,7 +2835,9 @@ fn companion_send(
             FALLBACK,
         ));
     }
-    if !may_message_phone {
+    if crate::companion_messages::is_barred(context.db, tile_id, process_key)
+        .map_err(companion_store_error)?
+    {
         return Err(AgentError::new(
             "SESSION_RELINKED",
             "This tile was linked to another Copilot session, so this session can no longer send to the phone",
@@ -3791,7 +3793,7 @@ mod tests {
         Caller::Agent {
             tile_id: tile.to_string(),
             workstream_id: workstream.to_string(),
-            may_message_phone: true,
+            process_key: process_key(tile),
         }
     }
 
@@ -4093,12 +4095,14 @@ mod tests {
         db
     }
 
-    fn relinked_agent(tile: &str, workstream: &str) -> Caller {
-        Caller::Agent {
-            tile_id: tile.to_string(),
-            workstream_id: workstream.to_string(),
-            may_message_phone: false,
-        }
+    /// The tile is re-linked as the app does it: under the DB lock, revoking
+    /// its thread and barring the processes running now.
+    fn relink(db: &Connection, tile: &str) {
+        crate::companion_messages::revoke_tile(db, tile, &[process_key(tile)]).unwrap();
+    }
+
+    fn process_key(tile: &str) -> String {
+        format!("proc-{tile}")
     }
 
     #[test]
@@ -4130,10 +4134,13 @@ mod tests {
     fn companion_send_refuses_the_old_process_of_a_relinked_tile() {
         let db = phone_session_db(true);
         for tile in ["phone-tile", "laptop-tile"] {
-            crate::companion_messages::revoke(&db, tile).unwrap();
+            // The caller (token) was resolved before the re-link landed: the
+            // permission is decided under the lock, at send time.
+            let resolved_earlier = agent(tile, "w1");
+            relink(&db, tile);
             let error = call(
                 &db,
-                &relinked_agent(tile, "w1"),
+                &resolved_earlier,
                 "companion.send",
                 serde_json::json!({"kind":"result","text":"from the old session"}),
             )
@@ -4182,21 +4189,50 @@ mod tests {
     }
 
     #[test]
-    fn revoking_phone_rights_bars_the_current_process_but_not_the_next() {
+    fn each_token_names_its_own_process_and_only_the_current_ones_are_listed() {
         let registry = IdentityRegistry::new();
         let old = registry.issue("tile-1", "ws");
-        registry.revoke_phone("tile-1");
-        assert_eq!(
-            registry.resolve(Some(&old)).unwrap(),
-            relinked_agent("tile-1", "ws")
-        );
+        let Caller::Agent {
+            process_key: old_key,
+            ..
+        } = registry.resolve(Some(&old)).unwrap()
+        else {
+            unreachable!()
+        };
         let fresh = registry.issue("tile-1", "ws");
-        assert_eq!(
-            registry.resolve(Some(&fresh)).unwrap(),
-            agent("tile-1", "ws")
-        );
-        // Unknown tiles are a no-op.
-        registry.revoke_phone("nobody");
+        let Caller::Agent { process_key, .. } = registry.resolve(Some(&fresh)).unwrap() else {
+            unreachable!()
+        };
+        assert_ne!(process_key, old_key);
+        assert_eq!(registry.process_keys("tile-1"), vec![process_key]);
+        assert!(registry.process_keys("nobody").is_empty());
+    }
+
+    #[test]
+    fn a_new_process_after_a_relink_may_message_the_phone_and_a_rollback_never_bars_one() {
+        let db = phone_session_db(true);
+        relink(&db, "phone-tile");
+        let respawned = Caller::Agent {
+            tile_id: "phone-tile".into(),
+            workstream_id: "w1".into(),
+            process_key: "proc-new".into(),
+        };
+        call(
+            &db,
+            &respawned,
+            "companion.send",
+            serde_json::json!({"kind":"result","text":"new"}),
+        )
+        .unwrap();
+        // A delayed rollback of an older claim touches neither the thread nor the process.
+        assert!(!crate::companion_messages::revoke_claim(&db, "phone-tile", "r1").unwrap());
+        call(
+            &db,
+            &respawned,
+            "companion.send",
+            serde_json::json!({"kind":"result","text":"again"}),
+        )
+        .unwrap();
     }
 
     #[test]
@@ -4617,8 +4653,15 @@ mod tests {
         let registry = IdentityRegistry::new();
         let token = registry.issue("tile-1", "ws-abc");
         assert_eq!(
-            registry.resolve(Some(&token)).expect("resolve"),
-            agent("tile-1", "ws-abc")
+            registry.resolve(Some(&token)).expect("resolve").actor(),
+            agent("tile-1", "ws-abc").actor()
+        );
+        assert_eq!(
+            registry
+                .resolve(Some(&token))
+                .expect("resolve")
+                .workstream_id(),
+            Some("ws-abc")
         );
     }
 
@@ -4672,8 +4715,15 @@ mod tests {
         let second = registry.issue("tile-2", "ws-xyz");
         assert_ne!(first, second);
         assert_eq!(
-            registry.resolve(Some(&second)).expect("resolve"),
-            agent("tile-2", "ws-xyz")
+            registry.resolve(Some(&second)).expect("resolve").actor(),
+            agent("tile-2", "ws-xyz").actor()
+        );
+        assert_eq!(
+            registry
+                .resolve(Some(&second))
+                .expect("resolve")
+                .workstream_id(),
+            Some("ws-xyz")
         );
     }
 

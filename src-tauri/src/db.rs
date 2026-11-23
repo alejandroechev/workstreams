@@ -381,6 +381,13 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
             at INTEGER NOT NULL
         );
         CREATE INDEX IF NOT EXISTS companion_send_log_tile_idx ON companion_send_log (tile_id, at);
+        -- Processes (by token key) still running a session their tile was
+        -- re-linked away from: they may not message the phone (ADR 044).
+        CREATE TABLE IF NOT EXISTS companion_barred_processes (
+            tile_id TEXT NOT NULL,
+            process_key TEXT NOT NULL,
+            PRIMARY KEY (tile_id, process_key)
+        );
 
         -- Periodic Copilot sessions (ADR 044): one schedule per session tile,
         -- gone with its tile. Times are ms epoch; next_run_at NULL means the

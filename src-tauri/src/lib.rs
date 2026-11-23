@@ -390,12 +390,17 @@ fn companion_revoke_session(
     request_id: Option<String>,
 ) -> Result<(), String> {
     let db = state.db.lock().map_err(|e| e.to_string())?;
-    let revoked = match request_id {
-        Some(request_id) => companion_messages::revoke_claim(&db, &tile_id, &request_id)?,
-        None => companion_messages::revoke(&db, &tile_id).map(|_| true)?,
-    };
-    if revoked {
-        state.agent_identities.revoke_phone(&tile_id);
+    // Under the DB lock, as every agent send is: a send from a process barred
+    // here can't slip in after the re-link. A rollback (request_id) only
+    // revokes the thread its own claim created, never a process.
+    match request_id {
+        Some(request_id) => {
+            companion_messages::revoke_claim(&db, &tile_id, &request_id)?;
+        }
+        None => {
+            let running = state.agent_identities.process_keys(&tile_id);
+            companion_messages::revoke_tile(&db, &tile_id, &running)?;
+        }
     }
     Ok(())
 }
@@ -2274,6 +2279,14 @@ fn spawn_copilot_session(
 fn clear_stale_session_locks(session_id: String) -> Result<usize, String> {
     let dir = session_poller::session_state_dir(&session_id)?;
     Ok(session_poller::clear_stale_locks(&dir))
+}
+
+/// Turns a Copilot session has started and ended (ADR 044: a periodic run's
+/// own turn is the first one after the cursor read before launching it).
+#[tauri::command]
+fn session_turn_state(session_id: String) -> Result<session_poller::TurnCursor, String> {
+    let dir = session_poller::session_state_dir(&session_id)?;
+    Ok(session_poller::turn_cursor(&dir))
 }
 
 #[tauri::command]
@@ -6955,6 +6968,7 @@ pub fn run() {
             companion_delete_session,
             companion_prune_sessions,
             schedule_list,
+            session_turn_state,
             schedule_create,
             schedule_update,
             schedule_delete,
@@ -8808,7 +8822,10 @@ Body here.
             crate::agent_registry::Caller::Agent {
                 tile_id: "tile-1".to_string(),
                 workstream_id: "ws-abc".to_string(),
-                may_message_phone: true,
+                process_key: match identities.resolve(Some(token)).unwrap() {
+                    crate::agent_registry::Caller::Agent { process_key, .. } => process_key,
+                    crate::agent_registry::Caller::Human => unreachable!(),
+                },
             }
         );
 

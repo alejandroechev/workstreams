@@ -193,6 +193,42 @@ pub fn send_from_agent(
     tx.commit().map_err(store)
 }
 
+/// The tile was re-linked to another Copilot session: revokes its thread and
+/// bars the processes running now (they still run the old session) from the
+/// phone. A process spawned later has another key and may send again.
+pub fn revoke_tile(
+    conn: &Connection,
+    tile_id: &str,
+    process_keys: &[String],
+) -> Result<(), String> {
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    tx.execute(
+        "UPDATE companion_sessions SET can_send = 0 WHERE tile_id = ?1",
+        [tile_id],
+    )
+    .map_err(|e| e.to_string())?;
+    for key in process_keys {
+        tx.execute(
+            "INSERT OR IGNORE INTO companion_barred_processes (tile_id, process_key) VALUES (?1, ?2)",
+            params![tile_id, key],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    tx.commit().map_err(|e| e.to_string())
+}
+
+/// Whether this process of the tile was barred by a re-link.
+pub fn is_barred(conn: &Connection, tile_id: &str, process_key: &str) -> Result<bool, String> {
+    conn.query_row(
+        "SELECT 1 FROM companion_barred_processes WHERE tile_id = ?1 AND process_key = ?2",
+        params![tile_id, process_key],
+        |_| Ok(()),
+    )
+    .optional()
+    .map(|found| found.is_some())
+    .map_err(|e| e.to_string())
+}
+
 /// Revokes a tile's thread only if it is still the one `request_id` claimed:
 /// a resume rolling back must not revoke a thread a newer claim created.
 /// Returns whether it revoked.
