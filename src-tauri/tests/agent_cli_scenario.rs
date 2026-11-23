@@ -553,6 +553,109 @@ fn inbox_configuration_and_read_state_survive_cli_connections() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+/// Periodic schedules (ADR 044, AT-2): an agent schedules another session tile
+/// of its workstream through the real binary, an interval under 5 minutes is
+/// refused with the minimum named and nothing stored, and the controls change
+/// what the app's runner reads.
+#[test]
+fn schedules_are_created_validated_and_controlled_through_the_cli() {
+    use std::io::Write;
+    let dir = scratch_dir("sched");
+    let path = socket_path_in(&dir, 44);
+    let db_path = dir.join("ws.db");
+    let db = workstreams_lib::db::open_db(&db_path).unwrap();
+    db.execute_batch(
+        "INSERT INTO workstreams (id, name, created_at, updated_at) VALUES ('ws', 'Courses', 't', 't');
+         INSERT INTO tiles (id, workstream_id, tile_type, title, config_json, created_at, updated_at) VALUES
+           ('tile', 'ws', 'copilot_session', 'Agent', '{}', 't', 't'),
+           ('videos', 'ws', 'copilot_session', 'Videos', '{}', 't', 't');",
+    )
+    .unwrap();
+    let identities = std::sync::Arc::new(IdentityRegistry::new());
+    let token = identities.issue("tile", "ws");
+    let server =
+        AgentSocketServer::start(path.clone(), serve_with_db(identities, db_path.clone())).unwrap();
+    let run = |args: &[&str], stdin: Option<&str>| {
+        let mut child = cli()
+            .args(args)
+            .env(SOCKET_ENV_VAR, &path)
+            .env(TOKEN_ENV_VAR, &token)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(stdin.unwrap_or("").as_bytes())
+            .unwrap();
+        let output = child.wait_with_output().unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        (output.status.success(), body)
+    };
+    let (ok, created) = run(
+        &[
+            "agent",
+            "call",
+            "schedule.create",
+            "tile=videos",
+            "frequency=every:2h",
+            "notify_inbox=true",
+            "prompt=@-",
+        ],
+        Some("Check the course for new videos\nand update the summary"),
+    );
+    assert!(ok, "{created}");
+    let id = created["data"]["id"].as_str().unwrap().to_string();
+    assert_eq!(created["data"]["frequency"]["minutes"], 120);
+    assert_eq!(
+        created["data"]["prompt"],
+        "Check the course for new videos\nand update the summary"
+    );
+
+    let (ok, refused) = run(
+        &[
+            "agent",
+            "call",
+            "schedule.create",
+            "frequency=every:1m",
+            "prompt=x",
+        ],
+        None,
+    );
+    assert!(!ok);
+    assert_eq!(refused["code"], "BAD_SCHEDULE");
+    assert!(
+        refused["message"].as_str().unwrap().contains("5 minutes"),
+        "{refused}"
+    );
+
+    let (_, listed) = run(&["agent", "call", "schedule.list"], None);
+    let rows = listed["data"]["schedules"].as_array().unwrap();
+    assert_eq!(rows.len(), 1, "the refused one stored nothing");
+    assert_eq!(rows[0]["tile_title"], "Videos");
+    assert_eq!(rows[0]["workstream_name"], "Courses");
+
+    let target = format!("id={id}");
+    assert!(run(&["agent", "call", "schedule.run", &target], None).0);
+    assert!(run(&["agent", "call", "schedule.pause", "tile=videos"], None).0);
+    let stored = workstreams_lib::periodic_schedules::get(&db, &id)
+        .unwrap()
+        .unwrap();
+    assert!(stored.run_requested && stored.paused);
+    let (_, resumed) = run(&["agent", "call", "schedule.resume", &target], None);
+    assert_eq!(resumed["data"]["paused"], false);
+    assert!(run(&["agent", "call", "schedule.delete", &target], None).0);
+    assert!(workstreams_lib::periodic_schedules::list(&db)
+        .unwrap()
+        .is_empty());
+    drop(db);
+    drop(server);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 /// A Rust Pocket check end to end (C-AT-1): the real CLI queues it over the
 /// socket, the learning worker compiles it with the real rustc against the
 /// same database file, and learning.jobs reports the outcome.
