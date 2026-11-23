@@ -34,8 +34,8 @@ const mocks = vi.hoisted(() => {
       return unlisten;
     },
   );
-  let stateChangedHandler: ((event: { payload: unknown }) => void) | null =
-    null;
+  // Several parts of the app listen (the sidebar refresh, schedules): keep them all.
+  const stateChangedHandlers = new Set<(event: { payload: unknown }) => void>();
   let tileUpdatedHandler: ((event: { payload: unknown }) => void) | null = null;
   const eventListen = vi.fn(
     async (
@@ -43,7 +43,7 @@ const mocks = vi.hoisted(() => {
       handler: (event: { payload: unknown }) => void,
     ) => {
       if (eventName === "tile-created") tileCreatedHandler = handler;
-      if (eventName === "state-changed") stateChangedHandler = handler;
+      if (eventName === "state-changed") stateChangedHandlers.add(handler);
       if (eventName === "tile-updated") tileUpdatedHandler = handler;
       return () => {
         if (eventName === "tile-created") tileCreatedHandler = null;
@@ -65,9 +65,9 @@ const mocks = vi.hoisted(() => {
       tileUpdatedHandler?.({ payload: tile });
     },
     emitStateChanged: (change: unknown) => {
-      stateChangedHandler?.({ payload: change });
+      for (const handler of stateChangedHandlers) handler({ payload: change });
     },
-    hasStateChangedListener: () => stateChangedHandler !== null,
+    hasStateChangedListener: () => stateChangedHandlers.size > 0,
     resetTileCreatedHandler: () => {
       tileCreatedHandler = null;
     },

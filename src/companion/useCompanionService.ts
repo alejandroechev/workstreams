@@ -84,6 +84,14 @@ export function _setCompanionServiceDepsForTests(deps: CompanionServiceDeps | nu
   depsOverride = deps;
 }
 
+/**
+ * Whether the phone companion is turned on in Settings, from the store the
+ * service uses. Scheduled runs record their prompts in phone threads only then (ADR 044).
+ */
+export async function isCompanionEnabled(): Promise<boolean> {
+  return (await loadCompanionSettings(depsOverride?.store ?? tauriSettingsStore)).enabled;
+}
+
 let currentStatus: CompanionStatus = { state: "off" };
 const statusListeners = new Set<(status: CompanionStatus) => void>();
 

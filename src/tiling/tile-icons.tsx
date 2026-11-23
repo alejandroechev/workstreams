@@ -21,6 +21,7 @@ import {
   ClipboardDocumentListIcon,
   ArrowPathRoundedSquareIcon,
   PencilSquareIcon,
+  ClockIcon,
 } from "@heroicons/react/24/outline";
 import type { ComponentType, SVGProps } from "react";
 import type { TileType } from "../domain/types";
@@ -40,7 +41,8 @@ export type TileIconKey =
   | "cog"
   | "plan"
   | "loop"
-  | "diagram";
+  | "diagram"
+  | "clock";
 
 type IconComponent = ComponentType<SVGProps<SVGSVGElement>>;
 
@@ -60,6 +62,7 @@ export const TILE_ICONS: Record<TileIconKey, IconComponent> = {
   plan: ClipboardDocumentListIcon,
   loop: ArrowPathRoundedSquareIcon,
   diagram: PencilSquareIcon,
+  clock: ClockIcon,
 };
 
 export const TILE_ICON_LABELS: Record<TileIconKey, string> = {
@@ -78,6 +81,7 @@ export const TILE_ICON_LABELS: Record<TileIconKey, string> = {
   plan: "Plan",
   loop: "Loop",
   diagram: "Diagram",
+  clock: "Clock",
 };
 
 export function defaultIconForType(tileType: TileType): TileIconKey {

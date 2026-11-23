@@ -2,7 +2,7 @@ import type { CompanionStoredSession } from "../../backend/types";
 import { SESSION_RETENTION_MS, readSessions, verifySessions } from "../protocol";
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { renderHook, waitFor, act, cleanup } from "@testing-library/react";
-import { useCompanionService, type CompanionBindings } from "../useCompanionService";
+import { isCompanionEnabled, useCompanionService, _setCompanionServiceDepsForTests, type CompanionBindings } from "../useCompanionService";
 import { createInMemoryHub } from "../doc";
 import { createMemorySettingsStore, saveCompanionSettings } from "../settings";
 import { emptyDocument, signRequest, type UnsignedRequest } from "../protocol";
@@ -52,6 +52,17 @@ async function phoneSends(phone: ReturnType<ReturnType<typeof createInMemoryHub>
   const signature = await signRequest(SECRET, unsigned);
   phone.change((d) => { d.requests[unsigned.id] = { ...unsigned, signature }; });
 }
+
+describe("isCompanionEnabled", () => {
+  it("reads the setting from the store the service uses", async () => {
+    const store = createMemorySettingsStore({});
+    _setCompanionServiceDepsForTests({ store });
+    expect(await isCompanionEnabled()).toBe(false);
+    await saveCompanionSettings(store, { enabled: true });
+    expect(await isCompanionEnabled()).toBe(true);
+    _setCompanionServiceDepsForTests(null);
+  });
+});
 
 describe("the companion service in the app", () => {
   it("does not connect while the companion is off", async () => {

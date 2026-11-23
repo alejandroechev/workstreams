@@ -37,6 +37,7 @@ import type { CopilotSessionStats } from "../domain/types";
 import { invoke } from "@tauri-apps/api/core";
 import { computeTileBorder } from "./tile-border";
 import { resolveTileIcon } from "./tile-icons";
+import { TileScheduleControls } from "../schedules/TileScheduleControls";
 
 interface TileProps {
   tile: Tile;
@@ -517,6 +518,7 @@ function TileWrapperImpl({
           </span>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 4 }} onDoubleClick={(e) => e.stopPropagation()}>
+          {isSessionTile && <TileScheduleControls tileId={tile.id} workstreamId={workstreamId} />}
           {isTermLike && (
             <>
               <button

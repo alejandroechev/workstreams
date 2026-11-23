@@ -215,10 +215,15 @@ describe("schedule runner", () => {
   it("never overlaps ticks, and survives a store failure", async () => {
     const { runner, deps } = await setup();
     const first = runner.tick(at(2026, 11, 23, 8, 30));
-    await runner.tick(at(2026, 11, 23, 8, 30));
+    expect(runner.tick(at(2026, 11, 23, 8, 30))).toBe(first);
     await first;
+    // Run now during a tick still runs, after it.
+    const busyTick = runner.tick(at(2026, 11, 23, 8, 31));
+    await runner.runNow((await deps.list())[0].id, at(2026, 11, 23, 8, 31));
+    await busyTick;
+    expect(deps.resume).toHaveBeenCalledTimes(1);
     const list = vi.spyOn(deps, "list").mockRejectedValueOnce(new Error("db locked"));
-    await expect(runner.tick(at(2026, 11, 23, 8, 31))).resolves.toBeUndefined();
+    await expect(runner.tick(at(2026, 11, 23, 8, 40))).resolves.toBeUndefined();
     expect(list).toHaveBeenCalled();
   });
 

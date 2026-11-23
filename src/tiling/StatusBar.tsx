@@ -22,6 +22,8 @@ interface Props {
   disabled?: boolean;
   workstreamName?: string;
   onAddSession?: () => void;
+  /** A Copilot session tile on a schedule (ADR 044): opens its prompt and frequency form. */
+  onAddPeriodicSession?: () => void;
   onAddTerminal?: () => void;
   onAddWslTerminal?: () => void;
   onAddExplorer?: () => void;
@@ -73,6 +75,7 @@ export default function StatusBar({
   disabled = false,
   workstreamName,
   onAddSession,
+  onAddPeriodicSession,
   onAddTerminal,
   onAddWslTerminal,
   onAddExplorer,
@@ -131,6 +134,7 @@ export default function StatusBar({
   };
   const rawItems: Array<{ key: string; label: string; icon: TileIconKey; shortcut?: string; onSelect?: () => void; gated?: boolean }> = [
     { key: "session", label: "Copilot Session", icon: "session", shortcut: shortcutForMenuKey("session"), onSelect: onAddSession },
+    { key: "periodic-session", label: "Periodic Copilot Session", icon: "clock", onSelect: onAddPeriodicSession },
     { key: "terminal", label: terminalTileLabel(), icon: "terminal", shortcut: shortcutForMenuKey("terminal"), onSelect: onAddTerminal },
     // WSL is Windows-only — hide the entry entirely on macOS/Linux.
     { key: "wsl", label: "WSL Terminal", icon: "terminal", shortcut: shortcutForMenuKey("wsl"), onSelect: onAddWslTerminal, gated: !supportsWsl() },

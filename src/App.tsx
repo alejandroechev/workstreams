@@ -75,9 +75,15 @@ import { decideUnarchive, type WorkLane } from "./domain/work-lanes";
 import type { Project, Workstream, Tile, TileType } from "./domain/types";
 import type { LoopSummary } from "./domain/loop";
 import { countUnreadInbox } from "./domain/pipeline-inbox";
-import { useCompanionService } from "./companion/useCompanionService";
+import { isCompanionEnabled, useCompanionService } from "./companion/useCompanionService";
 import { startPhoneSession } from "./companion/start-session";
-import { resumePhoneSession } from "./companion/resume-session";
+import { resumePhoneSession, resumeScheduledSession, type ResumeSessionDeps } from "./companion/resume-session";
+import { useSchedules, type ScheduleDraft } from "./schedules/useSchedules";
+import { ScheduleEditor } from "./schedules/ScheduleEditor";
+import { SchedulesModal } from "./schedules/SchedulesModal";
+import { TileSchedulesContext, type TileSchedules } from "./schedules/context";
+import { isTileBusy } from "./domain/tile-activity";
+import type { PeriodicSchedule } from "./domain/periodic-schedules";
 import { stopSession } from "./companion/stop-session";
 import { postTileNotice } from "./domain/tile-notices";
 import { revokeBeforeRelink } from "./companion/relink";
@@ -1941,6 +1947,7 @@ export default function App() {
       }
 
       setFocusedIndex(tileOrder.length);
+      return tile;
     },
     [
       activeWsId,
@@ -2262,47 +2269,116 @@ export default function App() {
    * Delivers a phone message to an existing session tile: stops it and
    * resumes the same Copilot session there with the message as its prompt.
    */
+  /** What resuming a session in its tile needs: phone messages and scheduled runs (ADR 044) share it. */
+  const resumeDeps = useCallback(
+    (): ResumeSessionDeps => ({
+      backend,
+      mount: mountWorkstream,
+      workstream: (id) => workstreamsRef.current.find((w) => w.id === id),
+      defaultCwd: defaultRootDir,
+      isSpawned: (tileId) => spawnedPtys.current.has(tileId),
+      markSpawned: (tileId) => { spawnedPtys.current.add(tileId); },
+      unmarkSpawned: (tileId) => { spawnedPtys.current.delete(tileId); },
+      markIntentionalRestart: (tileId) => { intentionalRestartIds.current.add(tileId); },
+      notice: postTileNotice,
+      stop: (tileId) =>
+        stopSession(
+          {
+            async watchExit(id) {
+              let resolve!: () => void;
+              const exited = new Promise<void>((r) => { resolve = r; });
+              const unlisten = await listen(`pty-exit-${id}`, () => resolve());
+              return { exited, dispose: unlisten };
+            },
+            write: (id, data) => backend.writeToTerminal(id, data),
+            close: (id) => backend.closeTerminal(id),
+            delay: (ms) => new Promise((r) => setTimeout(r, ms)),
+          },
+          tileId,
+        ),
+      spawn: async (tileId, cwd, command, sessionId, prompt) => {
+        await backend.spawnCopilotSession(tileId, cwd, sessionId, 30, 120, command, prompt);
+      },
+      onRecorded: () => setCompanionSessionsVersion((v) => v + 1),
+    }),
+    [backend, mountWorkstream],
+  );
   const messageSessionForCompanion = useCallback(
     (
       target: { workstreamId: string; tileId: string; linkRevision: string; prompt: string; command: string },
       guard: () => void,
       requestId: string,
-    ): Promise<void> =>
-      resumePhoneSession(
-        {
-          backend,
-          mount: mountWorkstream,
-          workstream: (id) => workstreamsRef.current.find((w) => w.id === id),
-          defaultCwd: defaultRootDir,
-          isSpawned: (tileId) => spawnedPtys.current.has(tileId),
-          markSpawned: (tileId) => { spawnedPtys.current.add(tileId); },
-          unmarkSpawned: (tileId) => { spawnedPtys.current.delete(tileId); },
-          markIntentionalRestart: (tileId) => { intentionalRestartIds.current.add(tileId); },
-          notice: postTileNotice,
-          stop: (tileId) =>
-            stopSession(
-              {
-                async watchExit(id) {
-                  let resolve!: () => void;
-                  const exited = new Promise<void>((r) => { resolve = r; });
-                  const unlisten = await listen(`pty-exit-${id}`, () => resolve());
-                  return { exited, dispose: unlisten };
-                },
-                write: (id, data) => backend.writeToTerminal(id, data),
-                close: (id) => backend.closeTerminal(id),
-                delay: (ms) => new Promise((r) => setTimeout(r, ms)),
-              },
-              tileId,
-            ),
-          spawn: async (tileId, cwd, command, sessionId, prompt) => {
-            await backend.spawnCopilotSession(tileId, cwd, sessionId, 30, 120, command, prompt);
-          },
-          onRecorded: () => setCompanionSessionsVersion((v) => v + 1),
-        },
-        { ...target, guard, requestId, now: Date.now() },
-      ),
-    [backend, mountWorkstream],
+    ): Promise<void> => resumePhoneSession(resumeDeps(), { ...target, guard, requestId, now: Date.now() }),
+    [resumeDeps],
   );
+
+  // ── Periodic Copilot sessions (ADR 044) ────────────────────────────────
+  // Closing a tile deletes its schedule, archiving pauses them: re-read when either changes.
+  const scheduleRefreshKey = useMemo(() => ({ workstreams, wsStates }), [workstreams, wsStates]);
+  const schedules = useSchedules({
+    backend,
+    ready: companionReady,
+    refreshKey: scheduleRefreshKey,
+    workstreamName: (id) => workstreamsRef.current.find((w) => w.id === id)?.name,
+    isBusy: isTileBusy,
+    resume: (schedule, prompt) =>
+      resumeScheduledSession(
+        { ...resumeDeps(), companionOn: isCompanionEnabled },
+        {
+          workstreamId: schedule.workstream_id, tileId: schedule.tile_id, prompt,
+          command: commandForWsId(schedule.workstream_id), scheduleId: schedule.id, now: Date.now(),
+        },
+      ),
+    interrupt: (tileId) => backend.writeToTerminal(tileId, "\u0003"),
+  });
+  const [showSchedules, setShowSchedules] = useState(false);
+  /** The schedule form: for a tile, an existing schedule, or a new periodic tile. */
+  const [scheduleEditor, setScheduleEditor] = useState<
+    | { kind: "tile"; tileId: string; workstreamId: string }
+    | { kind: "edit"; schedule: PeriodicSchedule }
+    | { kind: "new-tile"; workstreamId: string }
+    | null
+  >(null);
+  const schedulesByTile = useMemo(
+    () => new Map(schedules.schedules.map((s) => [s.tile_id, s])) as ReadonlyMap<string, PeriodicSchedule>,
+    [schedules.schedules],
+  );
+  const scheduledWorkstreamIds = useMemo(
+    () => new Set(schedules.schedules.map((s) => s.workstream_id)) as ReadonlySet<string>,
+    [schedules.schedules],
+  );
+  const tileSchedules = useMemo<TileSchedules>(
+    () => ({
+      byTile: schedulesByTile,
+      now: schedules.now,
+      openEditor: (tileId, workstreamId) => {
+        const existing = schedulesByTile.get(tileId);
+        setScheduleEditor(existing ? { kind: "edit", schedule: existing } : { kind: "tile", tileId, workstreamId });
+      },
+    }),
+    [schedulesByTile, schedules.now],
+  );
+  const saveSchedule = async (draft: ScheduleDraft) => {
+    const target = scheduleEditor;
+    if (!target) return;
+    if (target.kind === "edit") await schedules.edit(target.schedule.id, draft);
+    else if (target.kind === "tile") await schedules.create(target.tileId, target.workstreamId, draft);
+    else {
+      const tile = await addTile("copilot_session");
+      if (!tile) throw new Error("Select a workstream to add the tile to.");
+      await backend.updateTileConfig(tile.id, JSON.stringify({ ...JSON.parse(tile.config_json || "{}"), icon: "clock" }));
+      upsertTileLocally({ ...tile, config_json: JSON.stringify({ ...JSON.parse(tile.config_json || "{}"), icon: "clock" }) });
+      await schedules.create(tile.id, target.workstreamId, draft);
+    }
+    setScheduleEditor(null);
+  };
+  const scheduleTileTitle = (tileId: string) => {
+    for (const tiles of companionSessionTiles.values()) {
+      const tile = tiles.find((t) => t.id === tileId);
+      if (tile) return tile.title ?? undefined;
+    }
+    return undefined;
+  };
 
   useCompanionService({
     ready: companionReady,
@@ -2441,6 +2517,7 @@ export default function App() {
   const focusedTile = orderedTiles[focusedIndex];
 
   return (
+    <TileSchedulesContext.Provider value={tileSchedules}>
     <div
       style={{
         display: "flex",
@@ -2463,6 +2540,33 @@ export default function App() {
           onOpenAgentMessage={openAgentMessage}
           onClose={() => setShowInbox(false)} />
       )}
+      {showSchedules && (
+        <SchedulesModal
+          schedules={schedules.schedules}
+          now={schedules.now}
+          workstreamName={(id) => workstreams.find((w) => w.id === id)?.name ?? "Workstream"}
+          tileTitle={scheduleTileTitle}
+          runNow={schedules.runNow}
+          pause={schedules.pause}
+          resume={schedules.resume}
+          remove={schedules.remove}
+          edit={(schedule) => setScheduleEditor({ kind: "edit", schedule })}
+          onClose={() => setShowSchedules(false)}
+        />
+      )}
+      {scheduleEditor && (
+        <ScheduleEditor
+          title={scheduleEditor.kind === "new-tile" ? "Periodic Copilot session" : scheduleEditor.kind === "edit" ? "Edit schedule" : "Run periodically"}
+          initial={scheduleEditor.kind === "edit" ? {
+            prompt: scheduleEditor.schedule.prompt,
+            frequency: scheduleEditor.schedule.frequency,
+            notifyInbox: scheduleEditor.schedule.notify_inbox,
+            notifyPhone: scheduleEditor.schedule.notify_phone,
+          } : undefined}
+          onSave={saveSchedule}
+          onCancel={() => setScheduleEditor(null)}
+        />
+      )}
       {showPlanning && <PlanningView planning={planning} onClose={() => setShowPlanning(false)} />}
       {showSync && <SyncPanel monitor={syncMonitor} onClose={() => setShowSync(false)} />}
       {showPipelines && (
@@ -2477,6 +2581,8 @@ export default function App() {
         inboxUnread={countUnreadInbox(inbox.snapshot) + (syncMonitor.state?.events ?? []).filter((e) => !e.is_read).length}
         onOpenPipelines={() => setShowPipelines(true)}
         onOpenPlanning={() => setShowPlanning(true)}
+        onOpenSchedules={() => { setShowSchedules(true); void schedules.refresh().catch(() => {}); }}
+        scheduledWorkstreamIds={scheduledWorkstreamIds}
         onOpenSync={() => setShowSync(true)}
         syncLevel={statusLevel(!!syncMonitor.state?.configured, syncMonitor.state?.problems ?? [])}
         pipelinesError={(inbox.snapshot.pipelines ?? []).some((pipeline) => !!pipeline.error)}
@@ -2790,6 +2896,7 @@ export default function App() {
             workstreams.find((w) => w.id === activeWsId)?.name || ""
           }
           onAddSession={() => setShowSessionPicker(true)}
+          onAddPeriodicSession={() => { if (activeWsId) setScheduleEditor({ kind: "new-tile", workstreamId: activeWsId }); }}
           onAddTerminal={() => addTile("terminal")}
           onAddWslTerminal={() => addTile("terminal", { shell: "wsl" })}
           onAddExplorer={() => addTile("file_explorer")}
@@ -3082,5 +3189,6 @@ export default function App() {
           );
         })()}
     </div>
+    </TileSchedulesContext.Provider>
   );
 }

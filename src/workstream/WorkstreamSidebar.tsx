@@ -45,6 +45,7 @@ import {
   InboxIcon,
   RocketLaunchIcon,
   CalendarDaysIcon,
+  ClockIcon,
 } from "@heroicons/react/20/solid";
 import { getAppSettings } from "../domain/app-settings";
 import { selectableRepositories } from "../domain/repository-visibility";
@@ -88,6 +89,10 @@ interface Props {
   onOpenPlanning?: () => void;
   /** Opens the Sync server panel (ADR 040). */
   onOpenSync?: () => void;
+  /** Opens the Schedules overview of periodic Copilot sessions (ADR 044). */
+  onOpenSchedules?: () => void;
+  /** Workstreams with at least one schedule: their rows show a clock. */
+  scheduledWorkstreamIds?: ReadonlySet<string>;
   /** The sync server's monitored state, for the status dot. */
   syncLevel?: StatusLevel;
   /** A watched pipeline's last check failed. */
@@ -224,6 +229,8 @@ export default function WorkstreamSidebar({
   onOpenPipelines,
   onOpenPlanning,
   onOpenSync,
+  onOpenSchedules,
+  scheduledWorkstreamIds,
   syncLevel = "off",
   pipelinesError = false,
   inboxUnread = 0,
@@ -587,6 +594,13 @@ export default function WorkstreamSidebar({
                     <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                       {ws.name}
                     </span>
+                  )}
+                  {scheduledWorkstreamIds?.has(ws.id) && (
+                    <ClockIcon
+                      data-testid={`ws-schedules-${ws.id}`}
+                      aria-label="Has periodic sessions"
+                      style={{ width: 13, height: 13, color: "#89b4fa", flexShrink: 0 }}
+                    />
                   )}
                   {loopRunning && (
                     <ArrowPathRoundedSquareIcon
@@ -1269,6 +1283,19 @@ export default function WorkstreamSidebar({
             {(inboxError || inboxRepos?.some((repo) => repo.enabled && repo.error)) && (
               <ExclamationTriangleIcon aria-label="Inbox connection error" style={{ width: 14, height: 14, color: "#f9e2af" }} />
             )}
+          </button>
+        )}
+        {onOpenSchedules && (
+          <button
+            data-testid="schedules-button"
+            onClick={onOpenSchedules}
+            title="Periodic Copilot sessions: when each runs next and how it last went"
+            style={{ ...footerButtonStyle, color: "#6c7086" }}
+            onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "#1e1e2e"; }}
+            onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "transparent"; }}
+          >
+            <ClockIcon style={{ width: 14, height: 14 }} />
+            <span style={{ flex: 1, textAlign: "left" }}>Schedules</span>
           </button>
         )}
         {onOpenPlanning && (

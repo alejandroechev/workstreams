@@ -25,6 +25,8 @@ describe("tile-icons", () => {
 
   it("resolveTileIcon uses config override when valid", () => {
     expect(resolveTileIcon("copilot_session", "bug")).toBe(TILE_ICONS.bug);
+    // A periodic Copilot session tile (ADR 044) shows a clock.
+    expect(resolveTileIcon("copilot_session", "clock")).toBe(TILE_ICONS.clock);
   });
 
   it("resolveTileIcon falls back to default for invalid override", () => {

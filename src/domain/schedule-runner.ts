@@ -54,7 +54,7 @@ const clip = (text: string, max: number) => (text.length > max ? `${text.slice(0
 
 export function createScheduleRunner(deps: ScheduleRunnerDeps): ScheduleRunner {
   const inFlight = new Map<string, InFlight>();
-  let ticking = false;
+  let current: Promise<void> | null = null;
 
   async function finish(schedule: PeriodicSchedule, outcome: RunOutcome, now: number, extra: PeriodicSchedulePatch = {}): Promise<void> {
     const { patch, autoPaused } = applyRunResult(schedule, outcome, now);
@@ -135,9 +135,14 @@ export function createScheduleRunner(deps: ScheduleRunnerDeps): ScheduleRunner {
     }
   }
 
-  async function tick(now: number): Promise<void> {
-    if (ticking) return;
-    ticking = true;
+  function tick(now: number): Promise<void> {
+    // Joining the tick in progress rather than starting another: a due run starts once.
+    if (current) return current;
+    current = runTick(now).finally(() => { current = null; });
+    return current;
+  }
+
+  async function runTick(now: number): Promise<void> {
     let changed = false;
     try {
       const schedules = await deps.list();
@@ -150,8 +155,6 @@ export function createScheduleRunner(deps: ScheduleRunnerDeps): ScheduleRunner {
       changed = JSON.stringify(await deps.list()) !== before;
     } catch (error) {
       console.error("Failed to run schedules:", error);
-    } finally {
-      ticking = false;
     }
     if (changed) deps.onChange();
   }
@@ -162,6 +165,8 @@ export function createScheduleRunner(deps: ScheduleRunnerDeps): ScheduleRunner {
       const schedules = await deps.list();
       if (!schedules.some((s) => s.id === id)) throw new Error(`No schedule ${id}`);
       await deps.update(id, { run_requested: true });
+      // A tick already under way may have read the schedules before the request.
+      if (current) await current;
       await tick(now);
     },
   };
