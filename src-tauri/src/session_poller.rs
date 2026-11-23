@@ -342,6 +342,28 @@ fn status_priority(s: &str) -> u8 {
 
 // ── Events.jsonl parsing ───────────────────────────────────────────────
 
+/// Whether the latest turn marker in `lines` (oldest first) opened a turn that
+/// nothing has closed yet. With no marker in the window (a turn longer than
+/// the tail), tool or assistant activity means one is open.
+fn turn_is_open(lines: &[String]) -> bool {
+    let mut activity = false;
+    for line in lines.iter().rev() {
+        let Ok(event) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        match event.get("type").and_then(|v| v.as_str()).unwrap_or("") {
+            "assistant.turn_start" => return true,
+            "assistant.turn_end"
+            | "session.task_complete"
+            | "session.shutdown"
+            | "session.error" => return false,
+            t if t.starts_with("tool.") || t.starts_with("assistant.") => activity = true,
+            _ => {}
+        }
+    }
+    activity
+}
+
 struct EventsStatus {
     status: String,
     current_tool: Option<String>,
@@ -372,7 +394,7 @@ fn read_events_status(session_dir: &std::path::Path) -> EventsStatus {
     let mut status = "idle".to_string();
     let mut current_tool: Option<String> = None;
     let mut last_event_at: Option<String> = None;
-    let has_open_turn = false;
+    let has_open_turn = turn_is_open(&lines);
     let mut has_background = false;
 
     for line in lines.iter().rev() {
@@ -857,6 +879,54 @@ mod tests {
         assert_eq!(status.status, "tool_use");
         assert_eq!(status.current_tool, Some("powershell".to_string()));
         std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    fn events_status_of(label: &str, lines: &[&str]) -> EventsStatus {
+        let tmp = std::env::temp_dir().join(format!("ws_events_{label}_{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).ok();
+        let mut f = std::fs::File::create(tmp.join("events.jsonl")).unwrap();
+        for line in lines {
+            writeln!(f, "{line}").unwrap();
+        }
+        drop(f);
+        let status = read_events_status(&tmp);
+        std::fs::remove_dir_all(&tmp).ok();
+        status
+    }
+
+    #[test]
+    fn a_tool_completion_inside_an_open_turn_is_thinking_not_idle() {
+        let status = events_status_of(
+            "open_turn",
+            &[
+                r#"{"type":"assistant.turn_end","timestamp":"t0"}"#,
+                r#"{"type":"assistant.turn_start","timestamp":"t1"}"#,
+                r#"{"type":"tool.execution_start","timestamp":"t2","data":{"toolName":"bash"}}"#,
+                r#"{"type":"tool.execution_complete","timestamp":"t3"}"#,
+            ],
+        );
+        assert_eq!(status.status, "thinking");
+        let subagent = events_status_of(
+            "open_subagent",
+            &[
+                r#"{"type":"assistant.turn_start","timestamp":"t1"}"#,
+                r#"{"type":"subagent.completed","timestamp":"t2"}"#,
+            ],
+        );
+        assert_eq!(subagent.status, "thinking");
+    }
+
+    #[test]
+    fn a_tool_completion_after_the_turn_ended_is_idle() {
+        let status = events_status_of(
+            "closed_turn",
+            &[
+                r#"{"type":"assistant.turn_start","timestamp":"t1"}"#,
+                r#"{"type":"assistant.turn_end","timestamp":"t2"}"#,
+                r#"{"type":"tool.execution_complete","timestamp":"t3"}"#,
+            ],
+        );
+        assert_eq!(status.status, "idle");
     }
 
     #[test]
