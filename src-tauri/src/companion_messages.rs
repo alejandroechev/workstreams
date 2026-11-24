@@ -202,19 +202,75 @@ pub fn revoke_tile(
     process_keys: &[String],
 ) -> Result<(), String> {
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
-    tx.execute(
+    revoke_tile_in(&tx, tile_id, process_keys)?;
+    tx.commit().map_err(|e| e.to_string())
+}
+
+fn revoke_tile_in(conn: &Connection, tile_id: &str, process_keys: &[String]) -> Result<(), String> {
+    conn.execute(
         "UPDATE companion_sessions SET can_send = 0 WHERE tile_id = ?1",
         [tile_id],
     )
     .map_err(|e| e.to_string())?;
     for key in process_keys {
-        tx.execute(
+        conn.execute(
             "INSERT OR IGNORE INTO companion_barred_processes (tile_id, process_key) VALUES (?1, ?2)",
             params![tile_id, key],
         )
         .map_err(|e| e.to_string())?;
     }
+    Ok(())
+}
+
+/// Links a tile to another Copilot session in one transaction: its config
+/// (and title) change, its thread is revoked, and the processes running the
+/// old session are barred from the phone. A resume's claim checks the link
+/// under the same lock, so it can't slip in between.
+pub fn relink_tile(
+    conn: &Connection,
+    tile_id: &str,
+    config_json: &str,
+    title: Option<&str>,
+    process_keys: &[String],
+) -> Result<(), String> {
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    let changed = tx
+        .execute(
+            "UPDATE tiles SET config_json = ?2, title = COALESCE(?3, title),
+               updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?1",
+            params![tile_id, config_json, title],
+        )
+        .map_err(|e| e.to_string())?;
+    if changed == 0 {
+        return Err(format!("No tile {tile_id}"));
+    }
+    revoke_tile_in(&tx, tile_id, process_keys)?;
     tx.commit().map_err(|e| e.to_string())
+}
+
+/// Refuses to start `session_id` in a tile linked to another session: a
+/// resume that read the link before a re-link must not launch (and get a
+/// token for) the old session. An unlinked or unknown tile may start any.
+pub fn check_resume_target(
+    conn: &Connection,
+    tile_id: &str,
+    session_id: &str,
+) -> Result<(), String> {
+    let config: Option<String> = conn
+        .query_row(
+            "SELECT config_json FROM tiles WHERE id = ?1",
+            [tile_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+    match linked_session(config.as_deref()) {
+        Some(linked) if linked != session_id => Err(
+            "This tile now runs a different Copilot session, so the old one was not started."
+                .into(),
+        ),
+        _ => Ok(()),
+    }
 }
 
 /// Whether this process of the tile was barred by a re-link.
@@ -786,6 +842,54 @@ mod tests {
             Err(SendRefusal::RateLimited(PHONE_HOURLY_CAP))
         );
         assert!(send_from_agent(&conn, "t1", "w", "bad", "question", "x", now + HOUR_MS).is_err());
+    }
+
+    #[test]
+    fn relinking_updates_the_link_revokes_the_thread_and_bars_the_processes_together() {
+        let conn = db();
+        tile(&conn, "t1", "s-old");
+        record_session(&conn, "t1", "w", "r1", "Do x", 1).unwrap();
+        relink_tile(
+            &conn,
+            "t1",
+            r#"{"copilot_session_id":"s-new"}"#,
+            Some("New"),
+            &["p-old".into()],
+        )
+        .unwrap();
+        assert!(!list(&conn).unwrap()[0].can_send);
+        assert!(is_barred(&conn, "t1", "p-old").unwrap());
+        let (config, title): (String, String) = conn
+            .query_row(
+                "SELECT config_json, title FROM tiles WHERE id = 't1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            (config.as_str(), title.as_str()),
+            (r#"{"copilot_session_id":"s-new"}"#, "New")
+        );
+        // A claim for the old session now fails: it checks the link under the same lock.
+        assert!(claim_session(&conn, "t1", "w", "r2", "Hi", 2, "s-old").is_err());
+        assert!(relink_tile(&conn, "gone", "{}", None, &[])
+            .unwrap_err()
+            .contains("No tile"));
+    }
+
+    #[test]
+    fn a_resume_may_only_start_the_session_the_tile_is_linked_to() {
+        let conn = db();
+        tile(&conn, "t1", "s-new");
+        check_resume_target(&conn, "t1", "s-new").unwrap();
+        assert!(check_resume_target(&conn, "t1", "s-old")
+            .unwrap_err()
+            .contains("different Copilot session"));
+        // A tile not linked yet (a fresh session being linked) may start any.
+        conn.execute("UPDATE tiles SET config_json = '{}' WHERE id = 't1'", [])
+            .unwrap();
+        check_resume_target(&conn, "t1", "s-any").unwrap();
+        check_resume_target(&conn, "unknown", "s-any").unwrap();
     }
 
     #[test]

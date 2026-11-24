@@ -236,7 +236,7 @@ pub fn create(conn: &Connection, new: &NewSchedule) -> Result<Schedule, String> 
 pub fn list(conn: &Connection) -> Result<Vec<Schedule>, String> {
     let mut statement = conn
         .prepare(&format!(
-            "SELECT {COLUMNS} FROM periodic_schedules ORDER BY created_at, id"
+            "SELECT {COLUMNS} FROM periodic_schedules ORDER BY created_at, rowid"
         ))
         .map_err(|e| e.to_string())?;
     let rows = statement
@@ -342,6 +342,38 @@ pub fn update_if(
         return Err("The schedule changed since it was read.".into());
     }
     get(conn, id)?.ok_or_else(|| format!("No schedule {id}"))
+}
+
+/// The Inbox entry a schedule pausing itself posts (ADR 044).
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct Alert {
+    pub title: String,
+    pub body: String,
+}
+
+/// As `update_if`, storing `alert` as the schedule tile's Inbox entry in the
+/// same transaction: an auto-pause and its entry are kept together or not at all.
+pub fn update_with_alert(
+    conn: &Connection,
+    id: &str,
+    patch: &Value,
+    expected: Option<i64>,
+    alert: Option<&Alert>,
+) -> Result<Schedule, String> {
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    let updated = update_if(&tx, id, patch, expected)?;
+    if let Some(alert) = alert {
+        crate::inbox_messages::post_from_app(
+            &tx,
+            &updated.workstream_id,
+            &updated.tile_id,
+            "error",
+            &alert.title,
+            &alert.body,
+        )?;
+    }
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(updated)
 }
 
 /// Removes a schedule; the tile stays. False when there was none.
@@ -551,6 +583,50 @@ mod tests {
         )
         .unwrap();
         assert_eq!(stamped.run_requested_at, Some(1234));
+    }
+
+    #[test]
+    fn an_auto_pause_and_its_inbox_entry_are_stored_together_or_not_at_all() {
+        let conn = db();
+        let freq = json!({"kind":"daily","time":"09:00"});
+        let s = create(&conn, &new("t1", "w1", &freq)).unwrap();
+        let bad = Alert {
+            title: "x".repeat(200),
+            body: "b".into(),
+        };
+        assert!(update_with_alert(
+            &conn,
+            &s.id,
+            &json!({"paused":true,"failures":3}),
+            None,
+            Some(&bad)
+        )
+        .is_err());
+        assert!(!get(&conn, &s.id).unwrap().unwrap().paused);
+        assert!(crate::inbox_messages::list(&conn).unwrap().is_empty());
+        let alert = Alert {
+            title: "Schedule paused: Check".into(),
+            body: "3 failures".into(),
+        };
+        let paused = update_with_alert(
+            &conn,
+            &s.id,
+            &json!({"paused":true,"failures":3}),
+            None,
+            Some(&alert),
+        )
+        .unwrap();
+        assert!(paused.paused);
+        let messages = crate::inbox_messages::list(&conn).unwrap();
+        assert_eq!(
+            (
+                messages.len(),
+                messages[0].tile_id.as_str(),
+                messages[0].workstream_name.as_str(),
+                messages[0].level.as_str()
+            ),
+            (1, "t1", "Courses", "error")
+        );
     }
 
     #[test]

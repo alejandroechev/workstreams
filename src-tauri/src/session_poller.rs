@@ -349,19 +349,40 @@ fn status_priority(s: &str) -> u8 {
 pub struct TurnCursor {
     pub starts: u64,
     pub ends: u64,
+    /// The latest turn started and nothing has closed it: no end, abort,
+    /// shutdown, or the process restarting since (sub-agents keep it open).
+    pub open: bool,
 }
 
 pub fn turn_cursor(session_dir: &std::path::Path) -> TurnCursor {
     use std::io::BufRead;
-    let mut cursor = TurnCursor { starts: 0, ends: 0 };
+    let mut cursor = TurnCursor {
+        starts: 0,
+        ends: 0,
+        open: false,
+    };
     let Ok(file) = std::fs::File::open(session_dir.join("events.jsonl")) else {
         return cursor;
     };
     for line in std::io::BufReader::new(file).lines().map_while(Result::ok) {
         if line.contains("\"assistant.turn_start\"") {
             cursor.starts += 1;
+            cursor.open = true;
         } else if line.contains("\"assistant.turn_end\"") {
             cursor.ends += 1;
+            cursor.open = false;
+        } else if [
+            "\"session.shutdown\"",
+            "\"session.start\"",
+            "\"session.resume\"",
+            "\"session.error\"",
+            "\"session.task_complete\"",
+            "abort",
+        ]
+        .iter()
+        .any(|marker| line.contains(marker))
+        {
+            cursor.open = false;
         }
     }
     cursor
@@ -945,7 +966,14 @@ mod tests {
     fn counts_every_turn_start_and_end_in_the_whole_events_file() {
         let tmp = std::env::temp_dir().join(format!("ws_turns_{}", std::process::id()));
         std::fs::create_dir_all(&tmp).ok();
-        assert_eq!(turn_cursor(&tmp), TurnCursor { starts: 0, ends: 0 });
+        assert_eq!(
+            turn_cursor(&tmp),
+            TurnCursor {
+                starts: 0,
+                ends: 0,
+                open: false
+            }
+        );
         let mut f = std::fs::File::create(tmp.join("events.jsonl")).unwrap();
         for _ in 0..40 {
             writeln!(f, r#"{{"type":"assistant.turn_start"}}"#).unwrap();
@@ -959,10 +987,45 @@ mod tests {
             turn_cursor(&tmp),
             TurnCursor {
                 starts: 41,
-                ends: 40
+                ends: 40,
+                open: true
             }
         );
         std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn a_turn_is_open_until_its_end_or_the_process_ending_or_restarting() {
+        let open_after = |label: &str, lines: &[&str]| {
+            let tmp = std::env::temp_dir().join(format!("ws_open_{label}_{}", std::process::id()));
+            std::fs::create_dir_all(&tmp).ok();
+            let mut f = std::fs::File::create(tmp.join("events.jsonl")).unwrap();
+            for line in lines {
+                writeln!(f, "{line}").unwrap();
+            }
+            drop(f);
+            let open = turn_cursor(&tmp).open;
+            std::fs::remove_dir_all(&tmp).ok();
+            open
+        };
+        let start = r#"{"type":"assistant.turn_start"}"#;
+        // A sub-agent running inside the turn keeps it open.
+        assert!(open_after(
+            "sub",
+            &[start, r#"{"type":"subagent.started"}"#]
+        ));
+        assert!(!open_after(
+            "end",
+            &[start, r#"{"type":"assistant.turn_end"}"#]
+        ));
+        assert!(!open_after(
+            "shutdown",
+            &[start, r#"{"type":"session.shutdown"}"#]
+        ));
+        assert!(!open_after(
+            "resume",
+            &[start, r#"{"type":"session.resume"}"#]
+        ));
     }
 
     #[test]

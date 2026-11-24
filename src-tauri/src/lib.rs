@@ -475,9 +475,24 @@ fn schedule_update(
     id: String,
     patch: serde_json::Value,
     expected_revision: Option<i64>,
+    alert: Option<periodic_schedules::Alert>,
 ) -> Result<periodic_schedules::Schedule, String> {
     let db = state.db.lock().map_err(|e| e.to_string())?;
-    periodic_schedules::update_if(&db, &id, &patch, expected_revision)
+    periodic_schedules::update_with_alert(&db, &id, &patch, expected_revision, alert.as_ref())
+}
+
+/// Links a tile to another Copilot session (ADR 044): config, thread
+/// revocation and barring the old session's processes in one transaction.
+#[tauri::command]
+fn relink_tile_session(
+    state: State<'_, AppState>,
+    tile_id: String,
+    config_json: String,
+    title: Option<String>,
+) -> Result<(), String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    let running = state.agent_identities.process_keys(&tile_id);
+    companion_messages::relink_tile(&db, &tile_id, &config_json, title.as_deref(), &running)
 }
 
 #[tauri::command]
@@ -2251,7 +2266,15 @@ fn spawn_copilot_session(
         resume_session_id.as_deref(),
         initial_prompt.as_deref(),
     )?;
-    let env = build_workstream_env(&state, &tile_id);
+    // The link check and the token are under one lock: a resume that read the
+    // link before a re-link can't start (and get a token for) the old session.
+    let env = {
+        let db = state.db.lock().map_err(|e| e.to_string())?;
+        if let Some(session_id) = resume_session_id.as_deref() {
+            companion_messages::check_resume_target(&db, &tile_id, session_id)?;
+        }
+        workstream_env_from_db(&db, &tile_id, &state.agent_identities)
+    };
     let pid = state.pty.spawn(
         &app,
         &tile_id,
@@ -6969,6 +6992,7 @@ pub fn run() {
             companion_prune_sessions,
             schedule_list,
             session_turn_state,
+            relink_tile_session,
             schedule_create,
             schedule_update,
             schedule_delete,
