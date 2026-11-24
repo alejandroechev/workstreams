@@ -185,6 +185,22 @@ export function composeRunPrompt(schedule: Pick<PeriodicSchedule, "prompt" | "no
   return extra.length === 0 ? schedule.prompt : `${schedule.prompt}\n\n${extra.join("\n")}`;
 }
 
+/**
+ * The first prompt of a new periodic session tile. Copilot only assigns a
+ * session id once a prompt is sent, and scheduled runs resume by that id, so
+ * the tile starts on this instead of sitting empty.
+ */
+export function setupPrompt(draft: { prompt: string; frequency: ScheduleFrequency }): string {
+  const quoted = draft.prompt.split("\n").map((line) => `> ${line}`).join("\n");
+  return [
+    `This is a periodic session created by Workstreams. ${describeFrequency(draft.frequency)}, it will be resumed and sent this prompt:`,
+    "",
+    quoted,
+    "",
+    "Do not start on it now. Just reply that you are ready and wait for the first scheduled run.",
+  ].join("\n");
+}
+
 export function describeFrequency(frequency: ScheduleFrequency): string {
   switch (frequency.kind) {
     case "interval":

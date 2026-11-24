@@ -127,8 +127,15 @@ test("AT-2: adding a Periodic Copilot session tile stores its schedule; under 5 
   expect(stored).toHaveLength(1);
   expect(stored[0]).toMatchObject({ workstream_id: ws.id, frequency: { kind: "interval", minutes: 120 }, prompt: "Check CI health" });
   await expect(page.getByTestId(`tile-schedule-badge-${stored[0].tile_id}`)).toBeVisible();
-  // A fresh session tile, started without the prompt.
-  expect(await spawns(page)).toEqual([]);
+  // A fresh session tile, started on a setup prompt so it gets a session id
+  // to resume; the scheduled prompt itself is only quoted, not run.
+  const started = await spawns(page);
+  expect(started).toHaveLength(1);
+  expect(started[0].tileId).toBe(stored[0].tile_id);
+  expect(started[0].session).toBeNull();
+  expect(started[0].prompt).toContain("periodic session");
+  expect(started[0].prompt).toContain("> Check CI health");
+  expect(started[0].prompt).toMatch(/do not start on it now/i);
 });
 
 test("AT-3: a due run mounts the workstream in the background and resumes its session with exactly the prompt", async ({ page }) => {

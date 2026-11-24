@@ -724,7 +724,7 @@ earlier runs.
 | Do | What happens |
 |---|---|
 | Tile menu (⋮) → **Run periodically…** | Opens the form: the prompt (sent verbatim), a frequency, and **Notify in Inbox** / **Notify my phone** (both off). Saving plans the first run at its first scheduled time; nothing runs now. |
-| Add tile → **Periodic Copilot Session** | Adds a new session tile (clock icon) and its schedule in one step. |
+| Add tile → **Periodic Copilot Session** | Adds a new session tile (clock icon) and its schedule in one step. The session starts on a short setup prompt so it has a session id to resume; it is told to wait for the first scheduled run. |
 | Click the tile's badge, or ⋮ → **Edit schedule…** | Edits the prompt, frequency and toggles; the next run is re-planned. |
 | Sidebar → **Schedules** | Every schedule: workstream, tile, the prompt's first line, frequency, next run, last result; **Run now**, **Pause/Resume**, **Edit**, **Delete** (the tile stays). |
 | `workstreams agent call schedule.create prompt=@- frequency=daily:09:00` | The same from an agent (also `schedule.list/run/pause/resume/delete`). |

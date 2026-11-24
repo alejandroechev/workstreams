@@ -84,6 +84,7 @@ import { SchedulesModal } from "./schedules/SchedulesModal";
 import { TileSchedulesContext, type TileSchedules } from "./schedules/context";
 import { isTileBusy } from "./domain/tile-activity";
 import type { PeriodicSchedule } from "./domain/periodic-schedules";
+import { setupPrompt } from "./domain/periodic-schedules";
 import { stopSession } from "./companion/stop-session";
 import { postTileNotice } from "./domain/tile-notices";
 import { relinkTile } from "./companion/relink";
@@ -1841,7 +1842,7 @@ export default function App() {
   );
 
   const addTile = useCallback(
-    async (tileType: TileType, extraConfig?: Record<string, string>) => {
+    async (tileType: TileType, extraConfig?: Record<string, string>, opts?: { initialPrompt?: string }) => {
       if (!activeWsId) return;
       // Hidden features (sunset flags) cannot be created from any path:
       // menu, shortcut or programmatic.
@@ -1943,6 +1944,7 @@ export default function App() {
           30,
           120,
           commandForWs(ws),
+          opts?.initialPrompt ?? null,
         );
       }
 
@@ -2369,7 +2371,8 @@ export default function App() {
     if (target.kind === "edit") await schedules.edit(target.schedule.id, draft);
     else if (target.kind === "tile") await schedules.create(target.tileId, target.workstreamId, draft);
     else {
-      const tile = await addTile("copilot_session");
+      // Started on a setup prompt: a session that never got one has no id to resume.
+      const tile = await addTile("copilot_session", undefined, { initialPrompt: setupPrompt(draft) });
       if (!tile) throw new Error("Select a workstream to add the tile to.");
       await backend.updateTileConfig(tile.id, JSON.stringify({ ...JSON.parse(tile.config_json || "{}"), icon: "clock" }));
       upsertTileLocally({ ...tile, config_json: JSON.stringify({ ...JSON.parse(tile.config_json || "{}"), icon: "clock" }) });

@@ -13,6 +13,7 @@ import {
   nextRunAfter,
   PHONE_INSTRUCTION,
   promptFirstLine,
+  setupPrompt,
   validateFrequency,
   type PeriodicSchedule,
 } from "../periodic-schedules";
@@ -205,6 +206,24 @@ describe("applyRunResult", () => {
   it("does not re-announce a pause on a schedule already paused", () => {
     const { autoPaused } = applyRunResult(schedule({ failures: 5, paused: true }), { result: "timed out" }, now);
     expect(autoPaused).toBe(false);
+  });
+});
+
+describe("setupPrompt", () => {
+  const text = setupPrompt({ prompt: "Summarize new CI failures", frequency: { kind: "daily", time: "09:00" } });
+
+  it("tells the session it is periodic and when the prompt will arrive", () => {
+    expect(text).toContain("periodic session");
+    expect(text).toContain("Daily at 09:00");
+  });
+
+  it("quotes the scheduled prompt as context only", () => {
+    expect(text).toContain("> Summarize new CI failures");
+    expect(text).toMatch(/do not start on it now/i);
+  });
+
+  it("quotes every line of a multi-line prompt", () => {
+    expect(setupPrompt({ prompt: "a\nb", frequency: { kind: "interval", minutes: 60 } })).toContain("> a\n> b");
   });
 });
 

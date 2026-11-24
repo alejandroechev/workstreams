@@ -102,7 +102,10 @@ created and agent-resumed schedules get their first time without Rust knowing
 the calendar rules. No feature flag.
 
 **UI.** A Copilot session tile's header menu has **Run periodically…** (or
-**Edit schedule…**); the add-tile menu has **Periodic Copilot Session**. A
+**Edit schedule…**); the add-tile menu has **Periodic Copilot Session**, which
+starts the new session on a short setup prompt (quoting the scheduled prompt
+and asking it to wait), because Copilot assigns a session id only once a
+prompt is sent and scheduled runs resume by that id. A
 periodic tile shows a badge with the next run and last result. A **Schedules**
 button in the sidebar footer opens a modal listing every schedule
 (workstream, tile, the prompt's first line, frequency, next run, last result)
