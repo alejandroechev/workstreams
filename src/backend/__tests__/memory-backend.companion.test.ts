@@ -58,9 +58,11 @@ describe("MemoryBackend phone sessions", () => {
 
   it("reports a session's turn cursor, zero until set (round 2, findings 1-2)", async () => {
     const backend = new MemoryBackend();
-    expect(await backend.sessionTurnState("s")).toEqual({ starts: 0, ends: 0 });
+    expect(await backend.sessionTurnState("s")).toEqual({ starts: 0, ends: 0, open: false });
     backend.setSessionTurnsForTests("s", 3, 2);
-    expect(await backend.sessionTurnState("s")).toEqual({ starts: 3, ends: 2 });
+    expect(await backend.sessionTurnState("s")).toEqual({ starts: 3, ends: 2, open: true });
+    backend.setSessionTurnsForTests("s", 3, 2, false);
+    expect((await backend.sessionTurnState("s")).open).toBe(false);
   });
 
   it("refuses a terminal tile, as companion.send does", async () => {

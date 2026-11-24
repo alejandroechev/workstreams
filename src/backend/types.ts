@@ -277,13 +277,18 @@ export interface Backend {
   /** Drops sessions with no activity for `retentionMs`; returns how many. */
   companionPruneSessions(now: number, retentionMs: number): Promise<number>;
   // Periodic Copilot sessions (ADR 044)
-  /** How many turns the session's events file has started and ended. */
-  sessionTurnState(sessionId: string): Promise<{ starts: number; ends: number }>;
+  /** How many turns the session's events file has started and ended, and whether the latest is open. */
+  sessionTurnState(sessionId: string): Promise<{ starts: number; ends: number; open: boolean }>;
+  /** Links a tile to another session: config, thread revocation and barring the old processes, atomically. */
+  relinkTileSession(tileId: string, configJson: string, title?: string): Promise<void>;
   listSchedules(): Promise<PeriodicSchedule[]>;
   /** Refuses a second schedule on a tile, a non-session tile, and runs under 5 minutes apart. */
   createSchedule(input: NewPeriodicSchedule): Promise<PeriodicSchedule>;
-  /** With `expectedRevision`, refuses ("changed") unless the stored row is still that revision. */
-  updateSchedule(id: string, patch: PeriodicSchedulePatch, expectedRevision?: number): Promise<PeriodicSchedule>;
+  /**
+   * With `expectedRevision`, refuses ("changed") unless the stored row is still that revision.
+   * With `alert`, stores it as the schedule tile's Inbox entry in the same transaction (an auto-pause).
+   */
+  updateSchedule(id: string, patch: PeriodicSchedulePatch, expectedRevision?: number, alert?: { title: string; body: string }): Promise<PeriodicSchedule>;
   /** Removes the schedule; the tile stays. */
   deleteSchedule(id: string): Promise<void>;
   /** An Inbox entry the app raises itself about a tile (not rate limited). */

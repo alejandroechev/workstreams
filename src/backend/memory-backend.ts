@@ -248,9 +248,12 @@ export class MemoryBackend implements Backend {
     return structuredClone(schedule);
   }
 
-  async updateSchedule(id: string, patch: PeriodicSchedulePatch, expectedRevision?: number): Promise<PeriodicSchedule> {
+  async updateSchedule(id: string, patch: PeriodicSchedulePatch, expectedRevision?: number, alert?: { title: string; body: string }): Promise<PeriodicSchedule> {
     const schedule = this.schedules.get(id);
     if (!schedule) throw new Error(`No schedule ${id}`);
+    // As update_with_alert: the alert is checked first, so both are stored or neither.
+    const problem = alert ? checkAgentMessage("error", alert.title, alert.body) : null;
+    if (problem) throw new Error(problem);
     if (expectedRevision !== undefined && schedule.revision !== expectedRevision) throw new Error("The schedule changed since it was read.");
     if (patch.prompt !== undefined) this.checkSchedulePrompt(patch.prompt);
     if (patch.frequency !== undefined) {
@@ -258,6 +261,7 @@ export class MemoryBackend implements Backend {
       if (problem) throw new Error(problem);
     }
     Object.assign(schedule, structuredClone(patch), { revision: schedule.revision + 1 });
+    if (alert) await this.postAppInboxMessage(schedule.workstream_id, schedule.tile_id, "error", alert.title, alert.body);
     return structuredClone(schedule);
   }
 
@@ -1440,6 +1444,11 @@ export class MemoryBackend implements Backend {
   }
 
   async spawnCopilotSession(tileId: string, cwd: string, resumeSessionId?: string | null, rows?: number, cols?: number, command?: string | null, initialPrompt?: string | null): Promise<number | null> {
+    // As spawn_copilot_session: a resume may only start the session the tile is linked to.
+    const linked = linkedSessionId(this.tiles.get(tileId)?.config_json);
+    if (resumeSessionId && linked && linked !== resumeSessionId) {
+      throw new Error("This tile now runs a different Copilot session, so the old one was not started.");
+    }
     this.terminals.add(tileId);
     // A new process gets a new token, which may message the phone again.
     this.phoneBarred.delete(tileId);
@@ -2292,16 +2301,26 @@ export class MemoryBackend implements Backend {
     this.phoneBarred.add(tileId);
   }
 
-  private sessionTurns = new Map<string, { starts: number; ends: number }>();
+  private sessionTurns = new Map<string, { starts: number; ends: number; open: boolean }>();
 
-  /** As session_turn_state: turns the session's events file started and ended. */
-  async sessionTurnState(sessionId: string): Promise<{ starts: number; ends: number }> {
-    return { ...(this.sessionTurns.get(sessionId) ?? { starts: 0, ends: 0 }) };
+  /** As session_turn_state: turns the session's events file started and ended, and whether one is open. */
+  async sessionTurnState(sessionId: string): Promise<{ starts: number; ends: number; open: boolean }> {
+    return { ...(this.sessionTurns.get(sessionId) ?? { starts: 0, ends: 0, open: false }) };
   }
 
   /** E2E seam: what a session's events file holds (the CLI writing turns). */
-  setSessionTurnsForTests(sessionId: string, starts: number, ends: number): void {
-    this.sessionTurns.set(sessionId, { starts, ends });
+  setSessionTurnsForTests(sessionId: string, starts: number, ends: number, open = starts > ends): void {
+    this.sessionTurns.set(sessionId, { starts, ends, open });
+  }
+
+  /** As relink_tile_session: the link, the thread and the old process change together. */
+  async relinkTileSession(tileId: string, configJson: string, title?: string): Promise<void> {
+    const tile = this.tiles.get(tileId);
+    if (!tile) throw new Error(`No tile ${tileId}`);
+    tile.config_json = configJson;
+    if (title) tile.title = title;
+    if (this.companionSessions.has(tileId)) this.companionRevoked.add(tileId);
+    this.phoneBarred.add(tileId);
   }
 
   async companionDeleteSession(tileId: string): Promise<void> {

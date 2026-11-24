@@ -57,6 +57,16 @@ describe("periodic schedules in the in-memory backend (mirror of periodic_schedu
     expect((await backend.listSchedules())[0].run_requested_at).toEqual(expect.any(Number));
   });
 
+  it("stores an auto-pause and its Inbox entry together or neither (round 3, finding 4)", async () => {
+    const { backend, ws, tile } = await seed();
+    const { id } = await backend.createSchedule(input(tile.id, ws.id));
+    await expect(backend.updateSchedule(id, { paused: true }, undefined, { title: "x".repeat(200), body: "" })).rejects.toThrow("title");
+    expect((await backend.listSchedules())[0].paused).toBe(false);
+    await backend.updateSchedule(id, { paused: true }, undefined, { title: "Schedule paused: Check", body: "3 failures" });
+    expect((await backend.listSchedules())[0].paused).toBe(true);
+    expect((await backend.getPrInbox()).agent_messages!.map((m) => [m.title, m.tile_id])).toEqual([["Schedule paused: Check", tile.id]]);
+  });
+
   it("follows its tile and workstream: close deletes, archive pauses, delete keeps the tile", async () => {
     const { backend, ws, other, tile, second } = await seed();
     await backend.createSchedule(input(tile.id, ws.id));

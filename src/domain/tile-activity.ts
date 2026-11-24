@@ -8,7 +8,8 @@ import type { CopilotSessionStats } from "./types";
 
 type Activity = CopilotSessionStats["activity_status"];
 
-const MID_TURN: ReadonlySet<string> = new Set(["thinking", "tool_use", "responding"]);
+// A sub-agent running in the background is still inside its parent's turn.
+const MID_TURN: ReadonlySet<string> = new Set(["thinking", "tool_use", "responding", "background_task"]);
 const activity = new Map<string, Activity>();
 const generations = new Map<string, number>();
 
@@ -20,7 +21,7 @@ export function forgetTileActivity(tileId: string): void {
   activity.delete(tileId);
 }
 
-/** Mid-turn: thinking, using a tool or responding. Typing in the tile doesn't count. */
+/** Mid-turn: thinking, using a tool, responding or running a sub-agent. Typing doesn't count. */
 export function isTileBusy(tileId: string): boolean {
   const status = activity.get(tileId);
   return status !== undefined && MID_TURN.has(status);

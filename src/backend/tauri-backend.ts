@@ -582,8 +582,12 @@ export class TauriBackend implements Backend {
     return invoke<number>("companion_prune_sessions", { now, retentionMs });
   }
 
-  async sessionTurnState(sessionId: string): Promise<{ starts: number; ends: number }> {
-    return invoke<{ starts: number; ends: number }>("session_turn_state", { sessionId });
+  async sessionTurnState(sessionId: string): Promise<{ starts: number; ends: number; open: boolean }> {
+    return invoke<{ starts: number; ends: number; open: boolean }>("session_turn_state", { sessionId });
+  }
+
+  async relinkTileSession(tileId: string, configJson: string, title?: string): Promise<void> {
+    await invoke("relink_tile_session", { tileId, configJson, title: title ?? null });
   }
 
   async listSchedules(): Promise<PeriodicSchedule[]> {
@@ -594,8 +598,8 @@ export class TauriBackend implements Backend {
     return invoke<PeriodicSchedule>("schedule_create", { ...input });
   }
 
-  async updateSchedule(id: string, patch: PeriodicSchedulePatch, expectedRevision?: number): Promise<PeriodicSchedule> {
-    return invoke<PeriodicSchedule>("schedule_update", { id, patch, expectedRevision: expectedRevision ?? null });
+  async updateSchedule(id: string, patch: PeriodicSchedulePatch, expectedRevision?: number, alert?: { title: string; body: string }): Promise<PeriodicSchedule> {
+    return invoke<PeriodicSchedule>("schedule_update", { id, patch, expectedRevision: expectedRevision ?? null, alert: alert ?? null });
   }
 
   async deleteSchedule(id: string): Promise<void> {

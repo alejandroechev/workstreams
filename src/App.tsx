@@ -83,11 +83,10 @@ import { ScheduleEditor } from "./schedules/ScheduleEditor";
 import { SchedulesModal } from "./schedules/SchedulesModal";
 import { TileSchedulesContext, type TileSchedules } from "./schedules/context";
 import { isTileBusy } from "./domain/tile-activity";
-import { linkedSessionId } from "./domain/linked-sessions";
 import type { PeriodicSchedule } from "./domain/periodic-schedules";
 import { stopSession } from "./companion/stop-session";
 import { postTileNotice } from "./domain/tile-notices";
-import { revokeBeforeRelink } from "./companion/relink";
+import { relinkTile } from "./companion/relink";
 import { homeDir } from "@tauri-apps/api/path";
 import { createStandaloneFolder } from "./companion/folders";
 import { loadCompanionSettings, saveCompanionSettings, tauriSettingsStore } from "./companion/settings";
@@ -2326,11 +2325,7 @@ export default function App() {
       return status === "archived" || status === "archiving";
     },
     isBusy: isTileBusy,
-    turnState: async (schedule) => {
-      const tile = (await backend.listTiles(schedule.workstream_id)).find((t) => t.id === schedule.tile_id);
-      const sessionId = tile ? linkedSessionId(tile.config_json) : null;
-      return sessionId ? backend.sessionTurnState(sessionId) : null;
-    },
+    turnState: (sessionId) => backend.sessionTurnState(sessionId),
     resume: (schedule, prompt, revalidate) =>
       resumeScheduledSession(
         { ...resumeDeps(), companionOn: isCompanionEnabled },
@@ -2985,7 +2980,6 @@ export default function App() {
                 // A tile the phone started now runs a session the phone did
                 // not start: it must lose the right to message the phone
                 // before anything else changes, or not change at all.
-                if (!(await revokeBeforeRelink(backend, linkingTileId, (message) => window.alert(message)))) return;
                 const cfg = JSON.parse(tile.config_json || "{}");
                 cfg.copilot_session_id = session.session_id;
                 cfg.resume_by_id = session.session_id;
@@ -2994,11 +2988,8 @@ export default function App() {
                   session.summary || session.session_id.slice(0, 8);
                 const newConfig = JSON.stringify(cfg);
                 const newTitle = session.summary || tile.title;
-                backend.updateTileConfig(
-                  linkingTileId,
-                  newConfig,
-                  newTitle || undefined,
-                );
+                // The link, the phone thread and the old session's process change together.
+                if (!(await relinkTile(backend, linkingTileId, newConfig, newTitle || undefined, (message) => window.alert(message)))) return;
                 setTiles((prev) =>
                   prev.map((t) =>
                     t.id === linkingTileId

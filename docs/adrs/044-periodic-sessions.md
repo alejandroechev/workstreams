@@ -49,17 +49,22 @@ from Workstreams, and can't wake a session whose workstream isn't loaded.
   skipped silently and the next one planned. Every timer callback counts as a
   heartbeat, even one that joins a slow tick. A run that waited for its tile
   (a phone message holding it) is skipped if, by then, the tile was relaunched
-  or its agent is busy. A Run now request expires after 5 minutes
+  or its agent is busy — read live, under the tile's lock, from the session's
+  events (a turn started and not closed, a sub-agent running inside it
+  included), not from the poller's last snapshot. A Run now request expires after 5 minutes
   or when it predates this app start. A new schedule first runs at its first
   scheduled time, never on creation. There is no sleep prevention.
 - **The prompt is sent verbatim.** Two per-schedule toggles, **Notify in
   Inbox** and **Notify my phone** (both off by default), append one fixed
   instruction each, naming `ws-message` and `companion-reply`.
-- **Runaway protection.** Before launching, the runner reads the session's
-  turn cursor — how many turns its `events.jsonl` has started and ended
-  (`session_turn_state`) — so the first turn to start after it is the run's
-  own, and the first end closes it: the run is *ok*, and its timeout is
-  disarmed, whatever turns follow. If that turn is still open after **60
+- **Runaway protection.** Right before the spawn, the runner reads the
+  resumed session's turn cursor — how many turns its `events.jsonl` has
+  started and ended (`session_turn_state`; resuming appends to the same file)
+  — and follows that session, not the tile's current link. The first turn to
+  start after the cursor is the run's own, and the first end closes it: the
+  run is *ok*, and its timeout is disarmed, whatever turns follow — provided
+  the tile still runs the process the run launched; if it was restarted first
+  (a phone message), the run is *interrupted*. If that turn is still open after **60
   minutes** it gets one Ctrl+C (interrupted, the session left idle) and counts
   as a failure ("timed out") — but only if the tile still runs the process the
   schedule launched: every spawn and close bumps a per-tile generation, and a
@@ -71,7 +76,8 @@ from Workstreams, and can't wake a session whose workstream isn't loaded.
   when the app starts is recorded *interrupted*, which is not a failure.
   After **3 consecutive failures** the schedule pauses itself and posts one
   Inbox entry (an app-raised `agent_messages` row, not rate limited) naming
-  the schedule and the reason. Resuming clears the count.
+  the schedule and the reason, written in the same transaction as the pause
+  (`schedule_update` with an alert), so an exit in between loses neither. Resuming clears the count.
 - **Lifecycle.** Closing or deleting the tile deletes its schedule (`ON DELETE
   CASCADE`). Archiving the workstream pauses its schedules; unarchiving leaves
   them paused. Schedules, pause state, last result and failure count live in
@@ -119,7 +125,11 @@ Run now and Resume are refused for an archived workstream (UI, runner and
 
 - `companion.send` works from any Copilot session tile of the caller's
   workstream while the companion is on (terminal tiles, which carry a token
-  too, get `NOT_A_SESSION`). Each token names its process; re-linking a tile
+  too, get `NOT_A_SESSION`). Re-linking is one native transaction
+  (`relink_tile_session`): the tile's new link, its thread's revocation and
+  barring its running processes; a claim and the spawn of a resume (which
+  issues its token) both check the tile's current link under the same lock.
+  Each token names its process; re-linking a tile
   bars its running processes, which still run the old session, in the
   database (`companion_barred_processes`) under the same lock every agent
   send runs under (`SESSION_RELINKED`); a process spawned since may send. A

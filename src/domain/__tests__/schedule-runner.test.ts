@@ -19,8 +19,10 @@ async function setup(opts: { frequency?: ScheduleFrequency; prompt?: string; cre
   const busy = new Set<string>();
   const archived = new Set<string>();
   const generations = new Map<string, number>();
-  /** The session's turn cursor (events file), per tile. */
-  const cursor = new Map<string, { starts: number; ends: number }>();
+  /** Each session's turn cursor (its events file), by session id. */
+  const cursor = new Map<string, { starts: number; ends: number; open: boolean }>();
+  /** The session the tile is linked to when a run resumes it. */
+  let linked = "S";
   const spawns: Array<{ tileId: string; prompt: string }> = [];
   const interrupts: string[] = [];
   let failResume: string | null = null;
@@ -28,22 +30,23 @@ async function setup(opts: { frequency?: ScheduleFrequency; prompt?: string; cre
   let beforeLock: (() => Promise<void>) | null = null;
   const deps: ScheduleRunnerDeps = {
     list: () => backend.listSchedules(),
-    update: (id, patch, expected) => backend.updateSchedule(id, patch, expected),
-    postInbox: vi.fn((wsId, tileId, title, body) => backend.postAppInboxMessage(wsId, tileId, "error", title, body)),
+    update: vi.fn((id, patch, expected, alert) => backend.updateSchedule(id, patch, expected, alert)),
     workstreamName: (id) => (id === ws.id ? "Courses" : undefined),
     isArchived: (id) => archived.has(id),
     isBusy: (tileId) => busy.has(tileId),
-    turnState: async (s) => ({ ...(cursor.get(s.tile_id) ?? { starts: 0, ends: 0 }) }),
+    turnState: async (sessionId) => ({ ...(cursor.get(sessionId) ?? { starts: 0, ends: 0, open: false }) }),
     generation: (tileId) => generations.get(tileId) ?? 0,
     // Like resumeScheduledSession: wait for the tile, revalidate before the stop and before the spawn.
     resume: vi.fn(async (s, prompt, revalidate) => {
       await beforeLock?.();
       if (failResume) throw new Error(failResume);
-      await revalidate("before-stop");
+      const sessionId = linked;
+      await revalidate("before-stop", sessionId);
       await duringResume?.();
-      await revalidate("before-spawn");
+      await revalidate("before-spawn", sessionId);
       generations.set(s.tile_id, (generations.get(s.tile_id) ?? 0) + 1);
       spawns.push({ tileId: s.tile_id, prompt });
+      return { sessionId };
     }),
     interrupt: vi.fn(async (tileId) => { interrupts.push(tileId); }),
     onChange: vi.fn(),
@@ -56,15 +59,17 @@ async function setup(opts: { frequency?: ScheduleFrequency; prompt?: string; cre
     failWith: (e: string | null) => { failResume = e; },
     whileResuming: (fn: (() => Promise<void>) | null) => { duringResume = fn; },
     beforeTheLock: (fn: (() => Promise<void>) | null) => { beforeLock = fn; },
+    relinkTo: (sessionId: string) => { linked = sessionId; },
   };
 }
 
-/** A turn runs and ends in the tile's session: its events file and the poller's activity. */
-function turn(env: { busy: Set<string>; tile: { id: string }; cursor: Map<string, { starts: number; ends: number }> }) {
-  const at = () => env.cursor.get(env.tile.id) ?? { starts: 0, ends: 0 };
+type Cursor = { starts: number; ends: number; open: boolean };
+/** A turn runs and ends in session S (the tile's): its events file and the poller's activity. */
+function turn(env: { busy: Set<string>; tile: { id: string }; cursor: Map<string, Cursor> }, session = "S") {
+  const at = () => env.cursor.get(session) ?? { starts: 0, ends: 0, open: false };
   return {
-    start: () => { env.busy.add(env.tile.id); env.cursor.set(env.tile.id, { ...at(), starts: at().starts + 1 }); },
-    end: () => { env.busy.delete(env.tile.id); env.cursor.set(env.tile.id, { ...at(), ends: at().ends + 1 }); },
+    start: () => { env.busy.add(env.tile.id); env.cursor.set(session, { starts: at().starts + 1, ends: at().ends, open: true }); },
+    end: () => { env.busy.delete(env.tile.id); env.cursor.set(session, { starts: at().starts, ends: at().ends + 1, open: false }); },
   };
 }
 
@@ -98,9 +103,9 @@ describe("schedule runner", () => {
     const env = await setup();
     await env.runner.tick(at(2026, 11, 23, 8, 30));
     // The session already had 5 turns; nothing about it was polled before (background mount).
-    env.cursor.set(env.tile.id, { starts: 5, ends: 5 });
+    env.cursor.set("S", { starts: 5, ends: 5, open: false });
     await env.runner.tick(NINE);
-    env.cursor.set(env.tile.id, { starts: 6, ends: 6 });
+    env.cursor.set("S", { starts: 6, ends: 6, open: false });
     await env.runner.tick(NINE + 10_000);
     expect(await env.read()).toMatchObject({ last_result: "ok", failures: 0 });
   });
@@ -279,22 +284,74 @@ describe("schedule runner", () => {
     expect(await env.read()).toMatchObject({ last_result: "interrupted", failures: 0 });
   });
 
-  it("(finding 11) bounds the auto-pause alert whatever the prompt, and retries it if posting fails", async () => {
+  it("(finding 11) bounds the auto-pause alert whatever the prompt", async () => {
     const long = "x".repeat(19_999);
     const env = await setup({ prompt: long, frequency: { kind: "interval", minutes: 60 }, created: 0 });
     await env.backend.updateSchedule(env.schedule.id, { failures: 2, next_run_at: 60 * MIN });
     env.failWith("y".repeat(30_000));
-    vi.mocked(env.deps.postInbox).mockRejectedValueOnce(new Error("db locked"));
     await env.runner.tick(60 * MIN - 1);
     await env.runner.tick(60 * MIN);
     expect((await env.read()).paused).toBe(true);
-    expect((await env.backend.getPrInbox()).agent_messages).toHaveLength(0);
-    await env.runner.tick(61 * MIN);
     const [message] = (await env.backend.getPrInbox()).agent_messages!;
     expect(message.title.length).toBeLessThanOrEqual(120);
     expect(message.body.length).toBeLessThan(2_000);
-    await env.runner.tick(62 * MIN);
+  });
+
+  it("(round 3, finding 4) stores the auto-pause and its Inbox entry together, retrying both if that fails", async () => {
+    const env = await setup({ frequency: { kind: "interval", minutes: 60 }, created: 0 });
+    await env.backend.updateSchedule(env.schedule.id, { failures: 2, next_run_at: 60 * MIN });
+    env.failWith("tile gone");
+    const update = env.deps.update;
+    let failed = false;
+    env.deps.update = async (id, patch, expected, alert) => {
+      if (alert && !failed) { failed = true; throw new Error("app quit"); }
+      return update(id, patch, expected, alert);
+    };
+    await env.runner.tick(60 * MIN - 1);
+    await env.runner.tick(60 * MIN);
+    expect((await env.read()).paused).toBe(false);
+    expect((await env.backend.getPrInbox()).agent_messages).toHaveLength(0);
+    await env.runner.tick(60 * MIN + 15_000);
+    expect(await env.read()).toMatchObject({ paused: true, failures: 3, last_result: "could not start" });
     expect((await env.backend.getPrInbox()).agent_messages).toHaveLength(1);
+  });
+
+  it("(round 3, finding 1) skips the slot when the session's turn is open, whatever the poller last said", async () => {
+    const env = await setup();
+    await env.runner.tick(at(2026, 11, 23, 8, 30));
+    // A sub-agent is running inside a turn the poller reported as idle a moment ago.
+    env.cursor.set("S", { starts: 3, ends: 2, open: true });
+    await env.runner.tick(NINE);
+    expect(env.spawns).toEqual([]);
+    expect(await env.read()).toMatchObject({ last_result: "skipped", failures: 0 });
+  });
+
+  it("(round 3, finding 2) a phone turn that replaced the scheduled process is not the run's success", async () => {
+    const env = await setup();
+    await env.runner.tick(at(2026, 11, 23, 8, 30));
+    await env.runner.tick(NINE);
+    // Before the scheduled turn ended, a phone message restarted the tile and its turn ended.
+    env.generations.set(env.tile.id, 99);
+    turn(env).start();
+    turn(env).end();
+    await env.runner.tick(NINE + MIN);
+    expect(await env.read()).toMatchObject({ last_result: "interrupted", failures: 0 });
+  });
+
+  it("(round 3, finding 2) follows the session it launched, not the tile's current link", async () => {
+    const env = await setup();
+    await env.runner.tick(at(2026, 11, 23, 8, 30));
+    await env.runner.tick(NINE);
+    // A turn ending in another session the tile is linked to later doesn't count...
+    turn(env, "OTHER").start();
+    turn(env, "OTHER").end();
+    await env.runner.tick(NINE + MIN);
+    expect((await env.read()).last_result).toBe("running");
+    // ...the launched session's own turn does.
+    turn(env).start();
+    turn(env).end();
+    await env.runner.tick(NINE + 2 * MIN);
+    expect((await env.read()).last_result).toBe("ok");
   });
 
   it("(round 2, finding 6) a slow tick keeps the heartbeat, so a slot that fell during it still runs", async () => {

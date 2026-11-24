@@ -14,9 +14,9 @@ async function setup(over: Partial<UseSchedulesOptions> = {}) {
   const ws = await backend.createWorkstream("Courses", "/c");
   const tile = await backend.createTile(ws.id, "copilot_session", "Videos", JSON.stringify({ copilot_session_id: "S" }));
   let now = at(16, 42);
-  const resume = vi.fn(async () => {});
+  const resume = vi.fn(async () => ({ sessionId: "S" }));
   const options: UseSchedulesOptions = {
-    backend, ready: true, workstreamName: () => "Courses", isArchived: () => false, isBusy: () => false, turnState: async () => ({ starts: 0, ends: 0 }), resume, interrupt: vi.fn(async () => {}),
+    backend, ready: true, workstreamName: () => "Courses", isArchived: () => false, isBusy: () => false, turnState: async () => ({ starts: 0, ends: 0, open: false }), resume, interrupt: vi.fn(async () => {}),
     clock: () => now, tickMs: 60_000, ...over,
   };
   const hook = renderHook(() => useSchedules(options));

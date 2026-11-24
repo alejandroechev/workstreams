@@ -21,12 +21,16 @@ export interface UseSchedulesOptions {
   /** Archived workstreams' schedules never run, and can't be run now or resumed. */
   isArchived(workstreamId: string): boolean;
   isBusy(tileId: string): boolean;
-  /** The schedule's session's turn cursor (its events file), or null. */
-  turnState(schedule: PeriodicSchedule): Promise<TurnCursor | null>;
+  /** A session's turn cursor (its events file), read live, or null. */
+  turnState(sessionId: string): Promise<TurnCursor | null>;
   /** Defaults to the app-wide tile registry (`tile-activity.ts`). */
   generation?(tileId: string): number;
   /** Resumes the tile's session; `revalidate` must run before the stop and before the spawn. */
-  resume(schedule: PeriodicSchedule, prompt: string, revalidate: (phase: ResumePhase) => Promise<void>): Promise<void>;
+  resume(
+    schedule: PeriodicSchedule,
+    prompt: string,
+    revalidate: (phase: ResumePhase, sessionId: string) => Promise<void>,
+  ): Promise<{ sessionId: string }>;
   interrupt(tileId: string): Promise<void>;
   /** Changes when tiles or workstreams may have changed (closed, archived): re-read. */
   refreshKey?: unknown;
@@ -61,12 +65,11 @@ type OptionsRef = { readonly current: UseSchedulesOptions };
 function runnerFor(ref: OptionsRef, onChange: () => void, startedAt: number): ScheduleRunner {
   return createScheduleRunner({
     list: () => ref.current.backend.listSchedules(),
-    update: (id, patch, expected) => ref.current.backend.updateSchedule(id, patch, expected),
-    postInbox: (wsId, tileId, title, body) => ref.current.backend.postAppInboxMessage(wsId, tileId, "error", title, body),
+    update: (id, patch, expected, alert) => ref.current.backend.updateSchedule(id, patch, expected, alert),
     workstreamName: (id) => ref.current.workstreamName(id),
     isArchived: (id) => ref.current.isArchived(id),
     isBusy: (tileId) => ref.current.isBusy(tileId),
-    turnState: (schedule) => ref.current.turnState(schedule),
+    turnState: (sessionId) => ref.current.turnState(sessionId),
     generation: (tileId) => (ref.current.generation ?? tileGeneration)(tileId),
     resume: (schedule, prompt, revalidate) => ref.current.resume(schedule, prompt, revalidate),
     interrupt: (tileId) => ref.current.interrupt(tileId),

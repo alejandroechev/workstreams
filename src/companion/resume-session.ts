@@ -57,7 +57,7 @@ interface ResumeTileRequest {
   /** The line written in the terminal before the session restarts. */
   noticeText: string;
   /** Re-checks what asked for the resume (a schedule) right before the stop and the spawn; throws to cancel. */
-  revalidate?: (phase: ResumePhase) => Promise<void>;
+  revalidate?: (phase: ResumePhase, sessionId: string) => Promise<void>;
   /** Why an unlinked tile can't be resumed. */
   unlinkedError: string;
 }
@@ -91,11 +91,12 @@ async function withTileLock<T>(tileId: string, work: () => Promise<T>): Promise<
   }
 }
 
-function resumeTileSession(deps: ResumeSessionDeps, request: ResumeTileRequest, hooks: ResumeHooks): Promise<void> {
+/** Resolves to the session it resumed. */
+function resumeTileSession(deps: ResumeSessionDeps, request: ResumeTileRequest, hooks: ResumeHooks): Promise<string> {
   return withTileLock(request.tileId, () => resumeTileSessionNow(deps, request, hooks));
 }
 
-async function resumeTileSessionNow(deps: ResumeSessionDeps, request: ResumeTileRequest, hooks: ResumeHooks): Promise<void> {
+async function resumeTileSessionNow(deps: ResumeSessionDeps, request: ResumeTileRequest, hooks: ResumeHooks): Promise<string> {
   const { backend } = deps;
   const { guard } = request;
   const tiles = await backend.listTiles(request.workstreamId);
@@ -136,7 +137,7 @@ async function resumeTileSessionNow(deps: ResumeSessionDeps, request: ResumeTile
       recorded = true;
       await hooks.record(tile, sessionId);
     }
-    await request.revalidate?.("before-stop");
+    await request.revalidate?.("before-stop", sessionId);
     await stillLinked();
     guard();
     deps.notice(tile.id, request.noticeText);
@@ -148,7 +149,7 @@ async function resumeTileSessionNow(deps: ResumeSessionDeps, request: ResumeTile
     await clearLocks();
     // Recording and stopping take time: the tile may have been re-linked, or the
     // request expired, meanwhile. Checked last, with nothing awaited before launching.
-    await request.revalidate?.("before-spawn");
+    await request.revalidate?.("before-spawn", sessionId);
     await stillLinked();
     guard();
     const ws = deps.workstream(request.workstreamId);
@@ -156,6 +157,7 @@ async function resumeTileSessionNow(deps: ResumeSessionDeps, request: ResumeTile
     deps.markSpawned(tile.id);
     touched = true;
     await deps.spawn(tile.id, cwd, request.command, sessionId, request.prompt);
+    return sessionId;
   } catch (error) {
     // A record made for a session the tile no longer runs must not let that tile message the phone.
     if (recorded && hooks.undoRecord && (await currentSession().catch(() => null)) !== sessionId) {
@@ -235,7 +237,7 @@ export interface ScheduledResumeRequest {
   scheduleId: string;
   now: number;
   /** Throws when the schedule was paused, edited, deleted or archived since the run was claimed. */
-  revalidate?: (phase: ResumePhase) => Promise<void>;
+  revalidate?: (phase: ResumePhase, sessionId: string) => Promise<void>;
 }
 
 /**
@@ -248,11 +250,11 @@ export interface ScheduledResumeRequest {
 export async function resumeScheduledSession(
   deps: ResumeSessionDeps & { companionOn(): Promise<boolean> },
   request: ScheduledResumeRequest,
-): Promise<void> {
+): Promise<{ sessionId: string }> {
   const { backend } = deps;
   let claimed = false;
   const claimId = `schedule-${request.scheduleId}-${request.now}`;
-  await resumeTileSession(
+  const sessionId = await resumeTileSession(
     deps,
     {
       workstreamId: request.workstreamId,
@@ -284,4 +286,5 @@ export async function resumeScheduledSession(
       },
     },
   );
+  return { sessionId };
 }

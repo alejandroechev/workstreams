@@ -381,3 +381,15 @@ describe("recovery never relaunches an archived workstream's tile (round 2, find
     expect(spawned.has(tile.id)).toBe(false);
   });
 });
+
+describe("a scheduled resume names the session it launches (round 3, finding 2)", () => {
+  it("passes the session to both checks and resolves to it", async () => {
+    const { ws, tile, deps } = await setup();
+    const revalidate = vi.fn(async () => {});
+    const launched = await resumeScheduledSession({ ...deps, companionOn: async () => false }, {
+      workstreamId: ws.id, tileId: tile.id, prompt: "P", command: "c", scheduleId: "s", now: 1, revalidate,
+    });
+    expect(launched).toEqual({ sessionId: "session-s" });
+    expect(revalidate.mock.calls).toEqual([["before-stop", "session-s"], ["before-spawn", "session-s"]]);
+  });
+});
