@@ -395,6 +395,9 @@ Multi-tab repo browser (Files / Diff / Log / Hooks / Search):
   close the composer and stale list responses cannot erase the new thread.
   File rows read `name - directory`, so the file is identifiable without
   scrolling; the full directory stays reachable by scrolling the list sideways.
+  Drag the divider between the file list and the diff to resize them (arrow
+  keys nudge it when focused, double-click resets it). The width is remembered
+  app-wide, and the diff always keeps at least 200 px.
   **Code comments** is a focused review of the comments a diff introduces:
   it narrows the file list to files whose added or changed lines contain a
   code comment (whole-line, trailing, or inside a block comment; markers in

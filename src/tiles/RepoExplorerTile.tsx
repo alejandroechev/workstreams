@@ -78,6 +78,7 @@ import {
 } from "../domain/open-tabs";
 import { OpenTabsBar, TabSwitcher } from "./OpenTabsBar";
 import { useTileViewStatePersist } from "../domain/useTileViewStatePersist";
+import { useDiffPanelWidth } from "./useDiffPanelWidth";
 
 interface Props {
   tileId: string;
@@ -273,6 +274,7 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
   // the default, so a remembered "Name" can never hide a new order.
   const [diffOrder, setDiffOrder] = useState<DiffOrderView | null>(null);
   const [diffSort, setDiffSort] = useState<DiffSort>("name");
+  const diffPanel = useDiffPanelWidth();
   // Generation of the latest file-list + order read. Separate from
   // diffRequestEpochRef (which file selection also bumps) so picking a file
   // never cancels an order refresh, while an older read can never overwrite a
@@ -2065,8 +2067,8 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
             {diffError}
           </div>
         )}
-        <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
-          <div style={diffFilePanelStyle} data-testid="diff-file-list">
+        <div ref={diffPanel.containerRef} style={{ display: "flex", flex: 1, overflow: "hidden" }}>
+          <div style={{ ...diffFilePanelStyle, width: diffPanel.width }} data-testid="diff-file-list">
             {diffLoading && diffFiles.length === 0 && (
               <div style={{ padding: "6px 8px", color: "#585b70", fontSize: 11 }}>Loading...</div>
             )}
@@ -2144,6 +2146,7 @@ export default function RepoExplorerTile({ tileId, isFocused, rootDir, initialPa
               );
             })}
           </div>
+          <div {...diffPanel.dividerProps} style={diffPanelDividerStyle} />
           <div
             className={diffCommentsEnabled ? INTERACTIVE_ZONES_CLASS : undefined}
             style={{ flex: 1, position: "relative", minWidth: 0 }}
@@ -3310,10 +3313,19 @@ interface HiddenAreasEditor {
   getModel: () => { getLineCount: () => number } | null;
 }
 
+const diffPanelDividerStyle: React.CSSProperties = {
+  width: 5,
+  flexShrink: 0,
+  cursor: "col-resize",
+  touchAction: "none",
+  background: "#313244",
+  borderLeft: "2px solid #181825",
+  borderRight: "2px solid #1e1e2e",
+  boxSizing: "border-box",
+};
+
 const diffFilePanelStyle: React.CSSProperties = {
-  width: 180,
   minWidth: 120,
-  borderRight: "1px solid #313244",
   background: "#181825",
   overflowY: "auto",
   overflowX: "auto",

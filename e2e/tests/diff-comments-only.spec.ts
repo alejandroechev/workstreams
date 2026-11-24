@@ -45,6 +45,35 @@ test("file rows lead with the name and keep the full directory reachable by scro
   expect(end!.x + end!.width).toBeLessThanOrEqual(scrolled!.x + scrolled!.width + 1);
 });
 
+test("dragging the divider resizes the file list and the diff editor, and the width is remembered", async ({ page }) => {
+  await page.goto("/?harness=diff-comments-only", { waitUntil: "networkidle" });
+  await page.evaluate(() => localStorage.removeItem("workstreams.repoExplorer.diffFileListWidth"));
+  await openCase(page);
+  const panel = page.getByTestId("diff-file-list");
+  const divider = page.getByTestId("diff-panel-divider");
+  const editor = page.locator(".monaco-diff-editor").first();
+  const before = (await panel.boundingBox())!;
+  const editorBefore = (await editor.boundingBox())!;
+  expect(Math.round(before.width)).toBe(180);
+
+  const handle = (await divider.boundingBox())!;
+  await page.mouse.move(handle.x + handle.width / 2, handle.y + handle.height / 2);
+  await page.mouse.down();
+  // Over the Monaco editor, which must not steal the drag.
+  await page.mouse.move(handle.x + 150, handle.y + handle.height / 2, { steps: 5 });
+  await page.mouse.up();
+
+  const after = (await panel.boundingBox())!;
+  expect(after.width).toBeGreaterThan(before.width + 120);
+  await expect.poll(async () => (await editor.boundingBox())!.width).toBeLessThan(editorBefore.width - 120);
+
+  await openCase(page);
+  expect(Math.round((await page.getByTestId("diff-file-list").boundingBox())!.width)).toBe(Math.round(after.width));
+
+  await page.getByTestId("diff-panel-divider").dblclick();
+  expect(Math.round((await page.getByTestId("diff-file-list").boundingBox())!.width)).toBe(180);
+});
+
 test("code comments narrows the files and collapses the diff to them, then restores it", async ({ page }) => {
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(e.message));
