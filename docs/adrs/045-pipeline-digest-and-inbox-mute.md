@@ -204,6 +204,16 @@ savepoint and only if the stored mute is still the one that expired; a manual
 unmute lifts as of now. Entries recorded before
 muting are untouched, and the phone companion is not affected.
 
+**PR events first seen after a mute** (the app closed, or polls failing,
+through it; review round 1, f8). Each mute's interval is kept in
+`inbox_mute_intervals`. A comment whose ADO publish time falls inside one is
+dropped whenever it is first seen (its watermark still advances). Votes, gate
+states, closures and review assignments carry no time of their own, so when a
+repo's previous successful poll predates the end of a mute, its first
+successful poll after it records them silently as the new baseline; later
+changes notify as usual. So nothing from a mute replays, at the cost of
+transitions in the minutes between unmuting and that poll.
+
 The Inbox header has a **Mute all** toggle (until turned off, or until a date
 and time); while muted the Inbox shows a *Muted* banner (with the end) and the
 sidebar badge shows a muted bell instead of a count. Agents use
@@ -222,9 +232,9 @@ mute gate) with a test clock, and keeps the digest time and the mute in
   seen at the next digest. Failures or Both remain for pipelines that must page.
 - ADO cost grows by at most one request per failed run of a Daily-failures
   pipeline, 20 per pipeline per day.
-- A PR event that happens while muted but is first polled after unmuting (up to
-  one 2-minute poll) can still appear; pipeline runs and digests can't, because
-  unmuting moves their quiet periods.
+- Untimed PR transitions (votes, gates, closures, assignments) in the minutes
+  between unmuting and a repo's next successful poll are re-baselined silently
+  rather than notified.
 - The rolling cap counts asked-for starts, so one that failed to start still
   counts until it is 24 hours old.
 - Follow-ups go only to batch investigations, not to a single run's.

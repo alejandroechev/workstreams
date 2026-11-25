@@ -585,6 +585,12 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
             INSERT OR IGNORE INTO pipeline_digest_consumed (watch_id, run_id, finished_at)
             VALUES (NEW.watch_id, NEW.run_id, NEW.finished_at);
         END;
+        -- When Mute all was on (ADR 045): a PR event with a time inside one
+        -- is dropped even if first seen after unmuting.
+        CREATE TABLE IF NOT EXISTS inbox_mute_intervals (
+            start TEXT NOT NULL,
+            end TEXT NOT NULL
+        );
         -- Auto-investigations the app claimed to start (ADR 045): the rolling
         -- 24-hour cap counts these, whatever happened to their watch or digest.
         CREATE TABLE IF NOT EXISTS pipeline_auto_starts (

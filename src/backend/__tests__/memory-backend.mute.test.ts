@@ -83,4 +83,15 @@ describe("MemoryBackend Mute all", () => {
     b.runDigestPass();
     expect((await b.getPrInbox()).pipeline_digests!.map((d) => d.runs.map((r) => r.run_id))).toEqual([[6]]);
   });
+
+  it("drops a PR event timed inside a past mute even when first seen after it (f8)", async () => {
+    const { b, repo, setNow } = await setup();
+    setNow(new Date(2100, 2, 1, 10, 0));
+    await b.setInboxMute(true);
+    setNow(new Date(2100, 2, 2, 10, 0));
+    await b.setInboxMute(false);
+    b.recordPrInboxEvent(comment("during", { project_id: repo.id, summary: "Dev commented: during", discovered_at: new Date(2100, 2, 1, 12).toISOString() }));
+    b.recordPrInboxEvent(comment("after", { project_id: repo.id, summary: "Dev commented: after", discovered_at: new Date(2100, 2, 2, 11).toISOString() }));
+    expect((await b.getPrInbox()).items.map((i) => i.id).sort()).toEqual(["after", "before"]);
+  });
 });

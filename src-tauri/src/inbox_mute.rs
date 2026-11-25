@@ -11,6 +11,32 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
 const KEY: &str = "inbox_mute";
+const SINCE_KEY: &str = "inbox_mute_since";
+
+/// Whether `time` (an ADO timestamp) fell while the Inbox was muted: inside
+/// an ended mute's interval, or since the current mute began.
+pub fn was_muted_at(db: &Connection, time: &str) -> Result<bool, String> {
+    db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM inbox_mute_intervals
+            WHERE julianday(?1) BETWEEN julianday(start) AND julianday(end))
+        OR EXISTS(SELECT 1 FROM settings WHERE key=?2 AND julianday(?1) >= julianday(value))",
+        params![time, SINCE_KEY],
+        |r| r.get(0),
+    )
+    .map_err(|e| e.to_string())
+}
+
+/// Whether a mute ended after `time` (a repo's last successful poll): then
+/// what changed meanwhile without a time of its own can't be told apart
+/// from what happened while muted.
+pub fn unmuted_since(db: &Connection, time: &str) -> Result<bool, String> {
+    db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM inbox_mute_intervals WHERE julianday(end) > julianday(?1))",
+        [time],
+        |r| r.get(0),
+    )
+    .map_err(|e| e.to_string())
+}
 
 /// Whether the Inbox is muted, and until when (`None`: until turned off).
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
@@ -98,7 +124,15 @@ pub fn mute_at(
         None => None,
     };
     let state = MuteState { muted: true, until };
+    let already = stored(db)?.muted;
     save(db, &state)?;
+    if !already {
+        db.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES (?1, ?2)",
+            params![SINCE_KEY, crate::pipeline_digest::stamp(now)],
+        )
+        .map_err(|e| e.to_string())?;
+    }
     // Auto work not yet delivered is dropped, never replayed on unmute:
     // requested starts, follow-ups, and auto-started sessions not yet begun.
     db.execute_batch(
@@ -144,6 +178,15 @@ fn lift_inside(db: &Connection, was: &MuteState, at: DateTime<Utc>) -> Result<()
     save(db, &MuteState::default())?;
     if was.muted {
         let at = crate::pipeline_digest::stamp(at);
+        // The interval it was muted, for PR events first seen after it.
+        db.execute(
+            "INSERT INTO inbox_mute_intervals (start, end)
+            SELECT COALESCE((SELECT value FROM settings WHERE key=?1), ?2), ?2",
+            params![SINCE_KEY, at],
+        )
+        .map_err(|e| e.to_string())?;
+        db.execute("DELETE FROM settings WHERE key=?1", [SINCE_KEY])
+            .map_err(|e| e.to_string())?;
         db.execute(
             "UPDATE pipeline_watches SET notify_after=?1 WHERE julianday(notify_after) < julianday(?1)",
             [&at],

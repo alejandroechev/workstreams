@@ -1,4 +1,4 @@
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug)]
@@ -517,6 +517,23 @@ pub fn apply_snapshot(
     if !still_current(&tx, target)? {
         return Ok(());
     }
+    // Mute all (ADR 045): when the last successful poll predates the end of a
+    // mute, transitions with no time of their own (assignments, closures,
+    // votes, gates) can't be told from what happened while muted, so this
+    // poll records them silently as the new baseline.
+    let last_checked: Option<String> = tx
+        .query_row(
+            "SELECT last_checked FROM pr_inbox_config WHERE project_id=?1",
+            [&target.project_id],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?
+        .flatten();
+    let rebaseline = match last_checked.as_deref() {
+        Some(at) => crate::inbox_mute::unmuted_since(&tx, at)?,
+        None => false,
+    };
     for pr in prs {
         let url = repo.web_url(pr.id);
         let baseline: bool = tx
@@ -568,7 +585,7 @@ pub fn apply_snapshot(
             .map_err(|e| e.to_string())?;
             // Only a review assignment is an arrival worth announcing. The user
             // opening their own PR is not news to them.
-            if baseline && pr.role == PrRole::Reviewer {
+            if baseline && pr.role == PrRole::Reviewer && !rebaseline {
                 record_event(
                     &tx,
                     target,
@@ -608,6 +625,7 @@ pub fn apply_snapshot(
 
         if !previous.status.eq_ignore_ascii_case(&pr.status)
             && !pr.status.eq_ignore_ascii_case("active")
+            && !rebaseline
         {
             let summary = if pr.status.eq_ignore_ascii_case("completed") {
                 "Pull request completed"
@@ -656,9 +674,11 @@ pub fn apply_snapshot(
 
         if previous.deep_synced {
             for comment in &detail.comments {
+                // A comment posted while muted is dropped, whenever it is seen.
                 if comment.published_at > previous.comment_watermark
                     && !comment.is_system
                     && !comment.author_id.eq_ignore_ascii_case(&identity)
+                    && !crate::inbox_mute::was_muted_at(&tx, &comment.published_at)?
                 {
                     // Closed straight after posting ("no feedback" from an AI
                     // reviewer): kept, but already read, so nothing rings.
@@ -711,7 +731,10 @@ pub fn apply_snapshot(
             }
             for vote in &detail.votes {
                 let key = vote.reviewer_id.to_lowercase();
-                if previous.votes.get(&key).copied().unwrap_or(0) == vote.vote || vote.vote == 0 {
+                if previous.votes.get(&key).copied().unwrap_or(0) == vote.vote
+                    || vote.vote == 0
+                    || rebaseline
+                {
                     continue;
                 }
                 record_event(
@@ -732,7 +755,10 @@ pub fn apply_snapshot(
                     policy.status.to_ascii_lowercase().as_str(),
                     "approved" | "rejected" | "broken"
                 );
-                if !settled || previous.policies.get(&policy.id) == Some(&policy.status) {
+                if !settled
+                    || previous.policies.get(&policy.id) == Some(&policy.status)
+                    || rebaseline
+                {
                     continue;
                 }
                 record_event(
@@ -778,7 +804,7 @@ pub fn apply_snapshot(
     }
     tx.execute(
         "UPDATE pr_inbox_config SET current_identity=?2,current_source=?3,
-        last_checked=strftime('%Y-%m-%dT%H:%M:%SZ','now'),error=NULL WHERE project_id=?1",
+        last_checked=strftime('%Y-%m-%dT%H:%M:%fZ','now'),error=NULL WHERE project_id=?1",
         params![target.project_id, identity, source],
     )
     .map_err(|e| e.to_string())?;
@@ -2723,6 +2749,85 @@ mod tests {
             snapshot(&db).unwrap().items.len(),
             before + 1,
             "new events record again"
+        );
+    }
+
+    /// f8: with the app closed (or polls failing) through a mute, the first
+    /// poll after it drops comments posted during the mute and silently
+    /// re-baselines transitions that carry no time (votes, gates, closures,
+    /// assignments); later ones notify as usual.
+    #[test]
+    fn inbox_events_from_a_mute_the_app_never_polled_through_never_appear() {
+        let at = |t: &str| crate::pipeline_digest::parse_time(t).unwrap();
+        let mut db = db();
+        configure(&db, "p", WatchMode::Reviewer).unwrap();
+        let target = targets(&db).unwrap().remove(0);
+        apply_snapshot(&mut db, &target, "me", &[]).unwrap();
+        apply_snapshot(
+            &mut db,
+            &target,
+            "me",
+            &[with_detail(pr(3), PrDetail::default())],
+        )
+        .unwrap();
+        let before = snapshot(&db).unwrap().items.len();
+        // The last successful poll was before the mute; then the app closed.
+        db.execute(
+            "UPDATE pr_inbox_config SET last_checked='2026-03-01T09:00:00Z'",
+            [],
+        )
+        .unwrap();
+        crate::inbox_mute::mute_at(&db, None, at("2026-03-01T10:00:00Z")).unwrap();
+        crate::inbox_mute::unmute_at(&db, at("2026-03-05T10:00:00Z")).unwrap();
+        let vote = |v: i64| PrVote {
+            reviewer_id: "dev".into(),
+            reviewer: "Dev".into(),
+            vote: v,
+        };
+        let away = PrDetail {
+            comments: vec![
+                comment(1, 1, "dev", "2026-03-02T00:00:00Z"),
+                comment(1, 2, "dev", "2026-03-05T11:00:00Z"),
+            ],
+            votes: vec![vote(10)],
+            ..Default::default()
+        };
+        apply_snapshot(&mut db, &target, "me", &[with_detail(pr(3), away), pr(4)]).unwrap();
+        let summaries: Vec<String> = snapshot(&db)
+            .unwrap()
+            .items
+            .into_iter()
+            .map(|i| i.summary)
+            .collect();
+        assert_eq!(summaries.len(), before + 1, "{summaries:?}");
+        assert!(
+            summaries[0].contains("Comment 2"),
+            "only the comment after the mute: {summaries:?}"
+        );
+        // Later transitions notify again.
+        let later = PrDetail {
+            comments: vec![comment(1, 2, "dev", "2026-03-05T11:00:00Z")],
+            votes: vec![vote(-10)],
+            ..Default::default()
+        };
+        apply_snapshot(
+            &mut db,
+            &target,
+            "me",
+            &[with_detail(pr(3), later), pr(4), pr(5)],
+        )
+        .unwrap();
+        let kinds: Vec<String> = snapshot(&db)
+            .unwrap()
+            .items
+            .into_iter()
+            .map(|i| i.kind)
+            .collect();
+        assert!(kinds.contains(&"vote".to_string()), "{kinds:?}");
+        assert_eq!(
+            kinds.iter().filter(|k| *k == "assigned").count(),
+            2,
+            "{kinds:?}"
         );
     }
 

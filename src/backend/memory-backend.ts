@@ -923,6 +923,7 @@ export class MemoryBackend implements Backend {
     if (until && !(new Date(until).getTime() > this.digestClock().getTime())) {
       throw new Error(Number.isNaN(new Date(until).getTime()) ? "until must be a date and time" : "until must be in the future");
     }
+    if (!this.inboxMute.muted) this.mutedSince = this.digestClock().getTime();
     this.inboxMute = { muted: true, until: until ? new Date(until).toISOString() : null };
     this.persistInboxSettings();
     // As inbox_mute::mute_at: undelivered auto work is dropped, never replayed.
@@ -934,6 +935,8 @@ export class MemoryBackend implements Backend {
     return { ...this.inboxMute };
   }
   private prEventsSeen = new Set<string>();
+  private mutedSince: number | null = null;
+  private muteIntervals: Array<{ start: number; end: number }> = [];
   /**
    * What a PR poll does with one observed event (E2E seam): recorded once per
    * (PR, kind, summary), and dropped (still marked seen) while the Inbox is muted.
@@ -943,6 +946,9 @@ export class MemoryBackend implements Backend {
     if (this.prEventsSeen.has(key)) return;
     this.prEventsSeen.add(key);
     if (this.isInboxMuted()) return;
+    // As was_muted_at: an event timed inside a past mute is dropped whenever it is seen.
+    const at = Date.parse(item.discovered_at);
+    if (this.muteIntervals.some((m) => at >= m.start && at <= m.end)) return;
     this.prInbox.items.unshift(structuredClone(item));
   }
   private unmuteInboxNow(effective: Date = this.digestClock()): void {
@@ -950,6 +956,8 @@ export class MemoryBackend implements Backend {
     this.inboxMute = { muted: false, until: null };
     this.persistInboxSettings();
     if (!was) return;
+    this.muteIntervals.push({ start: this.mutedSince ?? effective.getTime(), end: effective.getTime() });
+    this.mutedSince = null;
     const at = effective.toISOString();
     for (const watch of this.pipelineWatches) {
       if (compareTimes(watch.notifyAfter, at) < 0) watch.notifyAfter = at;
