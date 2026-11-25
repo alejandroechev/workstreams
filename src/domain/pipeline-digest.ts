@@ -86,6 +86,21 @@ export function isDigestTime(text: string): boolean {
 }
 
 /**
+ * The instant a local wall-clock time names, as pipeline_digest::resolve: the
+ * earlier one when the clock is set back, and for a time skipped by a
+ * spring-forward the first valid minute after the gap (JS alone would move it
+ * forward by the gap's length).
+ */
+export function localInstant(year: number, month: number, day: number, hour: number, minute: number): Date {
+  for (let k = 0; k <= 180; k++) {
+    const wall = new Date(Date.UTC(year, month, day, hour, minute + k));
+    const at = new Date(wall.getUTCFullYear(), wall.getUTCMonth(), wall.getUTCDate(), wall.getUTCHours(), wall.getUTCMinutes());
+    if (at.getHours() === wall.getUTCHours() && at.getMinutes() === wall.getUTCMinutes() && at.getDate() === wall.getUTCDate()) return at;
+  }
+  return new Date(year, month, day, hour, minute);
+}
+
+/**
  * The latest scheduled digest at or before `now`: today's digest time, or
  * yesterday's when today's hasn't come. Local wall-clock time, so a DST change
  * moves it with the clock (a skipped time resolves to the first instant after).
@@ -94,7 +109,7 @@ export function lastSlot(now: Date, time: string): Date {
   const match = TIME.exec(time.trim());
   const [h, m] = match ? [Number(match[1]), Number(match[2])] : [9, 0];
   for (let back = 0; back < 3; back++) {
-    const at = new Date(now.getFullYear(), now.getMonth(), now.getDate() - back, h, m);
+    const at = localInstant(now.getFullYear(), now.getMonth(), now.getDate() - back, h, m);
     if (at.getTime() <= now.getTime()) return at;
   }
   return new Date(now.getTime() - 24 * 60 * 60 * 1000);

@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { afterEach, describe, it, expect } from "vitest";
 import { digestCounts, digestStateLabel, isDigestTime, lastSlot, localDay, stepLabel } from "../pipeline-digest";
 
 describe("pipeline digest", () => {
@@ -25,5 +25,25 @@ describe("pipeline digest", () => {
       stepLabel({ step: null, step_state: "pending" }),
       stepLabel({ step: null, step_state: "fetched" }),
     ]).toEqual(["Run tests", "step not fetched", "step not known yet", "no failing step reported"]);
+  });
+
+  describe("across DST changes, as the native side resolves them (f9)", () => {
+    const original = process.env.TZ;
+    afterEach(() => { process.env.TZ = original; });
+    const utc = (text: string) => new Date(text);
+
+    it("a time skipped by spring-forward is the first valid minute after the gap", () => {
+      process.env.TZ = "America/New_York"; // 2026-03-08 02:00 EST -> 03:00 EDT
+      expect(lastSlot(utc("2026-03-08T06:59:00Z"), "02:30").toISOString()).toBe("2026-03-07T07:30:00.000Z");
+      expect(lastSlot(utc("2026-03-08T07:00:00Z"), "02:30").toISOString()).toBe("2026-03-08T07:00:00.000Z");
+      expect(lastSlot(utc("2026-03-08T13:00:00Z"), "09:00").toISOString()).toBe("2026-03-08T13:00:00.000Z");
+    });
+
+    it("a time repeated by fall-back is its earlier instant, once", () => {
+      process.env.TZ = "America/New_York"; // 2026-11-01 02:00 EDT -> 01:00 EST
+      expect(lastSlot(utc("2026-11-01T05:29:00Z"), "01:30").toISOString()).toBe("2026-10-31T05:30:00.000Z");
+      expect(lastSlot(utc("2026-11-01T05:30:00Z"), "01:30").toISOString()).toBe("2026-11-01T05:30:00.000Z");
+      expect(lastSlot(utc("2026-11-01T06:45:00Z"), "01:30").toISOString()).toBe("2026-11-01T05:30:00.000Z");
+    });
   });
 });
