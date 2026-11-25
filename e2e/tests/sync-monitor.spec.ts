@@ -17,6 +17,9 @@ async function start(page: Page, server: { monitorKey?: string; vitals?: SyncVit
     Object.assign(window, { __WS_INVOKE_HANDLERS__: { get_setting: () => null, set_setting: () => null } });
   });
   await page.goto("/");
+  // Seed only once the app is up: its mount-time checks must find no server,
+  // or they add points the assertions below don't expect.
+  await expect(page.getByTestId("sync-status-button")).toBeVisible();
   await page.evaluate(async (s) => {
     const b = (window as unknown as W).__WS_BACKEND__;
     b.seedSyncServer({ url: "https://sync.example", monitorKey: s.monitorKey ?? null, vitals: s.vitals ?? null });
