@@ -57,3 +57,10 @@ and have it hold for every repo from then on.
   events come back, which is safe.
 - A legacy event whose summary cannot be parsed keeps an empty subject and
   simply offers no Stop tracking button.
+
+## Amendment (2026-11-25): Mute all
+
+These per-kind rules stay as they are. **Mute all** silences every Inbox
+source at once, for a while or until a time, and is a separate control
+(`inbox.mute_all_on` / `inbox.mute_all_off`; `inbox.unmute_all` still clears
+only these rules). See [ADR 045](045-pipeline-digest-and-inbox-mute.md).

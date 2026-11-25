@@ -179,6 +179,13 @@ branches=default|all`).
 - Investigations from release or PR branches need **All branches** (their runs
   otherwise don't notify).
 
+## Amendment (2026-11-25): Daily failures, digests and auto-investigate
+
+A fifth mode, **Daily failures**, notifies no single run: failed runs are kept
+for one daily digest entry per failing pipeline, which can be investigated as
+one batch, by hand or automatically (Auto-investigate). Every Inbox writer
+also checks the new Mute all. See [ADR 045](045-pipeline-digest-and-inbox-mute.md).
+
 ## References
 
 - [ADR 030: ADO PR inbox](030-ado-pr-inbox.md)

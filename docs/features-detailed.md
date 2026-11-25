@@ -179,6 +179,7 @@ Workstreams.
 | Failures (default) | Runs that finish `failed` |
 | Successes | Runs that finish `succeeded` |
 | Both | Either |
+| Daily failures | No single run; one daily digest entry per failing pipeline (below) |
 
 Partially succeeded and canceled runs never notify. By default only runs of the
 repo's **default branch** notify (the branch menu on each row names it, e.g.
@@ -213,6 +214,61 @@ workstreams agent call inbox.investigate item=<notification-id>
 
 `inbox.list` returns `pipelines` and `pipeline_items` next to the PR events,
 and `inbox.read id=<notification-id> read=true` works for both kinds.
+
+#### Daily failures and the daily digest
+
+A noisy or flaky pipeline can be set to **Daily failures**. Its runs no longer
+notify one by one. Instead, once a day at the **digest time** (one for all
+pipelines, 09:00 by default, set at the top of the Pipelines manager), each
+such pipeline that had a failed run since its previous digest gets **one**
+Inbox entry: "5 of 12 failed", *Still failing* or *Passed since* (the newest
+run succeeded), and the last failed run as a link. Expand it to see each failed
+run's number, branch, finish time, link and **failing step**. A pipeline with
+no failures gets no entry. If Workstreams was closed at the digest time, the
+digest arrives within a poll after the next start, covering the gap (at most 7
+days). The failing step costs one ADO request per failed run, at most 20 per
+pipeline per day; later runs say "step not fetched".
+
+**Investigate** on a digest starts one Copilot session for all its failed runs,
+in a new workstream (a worktree from the tip of the default branch on origin
+when the repo is known, `investigate/<pipeline>-failures-<date>`). It groups
+the runs by root cause, says whether each group looks flaky or broken, proposes
+fixes, changes nothing until you ask, and sends its conclusion to the Inbox.
+Each expanded run keeps its own Investigate.
+
+**Auto-investigate** (Off / With digest, next to the mode; only in Daily
+failures) does that by itself when the digest is posted. If the pipeline
+already has an investigation workstream, the new failed runs are sent to that
+session instead (skipped while it is mid-turn); at most 3 new ones start in any
+24 hours. See [ADR 045](adrs/045-pipeline-digest-and-inbox-mute.md).
+
+```sh
+workstreams agent call inbox.pipeline_mode id=<pipeline-id> mode=daily_failures
+workstreams agent call inbox.pipeline_auto_investigate pipeline=<pipeline-id> value=digest
+workstreams agent call inbox.digest_time time=17:30
+workstreams agent call inbox.investigate item=<digest-id>
+```
+
+`inbox.list` returns `pipeline_digests` and `digest_time`; `inbox.pipelines`
+returns each pipeline's `auto_investigate`.
+
+### Mute all
+
+**Mute all** in the Inbox header stops recording new entries from every
+source (pull requests, pipelines, digests, agent messages, schedule notices,
+sync alerts) until you turn it off, or until a date and time you pick. Muted
+events are dropped, not saved for later, and nothing from the muted time shows
+up after you unmute. While muted, the Inbox shows a *Muted* banner and the
+sidebar shows a muted bell instead of the count. Entries already in the Inbox
+stay, and the phone companion keeps working.
+
+```sh
+workstreams agent call inbox.mute_all_on until=2026-12-01T08:00:00Z
+workstreams agent call inbox.mute_all_off
+```
+
+`inbox.list` reports it as `mute`. `inbox.unmute_all` is different: it clears
+the PR "Stop tracking" rules.
 
 ### Pull requests
 
