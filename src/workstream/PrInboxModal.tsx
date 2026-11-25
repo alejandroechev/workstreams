@@ -10,6 +10,8 @@ import {
   type PrInboxSnapshot,
 } from "../domain/pr-inbox";
 import { groupPipelineItems, resultLabel, type PipelineItem } from "../domain/pipeline-inbox";
+import { digestCounts, digestStateLabel, stepLabel, type PipelineDigest } from "../domain/pipeline-digest";
+import { digestRunItemId } from "../domain/inbox-mute";
 import { resultColor } from "./pipeline-result";
 import { groupAgentMessages, levelLabel, previewLines, type AgentMessage } from "../domain/agent-messages";
 import { MarkdownView } from "../ui/MarkdownView";
@@ -32,6 +34,8 @@ interface Props {
   onSyncRead?: (id: string, isRead: boolean) => Promise<void>;
   /** Starts investigating a failed run in a new workstream (by notification id). */
   onInvestigate?: (itemId: string) => Promise<void>;
+  /** Starts investigating a daily digest's failed runs as one batch (ADR 045). */
+  onInvestigateDigest?: (digestId: string) => Promise<void>;
   /** Goes to the session that sent an agent message (ADR 041). */
   onOpenAgentMessage?: (message: AgentMessage) => void;
   /** Switches to a workstream, e.g. a run's existing investigation. */
@@ -48,7 +52,7 @@ interface Props {
  * reached from the same sidebar footer, so a different shell read as a
  * different app.
  */
-export function PrInboxModal({ snapshot, loading, error, onRead, onMute, onResetMutes, onOpenPipelines, syncEvents = [], onSyncRead, onInvestigate, onOpenWorkstream, onOpenAgentMessage, onClose }: Props) {
+export function PrInboxModal({ snapshot, loading, error, onRead, onMute, onResetMutes, onOpenPipelines, syncEvents = [], onSyncRead, onInvestigate, onInvestigateDigest, onOpenWorkstream, onOpenAgentMessage, onClose }: Props) {
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
   const toggleExpanded = (id: string) => setExpanded((current) => {
     const next = new Set(current);
@@ -70,11 +74,11 @@ export function PrInboxModal({ snapshot, loading, error, onRead, onMute, onReset
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
-  const investigate = async (itemId: string) => {
-    if (!onInvestigate) return;
+  const investigate = async (itemId: string, start: ((id: string) => Promise<void>) | undefined = onInvestigate) => {
+    if (!start) return;
     setStarting((current) => new Set(current).add(itemId));
     setActionError(null);
-    try { await onInvestigate(itemId); }
+    try { await start(itemId); }
     catch (failure) { setActionError(String(failure instanceof Error ? failure.message : failure)); }
     finally {
       setStarting((current) => { const next = new Set(current); next.delete(itemId); return next; });
@@ -90,10 +94,12 @@ export function PrInboxModal({ snapshot, loading, error, onRead, onMute, onReset
   };
 
   const runs = snapshot.pipeline_items ?? [];
+  const digests = snapshot.pipeline_digests ?? [];
   const messages = snapshot.agent_messages ?? [];
-  const total = snapshot.items.length + runs.length + syncEvents.length + messages.length;
+  const total = snapshot.items.length + runs.length + digests.length + syncEvents.length + messages.length;
   const unread = snapshot.items.filter((item) => !item.is_read).length + runs.filter((item) => !item.is_read).length
-    + syncEvents.filter((e) => !e.is_read).length + messages.filter((m) => !m.is_read).length;
+    + digests.filter((d) => !d.is_read).length + syncEvents.filter((e) => !e.is_read).length + messages.filter((m) => !m.is_read).length;
+  const visibleDigests = showRead ? digests : digests.filter((d) => !d.is_read);
   const visibleMessages = showRead ? messages : messages.filter((m) => !m.is_read);
   const visible = showRead ? snapshot.items : snapshot.items.filter((item) => !item.is_read);
   const visibleRuns = showRead ? runs : runs.filter((item) => !item.is_read);
@@ -101,15 +107,35 @@ export function PrInboxModal({ snapshot, loading, error, onRead, onMute, onReset
   const shows = (section: Kind) => kind === "all" || kind === section;
   const pipelineGroups = groupPipelineItems(visibleRuns);
   // What the current filters show, and what they hide because it was read.
-  const shownCount = (shows("prs") ? visible.length : 0) + (shows("pipelines") ? visibleRuns.length : 0) + (shows("sync") ? visibleSync.length : 0)
-    + (shows("agents") ? visibleMessages.length : 0);
-  const inKind = (shows("prs") ? snapshot.items.length : 0) + (shows("pipelines") ? runs.length : 0) + (shows("sync") ? syncEvents.length : 0)
-    + (shows("agents") ? messages.length : 0);
+  const shownCount = (shows("prs") ? visible.length : 0) + (shows("pipelines") ? visibleRuns.length + visibleDigests.length : 0)
+    + (shows("sync") ? visibleSync.length : 0) + (shows("agents") ? visibleMessages.length : 0);
+  const inKind = (shows("prs") ? snapshot.items.length : 0) + (shows("pipelines") ? runs.length + digests.length : 0)
+    + (shows("sync") ? syncEvents.length : 0) + (shows("agents") ? messages.length : 0);
   const failedChecks = (snapshot.pipelines ?? []).filter((pipeline) => pipeline.error);
   const openRun = (run: PipelineItem) => act(async () => {
     await openUrl(run.url);
     if (!run.is_read) await onRead(run.id, true);
   });
+  const openDigestRun = (digest: PipelineDigest, url: string) => act(async () => {
+    await openUrl(url);
+    if (!digest.is_read) await onRead(digest.id, true);
+  });
+  /** Investigate, or Open investigation once there is one; never marks anything read. */
+  const investigateButton = (itemId: string, investigation: string | null | undefined, start: ((id: string) => Promise<void>) | undefined, what: string) =>
+    (investigation ? onOpenWorkstream : start) && (
+      <button
+        data-testid={`pipeline-investigate-${itemId}`}
+        disabled={starting.has(itemId)}
+        title={investigation ? `Switch to the workstream investigating ${what}` : `Start a Copilot session that investigates ${what}, in a new workstream`}
+        onClick={() => {
+          if (investigation) onOpenWorkstream?.(investigation);
+          else void investigate(itemId, start);
+        }}
+        style={{ ...buttonStyle, padding: "1px 6px", fontSize: 10, whiteSpace: "nowrap" }}
+      >
+        {starting.has(itemId) ? "Starting…" : investigation ? "Open investigation" : "Investigate"}
+      </button>
+    );
 
   return (
     <div
@@ -495,11 +521,103 @@ export function PrInboxModal({ snapshot, loading, error, onRead, onMute, onReset
                   {pipeline.name}: {pipeline.error}
                 </p>
               ))}
-              {kind === "pipelines" && runs.length === 0 && (
+              {kind === "pipelines" && runs.length === 0 && digests.length === 0 && (
                 <p data-testid="inbox-pipelines-empty" style={emptyStyle}>
                   No pipeline notifications. Choose what notifies in Pipelines.
                 </p>
               )}
+              {visibleDigests.map((digest) => {
+                const open = expanded.has(digest.id);
+                const last = digest.runs[0];
+                return (
+                  <article
+                    key={digest.id}
+                    data-testid={`pipeline-digest-${digest.id}`}
+                    data-unread={!digest.is_read}
+                    style={{
+                      border: "1px solid #313244",
+                      borderLeft: `2px solid ${digest.is_read ? "#45475a" : "#f38ba8"}`,
+                      borderRadius: 4,
+                      padding: "8px 10px",
+                      margin: "8px 12px 0",
+                      background: "#181825",
+                      fontSize: 11,
+                    }}
+                  >
+                    <div style={{ display: "flex", gap: 8, alignItems: "baseline", flexWrap: "wrap" }}>
+                      <span style={{ fontSize: 12, fontWeight: digest.is_read ? 400 : 600, color: "#cdd6f4" }}>
+                        {digest.pipeline_name} <span style={{ color: "#6c7086", fontWeight: 400, fontSize: 11 }}>{digest.project}</span>
+                        {digest.repo && <span style={{ color: "#a6adc8", fontWeight: 400, fontSize: 11 }}> · {digest.repo}</span>}
+                      </span>
+                      <span style={{ color: "#6c7086" }}>Daily digest</span>
+                      <span data-testid={`pipeline-digest-counts-${digest.id}`} style={{ color: "#f38ba8", fontWeight: 600 }}>{digestCounts(digest)}</span>
+                      <span data-testid={`pipeline-digest-state-${digest.id}`} style={resultStyle(digest.state === "passed_since" ? "succeeded" : "failed")}>
+                        {digestStateLabel(digest.state)}
+                      </span>
+                      <span style={{ flex: 1 }} />
+                      <span style={{ color: "#6c7086", whiteSpace: "nowrap" }}>{new Date(digest.created_at).toLocaleString()}</span>
+                    </div>
+                    <div style={{ display: "flex", gap: 8, alignItems: "baseline", marginTop: 6 }}>
+                      {last && (
+                        <button
+                          data-testid={`pipeline-digest-last-${digest.id}`}
+                          disabled={busy}
+                          onClick={() => void openDigestRun(digest, last.url)}
+                          title="Open the last failed run in Azure DevOps"
+                          style={{ ...linkButtonStyle, color: digest.is_read ? "#6c7086" : "#cdd6f4" }}
+                        >
+                          Last failed: #{last.run_number} · {last.branch}
+                          <ArrowTopRightOnSquareIcon aria-hidden="true" width={11} height={11} style={{ display: "inline", marginLeft: 6 }} />
+                        </button>
+                      )}
+                      <span style={{ flex: 1 }} />
+                      {investigateButton(digest.id, digest.investigation, onInvestigateDigest, `${digest.pipeline_name}'s ${digest.failed} failed runs`)}
+                      <button
+                        data-testid={`pipeline-digest-expand-${digest.id}`}
+                        aria-expanded={open}
+                        aria-label={open ? `Hide the failed runs of ${digest.pipeline_name}` : `Show the failed runs of ${digest.pipeline_name}`}
+                        onClick={() => toggleExpanded(digest.id)}
+                        style={{ ...buttonStyle, padding: "1px 4px", display: "inline-flex" }}
+                      >
+                        {open ? <ChevronUpIcon width={12} height={12} /> : <ChevronDownIcon width={12} height={12} />}
+                      </button>
+                      <button
+                        disabled={busy}
+                        aria-label={`${digest.is_read ? "Mark unread" : "Read"}: ${digest.pipeline_name} digest`}
+                        onClick={() => void act(() => onRead(digest.id, !digest.is_read))}
+                        style={{ ...buttonStyle, padding: "1px 6px", fontSize: 10 }}
+                      >
+                        {digest.is_read ? "Unread" : "Read"}
+                      </button>
+                    </div>
+                    {open && (
+                      <ul data-testid={`pipeline-digest-runs-${digest.id}`} style={{ listStyle: "none", margin: "8px 0 0", padding: 0, display: "grid", gap: 4 }}>
+                        {digest.runs.map((run) => {
+                          const itemId = digestRunItemId(digest.id, run.run_id);
+                          return (
+                            <li key={run.run_id} data-testid={`pipeline-digest-run-${digest.id}-${run.run_id}`} style={{ display: "flex", gap: 8, alignItems: "baseline" }}>
+                              <button
+                                disabled={busy}
+                                onClick={() => void openDigestRun(digest, run.url)}
+                                title="Open the run in Azure DevOps"
+                                style={{ ...linkButtonStyle, flex: "none", color: "#cdd6f4" }}
+                              >
+                                #{run.run_number} · {run.branch}
+                                <ArrowTopRightOnSquareIcon aria-hidden="true" width={11} height={11} style={{ display: "inline", marginLeft: 6 }} />
+                              </button>
+                              <span style={{ flex: 1, minWidth: 0, color: run.step ? "#f9e2af" : "#6c7086", fontStyle: run.step ? "normal" : "italic", overflowWrap: "anywhere" }}>
+                                {stepLabel(run)}
+                              </span>
+                              <span style={{ color: "#6c7086", whiteSpace: "nowrap" }}>{new Date(run.finished_at).toLocaleString()}</span>
+                              {investigateButton(itemId, run.investigation, onInvestigate, `run #${run.run_number}`)}
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    )}
+                  </article>
+                );
+              })}
               {pipelineGroups.map((group) => (
                 <article
                   key={group.pipeline_id}
@@ -607,6 +725,11 @@ function resultStyle(result: string): React.CSSProperties {
     textAlign: "center",
   };
 }
+
+const linkButtonStyle: React.CSSProperties = {
+  background: "none", border: "none", padding: 0, textAlign: "left", cursor: "pointer", fontFamily: "inherit", fontSize: 11,
+  overflowWrap: "anywhere",
+};
 
 const headerStyle: React.CSSProperties = {
   display: "flex",

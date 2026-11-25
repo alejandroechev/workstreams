@@ -97,4 +97,12 @@ describe("pipelines through the inbox hook", () => {
     await act(async () => {});
     expect(result.current.snapshot.agent_messages!.map((m) => m.title)).toEqual(["Benchmarks finished"]);
   });
+
+  it("sets the digest time and re-reads", async () => {
+    const backend = new MemoryBackend();
+    const { result } = renderHook(() => usePrInbox(backend));
+    await act(async () => {});
+    await act(async () => { await result.current.setDigestTime("17:30"); });
+    expect(result.current.snapshot.digest_time).toBe("17:30");
+  });
 });

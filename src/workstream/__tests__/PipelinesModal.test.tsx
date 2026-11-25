@@ -55,6 +55,16 @@ describe("Pipelines manager", () => {
     expect(props.onSetMode).toHaveBeenCalledWith("p1", "daily_failures");
   });
 
+  it("sets the one digest time in the header", async () => {
+    const onSetDigestTime = vi.fn().mockResolvedValue(undefined);
+    setup([pipeline({ mode: "daily_failures" })], { digestTime: "09:00", onSetDigestTime });
+    const input = screen.getByTestId("pipeline-digest-time");
+    expect(input).toHaveValue("09:00");
+    fireEvent.change(input, { target: { value: "17:30" } });
+    fireEvent.blur(input);
+    await waitFor(() => expect(onSetDigestTime).toHaveBeenCalledWith("17:30"));
+  });
+
   it("adds a pasted link, clears the field, and shows a refusal without clearing it", async () => {
     const props = setup();
     const input = screen.getByTestId("pipeline-url-input");

@@ -898,8 +898,20 @@ export class MemoryBackend implements Backend {
     try { return await run; } finally { this.investigationsStarting.delete(itemId); }
   }
 
+  /** A daily digest's failed run (`drun:<digest>:<run>`) as a notification, as natively. */
+  private digestRunItem(itemId: string): PipelineItem | undefined {
+    const match = /^drun:(.+):(\d+)$/.exec(itemId);
+    if (!match) return undefined;
+    const digest = this.digestSnapshot().find((d) => d.id === match[1]);
+    const run = digest?.runs.find((r) => r.run_id === Number(match[2]));
+    if (!digest || !run) return undefined;
+    return { id: itemId, pipeline_id: digest.pipeline_id, pipeline_name: digest.pipeline_name, project: digest.project, run_id: run.run_id,
+      run_number: run.run_number, result: "failed", branch: run.branch, trigger: run.trigger, finished_at: run.finished_at, url: run.url,
+      is_read: false, discovered_at: "" };
+  }
+
   private async makeInvestigation(itemId: string): Promise<InvestigationStarted> {
-    const item = this.pipelineItems.find((i) => i.id === itemId);
+    const item = this.pipelineItems.find((i) => i.id === itemId) ?? this.digestRunItem(itemId);
     if (!item) throw new Error(`No pipeline notification with id ${itemId}`);
     if (item.result !== "failed") throw new Error(`Only failed runs can be investigated; run #${item.run_number} ${item.result}`);
     const existing = this.investigations.get(itemId);

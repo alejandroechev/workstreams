@@ -15,6 +15,7 @@ import {
   type RepoRef,
 } from "../domain/pipeline-inbox";
 import { resultColor } from "./pipeline-result";
+import { DEFAULT_DIGEST_TIME, isDigestTime } from "../domain/pipeline-digest";
 
 interface Props {
   pipelines: PipelineStatus[];
@@ -27,6 +28,9 @@ interface Props {
   onSetRepo: (id: string, repo: string) => Promise<void>;
   /** Every Workstreams repo, for the repo menu. */
   repos: RepoRef[];
+  /** The one time Daily-failures pipelines post their digest, HH:MM local (ADR 045). */
+  digestTime?: string;
+  onSetDigestTime?: (time: string) => Promise<void>;
   onClose: () => void;
 }
 
@@ -133,8 +137,20 @@ function RepoChip({ pipeline, repos, disabled, onSet }: { pipeline: PipelineStat
  * runs to add it, pick what notifies, remove it. Chrome mirrors the Inbox and
  * the Repo manager.
  */
-export function PipelinesModal({ pipelines, onAdd, onSetMode, onSetBranches, onRemove, onSetRepo, repos, onClose }: Props) {
+export function PipelinesModal({ pipelines, onAdd, onSetMode, onSetBranches, onRemove, onSetRepo, repos, digestTime = DEFAULT_DIGEST_TIME, onSetDigestTime, onClose }: Props) {
   const [url, setUrl] = useState("");
+  const [time, setTime] = useState(digestTime);
+  // A new stored time (from an agent, or the save) replaces the edit.
+  const [stored, setStored] = useState(digestTime);
+  if (stored !== digestTime) {
+    setStored(digestTime);
+    setTime(digestTime);
+  }
+  const saveTime = () => {
+    if (!onSetDigestTime || time === digestTime) return;
+    if (!isDigestTime(time)) { setTime(digestTime); return; }
+    void act(() => onSetDigestTime(time));
+  };
   const [adding, setAdding] = useState(false);
   const [addError, setAddError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -189,6 +205,26 @@ export function PipelinesModal({ pipelines, onAdd, onSetMode, onSetBranches, onR
               {pipelines.length} watched pipeline{pipelines.length === 1 ? "" : "s"}
             </div>
           </div>
+          <span style={{ flex: 1 }} />
+          {onSetDigestTime && (
+            <label
+              title="When pipelines in Daily failures mode post their digest: one Inbox entry per failing pipeline, covering the runs since the previous one"
+              style={{ display: "inline-flex", alignItems: "center", gap: 6, color: "#a6adc8", fontSize: 11, marginRight: 8 }}
+            >
+              Daily digest at
+              <input
+                type="time"
+                data-testid="pipeline-digest-time"
+                aria-label="Daily digest time"
+                value={time}
+                disabled={busy}
+                onChange={(event) => setTime(event.target.value)}
+                onBlur={saveTime}
+                onKeyDown={(event) => { if (event.key === "Enter") saveTime(); }}
+                style={{ ...inputStyle, flex: "none", width: "auto" }}
+              />
+            </label>
+          )}
           <button aria-label="Close pipelines" data-testid="pipelines-close" onClick={onClose} title="Close" style={iconButtonStyle}>
             <XMarkIcon style={{ width: 16, height: 16 }} />
           </button>
@@ -196,7 +232,8 @@ export function PipelinesModal({ pipelines, onAdd, onSetMode, onSetBranches, onR
 
         <div style={noteStyle}>
           Paste a link to an Azure DevOps pipeline or to one of its runs. Runs that finish from now on
-          notify in the Inbox according to the mode; earlier runs never do. Uses your Azure CLI account
+          notify in the Inbox according to the mode; earlier runs never do. Daily failures posts one digest
+          entry per failing pipeline a day instead of one per failed run. Uses your Azure CLI account
           (<code>az login</code>) and checks every two minutes while Workstreams is open.
           <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
             <input

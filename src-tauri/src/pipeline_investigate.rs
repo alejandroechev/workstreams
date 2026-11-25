@@ -89,18 +89,69 @@ pub fn claim(event_id: &str) -> Result<Claim, String> {
     Ok(Claim(event_id.to_string()))
 }
 
-/// Looks up a notification to investigate. Only failed runs can be.
-pub fn target(db: &Connection, event_id: &str) -> Result<Target, String> {
-    let (item, repos, ado_repo) = crate::pipeline_inbox::item_with_repos(db, event_id)?
-        .ok_or_else(|| format!("No pipeline notification with id {event_id}"))?;
-    if item.result != "failed" {
-        return Err(format!(
-            "Only failed runs can be investigated; run #{} {}",
-            item.run_number, item.result
-        ));
-    }
-    let repo = match repos.first() {
-        Some(r) => db
+/// A failed run of a daily digest (`drun:<digest>:<run>`), as a notification.
+fn digest_run_item(
+    db: &Connection,
+    event_id: &str,
+) -> Result<Option<crate::pipeline_inbox::ItemWithRepos>, String> {
+    let Some((digest_id, run_id)) = event_id
+        .strip_prefix("drun:")
+        .and_then(|rest| rest.rsplit_once(':'))
+        .and_then(|(d, r)| Some((d, r.parse::<u64>().ok()?)))
+    else {
+        return Ok(None);
+    };
+    let row: Option<(String, String, String, String, String, String)> = db
+        .query_row(
+            "SELECT watch_id, run_number, result, branch, trigger_label, finished_at
+            FROM pipeline_digest_runs WHERE digest_id=?1 AND run_id=?2",
+            params![digest_id, run_id],
+            |r| {
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                    r.get(4)?,
+                    r.get(5)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+    let Some((watch_id, run_number, result, branch, trigger, finished_at)) = row else {
+        return Ok(None);
+    };
+    let Some(view) = crate::pipeline_inbox::watch_view(db, &watch_id)? else {
+        return Ok(None);
+    };
+    let item = PipelineItem {
+        id: event_id.to_string(),
+        pipeline_id: watch_id,
+        pipeline_name: view.name,
+        url: crate::pipeline_inbox::run_url(&view.organization, &view.project, run_id),
+        project: view.project,
+        run_id,
+        run_number,
+        result,
+        branch,
+        trigger,
+        finished_at,
+        is_read: false,
+        discovered_at: String::new(),
+        repo: view.label,
+        investigation: existing(db, event_id)?,
+    };
+    Ok(Some((item, view.repos, view.ado_repo)))
+}
+
+/// The first of a pipeline's Workstreams repos (chip order), with its folder.
+fn first_repo(
+    db: &Connection,
+    repos: &[crate::pipeline_inbox::RepoRef],
+) -> Result<Option<(String, String, String)>, String> {
+    match repos.first() {
+        Some(r) => Ok(db
             .query_row(
                 "SELECT directory FROM projects WHERE id = ?1",
                 [&r.id],
@@ -108,9 +159,27 @@ pub fn target(db: &Connection, event_id: &str) -> Result<Target, String> {
             )
             .optional()
             .map_err(|e| e.to_string())?
-            .map(|dir| (r.id.clone(), r.name.clone(), dir)),
-        None => None,
+            .map(|dir| (r.id.clone(), r.name.clone(), dir))),
+        None => Ok(None),
+    }
+}
+
+/// Looks up a notification (or a daily digest's run) to investigate. Only
+/// failed runs can be.
+pub fn target(db: &Connection, event_id: &str) -> Result<Target, String> {
+    let found = match digest_run_item(db, event_id)? {
+        Some(found) => Some(found),
+        None => crate::pipeline_inbox::item_with_repos(db, event_id)?,
     };
+    let (item, repos, ado_repo) =
+        found.ok_or_else(|| format!("No pipeline notification with id {event_id}"))?;
+    if item.result != "failed" {
+        return Err(format!(
+            "Only failed runs can be investigated; run #{} {}",
+            item.run_number, item.result
+        ));
+    }
+    let repo = first_repo(db, &repos)?;
     Ok(Target {
         item,
         repo,
@@ -733,6 +802,63 @@ mod tests {
         assert!(claim("e-other").is_ok());
         drop(first);
         assert!(claim("e-claim").is_ok());
+    }
+
+    /// A daily digest of CI-Main (Daily failures) with failed runs 3 and 5.
+    pub(crate) fn seed_digest(db: &Connection) -> crate::pipeline_digest::PipelineDigest {
+        use crate::pipeline_digest::tests as digest;
+        let id = digest::watch(
+            db,
+            812,
+            "CI-Main",
+            crate::pipeline_inbox::PipelineMode::DailyFailures,
+        );
+        digest::since(db, &id, "2026-03-01T12:00:00.000Z");
+        let mut feature = digest::run(5, "failed", "2026-03-01T15:00:00Z");
+        feature.branch = "main".into();
+        digest::finish(
+            db,
+            &id,
+            &[
+                digest::run(3, "failed", "2026-03-01T13:00:00Z"),
+                digest::run(4, "succeeded", "2026-03-01T14:00:00Z"),
+                feature,
+            ],
+        );
+        let zone = digest::TestZone::fixed(-3);
+        crate::pipeline_digest::run_due(db, &digest::local_clock(&zone, "2026-03-02 09:00"))
+            .unwrap();
+        crate::pipeline_digest::digests(db).unwrap().remove(0)
+    }
+
+    #[test]
+    fn a_digests_run_is_investigated_on_its_own_like_a_notification() {
+        let db = db();
+        let d = seed_digest(&db);
+        let item = crate::pipeline_digest::run_item_id(&d.id, 5);
+        let t = target(&db, &item).unwrap();
+        assert_eq!(
+            (
+                t.item.run_id,
+                t.item.result.as_str(),
+                t.item.branch.as_str(),
+                t.item.pipeline_name.as_str()
+            ),
+            (5, "failed", "main", "CI-Main")
+        );
+        assert_eq!(
+            t.item.url,
+            "https://dev.azure.com/skype/SCC/_build/results?buildId=5"
+        );
+        assert!(target(&db, &crate::pipeline_digest::run_item_id(&d.id, 4)).is_err());
+        assert!(target(&db, "drun:nope:5").is_err());
+        let started = record(&db, &t, &place(None, &t, "/h"), None).unwrap();
+        let shown = crate::pipeline_digest::digests(&db).unwrap().remove(0);
+        assert_eq!(shown.runs[0].investigation, Some(started.workstream_id));
+        assert_eq!(
+            shown.investigation, None,
+            "a run's investigation isn't the digest's"
+        );
     }
 
     #[test]

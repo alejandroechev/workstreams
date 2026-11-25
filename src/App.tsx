@@ -2581,6 +2581,7 @@ export default function App() {
         <PipelinesModal pipelines={inbox.snapshot.pipelines ?? []}
           onAdd={inbox.addPipeline} onSetMode={inbox.setPipelineMode} onSetBranches={inbox.setPipelineBranches} onRemove={inbox.removePipeline}
           onSetRepo={inbox.setPipelineRepo}
+          digestTime={inbox.snapshot.digest_time} onSetDigestTime={inbox.setDigestTime}
           repos={projects.filter((p) => !p.archived).map((p) => ({ id: p.id, name: p.name }))}
           onClose={() => setShowPipelines(false)} />
       )}

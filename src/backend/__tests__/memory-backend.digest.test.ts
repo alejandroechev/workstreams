@@ -77,4 +77,17 @@ describe("MemoryBackend daily digest", () => {
     reloaded.useInboxSettingsStore(store);
     expect((await reloaded.getPrInbox()).digest_time).toBe("17:30");
   });
+
+  it("investigates one run of a digest on its own", async () => {
+    const { b, setNow } = await setup();
+    setNow(local(2, 9, 0));
+    b.runDigestPass();
+    const ci = (await b.getPrInbox()).pipeline_digests!.find((d) => d.pipeline_name === "CI-Main")!;
+    const started = await b.startPipelineInvestigation(`drun:${ci.id}:12`);
+    expect(started.created).toBe(true);
+    const again = (await b.getPrInbox()).pipeline_digests!.find((d) => d.id === ci.id)!;
+    expect(again.runs[0].investigation).toBe(started.workstream_id);
+    expect(again.investigation).toBeNull();
+    expect((await b.pendingInvestigationSessions())[0].prompt).toContain("#12 (id 12)");
+  });
 });

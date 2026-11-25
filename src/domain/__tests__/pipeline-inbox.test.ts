@@ -123,6 +123,7 @@ describe("the Inbox badge", () => {
       pipeline_items: [item({ id: "x" }), item({ id: "y" }), item({ id: "z", is_read: true })],
     })).toBe(3);
     expect(countUnreadInbox({ items: [] })).toBe(0);
+    expect(countUnreadInbox({ items: [], pipeline_digests: [{ is_read: false }, { is_read: false }, { is_read: true }] })).toBe(2);
   });
 });
 

@@ -6,6 +6,7 @@ import { PrInboxModal } from "../PrInboxModal";
 import type { PrInboxItem, PrInboxSnapshot } from "../../domain/pr-inbox";
 import type { PipelineItem } from "../../domain/pipeline-inbox";
 import type { AgentMessage } from "../../domain/agent-messages";
+import type { DigestRun, PipelineDigest } from "../../domain/pipeline-digest";
 
 vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: vi.fn().mockResolvedValue(undefined) }));
 
@@ -498,5 +499,57 @@ describe("Inbox, agent messages (ADR 041)", () => {
     expect(screen.getAllByTestId(/^inbox-section-/).map((s) => s.getAttribute("data-testid"))).toEqual(["inbox-section-agents"]);
     fireEvent.click(screen.getByRole("button", { name: "Read: Benchmarks finished" }));
     await waitFor(() => expect(onRead).toHaveBeenCalledWith("m1", true));
+  });
+});
+
+describe("Inbox, daily digests (ADR 045)", () => {
+  const run = (id: number, over: Partial<DigestRun> = {}): DigestRun => ({
+    run_id: id, run_number: `2026.${id}`, branch: "main", trigger: "Scheduled", finished_at: "2026-03-01T13:00:00Z",
+    commit: `sha${id}`, url: `https://dev.azure.com/skype/SCC/_build/results?buildId=${id}`, step: `Step ${id}`,
+    step_state: "fetched", investigation: null, ...over,
+  });
+  const digest = (over: Partial<PipelineDigest> = {}): PipelineDigest => ({
+    id: "d1", pipeline_id: "p1", pipeline_name: "CI-Main", project: "SCC", organization: "skype", repo: "media_components",
+    window_start: "2026-03-01T12:00:00Z", window_end: "2026-03-02T12:00:00Z", total: 12, failed: 5, state: "still_failing",
+    runs: [run(12), run(10), run(8, { step: null, step_state: "not_fetched" }), run(5), run(3)],
+    is_read: false, created_at: "2026-03-02T12:00:00Z", investigation: null, auto_pending: false, ...over,
+  });
+  const base: PrInboxSnapshot = { items: [], repos: [], mutes: [], pipeline_digests: [
+    digest(), digest({ id: "d2", pipeline_id: "p2", pipeline_name: "Deploy-PPE", total: 6, failed: 1, state: "passed_since", runs: [run(22)] }),
+  ] };
+
+  it("shows each digest with its counts, state and last failed run, each one unread", async () => {
+    const onRead = vi.fn().mockResolvedValue(undefined);
+    render(<PrInboxModal snapshot={base} error={null} loading={false} onRead={onRead} onClose={() => {}} />);
+    expect(screen.getByTestId("pr-inbox-summary")).toHaveTextContent("2 unread of 2 notifications");
+    expect(screen.getByTestId("pipeline-digest-counts-d1")).toHaveTextContent("5 of 12 failed");
+    expect(screen.getByTestId("pipeline-digest-state-d1")).toHaveTextContent("Still failing");
+    expect(screen.getByTestId("pipeline-digest-state-d2")).toHaveTextContent("Passed since");
+    fireEvent.click(screen.getByTestId("pipeline-digest-last-d1"));
+    await waitFor(() => expect(openUrl).toHaveBeenCalledWith("https://dev.azure.com/skype/SCC/_build/results?buildId=12"));
+    await waitFor(() => expect(onRead).toHaveBeenCalledWith("d1", true));
+  });
+
+  it("expands into its failed runs with number, branch, time, link and failing step", () => {
+    const onInvestigate = vi.fn().mockResolvedValue(undefined);
+    render(<PrInboxModal snapshot={base} error={null} loading={false} onRead={vi.fn()} onInvestigate={onInvestigate} onClose={() => {}} />);
+    expect(screen.queryByTestId("pipeline-digest-runs-d1")).toBeNull();
+    fireEvent.click(screen.getByTestId("pipeline-digest-expand-d1"));
+    const rows = within(screen.getByTestId("pipeline-digest-runs-d1")).getAllByRole("listitem");
+    expect(rows).toHaveLength(5);
+    expect(rows[0]).toHaveTextContent("#2026.12");
+    expect(rows[0]).toHaveTextContent("main");
+    expect(rows[0]).toHaveTextContent("Step 12");
+    expect(rows[2]).toHaveTextContent("step not fetched");
+    fireEvent.click(within(rows[0]).getByTestId("pipeline-investigate-drun:d1:12"));
+    expect(onInvestigate).toHaveBeenCalledWith("drun:d1:12");
+  });
+
+  it("hides read digests until With read, and filters to Pipelines", () => {
+    render(<PrInboxModal snapshot={{ ...base, pipeline_digests: [digest({ is_read: true })] }} error={null} loading={false} onRead={vi.fn()} onClose={() => {}} />);
+    expect(screen.queryByTestId("pipeline-digest-d1")).toBeNull();
+    fireEvent.click(screen.getByTestId("pr-inbox-filter-all"));
+    fireEvent.click(screen.getByTestId("inbox-kind-pipelines"));
+    expect(screen.getByTestId("pipeline-digest-d1")).toBeInTheDocument();
   });
 });

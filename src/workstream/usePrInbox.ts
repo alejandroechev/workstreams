@@ -76,6 +76,12 @@ export function usePrInbox(backend: Backend) {
     setRevision((value) => value + 1);
   }, [backend]);
 
+  /** The global time Daily-failures digests post (ADR 045). */
+  const setDigestTime = useCallback(async (time: string) => {
+    await backend.setPipelineDigestTime(time);
+    setRevision((value) => value + 1);
+  }, [backend]);
+
   const removePipeline = useCallback(async (id: string) => {
     await backend.removePipelineWatch(id);
     setRevision((value) => value + 1);
@@ -91,5 +97,5 @@ export function usePrInbox(backend: Backend) {
   /** Re-reads now, e.g. when an agent posted a message (ADR 041). */
   const refresh = useCallback(() => setRevision((value) => value + 1), []);
 
-  return { snapshot, error, loading, refresh, configure, setRead, mute, resetMutes, addPipeline, setPipelineMode, setPipelineBranches, setPipelineRepo, removePipeline, investigate };
+  return { snapshot, error, loading, refresh, configure, setRead, mute, resetMutes, addPipeline, setPipelineMode, setPipelineBranches, setPipelineRepo, setDigestTime, removePipeline, investigate };
 }
