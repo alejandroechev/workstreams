@@ -66,6 +66,24 @@ describe("MemoryBackend pipelines", () => {
     expect(inbox.pipelines![0]).toMatchObject({ mode: "daily_failures", last_result: "succeeded" });
   });
 
+  it("keeps Daily-failures runs for the digest, twenty step fetches a day", async () => {
+    const b = backend();
+    b.setDigestClock(() => new Date("2100-10-27T00:00:00Z"));
+    const p = await b.addPipelineWatch(PAGE, "daily_failures");
+    for (let i = 1; i <= 22; i++) {
+      b.finishPipelineRun(p.id, { id: i, number: `${i}`, result: "failed", branch: "main", finished_at: `2100-10-27T08:${String(i).padStart(2, "0")}:00Z`, commit: `sha${i}` });
+    }
+    b.finishPipelineRun(p.id, { id: 30, number: "30", result: "succeeded", branch: "main", finished_at: "2100-10-27T09:00:00Z" });
+    b.finishPipelineRun(p.id, { id: 31, number: "31", result: "failed", branch: "feature/x", finished_at: "2100-10-27T09:10:00Z" });
+    const kept = b.digestRunsFor(p.id);
+    expect(kept).toHaveLength(23);
+    expect(kept.filter((r) => r.step_state === "pending")).toHaveLength(20);
+    expect(kept.filter((r) => r.step_state === "not_fetched")).toHaveLength(2);
+    expect(kept.find((r) => r.run_id === 1)?.commit).toBe("sha1");
+    await b.setPipelineWatchMode(p.id, "failures");
+    expect(b.digestRunsFor(p.id)).toEqual([]);
+  });
+
   it("notifies only the default branch until switched to all branches", async () => {
     const b = new MemoryBackend();
     b.seedPipelineDefinition({ organization: "skype", project: "SCC", definition_id: 9, name: "engAIne", default_branch: "develop" });

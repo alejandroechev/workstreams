@@ -549,6 +549,41 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
             UNIQUE(watch_id, run_id, result)
         );
 
+        -- Runs of Daily-failures pipelines kept for the daily digest (ADR 045):
+        -- every in-scope run seen after the quiet period, so a digest can say
+        -- 5 of 12 failed. step_state: none (not failed), pending (a timeline
+        -- fetch is due), fetched, not_fetched (over the daily cap). digest_id is
+        -- NULL until a digest covers the run, or 'dropped' when it never will.
+        CREATE TABLE IF NOT EXISTS pipeline_digest_runs (
+            watch_id TEXT NOT NULL,
+            run_id INTEGER NOT NULL,
+            run_number TEXT NOT NULL,
+            result TEXT NOT NULL,
+            branch TEXT NOT NULL,
+            trigger_label TEXT NOT NULL,
+            finished_at TEXT NOT NULL,
+            commit_sha TEXT NOT NULL DEFAULT '',
+            step TEXT,
+            step_state TEXT NOT NULL DEFAULT 'none',
+            fetch_day TEXT,
+            digest_id TEXT,
+            seen_at TEXT NOT NULL,
+            PRIMARY KEY (watch_id, run_id)
+        );
+        -- One Inbox entry per failing Daily-failures pipeline per digest (ADR 045).
+        CREATE TABLE IF NOT EXISTS pipeline_digests (
+            id TEXT PRIMARY KEY,
+            watch_id TEXT NOT NULL,
+            window_start TEXT NOT NULL,
+            window_end TEXT NOT NULL,
+            total INTEGER NOT NULL,
+            failed INTEGER NOT NULL,
+            newest_result TEXT NOT NULL,
+            is_read INTEGER NOT NULL DEFAULT 0,
+            auto_pending INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL
+        );
+
         -- Sync server monitoring (ADR 040): 24 hours of checks, the open
         -- problems, and a week of alert events for the Inbox.
         CREATE TABLE IF NOT EXISTS sync_checks (
@@ -654,6 +689,16 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
         "ALTER TABLE pipeline_watches ADD COLUMN branches TEXT NOT NULL DEFAULT 'default'",
         "ALTER TABLE pipeline_watches ADD COLUMN default_branch TEXT",
         "ALTER TABLE pipeline_watches ADD COLUMN default_branch_checked INTEGER NOT NULL DEFAULT 0",
+        // Daily digest (ADR 045): when the pipeline's current digest window
+        // started (its last digest, or entering Daily failures), and whether a
+        // digest also starts an investigation.
+        "ALTER TABLE pipeline_watches ADD COLUMN digest_since TEXT",
+        "ALTER TABLE pipeline_watches ADD COLUMN auto_investigate TEXT NOT NULL DEFAULT 'off'",
+        // Investigations of a whole digest (ADR 045): the pipeline, whether the
+        // digest started it by itself, and follow-up prompts for an existing one.
+        "ALTER TABLE pipeline_investigations ADD COLUMN watch_id TEXT",
+        "ALTER TABLE pipeline_investigations ADD COLUMN auto INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE pipeline_investigations ADD COLUMN followup INTEGER NOT NULL DEFAULT 0",
         // Periodic schedules (ADR 044): when Run now was asked, and a revision
         // the runner claims runs against.
         "ALTER TABLE periodic_schedules ADD COLUMN run_requested_at INTEGER",

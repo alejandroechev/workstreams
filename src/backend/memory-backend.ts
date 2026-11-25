@@ -27,6 +27,7 @@ import {
   type InvestigationStarted,
   type PendingInvestigation,
 } from "../domain/pipeline-investigate";
+import { localDay, STEP_FETCHES_PER_DAY, type KeptRun } from "../domain/pipeline-digest";
 
 import { baseKind, MUTE_KINDS, type SyncCheck, type SyncEvent, type SyncMonitorState, type SyncProblem, type SyncThresholds, type SyncVitals } from "../domain/sync-monitor";
 import {
@@ -68,6 +69,8 @@ export interface MemoryPipelineRun {
   trigger?: string;
   /** The repo this run built, as ADO reports it. */
   repository?: AdoRepoRef | null;
+  /** The commit it built. */
+  commit?: string;
 }
 import type { Project, Workstream, Tile, TileType, WorkstreamLayout, CopilotConfigItem } from "../domain/types";
 import type { SessionFileComment } from "../domain/file-comments";
@@ -686,7 +689,37 @@ export class MemoryBackend implements Backend {
 
   // ── Pipelines (ADR 038) ──
   private pipelineDefinitions: Array<{ organization: string; project: string; definition_id: number; name: string; runs: MemoryPipelineRun[]; repository?: AdoRepoRef | null; default_branch?: string | null }> = [];
-  private pipelineWatches: Array<{ status: PipelineStatus; notifyAfter: string; adoRepo: AdoRepoRef | null; override: string | null }> = [];
+  private pipelineWatches: Array<{ status: PipelineStatus; notifyAfter: string; adoRepo: AdoRepoRef | null; override: string | null; digestSince?: string | null }> = [];
+  // ── Daily digest (mirror of src-tauri/src/pipeline_digest.rs, ADR 045) ──
+  private digestRuns = new Map<string, Array<KeptRun & { digest_id: string | null; fetch_day: string | null }>>();
+  private digestClock: () => Date = () => new Date();
+  /** Drives the digest's "now" (and the pipelines' quiet periods) in tests. */
+  setDigestClock(clock: () => Date): void { this.digestClock = clock; }
+  /** The runs a Daily-failures pipeline keeps that no digest covered yet. */
+  digestRunsFor(watchId: string): KeptRun[] {
+    return structuredClone((this.digestRuns.get(watchId) ?? []).filter((r) => r.digest_id === null)
+      .map(({ digest_id: _d, fetch_day: _f, ...run }) => run));
+  }
+  private dropUndigested(watchId: string): void {
+    for (const run of this.digestRuns.get(watchId) ?? []) if (run.digest_id === null) run.digest_id = "dropped";
+  }
+  /** As pipeline_digest::store_runs: one fetch slot per failed run while the day has fewer than 20. */
+  private keepDigestRun(watchId: string, run: MemoryPipelineRun): void {
+    const runs = this.digestRuns.get(watchId) ?? [];
+    this.digestRuns.set(watchId, runs);
+    let kept = runs.find((r) => r.run_id === run.id);
+    if (kept && (kept.digest_id !== null || kept.result === run.result)) return;
+    if (kept) Object.assign(kept, { result: run.result, run_number: run.number, finished_at: run.finished_at, commit: run.commit ?? "" });
+    else {
+      kept = { run_id: run.id, run_number: run.number, result: run.result, branch: run.branch ?? "main", trigger: run.trigger ?? "Scheduled",
+        finished_at: run.finished_at, commit: run.commit ?? "", step: null, step_state: "none", digest_id: null, fetch_day: null };
+      runs.push(kept);
+    }
+    if (run.result !== "failed" || kept.step_state !== "none") return;
+    const day = localDay(this.digestClock());
+    if (runs.filter((r) => r.fetch_day === day).length < STEP_FETCHES_PER_DAY) Object.assign(kept, { step_state: "pending", fetch_day: day });
+    else kept.step_state = "not_fetched";
+  }
   private pipelineItems: PipelineItem[] = [];
   private pipelineAuthError = false;
 
@@ -837,7 +870,8 @@ export class MemoryBackend implements Backend {
       error: null,
       ado_repo: null, repos: [], auto_repos: [], repo_source: "auto", repo_label: null,
     };
-    const watch = { status, notifyAfter: new Date().toISOString(), adoRepo: definition.repository ?? null, override: null };
+    const at = this.digestClock().toISOString();
+    const watch = { status, notifyAfter: at, adoRepo: definition.repository ?? null, override: null, digestSince: mode === "daily_failures" ? at : null };
     this.pipelineWatches.push(watch);
     this.pipelineWatches.sort((a, b) => a.status.name.localeCompare(b.status.name));
     return this.pipelineWithRepo(watch);
@@ -847,14 +881,16 @@ export class MemoryBackend implements Backend {
     const watch = this.pipelineWatches.find((w) => w.status.id === id);
     if (!watch) throw new Error("That pipeline isn't watched");
     watch.status.mode = mode;
-    watch.notifyAfter = new Date().toISOString();
+    watch.notifyAfter = this.digestClock().toISOString();
+    watch.digestSince = mode === "daily_failures" ? watch.notifyAfter : null;
+    this.dropUndigested(id);
   }
 
   async setPipelineWatchBranches(id: string, branches: BranchScope): Promise<void> {
     const watch = this.pipelineWatches.find((w) => w.status.id === id);
     if (!watch) throw new Error("That pipeline isn't watched");
     watch.status.branches = branches;
-    watch.notifyAfter = new Date().toISOString();
+    watch.notifyAfter = this.digestClock().toISOString();
   }
 
   async removePipelineWatch(id: string): Promise<void> {
@@ -862,6 +898,7 @@ export class MemoryBackend implements Backend {
     this.pipelineWatches = this.pipelineWatches.filter((w) => w.status.id !== id);
     if (this.pipelineWatches.length === before) throw new Error("That pipeline isn't watched");
     this.pipelineItems = this.pipelineItems.filter((item) => item.pipeline_id !== id);
+    this.digestRuns.delete(id);
   }
 
   /**
@@ -886,8 +923,13 @@ export class MemoryBackend implements Backend {
       Object.assign(status, { last_result: run.result, last_run_number: run.number, last_run_url: `${base}/results?buildId=${run.id}`, last_finished_at: run.finished_at });
     }
     status.last_checked = new Date().toISOString();
-    if (!pipelineModeWatches(status.mode, run.result) || compareTimes(run.finished_at, watch.notifyAfter) <= 0) return;
+    if (compareTimes(run.finished_at, watch.notifyAfter) <= 0) return;
     if (!branchScopeIncludes(status.branches, run.branch ?? "main", status.default_branch)) return;
+    if (status.mode === "daily_failures") {
+      this.keepDigestRun(id, run);
+      return;
+    }
+    if (!pipelineModeWatches(status.mode, run.result)) return;
     if (this.pipelineItems.some((i) => i.pipeline_id === id && i.run_id === run.id && i.result === run.result)) return;
     this.pipelineItems.push({
       id: crypto.randomUUID(),

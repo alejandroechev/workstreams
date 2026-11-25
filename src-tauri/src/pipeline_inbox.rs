@@ -642,8 +642,8 @@ pub fn add(
     let id = uuid::Uuid::new_v4().to_string();
     db.execute(
         &format!(
-            "INSERT INTO pipeline_watches(id,organization,project_id,project_name,definition_id,name,mode,created_at,notify_after,ado_repo,default_branch)
-            VALUES (?1,?2,?3,?4,?5,?6,?7,{NOW},{NOW},?8,?9)"
+            "INSERT INTO pipeline_watches(id,organization,project_id,project_name,definition_id,name,mode,created_at,notify_after,ado_repo,default_branch,digest_since)
+            VALUES (?1,?2,?3,?4,?5,?6,?7,{NOW},{NOW},?8,?9,CASE WHEN ?7='daily_failures' THEN {NOW} END)"
         ),
         params![
             id,
@@ -668,12 +668,15 @@ pub fn add(
 }
 
 /// Changes what notifies. Restarts the quiet period, so runs that finished
-/// under the old mode (including while Off) are never replayed.
+/// under the old mode (including while Off) are never replayed. Entering
+/// Daily failures starts its first digest window now; any change drops runs
+/// kept for a digest that will no longer come (ADR 045).
 pub fn set_mode(db: &Connection, id: &str, mode: PipelineMode) -> Result<(), String> {
     let changed = db
         .execute(
             &format!(
-                "UPDATE pipeline_watches SET mode=?2, notify_after={NOW}, revision=revision+1, error=NULL WHERE id=?1"
+                "UPDATE pipeline_watches SET mode=?2, notify_after={NOW}, revision=revision+1, error=NULL,
+                digest_since=CASE WHEN ?2='daily_failures' THEN {NOW} END WHERE id=?1"
             ),
             params![id, mode.as_str()],
         )
@@ -681,7 +684,7 @@ pub fn set_mode(db: &Connection, id: &str, mode: PipelineMode) -> Result<(), Str
     if changed == 0 {
         return Err("That pipeline isn't watched".into());
     }
-    Ok(())
+    crate::pipeline_digest::drop_undigested(db, id)
 }
 
 /// Changes whose runs notify. Like a mode change it restarts the quiet period,
@@ -703,8 +706,14 @@ pub fn set_branches(db: &Connection, id: &str, branches: BranchScope) -> Result<
 
 /// Stops watching a pipeline and drops its notifications.
 pub fn remove(db: &Connection, id: &str) -> Result<(), String> {
-    db.execute("DELETE FROM pipeline_events WHERE watch_id=?1", [id])
-        .map_err(|e| e.to_string())?;
+    for table in [
+        "pipeline_events",
+        "pipeline_digests",
+        "pipeline_digest_runs",
+    ] {
+        db.execute(&format!("DELETE FROM {table} WHERE watch_id=?1"), [id])
+            .map_err(|e| e.to_string())?;
+    }
     let changed = db
         .execute("DELETE FROM pipeline_watches WHERE id=?1", [id])
         .map_err(|e| e.to_string())?;
@@ -942,6 +951,8 @@ pub struct Run {
     pub finished_at: String,
     /// The repo this run built, when ADO says.
     pub repository: Option<AdoRepoRef>,
+    /// The commit it built (`sourceVersion`), or "".
+    pub commit: String,
 }
 
 fn trigger_label(reason: &str, requester: Option<&str>) -> String {
@@ -1001,6 +1012,7 @@ pub(crate) fn fetch_runs(
                     &target.organization,
                     &target.project_name,
                 ),
+                commit: text("sourceVersion"),
             })
         })
         .collect())
@@ -1033,6 +1045,22 @@ fn still_current(db: &Connection, target: &PipelineTarget) -> Result<bool, Strin
 /// (run, result). Nothing is written if the pipeline changed meanwhile.
 /// Returns how many notifications were added.
 pub fn apply_runs(db: &Connection, target: &PipelineTarget, runs: &[Run]) -> Result<usize, String> {
+    apply_runs_on(
+        db,
+        target,
+        runs,
+        &crate::pipeline_digest::Clock::system().local_day(),
+    )
+}
+
+/// [`apply_runs`] on a given local day (`YYYY-MM-DD`), which a Daily-failures
+/// pipeline's step-fetch cap counts in (ADR 045).
+pub fn apply_runs_on(
+    db: &Connection,
+    target: &PipelineTarget,
+    runs: &[Run],
+    local_day: &str,
+) -> Result<usize, String> {
     if !still_current(db, target)? {
         return Ok(0);
     }
@@ -1100,6 +1128,13 @@ pub fn apply_runs(db: &Connection, target: &PipelineTarget, runs: &[Run]) -> Res
                 ],
             )
             .map_err(|e| e.to_string())?;
+    }
+    if mode == PipelineMode::DailyFailures {
+        let kept: Vec<&Run> = runs
+            .iter()
+            .filter(|run| branches.includes(&run.branch, default_branch.as_deref()))
+            .collect();
+        crate::pipeline_digest::store_runs(&tx, &target.id, &kept, local_day)?;
     }
     tx.commit().map_err(|e| e.to_string())?;
     Ok(added)
@@ -1765,6 +1800,7 @@ mod tests {
             trigger: "Scheduled".into(),
             finished_at: finished.into(),
             repository: None,
+            commit: format!("c0ffee{id}"),
         }
     }
 
