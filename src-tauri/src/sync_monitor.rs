@@ -350,7 +350,9 @@ pub fn apply(
         .and_then(|raw| serde_json::from_str(&raw).ok())
         .unwrap_or_default();
     let mut inserted = Vec::new();
-    for e in new_events {
+    // Mute all drops sync alerts like every other Inbox source (ADR 045).
+    let muted = crate::inbox_mute::is_muted(&tx)?;
+    for e in new_events.iter().filter(|_| !muted) {
         if mutes
             .get(base_kind(&e.kind))
             .is_some_and(|until| *until > e.at)
@@ -503,6 +505,26 @@ mod tests {
         let s = stub();
         store_check(&db, &run_check(&s, "u", Some("k"), 30 * KEEP_MS)).unwrap();
         assert_eq!(events(&db, 10).unwrap(), vec![old], "an unread alert stays");
+    }
+
+    /// Mute all (ADR 045): sync alerts are dropped while the Inbox is muted.
+    #[test]
+    fn no_alert_is_recorded_while_the_inbox_is_muted() {
+        let mut db = db();
+        crate::inbox_mute::mute(&db, None).unwrap();
+        let e = Event {
+            id: "cpu-7-started".into(),
+            kind: "cpu".into(),
+            event: "started".into(),
+            at: 7,
+            message: "m".into(),
+            hint: "h".into(),
+            is_read: false,
+        };
+        assert!(apply(&mut db, &[], std::slice::from_ref(&e))
+            .unwrap()
+            .is_empty());
+        assert!(events(&db, 10).unwrap().is_empty());
     }
 
     #[test]

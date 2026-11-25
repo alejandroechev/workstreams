@@ -214,9 +214,11 @@ export class MemoryBackend implements Backend {
   private agentMessages: AgentMessage[] = [];
 
   /** What an agent's `inbox.message` does: validated, capped, tied to its tile. */
-  postAgentMessage(workstreamId: string, tileId: string, level: string, title: string, body = ""): AgentMessage {
+  postAgentMessage(workstreamId: string, tileId: string, level: string, title: string, body = ""): AgentMessage | null {
     const problem = checkAgentMessage(level, title, body);
     if (problem) throw new Error(problem);
+    // Mute all (ADR 045): dropped, as the native command answers {dropped: true}.
+    if (this.isInboxMuted()) return null;
     const hourAgo = Date.now() - 60 * 60 * 1000;
     if (this.agentMessages.filter((m) => m.tile_id === tileId && Date.parse(m.created_at) > hourAgo).length >= HOURLY_CAP) {
       throw new Error("This session has sent 20 messages in the last hour");
@@ -233,6 +235,7 @@ export class MemoryBackend implements Backend {
   async postAppInboxMessage(workstreamId: string, tileId: string, level: string, title: string, body: string): Promise<void> {
     const problem = checkAgentMessage(level, title, body);
     if (problem) throw new Error(problem);
+    if (this.isInboxMuted()) return;
     this.agentMessages.push({
       id: generateId(), workstream_id: workstreamId, workstream_name: this.workstreams.get(workstreamId)?.name ?? "",
       tile_id: tileId, level, title: title.trim(), body, is_read: false, created_at: new Date().toISOString(), available: true,
@@ -461,7 +464,8 @@ export class MemoryBackend implements Backend {
     this.syncStore.problems = structuredClone(problems);
     const known = new Set(this.syncStore.events.map((e) => e.id));
     // A mute set while the evaluation ran still wins.
-    const inserted = events.filter((e) => !known.has(e.id) && !((this.syncStore.mutes[baseKind(e.kind)] ?? 0) > e.at));
+    const muted = this.isInboxMuted();
+    const inserted = events.filter((e) => !muted && !known.has(e.id) && !((this.syncStore.mutes[baseKind(e.kind)] ?? 0) > e.at));
     this.syncStore.events.push(...structuredClone(inserted));
     // Only what was actually recorded is notified, so a repeat never alerts twice.
     const insertedIds = new Set(inserted.map((e) => e.id));
@@ -814,6 +818,31 @@ export class MemoryBackend implements Backend {
     if (muted && until && new Date(until).getTime() <= this.digestClock().getTime()) this.unmuteInboxNow();
     return this.inboxMute.muted;
   }
+  /** Mute all on (until turned off, or until `until`) or off, as inbox_mute::mute / unmute. */
+  async setInboxMute(muted: boolean, until?: string | null): Promise<InboxMuteState> {
+    if (!muted) {
+      this.unmuteInboxNow();
+      return { ...this.inboxMute };
+    }
+    if (until && !(new Date(until).getTime() > this.digestClock().getTime())) {
+      throw new Error(Number.isNaN(new Date(until).getTime()) ? "until must be a date and time" : "until must be in the future");
+    }
+    this.inboxMute = { muted: true, until: until ? new Date(until).toISOString() : null };
+    this.persistInboxSettings();
+    return { ...this.inboxMute };
+  }
+  private prEventsSeen = new Set<string>();
+  /**
+   * What a PR poll does with one observed event (E2E seam): recorded once per
+   * (PR, kind, summary), and dropped (still marked seen) while the Inbox is muted.
+   */
+  recordPrInboxEvent(item: PrInboxItem): void {
+    const key = `${item.project_id}|${item.pr_id}|${item.kind}|${item.summary}`;
+    if (this.prEventsSeen.has(key)) return;
+    this.prEventsSeen.add(key);
+    if (this.isInboxMuted()) return;
+    this.prInbox.items.unshift(structuredClone(item));
+  }
   private unmuteInboxNow(): void {
     const was = this.inboxMute.muted;
     this.inboxMute = { muted: false, until: null };
@@ -1114,6 +1143,7 @@ export class MemoryBackend implements Backend {
     }
     status.last_checked = new Date().toISOString();
     if (compareTimes(run.finished_at, watch.notifyAfter) <= 0) return;
+    if (this.isInboxMuted()) return;
     if (!branchScopeIncludes(status.branches, run.branch ?? "main", status.default_branch)) return;
     if (status.mode === "daily_failures") {
       this.keepDigestRun(id, run);

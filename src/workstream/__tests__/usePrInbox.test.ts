@@ -105,4 +105,14 @@ describe("pipelines through the inbox hook", () => {
     await act(async () => { await result.current.setDigestTime("17:30"); });
     expect(result.current.snapshot.digest_time).toBe("17:30");
   });
+
+  it("mutes and unmutes the Inbox and re-reads", async () => {
+    const backend = new MemoryBackend();
+    const { result } = renderHook(() => usePrInbox(backend));
+    await act(async () => {});
+    await act(async () => { await result.current.setMute(true, null); });
+    expect(result.current.snapshot.mute).toEqual({ muted: true, until: null });
+    await act(async () => { await result.current.setMute(false); });
+    expect(result.current.snapshot.mute?.muted).toBe(false);
+  });
 });

@@ -10,7 +10,7 @@ describe("agent messages in the in-memory backend", () => {
     const second = backend.postAgentMessage(ws.id, tile.id, "error", "Second", "body");
     let messages = (await backend.getPrInbox()).agent_messages!;
     expect(messages.map((m) => [m.title, m.workstream_name, m.available])).toEqual([["Second", "Bench", true], ["First", "Bench", true]]);
-    await backend.setPrInboxRead(second.id, true);
+    await backend.setPrInboxRead(second!.id, true);
     await backend.deleteWorkstream(ws.id);
     messages = (await backend.getPrInbox()).agent_messages!;
     expect(messages[0]).toMatchObject({ is_read: true, workstream_name: "Bench", available: false });

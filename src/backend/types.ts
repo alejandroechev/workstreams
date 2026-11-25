@@ -7,6 +7,7 @@ import type { PrInboxMute, PrInboxSnapshot, PrWatchMode } from "../domain/pr-inb
 import type { BranchScope, PipelineMode, PipelineStatus } from "../domain/pipeline-inbox";
 import type { SyncCheck, SyncEvent, SyncMonitorState, SyncProblem, SyncThresholds } from "../domain/sync-monitor";
 import type { InvestigationStarted, PendingInvestigation } from "../domain/pipeline-investigate";
+import type { InboxMuteState } from "../domain/inbox-mute";
 import type { Change, KtloFeature, OrphanHidden, OrphanReport, PlanningConnection, PlanningData, PlanningState, PublishResult } from "../domain/planning";
 import type { Project, Workstream, Tile, TileType, WorkstreamLayout, CopilotConfigItem } from "../domain/types";
 import type { SessionFileComment } from "../domain/file-comments";
@@ -101,6 +102,8 @@ export interface Backend {
   removePipelineWatch(id: string): Promise<void>;
   /** Sets a pipeline's repo by hand: a repo id, "none", or "auto" to follow what ADO says again. */
   setPipelineWatchRepo(id: string, repo: string): Promise<void>;
+  /** Mute all (ADR 045): on, until turned off or until `until` (ISO 8601), or off. */
+  setInboxMute(muted: boolean, until?: string | null): Promise<InboxMuteState>;
   /** Sets the global time Daily-failures pipelines post their digest (HH:MM local); returns it. */
   setPipelineDigestTime(time: string): Promise<string>;
   /** Makes (or returns) the investigation workstream of a failed run (by notification id). */

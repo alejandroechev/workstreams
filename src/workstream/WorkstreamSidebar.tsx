@@ -43,6 +43,7 @@ import {
   MagnifyingGlassIcon,
   XMarkIcon,
   InboxIcon,
+  BellSlashIcon,
   RocketLaunchIcon,
   CalendarDaysIcon,
   ClockIcon,
@@ -99,6 +100,8 @@ interface Props {
   pipelinesError?: boolean;
   /** Pull requests with at least one unread event, not the event count. */
   inboxUnread?: number;
+  /** Mute all is on (ADR 045): a muted bell replaces the count. */
+  inboxMuted?: boolean;
   inboxRepos?: PrInboxRepo[];
   inboxError?: string | null;
   onConfigureInbox?: (projectId: string, mode: PrWatchMode) => Promise<void>;
@@ -234,6 +237,7 @@ export default function WorkstreamSidebar({
   syncLevel = "off",
   pipelinesError = false,
   inboxUnread = 0,
+  inboxMuted = false,
   inboxRepos,
   inboxError,
   onConfigureInbox,
@@ -1250,7 +1254,7 @@ export default function WorkstreamSidebar({
           <button
             data-testid="pr-inbox-button"
             onClick={onOpenInbox}
-            title={inboxUnread > 0 ? `${inboxUnread} unread in the Inbox` : "Open the Inbox: pull request activity and pipeline runs"}
+            title={inboxMuted ? "The Inbox is muted: new notifications are dropped" : inboxUnread > 0 ? `${inboxUnread} unread in the Inbox` : "Open the Inbox: pull request activity and pipeline runs"}
             style={{
               ...footerButtonStyle,
               color: inboxUnread > 0 ? "#cdd6f4" : "#6c7086",
@@ -1261,7 +1265,10 @@ export default function WorkstreamSidebar({
           >
             <InboxIcon style={{ width: 14, height: 14, color: inboxUnread > 0 ? "#f38ba8" : "inherit" }} />
             <span style={{ flex: 1, textAlign: "left" }}>Inbox</span>
-            {inboxUnread > 0 && (
+            {inboxMuted && (
+              <BellSlashIcon data-testid="pr-inbox-muted-bell" aria-label="Inbox muted" style={{ width: 14, height: 14, color: "#f9e2af" }} />
+            )}
+            {inboxUnread > 0 && !inboxMuted && (
               <span
                 data-testid="pr-inbox-unread"
                 aria-label={`${inboxUnread} unread in the Inbox`}

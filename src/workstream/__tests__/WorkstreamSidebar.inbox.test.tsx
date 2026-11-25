@@ -83,6 +83,12 @@ describe("WorkstreamSidebar PR inbox badge", () => {
     );
   });
 
+  it("shows a muted bell instead of a count while the Inbox is muted", () => {
+    renderSidebar({ inboxUnread: 3, inboxMuted: true });
+    expect(screen.queryByTestId("pr-inbox-unread")).toBeNull();
+    expect(screen.getByTestId("pr-inbox-muted-bell")).toHaveAttribute("aria-label", "Inbox muted");
+  });
+
   it("caps the badge at 99+ so a backlog cannot stretch the sidebar", () => {
     renderSidebar({ inboxUnread: 250 });
     expect(screen.getByTestId("pr-inbox-unread")).toHaveTextContent("99+");

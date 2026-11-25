@@ -29,4 +29,14 @@ describe("TauriBackend pipelines", () => {
     expect(await backend.setPipelineDigestTime("17:30")).toBe("17:30");
     expect(invoke).toHaveBeenCalledWith("set_pipeline_digest_time", { time: "17:30" });
   });
+
+  it("mutes and unmutes the Inbox through the native command", async () => {
+    invoke.mockResolvedValue({ muted: true, until: null });
+    await backend.setInboxMute(true, "2026-12-01T08:00:00Z");
+    await backend.setInboxMute(false);
+    expect(invoke.mock.calls).toEqual([
+      ["set_inbox_mute", { muted: true, until: "2026-12-01T08:00:00Z" }],
+      ["set_inbox_mute", { muted: false, until: null }],
+    ]);
+  });
 });

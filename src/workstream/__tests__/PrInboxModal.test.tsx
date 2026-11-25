@@ -553,3 +553,33 @@ describe("Inbox, daily digests (ADR 045)", () => {
     expect(screen.getByTestId("pipeline-digest-d1")).toBeInTheDocument();
   });
 });
+
+describe("Inbox, Mute all (ADR 045)", () => {
+  const base: PrInboxSnapshot = { items: [event()], repos: [], mutes: [] };
+
+  it("mutes until turned off, or until a chosen time", async () => {
+    const onSetMute = vi.fn().mockResolvedValue(undefined);
+    render(<PrInboxModal snapshot={base} error={null} loading={false} onRead={vi.fn()} onSetMute={onSetMute} onClose={() => {}} />);
+    expect(screen.queryByTestId("inbox-muted-banner")).toBeNull();
+    fireEvent.click(screen.getByTestId("inbox-mute-all"));
+    expect(screen.getByTestId("inbox-mute-forever")).toBeChecked();
+    fireEvent.click(screen.getByTestId("inbox-mute-confirm"));
+    await waitFor(() => expect(onSetMute).toHaveBeenCalledWith(true, null));
+
+    fireEvent.click(screen.getByTestId("inbox-mute-all"));
+    fireEvent.click(screen.getByTestId("inbox-mute-until"));
+    fireEvent.change(screen.getByTestId("inbox-mute-until-input"), { target: { value: "2099-12-01T08:00" } });
+    fireEvent.click(screen.getByTestId("inbox-mute-confirm"));
+    await waitFor(() => expect(onSetMute).toHaveBeenLastCalledWith(true, new Date(2099, 11, 1, 8, 0).toISOString()));
+  });
+
+  it("shows a Muted banner with its end, and unmutes", async () => {
+    const onSetMute = vi.fn().mockResolvedValue(undefined);
+    const until = new Date(2099, 11, 1, 8, 0).toISOString();
+    render(<PrInboxModal snapshot={{ ...base, mute: { muted: true, until } }} error={null} loading={false} onRead={vi.fn()} onSetMute={onSetMute} onClose={() => {}} />);
+    expect(screen.getByTestId("inbox-muted-banner")).toHaveTextContent(`Muted until ${new Date(until).toLocaleString()}`);
+    expect(screen.getByTestId("pr-inbox-summary")).toHaveTextContent("1 unread of 1");
+    fireEvent.click(screen.getByTestId("inbox-mute-all"));
+    await waitFor(() => expect(onSetMute).toHaveBeenCalledWith(false));
+  });
+});

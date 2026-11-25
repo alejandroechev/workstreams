@@ -606,6 +606,22 @@ pub const COMMANDS: &[Command] = &[
         handler: inbox_investigate,
     },
     Command {
+        id: "inbox.mute_all_on",
+        log_params: &["until"],
+        summary: "Mute all: record nothing new in the Inbox from any source (PRs, pipelines, digests, agent messages, schedule notices, sync alerts) until turned off, or until a time (params: until = RFC 3339, e.g. 2026-12-01T08:00:00Z, optional). Muted events are dropped, never replayed. Not inbox.mute, which silences one kind of PR event",
+        requires_identity: true,
+        destructive: false,
+        handler: inbox_mute_all_on,
+    },
+    Command {
+        id: "inbox.mute_all_off",
+        log_params: &[],
+        summary: "Turn Mute all off: the Inbox records new events again; nothing from the muted time replays. Not inbox.unmute_all, which clears PR mute rules",
+        requires_identity: true,
+        destructive: false,
+        handler: inbox_mute_all_off,
+    },
+    Command {
         id: "inbox.digest_time",
         log_params: &["time"],
         summary: "Read or set the global time Daily-failures pipelines post their digest (params: time=HH:MM, 24-hour local; omit to read; default 09:00)",
@@ -1074,6 +1090,35 @@ fn inbox_investigate(
     Ok(CommandOutcome::changed(
         serde_json::json!(started),
         StateChange::new("pipeline_investigation", &started.workstream_id, "started"),
+    ))
+}
+
+fn inbox_mute_all_on(
+    context: &CommandContext,
+    params: &serde_json::Value,
+) -> Result<CommandOutcome, AgentError> {
+    let until = optional_str(params, "until");
+    let state = crate::inbox_mute::mute(context.db, until.as_deref()).map_err(|e| {
+        AgentError::new(
+            "INVALID_PARAM",
+            e,
+            "Omit until to mute until turned off, or pass a future time like until=2026-12-01T08:00:00Z.",
+        )
+    })?;
+    Ok(CommandOutcome::changed(
+        serde_json::json!(state),
+        StateChange::new("pr_inbox", "mute", "muted"),
+    ))
+}
+
+fn inbox_mute_all_off(
+    context: &CommandContext,
+    _: &serde_json::Value,
+) -> Result<CommandOutcome, AgentError> {
+    let state = crate::inbox_mute::unmute(context.db).map_err(inbox_error)?;
+    Ok(CommandOutcome::changed(
+        serde_json::json!(state),
+        StateChange::new("pr_inbox", "mute", "unmuted"),
     ))
 }
 
@@ -2800,26 +2845,33 @@ fn inbox_message(
             .to_string()
     };
     use crate::inbox_messages::{send, Refusal};
-    let message = send(
+    let message = match send(
         context.db,
         workstream_id,
         tile_id,
         &text("level"),
         &text("title"),
         &text("body"),
-    )
-    .map_err(|refusal| match refusal {
-        Refusal::Invalid(error) => AgentError::new(
+    ) {
+        Ok(message) => message,
+        // Mute all (ADR 045): dropped, not an error the agent should retry.
+        Err(Refusal::Muted) => {
+            return Ok(CommandOutcome::read(serde_json::json!({
+                "dropped": true,
+                "reason": "The user muted the Inbox (Mute all), so the message was not recorded. Give your result in the terminal instead."
+            })))
+        }
+        Err(Refusal::Invalid(error)) => return Err(AgentError::new(
             "BAD_MESSAGE",
             error,
             "Send level=info|done|needs-you|error, a title of at most 120 characters and a body of at most 20000.",
-        ),
-        Refusal::RateLimited => AgentError::new(
+        )),
+        Err(Refusal::RateLimited) => return Err(AgentError::new(
             "RATE_LIMITED",
             "This session has sent 20 messages in the last hour",
             "Wait, or put the rest in one message.",
-        ),
-    })?;
+        )),
+    };
     let id = message.id.clone();
     Ok(CommandOutcome::changed(
         serde_json::json!(message),
@@ -6170,6 +6222,49 @@ mod tests {
             .as_array()
             .unwrap()
             .is_empty());
+    }
+
+    #[test]
+    fn mute_all_turns_on_and_off_through_the_agent_channel_apart_from_pr_mutes() {
+        let db = memory_db();
+        let caller = agent("tile-1", "ws-own");
+        let on = call(
+            &db,
+            &caller,
+            "inbox.mute_all_on",
+            serde_json::json!({"until":"2999-01-01T08:00:00Z"}),
+        )
+        .unwrap();
+        assert_eq!(on.data["muted"], true);
+        assert_eq!(on.data["until"], "2999-01-01T08:00:00.000Z");
+        assert!(on.change.is_some());
+        let bad = call(
+            &db,
+            &caller,
+            "inbox.mute_all_on",
+            serde_json::json!({"until":"2000-01-01T00:00:00Z"}),
+        )
+        .unwrap_err();
+        assert_eq!(bad.code, "INVALID_PARAM");
+        // inbox.unmute_all clears PR mute rules only.
+        call(&db, &caller, "inbox.unmute_all", serde_json::Value::Null).unwrap();
+        let listed = call(&db, &caller, "inbox.list", serde_json::Value::Null).unwrap();
+        assert_eq!(listed.data["mute"]["muted"], true);
+        let dropped = call(
+            &db,
+            &caller,
+            "inbox.message",
+            serde_json::json!({"level":"done","title":"Finished"}),
+        )
+        .unwrap();
+        assert_eq!(dropped.data["dropped"], true);
+        let off = call(&db, &caller, "inbox.mute_all_off", serde_json::Value::Null).unwrap();
+        assert_eq!(off.data["muted"], false);
+        let listed = call(&db, &caller, "inbox.list", serde_json::Value::Null).unwrap();
+        assert_eq!(listed.data["mute"]["muted"], false);
+        assert!(listed.data["agent_messages"].as_array().unwrap().is_empty());
+        let forever = call(&db, &caller, "inbox.mute_all_on", serde_json::Value::Null).unwrap();
+        assert_eq!(forever.data["until"], serde_json::Value::Null);
     }
 
     #[test]

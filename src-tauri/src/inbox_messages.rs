@@ -34,6 +34,8 @@ pub struct AgentMessage {
 pub enum Refusal {
     Invalid(String),
     RateLimited,
+    /// The Inbox is muted (Mute all, ADR 045): the message is dropped.
+    Muted,
 }
 
 pub fn check(level: &str, title: &str, body: &str) -> Result<(), String> {
@@ -72,6 +74,9 @@ pub fn send(
     body: &str,
 ) -> Result<AgentMessage, Refusal> {
     check(level, title, body).map_err(Refusal::Invalid)?;
+    if crate::inbox_mute::is_muted(db).map_err(Refusal::Invalid)? {
+        return Err(Refusal::Muted);
+    }
     let sent: i64 = db
         .query_row(
             "SELECT COUNT(*) FROM agent_messages WHERE tile_id=?1
@@ -106,7 +111,8 @@ pub fn send(
 
 /// Stores an Inbox entry the app itself raises about a tile (a periodic
 /// schedule pausing itself, ADR 044). Validated like an agent's message but
-/// not rate limited: the app sends at most one per event.
+/// not rate limited: the app sends at most one per event. `None` when the
+/// Inbox is muted and the entry was dropped (ADR 045).
 pub fn post_from_app(
     db: &Connection,
     workstream_id: &str,
@@ -114,8 +120,11 @@ pub fn post_from_app(
     level: &str,
     title: &str,
     body: &str,
-) -> Result<AgentMessage, String> {
+) -> Result<Option<AgentMessage>, String> {
     check(level, title, body)?;
+    if crate::inbox_mute::is_muted(db)? {
+        return Ok(None);
+    }
     let id = uuid::Uuid::new_v4().to_string();
     db.execute(
         "INSERT INTO agent_messages (id, workstream_id, workstream_name, tile_id, level, title, body, is_read, created_at)
@@ -127,6 +136,7 @@ pub fn post_from_app(
     list(db)?
         .into_iter()
         .find(|m| m.id == id)
+        .map(Some)
         .ok_or_else(|| "The message was not stored.".into())
 }
 
@@ -187,13 +197,39 @@ mod tests {
         conn
     }
 
+    /// Mute all (ADR 045): agent messages and app notices are dropped, never
+    /// held; bad input is still refused.
+    #[test]
+    fn nothing_is_stored_while_the_inbox_is_muted() {
+        let db = db();
+        crate::inbox_mute::mute(&db, None).unwrap();
+        assert_eq!(
+            send(&db, "w1", "t1", "done", "Finished", ""),
+            Err(Refusal::Muted)
+        );
+        assert!(matches!(
+            send(&db, "w1", "t1", "loud", "x", ""),
+            Err(Refusal::Invalid(_))
+        ));
+        assert_eq!(
+            post_from_app(&db, "w1", "t1", "error", "Schedule paused", "").unwrap(),
+            None
+        );
+        assert!(list(&db).unwrap().is_empty());
+        crate::inbox_mute::unmute(&db).unwrap();
+        assert!(list(&db).unwrap().is_empty(), "nothing replays");
+        assert!(send(&db, "w1", "t1", "done", "Finished", "").is_ok());
+    }
+
     #[test]
     fn the_app_posts_entries_past_the_agent_cap_but_still_validated() {
         let db = db();
         for i in 0..HOURLY_CAP {
             send(&db, "w1", "t1", "info", &format!("m{i}"), "").unwrap();
         }
-        let m = post_from_app(&db, "w1", "t1", "error", "Schedule paused", "3 failures").unwrap();
+        let m = post_from_app(&db, "w1", "t1", "error", "Schedule paused", "3 failures")
+            .unwrap()
+            .unwrap();
         assert_eq!(
             (
                 m.workstream_name.as_str(),

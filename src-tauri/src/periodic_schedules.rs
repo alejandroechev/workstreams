@@ -629,6 +629,23 @@ mod tests {
         );
     }
 
+    /// Mute all (ADR 045): the schedule still pauses; its notice is dropped.
+    #[test]
+    fn an_auto_pause_while_the_inbox_is_muted_posts_no_notice() {
+        let conn = db();
+        let freq = json!({"kind":"daily","time":"09:00"});
+        let s = create(&conn, &new("t1", "w1", &freq)).unwrap();
+        crate::inbox_mute::mute(&conn, None).unwrap();
+        let alert = Alert {
+            title: "Schedule paused: Check".into(),
+            body: "3 failures".into(),
+        };
+        let paused =
+            update_with_alert(&conn, &s.id, &json!({"paused":true}), None, Some(&alert)).unwrap();
+        assert!(paused.paused);
+        assert!(crate::inbox_messages::list(&conn).unwrap().is_empty());
+    }
+
     #[test]
     fn follows_the_tile_and_the_workstream() {
         let conn = db();

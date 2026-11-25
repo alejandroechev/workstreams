@@ -1063,6 +1063,21 @@ fn set_pipeline_watch_repo(
     pipeline_inbox::set_repo(&db, &id, &repo)
 }
 
+/// Mute all (ADR 045): on (until turned off, or until `until`), or off.
+#[tauri::command]
+fn set_inbox_mute(
+    state: State<'_, AppState>,
+    muted: bool,
+    until: Option<String>,
+) -> Result<inbox_mute::MuteState, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    if muted {
+        inbox_mute::mute(&db, until.as_deref())
+    } else {
+        inbox_mute::unmute(&db)
+    }
+}
+
 /// Sets the global time Daily-failures digests post (ADR 045).
 #[tauri::command]
 fn set_pipeline_digest_time(state: State<'_, AppState>, time: String) -> Result<String, String> {
@@ -6910,6 +6925,7 @@ pub fn run() {
             pipeline_investigation_session_started,
             remove_pipeline_watch,
             set_pipeline_digest_time,
+            set_inbox_mute,
             set_pr_inbox_read,
             mute_pr_inbox_event,
             reset_pr_inbox_mutes,

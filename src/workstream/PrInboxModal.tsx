@@ -11,7 +11,7 @@ import {
 } from "../domain/pr-inbox";
 import { groupPipelineItems, resultLabel, type PipelineItem } from "../domain/pipeline-inbox";
 import { digestCounts, digestStateLabel, stepLabel, type PipelineDigest } from "../domain/pipeline-digest";
-import { digestRunItemId } from "../domain/inbox-mute";
+import { digestRunItemId, muteBannerText } from "../domain/inbox-mute";
 import { resultColor } from "./pipeline-result";
 import { groupAgentMessages, levelLabel, previewLines, type AgentMessage } from "../domain/agent-messages";
 import { MarkdownView } from "../ui/MarkdownView";
@@ -36,6 +36,8 @@ interface Props {
   onInvestigate?: (itemId: string) => Promise<void>;
   /** Starts investigating a daily digest's failed runs as one batch (ADR 045). */
   onInvestigateDigest?: (digestId: string) => Promise<void>;
+  /** Mute all (ADR 045): on until turned off (`until` null) or until a time, or off. */
+  onSetMute?: (muted: boolean, until?: string | null) => Promise<void>;
   /** Goes to the session that sent an agent message (ADR 041). */
   onOpenAgentMessage?: (message: AgentMessage) => void;
   /** Switches to a workstream, e.g. a run's existing investigation. */
@@ -52,7 +54,7 @@ interface Props {
  * reached from the same sidebar footer, so a different shell read as a
  * different app.
  */
-export function PrInboxModal({ snapshot, loading, error, onRead, onMute, onResetMutes, onOpenPipelines, syncEvents = [], onSyncRead, onInvestigate, onInvestigateDigest, onOpenWorkstream, onOpenAgentMessage, onClose }: Props) {
+export function PrInboxModal({ snapshot, loading, error, onRead, onMute, onResetMutes, onOpenPipelines, syncEvents = [], onSyncRead, onInvestigate, onInvestigateDigest, onSetMute, onOpenWorkstream, onOpenAgentMessage, onClose }: Props) {
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
   const toggleExpanded = (id: string) => setExpanded((current) => {
     const next = new Set(current);
@@ -66,6 +68,11 @@ export function PrInboxModal({ snapshot, loading, error, onRead, onMute, onReset
   const mutes = snapshot.mutes ?? [];
   const [busy, setBusy] = useState(false);
   const [showRead, setShowRead] = useState(false);
+  const [muteMenu, setMuteMenu] = useState(false);
+  const [muteUntil, setMuteUntil] = useState<"forever" | "until">("forever");
+  const [muteAt, setMuteAt] = useState("");
+  const muted = !!snapshot.mute?.muted;
+  const banner = muteBannerText(snapshot.mute);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") { event.stopPropagation(); onClose(); }
@@ -177,6 +184,58 @@ export function PrInboxModal({ snapshot, loading, error, onRead, onMute, onReset
             </div>
           </div>
           <span style={{ flex: 1 }} />
+          {onSetMute && (
+            <div style={{ position: "relative", marginRight: 8 }}>
+              <button
+                data-testid="inbox-mute-all"
+                aria-pressed={muted}
+                aria-expanded={muted ? undefined : muteMenu}
+                disabled={busy}
+                title={muted ? "Turn notifications back on" : "Stop recording new notifications from every source"}
+                onClick={() => {
+                  if (muted) void act(() => onSetMute(false));
+                  else setMuteMenu(!muteMenu);
+                }}
+                style={{ ...buttonStyle, display: "inline-flex", alignItems: "center", gap: 4, color: muted ? "#f9e2af" : "#cdd6f4" }}
+              >
+                <BellSlashIcon aria-hidden="true" width={12} height={12} />
+                {muted ? "Unmute" : "Mute all"}
+              </button>
+              {muteMenu && !muted && (
+                <div data-testid="inbox-mute-menu" role="dialog" aria-label="Mute all" style={muteMenuStyle}>
+                  <label style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                    <input type="radio" name="inbox-mute-end" data-testid="inbox-mute-forever" checked={muteUntil === "forever"} onChange={() => setMuteUntil("forever")} />
+                    Until I turn it off
+                  </label>
+                  <label style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                    <input type="radio" name="inbox-mute-end" data-testid="inbox-mute-until" checked={muteUntil === "until"} onChange={() => setMuteUntil("until")} />
+                    Until
+                    <input
+                      type="datetime-local"
+                      data-testid="inbox-mute-until-input"
+                      aria-label="Mute until"
+                      value={muteAt}
+                      onFocus={() => setMuteUntil("until")}
+                      onChange={(event) => { setMuteAt(event.target.value); setMuteUntil("until"); }}
+                      style={{ ...buttonStyle, padding: "2px 4px" }}
+                    />
+                  </label>
+                  <div style={{ color: "#6c7086" }}>New notifications are dropped while muted, not saved for later. The phone companion keeps working.</div>
+                  <button
+                    data-testid="inbox-mute-confirm"
+                    disabled={busy || (muteUntil === "until" && !muteAt)}
+                    onClick={() => void act(async () => {
+                      await onSetMute(true, muteUntil === "until" ? new Date(muteAt).toISOString() : null);
+                      setMuteMenu(false);
+                    })}
+                    style={buttonStyle}
+                  >
+                    Mute
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
           {onOpenPipelines && (
             <button data-testid="inbox-pipelines-open" onClick={onOpenPipelines} title="Choose which pipelines notify" style={{ ...buttonStyle, marginRight: 8 }}>
               Pipelines…
@@ -241,6 +300,13 @@ export function PrInboxModal({ snapshot, loading, error, onRead, onMute, onReset
             ))}
           </div>
         </div>
+
+        {banner && (
+          <div role="status" data-testid="inbox-muted-banner" style={{ ...noteStyle, display: "flex", alignItems: "center", gap: 8, color: "#f9e2af", background: "#181825" }}>
+            <BellSlashIcon aria-hidden="true" width={14} height={14} />
+            <span>{banner}</span>
+          </div>
+        )}
 
         {showMutes && onResetMutes && mutes.length > 0 && (
           <div data-testid="pr-inbox-mutes" style={{ ...noteStyle, display: "flex", flexDirection: "column", gap: 4 }}>
@@ -725,6 +791,12 @@ function resultStyle(result: string): React.CSSProperties {
     textAlign: "center",
   };
 }
+
+const muteMenuStyle: React.CSSProperties = {
+  position: "absolute", top: "calc(100% + 4px)", right: 0, zIndex: 10, width: 280, display: "grid", gap: 8, padding: 10,
+  background: "#181825", border: "1px solid #45475a", borderRadius: 6, boxShadow: "0 6px 16px rgba(0,0,0,0.45)",
+  color: "#cdd6f4", fontSize: 11,
+};
 
 const linkButtonStyle: React.CSSProperties = {
   background: "none", border: "none", padding: 0, textAlign: "left", cursor: "pointer", fontFamily: "inherit", fontSize: 11,

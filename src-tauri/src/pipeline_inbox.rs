@@ -1161,8 +1161,13 @@ pub fn apply_runs_on(
     )
     .map_err(|e| e.to_string())?;
     let mut added = 0;
+    // Mute all (ADR 045): nothing is recorded or kept for a digest; the last
+    // result still shows. Unmuting restarts the quiet period, so these runs
+    // never replay.
+    let muted = crate::inbox_mute::is_muted(&tx)?;
     for run in runs
         .iter()
+        .filter(|_| !muted)
         .filter(|run| mode.watches(&run.result))
         .filter(|run| branches.includes(&run.branch, default_branch.as_deref()))
     {
@@ -1193,7 +1198,7 @@ pub fn apply_runs_on(
             )
             .map_err(|e| e.to_string())?;
     }
-    if mode == PipelineMode::DailyFailures {
+    if mode == PipelineMode::DailyFailures && !muted {
         let kept: Vec<&Run> = runs
             .iter()
             .filter(|run| branches.includes(&run.branch, default_branch.as_deref()))

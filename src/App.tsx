@@ -2545,6 +2545,7 @@ export default function App() {
           onSyncRead={syncMonitor.setRead}
           onInvestigate={investigatePipelineRun}
           onInvestigateDigest={investigatePipelineRun}
+          onSetMute={inbox.setMute}
           onOpenWorkstream={(id) => { setShowInbox(false); selectWorkstream(id); }}
           onOpenAgentMessage={openAgentMessage}
           onClose={() => setShowInbox(false)} />
@@ -2589,6 +2590,7 @@ export default function App() {
       <WorkstreamSidebar
         onOpenInbox={() => setShowInbox(true)}
         inboxUnread={countUnreadInbox(inbox.snapshot) + (syncMonitor.state?.events ?? []).filter((e) => !e.is_read).length}
+        inboxMuted={!!inbox.snapshot.mute?.muted}
         onOpenPipelines={() => setShowPipelines(true)}
         onOpenPlanning={() => setShowPlanning(true)}
         onOpenSchedules={() => { setShowSchedules(true); void schedules.refresh().catch(() => {}); }}

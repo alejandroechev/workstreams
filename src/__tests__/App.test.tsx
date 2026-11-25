@@ -308,6 +308,7 @@ function createBackend(): Backend {
     setPipelineWatchRepo: vi.fn(async () => {}),
     startPipelineInvestigation: vi.fn(),
     setPipelineDigestTime: vi.fn(),
+    setInboxMute: vi.fn(),
     pendingInvestigationSessions: vi.fn(async () => []),
     markInvestigationSessionStarted: vi.fn(async () => {}),
     planningState: vi.fn(async () => ({ connection: null, selected_sprint: null, draft: [] })),

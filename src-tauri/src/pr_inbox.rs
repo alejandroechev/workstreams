@@ -450,7 +450,8 @@ fn record_event_read(
             |r| r.get(0),
         )
         .map_err(|e| e.to_string())?;
-    if muted {
+    // Mute all drops every event the same way (ADR 045).
+    if muted || crate::inbox_mute::is_muted(tx)? {
         return Ok(());
     }
     // An expired event is not reported again (ADR 041).
@@ -2669,6 +2670,60 @@ mod tests {
             .collect();
         assert!(!gates.iter().any(|(id, _)| *id == 3));
         assert!(gates.contains(&(4, "rejected".into())));
+    }
+
+    /// Mute all (ADR 045): a PR event while muted is dropped, and its
+    /// watermark advances, so nothing replays after unmuting.
+    #[test]
+    fn inbox_mute_all_drops_pr_events_and_nothing_replays() {
+        let mut db = db();
+        configure(&db, "p", WatchMode::Reviewer).unwrap();
+        let target = targets(&db).unwrap().remove(0);
+        apply_snapshot(&mut db, &target, "me", &[]).unwrap();
+        apply_snapshot(
+            &mut db,
+            &target,
+            "me",
+            &[with_detail(pr(3), PrDetail::default())],
+        )
+        .unwrap();
+        let before = snapshot(&db).unwrap().items.len();
+        crate::inbox_mute::mute(&db, None).unwrap();
+        let commented = PrDetail {
+            comments: vec![comment(1, 1, "dev", "2026-01-02T00:00:00Z")],
+            ..Default::default()
+        };
+        apply_snapshot(
+            &mut db,
+            &target,
+            "me",
+            &[with_detail(pr(3), commented.clone()), pr(4)],
+        )
+        .unwrap();
+        assert_eq!(
+            snapshot(&db).unwrap().items.len(),
+            before,
+            "nothing recorded while muted"
+        );
+        crate::inbox_mute::unmute(&db).unwrap();
+        apply_snapshot(
+            &mut db,
+            &target,
+            "me",
+            &[with_detail(pr(3), commented), pr(4)],
+        )
+        .unwrap();
+        assert_eq!(
+            snapshot(&db).unwrap().items.len(),
+            before,
+            "the muted comment never appears"
+        );
+        apply_snapshot(&mut db, &target, "me", &[pr(3), pr(4), pr(5)]).unwrap();
+        assert_eq!(
+            snapshot(&db).unwrap().items.len(),
+            before + 1,
+            "new events record again"
+        );
     }
 
     #[test]

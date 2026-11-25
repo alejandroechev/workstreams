@@ -1234,6 +1234,57 @@ pub(crate) mod tests {
         assert!(undigested(&db, &ci).unwrap().is_empty());
     }
 
+    /// Mute all: a run that finishes while muted never notifies, even when
+    /// seen again after unmuting; Daily-failures runs aren't kept either.
+    #[test]
+    fn runs_while_muted_never_notify_or_count() {
+        let db = db();
+        let failures = watch(&db, 1, "CI", PipelineMode::Failures);
+        let daily = watch(&db, 2, "Daily", PipelineMode::DailyFailures);
+        crate::inbox_mute::mute_at(&db, None, at("2026-03-01T10:00:00Z")).unwrap();
+        inbox::apply_runs_on(
+            &db,
+            &target(&db, &failures),
+            &[run(1, "failed", "2026-03-01T11:00:00Z")],
+            "2026-03-01",
+        )
+        .unwrap();
+        inbox::apply_runs_on(
+            &db,
+            &target(&db, &daily),
+            &[run(2, "failed", "2026-03-01T11:00:00Z")],
+            "2026-03-01",
+        )
+        .unwrap();
+        assert!(inbox::items(&db).unwrap().is_empty());
+        assert!(undigested(&db, &daily).unwrap().is_empty());
+        assert_eq!(
+            inbox::list(&db).unwrap()[0].last_result.as_deref(),
+            Some("failed"),
+            "the last result still shows"
+        );
+        crate::inbox_mute::unmute_at(&db, at("2026-03-01T12:00:00Z")).unwrap();
+        inbox::apply_runs_on(
+            &db,
+            &target(&db, &failures),
+            &[run(1, "failed", "2026-03-01T11:00:00Z")],
+            "2026-03-01",
+        )
+        .unwrap();
+        assert!(
+            inbox::items(&db).unwrap().is_empty(),
+            "no replay after unmuting"
+        );
+        inbox::apply_runs_on(
+            &db,
+            &target(&db, &failures),
+            &[run(3, "failed", "2026-03-01T12:30:00Z")],
+            "2026-03-01",
+        )
+        .unwrap();
+        assert_eq!(inbox::items(&db).unwrap().len(), 1);
+    }
+
     #[test]
     fn a_retried_run_takes_its_new_result_until_a_digest_covers_it() {
         let db = db();
