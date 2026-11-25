@@ -50,7 +50,7 @@ describe("MemoryBackend Mute all", () => {
     setNow(new Date(2100, 2, 3, 9, 0));
     b.runDigestPass();
     expect(await count(b)).toBe(1);
-    b.recordPrInboxEvent(comment("new", { project_id: repo.id, summary: "Dev commented: new" }));
+    b.recordPrInboxEvent(comment("new", { project_id: repo.id, summary: "Dev commented: new", discovered_at: new Date(2100, 2, 3, 9, 30).toISOString() }));
     expect(await count(b)).toBe(2);
   });
 
