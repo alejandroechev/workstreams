@@ -69,7 +69,7 @@ export interface FollowUpDeps {
   isBusy(tileId: string): boolean;
   /** The session's log has a turn that hasn't ended. */
   turnOpen(sessionId: string): Promise<boolean>;
-  /** Resumes the session in its tile with the prompt (the shared resume path). */
+  /** Resumes the session in its tile on the given text, through the shared resume path. */
   resume(workstreamId: string, tileId: string, prompt: string): Promise<void>;
   inFlight: Set<string>;
 }
