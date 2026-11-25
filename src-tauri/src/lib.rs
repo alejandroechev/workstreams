@@ -2303,8 +2303,61 @@ fn spawn_terminal(
 /// The command template is whitespace-split (it is a setting, not user text).
 /// An initial prompt is appended as `-i <prompt>`, a single argv entry, so it
 /// never passes through a shell or gets split.
+/// What an investigation tile's Copilot session may never do (ADR 045): write
+/// files, or run git and file commands that change the checkout. Deny rules
+/// win over every allow, `--yolo` included; `az` and `workstreams agent` stay
+/// allowed so it can read the runs and post its conclusion.
+pub(crate) const INVESTIGATION_DENY_RULES: &[&str] = &[
+    "write",
+    "shell(git commit)",
+    "shell(git push)",
+    "shell(git reset)",
+    "shell(git checkout)",
+    "shell(git switch)",
+    "shell(git restore)",
+    "shell(git merge)",
+    "shell(git rebase)",
+    "shell(git cherry-pick)",
+    "shell(git revert)",
+    "shell(git stash)",
+    "shell(git clean)",
+    "shell(git rm)",
+    "shell(git mv)",
+    "shell(git apply)",
+    "shell(git am)",
+    "shell(git branch)",
+    "shell(git tag)",
+    "shell(rm)",
+    "shell(mv)",
+    "shell(cp)",
+    "shell(rmdir)",
+    "shell(mkdir)",
+    "shell(touch)",
+    "shell(chmod)",
+    "shell(ln)",
+    "shell(truncate)",
+    "shell(dd)",
+];
+
+/// `--deny-tool=<rule>` for each investigation rule when the tile is an
+/// investigation's (`"investigation": true` in its config), else nothing.
+pub(crate) fn investigation_deny_args(config_json: &str) -> Vec<String> {
+    let investigation = serde_json::from_str::<serde_json::Value>(config_json)
+        .ok()
+        .and_then(|c| c["investigation"].as_bool())
+        .unwrap_or(false);
+    if !investigation {
+        return Vec::new();
+    }
+    INVESTIGATION_DENY_RULES
+        .iter()
+        .map(|rule| format!("--deny-tool={rule}"))
+        .collect()
+}
+
 fn copilot_launch(
     command: Option<&str>,
+    deny: &[String],
     resume_session_id: Option<&str>,
     initial_prompt: Option<&str>,
 ) -> Result<(String, Vec<String>), String> {
@@ -2318,6 +2371,7 @@ fn copilot_launch(
         .ok_or("empty copilot command template")?
         .to_string();
     let mut args: Vec<String> = parts.map(|s| s.to_string()).collect();
+    args.extend(deny.iter().cloned());
     if let Some(sid) = resume_session_id {
         args.push(format!("--resume={sid}"));
     }
@@ -2352,20 +2406,34 @@ fn spawn_copilot_session(
     command: Option<String>,
     initial_prompt: Option<String>,
 ) -> Result<Option<u32>, String> {
-    let (program, args) = copilot_launch(
-        command.as_deref(),
-        resume_session_id.as_deref(),
-        initial_prompt.as_deref(),
-    )?;
     // The link check and the token are under one lock: a resume that read the
     // link before a re-link can't start (and get a token for) the old session.
-    let env = {
+    // An investigation tile's deny rules are read from its stored config, so
+    // every start (mount, restart, resume, follow-up) carries them (ADR 045).
+    let (env, deny) = {
         let db = state.db.lock().map_err(|e| e.to_string())?;
         if let Some(session_id) = resume_session_id.as_deref() {
             companion_messages::check_resume_target(&db, &tile_id, session_id)?;
         }
-        workstream_env_from_db(&db, &tile_id, &state.agent_identities)
+        let config: Option<String> = db
+            .query_row(
+                "SELECT config_json FROM tiles WHERE id = ?1",
+                [&tile_id],
+                |r| r.get::<_, Option<String>>(0),
+            )
+            .ok()
+            .flatten();
+        (
+            workstream_env_from_db(&db, &tile_id, &state.agent_identities),
+            investigation_deny_args(config.as_deref().unwrap_or("{}")),
+        )
     };
+    let (program, args) = copilot_launch(
+        command.as_deref(),
+        &deny,
+        resume_session_id.as_deref(),
+        initial_prompt.as_deref(),
+    )?;
     let pid = state.pty.spawn(
         &app,
         &tile_id,
@@ -7197,15 +7265,55 @@ mod tests {
     fn copilot_launch_passes_an_initial_prompt_as_a_single_argument() {
         let prompt = "Fix it\nthen \"say\" $(whoami) done";
         let (program, args) =
-            copilot_launch(Some("agency copilot --yolo"), None, Some(prompt)).unwrap();
+            copilot_launch(Some("agency copilot --yolo"), &[], None, Some(prompt)).unwrap();
         assert_eq!(program, "agency");
         assert_eq!(args, vec!["copilot", "--yolo", "-i", prompt]);
+    }
+
+    /// f1: an investigation tile's session can't write files or run
+    /// mutating git/file commands, whatever command template it uses.
+    #[test]
+    fn an_investigation_tile_is_launched_with_deny_rules() {
+        let deny = investigation_deny_args(r#"{"session_name":"x","investigation":true}"#);
+        for rule in [
+            "write",
+            "shell(git push)",
+            "shell(git commit)",
+            "shell(git reset)",
+            "shell(git checkout)",
+            "shell(rm)",
+            "shell(mv)",
+        ] {
+            assert!(
+                deny.contains(&format!("--deny-tool={rule}")),
+                "{rule}: {deny:?}"
+            );
+        }
+        assert!(deny
+            .iter()
+            .all(|a| !a.contains("az") && !a.contains("workstreams")));
+        assert!(investigation_deny_args(r#"{"session_name":"x"}"#).is_empty());
+        assert!(investigation_deny_args("not json").is_empty());
+        let (program, args) = copilot_launch(
+            Some("agency copilot --yolo"),
+            &deny,
+            Some("abc"),
+            Some("go"),
+        )
+        .unwrap();
+        assert_eq!(program, "agency");
+        assert_eq!(&args[..2], &["copilot", "--yolo"]);
+        assert!(
+            args.contains(&"--deny-tool=shell(git push)".to_string()),
+            "{args:?}"
+        );
+        assert_eq!(&args[args.len() - 3..], &["--resume=abc", "-i", "go"]);
     }
 
     #[test]
     fn copilot_launch_keeps_resume_and_default_behaviour() {
         assert_eq!(
-            copilot_launch(None, Some("abc"), None).unwrap(),
+            copilot_launch(None, &[], Some("abc"), None).unwrap(),
             (
                 "agency".to_string(),
                 vec![
@@ -7216,7 +7324,7 @@ mod tests {
             )
         );
         assert_eq!(
-            copilot_launch(Some("  copilot  "), None, Some("   ")).unwrap(),
+            copilot_launch(Some("  copilot  "), &[], None, Some("   ")).unwrap(),
             ("copilot".to_string(), Vec::<String>::new()),
             "a blank prompt adds nothing"
         );

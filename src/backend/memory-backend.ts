@@ -30,6 +30,7 @@ import {
   batchPrompt,
   batchWorkstreamName,
   followupPrompt,
+  investigationDenyArgs,
 } from "../domain/pipeline-investigate";
 import {
   AUTO_STARTS_PER_DAY,
@@ -1774,7 +1775,9 @@ export class MemoryBackend implements Backend {
       if (!w.__WS_INVOKE_LOG__) w.__WS_INVOKE_LOG__ = [];
       w.__WS_INVOKE_LOG__.push({
         cmd: "spawn_copilot_session",
-        args: { tileId, cwd, resumeSessionId: resumeSessionId ?? null, rows: rows ?? null, cols: cols ?? null, command: command ?? null, initialPrompt: initialPrompt ?? null },
+        args: { tileId, cwd, resumeSessionId: resumeSessionId ?? null, rows: rows ?? null, cols: cols ?? null, command: command ?? null, initialPrompt: initialPrompt ?? null,
+          // As natively: an investigation tile's stored config adds its deny rules to every start.
+          denyTools: investigationDenyArgs(this.tiles.get(tileId)?.config_json ?? "{}") },
       });
     }
     return null;

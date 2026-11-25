@@ -32,6 +32,7 @@ describe("starting investigation sessions", () => {
     expect(d.mount).toHaveBeenCalledWith(started.workstream_id);
     const tiles = await backend.listTiles(started.workstream_id);
     expect(tiles.map((t) => t.tile_type)).toEqual(["copilot_session"]);
+    expect(JSON.parse(tiles[0].config_json).investigation).toBe(true);
     expect(d.spawn).toHaveBeenCalledWith(tiles[0].id, "/Users/demo", "copilot", expect.stringContaining("Investigate a failed Azure DevOps pipeline run"));
     expect(d.onTileCreated).toHaveBeenCalledWith(tiles[0]);
     expect(await backend.pendingInvestigationSessions()).toEqual([]);

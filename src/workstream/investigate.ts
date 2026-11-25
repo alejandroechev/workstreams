@@ -46,7 +46,9 @@ export async function startPendingInvestigations(deps: InvestigationDeps): Promi
       await deps.mount(session.workstream_id);
       const name = (await backend.listWorkstreams()).find((w) => w.id === session.workstream_id)?.name ?? "Investigation";
       const tile = left
-        ?? await backend.createTile(session.workstream_id, "copilot_session", name, createCopilotSessionConfig(name, session.directory));
+        // Marked as an investigation: every start of it is launched read-only (ADR 045).
+        ?? await backend.createTile(session.workstream_id, "copilot_session", name,
+          JSON.stringify({ ...JSON.parse(createCopilotSessionConfig(name, session.directory)), investigation: true }));
       tileId = tile.id;
       deps.onTileCreated(tile);
       deps.markSpawned(tile.id);

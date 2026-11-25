@@ -80,7 +80,7 @@ const workstreams = (page: Page) => call<Array<{ id: string; name: string; works
 const spawns = (page: Page) =>
   page.evaluate(() => ((window as unknown as SpecWindow).__WS_INVOKE_LOG__ ?? [])
     .filter((e) => e.cmd === "spawn_copilot_session" && e.args.initialPrompt)
-    .map((e) => e.args as { tileId: string; cwd: string; initialPrompt: string; resumeSessionId: string | null }));
+    .map((e) => e.args as { tileId: string; cwd: string; initialPrompt: string; resumeSessionId: string | null; denyTools: string[] }));
 const activeName = (page: Page) => page.locator('[data-testid="workstream-item"][data-active="true"]');
 
 /** CI-Main: 12 runs, 5 failed, newest failed. Deploy-PPE: 6 runs, 1 failed, newest succeeded. Docs: 4 passed. */
@@ -257,9 +257,12 @@ test("AT-6: Investigate on a digest makes one worktree workstream for the batch,
     expect(spawn.initialPrompt).toContain(`https://dev.azure.com/skype/SCC/_build/results?buildId=${id}`);
     expect(spawn.initialPrompt).toContain(`commit sha${id}`);
   }
-  for (const text of ["5 of 12 runs failed", "Group the runs by root cause", "flaky", "broken", "Change nothing until I ask", "ws-message skill", "Inbox"]) {
+  for (const text of ["5 of 12 runs failed", "Group the runs by root cause", "flaky", "broken", "Change nothing until I ask", "ws-message skill", "Inbox",
+    "Untrusted data from Azure DevOps"]) {
     expect(spawn.initialPrompt).toContain(text);
   }
+  // f1: the session is launched read-only.
+  for (const rule of ["write", "shell(git push)", "shell(git commit)", "shell(rm)"]) expect(spawn.denyTools).toContain(`--deny-tool=${rule}`);
   await expect(activeName(page)).toContainText("Read chunks");
   expect((await digests(page)).find((d) => d.id === ci.id)!.is_read).toBe(false);
   // Expanded runs keep per-run Investigate.
@@ -307,7 +310,7 @@ async function seedFive(page: Page, p1Busy: boolean) {
   const [old] = await digests(page);
   const started = await call<{ workstream_id: string }>(page, "startPipelineInvestigation", old.id);
   await call(page, "markInvestigationSessionStarted", old.id);
-  await call(page, "createTile", started.workstream_id, "copilot_session", "Investigate P1", JSON.stringify({ copilot_session_id: "s-p1" }));
+  await call(page, "createTile", started.workstream_id, "copilot_session", "Investigate P1", JSON.stringify({ copilot_session_id: "s-p1", investigation: true }));
   if (p1Busy) await call(page, "setSessionTurnsForTests", "s-p1", 1, 0);
   for (const id of ids) await call(page, "setPipelineAutoInvestigate", id, "digest");
   for (const [n, id] of ids.entries()) await finish(page, id, 2, [{ id: 100 + n, result: "failed" }]);
@@ -323,7 +326,8 @@ test("AT-8: an existing investigation gets a follow-up, and at most 3 new ones s
   expect(names).toEqual(["Investigate P1 failures 2100-03-02", "Investigate P2 failures 2100-03-03", "Investigate P3 failures 2100-03-03", "Investigate P4 failures 2100-03-03"].sort());
   await expect.poll(async () => (await spawns(page)).filter((s) => s.resumeSessionId === "s-p1").length, SNAPSHOT).toBe(1);
   const resume = (await spawns(page)).find((s) => s.resumeSessionId === "s-p1")!;
-  expect(resume.initialPrompt).toContain("A new daily digest of P1");
+  expect(resume.initialPrompt).toContain("- Pipeline: P1 (project SCC)");
+  expect(resume.denyTools).toContain("--deny-tool=write");
   expect(resume.initialPrompt).toContain("buildId=100");
   const today = (await digests(page)).filter((d) => d.created_at === new Date(2100, 2, 3, 9, 0).toISOString());
   expect(today.find((d) => d.pipeline_id === ids[0])!.investigation).toBe(p1Workstream);
