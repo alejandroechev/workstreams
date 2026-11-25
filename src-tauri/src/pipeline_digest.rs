@@ -116,6 +116,7 @@ pub(crate) fn store_runs(
             (watch_id,run_id,run_number,result,branch,trigger_label,finished_at,commit_sha,seen_at)
             SELECT ?1,?2,?3,?4,?5,?6,?7,?8,strftime('%Y-%m-%dT%H:%M:%fZ','now') FROM pipeline_watches
             WHERE id=?1 AND julianday(?7) > julianday(notify_after)
+            AND NOT EXISTS (SELECT 1 FROM pipeline_digest_consumed c WHERE c.watch_id=?1 AND c.run_id=?2)
             ON CONFLICT(watch_id,run_id) DO UPDATE SET result=excluded.result,
               run_number=excluded.run_number, finished_at=excluded.finished_at,
               commit_sha=excluded.commit_sha
@@ -411,6 +412,13 @@ pub fn run_due(db: &Connection, clock: &Clock) -> Result<Vec<Posted>, String> {
         } else {
             let id = uuid::Uuid::new_v4().to_string();
             let newest = runs.last().map(|r| r.result.clone()).unwrap_or_default();
+            // A run seen only after the previous digest (it finished just
+            // before it) is counted here, and the window shown covers it.
+            let window_start = runs
+                .iter()
+                .filter_map(|r| parse_time(&r.finished_at))
+                .min()
+                .map_or(window_start, |first| window_start.min(first));
             tx.execute(
                 "INSERT INTO pipeline_digests (id, watch_id, window_start, window_end, total, failed, newest_result, created_at)
                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?4)",
@@ -1726,6 +1734,59 @@ pub(crate) mod tests {
                 .map(|r| r.run_id)
                 .collect::<Vec<_>>(),
             vec![5]
+        );
+    }
+
+    /// f2: Inbox retention may delete a digest and its runs, but a run a
+    /// digest covered (or dropped) is never counted again when re-seen.
+    #[test]
+    fn runs_a_digest_consumed_are_never_counted_again_after_retention() {
+        let db = db();
+        let zone = TestZone::fixed(-3);
+        let ci = watch(&db, 1, "CI-Main", PipelineMode::DailyFailures);
+        since(&db, &ci, "2026-03-01T12:00:00.000Z");
+        let seen = [
+            run(1, "failed", "2026-03-01T18:00:00Z"),
+            run(2, "succeeded", "2026-03-01T19:00:00Z"),
+        ];
+        finish(&db, &ci, &seen);
+        assert_eq!(
+            run_due(&db, &local_clock(&zone, "2026-03-02 09:00"))
+                .unwrap()
+                .len(),
+            1
+        );
+        db.execute_batch("UPDATE pipeline_digests SET is_read=1")
+            .unwrap();
+        crate::inbox_retention::expire(&db, "2026-03-07T13:00:00Z").unwrap();
+        assert!(digests(&db).unwrap().is_empty(), "the read digest expired");
+        finish(&db, &ci, &seen);
+        assert!(run_due(&db, &local_clock(&zone, "2026-03-08 09:00"))
+            .unwrap()
+            .is_empty());
+
+        // A window with no failure drops its runs; re-seen later, they don't
+        // inflate the next total.
+        let db = super::tests::db();
+        let ci = watch(&db, 1, "CI-Main", PipelineMode::DailyFailures);
+        since(&db, &ci, "2026-03-01T12:00:00.000Z");
+        let ok = [
+            run(1, "succeeded", "2026-03-01T18:00:00Z"),
+            run(2, "succeeded", "2026-03-01T19:00:00Z"),
+        ];
+        finish(&db, &ci, &ok);
+        assert!(run_due(&db, &local_clock(&zone, "2026-03-02 09:00"))
+            .unwrap()
+            .is_empty());
+        crate::inbox_retention::expire(&db, "2026-03-02T13:00:00Z").unwrap();
+        finish(&db, &ci, &ok);
+        finish(&db, &ci, &[run(3, "failed", "2026-03-02T15:00:00Z")]);
+        run_due(&db, &local_clock(&zone, "2026-03-03 09:00")).unwrap();
+        let d = &digests(&db).unwrap()[0];
+        assert_eq!((d.failed, d.total), (1, 1));
+        assert!(
+            parse_time(&d.window_start).unwrap() <= parse_time("2026-03-02T15:00:00Z").unwrap(),
+            "the window shown covers what it counts"
         );
     }
 

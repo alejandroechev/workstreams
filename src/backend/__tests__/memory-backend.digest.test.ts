@@ -117,4 +117,19 @@ describe("MemoryBackend daily digest", () => {
       expect(prompt).toContain(text);
     }
   });
+
+  it("never counts a consumed run again after retention expires its digest (f2)", async () => {
+    const { b, ids, setNow } = await setup();
+    setNow(local(2, 9, 0));
+    b.runDigestPass();
+    const ci = (await b.getPrInbox()).pipeline_digests!.find((d) => d.pipeline_name === "CI-Main")!;
+    await b.setPrInboxRead(ci.id, true);
+    b.expireReadEntries(local(7, 13, 0));
+    expect((await b.getPrInbox()).pipeline_digests!.some((d) => d.id === ci.id)).toBe(false);
+    // The poller sees the same runs again.
+    b.finishPipelineRun(ids["CI-Main"], { id: 3, number: "3", result: "failed", branch: "main", finished_at: new Date(local(1, 10).getTime() + 3 * 60_000).toISOString() });
+    setNow(local(8, 9, 0));
+    b.runDigestPass();
+    expect((await b.getPrInbox()).pipeline_digests!.filter((d) => d.pipeline_name === "CI-Main")).toEqual([]);
+  });
 });

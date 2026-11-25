@@ -88,6 +88,12 @@ pub fn expire(db: &Connection, now: &str) -> Result<usize, String> {
         [],
     )
     .map_err(|e| e.to_string())?;
+    // What a digest consumed outlives its entry: only runs past any window go.
+    tx.execute(
+        "DELETE FROM pipeline_digest_consumed WHERE julianday(finished_at) < julianday(?1) - 14",
+        [now],
+    )
+    .map_err(|e| e.to_string())?;
     // A digest's investigation outlives its entry while its workstream
     // exists: the pipeline's next digests follow up in it (ADR 045).
     tx.execute(

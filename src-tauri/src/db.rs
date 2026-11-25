@@ -570,6 +570,21 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
             seen_at TEXT NOT NULL,
             PRIMARY KEY (watch_id, run_id)
         );
+        -- Runs a digest covered or dropped (ADR 045), kept apart from Inbox
+        -- retention so a re-seen run is never counted twice. Only the last
+        -- 7 days can count, so 14 days are kept.
+        CREATE TABLE IF NOT EXISTS pipeline_digest_consumed (
+            watch_id TEXT NOT NULL,
+            run_id INTEGER NOT NULL,
+            finished_at TEXT NOT NULL,
+            PRIMARY KEY (watch_id, run_id)
+        );
+        CREATE TRIGGER IF NOT EXISTS pipeline_digest_runs_consumed
+        AFTER UPDATE OF digest_id ON pipeline_digest_runs WHEN NEW.digest_id IS NOT NULL
+        BEGIN
+            INSERT OR IGNORE INTO pipeline_digest_consumed (watch_id, run_id, finished_at)
+            VALUES (NEW.watch_id, NEW.run_id, NEW.finished_at);
+        END;
         -- Runs whose failing step was asked of ADO, per pipeline per local day
         -- (ADR 045): at most 20 distinct runs a day, retries included.
         CREATE TABLE IF NOT EXISTS pipeline_step_requests (

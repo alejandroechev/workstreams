@@ -52,6 +52,14 @@ mode turns auto-investigate off.
   resolves to the first instant after it, a repeated one to the earlier. All of
   it takes an injectable clock (`pipeline_digest::Clock`, `Zone`), tested with
   a zone that changes DST. chrono is now a direct dependency for this.
+- **A run is counted once.** Every run a digest covers or drops is recorded in
+  `pipeline_digest_consumed` (by a trigger on the run's `digest_id`), which
+  Inbox retention doesn't touch; it keeps 14 days, twice the longest window.
+  A run the poller sees again after its digest expired is never kept again
+  (review round 1, f2). A run seen only after the previous digest (it
+  finished just before it) is counted in the next one, and that digest's
+  shown window starts at its finish, so a digest only counts runs inside the
+  window it displays.
 - **The entry** shows the pipeline, "5 of 12 failed", *Still failing* or
   *Passed since* (the newest run in the window succeeded), the last failed run
   as an ADO link, and expands into its failed runs (number, branch, finish

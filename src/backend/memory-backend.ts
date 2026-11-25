@@ -787,10 +787,12 @@ export class MemoryBackend implements Backend {
       const failed = runs.filter((r) => r.result === "failed").length;
       if (!muted && failed > 0) {
         const id = crypto.randomUUID();
-        const start = new Date(Math.max(new Date(watch.digestSince).getTime(), oldest.getTime()));
+        // As natively: a run seen only after the previous digest widens the window shown.
+        const start = new Date(Math.min(Math.max(new Date(watch.digestSince).getTime(), oldest.getTime()),
+          ...runs.map((r) => new Date(r.finished_at).getTime())));
         this.digests.push({ id, watch_id: watch.status.id, window_start: start.toISOString(), window_end: now.toISOString(),
           total: runs.length, failed, newest_result: runs[runs.length - 1].result, is_read: false, created_at: now.toISOString(), auto_pending: false });
-        for (const run of runs) run.digest_id = id;
+        for (const run of runs) { run.digest_id = id; this.consumedRuns.add(`${watch.status.id}:${run.run_id}`); }
         this.afterDigest(watch.status.id, id, now);
         posted.push(id);
       }
@@ -931,13 +933,35 @@ export class MemoryBackend implements Backend {
     this.inboxSettingsStore?.setItem("ws-memory-inbox-settings", JSON.stringify({ digestTime: this.digestTime, mute: this.inboxMute }));
   }
   private dropUndigested(watchId: string): void {
-    for (const run of this.digestRuns.get(watchId) ?? []) if (run.digest_id === null) run.digest_id = "dropped";
+    for (const run of this.digestRuns.get(watchId) ?? []) {
+      if (run.digest_id !== null) continue;
+      run.digest_id = "dropped";
+      this.consumedRuns.add(`${watchId}:${run.run_id}`);
+    }
+  }
+  /** As pipeline_digest_consumed: runs a digest covered or dropped, kept apart from Inbox retention. */
+  private consumedRuns = new Set<string>();
+  /**
+   * As inbox_retention::expire: read pipeline runs, digests and agent messages
+   * older than 5 days go (with a digest's runs); what digests consumed stays.
+   */
+  expireReadEntries(now: Date): void {
+    const cutoff = now.getTime() - 5 * 24 * 60 * 60 * 1000;
+    const old = (entry: { is_read: boolean }, at: string) => entry.is_read && Date.parse(at) < cutoff;
+    const gone = new Set(this.digests.filter((d) => old(d, d.created_at)).map((d) => d.id));
+    this.digests = this.digests.filter((d) => !gone.has(d.id));
+    for (const [watchId, runs] of this.digestRuns) {
+      this.digestRuns.set(watchId, runs.filter((r) => r.digest_id !== "dropped" && !(r.digest_id && gone.has(r.digest_id))));
+    }
+    this.pipelineItems = this.pipelineItems.filter((i) => !old(i, i.discovered_at));
+    this.agentMessages = this.agentMessages.filter((m) => !old(m, m.created_at));
   }
   /** As pipeline_digest::store_runs: one fetch slot per failed run while the day has fewer than 20. */
   private keepDigestRun(watchId: string, run: MemoryPipelineRun): void {
     const runs = this.digestRuns.get(watchId) ?? [];
     this.digestRuns.set(watchId, runs);
     let kept = runs.find((r) => r.run_id === run.id);
+    if (!kept && this.consumedRuns.has(`${watchId}:${run.id}`)) return;
     if (kept && (kept.digest_id !== null || kept.result === run.result)) return;
     if (kept) Object.assign(kept, { result: run.result, run_number: run.number, finished_at: run.finished_at, commit: run.commit ?? "" });
     else {
