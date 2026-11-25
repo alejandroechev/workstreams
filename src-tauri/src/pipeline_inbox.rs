@@ -610,7 +610,7 @@ fn pipeline_url(org: &str, project: &str, definition_id: u64) -> String {
     url.to_string()
 }
 
-fn run_url(org: &str, project: &str, run_id: u64) -> String {
+pub(crate) fn run_url(org: &str, project: &str, run_id: u64) -> String {
     let mut url = ado_url(org, project, &["_build", "results"]);
     url.query_pairs_mut()
         .append_pair("buildId", &run_id.to_string());
@@ -871,15 +871,76 @@ pub(crate) fn item_with_repos(
         .map(|item| (item, view.repos, ado)))
 }
 
-/// Marks a pipeline notification read or unread. `false` when there is no
-/// such notification, so the caller can try the PR events.
+/// A watched pipeline as a digest shows it: organization, project, name, its
+/// Workstreams repos as shown (override or automatic), ADO's repo and the
+/// repo chip's label.
+pub(crate) struct WatchView {
+    pub organization: String,
+    pub project: String,
+    pub name: String,
+    pub default_branch: Option<String>,
+    pub repos: Vec<RepoRef>,
+    pub ado_repo: Option<AdoRepoRef>,
+    pub label: Option<String>,
+}
+
+pub(crate) fn watch_view(db: &Connection, id: &str) -> Result<Option<WatchView>, String> {
+    type Row = (
+        String,
+        String,
+        String,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+    );
+    let row: Option<Row> = db
+        .query_row(
+            "SELECT organization, project_name, name, default_branch, ado_repo, repo_override
+            FROM pipeline_watches WHERE id=?1",
+            [id],
+            |r| {
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                    r.get(4)?,
+                    r.get(5)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+    let Some((organization, project, name, default_branch, ado, over)) = row else {
+        return Ok(None);
+    };
+    let ado_repo = parse_stored(ado);
+    let view = KnownRepos::load(db)?.view(db, ado_repo.as_ref(), over.as_deref())?;
+    Ok(Some(WatchView {
+        organization,
+        project,
+        name,
+        default_branch,
+        repos: view.repos,
+        ado_repo,
+        label: view.label,
+    }))
+}
+
+/// Marks a pipeline notification (a run or a daily digest) read or unread.
+/// `false` when there is no such notification, so the caller can try the PR
+/// events.
 pub fn set_read(db: &Connection, id: &str, is_read: bool) -> Result<bool, String> {
-    db.execute(
-        "UPDATE pipeline_events SET is_read=?2 WHERE id=?1",
-        params![id, is_read],
-    )
-    .map(|n| n > 0)
-    .map_err(|e| e.to_string())
+    let mut changed = 0;
+    for table in ["pipeline_events", "pipeline_digests"] {
+        changed += db
+            .execute(
+                &format!("UPDATE {table} SET is_read=?2 WHERE id=?1"),
+                params![id, is_read],
+            )
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(changed > 0)
 }
 
 // ── Checking ────────────────────────────────────────────────────────────

@@ -606,6 +606,14 @@ pub const COMMANDS: &[Command] = &[
         handler: inbox_investigate,
     },
     Command {
+        id: "inbox.digest_time",
+        log_params: &["time"],
+        summary: "Read or set the global time Daily-failures pipelines post their digest (params: time=HH:MM, 24-hour local; omit to read; default 09:00)",
+        requires_identity: true,
+        destructive: false,
+        handler: inbox_digest_time,
+    },
+    Command {
         id: "inbox.pipeline_set_repo",
         log_params: &["pipeline", "repo"],
         summary: "Set a watched pipeline's repo by hand (params: pipeline = its id, repo = a repo id, none, or auto to follow ADO again)",
@@ -1066,6 +1074,31 @@ fn inbox_investigate(
         serde_json::json!(started),
         StateChange::new("pipeline_investigation", &started.workstream_id, "started"),
     ))
+}
+
+fn inbox_digest_time(
+    context: &CommandContext,
+    params: &serde_json::Value,
+) -> Result<CommandOutcome, AgentError> {
+    match optional_str(params, "time") {
+        None => {
+            let time = crate::pipeline_digest::digest_time(context.db).map_err(inbox_error)?;
+            Ok(CommandOutcome::read(serde_json::json!({"time": time})))
+        }
+        Some(time) => {
+            let time = crate::pipeline_digest::set_digest_time(context.db, &time).map_err(|e| {
+                AgentError::new(
+                    "INVALID_PARAM",
+                    e,
+                    "Pass time=HH:MM, for example time=09:00.",
+                )
+            })?;
+            Ok(CommandOutcome::changed(
+                serde_json::json!({"time": time}),
+                StateChange::new("pr_inbox", "digest_time", "digest_time"),
+            ))
+        }
+    }
 }
 
 fn inbox_pipeline_set_repo(
@@ -6072,6 +6105,38 @@ mod tests {
         .is_err());
         let reset = call(&db, &caller, "inbox.unmute_all", serde_json::Value::Null).unwrap();
         assert_eq!(reset.data["cleared"], 1);
+    }
+
+    #[test]
+    fn the_digest_time_is_read_and_set_through_the_agent_channel() {
+        let db = memory_db();
+        let caller = agent("tile-1", "ws-own");
+        let read = call(&db, &caller, "inbox.digest_time", serde_json::Value::Null).unwrap();
+        assert_eq!(read.data["time"], "09:00");
+        assert!(read.change.is_none());
+        let set = call(
+            &db,
+            &caller,
+            "inbox.digest_time",
+            serde_json::json!({"time":"17:30"}),
+        )
+        .unwrap();
+        assert_eq!(set.data["time"], "17:30");
+        assert!(set.change.is_some());
+        let bad = call(
+            &db,
+            &caller,
+            "inbox.digest_time",
+            serde_json::json!({"time":"5pm"}),
+        )
+        .unwrap_err();
+        assert_eq!(bad.code, "INVALID_PARAM");
+        let listed = call(&db, &caller, "inbox.list", serde_json::Value::Null).unwrap();
+        assert_eq!(listed.data["digest_time"], "17:30");
+        assert!(listed.data["pipeline_digests"]
+            .as_array()
+            .unwrap()
+            .is_empty());
     }
 
     #[test]

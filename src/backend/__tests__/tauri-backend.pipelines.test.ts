@@ -23,4 +23,10 @@ describe("TauriBackend pipelines", () => {
       ["remove_pipeline_watch", { id: "p1" }],
     ]);
   });
+
+  it("sets the digest time through the native command", async () => {
+    invoke.mockResolvedValue("17:30");
+    expect(await backend.setPipelineDigestTime("17:30")).toBe("17:30");
+    expect(invoke).toHaveBeenCalledWith("set_pipeline_digest_time", { time: "17:30" });
+  });
 });

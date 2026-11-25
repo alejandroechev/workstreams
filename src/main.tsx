@@ -18,6 +18,8 @@ const isE2E = import.meta.env.VITE_E2E === "1";
 async function makeBackend(): Promise<Backend> {
   if (!isE2E) return new TauriBackend();
   const memory = new MemoryBackend();
+  // The digest time and Mute all survive a reload, as in the native settings table.
+  if (typeof localStorage !== "undefined") memory.useInboxSettingsStore(localStorage);
   const seed =
     typeof window === "undefined"
       ? undefined

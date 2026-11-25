@@ -172,6 +172,10 @@ export class TauriBackend implements Backend {
     await invoke("pipeline_investigation_session_started", { eventId });
   }
 
+  async setPipelineDigestTime(time: string): Promise<string> {
+    return invoke<string>("set_pipeline_digest_time", { time });
+  }
+
   async setPipelineWatchRepo(id: string, repo: string): Promise<void> {
     await invoke("set_pipeline_watch_repo", { id, repo });
   }

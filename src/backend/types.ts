@@ -101,6 +101,8 @@ export interface Backend {
   removePipelineWatch(id: string): Promise<void>;
   /** Sets a pipeline's repo by hand: a repo id, "none", or "auto" to follow what ADO says again. */
   setPipelineWatchRepo(id: string, repo: string): Promise<void>;
+  /** Sets the global time Daily-failures pipelines post their digest (HH:MM local); returns it. */
+  setPipelineDigestTime(time: string): Promise<string>;
   /** Makes (or returns) the investigation workstream of a failed run (by notification id). */
   startPipelineInvestigation(item: string): Promise<InvestigationStarted>;
   /** Investigations whose Copilot session hasn't been started yet. */

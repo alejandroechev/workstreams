@@ -33,3 +33,79 @@ export function localDay(at: Date): string {
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())}`;
 }
+
+/** A failed run in a digest, newest first. */
+export interface DigestRun {
+  run_id: number;
+  run_number: string;
+  branch: string;
+  trigger: string;
+  finished_at: string;
+  commit: string;
+  url: string;
+  step: string | null;
+  step_state: StepState;
+  /** The workstream investigating this one run, when there is one. */
+  investigation: string | null;
+}
+
+/** One digest entry in the Inbox: a failing pipeline's day. */
+export interface PipelineDigest {
+  id: string;
+  pipeline_id: string;
+  pipeline_name: string;
+  project: string;
+  organization: string;
+  repo: string | null;
+  window_start: string;
+  window_end: string;
+  total: number;
+  failed: number;
+  state: "still_failing" | "passed_since";
+  runs: DigestRun[];
+  is_read: boolean;
+  created_at: string;
+  /** The workstream investigating this digest's failures, when there is one. */
+  investigation: string | null;
+  /** Auto-investigate will start its investigation on the app's next pass. */
+  auto_pending: boolean;
+}
+
+const TIME = /^([01]\d|2[0-3]):([0-5]\d)$/;
+
+/** Whether a digest time is `HH:MM` (24-hour). */
+export function isDigestTime(text: string): boolean {
+  return TIME.test(text.trim());
+}
+
+/**
+ * The latest scheduled digest at or before `now`: today's digest time, or
+ * yesterday's when today's hasn't come. Local wall-clock time, so a DST change
+ * moves it with the clock (a skipped time resolves to the first instant after).
+ */
+export function lastSlot(now: Date, time: string): Date {
+  const match = TIME.exec(time.trim());
+  const [h, m] = match ? [Number(match[1]), Number(match[2])] : [9, 0];
+  for (let back = 0; back < 3; back++) {
+    const at = new Date(now.getFullYear(), now.getMonth(), now.getDate() - back, h, m);
+    if (at.getTime() <= now.getTime()) return at;
+  }
+  return new Date(now.getTime() - 24 * 60 * 60 * 1000);
+}
+
+/** "5 of 12 failed". */
+export function digestCounts(digest: Pick<PipelineDigest, "failed" | "total">): string {
+  return `${digest.failed} of ${digest.total} failed`;
+}
+
+export function digestStateLabel(state: PipelineDigest["state"]): string {
+  return state === "passed_since" ? "Passed since" : "Still failing";
+}
+
+/** What an expanded run says about its failing step. */
+export function stepLabel(run: Pick<DigestRun, "step" | "step_state">): string {
+  if (run.step) return run.step;
+  if (run.step_state === "not_fetched") return "step not fetched";
+  if (run.step_state === "pending") return "step not known yet";
+  return "no failing step reported";
+}

@@ -9,8 +9,9 @@
 //! Everything clock-dependent takes a [`Clock`], so tests drive time (DST
 //! days included) without waiting for it.
 
-use chrono::{DateTime, Duration, NaiveDateTime, TimeZone, Utc};
-use rusqlite::{params, Connection};
+use chrono::{DateTime, Duration, NaiveDateTime, NaiveTime, TimeZone, Utc};
+use rusqlite::{params, Connection, OptionalExtension};
+use serde::{Deserialize, Serialize};
 
 use crate::pipeline_inbox::Run;
 
@@ -164,6 +165,297 @@ pub(crate) fn drop_undigested(db: &Connection, watch_id: &str) -> Result<(), Str
     )
     .map(|_| ())
     .map_err(|e| e.to_string())
+}
+
+// ── The digest time ─────────────────────────────────────────────────────
+
+const TIME_KEY: &str = "pipeline_digest_time";
+
+fn parse_hhmm(text: &str) -> Option<NaiveTime> {
+    let (h, m) = text.trim().split_once(':')?;
+    if h.len() != 2 || m.len() != 2 {
+        return None;
+    }
+    NaiveTime::from_hms_opt(h.parse().ok()?, m.parse().ok()?, 0)
+}
+
+/// The global digest time, `HH:MM` local (default 09:00).
+pub fn digest_time(db: &Connection) -> Result<String, String> {
+    let stored: Option<String> = db
+        .query_row("SELECT value FROM settings WHERE key=?1", [TIME_KEY], |r| {
+            r.get(0)
+        })
+        .optional()
+        .map_err(|e| e.to_string())?
+        .flatten();
+    Ok(stored
+        .filter(|t| parse_hhmm(t).is_some())
+        .unwrap_or_else(|| DEFAULT_TIME.into()))
+}
+
+/// Sets the global digest time; it applies from the next digest.
+pub fn set_digest_time(db: &Connection, time: &str) -> Result<String, String> {
+    let parsed = parse_hhmm(time)
+        .ok_or_else(|| format!("The digest time must be HH:MM (24-hour); got {time:?}"))?;
+    let text = parsed.format("%H:%M").to_string();
+    db.execute(
+        "INSERT OR REPLACE INTO settings (key, value) VALUES (?1, ?2)",
+        params![TIME_KEY, text],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(text)
+}
+
+/// The latest scheduled digest at or before `clock.now`: today's digest time,
+/// or yesterday's when today's hasn't come yet. Read in local wall-clock time,
+/// so a DST change moves it with the clock on the wall.
+pub fn last_slot(clock: &Clock, time: NaiveTime) -> DateTime<Utc> {
+    let today = clock.zone.local(clock.now).date();
+    let mut day = today;
+    for _ in 0..3 {
+        let at = clock.zone.instant(day.and_time(time));
+        if at <= clock.now {
+            return at;
+        }
+        day = day.pred_opt().unwrap_or(day);
+    }
+    clock.now - Duration::days(1)
+}
+
+// ── Posting digests ─────────────────────────────────────────────────────
+
+/// What a due digest pass did for one pipeline.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Posted {
+    pub digest_id: String,
+    pub watch_id: String,
+}
+
+/// Posts every digest that is due: each Daily-failures pipeline whose window
+/// began before the latest digest time gets one entry if it had a failed run
+/// in the window (at most the last 7 days), and its next window starts now.
+/// While the Inbox is muted, a due digest is dropped and its window still
+/// moves on. Returns the digests posted.
+pub fn run_due(db: &Connection, clock: &Clock) -> Result<Vec<Posted>, String> {
+    let time = parse_hhmm(&digest_time(db)?).expect("validated");
+    let slot = last_slot(clock, time);
+    let now = clock.stamp();
+    let oldest = clock.now - Duration::days(MAX_WINDOW_DAYS);
+    let watches: Vec<(String, Option<String>)> = {
+        let mut stmt = db
+            .prepare("SELECT id, digest_since FROM pipeline_watches WHERE mode='daily_failures' ORDER BY id")
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .map_err(|e| e.to_string())?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?
+    };
+    let muted = crate::inbox_mute::is_muted_at(db, clock.now)?;
+    let mut posted = Vec::new();
+    for (watch_id, since) in watches {
+        let Some(since) = since.as_deref().and_then(parse_time) else {
+            db.execute(
+                "UPDATE pipeline_watches SET digest_since=?2 WHERE id=?1",
+                params![watch_id, now],
+            )
+            .map_err(|e| e.to_string())?;
+            continue;
+        };
+        if since >= slot {
+            continue;
+        }
+        let tx = db.unchecked_transaction().map_err(|e| e.to_string())?;
+        let window_start = since.max(oldest);
+        let runs: Vec<KeptRun> = undigested(&tx, &watch_id)?
+            .into_iter()
+            .filter(|r| parse_time(&r.finished_at).is_some_and(|t| t >= oldest))
+            .collect();
+        let failed = runs.iter().filter(|r| r.result == "failed").count();
+        if muted || failed == 0 {
+            drop_undigested(&tx, &watch_id)?;
+        } else {
+            let id = uuid::Uuid::new_v4().to_string();
+            let newest = runs.last().map(|r| r.result.clone()).unwrap_or_default();
+            tx.execute(
+                "INSERT INTO pipeline_digests (id, watch_id, window_start, window_end, total, failed, newest_result, created_at)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?4)",
+                params![id, watch_id, stamp(window_start), now, runs.len() as i64, failed as i64, newest],
+            )
+            .map_err(|e| e.to_string())?;
+            for run in &runs {
+                tx.execute(
+                    "UPDATE pipeline_digest_runs SET digest_id=?3 WHERE watch_id=?1 AND run_id=?2",
+                    params![watch_id, run.run_id, id],
+                )
+                .map_err(|e| e.to_string())?;
+            }
+            drop_undigested(&tx, &watch_id)?;
+            posted.push(Posted {
+                digest_id: id,
+                watch_id: watch_id.clone(),
+            });
+        }
+        tx.execute(
+            "UPDATE pipeline_watches SET digest_since=?2 WHERE id=?1",
+            params![watch_id, now],
+        )
+        .map_err(|e| e.to_string())?;
+        tx.commit().map_err(|e| e.to_string())?;
+    }
+    Ok(posted)
+}
+
+/// A failed run in a digest.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct DigestRun {
+    pub run_id: u64,
+    pub run_number: String,
+    pub branch: String,
+    pub trigger: String,
+    pub finished_at: String,
+    pub commit: String,
+    /// The run's results page in ADO.
+    pub url: String,
+    pub step: Option<String>,
+    /// fetched, pending or not_fetched.
+    pub step_state: String,
+    /// The workstream investigating this one run, when there is one.
+    pub investigation: Option<String>,
+}
+
+/// One digest entry in the Inbox.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct PipelineDigest {
+    pub id: String,
+    pub pipeline_id: String,
+    pub pipeline_name: String,
+    pub project: String,
+    pub organization: String,
+    /// The pipeline's repo, as its chip shows it.
+    pub repo: Option<String>,
+    pub window_start: String,
+    pub window_end: String,
+    pub total: u64,
+    pub failed: u64,
+    /// `still_failing`, or `passed_since` when the newest run in the window succeeded.
+    pub state: String,
+    /// Its failed runs, newest first.
+    pub runs: Vec<DigestRun>,
+    pub is_read: bool,
+    pub created_at: String,
+    /// The workstream investigating this digest's failures, when there is one.
+    pub investigation: Option<String>,
+    /// Auto-investigate will start its investigation on the app's next pass.
+    pub auto_pending: bool,
+}
+
+/// The id of a digest's run as an investigatable item (`drun:<digest>:<run>`).
+pub fn run_item_id(digest_id: &str, run_id: u64) -> String {
+    format!("drun:{digest_id}:{run_id}")
+}
+
+/// Every digest, newest first.
+pub fn digests(db: &Connection) -> Result<Vec<PipelineDigest>, String> {
+    type Row = (
+        String,
+        String,
+        String,
+        String,
+        u64,
+        u64,
+        String,
+        bool,
+        String,
+        Option<String>,
+        bool,
+    );
+    let rows: Vec<Row> = {
+        let mut stmt = db
+            .prepare(
+                "SELECT d.id, d.watch_id, d.window_start, d.window_end, d.total, d.failed, d.newest_result,
+                d.is_read, d.created_at, ws.id, d.auto_pending
+                FROM pipeline_digests d
+                LEFT JOIN pipeline_investigations i ON i.event_id = d.id
+                LEFT JOIN workstreams ws ON ws.id = i.workstream_id
+                ORDER BY julianday(d.created_at) DESC, d.rowid DESC",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                    r.get(4)?,
+                    r.get(5)?,
+                    r.get(6)?,
+                    r.get(7)?,
+                    r.get(8)?,
+                    r.get(9)?,
+                    r.get(10)?,
+                ))
+            })
+            .map_err(|e| e.to_string())?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?
+    };
+    let mut out = Vec::new();
+    for (id, watch_id, start, end, total, failed, newest, is_read, created, investigation, auto) in
+        rows
+    {
+        let Some(view) = crate::pipeline_inbox::watch_view(db, &watch_id)? else {
+            continue;
+        };
+        let mut runs: Vec<DigestRun> = runs_where(db, "digest_id=?1 AND result='failed'", &id)?
+            .into_iter()
+            .map(|r| {
+                let item = run_item_id(&id, r.run_id);
+                Ok(DigestRun {
+                    url: crate::pipeline_inbox::run_url(
+                        &view.organization,
+                        &view.project,
+                        r.run_id,
+                    ),
+                    investigation: crate::pipeline_investigate::existing(db, &item)?,
+                    run_id: r.run_id,
+                    run_number: r.run_number,
+                    branch: r.branch,
+                    trigger: r.trigger,
+                    finished_at: r.finished_at,
+                    commit: r.commit,
+                    step: r.step,
+                    step_state: r.step_state,
+                })
+            })
+            .collect::<Result<_, String>>()?;
+        runs.reverse();
+        out.push(PipelineDigest {
+            id,
+            pipeline_id: watch_id,
+            pipeline_name: view.name,
+            project: view.project,
+            organization: view.organization,
+            repo: view.label,
+            window_start: start,
+            window_end: end,
+            total,
+            failed,
+            state: if newest == "succeeded" {
+                "passed_since"
+            } else {
+                "still_failing"
+            }
+            .into(),
+            runs,
+            is_read,
+            created_at: created,
+            investigation,
+            auto_pending: auto,
+        });
+    }
+    Ok(out)
 }
 
 // ── Failing steps ───────────────────────────────────────────────────────
@@ -614,6 +906,327 @@ pub(crate) mod tests {
         let step = failing_step(&timeline);
         println!("run {id}: failing step {step:?}");
         assert!(step.is_some());
+    }
+
+    // ── The digest ──
+
+    /// A zone with one DST change: UTC-3 before `switch`, `after` from it.
+    pub(crate) struct TestZone {
+        pub switch: DateTime<Utc>,
+        pub before: i64,
+        pub after: i64,
+    }
+
+    impl TestZone {
+        pub(crate) fn fixed(hours: i64) -> Self {
+            TestZone {
+                switch: parse_time("2100-01-01T00:00:00Z").unwrap(),
+                before: hours * 3600,
+                after: hours * 3600,
+            }
+        }
+    }
+
+    impl Zone for TestZone {
+        fn local(&self, at: DateTime<Utc>) -> NaiveDateTime {
+            let offset = if at < self.switch {
+                self.before
+            } else {
+                self.after
+            };
+            at.naive_utc() + Duration::seconds(offset)
+        }
+        fn instant(&self, local: NaiveDateTime) -> DateTime<Utc> {
+            for minutes in 0..=180 {
+                let probe = local + Duration::minutes(minutes);
+                let mut valid: Vec<DateTime<Utc>> = [self.before, self.after]
+                    .iter()
+                    .map(|o| Utc.from_utc_datetime(&(probe - Duration::seconds(*o))))
+                    .filter(|at| self.local(*at) == probe)
+                    .collect();
+                valid.sort();
+                if let Some(first) = valid.first() {
+                    return *first;
+                }
+            }
+            unreachable!()
+        }
+    }
+
+    pub(crate) fn at(text: &str) -> DateTime<Utc> {
+        parse_time(text).unwrap()
+    }
+
+    /// Clock at local time `text` (UTC-3, Santiago in summer).
+    pub(crate) fn local_clock<'a>(zone: &'a TestZone, text: &str) -> Clock<'a> {
+        Clock {
+            now: zone.instant(NaiveDateTime::parse_from_str(text, "%Y-%m-%d %H:%M").unwrap()),
+            zone,
+        }
+    }
+
+    pub(crate) fn since(db: &Connection, id: &str, text: &str) {
+        db.execute(
+            "UPDATE pipeline_watches SET digest_since=?2, notify_after='2020-01-01T00:00:00.000Z' WHERE id=?1",
+            params![id, text],
+        )
+        .unwrap();
+    }
+
+    pub(crate) fn finish(db: &Connection, id: &str, runs: &[Run]) {
+        inbox::apply_runs_on(db, &target(db, id), runs, "2026-03-02").unwrap();
+    }
+
+    /// AT-2: one entry per failing pipeline, counts and states, nothing for a
+    /// clean pipeline, and nothing twice the same day.
+    #[test]
+    fn posts_one_digest_per_failing_pipeline_at_the_digest_time_once() {
+        let db = db();
+        let zone = TestZone::fixed(-3);
+        let ci = watch(&db, 1, "CI-Main", PipelineMode::DailyFailures);
+        let deploy = watch(&db, 2, "Deploy-PPE", PipelineMode::DailyFailures);
+        let docs = watch(&db, 3, "Docs", PipelineMode::DailyFailures);
+        for id in [&ci, &deploy, &docs] {
+            since(&db, id, "2026-03-01T12:00:00.000Z");
+        }
+        let at_minute = |m: u64| format!("2026-03-01T{:02}:{:02}:00Z", 13 + m / 60, m % 60);
+        let mut ci_runs: Vec<Run> = (1..=12)
+            .map(|i| run(i, "succeeded", &at_minute(i)))
+            .collect();
+        for i in [3, 5, 8, 10, 12] {
+            ci_runs[i as usize - 1].result = "failed".into();
+        }
+        finish(&db, &ci, &ci_runs);
+        let mut deploy_runs: Vec<Run> = (21..=26)
+            .map(|i| run(i, "succeeded", &at_minute(i)))
+            .collect();
+        deploy_runs[1].result = "failed".into();
+        finish(&db, &deploy, &deploy_runs);
+        finish(
+            &db,
+            &docs,
+            &(31..=34)
+                .map(|i| run(i, "succeeded", &at_minute(i)))
+                .collect::<Vec<_>>(),
+        );
+
+        assert!(run_due(&db, &local_clock(&zone, "2026-03-02 08:59"))
+            .unwrap()
+            .is_empty());
+        let posted = run_due(&db, &local_clock(&zone, "2026-03-02 09:00")).unwrap();
+        assert_eq!(posted.len(), 2);
+        let all = digests(&db).unwrap();
+        let ci_digest = all.iter().find(|d| d.pipeline_name == "CI-Main").unwrap();
+        assert_eq!(
+            (
+                ci_digest.failed,
+                ci_digest.total,
+                ci_digest.state.as_str(),
+                ci_digest.is_read
+            ),
+            (5, 12, "still_failing", false)
+        );
+        assert_eq!(
+            ci_digest.runs.iter().map(|r| r.run_id).collect::<Vec<_>>(),
+            vec![12, 10, 8, 5, 3],
+            "newest first"
+        );
+        assert_eq!(
+            ci_digest.runs[0].url,
+            "https://dev.azure.com/skype/SCC/_build/results?buildId=12"
+        );
+        assert_eq!(ci_digest.runs[0].commit, "sha12");
+        let deploy_digest = all
+            .iter()
+            .find(|d| d.pipeline_name == "Deploy-PPE")
+            .unwrap();
+        assert_eq!(
+            (
+                deploy_digest.failed,
+                deploy_digest.total,
+                deploy_digest.state.as_str()
+            ),
+            (1, 6, "passed_since")
+        );
+        assert!(all.iter().all(|d| d.pipeline_name != "Docs"));
+        assert!(run_due(&db, &local_clock(&zone, "2026-03-02 15:00"))
+            .unwrap()
+            .is_empty());
+        assert!(run_due(&db, &local_clock(&zone, "2026-03-02 23:59"))
+            .unwrap()
+            .is_empty());
+        // Read state is per digest, like any notification.
+        assert!(inbox::set_read(&db, &ci_digest.id, true).unwrap());
+        assert!(digests(&db)
+            .unwrap()
+            .iter()
+            .any(|d| d.id == ci_digest.id && d.is_read));
+    }
+
+    /// AT-3: the time can be changed and applies to the next digest.
+    #[test]
+    fn the_digest_time_is_global_and_applies_to_the_next_digest() {
+        let db = db();
+        let zone = TestZone::fixed(-3);
+        assert_eq!(digest_time(&db).unwrap(), "09:00");
+        assert!(set_digest_time(&db, "25:00").is_err());
+        assert!(set_digest_time(&db, "9").is_err());
+        assert_eq!(set_digest_time(&db, "17:30").unwrap(), "17:30");
+        let ci = watch(&db, 1, "CI-Main", PipelineMode::DailyFailures);
+        since(&db, &ci, "2026-03-01T21:00:00.000Z");
+        finish(&db, &ci, &[run(1, "failed", "2026-03-01T22:00:00Z")]);
+        assert!(run_due(&db, &local_clock(&zone, "2026-03-02 09:05"))
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            run_due(&db, &local_clock(&zone, "2026-03-02 17:30"))
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(digest_time(&db).unwrap(), "17:30");
+    }
+
+    /// AT-4: a missed digest goes out once at the next start, covering the
+    /// gap (at most 7 days); the next day covers only newer runs.
+    #[test]
+    fn a_missed_digest_covers_the_gap_once_and_at_most_seven_days() {
+        let db = db();
+        let zone = TestZone::fixed(-3);
+        let ci = watch(&db, 1, "CI-Main", PipelineMode::DailyFailures);
+        // Last digest Monday 09:00 (12:00Z); failures Monday and Tuesday.
+        since(&db, &ci, "2026-03-02T12:00:00.000Z");
+        finish(
+            &db,
+            &ci,
+            &[
+                run(1, "failed", "2026-03-02T15:00:00Z"),
+                run(2, "failed", "2026-03-03T15:00:00Z"),
+                run(3, "succeeded", "2026-03-03T16:00:00Z"),
+            ],
+        );
+        // The app starts Wednesday 10:00.
+        let posted = run_due(&db, &local_clock(&zone, "2026-03-04 10:00")).unwrap();
+        assert_eq!(posted.len(), 1);
+        let first = &digests(&db).unwrap()[0];
+        assert_eq!((first.failed, first.total), (2, 3));
+        assert_eq!(first.window_start, "2026-03-02T12:00:00.000Z");
+        assert!(run_due(&db, &local_clock(&zone, "2026-03-04 10:02"))
+            .unwrap()
+            .is_empty());
+        assert!(run_due(&db, &local_clock(&zone, "2026-03-04 23:00"))
+            .unwrap()
+            .is_empty());
+        finish(&db, &ci, &[run(4, "failed", "2026-03-04T20:00:00Z")]);
+        assert_eq!(
+            run_due(&db, &local_clock(&zone, "2026-03-05 09:00"))
+                .unwrap()
+                .len(),
+            1
+        );
+        let thursday = &digests(&db).unwrap()[0];
+        assert_eq!(
+            thursday.runs.iter().map(|r| r.run_id).collect::<Vec<_>>(),
+            vec![4]
+        );
+
+        // A 10-day gap: only the last 7 days count.
+        let db2 = super::tests::db();
+        let p = watch(&db2, 1, "CI-Main", PipelineMode::DailyFailures);
+        since(&db2, &p, "2026-03-01T12:00:00.000Z");
+        finish(
+            &db2,
+            &p,
+            &[
+                run(1, "failed", "2026-03-01T15:00:00Z"),
+                run(2, "failed", "2026-03-03T15:00:00Z"),
+                run(3, "failed", "2026-03-09T15:00:00Z"),
+            ],
+        );
+        run_due(&db2, &local_clock(&zone, "2026-03-11 10:00")).unwrap();
+        let d = &digests(&db2).unwrap()[0];
+        assert_eq!(
+            d.runs.iter().map(|r| r.run_id).collect::<Vec<_>>(),
+            vec![3],
+            "runs older than 7 days are left out"
+        );
+        assert_eq!(d.window_start, "2026-03-04T13:00:00.000Z");
+    }
+
+    /// DST: the digest follows the wall clock, a skipped 09:00 posts at the
+    /// first instant after it, and a repeated hour never posts twice.
+    #[test]
+    fn digests_follow_the_wall_clock_across_dst_changes() {
+        let db = db();
+        set_digest_time(&db, "23:30").unwrap();
+        // Clocks spring forward at 03:00Z, from 23:00 to 00:00: 23:00-23:59 don't exist.
+        let spring = TestZone {
+            switch: at("2026-09-06T03:00:00Z"),
+            before: -4 * 3600,
+            after: -3 * 3600,
+        };
+        let ci = watch(&db, 1, "CI-Main", PipelineMode::DailyFailures);
+        since(&db, &ci, "2026-09-05T05:00:00.000Z");
+        finish(&db, &ci, &[run(1, "failed", "2026-09-05T20:00:00Z")]);
+        let before_gap = Clock {
+            now: at("2026-09-06T02:59:00Z"),
+            zone: &spring,
+        };
+        assert!(run_due(&db, &before_gap).unwrap().is_empty());
+        let after_gap = Clock {
+            now: at("2026-09-06T03:00:00Z"),
+            zone: &spring,
+        };
+        assert_eq!(
+            run_due(&db, &after_gap).unwrap().len(),
+            1,
+            "posted at 00:00, the first instant after the skipped 23:30"
+        );
+
+        // Clocks fall back at 03:00Z, from 00:00 to 23:00: 23:30 happens twice.
+        let db = super::tests::db();
+        set_digest_time(&db, "23:30").unwrap();
+        let fall = TestZone {
+            switch: at("2026-04-05T03:00:00Z"),
+            before: -3 * 3600,
+            after: -4 * 3600,
+        };
+        let ci = watch(&db, 1, "CI-Main", PipelineMode::DailyFailures);
+        since(&db, &ci, "2026-04-04T12:00:00.000Z");
+        finish(&db, &ci, &[run(1, "failed", "2026-04-04T20:00:00Z")]);
+        let first = Clock {
+            now: at("2026-04-05T02:30:00Z"),
+            zone: &fall,
+        };
+        assert_eq!(run_due(&db, &first).unwrap().len(), 1, "the earlier 23:30");
+        finish(&db, &ci, &[run(2, "failed", "2026-04-05T03:10:00Z")]);
+        let second = Clock {
+            now: at("2026-04-05T03:30:00Z"),
+            zone: &fall,
+        };
+        assert!(
+            run_due(&db, &second).unwrap().is_empty(),
+            "the repeated 23:30 posts nothing"
+        );
+    }
+
+    #[test]
+    fn a_digest_due_while_muted_is_dropped_and_its_window_moves_on() {
+        let db = db();
+        let zone = TestZone::fixed(-3);
+        let ci = watch(&db, 1, "CI-Main", PipelineMode::DailyFailures);
+        since(&db, &ci, "2026-03-01T12:00:00.000Z");
+        finish(&db, &ci, &[run(1, "failed", "2026-03-01T15:00:00Z")]);
+        crate::inbox_mute::mute_at(&db, None, at("2026-03-01T16:00:00Z")).unwrap();
+        assert!(run_due(&db, &local_clock(&zone, "2026-03-02 09:00"))
+            .unwrap()
+            .is_empty());
+        crate::inbox_mute::unmute_at(&db, at("2026-03-02T13:00:00Z")).unwrap();
+        assert!(run_due(&db, &local_clock(&zone, "2026-03-03 09:00"))
+            .unwrap()
+            .is_empty());
+        assert!(digests(&db).unwrap().is_empty());
+        assert!(undigested(&db, &ci).unwrap().is_empty());
     }
 
     #[test]

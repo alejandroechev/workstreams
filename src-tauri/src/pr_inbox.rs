@@ -312,6 +312,15 @@ pub struct InboxSnapshot {
     /// Messages agents sent (ADR 041).
     #[serde(default)]
     pub agent_messages: Vec<crate::inbox_messages::AgentMessage>,
+    /// Daily failure digests of Daily-failures pipelines (ADR 045).
+    #[serde(default)]
+    pub pipeline_digests: Vec<crate::pipeline_digest::PipelineDigest>,
+    /// The global digest time, HH:MM local.
+    #[serde(default)]
+    pub digest_time: String,
+    /// Mute all (ADR 045).
+    #[serde(default)]
+    pub mute: crate::inbox_mute::MuteState,
 }
 
 pub fn configure(db: &Connection, project_id: &str, mode: WatchMode) -> Result<(), String> {
@@ -1006,6 +1015,9 @@ pub fn snapshot(db: &Connection) -> Result<InboxSnapshot, String> {
         pipelines: crate::pipeline_inbox::list(db)?,
         pipeline_items: crate::pipeline_inbox::items(db)?,
         agent_messages: crate::inbox_messages::list(db)?,
+        pipeline_digests: crate::pipeline_digest::digests(db)?,
+        digest_time: crate::pipeline_digest::digest_time(db)?,
+        mute: crate::inbox_mute::state(db)?,
     })
 }
 
@@ -1662,6 +1674,16 @@ impl InboxPoller {
                         previous = fingerprint;
                     }
                     Err(error) => eprintln!("[pr-inbox] Could not read configuration: {error}"),
+                }
+                // A mute whose end has passed lifts, and digests that are due
+                // post (ADR 045); after the checks, so a missed digest covers
+                // what the first check at startup saw.
+                let digested = db.lock().map_err(|e| e.to_string()).and_then(|db| {
+                    crate::inbox_mute::state(&db)?;
+                    crate::pipeline_digest::run_due(&db, &crate::pipeline_digest::Clock::system())
+                });
+                if let Err(error) = digested {
+                    eprintln!("[pipeline-digest] Could not post digests: {error}");
                 }
                 if stopped.recv_timeout(check_interval)
                     != Err(std::sync::mpsc::RecvTimeoutError::Timeout)

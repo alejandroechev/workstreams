@@ -76,8 +76,25 @@ pub fn expire(db: &Connection, now: &str) -> Result<usize, String> {
     deleted += run(&format!(
         "DELETE FROM agent_messages WHERE is_read=1 AND {old}"
     ))?;
+    run(&format!(
+        "UPDATE pipeline_digest_runs SET digest_id='dropped' WHERE digest_id IN
+        (SELECT id FROM pipeline_digests WHERE is_read=1 AND {old})"
+    ))?;
+    deleted += run(&format!(
+        "DELETE FROM pipeline_digests WHERE is_read=1 AND {old}"
+    ))?;
     tx.execute(
-        "DELETE FROM pipeline_investigations WHERE event_id NOT IN (SELECT id FROM pipeline_events)",
+        "DELETE FROM pipeline_digest_runs WHERE digest_id='dropped'",
+        [],
+    )
+    .map_err(|e| e.to_string())?;
+    // A digest's investigation outlives its entry while its workstream
+    // exists: the pipeline's next digests follow up in it (ADR 045).
+    tx.execute(
+        "DELETE FROM pipeline_investigations WHERE event_id NOT IN (SELECT id FROM pipeline_events)
+        AND event_id NOT IN (SELECT id FROM pipeline_digests)
+        AND NOT EXISTS (SELECT 1 FROM pipeline_digests d WHERE pipeline_investigations.event_id LIKE 'drun:' || d.id || ':%')
+        AND NOT (watch_id IS NOT NULL AND workstream_id IN (SELECT id FROM workstreams))",
         [],
     )
     .map_err(|e| e.to_string())?;
@@ -230,6 +247,63 @@ mod tests {
             .map(Result::unwrap)
             .collect();
         assert_eq!(investigations, vec!["pl-r4".to_string()]);
+    }
+
+    #[test]
+    fn read_digests_expire_with_their_runs_but_a_live_investigation_stays() {
+        let db = db();
+        for (id, read, at) in [
+            ("dg-r6", 1, "2026-11-14T12:00:00Z"),
+            ("dg-u30", 0, "2026-10-21T12:00:00Z"),
+        ] {
+            db.execute(
+                "INSERT INTO pipeline_digests (id,watch_id,window_start,window_end,total,failed,newest_result,is_read,created_at)
+                VALUES (?1,'w',?2,?2,1,1,'failed',?3,?2)",
+                params![id, at, read],
+            )
+            .unwrap();
+            db.execute(
+                "INSERT INTO pipeline_digest_runs (watch_id,run_id,run_number,result,branch,trigger_label,finished_at,digest_id,seen_at)
+                VALUES ('w',?3,'1','failed','main','S',?2,?1,?2)",
+                params![id, at, if read == 1 { 1 } else { 2 }],
+            )
+            .unwrap();
+        }
+        db.execute(
+            "INSERT INTO workstreams (id, name, created_at, updated_at) VALUES ('ws-live','Investigate','t','t')",
+            [],
+        )
+        .unwrap();
+        db.execute(
+            "INSERT INTO pipeline_investigations (event_id, workstream_id, prompt, created_at, watch_id)
+            VALUES ('dg-r6','ws-live','p','now','w'), ('drun:dg-u30:2','ws-x','p','now',NULL), ('drun:dg-r6:1','ws-x','p','now',NULL)",
+            [],
+        )
+        .unwrap();
+        assert_eq!(expire(&db, NOW).unwrap(), 1);
+        let digests: Vec<String> = db
+            .prepare("SELECT id FROM pipeline_digests")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(digests, vec!["dg-u30".to_string()]);
+        let runs: i64 = db
+            .query_row("SELECT COUNT(*) FROM pipeline_digest_runs", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(runs, 1);
+        let mut kept: Vec<String> = db
+            .prepare("SELECT event_id FROM pipeline_investigations")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        kept.sort();
+        assert_eq!(kept, vec!["dg-r6".to_string(), "drun:dg-u30:2".to_string()]);
     }
 
     #[test]

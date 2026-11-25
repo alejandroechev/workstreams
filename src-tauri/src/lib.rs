@@ -20,6 +20,7 @@ pub mod diff_order;
 mod file_io;
 mod fs_watcher;
 mod inbox_messages;
+pub mod inbox_mute;
 mod inbox_retention;
 pub mod learning_ai;
 pub mod learning_jobs;
@@ -1049,6 +1050,13 @@ fn set_pipeline_watch_repo(
 ) -> Result<(), String> {
     let db = state.db.lock().map_err(|e| e.to_string())?;
     pipeline_inbox::set_repo(&db, &id, &repo)
+}
+
+/// Sets the global time Daily-failures digests post (ADR 045).
+#[tauri::command]
+fn set_pipeline_digest_time(state: State<'_, AppState>, time: String) -> Result<String, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    pipeline_digest::set_digest_time(&db, &time)
 }
 
 #[tauri::command]
@@ -6890,6 +6898,7 @@ pub fn run() {
             pipeline_investigation_pending,
             pipeline_investigation_session_started,
             remove_pipeline_watch,
+            set_pipeline_digest_time,
             set_pr_inbox_read,
             mute_pr_inbox_event,
             reset_pr_inbox_mutes,

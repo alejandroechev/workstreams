@@ -27,7 +27,18 @@ import {
   type InvestigationStarted,
   type PendingInvestigation,
 } from "../domain/pipeline-investigate";
-import { localDay, STEP_FETCHES_PER_DAY, type KeptRun } from "../domain/pipeline-digest";
+import {
+  DEFAULT_DIGEST_TIME,
+  isDigestTime,
+  lastSlot,
+  localDay,
+  MAX_WINDOW_DAYS,
+  STEP_FETCHES_PER_DAY,
+  type DigestRun,
+  type KeptRun,
+  type PipelineDigest,
+} from "../domain/pipeline-digest";
+import { digestRunItemId, type InboxMuteState } from "../domain/inbox-mute";
 
 import { baseKind, MUTE_KINDS, type SyncCheck, type SyncEvent, type SyncMonitorState, type SyncProblem, type SyncThresholds, type SyncVitals } from "../domain/sync-monitor";
 import {
@@ -182,6 +193,9 @@ export class MemoryBackend implements Backend {
           };
         })
         .sort((a, b) => compareTimes(b.finished_at, a.finished_at) || b.run_id - a.run_id),
+      pipeline_digests: this.digestSnapshot(),
+      digest_time: this.digestTime,
+      mute: (this.isInboxMuted(), { ...this.inboxMute }),
       agent_messages: [...this.agentMessages].reverse().map((message) => {
         const ws = this.workstreams.get(message.workstream_id);
         return {
@@ -720,6 +734,108 @@ export class MemoryBackend implements Backend {
       }
     }
   }
+  private digestTime = DEFAULT_DIGEST_TIME;
+  private digests: Array<{ id: string; watch_id: string; window_start: string; window_end: string; total: number; failed: number;
+    newest_result: string; is_read: boolean; created_at: string; auto_pending: boolean }> = [];
+  /** Posts a digest to the store (E2E seam): `pipeline_digests` and the time setting come back on the snapshot. */
+  async setPipelineDigestTime(time: string): Promise<string> {
+    if (!isDigestTime(time)) throw new Error(`The digest time must be HH:MM (24-hour); got "${time}"`);
+    this.digestTime = time.trim();
+    this.persistInboxSettings();
+    return this.digestTime;
+  }
+  /**
+   * As pipeline_digest::run_due on a poller tick: every Daily-failures
+   * pipeline whose window began before the latest digest time gets one entry
+   * when it had a failed run (at most the last 7 days), and its next window
+   * starts now. A due digest is dropped while the Inbox is muted.
+   */
+  runDigestPass(): string[] {
+    const now = this.digestClock();
+    const slot = lastSlot(now, this.digestTime);
+    const oldest = new Date(now.getTime() - MAX_WINDOW_DAYS * 24 * 60 * 60 * 1000);
+    const muted = this.isInboxMuted();
+    const posted: string[] = [];
+    for (const watch of this.pipelineWatches) {
+      if (watch.status.mode !== "daily_failures") continue;
+      if (!watch.digestSince) { watch.digestSince = now.toISOString(); continue; }
+      if (new Date(watch.digestSince).getTime() >= slot.getTime()) continue;
+      const runs = (this.digestRuns.get(watch.status.id) ?? [])
+        .filter((r) => r.digest_id === null && new Date(r.finished_at).getTime() >= oldest.getTime())
+        .sort((a, b) => compareTimes(a.finished_at, b.finished_at) || a.run_id - b.run_id);
+      const failed = runs.filter((r) => r.result === "failed").length;
+      if (!muted && failed > 0) {
+        const id = crypto.randomUUID();
+        const start = new Date(Math.max(new Date(watch.digestSince).getTime(), oldest.getTime()));
+        this.digests.push({ id, watch_id: watch.status.id, window_start: start.toISOString(), window_end: now.toISOString(),
+          total: runs.length, failed, newest_result: runs[runs.length - 1].result, is_read: false, created_at: now.toISOString(), auto_pending: false });
+        for (const run of runs) run.digest_id = id;
+        posted.push(id);
+      }
+      this.dropUndigested(watch.status.id);
+      watch.digestSince = now.toISOString();
+    }
+    return posted;
+  }
+  private digestSnapshot(): PipelineDigest[] {
+    return [...this.digests].reverse().flatMap((d) => {
+      const watch = this.pipelineWatches.find((w) => w.status.id === d.watch_id);
+      if (!watch) return [];
+      const { status } = watch;
+      const base = `https://dev.azure.com/${encodeURIComponent(status.organization)}/${encodeURIComponent(status.project)}/_build`;
+      const runs: DigestRun[] = (this.digestRuns.get(d.watch_id) ?? [])
+        .filter((r) => r.digest_id === d.id && r.result === "failed")
+        .sort((a, b) => compareTimes(b.finished_at, a.finished_at) || b.run_id - a.run_id)
+        .map((r) => {
+          const investigation = this.investigations.get(digestRunItemId(d.id, r.run_id));
+          return { run_id: r.run_id, run_number: r.run_number, branch: r.branch, trigger: r.trigger, finished_at: r.finished_at,
+            commit: r.commit, url: `${base}/results?buildId=${r.run_id}`, step: r.step, step_state: r.step_state,
+            investigation: investigation && this.workstreams.has(investigation.workstream_id) ? investigation.workstream_id : null };
+        });
+      const investigation = this.investigations.get(d.id);
+      return [{
+        id: d.id, pipeline_id: d.watch_id, pipeline_name: status.name, project: status.project, organization: status.organization,
+        repo: this.pipelineWithRepo(watch).repo_label, window_start: d.window_start, window_end: d.window_end, total: d.total,
+        failed: d.failed, state: d.newest_result === "succeeded" ? "passed_since" as const : "still_failing" as const, runs,
+        is_read: d.is_read, created_at: d.created_at,
+        investigation: investigation && this.workstreams.has(investigation.workstream_id) ? investigation.workstream_id : null,
+        auto_pending: d.auto_pending,
+      }];
+    });
+  }
+  // ── Mute all (mirror of src-tauri/src/inbox_mute.rs, ADR 045) ──
+  private inboxMute: InboxMuteState = { muted: false, until: null };
+  /** The one gate every Inbox writer checks; a mute whose end has passed lifts first. */
+  isInboxMuted(): boolean {
+    const { muted, until } = this.inboxMute;
+    if (muted && until && new Date(until).getTime() <= this.digestClock().getTime()) this.unmuteInboxNow();
+    return this.inboxMute.muted;
+  }
+  private unmuteInboxNow(): void {
+    const was = this.inboxMute.muted;
+    this.inboxMute = { muted: false, until: null };
+    this.persistInboxSettings();
+    if (!was) return;
+    const at = this.digestClock().toISOString();
+    for (const watch of this.pipelineWatches) {
+      if (compareTimes(watch.notifyAfter, at) < 0) watch.notifyAfter = at;
+      if (watch.status.mode === "daily_failures") watch.digestSince = at;
+      this.dropUndigested(watch.status.id);
+    }
+  }
+  private inboxSettingsStore: Pick<Storage, "getItem" | "setItem"> | null = null;
+  /** Keeps the digest time and the mute across reloads (E2E: localStorage), as the native settings table does. */
+  useInboxSettingsStore(store: Pick<Storage, "getItem" | "setItem">): void {
+    this.inboxSettingsStore = store;
+    try {
+      const saved = JSON.parse(store.getItem("ws-memory-inbox-settings") ?? "null") as { digestTime?: string; mute?: InboxMuteState } | null;
+      if (saved?.digestTime && isDigestTime(saved.digestTime)) this.digestTime = saved.digestTime;
+      if (saved?.mute) this.inboxMute = { muted: !!saved.mute.muted, until: saved.mute.until ?? null };
+    } catch { /* a damaged entry is ignored */ }
+  }
+  private persistInboxSettings(): void {
+    this.inboxSettingsStore?.setItem("ws-memory-inbox-settings", JSON.stringify({ digestTime: this.digestTime, mute: this.inboxMute }));
+  }
   private dropUndigested(watchId: string): void {
     for (const run of this.digestRuns.get(watchId) ?? []) if (run.digest_id === null) run.digest_id = "dropped";
   }
@@ -921,6 +1037,7 @@ export class MemoryBackend implements Backend {
     if (this.pipelineWatches.length === before) throw new Error("That pipeline isn't watched");
     this.pipelineItems = this.pipelineItems.filter((item) => item.pipeline_id !== id);
     this.digestRuns.delete(id);
+    this.digests = this.digests.filter((d) => d.watch_id !== id);
   }
 
   /**
@@ -992,7 +1109,8 @@ export class MemoryBackend implements Backend {
   }
 
   async setPrInboxRead(id: string, isRead: boolean): Promise<void> {
-    const run = this.pipelineItems.find((item) => item.id === id) ?? this.agentMessages.find((m) => m.id === id);
+    const run = this.pipelineItems.find((item) => item.id === id) ?? this.agentMessages.find((m) => m.id === id)
+      ?? this.digests.find((d) => d.id === id);
     if (run) {
       run.is_read = isRead;
       return;
