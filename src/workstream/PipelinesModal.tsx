@@ -346,7 +346,7 @@ export function PipelinesModal({ pipelines, onAdd, onSetMode, onSetBranches, onR
                   style={{ ...inputStyle, flex: "none", width: "auto" }}
                 >
                   {(["off", "digest"] as const).map((value) => (
-                    <option key={value} value={value}>{AUTO_INVESTIGATE_LABELS[value]}</option>
+                    <option key={value} value={value}>Auto-investigate: {AUTO_INVESTIGATE_LABELS[value]}</option>
                   ))}
                 </select>
               )}

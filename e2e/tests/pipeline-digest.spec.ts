@@ -287,7 +287,7 @@ test("AT-7: Auto-investigate starts the batch with the digest, quietly", async (
   await expect(page.getByTestId(`pipeline-row-${b}`)).toBeVisible(SNAPSHOT);
   await expect(page.getByTestId(`pipeline-auto-${b}`)).toBeDisabled();
   const auto = page.getByTestId(`pipeline-auto-${ci}`);
-  await expect(auto.locator("option")).toHaveText(["Off", "With digest"]);
+  await expect(auto.locator("option")).toHaveText(["Auto-investigate: Off", "Auto-investigate: With digest"]);
   await auto.selectOption("digest");
   await expect(auto).toHaveValue("digest");
   await page.getByTestId("pipelines-close").click();

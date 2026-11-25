@@ -59,7 +59,7 @@ describe("Pipelines manager", () => {
     const onSetAutoInvestigate = vi.fn().mockResolvedValue(undefined);
     setup([pipeline({ id: "p1", mode: "daily_failures", auto_investigate: "off" }), pipeline({ id: "p2", mode: "failures" })], { onSetAutoInvestigate });
     const daily = screen.getByTestId("pipeline-auto-p1");
-    expect([...daily.querySelectorAll("option")].map((o) => o.textContent)).toEqual(["Off", "With digest"]);
+    expect([...daily.querySelectorAll("option")].map((o) => o.textContent)).toEqual(["Auto-investigate: Off", "Auto-investigate: With digest"]);
     expect(daily).toBeEnabled();
     expect(screen.getByTestId("pipeline-auto-p2")).toBeDisabled();
     fireEvent.change(daily, { target: { value: "digest" } });
