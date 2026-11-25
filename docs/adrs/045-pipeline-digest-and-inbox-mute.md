@@ -86,7 +86,9 @@ stop once it leaves the mode, digested runs included), and
 `pipeline_step_requests` records each distinct run asked for per pipeline per
 local day. A run already asked for today may be retried; a new one goes out
 only while the day has fewer than 20, retries carried over from earlier days
-included, and otherwise waits for a later day.
+included, and otherwise waits for a later day. The local day is read at each
+request, so a poll that runs past midnight charges its later requests to the
+new day (review round 2, f7).
 
 ### Investigating a digest as one batch
 

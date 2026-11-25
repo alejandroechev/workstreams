@@ -738,10 +738,11 @@ export class MemoryBackend implements Backend {
   /** As pipeline_step_requests: `${watch}|${day}` -> the distinct runs asked for that day. */
   private stepRequests = new Map<string, Set<number>>();
   fetchDigestSteps(only?: { watchId: string; runId: number }): void {
-    const day = localDay(this.digestClock());
     for (const [watchId, runs] of this.digestRuns) {
       for (const run of runs) {
         if (only && (only.watchId !== watchId || only.runId !== run.run_id)) continue;
+        // As natively, the day is read at each request.
+        const day = localDay(this.digestClock());
         if (run.step_state !== "pending" || run.digest_id === "dropped") continue;
         // As reserve_request: still Daily failures, and room today for this run.
         if (this.pipelineWatches.find((w) => w.status.id === watchId)?.status.mode !== "daily_failures") break;

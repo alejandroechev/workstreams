@@ -759,12 +759,12 @@ pub(crate) fn fetch_steps(
     db: &std::sync::Mutex<Connection>,
     http: &dyn crate::pr_inbox::JsonTransport,
     target: &crate::pipeline_inbox::PipelineTarget,
-    local_day: &str,
+    local_day: &dyn Fn() -> String,
 ) {
     let waiting: Result<Vec<u64>, String> = db.lock().map_err(|e| e.to_string()).and_then(|db| {
         db.execute(
             "DELETE FROM pipeline_step_requests WHERE day < date(?1, '-7 days')",
-            [local_day],
+            [local_day()],
         )
         .map_err(|e| e.to_string())?;
         let mut stmt = db
@@ -790,7 +790,7 @@ pub(crate) fn fetch_steps(
         match db
             .lock()
             .map_err(|e| e.to_string())
-            .and_then(|db| reserve_request(&db, &target.id, run_id, local_day))
+            .and_then(|db| reserve_request(&db, &target.id, run_id, &local_day()))
         {
             Ok(true) => {}
             Ok(false) => break,
@@ -1863,20 +1863,70 @@ pub(crate) mod tests {
         };
         let shared = std::sync::Mutex::new(conn);
         let all = inbox::targets(&shared.lock().unwrap()).unwrap();
-        inbox::check_all_on(&shared, Ok(&ado), &all, "2026-03-01");
+        inbox::check_all_on(&shared, Ok(&ado), &all, &|| "2026-03-01".to_string());
         assert_eq!(ado.timeline_requests().len(), 20);
         ado.runs.insert(1, wire_runs_on(21..=40, "2026-03-02"));
         ado.asked.lock().unwrap().clear();
-        inbox::check_all_on(&shared, Ok(&ado), &all, "2026-03-02");
-        inbox::check_all_on(&shared, Ok(&ado), &all, "2026-03-02");
+        inbox::check_all_on(&shared, Ok(&ado), &all, &|| "2026-03-02".to_string());
+        inbox::check_all_on(&shared, Ok(&ado), &all, &|| "2026-03-02".to_string());
         let day2: std::collections::HashSet<u64> = ado.timeline_requests().into_iter().collect();
         assert_eq!(day2.len(), 20, "{day2:?}");
         ado.asked.lock().unwrap().clear();
-        inbox::check_all_on(&shared, Ok(&ado), &all, "2026-03-03");
+        inbox::check_all_on(&shared, Ok(&ado), &all, &|| "2026-03-03".to_string());
         assert!(
             !ado.timeline_requests().is_empty(),
             "what waited is asked on a later day"
         );
+    }
+
+    /// r2-f7: the local day is read at each request, so a poll that runs
+    /// past midnight charges later requests to the new day, 20 at most each.
+    #[test]
+    fn a_poll_crossing_midnight_charges_each_request_to_its_own_day() {
+        let conn = db();
+        watch(&conn, 1, "CI-Main", PipelineMode::DailyFailures);
+        // 20 asked yesterday already; the poll starts at 23:59.
+        for run in 1001..=1020 {
+            conn.execute(
+                "INSERT INTO pipeline_step_requests (watch_id, run_id, day) SELECT id, ?1, '2026-03-01' FROM pipeline_watches",
+                [run],
+            )
+            .unwrap();
+        }
+        let ado = FakeAdo {
+            runs: [(1, wire_runs_on(1..=25, "2026-03-01"))]
+                .into_iter()
+                .collect(),
+            steps: Default::default(),
+            fail_once: Default::default(),
+            asked: Default::default(),
+        };
+        let shared = std::sync::Mutex::new(conn);
+        let all = inbox::targets(&shared.lock().unwrap()).unwrap();
+        // Midnight passes after the runs list is read (the first request).
+        let day = || {
+            if ado.asked.lock().unwrap().is_empty() {
+                "2026-03-01"
+            } else {
+                "2026-03-02"
+            }
+            .to_string()
+        };
+        inbox::check_all_on(&shared, Ok(&ado), &all, &day);
+        let asked = ado.timeline_requests().len();
+        assert_eq!(
+            asked, 20,
+            "the new day's 20, none charged to the full old day"
+        );
+        let conn = shared.lock().unwrap();
+        let (old, new): (i64, i64) = conn
+            .query_row(
+                "SELECT SUM(day='2026-03-01'), SUM(day='2026-03-02') FROM pipeline_step_requests",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((old, new), (20, 20));
     }
 
     /// f6: once a pipeline leaves Daily failures, its waiting runs are never
@@ -1893,7 +1943,7 @@ pub(crate) mod tests {
         };
         let shared = std::sync::Mutex::new(conn);
         let all = inbox::targets(&shared.lock().unwrap()).unwrap();
-        inbox::check_all_on(&shared, Ok(&ado), &all, "2026-03-01");
+        inbox::check_all_on(&shared, Ok(&ado), &all, &|| "2026-03-01".to_string());
         assert_eq!(ado.timeline_requests().len(), 2);
         {
             let conn = shared.lock().unwrap();
@@ -1908,9 +1958,9 @@ pub(crate) mod tests {
             inbox::set_mode(&conn, &id, PipelineMode::Failures).unwrap();
         }
         // The old target (revision) and a fresh one both ask nothing more.
-        inbox::check_all_on(&shared, Ok(&ado), &all, "2026-03-02");
+        inbox::check_all_on(&shared, Ok(&ado), &all, &|| "2026-03-02".to_string());
         let fresh = inbox::targets(&shared.lock().unwrap()).unwrap();
-        inbox::check_all_on(&shared, Ok(&ado), &fresh, "2026-03-02");
+        inbox::check_all_on(&shared, Ok(&ado), &fresh, &|| "2026-03-02".to_string());
         assert_eq!(ado.timeline_requests().len(), 2);
     }
 

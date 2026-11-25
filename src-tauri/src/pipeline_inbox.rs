@@ -1251,21 +1251,19 @@ pub(crate) fn check_all(
     http: Result<&dyn JsonTransport, &str>,
     targets: &[PipelineTarget],
 ) {
-    check_all_on(
-        db,
-        http,
-        targets,
-        &crate::pipeline_digest::Clock::system().local_day(),
-    )
+    check_all_on(db, http, targets, &|| {
+        crate::pipeline_digest::Clock::system().local_day()
+    })
 }
 
-/// [`check_all`] on a given local day, which Daily-failures step fetches are
-/// capped in.
+/// [`check_all`] with a given clock for the local day, which Daily-failures
+/// step fetches are capped in; it is read at each use, so a poll that runs
+/// past midnight charges later requests to the new day.
 pub(crate) fn check_all_on(
     db: &std::sync::Mutex<Connection>,
     http: Result<&dyn JsonTransport, &str>,
     targets: &[PipelineTarget],
-    local_day: &str,
+    local_day: &dyn Fn() -> String,
 ) {
     for target in targets {
         let result = http
@@ -1338,7 +1336,7 @@ pub(crate) fn check_all_on(
             .lock()
             .map_err(|e| e.to_string())
             .and_then(|db| match &result {
-                Ok(runs) => apply_runs_on(&db, target, runs, local_day).map(|_| ()),
+                Ok(runs) => apply_runs_on(&db, target, runs, &local_day()).map(|_| ()),
                 Err(error) => record_error(&db, target, error),
             });
         if let Err(error) = saved {
