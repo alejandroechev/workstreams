@@ -132,4 +132,17 @@ describe("MemoryBackend daily digest", () => {
     b.runDigestPass();
     expect((await b.getPrInbox()).pipeline_digests!.filter((d) => d.pipeline_name === "CI-Main")).toEqual([]);
   });
+
+  it("launches an investigation tile restricted, and records why one can't start (r2-f1)", async () => {
+    const { b, setNow } = await setup();
+    setNow(local(2, 9, 0));
+    b.runDigestPass();
+    const ci = (await b.getPrInbox()).pipeline_digests!.find((d) => d.pipeline_name === "CI-Main")!;
+    const started = await b.startPipelineInvestigation(ci.id);
+    const tile = await b.createTile(started.workstream_id, "copilot_session", "I", JSON.stringify({ investigation: true }));
+    await expect(b.spawnCopilotSession(tile.id, "/x", null, 30, 120, "my-agent --yolo", "go")).rejects.toThrow("isn't recognizably the Copilot CLI");
+    expect((await b.getPrInbox()).pipeline_digests!.find((d) => d.id === ci.id)!.investigation_error).toContain("Copilot CLI");
+    await b.spawnCopilotSession(tile.id, "/x", null, 30, 120, "agency copilot --yolo", "go");
+    expect((await b.getPrInbox()).pipeline_digests!.find((d) => d.id === ci.id)!.investigation_error).toBeNull();
+  });
 });

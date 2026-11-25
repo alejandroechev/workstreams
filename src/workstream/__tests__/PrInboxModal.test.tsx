@@ -545,6 +545,12 @@ describe("Inbox, daily digests (ADR 045)", () => {
     expect(onInvestigate).toHaveBeenCalledWith("drun:d1:12");
   });
 
+  it("says why a digest's investigation couldn't start (r2-f1)", () => {
+    render(<PrInboxModal snapshot={{ ...base, pipeline_digests: [digest({ investigation: "ws-1", investigation_error: "isn't recognizably the Copilot CLI" })] }}
+      error={null} loading={false} onRead={vi.fn()} onOpenWorkstream={vi.fn()} onClose={() => {}} />);
+    expect(screen.getByTestId("pipeline-investigation-error-d1")).toHaveTextContent("Investigation couldn't start: isn't recognizably the Copilot CLI");
+  });
+
   it("hides read digests until With read, and filters to Pipelines", () => {
     render(<PrInboxModal snapshot={{ ...base, pipeline_digests: [digest({ is_read: true })] }} error={null} loading={false} onRead={vi.fn()} onClose={() => {}} />);
     expect(screen.queryByTestId("pipeline-digest-d1")).toBeNull();

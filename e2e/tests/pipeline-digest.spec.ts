@@ -80,7 +80,7 @@ const workstreams = (page: Page) => call<Array<{ id: string; name: string; works
 const spawns = (page: Page) =>
   page.evaluate(() => ((window as unknown as SpecWindow).__WS_INVOKE_LOG__ ?? [])
     .filter((e) => e.cmd === "spawn_copilot_session" && e.args.initialPrompt)
-    .map((e) => e.args as { tileId: string; cwd: string; initialPrompt: string; resumeSessionId: string | null; denyTools: string[] }));
+    .map((e) => e.args as { tileId: string; cwd: string; initialPrompt: string; resumeSessionId: string | null; denyTools: string[]; allowTools: string[]; command: string | null }));
 const activeName = (page: Page) => page.locator('[data-testid="workstream-item"][data-active="true"]');
 
 /** CI-Main: 12 runs, 5 failed, newest failed. Deploy-PPE: 6 runs, 1 failed, newest succeeded. Docs: 4 passed. */
@@ -261,8 +261,10 @@ test("AT-6: Investigate on a digest makes one worktree workstream for the batch,
     "Untrusted data from Azure DevOps"]) {
     expect(spawn.initialPrompt).toContain(text);
   }
-  // f1: the session is launched read-only.
+  // f1: the session is launched restricted: an allowlist, deny rules, and never --yolo.
   for (const rule of ["write", "shell(git push)", "shell(git commit)", "shell(rm)"]) expect(spawn.denyTools).toContain(`--deny-tool=${rule}`);
+  expect(spawn.allowTools).toEqual(["--allow-tool=read", "--allow-tool=shell(git status)"]);
+  expect(spawn.command ?? "").not.toMatch(/--yolo|--allow-all/);
   await expect(activeName(page)).toContainText("Read chunks");
   expect((await digests(page)).find((d) => d.id === ci.id)!.is_read).toBe(false);
   // Expanded runs keep per-run Investigate.
@@ -328,6 +330,8 @@ test("AT-8: an existing investigation gets a follow-up, and at most 3 new ones s
   const resume = (await spawns(page)).find((s) => s.resumeSessionId === "s-p1")!;
   expect(resume.initialPrompt).toContain("- Pipeline: P1 (project SCC)");
   expect(resume.denyTools).toContain("--deny-tool=write");
+  expect(resume.allowTools).toContain("--allow-tool=read");
+  expect(resume.command ?? "").not.toMatch(/--yolo|--allow-all/);
   expect(resume.initialPrompt).toContain("buildId=100");
   const today = (await digests(page)).filter((d) => d.created_at === new Date(2100, 2, 3, 9, 0).toISOString());
   expect(today.find((d) => d.pipeline_id === ids[0])!.investigation).toBe(p1Workstream);

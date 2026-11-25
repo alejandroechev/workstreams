@@ -617,6 +617,9 @@ pub struct PipelineDigest {
     pub investigation: Option<String>,
     /// Auto-investigate will start its investigation on the app's next pass.
     pub auto_pending: bool,
+    /// Why its investigation's session couldn't start, when it couldn't.
+    #[serde(default)]
+    pub investigation_error: Option<String>,
 }
 
 /// "5 of 12 runs failed".
@@ -705,6 +708,7 @@ pub fn digests(db: &Connection) -> Result<Vec<PipelineDigest>, String> {
             })
             .collect::<Result<_, String>>()?;
         runs.reverse();
+        let investigation_error = crate::pipeline_investigate::start_error(db, &id)?;
         out.push(PipelineDigest {
             id,
             pipeline_id: watch_id,
@@ -726,6 +730,7 @@ pub fn digests(db: &Connection) -> Result<Vec<PipelineDigest>, String> {
             is_read,
             created_at: created,
             investigation,
+            investigation_error,
             auto_pending: auto,
         });
     }

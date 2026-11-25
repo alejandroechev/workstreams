@@ -192,3 +192,33 @@ export function investigationDenyArgs(configJson: string): string[] {
   }
   return INVESTIGATION_DENY_RULES.map((rule) => `--deny-tool=${rule}`);
 }
+
+/** What an investigation tile may do without asking (mirror of INVESTIGATION_ALLOW_RULES). */
+export const INVESTIGATION_ALLOW_RULES = ["read", "shell(git status)"] as const;
+const UNRESTRICTING_FLAGS = ["--yolo", "--allow-all", "--allow-all-tools", "--allow-all-paths", "--allow-all-urls", "--autopilot", "--assisted-approval"];
+const UNRESTRICTING_WITH_VALUE = ["--allow-tool", "--allow-url", "--add-dir"];
+
+/**
+ * For an investigation tile (mirror of investigation_launch): the configured
+ * command without any flag that lifts restrictions, plus the allow and deny
+ * rules; null for other tiles. Throws when the command isn't recognizably the
+ * Copilot CLI, since it then can't be restricted.
+ */
+export function investigationLaunch(configJson: string, template: string): { command: string; args: string[] } | null {
+  const deny = investigationDenyArgs(configJson);
+  if (deny.length === 0) return null;
+  const tokens = template.trim().split(/\s+/).filter(Boolean);
+  if (!tokens.some((t) => t === "copilot" || t.endsWith("/copilot"))) {
+    throw new Error(`The Copilot command "${template}" isn't recognizably the Copilot CLI, so the investigation can't run with restricted permissions and wasn't started. Set a command that runs copilot (for example "copilot" or "agency copilot").`);
+  }
+  const kept: string[] = [];
+  let skipValue = false;
+  for (const token of tokens) {
+    if (skipValue) { skipValue = false; continue; }
+    const flag = token.split("=")[0];
+    if (UNRESTRICTING_FLAGS.includes(flag)) continue;
+    if (UNRESTRICTING_WITH_VALUE.includes(flag)) { skipValue = !token.includes("="); continue; }
+    kept.push(token);
+  }
+  return { command: kept.join(" "), args: [...INVESTIGATION_ALLOW_RULES.map((r) => `--allow-tool=${r}`), ...deny] };
+}

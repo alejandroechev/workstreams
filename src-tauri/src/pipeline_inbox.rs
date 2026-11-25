@@ -603,6 +603,9 @@ pub struct PipelineItem {
     pub repo: Option<String>,
     /// The workstream investigating this run, when there is one.
     pub investigation: Option<String>,
+    /// Why that investigation's session couldn't start, when it couldn't.
+    #[serde(default)]
+    pub investigation_error: Option<String>,
 }
 
 fn pipeline_url(org: &str, project: &str, definition_id: u64) -> String {
@@ -845,6 +848,7 @@ pub fn items(db: &Connection) -> Result<Vec<PipelineItem>, String> {
                 discovered_at: r.get(12)?,
                 repo: None,
                 investigation: r.get(15)?,
+                investigation_error: None,
             };
             Ok((
                 parse_stored(r.get(13)?),
@@ -859,6 +863,7 @@ pub fn items(db: &Connection) -> Result<Vec<PipelineItem>, String> {
     rows.into_iter()
         .map(|(ado_repo, over, mut item)| {
             item.repo = known.view(db, ado_repo.as_ref(), over.as_deref())?.label;
+            item.investigation_error = crate::pipeline_investigate::start_error(db, &item.id)?;
             Ok(item)
         })
         .collect()

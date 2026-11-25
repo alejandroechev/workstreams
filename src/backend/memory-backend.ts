@@ -31,6 +31,7 @@ import {
   batchWorkstreamName,
   followupPrompt,
   investigationDenyArgs,
+  investigationLaunch,
 } from "../domain/pipeline-investigate";
 import {
   AUTO_STARTS_PER_DAY,
@@ -197,6 +198,7 @@ export class MemoryBackend implements Backend {
             ...item,
             repo: watch ? this.pipelineWithRepo(watch).repo_label : null,
             investigation: investigation && this.workstreams.has(investigation.workstream_id) ? investigation.workstream_id : null,
+            investigation_error: this.investigationErrors.get(item.id) ?? null,
           };
         })
         .sort((a, b) => compareTimes(b.finished_at, a.finished_at) || b.run_id - a.run_id),
@@ -903,6 +905,7 @@ export class MemoryBackend implements Backend {
         failed: d.failed, state: d.newest_result === "succeeded" ? "passed_since" as const : "still_failing" as const, runs,
         is_read: d.is_read, created_at: d.created_at,
         investigation: investigation && this.workstreams.has(investigation.workstream_id) ? investigation.workstream_id : null,
+        investigation_error: this.investigationErrors.get(d.id) ?? null,
         auto_pending: d.auto_pending,
       }];
     });
@@ -1853,7 +1856,30 @@ export class MemoryBackend implements Backend {
     }
   }
 
+  /** As pipeline_investigations.error: why an investigation's session couldn't start. */
+  private investigationErrors = new Map<string, string>();
+  private recordStartError(tileId: string, error: string | null): void {
+    const ws = this.tiles.get(tileId)?.workstream_id;
+    for (const [id, i] of this.investigations) {
+      if (i.workstream_id !== ws || this.investigationMeta.get(id)?.followup) continue;
+      if (error) this.investigationErrors.set(id, error);
+      else this.investigationErrors.delete(id);
+    }
+  }
+
   async spawnCopilotSession(tileId: string, cwd: string, resumeSessionId?: string | null, rows?: number, cols?: number, command?: string | null, initialPrompt?: string | null): Promise<number | null> {
+    // As natively: an investigation tile is launched restricted, or not at all.
+    let launch: ReturnType<typeof investigationLaunch>;
+    try {
+      launch = investigationLaunch(this.tiles.get(tileId)?.config_json ?? "{}", command?.trim() || "agency copilot --yolo");
+    } catch (error) {
+      this.recordStartError(tileId, error instanceof Error ? error.message : String(error));
+      throw error;
+    }
+    if (launch) {
+      this.recordStartError(tileId, null);
+      command = launch.command;
+    }
     // As spawn_copilot_session: a resume may only start the session the tile is linked to.
     const linked = linkedSessionId(this.tiles.get(tileId)?.config_json);
     if (resumeSessionId && linked && linked !== resumeSessionId) {
@@ -1869,8 +1895,9 @@ export class MemoryBackend implements Backend {
       w.__WS_INVOKE_LOG__.push({
         cmd: "spawn_copilot_session",
         args: { tileId, cwd, resumeSessionId: resumeSessionId ?? null, rows: rows ?? null, cols: cols ?? null, command: command ?? null, initialPrompt: initialPrompt ?? null,
-          // As natively: an investigation tile's stored config adds its deny rules to every start.
-          denyTools: investigationDenyArgs(this.tiles.get(tileId)?.config_json ?? "{}") },
+          // As natively: an investigation tile's stored config adds its rules to every start.
+          denyTools: investigationDenyArgs(this.tiles.get(tileId)?.config_json ?? "{}"),
+          allowTools: launch?.args.filter((a) => a.startsWith("--allow-tool=")) ?? [] },
       });
     }
     return null;

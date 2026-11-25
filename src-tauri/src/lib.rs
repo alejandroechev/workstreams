@@ -2345,20 +2345,88 @@ pub(crate) const INVESTIGATION_DENY_RULES: &[&str] = &[
     "shell(dd)",
 ];
 
+/// What an investigation tile's session may do without asking (ADR 045): read
+/// files, and `git status`. Shell rules match a tool by name and, for a few
+/// known tools, its first subcommand only, never its arguments (checked
+/// against the real CLI), so nothing that could also mutate is allowed: `az`
+/// (`az pipelines` also queues runs), `workstreams` (every agent command), and
+/// `git log/show/diff` (`--output=<file>` writes) ask for approval instead.
+pub(crate) const INVESTIGATION_ALLOW_RULES: &[&str] = &["read", "shell(git status)"];
+
+/// Flags of a configured command that would lift the investigation's
+/// restrictions; dropped (with their value when it is a separate argument).
+const UNRESTRICTING_FLAGS: &[&str] = &[
+    "--yolo",
+    "--allow-all",
+    "--allow-all-tools",
+    "--allow-all-paths",
+    "--allow-all-urls",
+    "--autopilot",
+    "--assisted-approval",
+];
+const UNRESTRICTING_WITH_VALUE: &[&str] = &["--allow-tool", "--allow-url", "--add-dir"];
+
+fn is_investigation(config_json: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(config_json)
+        .ok()
+        .and_then(|c| c["investigation"].as_bool())
+        .unwrap_or(false)
+}
+
 /// `--deny-tool=<rule>` for each investigation rule when the tile is an
 /// investigation's (`"investigation": true` in its config), else nothing.
 pub(crate) fn investigation_deny_args(config_json: &str) -> Vec<String> {
-    let investigation = serde_json::from_str::<serde_json::Value>(config_json)
-        .ok()
-        .and_then(|c| c["investigation"].as_bool())
-        .unwrap_or(false);
-    if !investigation {
+    if !is_investigation(config_json) {
         return Vec::new();
     }
     INVESTIGATION_DENY_RULES
         .iter()
         .map(|rule| format!("--deny-tool={rule}"))
         .collect()
+}
+
+/// For an investigation tile: the configured command with every flag that
+/// lifts restrictions removed, and the allow and deny rules to add. `None`
+/// for any other tile. Refused when the command isn't recognizably the
+/// Copilot CLI, since then it can't be restricted.
+pub(crate) fn investigation_launch(
+    config_json: &str,
+    template: &str,
+) -> Result<Option<(String, Vec<String>)>, String> {
+    if !is_investigation(config_json) {
+        return Ok(None);
+    }
+    let tokens: Vec<&str> = template.split_whitespace().collect();
+    let copilot = tokens
+        .iter()
+        .any(|t| *t == "copilot" || t.ends_with("/copilot"));
+    if !copilot {
+        return Err(format!(
+            "The Copilot command \"{template}\" isn't recognizably the Copilot CLI, so the investigation can't run with restricted permissions and wasn't started. Set a command that runs copilot (for example \"copilot\" or \"agency copilot\")."
+        ));
+    }
+    let mut kept = Vec::new();
+    let mut skip_value = false;
+    for token in tokens {
+        if std::mem::take(&mut skip_value) {
+            continue;
+        }
+        let flag = token.split('=').next().unwrap_or(token);
+        if UNRESTRICTING_FLAGS.contains(&flag) {
+            continue;
+        }
+        if UNRESTRICTING_WITH_VALUE.contains(&flag) {
+            skip_value = !token.contains('=');
+            continue;
+        }
+        kept.push(token);
+    }
+    let mut extra: Vec<String> = INVESTIGATION_ALLOW_RULES
+        .iter()
+        .map(|rule| format!("--allow-tool={rule}"))
+        .collect();
+    extra.extend(investigation_deny_args(config_json));
+    Ok(Some((kept.join(" "), extra)))
 }
 
 fn copilot_launch(
@@ -2429,14 +2497,33 @@ fn spawn_copilot_session(
             )
             .ok()
             .flatten();
-        (
-            workstream_env_from_db(&db, &tile_id, &state.agent_identities),
-            investigation_deny_args(config.as_deref().unwrap_or("{}")),
-        )
+        let config = config.unwrap_or_else(|| "{}".into());
+        let template = command
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or("agency copilot --yolo")
+            .to_string();
+        let restricted = investigation_launch(&config, &template);
+        if let Err(error) = &restricted {
+            pipeline_investigate::record_start_error(&db, &tile_id, error)?;
+        }
+        let mut env = workstream_env_from_db(&db, &tile_id, &state.agent_identities);
+        if matches!(restricted, Ok(Some(_))) {
+            // The environment can't grant what the flags no longer do.
+            env.get_or_insert_with(Default::default)
+                .insert("COPILOT_ALLOW_ALL".into(), "false".into());
+            pipeline_investigate::record_start_error(&db, &tile_id, "")?;
+        }
+        (env, restricted?)
+    };
+    let (template, extra) = match &deny {
+        Some((restricted, extra)) => (Some(restricted.as_str()), extra.clone()),
+        None => (command.as_deref(), Vec::new()),
     };
     let (program, args) = copilot_launch(
-        command.as_deref(),
-        &deny,
+        template,
+        &extra,
         resume_session_id.as_deref(),
         initial_prompt.as_deref(),
     )?;
@@ -7274,6 +7361,45 @@ mod tests {
             copilot_launch(Some("agency copilot --yolo"), &[], None, Some(prompt)).unwrap();
         assert_eq!(program, "agency");
         assert_eq!(args, vec!["copilot", "--yolo", "-i", prompt]);
+    }
+
+    /// r2-f1: every start of an investigation tile (first prompt, restart,
+    /// follow-up resume, respawn at app start) launches without --yolo or any
+    /// allow-all, with the read-only allowlist and the deny rules.
+    #[test]
+    fn every_start_of_an_investigation_tile_is_restricted() {
+        let config = r#"{"investigation":true}"#;
+        for template in [
+            "agency copilot --yolo",
+            "copilot --allow-all-tools --allow-all-paths --model x",
+            "/opt/bin/copilot --allow-all --allow-tool shell(rm) --allow-tool=shell(git:*) --add-dir / --allow-url=x --autopilot",
+        ] {
+            let (restricted, extra) = investigation_launch(config, template).unwrap().unwrap();
+            for (resume, prompt) in [(None, Some("go")), (Some("s"), None), (Some("s"), Some("follow up")), (None, None)] {
+                let (_, args) = copilot_launch(Some(&restricted), &extra, resume, prompt).unwrap();
+                for a in &args {
+                    for banned in ["--yolo", "--allow-all", "--add-dir", "--autopilot", "--allow-url"] {
+                        assert!(!a.starts_with(banned), "{a} in {args:?}");
+                    }
+                    assert!(a != "shell(rm)" && a != "--allow-tool=shell(git:*)", "{a} in {args:?}");
+                }
+                for rule in INVESTIGATION_ALLOW_RULES {
+                    assert!(args.contains(&format!("--allow-tool={rule}")), "{rule}: {args:?}");
+                }
+                assert!(args.contains(&"--deny-tool=write".to_string()));
+                assert!(args.contains(&"--deny-tool=shell(git push)".to_string()));
+            }
+        }
+        assert!(
+            investigation_launch(r#"{"session_name":"x"}"#, "agency copilot --yolo")
+                .unwrap()
+                .is_none()
+        );
+        let refused = investigation_launch(config, "my-agent --yolo").unwrap_err();
+        assert!(
+            refused.contains("isn't recognizably the Copilot CLI"),
+            "{refused}"
+        );
     }
 
     /// f1: an investigation tile's session can't write files or run
