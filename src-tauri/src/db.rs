@@ -712,6 +712,10 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
         "ALTER TABLE pr_inbox_seen ADD COLUMN comment_watermark TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE pr_inbox_seen ADD COLUMN votes_json TEXT NOT NULL DEFAULT '{}'",
         "ALTER TABLE pr_inbox_seen ADD COLUMN policies_json TEXT NOT NULL DEFAULT '{}'",
+        // When a PR was last seen, and last had its detail read (ADR 045): a
+        // transition without a time is re-baselined when these predate a mute's end.
+        "ALTER TABLE pr_inbox_seen ADD COLUMN last_seen TEXT",
+        "ALTER TABLE pr_inbox_seen ADD COLUMN last_deep TEXT",
         // What a mute rule matches an event on (ADR 036).
         "ALTER TABLE pr_inbox_events ADD COLUMN subject TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE pr_inbox_events ADD COLUMN outcome TEXT NOT NULL DEFAULT ''",

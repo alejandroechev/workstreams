@@ -399,6 +399,8 @@ struct StoredPr {
     comment_watermark: String,
     votes: std::collections::BTreeMap<String, i64>,
     policies: std::collections::BTreeMap<String, String>,
+    last_seen: Option<String>,
+    last_deep: Option<String>,
 }
 
 fn decode_map<V: serde::de::DeserializeOwned + Ord>(
@@ -421,7 +423,7 @@ fn record_event(
     rule: (&str, &str),
 ) -> Result<(), String> {
     record_event_read(
-        tx, target, source, identity, pr, url, kind, dedupe_key, summary, rule, false,
+        tx, target, source, identity, pr, url, kind, dedupe_key, summary, rule, false, false,
     )
 }
 
@@ -439,6 +441,7 @@ fn record_event_read(
     summary: &str,
     rule: (&str, &str),
     is_read: bool,
+    all_muted: bool,
 ) -> Result<(), String> {
     let (subject, outcome) = rule;
     // A muted event is never recorded. Its PR's watermarks still advance (the
@@ -450,8 +453,8 @@ fn record_event_read(
             |r| r.get(0),
         )
         .map_err(|e| e.to_string())?;
-    // Mute all drops every event the same way (ADR 045).
-    if muted || crate::inbox_mute::is_muted(tx)? {
+    // Mute all, resolved once per snapshot by the caller (ADR 045).
+    if muted || all_muted {
         return Ok(());
     }
     // An expired event is not reported again (ADR 041).
@@ -517,10 +520,14 @@ pub fn apply_snapshot(
     if !still_current(&tx, target)? {
         return Ok(());
     }
-    // Mute all (ADR 045): when the last successful poll predates the end of a
-    // mute, transitions with no time of their own (assignments, closures,
-    // votes, gates) can't be told from what happened while muted, so this
-    // poll records them silently as the new baseline.
+    // Mute all (ADR 045), resolved once (a mute past its end lifts here, as
+    // of its end) and fixed for the whole snapshot.
+    let muted = crate::inbox_mute::is_muted(&tx)?;
+    // When a PR was last seen (or its detail last read) before the end of a
+    // mute, its transitions with no time of their own (assignments, closures,
+    // votes, gates) can't be told from what happened while muted, so they are
+    // recorded silently as the new baseline. A PR not seen yet goes by the
+    // repo's last successful poll.
     let last_checked: Option<String> = tx
         .query_row(
             "SELECT last_checked FROM pr_inbox_config WHERE project_id=?1",
@@ -530,10 +537,13 @@ pub fn apply_snapshot(
         .optional()
         .map_err(|e| e.to_string())?
         .flatten();
-    let rebaseline = match last_checked.as_deref() {
-        Some(at) => crate::inbox_mute::unmuted_since(&tx, at)?,
-        None => false,
+    let stale = |at: Option<&str>| -> Result<bool, String> {
+        match at {
+            Some(at) => crate::inbox_mute::unmuted_since(&tx, at),
+            None => Ok(false),
+        }
     };
+    let rebaseline_new = stale(last_checked.as_deref())?;
     for pr in prs {
         let url = repo.web_url(pr.id);
         let baseline: bool = tx
@@ -546,7 +556,7 @@ pub fn apply_snapshot(
             .map_err(|e| e.to_string())?;
         let stored = tx
             .query_row(
-                "SELECT deep_synced,pr_status,comment_watermark,votes_json,policies_json
+                "SELECT deep_synced,pr_status,comment_watermark,votes_json,policies_json,last_seen,last_deep
                 FROM pr_inbox_seen WHERE project_id=?1 AND source=?2 AND identity=?3 AND pr_id=?4",
                 params![target.project_id, source, identity, pr.id],
                 |r| {
@@ -558,6 +568,8 @@ pub fn apply_snapshot(
                         comment_watermark: r.get(2)?,
                         votes: decode_map(&votes),
                         policies: decode_map(&policies),
+                        last_seen: r.get(5)?,
+                        last_deep: r.get(6)?,
                     })
                 },
             )
@@ -585,7 +597,7 @@ pub fn apply_snapshot(
             .map_err(|e| e.to_string())?;
             // Only a review assignment is an arrival worth announcing. The user
             // opening their own PR is not news to them.
-            if baseline && pr.role == PrRole::Reviewer && !rebaseline {
+            if baseline && pr.role == PrRole::Reviewer && !rebaseline_new && !muted {
                 record_event(
                     &tx,
                     target,
@@ -621,11 +633,22 @@ pub fn apply_snapshot(
             comment_watermark: String::new(),
             votes: Default::default(),
             policies: Default::default(),
+            last_seen: None,
+            last_deep: None,
         });
+        let rebaseline_seen = stale(previous.last_seen.as_deref().or(last_checked.as_deref()))?;
+        let rebaseline_deep = stale(previous.last_deep.as_deref().or(last_checked.as_deref()))?;
+        tx.execute(
+            "UPDATE pr_inbox_seen SET last_seen=strftime('%Y-%m-%dT%H:%M:%fZ','now')
+            WHERE project_id=?1 AND source=?2 AND identity=?3 AND pr_id=?4",
+            params![target.project_id, source, identity, pr.id],
+        )
+        .map_err(|e| e.to_string())?;
 
         if !previous.status.eq_ignore_ascii_case(&pr.status)
             && !pr.status.eq_ignore_ascii_case("active")
-            && !rebaseline
+            && !rebaseline_seen
+            && !muted
         {
             let summary = if pr.status.eq_ignore_ascii_case("completed") {
                 "Pull request completed"
@@ -678,6 +701,7 @@ pub fn apply_snapshot(
                 if comment.published_at > previous.comment_watermark
                     && !comment.is_system
                     && !comment.author_id.eq_ignore_ascii_case(&identity)
+                    && !muted
                     && !crate::inbox_mute::was_muted_at(&tx, &comment.published_at)?
                 {
                     // Closed straight after posting ("no feedback" from an AI
@@ -698,6 +722,7 @@ pub fn apply_snapshot(
                         &format!("{} commented: {}", comment.author, excerpt(&comment.text)),
                         (&comment.author, ""),
                         closed_quickly,
+                        muted,
                     )?;
                 }
             }
@@ -733,7 +758,8 @@ pub fn apply_snapshot(
                 let key = vote.reviewer_id.to_lowercase();
                 if previous.votes.get(&key).copied().unwrap_or(0) == vote.vote
                     || vote.vote == 0
-                    || rebaseline
+                    || rebaseline_deep
+                    || muted
                 {
                     continue;
                 }
@@ -757,7 +783,8 @@ pub fn apply_snapshot(
                 );
                 if !settled
                     || previous.policies.get(&policy.id) == Some(&policy.status)
-                    || rebaseline
+                    || rebaseline_deep
+                    || muted
                 {
                     continue;
                 }
@@ -777,7 +804,8 @@ pub fn apply_snapshot(
         }
 
         tx.execute(
-            "UPDATE pr_inbox_seen SET deep_synced=1,comment_watermark=?5,votes_json=?6,policies_json=?7
+            "UPDATE pr_inbox_seen SET deep_synced=1,comment_watermark=?5,votes_json=?6,policies_json=?7,
+            last_deep=strftime('%Y-%m-%dT%H:%M:%fZ','now')
             WHERE project_id=?1 AND source=?2 AND identity=?3 AND pr_id=?4",
             params![
                 target.project_id,
@@ -2772,9 +2800,9 @@ mod tests {
         .unwrap();
         let before = snapshot(&db).unwrap().items.len();
         // The last successful poll was before the mute; then the app closed.
-        db.execute(
-            "UPDATE pr_inbox_config SET last_checked='2026-03-01T09:00:00Z'",
-            [],
+        db.execute_batch(
+            "UPDATE pr_inbox_config SET last_checked='2026-03-01T09:00:00Z';
+            UPDATE pr_inbox_seen SET last_seen='2026-03-01T09:00:00Z', last_deep='2026-03-01T09:00:00Z';",
         )
         .unwrap();
         crate::inbox_mute::mute_at(&db, None, at("2026-03-01T10:00:00Z")).unwrap();
@@ -2828,6 +2856,114 @@ mod tests {
             kinds.iter().filter(|k| *k == "assigned").count(),
             2,
             "{kinds:?}"
+        );
+    }
+
+    /// r2-f5: a mute whose end passed while the app was closed is resolved at
+    /// the start of the snapshot: untimed transitions re-baseline, and a
+    /// comment after its end still notifies.
+    #[test]
+    fn inbox_a_mute_expired_while_closed_is_resolved_before_the_snapshot() {
+        let at = |t: &str| crate::pipeline_digest::parse_time(t).unwrap();
+        let mut db = db();
+        configure(&db, "p", WatchMode::Reviewer).unwrap();
+        let target = targets(&db).unwrap().remove(0);
+        apply_snapshot(&mut db, &target, "me", &[]).unwrap();
+        apply_snapshot(
+            &mut db,
+            &target,
+            "me",
+            &[with_detail(pr(3), PrDetail::default())],
+        )
+        .unwrap();
+        let before = snapshot(&db).unwrap().items.len();
+        db.execute_batch(
+            "UPDATE pr_inbox_config SET last_checked='2026-03-01T09:00:00Z';
+            UPDATE pr_inbox_seen SET last_seen='2026-03-01T09:00:00Z', last_deep='2026-03-01T09:00:00Z';",
+        )
+        .unwrap();
+        crate::inbox_mute::mute_at(
+            &db,
+            Some("2026-03-05T10:00:00Z"),
+            at("2026-03-01T10:00:00Z"),
+        )
+        .unwrap();
+        let away = PrDetail {
+            comments: vec![
+                comment(1, 1, "dev", "2026-03-02T00:00:00Z"),
+                comment(1, 2, "dev", "2026-03-05T11:00:00Z"),
+            ],
+            votes: vec![PrVote {
+                reviewer_id: "dev".into(),
+                reviewer: "Dev".into(),
+                vote: 10,
+            }],
+            ..Default::default()
+        };
+        apply_snapshot(&mut db, &target, "me", &[with_detail(pr(3), away)]).unwrap();
+        let summaries: Vec<String> = snapshot(&db)
+            .unwrap()
+            .items
+            .into_iter()
+            .map(|i| i.summary)
+            .collect();
+        assert_eq!(summaries.len(), before + 1, "{summaries:?}");
+        assert!(summaries[0].contains("Comment 2"), "{summaries:?}");
+    }
+
+    /// r2-f5: the baseline is per PR: one whose detail wasn't read since the
+    /// mute (outside the deep-poll cap) doesn't replay its transitions later.
+    #[test]
+    fn inbox_a_pr_outside_the_deep_poll_cap_rebaselines_when_next_read() {
+        let at = |t: &str| crate::pipeline_digest::parse_time(t).unwrap();
+        let mut db = db();
+        configure(&db, "p", WatchMode::Reviewer).unwrap();
+        let target = targets(&db).unwrap().remove(0);
+        apply_snapshot(&mut db, &target, "me", &[]).unwrap();
+        apply_snapshot(
+            &mut db,
+            &target,
+            "me",
+            &[with_detail(pr(3), PrDetail::default())],
+        )
+        .unwrap();
+        let before = snapshot(&db).unwrap().items.len();
+        db.execute_batch(
+            "UPDATE pr_inbox_config SET last_checked='2026-03-01T09:00:00Z';
+            UPDATE pr_inbox_seen SET last_seen='2026-03-01T09:00:00Z', last_deep='2026-03-01T09:00:00Z';",
+        )
+        .unwrap();
+        crate::inbox_mute::mute_at(&db, None, at("2026-03-01T10:00:00Z")).unwrap();
+        crate::inbox_mute::unmute_at(&db, at("2026-03-05T10:00:00Z")).unwrap();
+        // First poll after: PR 3 is past the deep-poll cap; its detail isn't read.
+        apply_snapshot(&mut db, &target, "me", &[pr(3)]).unwrap();
+        let voted = PrDetail {
+            votes: vec![PrVote {
+                reviewer_id: "dev".into(),
+                reviewer: "Dev".into(),
+                vote: 10,
+            }],
+            ..Default::default()
+        };
+        apply_snapshot(&mut db, &target, "me", &[with_detail(pr(3), voted)]).unwrap();
+        assert_eq!(
+            snapshot(&db).unwrap().items.len(),
+            before,
+            "the vote from the mute isn't replayed"
+        );
+        let rejected = PrDetail {
+            votes: vec![PrVote {
+                reviewer_id: "dev".into(),
+                reviewer: "Dev".into(),
+                vote: -10,
+            }],
+            ..Default::default()
+        };
+        apply_snapshot(&mut db, &target, "me", &[with_detail(pr(3), rejected)]).unwrap();
+        assert_eq!(
+            snapshot(&db).unwrap().items.len(),
+            before + 1,
+            "a later vote notifies"
         );
     }
 

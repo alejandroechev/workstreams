@@ -212,9 +212,14 @@ muting are untouched, and the phone companion is not affected.
 through it; review round 1, f8). Each mute's interval is kept in
 `inbox_mute_intervals`. A comment whose ADO publish time falls inside one is
 dropped whenever it is first seen (its watermark still advances). Votes, gate
-states, closures and review assignments carry no time of their own, so when a
-repo's previous successful poll predates the end of a mute, its first
-successful poll after it records them silently as the new baseline; later
+states, closures and review assignments carry no time of their own, so they are
+recorded silently as the new baseline when the PR was last seen (closures) or
+last had its detail read (votes, gates) before the end of a mute; a PR not seen
+yet (an assignment) goes by the repo's last successful poll. The baseline is
+per PR (`pr_inbox_seen.last_seen` / `last_deep`), so a PR outside the
+deep-poll cap doesn't replay muted votes when its detail is next read. Each
+snapshot resolves the mute once at its start (a mute past its end lifts there,
+as of its end) and uses that state throughout (review round 2, f5). Later
 changes notify as usual. So nothing from a mute replays, at the cost of
 transitions in the minutes between unmuting and that poll.
 
