@@ -1247,6 +1247,13 @@ export class MemoryBackend implements Backend {
     if (!watch) throw new Error("That pipeline isn't watched");
     watch.status.branches = branches;
     watch.notifyAfter = this.digestClock().toISOString();
+    // As set_branches: buffered runs the new scope no longer covers are dropped.
+    for (const run of this.digestRuns.get(id) ?? []) {
+      if (run.digest_id === null && !branchScopeIncludes(branches, run.branch, watch.status.default_branch)) {
+        run.digest_id = "dropped";
+        this.consumedRuns.add(`${id}:${run.run_id}`);
+      }
+    }
   }
 
   async removePipelineWatch(id: string): Promise<void> {

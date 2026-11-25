@@ -863,6 +863,16 @@ fn reserve_request(
     .map_err(|e| e.to_string())
 }
 
+/// Forgets one buffered run: it will never be in a digest.
+pub(crate) fn drop_run(db: &Connection, watch_id: &str, run_id: u64) -> Result<(), String> {
+    db.execute(
+        "UPDATE pipeline_digest_runs SET digest_id='dropped' WHERE watch_id=?1 AND run_id=?2 AND digest_id IS NULL",
+        params![watch_id, run_id],
+    )
+    .map(|_| ())
+    .map_err(|e| e.to_string())
+}
+
 /// A kept run, as a digest lists it.
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq)]
 pub struct KeptRun {
@@ -1998,6 +2008,43 @@ pub(crate) mod tests {
         assert!(
             parse_time(&d.window_start).unwrap() <= parse_time("2026-03-02T15:00:00Z").unwrap(),
             "the window shown covers what it counts"
+        );
+    }
+
+    /// r2-f8: narrowing the branch scope drops buffered runs now out of scope.
+    #[test]
+    fn narrowing_the_branch_scope_drops_buffered_out_of_scope_runs() {
+        let db = db();
+        let zone = TestZone::fixed(-3);
+        let ci = watch(&db, 1, "CI-Main", PipelineMode::DailyFailures);
+        inbox::set_branches(&db, &ci, inbox::BranchScope::All).unwrap();
+        since(&db, &ci, "2026-03-01T12:00:00.000Z");
+        let mut feature = run(1, "failed", "2026-03-01T15:00:00Z");
+        feature.branch = "feature/x".into();
+        finish(
+            &db,
+            &ci,
+            &[feature, run(2, "failed", "2026-03-01T16:00:00Z")],
+        );
+        assert_eq!(undigested(&db, &ci).unwrap().len(), 2);
+        inbox::set_branches(&db, &ci, inbox::BranchScope::Default).unwrap();
+        assert_eq!(
+            undigested(&db, &ci)
+                .unwrap()
+                .iter()
+                .map(|r| r.run_id)
+                .collect::<Vec<_>>(),
+            vec![2]
+        );
+        since(&db, &ci, "2026-03-01T12:00:00.000Z");
+        run_due(&db, &local_clock(&zone, "2026-03-02 09:00")).unwrap();
+        assert_eq!(
+            digests(&db).unwrap()[0]
+                .runs
+                .iter()
+                .map(|r| r.run_id)
+                .collect::<Vec<_>>(),
+            vec![2]
         );
     }
 

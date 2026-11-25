@@ -695,8 +695,11 @@ pub fn set_mode(db: &Connection, id: &str, mode: PipelineMode) -> Result<(), Str
 
 /// Changes whose runs notify. Like a mode change it restarts the quiet period,
 /// so switching to all branches never replays runs that already finished.
+/// Runs buffered for a Daily-failures digest that the new scope no longer
+/// covers are dropped in the same transaction (ADR 045).
 pub fn set_branches(db: &Connection, id: &str, branches: BranchScope) -> Result<(), String> {
-    let changed = db
+    let tx = db.unchecked_transaction().map_err(|e| e.to_string())?;
+    let changed = tx
         .execute(
             &format!(
                 "UPDATE pipeline_watches SET branches=?2, notify_after={NOW}, revision=revision+1, error=NULL WHERE id=?1"
@@ -707,7 +710,19 @@ pub fn set_branches(db: &Connection, id: &str, branches: BranchScope) -> Result<
     if changed == 0 {
         return Err("That pipeline isn't watched".into());
     }
-    Ok(())
+    let default_branch: Option<String> = tx
+        .query_row(
+            "SELECT default_branch FROM pipeline_watches WHERE id=?1",
+            [id],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    for run in crate::pipeline_digest::undigested(&tx, id)? {
+        if !branches.includes(&run.branch, default_branch.as_deref()) {
+            crate::pipeline_digest::drop_run(&tx, id, run.run_id)?;
+        }
+    }
+    tx.commit().map_err(|e| e.to_string())
 }
 
 /// Stops watching a pipeline and drops its notifications.

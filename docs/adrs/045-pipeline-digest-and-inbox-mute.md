@@ -30,7 +30,9 @@ run (branch scope applies) that finishes after the quiet period is kept in
 digest can say "5 of 12 failed". Only `failed` is a failure. Like any mode
 change, entering it restarts the quiet period: runs that already finished are
 never counted. Any mode change drops kept runs no digest covered; leaving the
-mode turns auto-investigate off.
+mode turns auto-investigate off. Narrowing the branch scope (All → Default)
+drops, in the same transaction, the buffered runs the new scope no longer
+covers (review round 2, f8).
 
 ### The digest
 

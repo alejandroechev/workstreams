@@ -120,6 +120,18 @@ describe("MemoryBackend pipelines", () => {
     expect(b.timelineRequests()).toHaveLength(before);
   });
 
+  it("drops buffered runs a narrower branch scope no longer covers (r2-f8)", async () => {
+    const b = backend();
+    b.setDigestClock(() => new Date(2100, 9, 27, 0, 0));
+    const p = await b.addPipelineWatch(PAGE, "daily_failures");
+    await b.setPipelineWatchBranches(p.id, "all");
+    b.finishPipelineRun(p.id, { id: 1, number: "1", result: "failed", branch: "feature/x", finished_at: new Date(2100, 9, 27, 8).toISOString() });
+    b.finishPipelineRun(p.id, { id: 2, number: "2", result: "failed", branch: "main", finished_at: new Date(2100, 9, 27, 9).toISOString() });
+    expect(b.digestRunsFor(p.id).map((r) => r.run_id)).toEqual([1, 2]);
+    await b.setPipelineWatchBranches(p.id, "default");
+    expect(b.digestRunsFor(p.id).map((r) => r.run_id)).toEqual([2]);
+  });
+
   it("notifies only the default branch until switched to all branches", async () => {
     const b = new MemoryBackend();
     b.seedPipelineDefinition({ organization: "skype", project: "SCC", definition_id: 9, name: "engAIne", default_branch: "develop" });
