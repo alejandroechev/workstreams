@@ -734,9 +734,10 @@ export class MemoryBackend implements Backend {
   /** Makes the next timeline request for this run fail, as a network error does. */
   failNextTimeline(runId: number): void { this.timelineFailures.add(runId); }
   /** As pipeline_digest::fetch_steps on a poll: one request per run waiting for its step. */
-  fetchDigestSteps(): void {
+  fetchDigestSteps(only?: { watchId: string; runId: number }): void {
     for (const [watchId, runs] of this.digestRuns) {
       for (const run of runs) {
+        if (only && (only.watchId !== watchId || only.runId !== run.run_id)) continue;
         if (run.step_state !== "pending" || run.digest_id === "dropped") continue;
         this.timelineLog.push(run.run_id);
         if (this.timelineFailures.delete(run.run_id)) continue;
@@ -938,7 +939,8 @@ export class MemoryBackend implements Backend {
     const day = localDay(this.digestClock());
     if (runs.filter((r) => r.fetch_day === day).length < STEP_FETCHES_PER_DAY) Object.assign(kept, { step_state: "pending", fetch_day: day });
     else kept.step_state = "not_fetched";
-    this.fetchDigestSteps();
+    // The pass that saw it fetches its step; one that failed waits for a later pass.
+    this.fetchDigestSteps({ watchId, runId: run.id });
   }
   private pipelineItems: PipelineItem[] = [];
   private pipelineAuthError = false;

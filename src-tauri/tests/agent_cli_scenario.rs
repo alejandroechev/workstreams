@@ -1376,3 +1376,144 @@ fn the_skill_is_installed_and_discoverable() {
          and every drift check below is vacuous until that is fixed."
     );
 }
+
+/// Daily failure digest, auto-investigate and Mute all (ADR 045) through the
+/// real binary: AT-1, AT-7 and AT-10's agent halves of
+/// files/features/pipeline-digest-and-inbox-mute/acceptance.md.
+#[test]
+fn digest_auto_investigate_and_mute_all_through_the_cli() {
+    let dir = scratch_dir("digest");
+    let path = socket_path_in(&dir, 12);
+    let db_path = dir.join("ws.db");
+    let db = workstreams_lib::db::open_db(&db_path).unwrap();
+    for (id, definition, name) in [("ci", 1, "CI-Main"), ("b", 2, "B")] {
+        db.execute(
+            "INSERT INTO pipeline_watches (id,organization,project_id,project_name,definition_id,name,mode,created_at,notify_after)
+            VALUES (?1,'skype','proj','SCC',?2,?3,'failures','2026-01-01T00:00:00.000Z','2026-01-01T00:00:00.000Z')",
+            rusqlite::params![id, definition, name],
+        )
+        .unwrap();
+    }
+    let identities = std::sync::Arc::new(IdentityRegistry::new());
+    let token = identities.issue("tile", "ws");
+    let server =
+        AgentSocketServer::start(path.clone(), serve_with_db(identities, db_path.clone())).unwrap();
+    let raw = |args: &[&str]| {
+        cli()
+            .args(args)
+            .env(SOCKET_ENV_VAR, &path)
+            .env(TOKEN_ENV_VAR, &token)
+            .output()
+            .unwrap()
+    };
+    let run = |args: &[&str]| {
+        let output = raw(args);
+        assert!(
+            output.status.success(),
+            "{args:?}: {}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()["data"].clone()
+    };
+
+    // AT-1: the mode is stored.
+    run(&[
+        "agent",
+        "call",
+        "inbox.pipeline_mode",
+        "id=ci",
+        "mode=daily_failures",
+    ]);
+    let mode: String = db
+        .query_row("SELECT mode FROM pipeline_watches WHERE id='ci'", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(mode, "daily_failures");
+
+    // AT-7: auto-investigate for CI-Main, refused for B (Failures).
+    let set = run(&[
+        "agent",
+        "call",
+        "inbox.pipeline_auto_investigate",
+        "pipeline=ci",
+        "value=digest",
+    ]);
+    assert_eq!(set["auto_investigate"], "digest");
+    let refused = raw(&[
+        "agent",
+        "call",
+        "inbox.pipeline_auto_investigate",
+        "pipeline=b",
+        "value=digest",
+    ]);
+    assert!(!refused.status.success());
+    let said = format!(
+        "{}{}",
+        String::from_utf8_lossy(&refused.stdout),
+        String::from_utf8_lossy(&refused.stderr)
+    );
+    assert!(said.contains("Daily failures"), "{said}");
+    let pipelines = run(&["agent", "call", "inbox.pipelines"]);
+    let ci = pipelines
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["id"] == "ci")
+        .unwrap()
+        .clone();
+    assert_eq!(
+        (ci["mode"].as_str(), ci["auto_investigate"].as_str()),
+        (Some("daily_failures"), Some("digest"))
+    );
+
+    // A digest shows in inbox.list, with the digest time.
+    run(&["agent", "call", "inbox.digest_time", "time=17:30"]);
+    db.execute_batch(
+        "UPDATE pipeline_watches SET digest_since='2026-01-01T00:00:00.000Z' WHERE id='ci';
+        INSERT INTO pipeline_digest_runs (watch_id,run_id,run_number,result,branch,trigger_label,finished_at,seen_at)
+        VALUES ('ci',7,'2026.7','failed','main','CI',strftime('%Y-%m-%dT%H:%M:%fZ','now','-1 hour'),'now');",
+    )
+    .unwrap();
+    let posted = workstreams_lib::pipeline_digest::run_due(
+        &db,
+        &workstreams_lib::pipeline_digest::Clock::system(),
+    )
+    .unwrap();
+    assert_eq!(posted.len(), 1);
+    let listed = run(&["agent", "call", "inbox.list"]);
+    assert_eq!(listed["digest_time"], "17:30");
+    assert_eq!(listed["pipeline_digests"][0]["pipeline_name"], "CI-Main");
+    assert_eq!(listed["pipeline_digests"][0]["failed"], 1);
+    assert_eq!(listed["pipeline_digests"][0]["auto_pending"], true);
+
+    // AT-10: mute until a time, unmute; inbox.unmute_all only clears PR mute rules.
+    let muted = run(&[
+        "agent",
+        "call",
+        "inbox.mute_all_on",
+        "until=2999-01-01T08:00:00Z",
+    ]);
+    assert_eq!(muted["until"], "2999-01-01T08:00:00.000Z");
+    run(&["agent", "call", "inbox.unmute_all"]);
+    let listed = run(&["agent", "call", "inbox.list"]);
+    assert_eq!(listed["mute"]["muted"], true);
+    assert_eq!(listed["mute"]["until"], "2999-01-01T08:00:00.000Z");
+    let dropped = run(&[
+        "agent",
+        "call",
+        "inbox.message",
+        "level=done",
+        "title=While muted",
+    ]);
+    assert_eq!(dropped["dropped"], true);
+    run(&["agent", "call", "inbox.mute_all_off"]);
+    let listed = run(&["agent", "call", "inbox.list"]);
+    assert_eq!(listed["mute"]["muted"], false);
+    assert!(listed["agent_messages"].as_array().unwrap().is_empty());
+
+    drop(db);
+    drop(server);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
