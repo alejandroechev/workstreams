@@ -42,20 +42,27 @@ fn save(db: &Connection, state: &MuteState) -> Result<(), String> {
     .map_err(|e| e.to_string())
 }
 
-/// The mute as of `now`: a mute whose end has passed is lifted first.
+/// When a mute ends by itself, if it has one.
+fn end_of(state: &MuteState) -> Option<DateTime<Utc>> {
+    state
+        .until
+        .as_deref()
+        .and_then(crate::pipeline_digest::parse_time)
+        .filter(|_| state.muted)
+}
+
+/// The mute as of `now`: a mute whose end has passed is lifted first, as of
+/// its end (not `now`), so what happened between the end and `now` (the app
+/// closed, say) still counts.
 pub fn state_at(db: &Connection, now: DateTime<Utc>) -> Result<MuteState, String> {
     let state = stored(db)?;
-    let expired = state.muted
-        && state
-            .until
-            .as_deref()
-            .and_then(crate::pipeline_digest::parse_time)
-            .is_some_and(|until| until <= now);
-    if expired {
-        unmute_at(db, now)?;
-        return Ok(MuteState::default());
+    match end_of(&state) {
+        Some(until) if until <= now => {
+            lift(db, &state, until)?;
+            Ok(MuteState::default())
+        }
+        _ => Ok(state),
     }
-    Ok(state)
 }
 
 pub fn state(db: &Connection) -> Result<MuteState, String> {
@@ -99,13 +106,36 @@ pub fn mute(db: &Connection, until: Option<&str>) -> Result<MuteState, String> {
     mute_at(db, until, Utc::now())
 }
 
-/// Turns notifications back on. Nothing from the muted time replays: every
-/// pipeline's quiet period and digest window restart now.
+/// Turns notifications back on now. Nothing from the muted time replays:
+/// every pipeline's quiet period and digest window restart now.
 pub fn unmute_at(db: &Connection, now: DateTime<Utc>) -> Result<MuteState, String> {
     let was = stored(db)?;
+    lift(db, &was, now)?;
+    Ok(MuteState::default())
+}
+
+/// Ends the mute `was` as of `at`, in one savepoint (callers may already be
+/// inside a transaction), and only if it is still the stored mute.
+fn lift(db: &Connection, was: &MuteState, at: DateTime<Utc>) -> Result<(), String> {
+    db.execute_batch("SAVEPOINT inbox_unmute")
+        .map_err(|e| e.to_string())?;
+    let result = lift_inside(db, was, at);
+    let end = if result.is_ok() {
+        "RELEASE inbox_unmute"
+    } else {
+        "ROLLBACK TO inbox_unmute; RELEASE inbox_unmute"
+    };
+    db.execute_batch(end).map_err(|e| e.to_string())?;
+    result
+}
+
+fn lift_inside(db: &Connection, was: &MuteState, at: DateTime<Utc>) -> Result<(), String> {
+    if stored(db)? != *was {
+        return Ok(());
+    }
     save(db, &MuteState::default())?;
     if was.muted {
-        let at = crate::pipeline_digest::stamp(now);
+        let at = crate::pipeline_digest::stamp(at);
         db.execute(
             "UPDATE pipeline_watches SET notify_after=?1 WHERE julianday(notify_after) < julianday(?1)",
             [&at],
@@ -117,12 +147,13 @@ pub fn unmute_at(db: &Connection, now: DateTime<Utc>) -> Result<MuteState, Strin
         )
         .map_err(|e| e.to_string())?;
         db.execute(
-            "UPDATE pipeline_digest_runs SET digest_id='dropped' WHERE digest_id IS NULL",
-            [],
+            "UPDATE pipeline_digest_runs SET digest_id='dropped' WHERE digest_id IS NULL
+            AND julianday(finished_at) <= julianday(?1)",
+            [&at],
         )
         .map_err(|e| e.to_string())?;
     }
-    Ok(MuteState::default())
+    Ok(())
 }
 
 pub fn unmute(db: &Connection) -> Result<MuteState, String> {
@@ -166,6 +197,25 @@ mod tests {
             MuteState::default(),
             "lifted, not just ignored"
         );
+        // Lifted as of its end, not as of when it was noticed.
+        db.execute_batch(
+            "INSERT INTO pipeline_watches (id,organization,project_id,project_name,definition_id,name,created_at,notify_after)
+            VALUES ('w','o','p','P',1,'CI','t','2026-01-01T00:00:00.000Z')",
+        )
+        .unwrap();
+        mute_at(
+            &db,
+            Some("2026-03-05T08:00:00Z"),
+            at("2026-03-04T10:00:00Z"),
+        )
+        .unwrap();
+        assert!(!is_muted_at(&db, at("2026-03-06T10:00:00Z")).unwrap());
+        let after: String = db
+            .query_row("SELECT notify_after FROM pipeline_watches", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(after, "2026-03-05T08:00:00.000Z");
     }
 
     #[test]

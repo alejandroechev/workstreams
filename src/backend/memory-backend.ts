@@ -876,7 +876,8 @@ export class MemoryBackend implements Backend {
   /** The one gate every Inbox writer checks; a mute whose end has passed lifts first. */
   isInboxMuted(): boolean {
     const { muted, until } = this.inboxMute;
-    if (muted && until && new Date(until).getTime() <= this.digestClock().getTime()) this.unmuteInboxNow();
+    // As inbox_mute::state_at: an expired mute ends as of its until, not as of now.
+    if (muted && until && new Date(until).getTime() <= this.digestClock().getTime()) this.unmuteInboxNow(new Date(until));
     return this.inboxMute.muted;
   }
   /** Mute all on (until turned off, or until `until`) or off, as inbox_mute::mute / unmute. */
@@ -904,12 +905,12 @@ export class MemoryBackend implements Backend {
     if (this.isInboxMuted()) return;
     this.prInbox.items.unshift(structuredClone(item));
   }
-  private unmuteInboxNow(): void {
+  private unmuteInboxNow(effective: Date = this.digestClock()): void {
     const was = this.inboxMute.muted;
     this.inboxMute = { muted: false, until: null };
     this.persistInboxSettings();
     if (!was) return;
-    const at = this.digestClock().toISOString();
+    const at = effective.toISOString();
     for (const watch of this.pipelineWatches) {
       if (compareTimes(watch.notifyAfter, at) < 0) watch.notifyAfter = at;
       if (watch.status.mode === "daily_failures") watch.digestSince = at;

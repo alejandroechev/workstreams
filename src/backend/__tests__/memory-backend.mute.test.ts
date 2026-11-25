@@ -72,4 +72,15 @@ describe("MemoryBackend Mute all", () => {
     setNow(new Date(2100, 2, 1, 23, 0));
     expect(b.isInboxMuted()).toBe(true);
   });
+
+  it("ends an expired mute at its until, so runs after it still count after a restart (f3)", async () => {
+    const { b, ci, daily, setNow } = await setup();
+    await b.setInboxMute(true, new Date(2100, 2, 2, 8, 0).toISOString());
+    setNow(new Date(2100, 2, 2, 10, 0));
+    b.finishPipelineRun(ci.id, { id: 5, number: "5", result: "failed", branch: "main", finished_at: new Date(2100, 2, 2, 8, 30).toISOString() });
+    b.finishPipelineRun(daily.id, { id: 6, number: "6", result: "failed", branch: "main", finished_at: new Date(2100, 2, 2, 8, 30).toISOString() });
+    expect((await b.getPrInbox()).pipeline_items!.map((i) => i.run_id)).toEqual([5]);
+    b.runDigestPass();
+    expect((await b.getPrInbox()).pipeline_digests!.map((d) => d.runs.map((r) => r.run_id))).toEqual([[6]]);
+  });
 });

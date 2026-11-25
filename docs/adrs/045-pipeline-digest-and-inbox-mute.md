@@ -163,7 +163,12 @@ auto-pause (`post_from_app`), and sync alerts (`sync_monitor::apply`). Muted
 events are **dropped, never held**: watermarks still advance, and unmuting
 restarts every pipeline's quiet period and digest window, so nothing from the
 muted time replays. A mute may end at a time; it lifts by itself on the
-poller's tick, at startup, or whenever a writer asks. Entries recorded before
+poller's tick, at startup, or whenever a writer asks, and it lifts **as of its
+`until`**, not as of when it was noticed (review round 1, f3): quiet periods
+and digest windows restart at `until`, so a run that finished between the end
+of the mute and a later restart still notifies or counts. Lifting runs in one
+savepoint and only if the stored mute is still the one that expired; a manual
+unmute lifts as of now. Entries recorded before
 muting are untouched, and the phone companion is not affected.
 
 The Inbox header has a **Mute all** toggle (until turned off, or until a date

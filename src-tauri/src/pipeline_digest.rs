@@ -1685,6 +1685,50 @@ pub(crate) mod tests {
         assert_eq!(ado.timeline_requests().len(), 2);
     }
 
+    /// f3: a mute that ended while the app was closed ends at its `until`,
+    /// so runs finishing between then and the restart still count.
+    #[test]
+    fn a_mute_that_expired_while_closed_ends_at_its_until_not_at_the_restart() {
+        let db = db();
+        let zone = TestZone::fixed(-3);
+        let daily = watch(&db, 1, "CI-Main", PipelineMode::DailyFailures);
+        let failures = watch(&db, 2, "CI", PipelineMode::Failures);
+        since(&db, &daily, "2026-03-02T12:00:00.000Z");
+        // Muted Monday evening until Tuesday 08:00 local (11:00Z); app closed.
+        crate::inbox_mute::mute_at(
+            &db,
+            Some("2026-03-03T11:00:00Z"),
+            at("2026-03-02T22:00:00Z"),
+        )
+        .unwrap();
+        // Restarted Tuesday 10:00 local: the first check sees a run from 08:30.
+        let restart = local_clock(&zone, "2026-03-03 10:00");
+        let late = run(5, "failed", "2026-03-03T11:30:00Z");
+        inbox::apply_runs_on(
+            &db,
+            &target(&db, &failures),
+            std::slice::from_ref(&late),
+            "2026-03-03",
+        )
+        .unwrap();
+        inbox::apply_runs_on(&db, &target(&db, &daily), &[late], "2026-03-03").unwrap();
+        assert!(!crate::inbox_mute::is_muted_at(&db, restart.now).unwrap());
+        assert_eq!(
+            inbox::items(&db).unwrap().len(),
+            1,
+            "the 08:30 failure notifies"
+        );
+        assert_eq!(run_due(&db, &restart).unwrap().len(), 1);
+        assert_eq!(
+            digests(&db).unwrap()[0]
+                .runs
+                .iter()
+                .map(|r| r.run_id)
+                .collect::<Vec<_>>(),
+            vec![5]
+        );
+    }
+
     #[test]
     fn a_retried_run_takes_its_new_result_until_a_digest_covers_it() {
         let db = db();
