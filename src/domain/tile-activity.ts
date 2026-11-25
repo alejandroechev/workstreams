@@ -27,9 +27,21 @@ export function isTileBusy(tileId: string): boolean {
   return status !== undefined && MID_TURN.has(status);
 }
 
+const changedAt = new Map<string, number>();
+
 /** The tile's process was spawned or closed (called by the backends). */
-export function bumpTileGeneration(tileId: string): void {
+export function bumpTileGeneration(tileId: string, now: number = Date.now()): void {
   generations.set(tileId, (generations.get(tileId) ?? 0) + 1);
+  changedAt.set(tileId, now);
+}
+
+/** How long after a start or stop a tile counts as just changed: its new turn may not show yet. */
+export const RECENT_CHANGE_MS = 2 * 60 * 1000;
+
+/** The tile's process started or stopped within RECENT_CHANGE_MS (a digest follow-up then waits, ADR 045). */
+export function tileChangedRecently(tileId: string, now: number = Date.now()): boolean {
+  const at = changedAt.get(tileId);
+  return at !== undefined && now - at < RECENT_CHANGE_MS;
 }
 
 export function tileGeneration(tileId: string): number {

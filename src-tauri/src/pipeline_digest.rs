@@ -287,7 +287,8 @@ pub fn set_auto_investigate(
 
 /// After a digest is posted, for a pipeline that auto-investigates: its
 /// existing investigation gets the new failed runs as a follow-up prompt;
-/// otherwise a new one is asked for, unless 3 were in the last 24 hours.
+/// otherwise a new one is asked for, which the app claims (with the cap)
+/// when it starts it.
 fn after_digest(
     db: &Connection,
     watch_id: &str,
@@ -305,34 +306,146 @@ fn after_digest(
         return Ok(());
     }
     if let Some(workstream) = crate::pipeline_investigate::pipeline_investigation(db, watch_id)? {
-        let digest = digests(db)?
-            .into_iter()
-            .find(|d| d.id == digest_id)
-            .ok_or("The digest was not stored")?;
-        db.execute(
-            "INSERT OR REPLACE INTO pipeline_investigations (event_id, workstream_id, prompt, session_started, created_at, watch_id, followup)
-            VALUES (?1, ?2, ?3, 0, ?4, ?5, 1)",
-            params![digest_id, workstream, crate::pipeline_investigate::followup_prompt(&digest), clock.stamp(), watch_id],
+        return enqueue_followup(db, watch_id, digest_id, &workstream, clock);
+    }
+    db.execute(
+        "UPDATE pipeline_digests SET auto_pending=1, auto_requested_at=?2 WHERE id=?1",
+        params![digest_id, clock.stamp()],
+    )
+    .map(|_| ())
+    .map_err(|e| e.to_string())
+}
+
+/// The session an investigation workstream's tile runs: its investigation
+/// tile's, else its first session tile's.
+fn investigation_session(db: &Connection, workstream: &str) -> Result<Option<String>, String> {
+    let mut stmt = db
+        .prepare(
+            "SELECT config_json FROM tiles WHERE workstream_id=?1 AND tile_type='copilot_session'
+            ORDER BY created_at, id",
         )
         .map_err(|e| e.to_string())?;
-        return Ok(());
+    let configs: Vec<serde_json::Value> = stmt
+        .query_map([workstream], |r| r.get::<_, Option<String>>(0))
+        .map_err(|e| e.to_string())?
+        .filter_map(|c| c.ok().flatten())
+        .filter_map(|c| serde_json::from_str(&c).ok())
+        .collect();
+    let session = |c: &serde_json::Value| c["copilot_session_id"].as_str().map(str::to_owned);
+    Ok(configs
+        .iter()
+        .find(|c| c["investigation"] == true)
+        .or(configs.first())
+        .and_then(session))
+}
+
+/// Records a digest's new failed runs as a follow-up for the session the
+/// investigation's tile runs now.
+fn enqueue_followup(
+    db: &Connection,
+    watch_id: &str,
+    digest_id: &str,
+    workstream: &str,
+    clock: &Clock,
+) -> Result<(), String> {
+    let digest = digests(db)?
+        .into_iter()
+        .find(|d| d.id == digest_id)
+        .ok_or("The digest was not stored")?;
+    db.execute(
+        "INSERT OR REPLACE INTO pipeline_investigations
+        (event_id, workstream_id, prompt, session_started, created_at, watch_id, followup, expected_session)
+        VALUES (?1, ?2, ?3, 0, ?4, ?5, 1, ?6)",
+        params![
+            digest_id,
+            workstream,
+            crate::pipeline_investigate::followup_prompt(&digest),
+            clock.stamp(),
+            watch_id,
+            investigation_session(db, workstream)?
+        ],
+    )
+    .map(|_| ())
+    .map_err(|e| e.to_string())
+}
+
+/// What claiming a digest's auto-investigation decided.
+#[derive(Debug, Clone, PartialEq)]
+pub enum AutoClaim {
+    /// Start it: `reservation` holds its place in the rolling cap; release it
+    /// if the start doesn't happen.
+    Start {
+        reservation: String,
+    },
+    /// An investigation exists now: the runs went to it as a follow-up.
+    FollowUp,
+    CapReached,
+    /// Muted, already claimed or investigated, or gone.
+    Skipped,
+}
+
+/// Claims a digest's auto-investigation right before the app starts it, in
+/// one transaction: the request is consumed whatever the outcome; nothing
+/// starts while muted or when the digest already has one; an investigation of
+/// the pipeline that appeared meanwhile gets a follow-up instead; otherwise a
+/// start is reserved while fewer than [`AUTO_STARTS_PER_DAY`] were in the
+/// rolling last 24 hours.
+pub fn claim_auto(db: &Connection, digest_id: &str, clock: &Clock) -> Result<AutoClaim, String> {
+    let tx = db.unchecked_transaction().map_err(|e| e.to_string())?;
+    let claimed = claim_inside(&tx, digest_id, clock)?;
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(claimed)
+}
+
+fn claim_inside(db: &Connection, digest_id: &str, clock: &Clock) -> Result<AutoClaim, String> {
+    let watch: Option<String> = db
+        .query_row(
+            "SELECT watch_id FROM pipeline_digests WHERE id=?1 AND auto_pending=1",
+            [digest_id],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+    let Some(watch) = watch else {
+        return Ok(AutoClaim::Skipped);
+    };
+    clear_auto_pending(db, digest_id)?;
+    if crate::inbox_mute::is_muted_at(db, clock.now)?
+        || crate::pipeline_investigate::existing(db, digest_id)?.is_some()
+    {
+        return Ok(AutoClaim::Skipped);
+    }
+    if let Some(workstream) = crate::pipeline_investigate::pipeline_investigation(db, &watch)? {
+        enqueue_followup(db, &watch, digest_id, &workstream, clock)?;
+        return Ok(AutoClaim::FollowUp);
     }
     let started: i64 = db
         .query_row(
-            "SELECT COUNT(*) FROM pipeline_digests WHERE auto_requested_at IS NOT NULL
-            AND julianday(auto_requested_at) > julianday(?1) - 1",
+            "SELECT COUNT(*) FROM pipeline_auto_starts WHERE julianday(at) > julianday(?1) - 1",
             [clock.stamp()],
             |r| r.get(0),
         )
         .map_err(|e| e.to_string())?;
-    if started < AUTO_STARTS_PER_DAY {
-        db.execute(
-            "UPDATE pipeline_digests SET auto_pending=1, auto_requested_at=?2 WHERE id=?1",
-            params![digest_id, clock.stamp()],
-        )
-        .map_err(|e| e.to_string())?;
+    if started >= AUTO_STARTS_PER_DAY {
+        return Ok(AutoClaim::CapReached);
     }
-    Ok(())
+    let reservation = uuid::Uuid::new_v4().to_string();
+    db.execute(
+        "INSERT INTO pipeline_auto_starts (id, watch_id, digest_id, at) VALUES (?1, ?2, ?3, ?4)",
+        params![reservation, watch, digest_id, clock.stamp()],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(AutoClaim::Start { reservation })
+}
+
+/// Gives back a reserved start that didn't happen.
+pub fn release_auto_start(db: &Connection, reservation: &str) -> Result<(), String> {
+    db.execute(
+        "DELETE FROM pipeline_auto_starts WHERE id=?1",
+        [reservation],
+    )
+    .map(|_| ())
+    .map_err(|e| e.to_string())
 }
 
 /// Digests whose investigation auto-investigate asked for and the app hasn't
@@ -1157,94 +1270,192 @@ pub(crate) mod tests {
         assert!(AutoInvestigate::parse("first").is_err());
     }
 
-    /// AT-7/AT-8: an existing investigation gets a follow-up instead of a new
-    /// one; at most 3 new ones start in a rolling 24 h; nothing while muted.
-    #[test]
-    fn a_digest_starts_or_follows_up_investigations_within_the_daily_cap() {
-        let db = db();
-        let zone = TestZone::fixed(-3);
-        let ids: Vec<String> = (1..=5)
-            .map(|n| watch(&db, n, &format!("P{n}"), PipelineMode::DailyFailures))
-            .collect();
-        for (n, id) in ids.iter().enumerate() {
-            auto(&db, id);
-            since(&db, id, "2026-03-01T12:00:00.000Z");
-            finish(
-                &db,
-                id,
-                &[run(n as u64 * 10 + 1, "failed", "2026-03-01T15:00:00Z")],
-            );
-        }
-        // P1 already has an investigation workstream, from an earlier digest.
+    /// A pipeline with an investigation workstream whose investigation tile
+    /// runs session `s-<name>`.
+    fn investigated(db: &Connection, watch_id: &str, name: &str) {
         db.execute(
-            "INSERT INTO workstreams (id, name, created_at, updated_at) VALUES ('ws-p1', 'Investigate P1', 't', 't')",
-            [],
+            "INSERT INTO workstreams (id, name, created_at, updated_at) VALUES (?1, ?1, 't', 't')",
+            [format!("ws-{name}")],
+        )
+        .unwrap();
+        db.execute(
+            "INSERT INTO tiles (id, workstream_id, tile_type, title, config_json, created_at, updated_at)
+            VALUES (?1, ?2, 'copilot_session', 'Investigate', ?3, 't', 't')",
+            params![
+                format!("tile-{name}"),
+                format!("ws-{name}"),
+                format!(r#"{{"investigation":true,"copilot_session_id":"s-{name}"}}"#)
+            ],
         )
         .unwrap();
         db.execute(
             "INSERT INTO pipeline_investigations (event_id, workstream_id, prompt, session_started, created_at, watch_id)
-            VALUES ('old-digest', 'ws-p1', 'p', 1, '2026-02-28T12:00:00Z', ?1)",
-            [&ids[0]],
+            VALUES (?1, ?2, 'p', 1, '2026-02-28T12:00:00Z', ?3)",
+            params![format!("old-{name}"), format!("ws-{name}"), watch_id],
         )
         .unwrap();
-        let posted = run_due(&db, &local_clock(&zone, "2026-03-02 09:00")).unwrap();
-        assert_eq!(posted.len(), 5);
+    }
+
+    fn five_digests(db: &Connection) -> Vec<String> {
+        let zone = TestZone::fixed(-3);
+        let ids: Vec<String> = (1..=5)
+            .map(|n| watch(db, n, &format!("P{n}"), PipelineMode::DailyFailures))
+            .collect();
+        for (n, id) in ids.iter().enumerate() {
+            auto(db, id);
+            since(db, id, "2026-03-01T12:00:00.000Z");
+            finish(
+                db,
+                id,
+                &[run(n as u64 * 10 + 1, "failed", "2026-03-01T15:00:00Z")],
+            );
+        }
+        investigated(db, &ids[0], "P1");
+        assert_eq!(
+            run_due(db, &local_clock(&zone, "2026-03-02 09:00"))
+                .unwrap()
+                .len(),
+            5
+        );
+        ids
+    }
+
+    /// AT-7/AT-8: an existing investigation gets a follow-up for its tile's
+    /// session; the others wait for the app to claim them.
+    #[test]
+    fn a_digest_follows_up_an_existing_investigation_or_asks_for_one() {
+        let db = db();
+        five_digests(&db);
         let all = digests(&db).unwrap();
         let of = |name: &str| all.iter().find(|d| d.pipeline_name == name).unwrap();
-        assert_eq!(
-            of("P1").investigation.as_deref(),
-            Some("ws-p1"),
-            "links to the existing one"
-        );
+        assert_eq!(of("P1").investigation.as_deref(), Some("ws-P1"));
         assert!(!of("P1").auto_pending);
         let followups = crate::pipeline_investigate::pending_followups(&db).unwrap();
         assert_eq!(followups.len(), 1);
-        assert_eq!(followups[0].workstream_id, "ws-p1");
-        assert!(
-            followups[0].prompt.contains("buildId=1"),
-            "{}",
-            followups[0].prompt
-        );
-        assert!(followups[0].prompt.contains("Change nothing until I ask"));
-        let pending: Vec<&str> = all
-            .iter()
-            .filter(|d| d.auto_pending)
-            .map(|d| d.pipeline_name.as_str())
-            .collect();
-        assert_eq!(pending.len(), 3, "{pending:?}");
-        assert_eq!(auto_pending(&db).unwrap().len(), 3);
+        assert_eq!(followups[0].workstream_id, "ws-P1");
+        assert_eq!(followups[0].expected_session_id.as_deref(), Some("s-P1"));
+        assert!(followups[0].prompt.contains("buildId=1"));
+        assert_eq!(auto_pending(&db).unwrap().len(), 4);
+    }
 
-        // A day later the cap has room again; muted, nothing starts.
-        for id in &ids {
-            finish(
-                &db,
-                id,
-                &[run(900 + id.len() as u64, "failed", "2026-03-02T15:00:00Z")],
-            );
+    /// f7: the cap is checked when the app claims a start, in a ledger that
+    /// outlives the watches and digests it counts.
+    #[test]
+    fn auto_starts_are_capped_at_launch_by_a_ledger_that_outlives_watches() {
+        let db = db();
+        let ids = five_digests(&db);
+        let clock_at = |t: &str| Clock {
+            now: at(t),
+            zone: &SystemZone,
+        };
+        let mut started = Vec::new();
+        for digest in auto_pending(&db).unwrap() {
+            match claim_auto(&db, &digest, &clock_at("2026-03-02T12:05:00Z")).unwrap() {
+                AutoClaim::Start { .. } => started.push(digest),
+                AutoClaim::CapReached => {}
+                other => panic!("{other:?}"),
+            }
         }
-        crate::inbox_mute::mute_at(&db, None, at("2026-03-02T16:00:00Z")).unwrap();
-        assert!(run_due(&db, &local_clock(&zone, "2026-03-03 09:00"))
-            .unwrap()
-            .is_empty());
-        crate::inbox_mute::unmute_at(&db, at("2026-03-03T13:00:00Z")).unwrap();
-        let left_out = all
-            .iter()
-            .find(|d| d.pipeline_name != "P1" && !d.auto_pending)
-            .unwrap()
-            .pipeline_id
-            .clone();
-        finish(
-            &db,
-            &left_out,
-            &[run(999, "failed", "2026-03-03T15:00:00Z")],
+        assert_eq!(started.len(), 3);
+        assert!(
+            auto_pending(&db).unwrap().is_empty(),
+            "every request is claimed once"
         );
-        run_due(&db, &local_clock(&zone, "2026-03-04 09:00")).unwrap();
-        let newest = digests(&db)
+        for id in &ids[1..] {
+            inbox::remove(&db, id).unwrap();
+        }
+        let p6 = watch(&db, 6, "P6", PipelineMode::DailyFailures);
+        auto(&db, &p6);
+        since(&db, &p6, "2026-03-02T13:00:00.000Z");
+        finish(&db, &p6, &[run(61, "failed", "2026-03-02T15:00:00Z")]);
+        let zone = TestZone::fixed(-3);
+        run_due(&db, &local_clock(&zone, "2026-03-03 09:00")).unwrap();
+        let p6_digest = auto_pending(&db).unwrap().remove(0);
+        assert_eq!(
+            claim_auto(&db, &p6_digest, &clock_at("2026-03-02T23:00:00Z")).unwrap(),
+            AutoClaim::CapReached,
+            "the removed watches' starts still count"
+        );
+        db.execute(
+            "UPDATE pipeline_digests SET auto_pending=1 WHERE id=?1",
+            [&p6_digest],
+        )
+        .unwrap();
+        assert!(matches!(
+            claim_auto(&db, &p6_digest, &clock_at("2026-03-03T12:06:00Z")).unwrap(),
+            AutoClaim::Start { .. }
+        ));
+    }
+
+    /// f7: an investigation that appeared since the digest asked (Investigate
+    /// on an earlier digest, say) turns the start into a follow-up.
+    #[test]
+    fn a_claim_becomes_a_follow_up_when_an_investigation_appeared_meanwhile() {
+        let db = db();
+        let ids = five_digests(&db);
+        investigated(&db, &ids[1], "P2");
+        let p2 = digests(&db)
             .unwrap()
             .into_iter()
-            .find(|d| d.pipeline_id == left_out)
+            .find(|d| d.pipeline_name == "P2")
             .unwrap();
-        assert!(newest.auto_pending, "more than 24 h after the first three");
+        let clock = Clock {
+            now: at("2026-03-02T12:05:00Z"),
+            zone: &SystemZone,
+        };
+        assert_eq!(
+            claim_auto(&db, &p2.id, &clock).unwrap(),
+            AutoClaim::FollowUp
+        );
+        let followups = crate::pipeline_investigate::pending_followups(&db).unwrap();
+        assert!(followups
+            .iter()
+            .any(|f| f.event_id == p2.id && f.expected_session_id.as_deref() == Some("s-P2")));
+        assert_eq!(
+            claim_auto(&db, &p2.id, &clock).unwrap(),
+            AutoClaim::Skipped,
+            "claimed once"
+        );
+    }
+
+    /// f4: muting drops undelivered auto work (requests, follow-ups, sessions
+    /// not yet started) for good; a claim while muted starts nothing; a manual
+    /// investigation is unaffected.
+    #[test]
+    fn muting_invalidates_undelivered_auto_work() {
+        let db = db();
+        five_digests(&db);
+        let pending = auto_pending(&db).unwrap();
+        let clock = Clock {
+            now: at("2026-03-02T12:05:00Z"),
+            zone: &SystemZone,
+        };
+        assert!(matches!(
+            claim_auto(&db, &pending[0], &clock).unwrap(),
+            AutoClaim::Start { .. }
+        ));
+        db.execute_batch(
+            "INSERT INTO workstreams (id, name, created_at, updated_at) VALUES ('ws-auto','A','t','t'), ('ws-manual','M','t','t');
+            INSERT INTO pipeline_investigations (event_id, workstream_id, prompt, session_started, created_at, auto)
+            VALUES ('auto-digest','ws-auto','p',0,'t',1), ('manual-run','ws-manual','p',0,'t',0);",
+        )
+        .unwrap();
+        crate::inbox_mute::mute_at(&db, None, at("2026-03-02T12:06:00Z")).unwrap();
+        assert_eq!(
+            claim_auto(&db, &pending[1], &clock).unwrap(),
+            AutoClaim::Skipped
+        );
+        crate::inbox_mute::unmute_at(&db, at("2026-03-02T13:00:00Z")).unwrap();
+        assert!(auto_pending(&db).unwrap().is_empty());
+        assert!(crate::pipeline_investigate::pending_followups(&db)
+            .unwrap()
+            .is_empty());
+        let sessions: Vec<String> = crate::pipeline_investigate::pending_sessions(&db)
+            .unwrap()
+            .into_iter()
+            .map(|p| p.event_id)
+            .collect();
+        assert_eq!(sessions, vec!["manual-run".to_string()]);
     }
 
     // ── The digest ──

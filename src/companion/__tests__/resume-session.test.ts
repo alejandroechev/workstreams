@@ -408,4 +408,14 @@ describe("resuming an investigation with a digest's follow-up (ADR 045)", () => 
     ]);
     expect(await backend.companionListSessions()).toEqual([]);
   });
+
+  it("cancels under the tile lock, before stopping anything, when revalidation refuses", async () => {
+    const { ws, tile, deps, log } = await setup();
+    await expect(resumeFollowUpSession(deps, {
+      workstreamId: ws.id, tileId: tile.id, prompt: "Follow up", command: "copilot",
+      revalidate: async (phase) => { if (phase === "before-stop") throw new Error("busy"); },
+    })).rejects.toThrow("busy");
+    expect(log).not.toContain("stop");
+    expect(log.some((l) => l.includes("Follow up"))).toBe(false);
+  });
 });

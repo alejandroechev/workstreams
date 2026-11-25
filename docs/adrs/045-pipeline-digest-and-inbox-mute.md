@@ -160,6 +160,31 @@ No "investigation started" entry is posted; the digest shows Open
 investigation. Manual Investigate is never capped. Muted digests aren't posted,
 so nothing starts while muted.
 
+Decisions are made at launch, not only when the digest is posted (review
+round 1, f4, f5, f7):
+
+- **Claimed at launch.** `run_auto_investigations` claims each request in one
+  transaction (`claim_auto`) right before starting it: the request is consumed
+  whatever happens; muted, or the digest already investigated, it is skipped;
+  an investigation of the pipeline that appeared meanwhile (Investigate on an
+  earlier digest, say) turns it into a follow-up; otherwise a start is
+  reserved in `pipeline_auto_starts` while fewer than 3 were in the rolling 24
+  hours. That ledger survives removing watches and expiring digests; a start
+  that then doesn't happen gives its place back.
+- **Mute is rechecked** before git runs and before the start is recorded, and
+  the app rechecks a session is still due right before spawning it. Turning
+  Mute all on drops every undelivered piece of auto work for good (requests,
+  follow-ups, auto-started sessions not yet begun), so nothing replays after
+  unmuting. Manual investigations are unaffected.
+- **A follow-up never interrupts.** It is queued with the session it is for
+  (the investigation tile's `copilot_session_id`). The app sends it through
+  the shared per-tile resume path, and under the tile's resume lock, right
+  before stopping and before spawning, it rechecks that the follow-up is still
+  due, that the tile still runs that session, that no other start or stop of
+  the tile happened since it was read (a phone message or scheduled run that
+  queued first), and that the session isn't mid-turn, in an open turn, or
+  started in the last two minutes. Otherwise it is skipped, never forced.
+
 ### Mute all
 
 `settings.inbox_mute` holds `{muted, until}`. **One gate**,

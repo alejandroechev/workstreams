@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bumpTileGeneration, forgetTileActivity, isTileBusy, setTileActivity, tileGeneration } from "../tile-activity";
+import { bumpTileGeneration, forgetTileActivity, isTileBusy, setTileActivity, tileChangedRecently, tileGeneration } from "../tile-activity";
 
 describe("tile activity registry", () => {
   it("is busy only while the agent is mid-turn", () => {
@@ -39,5 +39,14 @@ describe("tile process generations (finding 5)", () => {
     await backend.spawnCopilotSession("p", "/", null);
     await backend.closeTerminal("p");
     expect(tileGeneration("p")).toBe(start + 2);
+  });
+});
+
+describe("a tile's process changed moments ago", () => {
+  it("counts as recent for two minutes after a start or stop", () => {
+    expect(tileChangedRecently("fresh-tile", 1_000)).toBe(false);
+    bumpTileGeneration("fresh-tile", 1_000);
+    expect(tileChangedRecently("fresh-tile", 1_000 + 119_000)).toBe(true);
+    expect(tileChangedRecently("fresh-tile", 1_000 + 121_000)).toBe(false);
   });
 });

@@ -168,6 +168,28 @@ describe("starting investigation sessions", () => {
   });
 });
 
+describe("auto-started investigation sessions are rechecked at dispatch (f4)", () => {
+  it("doesn't spawn one whose start was dropped by a mute while it mounted", async () => {
+    const backend = new MemoryBackend();
+    let now = new Date(2100, 2, 1, 9, 30);
+    backend.setDigestClock(() => now);
+    backend.seedPipelineDefinition({ organization: "skype", project: "SCC", definition_id: 1, name: "CI-Main" });
+    const watch = await backend.addPipelineWatch("https://dev.azure.com/skype/SCC/_build?definitionId=1", "daily_failures");
+    await backend.setPipelineAutoInvestigate(watch.id, "digest");
+    backend.finishPipelineRun(watch.id, { id: 1, number: "1", result: "failed", branch: "main", finished_at: new Date(2100, 2, 1, 12).toISOString() });
+    now = new Date(2100, 2, 2, 9, 0);
+    backend.runDigestPass();
+    expect(await backend.runAutoInvestigations()).toBe(1);
+    const d = deps(backend);
+    d.mount.mockImplementation(async () => { await backend.setInboxMute(true); });
+    await startPendingInvestigations(d);
+    expect(d.spawn).not.toHaveBeenCalled();
+    await backend.setInboxMute(false);
+    await startPendingInvestigations(d);
+    expect(d.spawn).not.toHaveBeenCalled();
+  });
+});
+
 describe("sending a digest's follow-up into an existing investigation (ADR 045)", () => {
   async function withFollowUp(linked: string | null) {
     const backend = new MemoryBackend();
@@ -182,41 +204,74 @@ describe("sending a digest's follow-up into an existing investigation (ADR 045)"
     const started = await backend.runAutoInvestigations();
     expect(started).toBe(1);
     const ws = (await backend.listWorkstreams())[0];
-    const tile = await backend.createTile(ws.id, "copilot_session", "Investigate", JSON.stringify(linked ? { copilot_session_id: linked } : {}));
+    const tile = await backend.createTile(ws.id, "copilot_session", "Investigate",
+      JSON.stringify(linked ? { investigation: true, copilot_session_id: linked } : { investigation: true }));
     await backend.markInvestigationSessionStarted((await backend.pendingInvestigationSessions())[0].event_id);
     backend.finishPipelineRun(watch.id, { id: 2, number: "2", result: "failed", branch: "main", finished_at: new Date(2100, 2, 2, 12).toISOString() });
     now = new Date(2100, 2, 3, 9, 0);
     backend.runDigestPass();
     expect(await backend.pendingInvestigationFollowups()).toHaveLength(1);
+    let generation = 0;
+    const sent: string[] = [];
+    /** Plays the shared resume path: under the tile lock it revalidates, then sends. */
+    const hooks = { beforeLock: async () => {} };
+    const resume = Object.assign(vi.fn(async (_ws: string, _tile: string, prompt: string, revalidate: (phase: "before-stop" | "before-spawn", sessionId: string) => Promise<void>) => {
+      await resume.beforeLock();
+      const session = JSON.parse((await backend.listTiles(ws.id)).find((t) => t.id === tile.id)!.config_json).copilot_session_id;
+      await revalidate("before-stop", session);
+      await revalidate("before-spawn", session);
+      sent.push(prompt);
+    }), hooks);
     const deps = {
       backend,
       isBusy: vi.fn(() => false),
       turnOpen: vi.fn(async () => false),
-      resume: vi.fn(async () => {}),
+      generation: () => generation,
+      spawnedRecently: vi.fn(() => false),
+      resume,
       inFlight: new Set<string>(),
     };
-    return { backend, ws, tile, deps };
+    return { backend, ws, tile, deps, sent, bump: () => { generation += 1; } };
   }
 
   it("resumes the investigation's session with the follow-up, once", async () => {
-    const { backend, ws, tile, deps } = await withFollowUp("session-1");
+    const { backend, ws, tile, deps, sent } = await withFollowUp("session-1");
     await deliverFollowUps(deps);
-    expect(deps.resume).toHaveBeenCalledWith(ws.id, tile.id, expect.stringContaining("buildId=2"));
+    expect(deps.resume).toHaveBeenCalledWith(ws.id, tile.id, expect.stringContaining("buildId=2"), expect.any(Function));
+    expect(sent).toHaveLength(1);
     expect(await backend.pendingInvestigationFollowups()).toEqual([]);
     await deliverFollowUps(deps);
     expect(deps.resume).toHaveBeenCalledTimes(1);
   });
 
   it.each([
-    ["mid-turn", { busy: true, open: false, linked: "session-1" }],
-    ["in an open turn", { busy: false, open: true, linked: "session-1" }],
-    ["not linked to a session", { busy: false, open: false, linked: null }],
+    ["mid-turn", { busy: true, open: false, recent: false, linked: "session-1" }],
+    ["in an open turn", { busy: false, open: true, recent: false, linked: "session-1" }],
+    ["just (re)started", { busy: false, open: false, recent: true, linked: "session-1" }],
+    ["not linked to a session", { busy: false, open: false, recent: false, linked: null }],
   ])("skips a session %s", async (_label, opts) => {
-    const { backend, deps } = await withFollowUp(opts.linked);
+    const { backend, deps, sent } = await withFollowUp(opts.linked);
     deps.isBusy.mockReturnValue(opts.busy);
     deps.turnOpen.mockResolvedValue(opts.open);
+    deps.spawnedRecently.mockReturnValue(opts.recent);
     await deliverFollowUps(deps);
-    expect(deps.resume).not.toHaveBeenCalled();
+    expect(sent).toEqual([]);
     expect(await backend.pendingInvestigationFollowups()).toEqual([]);
+  });
+
+  it("skips when, waiting for the tile lock, another resume started it, it was relinked, or the Inbox was muted (f4, f5)", async () => {
+    for (const meanwhile of ["resumed", "turn", "relinked", "muted"] as const) {
+      const { backend, ws, tile, deps, sent, bump } = await withFollowUp("session-1");
+      deps.resume.beforeLock = async () => {
+        if (meanwhile === "resumed") bump();
+        if (meanwhile === "turn") deps.turnOpen.mockResolvedValue(true);
+        if (meanwhile === "relinked") await backend.updateTileConfig(tile.id, JSON.stringify({ investigation: true, copilot_session_id: "other" }));
+        if (meanwhile === "muted") await backend.setInboxMute(true);
+      };
+      await deliverFollowUps(deps);
+      expect(sent, meanwhile).toEqual([]);
+      expect(await backend.pendingInvestigationFollowups(), meanwhile).toEqual([]);
+      void ws;
+    }
   });
 });

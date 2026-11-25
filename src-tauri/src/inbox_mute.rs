@@ -99,6 +99,14 @@ pub fn mute_at(
     };
     let state = MuteState { muted: true, until };
     save(db, &state)?;
+    // Auto work not yet delivered is dropped, never replayed on unmute:
+    // requested starts, follow-ups, and auto-started sessions not yet begun.
+    db.execute_batch(
+        "UPDATE pipeline_digests SET auto_pending=0 WHERE auto_pending=1;
+        UPDATE pipeline_investigations SET session_started=1
+        WHERE session_started=0 AND (followup=1 OR auto=1);",
+    )
+    .map_err(|e| e.to_string())?;
     Ok(state)
 }
 

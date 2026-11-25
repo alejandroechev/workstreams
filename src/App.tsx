@@ -82,7 +82,7 @@ import { useSchedules, type ScheduleDraft } from "./schedules/useSchedules";
 import { ScheduleEditor } from "./schedules/ScheduleEditor";
 import { SchedulesModal } from "./schedules/SchedulesModal";
 import { TileSchedulesContext, type TileSchedules } from "./schedules/context";
-import { isTileBusy } from "./domain/tile-activity";
+import { isTileBusy, tileChangedRecently, tileGeneration } from "./domain/tile-activity";
 import type { PeriodicSchedule } from "./domain/periodic-schedules";
 import { setupPrompt } from "./domain/periodic-schedules";
 import { stopSession } from "./companion/stop-session";
@@ -2328,8 +2328,10 @@ export default function App() {
         backend,
         isBusy: isTileBusy,
         turnOpen: async (sessionId) => !!(await backend.sessionTurnState(sessionId))?.open,
-        resume: async (workstreamId, tileId, prompt) => {
-          await resumeFollowUpSession(resumeDeps(), { workstreamId, tileId, prompt, command: commandForWsId(workstreamId) });
+        generation: tileGeneration,
+        spawnedRecently: (tileId) => tileChangedRecently(tileId),
+        resume: async (workstreamId, tileId, prompt, revalidate) => {
+          await resumeFollowUpSession(resumeDeps(), { workstreamId, tileId, prompt, command: commandForWsId(workstreamId), revalidate });
         },
         inFlight: followUpsInFlight.current,
       });

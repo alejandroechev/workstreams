@@ -18,6 +18,8 @@ export interface PendingInvestigation {
   workstream_id: string;
   directory: string;
   prompt: string;
+  /** For a follow-up: the session it is for; sent only if the tile still runs it. */
+  expected_session_id?: string | null;
 }
 
 export type InvestigationPlacement =

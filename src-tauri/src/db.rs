@@ -585,6 +585,14 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
             INSERT OR IGNORE INTO pipeline_digest_consumed (watch_id, run_id, finished_at)
             VALUES (NEW.watch_id, NEW.run_id, NEW.finished_at);
         END;
+        -- Auto-investigations the app claimed to start (ADR 045): the rolling
+        -- 24-hour cap counts these, whatever happened to their watch or digest.
+        CREATE TABLE IF NOT EXISTS pipeline_auto_starts (
+            id TEXT PRIMARY KEY,
+            watch_id TEXT NOT NULL,
+            digest_id TEXT NOT NULL,
+            at TEXT NOT NULL
+        );
         -- Runs whose failing step was asked of ADO, per pipeline per local day
         -- (ADR 045): at most 20 distinct runs a day, retries included.
         CREATE TABLE IF NOT EXISTS pipeline_step_requests (
@@ -723,6 +731,8 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
         "ALTER TABLE pipeline_investigations ADD COLUMN watch_id TEXT",
         "ALTER TABLE pipeline_investigations ADD COLUMN auto INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE pipeline_investigations ADD COLUMN followup INTEGER NOT NULL DEFAULT 0",
+        // The session a follow-up is for: sent only if the tile still runs it.
+        "ALTER TABLE pipeline_investigations ADD COLUMN expected_session TEXT",
         // When a digest asked to start its investigation by itself: the rolling
         // 24-hour cap of auto-started investigations counts these.
         "ALTER TABLE pipeline_digests ADD COLUMN auto_requested_at TEXT",

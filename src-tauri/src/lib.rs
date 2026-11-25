@@ -1017,6 +1017,10 @@ async fn start_investigation(
                 created: false,
             });
         }
+        // An auto-start is rechecked before git runs (and again before it is recorded).
+        if auto && inbox_mute::is_muted(&db)? {
+            return Err("The Inbox is muted, so the auto-investigation was not started".into());
+        }
         pipeline_investigate::subject(&db, &item)?
     };
     let placed = subject.clone();
@@ -1035,36 +1039,38 @@ async fn start_investigation(
 }
 
 /// Starts the investigations auto-investigate asked for when it posted a
-/// digest (ADR 045), unless the Inbox is muted meanwhile. One that fails to
-/// start stays asked for and is tried again next time. Returns how many
+/// digest (ADR 045). Each request is claimed right before its start, in one
+/// transaction (mute, an investigation that appeared meanwhile, and the
+/// rolling cap are checked there, the cap in a ledger); the mute is checked
+/// again before git runs and before the start is recorded. A start that
+/// doesn't happen gives its place in the cap back. Returns how many
 /// workstreams it made.
 #[tauri::command]
 async fn run_auto_investigations(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<usize, String> {
-    let (pending, muted) = {
+    let pending = {
         let db = state.db.lock().map_err(|e| e.to_string())?;
-        (
-            pipeline_digest::auto_pending(&db)?,
-            inbox_mute::is_muted(&db)?,
-        )
+        pipeline_digest::auto_pending(&db)?
     };
     let mut made = 0;
     for digest in pending {
-        if !muted {
-            match start_investigation(app.clone(), Arc::clone(&state.db), digest.clone(), true)
-                .await
-            {
-                Ok(started) => made += usize::from(started.created),
-                Err(error) => {
-                    eprintln!("[pipeline-digest] Could not auto-investigate a digest: {error}");
-                    continue;
-                }
+        let claimed = {
+            let db = state.db.lock().map_err(|e| e.to_string())?;
+            pipeline_digest::claim_auto(&db, &digest, &pipeline_digest::Clock::system())?
+        };
+        let pipeline_digest::AutoClaim::Start { reservation } = claimed else {
+            continue;
+        };
+        match start_investigation(app.clone(), Arc::clone(&state.db), digest, true).await {
+            Ok(started) => made += usize::from(started.created),
+            Err(error) => {
+                eprintln!("[pipeline-digest] Could not auto-investigate a digest: {error}");
+                let db = state.db.lock().map_err(|e| e.to_string())?;
+                pipeline_digest::release_auto_start(&db, &reservation)?;
             }
         }
-        let db = state.db.lock().map_err(|e| e.to_string())?;
-        pipeline_digest::clear_auto_pending(&db, &digest)?;
     }
     Ok(made)
 }

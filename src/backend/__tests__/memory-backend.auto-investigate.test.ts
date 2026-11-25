@@ -74,4 +74,63 @@ describe("MemoryBackend auto-investigate", () => {
     expect(await b.runAutoInvestigations()).toBe(0);
     expect(await b.listWorkstreams()).toEqual([]);
   });
+
+  it("claims at launch: the cap ledger outlives removed watches (f7)", async () => {
+    const { b, ids, fail, setNow } = await setup(4);
+    for (const id of ids.slice(0, 3)) await b.setPipelineAutoInvestigate(id, "digest");
+    fail(1, 1);
+    setNow(local(2, 9, 0));
+    b.runDigestPass();
+    expect(await b.runAutoInvestigations()).toBe(3);
+    for (const id of ids.slice(0, 3)) await b.removePipelineWatch(id);
+    await b.setPipelineAutoInvestigate(ids[3], "digest");
+    b.finishPipelineRun(ids[3], { id: 50, number: "50", result: "failed", branch: "main", finished_at: local(2, 12).toISOString() });
+    // A digest later the same day (the time changed) still meets the cap.
+    await b.setPipelineDigestTime("20:00");
+    setNow(local(2, 20, 0));
+    b.runDigestPass();
+    expect((await b.getPrInbox()).pipeline_digests!.some((d) => d.auto_pending)).toBe(true);
+    expect(await b.runAutoInvestigations()).toBe(0);
+  });
+
+  it("turns a start into a follow-up when an investigation appeared before launch (f7)", async () => {
+    const { b, ids, fail, setNow } = await setup(1);
+    fail(1, 1);
+    setNow(local(2, 9, 0));
+    b.runDigestPass();
+    const [earlier] = (await b.getPrInbox()).pipeline_digests!;
+    await b.setPipelineAutoInvestigate(ids[0], "digest");
+    fail(10, 2);
+    setNow(local(3, 9, 0));
+    b.runDigestPass();
+    const later = (await b.getPrInbox()).pipeline_digests!.find((d) => d.id !== earlier.id)!;
+    expect(later.auto_pending).toBe(true);
+    // Before the app launches it, the earlier digest is investigated by hand.
+    await b.startPipelineInvestigation(earlier.id);
+    expect(await b.runAutoInvestigations()).toBe(0);
+    expect((await b.listWorkstreams()).filter((w) => w.name.startsWith("Investigate "))).toHaveLength(1);
+    expect((await b.pendingInvestigationFollowups()).map((f) => f.event_id)).toEqual([later.id]);
+  });
+
+  it("muting drops undelivered auto work for good; manual work stays (f4)", async () => {
+    const { b, ids, fail, setNow } = await setup(2);
+    for (const id of ids) await b.setPipelineAutoInvestigate(id, "digest");
+    fail(1, 1);
+    setNow(local(2, 9, 0));
+    b.runDigestPass();
+    expect(await b.runAutoInvestigations()).toBe(2);
+    const ws = (await b.listWorkstreams()).find((w) => w.name.startsWith("Investigate P1"))!;
+    await b.createTile(ws.id, "copilot_session", "Investigate", JSON.stringify({ investigation: true, copilot_session_id: "s-1" }));
+    fail(10, 2);
+    setNow(local(3, 9, 0));
+    b.runDigestPass();
+    const [followUp] = await b.pendingInvestigationFollowups();
+    expect(followUp.expected_session_id).toBe("s-1");
+    await b.setInboxMute(true);
+    expect(await b.pendingInvestigationSessions()).toEqual([]);
+    expect(await b.pendingInvestigationFollowups()).toEqual([]);
+    await b.setInboxMute(false);
+    expect(await b.pendingInvestigationSessions()).toEqual([]);
+    expect(await b.pendingInvestigationFollowups()).toEqual([]);
+  });
 });

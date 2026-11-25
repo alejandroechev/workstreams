@@ -52,6 +52,11 @@ export async function startPendingInvestigations(deps: InvestigationDeps): Promi
       tileId = tile.id;
       deps.onTileCreated(tile);
       deps.markSpawned(tile.id);
+      // Rechecked right before the spawn: an auto-start dropped meanwhile (the Inbox was muted) doesn't start (ADR 045).
+      if (!(await backend.pendingInvestigationSessions()).some((p) => p.event_id === session.event_id)) {
+        deps.unmarkSpawned(tile.id);
+        continue;
+      }
       await deps.spawn(tile.id, session.directory, deps.commandFor(session.workstream_id), session.prompt);
       spawned = true;
       await backend.markInvestigationSessionStarted(session.event_id);
@@ -71,16 +76,31 @@ export interface FollowUpDeps {
   isBusy(tileId: string): boolean;
   /** The session's log has a turn that hasn't ended. */
   turnOpen(sessionId: string): Promise<boolean>;
-  /** Resumes the session in its tile on the given text, through the shared resume path. */
-  resume(workstreamId: string, tileId: string, prompt: string): Promise<void>;
+  /** Counts the tile's process starts and stops. */
+  generation(tileId: string): number;
+  /** The tile's process started or stopped moments ago (a resume whose turn may not show yet). */
+  spawnedRecently(tileId: string): boolean;
+  /**
+   * Resumes the session in its tile on the follow-up, through the shared,
+   * per-tile serialized resume path; `revalidate` runs under the tile lock
+   * right before the stop and the spawn, and throws to cancel.
+   */
+  resume(workstreamId: string, tileId: string, prompt: string,
+    revalidate: (phase: "before-stop" | "before-spawn", sessionId: string) => Promise<void>): Promise<void>;
   inFlight: Set<string>;
 }
 
+class Skip extends Error {}
+
 /**
  * Sends each waiting digest follow-up into its investigation's session
- * (ADR 045), resuming it in its tile. A session that is mid-turn, or not
- * linked to one, is skipped: the digest still links to the investigation.
- * Each follow-up is handled once, whatever happens.
+ * (ADR 045), resuming it in its tile, never interrupting anything: it goes
+ * only to the session it was queued for, and only if, rechecked under the
+ * tile's resume lock right before sending, the follow-up is still due (not
+ * muted meanwhile), the tile still runs that session, no other start happened
+ * since it was read, and the session isn't mid-turn or just started.
+ * Otherwise it is skipped; the digest still links to the investigation. Each
+ * follow-up is handled once, whatever happens.
  */
 export async function deliverFollowUps(deps: FollowUpDeps): Promise<void> {
   const { backend } = deps;
@@ -88,12 +108,24 @@ export async function deliverFollowUps(deps: FollowUpDeps): Promise<void> {
     if (deps.inFlight.has(followUp.event_id)) continue;
     deps.inFlight.add(followUp.event_id);
     try {
-      const tile = (await backend.listTiles(followUp.workstream_id)).find((t) => t.tile_type === "copilot_session");
-      const sessionId = tile ? parseCopilotSessionConfig(tile.config_json).copilot_session_id : null;
-      const busy = !tile || !sessionId || deps.isBusy(tile.id) || (await deps.turnOpen(sessionId).catch(() => true));
-      if (!busy) await deps.resume(followUp.workstream_id, tile.id, followUp.prompt);
+      const expected = followUp.expected_session_id ?? null;
+      const tile = (await backend.listTiles(followUp.workstream_id))
+        .find((t) => t.tile_type === "copilot_session" && expected !== null && parseCopilotSessionConfig(t.config_json).copilot_session_id === expected);
+      if (!tile || !expected) continue;
+      const busy = async () => deps.isBusy(tile.id) || deps.spawnedRecently(tile.id) || (await deps.turnOpen(expected).catch(() => true));
+      if (await busy()) continue;
+      const generation = deps.generation(tile.id);
+      await deps.resume(followUp.workstream_id, tile.id, followUp.prompt, async (phase, sessionId) => {
+        if (sessionId !== expected) throw new Skip("The investigation's tile runs another session now.");
+        if (!(await backend.pendingInvestigationFollowups()).some((f) => f.event_id === followUp.event_id)) {
+          throw new Skip("The follow-up is no longer due (the Inbox was muted).");
+        }
+        if (phase === "before-stop" && (deps.generation(tile.id) !== generation || (await busy()))) {
+          throw new Skip("The investigation's session is busy.");
+        }
+      });
     } catch (error) {
-      console.error("[investigate] Could not send the digest follow-up:", error);
+      if (!(error instanceof Skip)) console.error("[investigate] Could not send the digest follow-up:", error);
     } finally {
       await backend.markInvestigationSessionStarted(followUp.event_id).catch(() => {});
       deps.inFlight.delete(followUp.event_id);

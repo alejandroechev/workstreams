@@ -801,25 +801,53 @@ export class MemoryBackend implements Backend {
     }
     return posted;
   }
-  /** As pipeline_digest::after_digest: follow up an existing investigation, or ask for a new one within the cap. */
+  /** The pipeline's investigation workstream that still exists (newest), as pipeline_investigation. */
+  private pipelineInvestigationOf(watchId: string): PendingInvestigation | undefined {
+    const found = [...this.investigationMeta.entries()]
+      .filter(([id, meta]) => meta.watch_id === watchId && !meta.followup && this.workstreams.has(this.investigations.get(id)?.workstream_id ?? ""))
+      .sort((a, b) => b[1].created_at - a[1].created_at)[0];
+    return found ? this.investigations.get(found[0]) : undefined;
+  }
+  /** As enqueue_followup: for the session the investigation's tile runs now. */
+  private enqueueFollowUp(watchId: string, digestId: string, investigation: PendingInvestigation, now: Date): void {
+    const digest = this.digestSnapshot().find((d) => d.id === digestId)!;
+    const tiles = [...this.tiles.values()].filter((t) => t.workstream_id === investigation.workstream_id && t.tile_type === "copilot_session");
+    const config = (t: Tile) => { try { return JSON.parse(t.config_json || "{}") as { investigation?: boolean; copilot_session_id?: string }; } catch { return {}; } };
+    const tile = tiles.find((t) => config(t).investigation === true) ?? tiles[0];
+    this.investigations.set(digestId, {
+      event_id: digestId, workstream_id: investigation.workstream_id, directory: investigation.directory, prompt: followupPrompt(digest),
+      expected_session_id: tile ? config(tile).copilot_session_id ?? null : null, started: false,
+    });
+    this.investigationMeta.set(digestId, { watch_id: watchId, auto: false, followup: true, created_at: now.getTime() });
+  }
+  /** As pipeline_digest::after_digest: follow up an existing investigation, or ask the app to start one. */
   private afterDigest(watchId: string, digestId: string, now: Date): void {
     const watch = this.pipelineWatches.find((w) => w.status.id === watchId);
     if (watch?.status.auto_investigate !== "digest") return;
-    const existing = [...this.investigationMeta.entries()]
-      .filter(([id, meta]) => meta.watch_id === watchId && !meta.followup && this.workstreams.has(this.investigations.get(id)?.workstream_id ?? ""))
-      .sort((a, b) => b[1].created_at - a[1].created_at)[0];
+    const existing = this.pipelineInvestigationOf(watchId);
+    if (existing) return this.enqueueFollowUp(watchId, digestId, existing, now);
+    Object.assign(this.digests.find((d) => d.id === digestId)!, { auto_pending: true });
+  }
+  /** As pipeline_auto_starts: the cap's ledger, independent of watches and digests. */
+  private autoStarts: Array<{ id: string; at: number }> = [];
+  /** As pipeline_digest::claim_auto. */
+  private claimAuto(digestId: string): { kind: "start"; reservation: string } | { kind: "follow-up" | "cap" | "skipped" } {
+    const digest = this.digests.find((d) => d.id === digestId && d.auto_pending);
+    if (!digest) return { kind: "skipped" };
+    digest.auto_pending = false;
+    const own = this.investigations.get(digestId);
+    if (this.isInboxMuted() || (own && this.workstreams.has(own.workstream_id))) return { kind: "skipped" };
+    const now = this.digestClock();
+    const existing = this.pipelineInvestigationOf(digest.watch_id);
     if (existing) {
-      const digest = this.digestSnapshot().find((d) => d.id === digestId)!;
-      const ws = this.investigations.get(existing[0])!;
-      this.investigations.set(digestId, { event_id: digestId, workstream_id: ws.workstream_id, directory: ws.directory, prompt: followupPrompt(digest), started: false });
-      this.investigationMeta.set(digestId, { watch_id: watchId, auto: false, followup: true, created_at: now.getTime() });
-      return;
+      this.enqueueFollowUp(digest.watch_id, digestId, existing, now);
+      return { kind: "follow-up" };
     }
     const dayAgo = now.getTime() - 24 * 60 * 60 * 1000;
-    const started = this.digests.filter((d) => d.auto_requested_at !== undefined && d.auto_requested_at > dayAgo).length;
-    if (started >= AUTO_STARTS_PER_DAY) return;
-    const digest = this.digests.find((d) => d.id === digestId)!;
-    Object.assign(digest, { auto_pending: true, auto_requested_at: now.getTime() });
+    if (this.autoStarts.filter((s) => s.at > dayAgo).length >= AUTO_STARTS_PER_DAY) return { kind: "cap" };
+    const reservation = crypto.randomUUID();
+    this.autoStarts.push({ id: reservation, at: now.getTime() });
+    return { kind: "start", reservation };
   }
   async setPipelineAutoInvestigate(id: string, value: AutoInvestigate): Promise<void> {
     const watch = this.pipelineWatches.find((w) => w.status.id === id);
@@ -829,20 +857,24 @@ export class MemoryBackend implements Backend {
     }
     watch.status.auto_investigate = value;
   }
-  /** As the native run_auto_investigations: starts each investigation a digest asked for, unless muted. */
+  /** As the native run_auto_investigations: claims each request at launch; a start that fails gives its place back. */
   async runAutoInvestigations(): Promise<number> {
-    const muted = this.isInboxMuted();
     let made = 0;
     for (const digest of this.digests.filter((d) => d.auto_pending)) {
-      if (!muted) {
+      const claim = this.claimAuto(digest.id);
+      if (claim.kind !== "start") continue;
+      try {
         const shown = this.digestSnapshot().find((d) => d.id === digest.id);
-        if (shown && (await this.makeBatchInvestigation(shown, true)).created) made += 1;
+        if (!shown) throw new Error("gone");
+        if ((await this.makeBatchInvestigation(shown, true)).created) made += 1;
+      } catch {
+        this.autoStarts = this.autoStarts.filter((s) => s.id !== claim.reservation);
       }
-      digest.auto_pending = false;
     }
     return made;
   }
   async pendingInvestigationFollowups(): Promise<PendingInvestigation[]> {
+    if (this.isInboxMuted()) return [];
     return [...this.investigations.values()]
       .filter((i) => !i.started && this.investigationMeta.get(i.event_id)?.followup && this.workstreams.has(i.workstream_id))
       .map(({ started: _started, ...rest }) => ({ ...rest }));
@@ -893,6 +925,12 @@ export class MemoryBackend implements Backend {
     }
     this.inboxMute = { muted: true, until: until ? new Date(until).toISOString() : null };
     this.persistInboxSettings();
+    // As inbox_mute::mute_at: undelivered auto work is dropped, never replayed.
+    for (const d of this.digests) d.auto_pending = false;
+    for (const [id, i] of this.investigations) {
+      const meta = this.investigationMeta.get(id);
+      if (!i.started && (meta?.followup || meta?.auto)) i.started = true;
+    }
     return { ...this.inboxMute };
   }
   private prEventsSeen = new Set<string>();
@@ -1033,6 +1071,8 @@ export class MemoryBackend implements Backend {
   private async makeBatchInvestigation(digest: PipelineDigest, auto: boolean): Promise<InvestigationStarted> {
     const existing = this.investigations.get(digest.id);
     if (existing && this.workstreams.has(existing.workstream_id)) return { workstream_id: existing.workstream_id, created: false };
+    // As record_subject: an auto-start is rechecked against the mute.
+    if (auto && this.isInboxMuted()) throw new Error("The Inbox was muted, so the auto-investigation was not started");
     const watch = this.pipelineWatches.find((w) => w.status.id === digest.pipeline_id);
     const status = watch ? this.pipelineWithRepo(watch) : null;
     const linked = status?.repos[0] ? this.projects.get(status.repos[0].id) : undefined;
@@ -1104,8 +1144,10 @@ export class MemoryBackend implements Backend {
   }
 
   async pendingInvestigationSessions(): Promise<PendingInvestigation[]> {
+    const muted = this.isInboxMuted();
     return [...this.investigations.values()]
       .filter((i) => !i.started && !this.investigationMeta.get(i.event_id)?.followup && this.workstreams.has(i.workstream_id))
+      .filter((i) => !(muted && this.investigationMeta.get(i.event_id)?.auto))
       .map(({ started: _started, ...rest }) => ({ ...rest }));
   }
 

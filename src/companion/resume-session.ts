@@ -294,6 +294,8 @@ export interface FollowUpResumeRequest {
   tileId: string;
   prompt: string;
   command: string;
+  /** Rechecks, under the tile lock right before the stop and the spawn, that the follow-up may go; throws to cancel. */
+  revalidate?: (phase: ResumePhase, sessionId: string) => Promise<void>;
 }
 
 /**
@@ -311,6 +313,7 @@ export async function resumeFollowUpSession(deps: ResumeSessionDeps, request: Fo
       prompt: request.prompt,
       command: request.command,
       guard: () => {},
+      revalidate: request.revalidate,
       noticeText: `Daily digest follow-up: ${firstLine(request.prompt)}`,
       unlinkedError: "The investigation's tile isn't linked to a Copilot session yet, so there is nothing to resume.",
     },
