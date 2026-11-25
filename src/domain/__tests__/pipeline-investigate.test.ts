@@ -7,8 +7,6 @@ import {
   followupPrompt,
   MAX_FIELD,
   untrusted,
-  investigationDenyArgs,
-  investigationLaunch,
   investigationBase,
   investigationBranch,
   investigationName,
@@ -118,35 +116,5 @@ describe("untrusted ADO text in investigation prompts (f1)", () => {
       expect(text.match(/```/g)).toHaveLength(2);
       for (const line of text.split("\n")) expect(line.trimStart()).not.toMatch(/^(Ignore all|rm -rf|## New instructions|previous)/);
     }
-  });
-});
-
-describe("investigation tiles are launched read-only (f1)", () => {
-  it("deny writes and mutating git and file commands, never az or workstreams", () => {
-    const deny = investigationDenyArgs(JSON.stringify({ session_name: "x", investigation: true }));
-    for (const rule of ["write", "shell(git push)", "shell(git commit)", "shell(git reset)", "shell(git checkout)", "shell(rm)", "shell(mv)"]) {
-      expect(deny).toContain(`--deny-tool=${rule}`);
-    }
-    expect(deny.some((a) => a.includes("az") || a.includes("workstreams"))).toBe(false);
-    expect(investigationDenyArgs(JSON.stringify({ session_name: "x" }))).toEqual([]);
-    expect(investigationDenyArgs("nope")).toEqual([]);
-  });
-});
-
-describe("investigation tiles launch with an allowlist, never --yolo (r2-f1)", () => {
-  const config = JSON.stringify({ investigation: true });
-  it("strips every flag that lifts restrictions and adds the allow and deny rules", () => {
-    const launch = investigationLaunch(config, "/opt/copilot --yolo --allow-all-tools --allow-tool shell(rm) --allow-tool=shell(git:*) --add-dir / --model x")!;
-    expect(launch.command).toBe("/opt/copilot --model x");
-    expect(launch.args).toContain("--allow-tool=read");
-    expect(launch.args).toContain("--allow-tool=shell(git status)");
-    expect(launch.args).toContain("--deny-tool=shell(git push)");
-    expect(launch.args.filter((a) => a.startsWith("--allow")).join(" ")).not.toMatch(/--allow-all|shell\(rm\)|git:\*/);
-    expect(launch.args.join(" ")).not.toContain("--yolo");
-  });
-
-  it("is nothing for other tiles, and refuses a command that isn't the Copilot CLI", () => {
-    expect(investigationLaunch(JSON.stringify({}), "agency copilot --yolo")).toBeNull();
-    expect(() => investigationLaunch(config, "my-agent --yolo")).toThrow("isn't recognizably the Copilot CLI");
   });
 });

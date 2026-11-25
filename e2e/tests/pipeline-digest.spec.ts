@@ -15,19 +15,24 @@ import type { PipelineDigest } from "../../src/domain/pipeline-digest";
 const MC: AdoRepoRef = { id: "mc-guid", kind: "azure", organization: "skype", project: "SCC", name: "media_components" };
 const MC_REMOTE = "https://dev.azure.com/skype/SCC/_git/media_components";
 const SNAPSHOT = { timeout: 12_000 };
+/** The configured Copilot command; investigations must launch with it exactly as it is. */
+const CONFIGURED = "my-copilot --yolo --model z";
 
 type SpecWindow = { __WS_BACKEND__: MemoryBackend; __DIGEST_NOW__: number; __WS_INVOKE_LOG__?: Array<{ cmd: string; args: Record<string, unknown> }> };
 
 async function start(page: Page, projects: Array<{ name: string; git_remote: string | null }> = []) {
   await page.addInitScript((seed) => {
     Object.assign(window, {
-      __WS_INVOKE_HANDLERS__: { get_setting: () => null, set_setting: () => null },
+      __WS_INVOKE_HANDLERS__: {
+        get_setting: (args: Record<string, unknown>) => (args.key === "app.copilot_command" ? seed.command : null),
+        set_setting: () => null,
+      },
       __WS_DEMO_SEED__: {
-        projects: seed.map((p, i) => ({ ...p, directory: `/demo/${i}` })),
+        projects: seed.projects.map((p, i) => ({ ...p, directory: `/demo/${i}` })),
         workstreams: [{ name: "Read chunks", directory: "/demo/read-chunks", loaded: true }],
       },
     });
-  }, projects);
+  }, { projects, command: CONFIGURED });
   await page.goto("/");
   await page.getByTestId("workstream-item").filter({ hasText: "Read chunks" }).click();
   await useClock(page);
@@ -80,7 +85,7 @@ const workstreams = (page: Page) => call<Array<{ id: string; name: string; works
 const spawns = (page: Page) =>
   page.evaluate(() => ((window as unknown as SpecWindow).__WS_INVOKE_LOG__ ?? [])
     .filter((e) => e.cmd === "spawn_copilot_session" && e.args.initialPrompt)
-    .map((e) => e.args as { tileId: string; cwd: string; initialPrompt: string; resumeSessionId: string | null; denyTools: string[]; allowTools: string[]; command: string | null }));
+    .map((e) => e.args as { tileId: string; cwd: string; initialPrompt: string; resumeSessionId: string | null; command: string | null }));
 const activeName = (page: Page) => page.locator('[data-testid="workstream-item"][data-active="true"]');
 
 /** CI-Main: 12 runs, 5 failed, newest failed. Deploy-PPE: 6 runs, 1 failed, newest succeeded. Docs: 4 passed. */
@@ -261,10 +266,8 @@ test("AT-6: Investigate on a digest makes one worktree workstream for the batch,
     "Untrusted data from Azure DevOps"]) {
     expect(spawn.initialPrompt).toContain(text);
   }
-  // f1: the session is launched restricted: an allowlist, deny rules, and never --yolo.
-  for (const rule of ["write", "shell(git push)", "shell(git commit)", "shell(rm)"]) expect(spawn.denyTools).toContain(`--deny-tool=${rule}`);
-  expect(spawn.allowTools).toEqual(["--allow-tool=read", "--allow-tool=shell(git status)"]);
-  expect(spawn.command ?? "").not.toMatch(/--yolo|--allow-all/);
+  // The session runs the configured command exactly as it is; the user owns its permissions.
+  expect(spawn.command).toBe(CONFIGURED);
   await expect(activeName(page)).toContainText("Read chunks");
   expect((await digests(page)).find((d) => d.id === ci.id)!.is_read).toBe(false);
   // Expanded runs keep per-run Investigate.
@@ -294,6 +297,7 @@ test("AT-7: Auto-investigate starts the batch with the digest, quietly", async (
   await expect.poll(async () => (await workstreams(page)).filter((w) => w.name.startsWith("Investigate ")).length, SNAPSHOT).toBe(1);
   await expect.poll(async () => (await spawns(page)).length, SNAPSHOT).toBe(1);
   expect((await spawns(page))[0].initialPrompt).toContain("Group the runs by root cause");
+  expect((await spawns(page))[0].command).toBe(CONFIGURED);
   expect(await snapshotCount(page)).toBe(1);
   const [digest] = await digests(page);
   await page.getByTestId("pr-inbox-button").click();
@@ -329,9 +333,11 @@ test("AT-8: an existing investigation gets a follow-up, and at most 3 new ones s
   await expect.poll(async () => (await spawns(page)).filter((s) => s.resumeSessionId === "s-p1").length, SNAPSHOT).toBe(1);
   const resume = (await spawns(page)).find((s) => s.resumeSessionId === "s-p1")!;
   expect(resume.initialPrompt).toContain("- Pipeline: P1 (project SCC)");
-  expect(resume.denyTools).toContain("--deny-tool=write");
-  expect(resume.allowTools).toContain("--allow-tool=read");
-  expect(resume.command ?? "").not.toMatch(/--yolo|--allow-all/);
+  expect(resume.command).toBe(CONFIGURED);
+  // The three new ones start unattended with the configured command too.
+  const fresh = (await spawns(page)).filter((s) => !s.resumeSessionId);
+  expect(fresh.length).toBeGreaterThanOrEqual(3);
+  for (const spawn of fresh) expect(spawn.command).toBe(CONFIGURED);
   expect(resume.initialPrompt).toContain("buildId=100");
   const today = (await digests(page)).filter((d) => d.created_at === new Date(2100, 2, 3, 9, 0).toISOString());
   expect(today.find((d) => d.pipeline_id === ids[0])!.investigation).toBe(p1Workstream);

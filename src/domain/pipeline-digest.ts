@@ -76,8 +76,6 @@ export interface PipelineDigest {
   investigation: string | null;
   /** Auto-investigate will start its investigation on the app's next pass. */
   auto_pending: boolean;
-  /** Why its investigation's session couldn't start, when it couldn't. */
-  investigation_error?: string | null;
 }
 
 const TIME = /^([01]\d|2[0-3]):([0-5]\d)$/;

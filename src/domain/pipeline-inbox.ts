@@ -172,8 +172,6 @@ export interface PipelineItem {
   repo?: string | null;
   /** The workstream investigating this run, when there is one. */
   investigation?: string | null;
-  /** Why that investigation's session couldn't start, when it couldn't. */
-  investigation_error?: string | null;
 }
 
 export interface PipelineGroup {

@@ -744,8 +744,6 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
         // The session a follow-up is for: sent only if the tile still runs it.
         "ALTER TABLE pipeline_investigations ADD COLUMN expected_session TEXT",
         "ALTER TABLE pipeline_investigations ADD COLUMN expected_tile TEXT",
-        // Why the investigation's session couldn't start, shown in the Inbox.
-        "ALTER TABLE pipeline_investigations ADD COLUMN error TEXT",
         // An auto-start's reservation through git and its first spawn:
         // claimed, recorded, spawned, or cancelled (by a mute).
         "ALTER TABLE pipeline_auto_starts ADD COLUMN state TEXT NOT NULL DEFAULT 'claimed'",

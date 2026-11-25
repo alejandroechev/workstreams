@@ -656,11 +656,6 @@ export function PrInboxModal({ snapshot, loading, error, onRead, onMute, onReset
                         {digest.is_read ? "Unread" : "Read"}
                       </button>
                     </div>
-                    {digest.investigation_error && (
-                      <p role="alert" data-testid={`pipeline-investigation-error-${digest.id}`} style={{ color: "#f38ba8", margin: "6px 0 0" }}>
-                        Investigation couldn't start: {digest.investigation_error}
-                      </p>
-                    )}
                     {open && (
                       <ul data-testid={`pipeline-digest-runs-${digest.id}`} style={{ listStyle: "none", margin: "8px 0 0", padding: 0, display: "grid", gap: 4 }}>
                         {digest.runs.map((run) => {
@@ -746,11 +741,6 @@ export function PrInboxModal({ snapshot, loading, error, onRead, onMute, onReset
                           >
                             {starting.has(run.id) ? "Starting…" : run.investigation ? "Open investigation" : "Investigate"}
                           </button>
-                        )}
-                        {run.investigation_error && (
-                          <span role="alert" data-testid={`pipeline-investigation-error-${run.id}`} title={run.investigation_error} style={{ color: "#f38ba8", whiteSpace: "nowrap" }}>
-                            Investigation couldn't start
-                          </span>
                         )}
                         <button
                           disabled={busy}

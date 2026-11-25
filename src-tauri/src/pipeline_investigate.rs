@@ -148,7 +148,6 @@ fn digest_run_item(
         discovered_at: String::new(),
         repo: view.label,
         investigation: existing(db, event_id)?,
-        investigation_error: start_error(db, event_id)?,
     };
     Ok(Some((item, view.repos, view.ado_repo)))
 }
@@ -405,8 +404,7 @@ fn az_hint(run_id: u64) -> String {
     format!(
         "Get the failing steps and logs yourself with the Azure CLI (az), for example \
 `az pipelines runs show --id {run_id}` with the organization and project from the data above, \
-then the build timeline and logs through `az devops invoke --area build`. This session runs with \
-restricted permissions: commands that aren't read-only ask me first, so expect to wait for approval."
+then the build timeline and logs through `az devops invoke --area build`."
     )
 }
 
@@ -850,31 +848,6 @@ fn placement_columns(
         ),
         Placement::Standalone { directory, .. } => (directory.clone(), None, "standalone", None),
     }
-}
-
-/// Why the investigation of `event_id` couldn't start its session, if so.
-pub fn start_error(db: &Connection, event_id: &str) -> Result<Option<String>, String> {
-    db.query_row(
-        "SELECT error FROM pipeline_investigations WHERE event_id = ?1",
-        [event_id],
-        |r| r.get(0),
-    )
-    .optional()
-    .map(Option::flatten)
-    .map_err(|e| e.to_string())
-}
-
-/// Records why an investigation tile's session couldn't start (or, with "",
-/// that it could), on the investigations of the tile's workstream, so the
-/// Inbox can show it.
-pub fn record_start_error(db: &Connection, tile_id: &str, error: &str) -> Result<(), String> {
-    db.execute(
-        "UPDATE pipeline_investigations SET error = NULLIF(?2, '')
-        WHERE followup = 0 AND workstream_id = (SELECT workstream_id FROM tiles WHERE id = ?1)",
-        params![tile_id, error],
-    )
-    .map(|_| ())
-    .map_err(|e| e.to_string())
 }
 
 // ── An auto-start's reservation, through git and its first spawn ─────────
@@ -1798,40 +1771,6 @@ pub(crate) mod tests {
                 assert!(!out.contains(value), "{value:?} outside the fence:\n{out}");
             }
         }
-    }
-
-    /// r2-f1: a session that couldn't start (an unrestrictable command) shows
-    /// why on its digest, until a start succeeds.
-    #[test]
-    fn a_start_error_shows_on_the_digest_until_a_start_succeeds() {
-        let db = db();
-        let d = seed_digest(&db);
-        let subject = subject(&db, &d.id).unwrap();
-        let started = record_subject(
-            &db,
-            &subject,
-            &place_subject(None, &subject, "/h"),
-            None,
-            false,
-        )
-        .unwrap();
-        db.execute(
-            "INSERT INTO tiles (id, workstream_id, tile_type, title, config_json, created_at, updated_at)
-            VALUES ('t', ?1, 'copilot_session', 'I', '{\"investigation\":true}', 't', 't')",
-            [&started.workstream_id],
-        )
-        .unwrap();
-        record_start_error(&db, "t", "not the Copilot CLI").unwrap();
-        let shown = crate::pipeline_digest::digests(&db).unwrap().remove(0);
-        assert_eq!(
-            shown.investigation_error.as_deref(),
-            Some("not the Copilot CLI")
-        );
-        record_start_error(&db, "t", "").unwrap();
-        assert_eq!(
-            crate::pipeline_digest::digests(&db).unwrap()[0].investigation_error,
-            None
-        );
     }
 
     /// A claimed auto-start of `seed_digest`'s digest, placed in a worktree.
