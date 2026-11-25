@@ -735,11 +735,20 @@ export class MemoryBackend implements Backend {
   /** Makes the next timeline request for this run fail, as a network error does. */
   failNextTimeline(runId: number): void { this.timelineFailures.add(runId); }
   /** As pipeline_digest::fetch_steps on a poll: one request per run waiting for its step. */
+  /** As pipeline_step_requests: `${watch}|${day}` -> the distinct runs asked for that day. */
+  private stepRequests = new Map<string, Set<number>>();
   fetchDigestSteps(only?: { watchId: string; runId: number }): void {
+    const day = localDay(this.digestClock());
     for (const [watchId, runs] of this.digestRuns) {
       for (const run of runs) {
         if (only && (only.watchId !== watchId || only.runId !== run.run_id)) continue;
         if (run.step_state !== "pending" || run.digest_id === "dropped") continue;
+        // As reserve_request: still Daily failures, and room today for this run.
+        if (this.pipelineWatches.find((w) => w.status.id === watchId)?.status.mode !== "daily_failures") break;
+        const asked = this.stepRequests.get(`${watchId}|${day}`) ?? new Set<number>();
+        if (!asked.has(run.run_id) && asked.size >= STEP_FETCHES_PER_DAY) break;
+        asked.add(run.run_id);
+        this.stepRequests.set(`${watchId}|${day}`, asked);
         this.timelineLog.push(run.run_id);
         if (this.timelineFailures.delete(run.run_id)) continue;
         Object.assign(run, { step: this.stepsByRun.get(`${watchId}:${run.run_id}`) ?? null, step_state: "fetched" });

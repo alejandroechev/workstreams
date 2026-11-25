@@ -70,6 +70,14 @@ first, else a failed job, phase or stage (checked against a real run). At most
 "step not fetched". A failed request leaves the run waiting for a later pass; a
 fetched run is never asked again. Other modes make no extra request.
 
+The cap is enforced where the request goes out (review round 1, f6): before
+each request the pipeline must still be watched in Daily failures (so retries
+stop once it leaves the mode, digested runs included), and
+`pipeline_step_requests` records each distinct run asked for per pipeline per
+local day. A run already asked for today may be retried; a new one goes out
+only while the day has fewer than 20, retries carried over from earlier days
+included, and otherwise waits for a later day.
+
 ### Investigating a digest as one batch
 
 **Investigate** on a digest makes **one** workstream for that pipeline's failed

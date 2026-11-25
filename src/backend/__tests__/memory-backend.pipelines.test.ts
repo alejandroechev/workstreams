@@ -101,6 +101,25 @@ describe("MemoryBackend pipelines", () => {
     expect(b.digestRunsFor(daily.id)[1]).toMatchObject({ step: "Publish", step_state: "fetched" });
   });
 
+  it("asks at most 20 distinct runs a day, carried-over retries included, and only in Daily failures (f6)", async () => {
+    const b = backend();
+    let now = new Date(2100, 9, 27, 0, 0);
+    b.setDigestClock(() => now);
+    const p = await b.addPipelineWatch(PAGE, "daily_failures");
+    b.failNextTimeline(3);
+    for (let i = 1; i <= 20; i++) b.finishPipelineRun(p.id, { id: i, number: `${i}`, result: "failed", branch: "main", finished_at: new Date(2100, 9, 27, 8, i).toISOString() });
+    expect(b.timelineRequests()).toHaveLength(20);
+    now = new Date(2100, 9, 28, 0, 0);
+    for (let i = 21; i <= 40; i++) b.finishPipelineRun(p.id, { id: i, number: `${i}`, result: "failed", branch: "main", finished_at: new Date(2100, 9, 28, 8, i - 20).toISOString() });
+    b.fetchDigestSteps();
+    expect(new Set(b.timelineRequests().slice(20)).size).toBe(20);
+    now = new Date(2100, 9, 29, 0, 0);
+    await b.setPipelineWatchMode(p.id, "failures");
+    const before = b.timelineRequests().length;
+    b.fetchDigestSteps();
+    expect(b.timelineRequests()).toHaveLength(before);
+  });
+
   it("notifies only the default branch until switched to all branches", async () => {
     const b = new MemoryBackend();
     b.seedPipelineDefinition({ organization: "skype", project: "SCC", definition_id: 9, name: "engAIne", default_branch: "develop" });

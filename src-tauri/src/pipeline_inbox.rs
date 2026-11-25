@@ -1115,6 +1115,7 @@ fn still_current(db: &Connection, target: &PipelineTarget) -> Result<bool, Strin
 /// finished after the quiet period with a watched result notifies, once per
 /// (run, result). Nothing is written if the pipeline changed meanwhile.
 /// Returns how many notifications were added.
+#[cfg(test)]
 pub fn apply_runs(db: &Connection, target: &PipelineTarget, runs: &[Run]) -> Result<usize, String> {
     apply_runs_on(
         db,
@@ -1235,6 +1236,22 @@ pub(crate) fn check_all(
     http: Result<&dyn JsonTransport, &str>,
     targets: &[PipelineTarget],
 ) {
+    check_all_on(
+        db,
+        http,
+        targets,
+        &crate::pipeline_digest::Clock::system().local_day(),
+    )
+}
+
+/// [`check_all`] on a given local day, which Daily-failures step fetches are
+/// capped in.
+pub(crate) fn check_all_on(
+    db: &std::sync::Mutex<Connection>,
+    http: Result<&dyn JsonTransport, &str>,
+    targets: &[PipelineTarget],
+    local_day: &str,
+) {
     for target in targets {
         let result = http
             .map_err(str::to_owned)
@@ -1306,7 +1323,7 @@ pub(crate) fn check_all(
             .lock()
             .map_err(|e| e.to_string())
             .and_then(|db| match &result {
-                Ok(runs) => apply_runs(&db, target, runs).map(|_| ()),
+                Ok(runs) => apply_runs_on(&db, target, runs, local_day).map(|_| ()),
                 Err(error) => record_error(&db, target, error),
             });
         if let Err(error) = saved {
@@ -1315,7 +1332,7 @@ pub(crate) fn check_all(
         // A Daily-failures pipeline's new failed runs learn their failing step
         // (ADR 045); other pipelines never have one waiting.
         if let Ok(http) = http {
-            crate::pipeline_digest::fetch_steps(db, http, target);
+            crate::pipeline_digest::fetch_steps(db, http, target, local_day);
         }
     }
 }

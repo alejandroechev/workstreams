@@ -628,14 +628,24 @@ pub fn failing_step(timeline: &serde_json::Value) -> Option<String> {
 
 /// Fetches the failing step of each of a pipeline's failed runs that has a
 /// fetch slot and no step yet: one timeline request per run, without the
-/// database lock. A failed request leaves the run waiting for a later pass; a
-/// fetched run is never asked again.
+/// database lock. Before each request the pipeline must still be watched in
+/// Daily failures, and the run must fit the day's budget: at most
+/// [`FETCHES_PER_DAY`] distinct runs per pipeline per local day, retries
+/// carried over from earlier days included (what doesn't fit waits for a
+/// later day). A failed request leaves the run waiting; a fetched run is
+/// never asked again.
 pub(crate) fn fetch_steps(
     db: &std::sync::Mutex<Connection>,
     http: &dyn crate::pr_inbox::JsonTransport,
     target: &crate::pipeline_inbox::PipelineTarget,
+    local_day: &str,
 ) {
     let waiting: Result<Vec<u64>, String> = db.lock().map_err(|e| e.to_string()).and_then(|db| {
+        db.execute(
+            "DELETE FROM pipeline_step_requests WHERE day < date(?1, '-7 days')",
+            [local_day],
+        )
+        .map_err(|e| e.to_string())?;
         let mut stmt = db
             .prepare(
                 "SELECT run_id FROM pipeline_digest_runs WHERE watch_id=?1 AND step_state='pending'
@@ -656,6 +666,18 @@ pub(crate) fn fetch_steps(
         }
     };
     for run_id in waiting {
+        match db
+            .lock()
+            .map_err(|e| e.to_string())
+            .and_then(|db| reserve_request(&db, &target.id, run_id, local_day))
+        {
+            Ok(true) => {}
+            Ok(false) => break,
+            Err(error) => {
+                eprintln!("[pipeline-digest] Could not check a step request: {error}");
+                return;
+            }
+        }
         let url = crate::pipeline_inbox::ado_url(
             &target.organization,
             &target.project_id,
@@ -677,6 +699,47 @@ pub(crate) fn fetch_steps(
             eprintln!("[pipeline-digest] Could not save a failing step: {error}");
         }
     }
+}
+
+/// Whether a timeline request for `run_id` may go out now: the pipeline is
+/// still watched in Daily failures, and the run was already asked for today
+/// or today has room for one more distinct run. Records it when it may.
+fn reserve_request(
+    db: &Connection,
+    watch_id: &str,
+    run_id: u64,
+    day: &str,
+) -> Result<bool, String> {
+    let daily: bool = db
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM pipeline_watches WHERE id=?1 AND mode='daily_failures')",
+            [watch_id],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    if !daily {
+        return Ok(false);
+    }
+    let (asked, today): (bool, i64) = db
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM pipeline_step_requests WHERE watch_id=?1 AND run_id=?2 AND day=?3),
+            (SELECT COUNT(*) FROM pipeline_step_requests WHERE watch_id=?1 AND day=?3)",
+            params![watch_id, run_id, day],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .map_err(|e| e.to_string())?;
+    if asked {
+        return Ok(true);
+    }
+    if today >= FETCHES_PER_DAY {
+        return Ok(false);
+    }
+    db.execute(
+        "INSERT INTO pipeline_step_requests (watch_id, run_id, day) VALUES (?1, ?2, ?3)",
+        params![watch_id, run_id, day],
+    )
+    .map(|_| true)
+    .map_err(|e| e.to_string())
 }
 
 /// A kept run, as a digest lists it.
@@ -1546,6 +1609,80 @@ pub(crate) mod tests {
         )
         .unwrap();
         assert_eq!(inbox::items(&db).unwrap().len(), 1);
+    }
+
+    fn wire_runs_on(range: std::ops::RangeInclusive<u64>, day: &str) -> serde_json::Value {
+        serde_json::json!({"value": range.map(|i| serde_json::json!({
+            "id": i, "buildNumber": format!("{i}"), "result": "failed", "sourceBranch": "refs/heads/main",
+            "reason": "schedule", "finishTime": format!("{day}T08:{:02}:00Z", i % 60), "sourceVersion": format!("sha{i}")
+        })).collect::<Vec<_>>()})
+    }
+
+    /// f6: no more than 20 distinct runs are asked for per pipeline per local
+    /// day, retries carried over from an earlier day included.
+    #[test]
+    fn carried_over_retries_count_against_the_days_twenty() {
+        let conn = db();
+        watch(&conn, 1, "CI-Main", PipelineMode::DailyFailures);
+        let mut ado = FakeAdo {
+            runs: [(1, wire_runs_on(1..=20, "2026-03-01"))]
+                .into_iter()
+                .collect(),
+            steps: Default::default(),
+            fail_once: std::sync::Mutex::new([3].into_iter().collect()),
+            asked: Default::default(),
+        };
+        let shared = std::sync::Mutex::new(conn);
+        let all = inbox::targets(&shared.lock().unwrap()).unwrap();
+        inbox::check_all_on(&shared, Ok(&ado), &all, "2026-03-01");
+        assert_eq!(ado.timeline_requests().len(), 20);
+        ado.runs.insert(1, wire_runs_on(21..=40, "2026-03-02"));
+        ado.asked.lock().unwrap().clear();
+        inbox::check_all_on(&shared, Ok(&ado), &all, "2026-03-02");
+        inbox::check_all_on(&shared, Ok(&ado), &all, "2026-03-02");
+        let day2: std::collections::HashSet<u64> = ado.timeline_requests().into_iter().collect();
+        assert_eq!(day2.len(), 20, "{day2:?}");
+        ado.asked.lock().unwrap().clear();
+        inbox::check_all_on(&shared, Ok(&ado), &all, "2026-03-03");
+        assert!(
+            !ado.timeline_requests().is_empty(),
+            "what waited is asked on a later day"
+        );
+    }
+
+    /// f6: once a pipeline leaves Daily failures, its waiting runs are never
+    /// asked for, digested ones included.
+    #[test]
+    fn retries_stop_when_the_pipeline_leaves_daily_failures() {
+        let conn = db();
+        let id = watch(&conn, 1, "CI-Main", PipelineMode::DailyFailures);
+        let ado = FakeAdo {
+            runs: [(1, wire_runs(1..=2, "failed"))].into_iter().collect(),
+            steps: Default::default(),
+            fail_once: std::sync::Mutex::new([1, 2].into_iter().collect()),
+            asked: Default::default(),
+        };
+        let shared = std::sync::Mutex::new(conn);
+        let all = inbox::targets(&shared.lock().unwrap()).unwrap();
+        inbox::check_all_on(&shared, Ok(&ado), &all, "2026-03-01");
+        assert_eq!(ado.timeline_requests().len(), 2);
+        {
+            let conn = shared.lock().unwrap();
+            since(&conn, &id, "2026-02-28T12:00:00.000Z");
+            let zone = TestZone::fixed(-3);
+            assert_eq!(
+                run_due(&conn, &local_clock(&zone, "2026-03-02 09:00"))
+                    .unwrap()
+                    .len(),
+                1
+            );
+            inbox::set_mode(&conn, &id, PipelineMode::Failures).unwrap();
+        }
+        // The old target (revision) and a fresh one both ask nothing more.
+        inbox::check_all_on(&shared, Ok(&ado), &all, "2026-03-02");
+        let fresh = inbox::targets(&shared.lock().unwrap()).unwrap();
+        inbox::check_all_on(&shared, Ok(&ado), &fresh, "2026-03-02");
+        assert_eq!(ado.timeline_requests().len(), 2);
     }
 
     #[test]

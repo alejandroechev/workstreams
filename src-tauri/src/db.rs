@@ -570,6 +570,14 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
             seen_at TEXT NOT NULL,
             PRIMARY KEY (watch_id, run_id)
         );
+        -- Runs whose failing step was asked of ADO, per pipeline per local day
+        -- (ADR 045): at most 20 distinct runs a day, retries included.
+        CREATE TABLE IF NOT EXISTS pipeline_step_requests (
+            watch_id TEXT NOT NULL,
+            run_id INTEGER NOT NULL,
+            day TEXT NOT NULL,
+            PRIMARY KEY (watch_id, run_id, day)
+        );
         -- One Inbox entry per failing Daily-failures pipeline per digest (ADR 045).
         CREATE TABLE IF NOT EXISTS pipeline_digests (
             id TEXT PRIMARY KEY,
