@@ -743,6 +743,7 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
         "ALTER TABLE pipeline_investigations ADD COLUMN followup INTEGER NOT NULL DEFAULT 0",
         // The session a follow-up is for: sent only if the tile still runs it.
         "ALTER TABLE pipeline_investigations ADD COLUMN expected_session TEXT",
+        "ALTER TABLE pipeline_investigations ADD COLUMN expected_tile TEXT",
         // When a digest asked to start its investigation by itself: the rolling
         // 24-hour cap of auto-started investigations counts these.
         "ALTER TABLE pipeline_digests ADD COLUMN auto_requested_at TEXT",

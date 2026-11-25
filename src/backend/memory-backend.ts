@@ -814,10 +814,11 @@ export class MemoryBackend implements Backend {
     const digest = this.digestSnapshot().find((d) => d.id === digestId)!;
     const tiles = [...this.tiles.values()].filter((t) => t.workstream_id === investigation.workstream_id && t.tile_type === "copilot_session");
     const config = (t: Tile) => { try { return JSON.parse(t.config_json || "{}") as { investigation?: boolean; copilot_session_id?: string }; } catch { return {}; } };
-    const tile = tiles.find((t) => config(t).investigation === true) ?? tiles[0];
+    // As investigation_tile: only the designated investigation tile, never another; without one, only a link.
+    const tile = tiles.find((t) => config(t).investigation === true && config(t).copilot_session_id);
     this.investigations.set(digestId, {
       event_id: digestId, workstream_id: investigation.workstream_id, directory: investigation.directory, prompt: followupPrompt(digest),
-      expected_session_id: tile ? config(tile).copilot_session_id ?? null : null, started: false,
+      expected_tile_id: tile?.id ?? null, expected_session_id: tile ? config(tile).copilot_session_id ?? null : null, started: !tile,
     });
     this.investigationMeta.set(digestId, { watch_id: watchId, auto: false, followup: true, created_at: now.getTime() });
   }

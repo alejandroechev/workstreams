@@ -210,7 +210,8 @@ describe("sending a digest's follow-up into an existing investigation (ADR 045)"
     backend.finishPipelineRun(watch.id, { id: 2, number: "2", result: "failed", branch: "main", finished_at: new Date(2100, 2, 2, 12).toISOString() });
     now = new Date(2100, 2, 3, 9, 0);
     backend.runDigestPass();
-    expect(await backend.pendingInvestigationFollowups()).toHaveLength(1);
+    // A tile running no session gets no follow-up queued at all.
+    expect(await backend.pendingInvestigationFollowups()).toHaveLength(linked ? 1 : 0);
     let generation = 0;
     const sent: string[] = [];
     /** Plays the shared resume path: under the tile lock it revalidates, then sends. */
@@ -224,6 +225,7 @@ describe("sending a digest's follow-up into an existing investigation (ADR 045)"
     }), hooks);
     const deps = {
       backend,
+      isSpawned: vi.fn(() => false),
       isBusy: vi.fn(() => false),
       turnOpen: vi.fn(async () => false),
       generation: () => generation,
@@ -257,6 +259,26 @@ describe("sending a digest's follow-up into an existing investigation (ADR 045)"
     await deliverFollowUps(deps);
     expect(sent).toEqual([]);
     expect(await backend.pendingInvestigationFollowups()).toEqual([]);
+  });
+
+  it("never touches a running process: a live tile is skipped, not stopped (r2-f6)", async () => {
+    const { backend, deps, sent } = await withFollowUp("session-1");
+    deps.isSpawned.mockReturnValue(true);
+    await deliverFollowUps(deps);
+    expect(deps.resume).not.toHaveBeenCalled();
+    expect(sent).toEqual([]);
+    expect(await backend.pendingInvestigationFollowups()).toEqual([]);
+  });
+
+  it("goes only to the designated investigation tile (r2-f2)", async () => {
+    const { backend, ws, tile, deps } = await withFollowUp("session-1");
+    const [followUp] = await backend.pendingInvestigationFollowups();
+    expect([followUp.expected_tile_id, followUp.expected_session_id]).toEqual([tile.id, "session-1"]);
+    // A second, ordinary tile running the same session id must not receive it.
+    await backend.updateTileConfig(tile.id, JSON.stringify({ copilot_session_id: "session-1" }));
+    await backend.createTile(ws.id, "copilot_session", "Coding", JSON.stringify({ copilot_session_id: "session-1" }));
+    await deliverFollowUps(deps);
+    expect(deps.resume).not.toHaveBeenCalled();
   });
 
   it("skips when, waiting for the tile lock, another resume started it, it was relinked, or the Inbox was muted (f4, f5)", async () => {

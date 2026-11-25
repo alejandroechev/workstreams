@@ -62,6 +62,9 @@ pub struct PendingSession {
     /// investigation's tile still runs that session.
     #[serde(default)]
     pub expected_session_id: Option<String>,
+    /// For a follow-up: the investigation tile it is for.
+    #[serde(default)]
+    pub expected_tile_id: Option<String>,
 }
 
 fn starting() -> &'static Mutex<HashSet<String>> {
@@ -480,7 +483,7 @@ pub fn pending_sessions(db: &Connection) -> Result<Vec<PendingSession>, String> 
     let muted = crate::inbox_mute::is_muted(db)?;
     let mut stmt = db
         .prepare(
-            "SELECT i.event_id, i.workstream_id, COALESCE(w.directory, ''), i.prompt, NULL
+            "SELECT i.event_id, i.workstream_id, COALESCE(w.directory, ''), i.prompt, NULL, NULL
             FROM pipeline_investigations i JOIN workstreams w ON w.id = i.workstream_id
             WHERE i.session_started = 0 AND i.followup = 0 AND NOT (i.auto = 1 AND ?1)
             ORDER BY i.created_at",
@@ -494,6 +497,7 @@ pub fn pending_sessions(db: &Connection) -> Result<Vec<PendingSession>, String> 
                 directory: r.get(2)?,
                 prompt: r.get(3)?,
                 expected_session_id: r.get(4)?,
+                expected_tile_id: r.get(5)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -711,7 +715,7 @@ pub fn pending_followups(db: &Connection) -> Result<Vec<PendingSession>, String>
     let muted = crate::inbox_mute::is_muted(db)?;
     let mut stmt = db
         .prepare(
-            "SELECT i.event_id, i.workstream_id, COALESCE(w.directory, ''), i.prompt, i.expected_session
+            "SELECT i.event_id, i.workstream_id, COALESCE(w.directory, ''), i.prompt, i.expected_session, i.expected_tile
             FROM pipeline_investigations i JOIN workstreams w ON w.id = i.workstream_id
             WHERE i.session_started = 0 AND i.followup = 1 AND NOT ?1 ORDER BY i.created_at",
         )
@@ -724,6 +728,7 @@ pub fn pending_followups(db: &Connection) -> Result<Vec<PendingSession>, String>
                 directory: r.get(2)?,
                 prompt: r.get(3)?,
                 expected_session_id: r.get(4)?,
+                expected_tile_id: r.get(5)?,
             })
         })
         .map_err(|e| e.to_string())?;

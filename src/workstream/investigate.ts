@@ -72,6 +72,8 @@ export async function startPendingInvestigations(deps: InvestigationDeps): Promi
 
 export interface FollowUpDeps {
   backend: Pick<Backend, "pendingInvestigationFollowups" | "markInvestigationSessionStarted" | "listTiles">;
+  /** The app has started (or is starting) this tile's process: a follow-up then never goes. */
+  isSpawned(tileId: string): boolean;
   /** The tile's agent is mid-turn, as the session poller last said. */
   isBusy(tileId: string): boolean;
   /** The session's log has a turn that hasn't ended. */
@@ -92,15 +94,23 @@ export interface FollowUpDeps {
 
 class Skip extends Error {}
 
+/** The tile is the designated investigation tile, running `sessionId`. */
+function isInvestigationTile(tile: Tile | undefined, tileId: string, sessionId: string): tile is Tile {
+  if (!tile || tile.id !== tileId || tile.tile_type !== "copilot_session") return false;
+  const config = parseCopilotSessionConfig(tile.config_json) as { copilot_session_id?: string | null; investigation?: unknown };
+  return config.investigation === true && config.copilot_session_id === sessionId;
+}
+
 /**
- * Sends each waiting digest follow-up into its investigation's session
- * (ADR 045), resuming it in its tile, never interrupting anything: it goes
- * only to the session it was queued for, and only if, rechecked under the
- * tile's resume lock right before sending, the follow-up is still due (not
- * muted meanwhile), the tile still runs that session, no other start happened
- * since it was read, and the session isn't mid-turn or just started.
- * Otherwise it is skipped; the digest still links to the investigation. Each
- * follow-up is handled once, whatever happens.
+ * Sends each waiting digest follow-up into its investigation (ADR 045),
+ * never interrupting anything: it goes only to the designated investigation
+ * tile and session it was queued for, only when that tile has no live process
+ * (the resume starts it on the follow-up), and only if, rechecked under the
+ * tile's resume lock right before sending, it is still due (not muted
+ * meanwhile), the tile is still that investigation tile running that session,
+ * nothing started or stopped it since, and the session isn't in a turn.
+ * Otherwise it is skipped, and not retried; the digest still links to the
+ * investigation.
  */
 export async function deliverFollowUps(deps: FollowUpDeps): Promise<void> {
   const { backend } = deps;
@@ -108,19 +118,24 @@ export async function deliverFollowUps(deps: FollowUpDeps): Promise<void> {
     if (deps.inFlight.has(followUp.event_id)) continue;
     deps.inFlight.add(followUp.event_id);
     try {
+      const tileId = followUp.expected_tile_id ?? null;
       const expected = followUp.expected_session_id ?? null;
-      const tile = (await backend.listTiles(followUp.workstream_id))
-        .find((t) => t.tile_type === "copilot_session" && expected !== null && parseCopilotSessionConfig(t.config_json).copilot_session_id === expected);
-      if (!tile || !expected) continue;
-      const busy = async () => deps.isBusy(tile.id) || deps.spawnedRecently(tile.id) || (await deps.turnOpen(expected).catch(() => true));
+      if (!tileId || !expected) continue;
+      const current = async () => (await backend.listTiles(followUp.workstream_id)).find((t) => t.id === tileId);
+      if (!isInvestigationTile(await current(), tileId, expected)) continue;
+      const busy = async () => deps.isSpawned(tileId) || deps.isBusy(tileId) || deps.spawnedRecently(tileId)
+        || (await deps.turnOpen(expected).catch(() => true));
       if (await busy()) continue;
-      const generation = deps.generation(tile.id);
-      await deps.resume(followUp.workstream_id, tile.id, followUp.prompt, async (phase, sessionId) => {
-        if (sessionId !== expected) throw new Skip("The investigation's tile runs another session now.");
+      const generation = deps.generation(tileId);
+      await deps.resume(followUp.workstream_id, tileId, followUp.prompt, async (phase, sessionId) => {
+        if (sessionId !== expected || !isInvestigationTile(await current(), tileId, expected)) {
+          throw new Skip("The investigation's tile runs another session now.");
+        }
         if (!(await backend.pendingInvestigationFollowups()).some((f) => f.event_id === followUp.event_id)) {
           throw new Skip("The follow-up is no longer due (the Inbox was muted).");
         }
-        if (phase === "before-stop" && (deps.generation(tile.id) !== generation || (await busy()))) {
+        if (phase === "before-stop" && (deps.generation(tileId) !== generation || deps.isBusy(tileId)
+          || deps.spawnedRecently(tileId) || (await deps.turnOpen(expected).catch(() => true)))) {
           throw new Skip("The investigation's session is busy.");
         }
       });

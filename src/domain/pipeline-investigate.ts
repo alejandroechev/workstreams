@@ -20,6 +20,8 @@ export interface PendingInvestigation {
   prompt: string;
   /** For a follow-up: the session it is for; sent only if the tile still runs it. */
   expected_session_id?: string | null;
+  /** For a follow-up: the designated investigation tile it is for. */
+  expected_tile_id?: string | null;
 }
 
 export type InvestigationPlacement =

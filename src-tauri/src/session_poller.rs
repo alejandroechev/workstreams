@@ -365,24 +365,26 @@ pub fn turn_cursor(session_dir: &std::path::Path) -> TurnCursor {
         return cursor;
     };
     for line in std::io::BufReader::new(file).lines().map_while(Result::ok) {
-        if line.contains("\"assistant.turn_start\"") {
-            cursor.starts += 1;
-            cursor.open = true;
-        } else if line.contains("\"assistant.turn_end\"") {
-            cursor.ends += 1;
-            cursor.open = false;
-        } else if [
-            "\"session.shutdown\"",
-            "\"session.start\"",
-            "\"session.resume\"",
-            "\"session.error\"",
-            "\"session.task_complete\"",
-            "abort",
-        ]
-        .iter()
-        .any(|marker| line.contains(marker))
-        {
-            cursor.open = false;
+        // The event's own type, never a word inside its payload.
+        let Ok(event) = serde_json::from_str::<serde_json::Value>(&line) else {
+            continue;
+        };
+        match event.get("type").and_then(|v| v.as_str()).unwrap_or("") {
+            "assistant.turn_start" => {
+                cursor.starts += 1;
+                cursor.open = true;
+            }
+            "assistant.turn_end" => {
+                cursor.ends += 1;
+                cursor.open = false;
+            }
+            "session.shutdown"
+            | "session.start"
+            | "session.resume"
+            | "session.error"
+            | "session.task_complete"
+            | "abort" => cursor.open = false,
+            _ => {}
         }
     }
     cursor
@@ -1025,6 +1027,15 @@ mod tests {
         assert!(!open_after(
             "resume",
             &[start, r#"{"type":"session.resume"}"#]
+        ));
+        // r2-f6: only an abort event closes it, not the word in a tool's output.
+        assert!(!open_after("abort", &[start, r#"{"type":"abort"}"#]));
+        assert!(open_after(
+            "word",
+            &[
+                start,
+                r#"{"type":"tool.execution_complete","data":{"result":"git rebase --abort; aborting"}}"#
+            ]
         ));
     }
 

@@ -395,27 +395,27 @@ describe("a scheduled resume names the session it launches (round 3, finding 2)"
 });
 
 describe("resuming an investigation with a digest's follow-up (ADR 045)", () => {
-  it("stops the session and resumes it in its tile with the follow-up, recording nothing for the phone", async () => {
-    const { backend, ws, tile, deps, log } = await setup();
-    await resumeFollowUpSession(deps, { workstreamId: ws.id, tileId: tile.id, prompt: "A new daily digest of CI-Main\nNew failed runs", command: "copilot" });
-    expect(log).toEqual([
-      "mount:ws:marked",
-      "notice:Daily digest follow-up: A new daily digest of CI-Main",
-      "intentional",
-      "stop",
-      "clear:session-s",
-      "spawn:/repo/alpha/sub:copilot:session-s:A new daily digest of CI-Main\nNew failed runs",
-    ]);
-    expect(await backend.companionListSessions()).toEqual([]);
-  });
-
-  it("cancels under the tile lock, before stopping anything, when revalidation refuses", async () => {
-    const { ws, tile, deps, log } = await setup();
+  it("cancels under the tile lock, before sending anything, when revalidation refuses", async () => {
+    const { ws, tile, deps, log } = await setup({ running: false });
     await expect(resumeFollowUpSession(deps, {
       workstreamId: ws.id, tileId: tile.id, prompt: "Follow up", command: "copilot",
       revalidate: async (phase) => { if (phase === "before-stop") throw new Error("busy"); },
     })).rejects.toThrow("busy");
     expect(log).not.toContain("stop");
     expect(log.some((l) => l.includes("Follow up"))).toBe(false);
+  });
+
+  it("refuses a tile whose process is running, under the lock, stopping nothing (r2-f6)", async () => {
+    const { ws, tile, deps, log } = await setup({ running: true });
+    await expect(resumeFollowUpSession(deps, { workstreamId: ws.id, tileId: tile.id, prompt: "Follow up", command: "copilot" }))
+      .rejects.toThrow("running");
+    expect(log).toEqual([]);
+  });
+
+  it("resumes a tile with no live process on the follow-up", async () => {
+    const { ws, tile, deps, log } = await setup({ running: false });
+    await resumeFollowUpSession(deps, { workstreamId: ws.id, tileId: tile.id, prompt: "Follow up", command: "copilot" });
+    expect(log).not.toContain("stop");
+    expect(log[log.length - 1]).toBe("spawn:/repo/alpha/sub:copilot:session-s:Follow up");
   });
 });

@@ -316,27 +316,35 @@ fn after_digest(
     .map_err(|e| e.to_string())
 }
 
-/// The session an investigation workstream's tile runs: its investigation
-/// tile's, else its first session tile's.
-fn investigation_session(db: &Connection, workstream: &str) -> Result<Option<String>, String> {
+/// The designated investigation tile of a workstream (marked
+/// `"investigation": true`) and the session it runs, if it runs one. Never
+/// another tile: a follow-up carries ADO text and must only reach the
+/// restricted investigation session.
+fn investigation_tile(
+    db: &Connection,
+    workstream: &str,
+) -> Result<Option<(String, String)>, String> {
     let mut stmt = db
         .prepare(
-            "SELECT config_json FROM tiles WHERE workstream_id=?1 AND tile_type='copilot_session'
+            "SELECT id, config_json FROM tiles WHERE workstream_id=?1 AND tile_type='copilot_session'
             ORDER BY created_at, id",
         )
         .map_err(|e| e.to_string())?;
-    let configs: Vec<serde_json::Value> = stmt
-        .query_map([workstream], |r| r.get::<_, Option<String>>(0))
+    let rows: Vec<(String, Option<String>)> = stmt
+        .query_map([workstream], |r| Ok((r.get(0)?, r.get(1)?)))
         .map_err(|e| e.to_string())?
-        .filter_map(|c| c.ok().flatten())
-        .filter_map(|c| serde_json::from_str(&c).ok())
-        .collect();
-    let session = |c: &serde_json::Value| c["copilot_session_id"].as_str().map(str::to_owned);
-    Ok(configs
-        .iter()
-        .find(|c| c["investigation"] == true)
-        .or(configs.first())
-        .and_then(session))
+        .collect::<Result<_, _>>()
+        .map_err(|e| e.to_string())?;
+    Ok(rows.into_iter().find_map(|(id, config)| {
+        let config: serde_json::Value = serde_json::from_str(config.as_deref()?).ok()?;
+        (config["investigation"] == true)
+            .then(|| {
+                config["copilot_session_id"]
+                    .as_str()
+                    .map(|s| (id, s.to_owned()))
+            })
+            .flatten()
+    }))
 }
 
 /// Records a digest's new failed runs as a follow-up for the session the
@@ -352,17 +360,22 @@ fn enqueue_followup(
         .into_iter()
         .find(|d| d.id == digest_id)
         .ok_or("The digest was not stored")?;
+    // Without a designated investigation tile running a session, nothing is
+    // sent: the row only links the digest to the workstream.
+    let tile = investigation_tile(db, workstream)?;
     db.execute(
         "INSERT OR REPLACE INTO pipeline_investigations
-        (event_id, workstream_id, prompt, session_started, created_at, watch_id, followup, expected_session)
-        VALUES (?1, ?2, ?3, 0, ?4, ?5, 1, ?6)",
+        (event_id, workstream_id, prompt, session_started, created_at, watch_id, followup, expected_tile, expected_session)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1, ?7, ?8)",
         params![
             digest_id,
             workstream,
             crate::pipeline_investigate::followup_prompt(&digest),
+            tile.is_none(),
             clock.stamp(),
             watch_id,
-            investigation_session(db, workstream)?
+            tile.as_ref().map(|t| &t.0),
+            tile.as_ref().map(|t| &t.1)
         ],
     )
     .map(|_| ())
@@ -1346,6 +1359,47 @@ pub(crate) mod tests {
         assert_eq!(followups[0].expected_session_id.as_deref(), Some("s-P1"));
         assert!(followups[0].prompt.contains("buildId=1"));
         assert_eq!(auto_pending(&db).unwrap().len(), 4);
+    }
+
+    /// r2-f2: a follow-up only ever targets the designated investigation
+    /// tile; without one the digest just links to the workstream.
+    #[test]
+    fn a_follow_up_targets_only_the_investigation_tile_never_another() {
+        let db = db();
+        five_digests(&db);
+        let p1 = crate::pipeline_investigate::pending_followups(&db)
+            .unwrap()
+            .remove(0);
+        assert_eq!(
+            (
+                p1.expected_tile_id.as_deref(),
+                p1.expected_session_id.as_deref()
+            ),
+            (Some("tile-P1"), Some("s-P1"))
+        );
+
+        // A pipeline whose investigation workstream has only an ordinary session tile.
+        let db = super::tests::db();
+        let zone = TestZone::fixed(-3);
+        let ci = watch(&db, 1, "CI", PipelineMode::DailyFailures);
+        auto(&db, &ci);
+        investigated(&db, &ci, "CI");
+        db.execute(
+            "UPDATE tiles SET config_json='{\"copilot_session_id\":\"s-coding\"}' WHERE id='tile-CI'",
+            [],
+        )
+        .unwrap();
+        since(&db, &ci, "2026-03-01T12:00:00.000Z");
+        finish(&db, &ci, &[run(1, "failed", "2026-03-01T15:00:00Z")]);
+        run_due(&db, &local_clock(&zone, "2026-03-02 09:00")).unwrap();
+        assert!(crate::pipeline_investigate::pending_followups(&db)
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            digests(&db).unwrap()[0].investigation.as_deref(),
+            Some("ws-CI"),
+            "still linked"
+        );
     }
 
     /// f7: the cap is checked when the app claims a start, in a ledger that

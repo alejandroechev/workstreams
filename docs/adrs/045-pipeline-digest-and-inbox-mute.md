@@ -180,14 +180,21 @@ round 1, f4, f5, f7):
   Mute all on drops every undelivered piece of auto work for good (requests,
   follow-ups, auto-started sessions not yet begun), so nothing replays after
   unmuting. Manual investigations are unaffected.
-- **A follow-up never interrupts.** It is queued with the session it is for
-  (the investigation tile's `copilot_session_id`). The app sends it through
-  the shared per-tile resume path, and under the tile's resume lock, right
-  before stopping and before spawning, it rechecks that the follow-up is still
-  due, that the tile still runs that session, that no other start or stop of
-  the tile happened since it was read (a phone message or scheduled run that
-  queued first), and that the session isn't mid-turn, in an open turn, or
-  started in the last two minutes. Otherwise it is skipped, never forced.
+- **A follow-up only reaches the investigation tile.** It is queued with the
+  designated investigation tile's id and the session it runs; only a tile
+  marked `"investigation": true` qualifies, never another session tile of the
+  workstream. Without one, no prompt is queued and the digest only links to
+  the investigation workstream (review round 2, f2).
+- **A follow-up never interrupts.** It is sent only when that tile has no live
+  process: the shared per-tile resume path then starts the session on it.
+  If the tile's process is running (idle or not), the follow-up is skipped,
+  counted as handled and not retried (review round 2, f6). Under the tile's
+  resume lock, right before spawning, it also rechecks that the follow-up is
+  still due (not muted meanwhile), that the tile is still the investigation
+  tile running that session, that nothing started or stopped it since it was
+  read, and that the session isn't in a turn or started in the last two
+  minutes. Turn state is read from the session's events by their `type`
+  field (an `abort` event closes a turn; the word in a tool's output doesn't).
 
 ### Mute all
 

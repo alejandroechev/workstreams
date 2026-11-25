@@ -39,6 +39,9 @@ describe("MemoryBackend auto-investigate", () => {
     const p1Digest = (await b.getPrInbox()).pipeline_digests!.find((d) => d.pipeline_id === ids[0])!;
     const first = await b.runAutoInvestigations();
     expect(first).toBe(1);
+    // Its investigation tile, running a session (follow-ups go only there).
+    const p1Ws = (await b.listWorkstreams()).find((w) => w.name.startsWith("Investigate P1"))!;
+    await b.createTile(p1Ws.id, "copilot_session", "Investigate", JSON.stringify({ investigation: true, copilot_session_id: "s-p1" }));
     expect((await b.getPrInbox()).pipeline_digests!.find((d) => d.id === p1Digest.id)!.investigation).not.toBeNull();
     for (const id of ids.slice(1)) await b.setPipelineAutoInvestigate(id, "digest");
     setNow(local(3, 8, 0));
@@ -106,7 +109,8 @@ describe("MemoryBackend auto-investigate", () => {
     const later = (await b.getPrInbox()).pipeline_digests!.find((d) => d.id !== earlier.id)!;
     expect(later.auto_pending).toBe(true);
     // Before the app launches it, the earlier digest is investigated by hand.
-    await b.startPipelineInvestigation(earlier.id);
+    const manual = await b.startPipelineInvestigation(earlier.id);
+    await b.createTile(manual.workstream_id, "copilot_session", "Investigate", JSON.stringify({ investigation: true, copilot_session_id: "s-1" }));
     expect(await b.runAutoInvestigations()).toBe(0);
     expect((await b.listWorkstreams()).filter((w) => w.name.startsWith("Investigate "))).toHaveLength(1);
     expect((await b.pendingInvestigationFollowups()).map((f) => f.event_id)).toEqual([later.id]);

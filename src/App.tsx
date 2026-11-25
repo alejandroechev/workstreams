@@ -2328,6 +2328,7 @@ export default function App() {
         backend,
         isBusy: isTileBusy,
         turnOpen: async (sessionId) => !!(await backend.sessionTurnState(sessionId))?.open,
+        isSpawned: (tileId) => spawnedPtys.current.has(tileId),
         generation: tileGeneration,
         spawnedRecently: (tileId) => tileChangedRecently(tileId),
         resume: async (workstreamId, tileId, prompt, revalidate) => {

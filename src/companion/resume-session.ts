@@ -60,6 +60,8 @@ interface ResumeTileRequest {
   revalidate?: (phase: ResumePhase, sessionId: string) => Promise<void>;
   /** Why an unlinked tile can't be resumed. */
   unlinkedError: string;
+  /** Refuse (touching nothing) when the tile's process is running: never stop it. */
+  onlyIfStopped?: boolean;
 }
 
 /**
@@ -123,6 +125,7 @@ async function resumeTileSessionNow(deps: ResumeSessionDeps, request: ResumeTile
   };
 
   const running = deps.isSpawned(tile.id);
+  if (running && request.onlyIfStopped) throw new Error("The tile's session is running, so nothing was sent.");
   if (!running) deps.markSpawned(tile.id);
   let mounted = false;
   /** From here a failure would leave the tile without its process. */
@@ -302,7 +305,8 @@ export interface FollowUpResumeRequest {
  * Sends a later digest's new failed runs into an existing investigation
  * (ADR 045): resumes the session its tile runs with the follow-up as the
  * prompt, through the same per-tile serialized path as phone messages and
- * scheduled runs.
+ * scheduled runs, and only when the tile has no live process: a running
+ * session is never stopped or interrupted for a follow-up.
  */
 export async function resumeFollowUpSession(deps: ResumeSessionDeps, request: FollowUpResumeRequest): Promise<{ sessionId: string }> {
   const sessionId = await resumeTileSession(
@@ -314,6 +318,7 @@ export async function resumeFollowUpSession(deps: ResumeSessionDeps, request: Fo
       command: request.command,
       guard: () => {},
       revalidate: request.revalidate,
+      onlyIfStopped: true,
       noticeText: `Daily digest follow-up: ${firstLine(request.prompt)}`,
       unlinkedError: "The investigation's tile isn't linked to a Copilot session yet, so there is nothing to resume.",
     },
