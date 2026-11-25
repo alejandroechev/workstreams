@@ -77,11 +77,28 @@ describe("MemoryBackend pipelines", () => {
     b.finishPipelineRun(p.id, { id: 31, number: "31", result: "failed", branch: "feature/x", finished_at: "2100-10-27T09:10:00Z" });
     const kept = b.digestRunsFor(p.id);
     expect(kept).toHaveLength(23);
-    expect(kept.filter((r) => r.step_state === "pending")).toHaveLength(20);
+    expect(kept.filter((r) => r.step_state === "fetched")).toHaveLength(20);
     expect(kept.filter((r) => r.step_state === "not_fetched")).toHaveLength(2);
     expect(kept.find((r) => r.run_id === 1)?.commit).toBe("sha1");
     await b.setPipelineWatchMode(p.id, "failures");
     expect(b.digestRunsFor(p.id)).toEqual([]);
+  });
+
+  it("fetches a failed run's step once, only in Daily failures, retrying an error", async () => {
+    const b = backend();
+    b.setDigestClock(() => new Date("2100-10-27T00:00:00Z"));
+    const daily = await b.addPipelineWatch(PAGE, "daily_failures");
+    const both = await b.addPipelineWatch("https://dev.azure.com/skype/SCC/_build?definitionId=33995", "both");
+    b.finishPipelineRun(both.id, { id: 50, number: "50", result: "failed", branch: "main", finished_at: "2100-10-27T08:00:00Z", step: "Build" });
+    b.failNextTimeline(2);
+    b.finishPipelineRun(daily.id, { id: 1, number: "1", result: "failed", branch: "main", finished_at: "2100-10-27T08:00:00Z", step: "Run tests" });
+    b.finishPipelineRun(daily.id, { id: 2, number: "2", result: "failed", branch: "main", finished_at: "2100-10-27T08:01:00Z", step: "Publish" });
+    expect(b.timelineRequests()).toEqual([1, 2]);
+    expect(b.digestRunsFor(daily.id).map((r) => [r.run_id, r.step, r.step_state])).toEqual([[1, "Run tests", "fetched"], [2, null, "pending"]]);
+    b.fetchDigestSteps();
+    b.fetchDigestSteps();
+    expect(b.timelineRequests()).toEqual([1, 2, 2]);
+    expect(b.digestRunsFor(daily.id)[1]).toMatchObject({ step: "Publish", step_state: "fetched" });
   });
 
   it("notifies only the default branch until switched to all branches", async () => {

@@ -166,6 +166,87 @@ pub(crate) fn drop_undigested(db: &Connection, watch_id: &str) -> Result<(), Str
     .map_err(|e| e.to_string())
 }
 
+// ── Failing steps ───────────────────────────────────────────────────────
+
+/// The failing step of a run, from its build timeline: the failed task that
+/// started first, else a failed job, phase or stage.
+pub fn failing_step(timeline: &serde_json::Value) -> Option<String> {
+    let records = timeline["records"].as_array()?;
+    for kind in ["Task", "Job", "Phase", "Stage"] {
+        let first = records
+            .iter()
+            .filter(|r| r["type"] == kind && r["result"] == "failed")
+            .filter(|r| r["name"].as_str().is_some_and(|n| !n.trim().is_empty()))
+            .min_by_key(|r| {
+                (
+                    r["startTime"]
+                        .as_str()
+                        .and_then(parse_time)
+                        .map(|t| t.timestamp_nanos_opt().unwrap_or(i64::MAX))
+                        .unwrap_or(i64::MAX),
+                    r["order"].as_i64().unwrap_or(i64::MAX),
+                )
+            });
+        if let Some(record) = first {
+            return record["name"].as_str().map(|n| n.trim().to_string());
+        }
+    }
+    None
+}
+
+/// Fetches the failing step of each of a pipeline's failed runs that has a
+/// fetch slot and no step yet: one timeline request per run, without the
+/// database lock. A failed request leaves the run waiting for a later pass; a
+/// fetched run is never asked again.
+pub(crate) fn fetch_steps(
+    db: &std::sync::Mutex<Connection>,
+    http: &dyn crate::pr_inbox::JsonTransport,
+    target: &crate::pipeline_inbox::PipelineTarget,
+) {
+    let waiting: Result<Vec<u64>, String> = db.lock().map_err(|e| e.to_string()).and_then(|db| {
+        let mut stmt = db
+            .prepare(
+                "SELECT run_id FROM pipeline_digest_runs WHERE watch_id=?1 AND step_state='pending'
+                AND result='failed' AND (digest_id IS NULL OR digest_id <> 'dropped') ORDER BY run_id",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([&target.id], |r| r.get(0))
+            .map_err(|e| e.to_string())?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())
+    });
+    let waiting = match waiting {
+        Ok(ids) => ids,
+        Err(error) => {
+            eprintln!("[pipeline-digest] Could not read runs waiting for a step: {error}");
+            return;
+        }
+    };
+    for run_id in waiting {
+        let url = crate::pipeline_inbox::ado_url(
+            &target.organization,
+            &target.project_id,
+            &["_apis", "build", "builds", &run_id.to_string(), "timeline"],
+        );
+        let Ok(timeline) = crate::pipeline_inbox::api_get(http, url) else {
+            continue;
+        };
+        let step = failing_step(&timeline);
+        let saved = db.lock().map_err(|e| e.to_string()).and_then(|db| {
+            db.execute(
+                "UPDATE pipeline_digest_runs SET step=?3, step_state='fetched'
+                WHERE watch_id=?1 AND run_id=?2 AND step_state='pending'",
+                params![target.id, run_id, step],
+            )
+            .map_err(|e| e.to_string())
+        });
+        if let Err(error) = saved {
+            eprintln!("[pipeline-digest] Could not save a failing step: {error}");
+        }
+    }
+}
+
 /// A kept run, as a digest lists it.
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq)]
 pub struct KeptRun {
@@ -366,6 +447,173 @@ pub(crate) mod tests {
             })
             .unwrap();
         assert_eq!(left, 0);
+    }
+
+    /// Serves each pipeline's runs and each run's timeline, and counts requests.
+    pub(crate) struct FakeAdo {
+        pub runs: std::collections::HashMap<u64, serde_json::Value>,
+        pub steps: std::collections::HashMap<u64, &'static str>,
+        pub fail_once: std::sync::Mutex<std::collections::HashSet<u64>>,
+        pub asked: std::sync::Mutex<Vec<String>>,
+    }
+
+    impl FakeAdo {
+        pub(crate) fn timeline_requests(&self) -> Vec<u64> {
+            self.asked
+                .lock()
+                .unwrap()
+                .iter()
+                .filter_map(|p| p.strip_suffix("/timeline"))
+                .filter_map(|p| p.rsplit('/').next()?.parse().ok())
+                .collect()
+        }
+    }
+
+    impl crate::pr_inbox::JsonTransport for FakeAdo {
+        fn get(&self, url: reqwest::Url) -> Result<serde_json::Value, String> {
+            let path = url.path().to_string();
+            self.asked.lock().unwrap().push(path.clone());
+            if let Some(build) = path.strip_suffix("/timeline") {
+                let id: u64 = build.rsplit('/').next().unwrap().parse().unwrap();
+                if self.fail_once.lock().unwrap().remove(&id) {
+                    return Err("ADO connection failed or timed out.".into());
+                }
+                let step = self.steps.get(&id).copied().unwrap_or("Run tests");
+                return Ok(serde_json::json!({"records": [
+                    {"type": "Stage", "name": "Build", "result": "failed", "startTime": "2026-03-01T07:00:00Z"},
+                    {"type": "Job", "name": "Linux", "result": "failed", "startTime": "2026-03-01T07:00:01Z"},
+                    {"type": "Task", "name": "Checkout", "result": "succeeded", "startTime": "2026-03-01T07:00:02Z"},
+                    {"type": "Task", "name": "Publish", "result": "failed", "startTime": "2026-03-01T07:09:00Z"},
+                    {"type": "Task", "name": step, "result": "failed", "startTime": "2026-03-01T07:05:00Z"}
+                ]}));
+            }
+            let definition: u64 = url
+                .query_pairs()
+                .find(|(k, _)| k == "definitions")
+                .and_then(|(_, v)| v.parse().ok())
+                .unwrap_or(0);
+            Ok(self
+                .runs
+                .get(&definition)
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!({"value": []})))
+        }
+    }
+
+    fn wire_runs(range: std::ops::RangeInclusive<u64>, result: &str) -> serde_json::Value {
+        serde_json::json!({"value": range.map(|i| serde_json::json!({
+            "id": i, "buildNumber": format!("{i}"), "result": result, "sourceBranch": "refs/heads/main",
+            "reason": "schedule", "finishTime": format!("2026-03-01T08:{:02}:00Z", i % 60),
+            "sourceVersion": format!("sha{i}")
+        })).collect::<Vec<_>>()})
+    }
+
+    #[test]
+    fn reads_the_failing_task_from_a_timeline_falling_back_to_its_job() {
+        let timeline = serde_json::json!({"records": [
+            {"type": "Stage", "name": "Pipeline watchdog", "result": "failed", "startTime": "2026-11-25T07:00:50Z"},
+            {"type": "Job", "name": "Detect actionable pipeline failures", "result": "failed", "startTime": "2026-11-25T07:00:50Z"},
+            {"type": "Task", "name": "Later failure", "result": "failed", "startTime": "2026-11-25T07:09:52Z"},
+            {"type": "Task", "name": "Inspect pipeline failures", "result": "failed", "startTime": "2026-11-25T07:02:52.1433333Z"},
+            {"type": "Task", "name": "Checkout", "result": "succeeded", "startTime": "2026-11-25T07:01:00Z"}
+        ]});
+        assert_eq!(
+            failing_step(&timeline).as_deref(),
+            Some("Inspect pipeline failures")
+        );
+        let no_task = serde_json::json!({"records": [
+            {"type": "Stage", "name": "Build", "result": "failed"},
+            {"type": "Job", "name": "Linux", "result": "failed"}
+        ]});
+        assert_eq!(failing_step(&no_task).as_deref(), Some("Linux"));
+        assert_eq!(failing_step(&serde_json::json!({"records": []})), None);
+    }
+
+    /// AT-5: only Daily failures asks for timelines, one per failed run, 20 a
+    /// day; an error is retried on a later pass; nothing is asked twice.
+    #[test]
+    fn step_fetches_are_bounded_retried_and_never_repeated() {
+        let conn = db();
+        let daily = watch(&conn, 1, "CI-Main", PipelineMode::DailyFailures);
+        watch(&conn, 2, "Failures", PipelineMode::Failures);
+        watch(&conn, 3, "Both", PipelineMode::Both);
+        let mut runs = std::collections::HashMap::new();
+        runs.insert(1, wire_runs(1..=25, "failed"));
+        runs.insert(2, wire_runs(101..=103, "failed"));
+        runs.insert(3, wire_runs(201..=203, "failed"));
+        let ado = FakeAdo {
+            runs,
+            steps: [(5, "Integration tests")].into_iter().collect(),
+            fail_once: std::sync::Mutex::new([3].into_iter().collect()),
+            asked: Default::default(),
+        };
+        let all = inbox::targets(&conn).unwrap();
+        let shared = std::sync::Mutex::new(conn);
+        inbox::check_all(&shared, Ok(&ado), &all);
+        let first = ado.timeline_requests();
+        assert_eq!(first.len(), 20, "{first:?}");
+        assert!(
+            first.iter().all(|id| *id <= 25),
+            "only the Daily-failures pipeline"
+        );
+        {
+            let conn = shared.lock().unwrap();
+            let kept = undigested(&conn, &daily).unwrap();
+            assert_eq!(
+                kept.iter()
+                    .filter(|r| r.step_state == "not_fetched")
+                    .count(),
+                5
+            );
+            let errored = kept.iter().find(|r| r.run_id == 3).unwrap();
+            assert_eq!(
+                (errored.step.as_deref(), errored.step_state.as_str()),
+                (None, "pending")
+            );
+            let five = kept.iter().find(|r| r.run_id == 5).unwrap();
+            assert_eq!(
+                (five.step.as_deref(), five.step_state.as_str()),
+                (Some("Integration tests"), "fetched")
+            );
+        }
+        inbox::check_all(&shared, Ok(&ado), &all);
+        assert_eq!(ado.timeline_requests().len(), 21, "one retry");
+        inbox::check_all(&shared, Ok(&ado), &all);
+        assert_eq!(ado.timeline_requests().len(), 21, "never fetched twice");
+        let conn = shared.lock().unwrap();
+        let retried = undigested(&conn, &daily)
+            .unwrap()
+            .into_iter()
+            .find(|r| r.run_id == 3)
+            .unwrap();
+        assert_eq!(retried.step.as_deref(), Some("Run tests"));
+    }
+
+    /// Against real Azure DevOps with your `az login`; run with
+    /// `cargo test --lib real_ado_timeline -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn real_ado_timeline_names_the_failing_step_of_a_failed_run() {
+        let http = crate::pr_inbox::AdoTransport::connect().expect("az login");
+        let mut url = crate::pipeline_inbox::ado_url("skype", "SCC", &["_apis", "build", "builds"]);
+        url.query_pairs_mut()
+            .append_pair("definitions", "33770")
+            .append_pair("resultFilter", "failed")
+            .append_pair("$top", "1");
+        let runs = crate::pipeline_inbox::api_get(&http, url).unwrap();
+        let id = runs["value"][0]["id"].as_u64().expect("a failed run");
+        let timeline = crate::pipeline_inbox::api_get(
+            &http,
+            crate::pipeline_inbox::ado_url(
+                "skype",
+                "SCC",
+                &["_apis", "build", "builds", &id.to_string(), "timeline"],
+            ),
+        )
+        .unwrap();
+        let step = failing_step(&timeline);
+        println!("run {id}: failing step {step:?}");
+        assert!(step.is_some());
     }
 
     #[test]

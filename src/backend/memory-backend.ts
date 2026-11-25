@@ -71,6 +71,8 @@ export interface MemoryPipelineRun {
   repository?: AdoRepoRef | null;
   /** The commit it built. */
   commit?: string;
+  /** The failing step its ADO timeline names (Daily failures fetches it). */
+  step?: string;
 }
 import type { Project, Workstream, Tile, TileType, WorkstreamLayout, CopilotConfigItem } from "../domain/types";
 import type { SessionFileComment } from "../domain/file-comments";
@@ -700,6 +702,24 @@ export class MemoryBackend implements Backend {
     return structuredClone((this.digestRuns.get(watchId) ?? []).filter((r) => r.digest_id === null)
       .map(({ digest_id: _d, fetch_day: _f, ...run }) => run));
   }
+  private stepsByRun = new Map<string, string | null>();
+  private timelineLog: number[] = [];
+  private timelineFailures = new Set<number>();
+  /** Run ids whose timeline was asked for, in order. */
+  timelineRequests(): number[] { return [...this.timelineLog]; }
+  /** Makes the next timeline request for this run fail, as a network error does. */
+  failNextTimeline(runId: number): void { this.timelineFailures.add(runId); }
+  /** As pipeline_digest::fetch_steps on a poll: one request per run waiting for its step. */
+  fetchDigestSteps(): void {
+    for (const [watchId, runs] of this.digestRuns) {
+      for (const run of runs) {
+        if (run.step_state !== "pending" || run.digest_id === "dropped") continue;
+        this.timelineLog.push(run.run_id);
+        if (this.timelineFailures.delete(run.run_id)) continue;
+        Object.assign(run, { step: this.stepsByRun.get(`${watchId}:${run.run_id}`) ?? null, step_state: "fetched" });
+      }
+    }
+  }
   private dropUndigested(watchId: string): void {
     for (const run of this.digestRuns.get(watchId) ?? []) if (run.digest_id === null) run.digest_id = "dropped";
   }
@@ -715,10 +735,12 @@ export class MemoryBackend implements Backend {
         finished_at: run.finished_at, commit: run.commit ?? "", step: null, step_state: "none", digest_id: null, fetch_day: null };
       runs.push(kept);
     }
+    this.stepsByRun.set(`${watchId}:${run.id}`, run.step ?? null);
     if (run.result !== "failed" || kept.step_state !== "none") return;
     const day = localDay(this.digestClock());
     if (runs.filter((r) => r.fetch_day === day).length < STEP_FETCHES_PER_DAY) Object.assign(kept, { step_state: "pending", fetch_day: day });
     else kept.step_state = "not_fetched";
+    this.fetchDigestSteps();
   }
   private pipelineItems: PipelineItem[] = [];
   private pipelineAuthError = false;

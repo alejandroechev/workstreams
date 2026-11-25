@@ -452,7 +452,7 @@ fn save_detected(
 /// `https://dev.azure.com/<org>/<project>/<segments…>`. Requests always go to
 /// dev.azure.com, whatever host the pasted link used, and never follow a URL
 /// the provider returned.
-fn ado_url(organization: &str, project: &str, segments: &[&str]) -> reqwest::Url {
+pub(crate) fn ado_url(organization: &str, project: &str, segments: &[&str]) -> reqwest::Url {
     let mut url = reqwest::Url::parse("https://dev.azure.com/").expect("constant URL");
     url.path_segments_mut()
         .expect("HTTPS base")
@@ -463,7 +463,10 @@ fn ado_url(organization: &str, project: &str, segments: &[&str]) -> reqwest::Url
     url
 }
 
-fn api_get(http: &dyn JsonTransport, mut url: reqwest::Url) -> Result<serde_json::Value, String> {
+pub(crate) fn api_get(
+    http: &dyn JsonTransport,
+    mut url: reqwest::Url,
+) -> Result<serde_json::Value, String> {
     url.query_pairs_mut().append_pair("api-version", "7.1");
     http.get(url).map_err(|error| {
         if error.contains("HTTP 404") {
@@ -1235,6 +1238,11 @@ pub(crate) fn check_all(
             });
         if let Err(error) = saved {
             eprintln!("[pipeline-inbox] Could not save check: {error}");
+        }
+        // A Daily-failures pipeline's new failed runs learn their failing step
+        // (ADR 045); other pipelines never have one waiting.
+        if let Ok(http) = http {
+            crate::pipeline_digest::fetch_steps(db, http, target);
         }
     }
 }
