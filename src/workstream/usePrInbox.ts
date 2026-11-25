@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import type { Backend } from "../backend/types";
 import type { PrInboxSnapshot, PrWatchMode } from "../domain/pr-inbox";
 import type { BranchScope, PipelineMode } from "../domain/pipeline-inbox";
+import type { AutoInvestigate } from "../domain/pipeline-digest";
 
 export function usePrInbox(backend: Backend) {
   const [snapshot, setSnapshot] = useState<PrInboxSnapshot>({ items: [], repos: [], mutes: [] });
@@ -76,6 +77,11 @@ export function usePrInbox(backend: Backend) {
     setRevision((value) => value + 1);
   }, [backend]);
 
+  const setPipelineAutoInvestigate = useCallback(async (id: string, value: AutoInvestigate) => {
+    await backend.setPipelineAutoInvestigate(id, value);
+    setRevision((n) => n + 1);
+  }, [backend]);
+
   /** Mute all (ADR 045): on until turned off or until `until`, or off. */
   const setMute = useCallback(async (muted: boolean, until?: string | null) => {
     await backend.setInboxMute(muted, until);
@@ -103,5 +109,5 @@ export function usePrInbox(backend: Backend) {
   /** Re-reads now, e.g. when an agent posted a message (ADR 041). */
   const refresh = useCallback(() => setRevision((value) => value + 1), []);
 
-  return { snapshot, error, loading, refresh, configure, setRead, mute, resetMutes, addPipeline, setPipelineMode, setPipelineBranches, setPipelineRepo, setDigestTime, setMute, removePipeline, investigate };
+  return { snapshot, error, loading, refresh, configure, setRead, mute, resetMutes, addPipeline, setPipelineMode, setPipelineBranches, setPipelineRepo, setPipelineAutoInvestigate, setDigestTime, setMute, removePipeline, investigate };
 }

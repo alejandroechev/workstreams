@@ -62,3 +62,39 @@ export async function startPendingInvestigations(deps: InvestigationDeps): Promi
     }
   }
 }
+
+export interface FollowUpDeps {
+  backend: Pick<Backend, "pendingInvestigationFollowups" | "markInvestigationSessionStarted" | "listTiles">;
+  /** The tile's agent is mid-turn, as the session poller last said. */
+  isBusy(tileId: string): boolean;
+  /** The session's log has a turn that hasn't ended. */
+  turnOpen(sessionId: string): Promise<boolean>;
+  /** Resumes the session in its tile with the prompt (the shared resume path). */
+  resume(workstreamId: string, tileId: string, prompt: string): Promise<void>;
+  inFlight: Set<string>;
+}
+
+/**
+ * Sends each waiting digest follow-up into its investigation's session
+ * (ADR 045), resuming it in its tile. A session that is mid-turn, or not
+ * linked to one, is skipped: the digest still links to the investigation.
+ * Each follow-up is handled once, whatever happens.
+ */
+export async function deliverFollowUps(deps: FollowUpDeps): Promise<void> {
+  const { backend } = deps;
+  for (const followUp of await backend.pendingInvestigationFollowups()) {
+    if (deps.inFlight.has(followUp.event_id)) continue;
+    deps.inFlight.add(followUp.event_id);
+    try {
+      const tile = (await backend.listTiles(followUp.workstream_id)).find((t) => t.tile_type === "copilot_session");
+      const sessionId = tile ? parseCopilotSessionConfig(tile.config_json).copilot_session_id : null;
+      const busy = !tile || !sessionId || deps.isBusy(tile.id) || (await deps.turnOpen(sessionId).catch(() => true));
+      if (!busy) await deps.resume(followUp.workstream_id, tile.id, followUp.prompt);
+    } catch (error) {
+      console.error("[investigate] Could not send the digest follow-up:", error);
+    } finally {
+      await backend.markInvestigationSessionStarted(followUp.event_id).catch(() => {});
+      deps.inFlight.delete(followUp.event_id);
+    }
+  }
+}

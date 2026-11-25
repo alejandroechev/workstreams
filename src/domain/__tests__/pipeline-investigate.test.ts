@@ -4,6 +4,7 @@ import {
   batchPrompt,
   batchWorkstreamName,
   CONCLUSION_INSTRUCTION,
+  followupPrompt,
   investigationBase,
   investigationBranch,
   investigationName,
@@ -78,5 +79,13 @@ describe("investigating a daily digest as one batch", () => {
     expect(text).toContain("Change nothing until I ask");
     expect(text).toContain(CONCLUSION_INSTRUCTION);
     expect(batchPrompt(digest, { kind: "standalone", repo: "", failure: null })).toContain("Repo: none linked");
+  });
+
+  it("sends an existing investigation only the new runs, with the same rules", () => {
+    const text = followupPrompt(digest);
+    expect(text).toMatch(/^A new daily digest of CI Main: nightly \(project SCC\): 2 of 12 runs failed/);
+    expect(text).toContain("buildId=12");
+    expect(text).toContain("Change nothing until I ask");
+    expect(text).toContain(CONCLUSION_INSTRUCTION);
   });
 });

@@ -120,3 +120,16 @@ Goal: Group the runs by root cause. For each group, say whether it looks flaky (
 
 ${CONCLUSION_INSTRUCTION}`;
 }
+
+/** What an existing investigation is sent when a later digest of its pipeline has new failed runs. */
+export function followupPrompt(digest: PipelineDigest): string {
+  const state = digest.state === "passed_since" ? "the newest run passed since" : "it is still failing";
+  return `A new daily digest of ${digest.pipeline_name} (project ${digest.project}): ${digest.failed} of ${digest.total} runs failed between ${digest.window_start} and ${digest.window_end}; ${state}.
+
+New failed runs:
+${runLines(digest.runs)}
+
+Add them to your investigation: Group the runs by root cause, with the earlier ones; say whether each group looks flaky or broken, and propose fixes. Change nothing until I ask: don't edit code, commit, push or re-run anything.
+
+${CONCLUSION_INSTRUCTION}`;
+}

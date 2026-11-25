@@ -8,6 +8,7 @@ import type { BranchScope, PipelineMode, PipelineStatus } from "../domain/pipeli
 import type { SyncCheck, SyncEvent, SyncMonitorState, SyncProblem, SyncThresholds } from "../domain/sync-monitor";
 import type { InvestigationStarted, PendingInvestigation } from "../domain/pipeline-investigate";
 import type { InboxMuteState } from "../domain/inbox-mute";
+import type { AutoInvestigate } from "../domain/pipeline-digest";
 import type { Change, KtloFeature, OrphanHidden, OrphanReport, PlanningConnection, PlanningData, PlanningState, PublishResult } from "../domain/planning";
 import type { Project, Workstream, Tile, TileType, WorkstreamLayout, CopilotConfigItem } from "../domain/types";
 import type { SessionFileComment } from "../domain/file-comments";
@@ -102,6 +103,12 @@ export interface Backend {
   removePipelineWatch(id: string): Promise<void>;
   /** Sets a pipeline's repo by hand: a repo id, "none", or "auto" to follow what ADO says again. */
   setPipelineWatchRepo(id: string, repo: string): Promise<void>;
+  /** Whether a Daily-failures pipeline's digest also starts its investigation (ADR 045). */
+  setPipelineAutoInvestigate(id: string, value: AutoInvestigate): Promise<void>;
+  /** Starts the investigations auto-investigate asked for (unless muted); returns how many it made. */
+  runAutoInvestigations(): Promise<number>;
+  /** Follow-up prompts for existing investigations, waiting to be sent; marked with markInvestigationSessionStarted. */
+  pendingInvestigationFollowups(): Promise<PendingInvestigation[]>;
   /** Mute all (ADR 045): on, until turned off or until `until` (ISO 8601), or off. */
   setInboxMute(muted: boolean, until?: string | null): Promise<InboxMuteState>;
   /** Sets the global time Daily-failures pipelines post their digest (HH:MM local); returns it. */

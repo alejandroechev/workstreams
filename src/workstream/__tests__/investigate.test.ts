@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { MemoryBackend } from "../../backend/memory-backend";
-import { startPendingInvestigations } from "../investigate";
+import { deliverFollowUps, startPendingInvestigations } from "../investigate";
 
 async function setup() {
   const backend = new MemoryBackend();
@@ -164,5 +164,58 @@ describe("starting investigation sessions", () => {
     expect(d.spawn).not.toHaveBeenCalled();
     expect(d.markSpawned).not.toHaveBeenCalledWith(tile.id);
     expect(await backend.pendingInvestigationSessions()).toEqual([]);
+  });
+});
+
+describe("sending a digest's follow-up into an existing investigation (ADR 045)", () => {
+  async function withFollowUp(linked: string | null) {
+    const backend = new MemoryBackend();
+    let now = new Date(2100, 2, 1, 9, 30);
+    backend.setDigestClock(() => now);
+    backend.seedPipelineDefinition({ organization: "skype", project: "SCC", definition_id: 1, name: "CI-Main" });
+    const watch = await backend.addPipelineWatch("https://dev.azure.com/skype/SCC/_build?definitionId=1", "daily_failures");
+    await backend.setPipelineAutoInvestigate(watch.id, "digest");
+    backend.finishPipelineRun(watch.id, { id: 1, number: "1", result: "failed", branch: "main", finished_at: new Date(2100, 2, 1, 12).toISOString() });
+    now = new Date(2100, 2, 2, 9, 0);
+    backend.runDigestPass();
+    const started = await backend.runAutoInvestigations();
+    expect(started).toBe(1);
+    const ws = (await backend.listWorkstreams())[0];
+    const tile = await backend.createTile(ws.id, "copilot_session", "Investigate", JSON.stringify(linked ? { copilot_session_id: linked } : {}));
+    await backend.markInvestigationSessionStarted((await backend.pendingInvestigationSessions())[0].event_id);
+    backend.finishPipelineRun(watch.id, { id: 2, number: "2", result: "failed", branch: "main", finished_at: new Date(2100, 2, 2, 12).toISOString() });
+    now = new Date(2100, 2, 3, 9, 0);
+    backend.runDigestPass();
+    expect(await backend.pendingInvestigationFollowups()).toHaveLength(1);
+    const deps = {
+      backend,
+      isBusy: vi.fn(() => false),
+      turnOpen: vi.fn(async () => false),
+      resume: vi.fn(async () => {}),
+      inFlight: new Set<string>(),
+    };
+    return { backend, ws, tile, deps };
+  }
+
+  it("resumes the investigation's session with the follow-up, once", async () => {
+    const { backend, ws, tile, deps } = await withFollowUp("session-1");
+    await deliverFollowUps(deps);
+    expect(deps.resume).toHaveBeenCalledWith(ws.id, tile.id, expect.stringContaining("buildId=2"));
+    expect(await backend.pendingInvestigationFollowups()).toEqual([]);
+    await deliverFollowUps(deps);
+    expect(deps.resume).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["mid-turn", { busy: true, open: false, linked: "session-1" }],
+    ["in an open turn", { busy: false, open: true, linked: "session-1" }],
+    ["not linked to a session", { busy: false, open: false, linked: null }],
+  ])("skips a session %s", async (_label, opts) => {
+    const { backend, deps } = await withFollowUp(opts.linked);
+    deps.isBusy.mockReturnValue(opts.busy);
+    deps.turnOpen.mockResolvedValue(opts.open);
+    await deliverFollowUps(deps);
+    expect(deps.resume).not.toHaveBeenCalled();
+    expect(await backend.pendingInvestigationFollowups()).toEqual([]);
   });
 });

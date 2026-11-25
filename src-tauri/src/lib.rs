@@ -1034,6 +1034,62 @@ async fn start_investigation(
     pipeline_investigate::record_subject(&db, &subject, &placement, None, auto)
 }
 
+/// Starts the investigations auto-investigate asked for when it posted a
+/// digest (ADR 045), unless the Inbox is muted meanwhile. One that fails to
+/// start stays asked for and is tried again next time. Returns how many
+/// workstreams it made.
+#[tauri::command]
+async fn run_auto_investigations(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<usize, String> {
+    let (pending, muted) = {
+        let db = state.db.lock().map_err(|e| e.to_string())?;
+        (
+            pipeline_digest::auto_pending(&db)?,
+            inbox_mute::is_muted(&db)?,
+        )
+    };
+    let mut made = 0;
+    for digest in pending {
+        if !muted {
+            match start_investigation(app.clone(), Arc::clone(&state.db), digest.clone(), true)
+                .await
+            {
+                Ok(started) => made += usize::from(started.created),
+                Err(error) => {
+                    eprintln!("[pipeline-digest] Could not auto-investigate a digest: {error}");
+                    continue;
+                }
+            }
+        }
+        let db = state.db.lock().map_err(|e| e.to_string())?;
+        pipeline_digest::clear_auto_pending(&db, &digest)?;
+    }
+    Ok(made)
+}
+
+/// Follow-up prompts for existing investigations, waiting to be sent (ADR 045).
+#[tauri::command]
+fn pipeline_investigation_followups(
+    state: State<'_, AppState>,
+) -> Result<Vec<pipeline_investigate::PendingSession>, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    pipeline_investigate::pending_followups(&db)
+}
+
+/// Whether a Daily-failures pipeline's digest also starts an investigation.
+#[tauri::command]
+fn set_pipeline_auto_investigate(
+    state: State<'_, AppState>,
+    id: String,
+    value: String,
+) -> Result<(), String> {
+    let value = pipeline_digest::AutoInvestigate::parse(&value)?;
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    pipeline_digest::set_auto_investigate(&db, &id, value)
+}
+
 /// Investigations whose Copilot session hasn't been started yet.
 #[tauri::command]
 fn pipeline_investigation_pending(
@@ -6926,6 +6982,9 @@ pub fn run() {
             remove_pipeline_watch,
             set_pipeline_digest_time,
             set_inbox_mute,
+            run_auto_investigations,
+            pipeline_investigation_followups,
+            set_pipeline_auto_investigate,
             set_pr_inbox_read,
             mute_pr_inbox_event,
             reset_pr_inbox_mutes,

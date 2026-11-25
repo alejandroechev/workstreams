@@ -288,3 +288,33 @@ export async function resumeScheduledSession(
   );
   return { sessionId };
 }
+
+export interface FollowUpResumeRequest {
+  workstreamId: string;
+  tileId: string;
+  prompt: string;
+  command: string;
+}
+
+/**
+ * Sends a later digest's new failed runs into an existing investigation
+ * (ADR 045): resumes the session its tile runs with the follow-up as the
+ * prompt, through the same per-tile serialized path as phone messages and
+ * scheduled runs.
+ */
+export async function resumeFollowUpSession(deps: ResumeSessionDeps, request: FollowUpResumeRequest): Promise<{ sessionId: string }> {
+  const sessionId = await resumeTileSession(
+    deps,
+    {
+      workstreamId: request.workstreamId,
+      tileId: request.tileId,
+      prompt: request.prompt,
+      command: request.command,
+      guard: () => {},
+      noticeText: `Daily digest follow-up: ${firstLine(request.prompt)}`,
+      unlinkedError: "The investigation's tile isn't linked to a Copilot session yet, so there is nothing to resume.",
+    },
+    {},
+  );
+  return { sessionId };
+}

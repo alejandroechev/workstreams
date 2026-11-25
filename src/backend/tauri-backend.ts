@@ -9,6 +9,7 @@ import type { BranchScope, PipelineMode, PipelineStatus } from "../domain/pipeli
 import type { SyncCheck, SyncEvent, SyncMonitorState, SyncProblem, SyncThresholds } from "../domain/sync-monitor";
 import type { InvestigationStarted, PendingInvestigation } from "../domain/pipeline-investigate";
 import type { InboxMuteState } from "../domain/inbox-mute";
+import type { AutoInvestigate } from "../domain/pipeline-digest";
 import type { Change, KtloFeature, OrphanHidden, OrphanReport, PlanningConnection, PlanningData, PlanningState, PublishResult } from "../domain/planning";
 import type { Project, Workstream, Tile, TileType, WorkstreamLayout, CopilotConfigItem } from "../domain/types";
 import type { SessionFileComment } from "../domain/file-comments";
@@ -171,6 +172,18 @@ export class TauriBackend implements Backend {
 
   async markInvestigationSessionStarted(eventId: string): Promise<void> {
     await invoke("pipeline_investigation_session_started", { eventId });
+  }
+
+  async setPipelineAutoInvestigate(id: string, value: AutoInvestigate): Promise<void> {
+    await invoke("set_pipeline_auto_investigate", { id, value });
+  }
+
+  async runAutoInvestigations(): Promise<number> {
+    return invoke<number>("run_auto_investigations");
+  }
+
+  async pendingInvestigationFollowups(): Promise<PendingInvestigation[]> {
+    return invoke<PendingInvestigation[]>("pipeline_investigation_followups");
   }
 
   async setInboxMute(muted: boolean, until?: string | null): Promise<InboxMuteState> {

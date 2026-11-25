@@ -581,6 +581,7 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
             newest_result TEXT NOT NULL,
             is_read INTEGER NOT NULL DEFAULT 0,
             auto_pending INTEGER NOT NULL DEFAULT 0,
+            auto_requested_at TEXT,
             created_at TEXT NOT NULL
         );
 
@@ -699,6 +700,9 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
         "ALTER TABLE pipeline_investigations ADD COLUMN watch_id TEXT",
         "ALTER TABLE pipeline_investigations ADD COLUMN auto INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE pipeline_investigations ADD COLUMN followup INTEGER NOT NULL DEFAULT 0",
+        // When a digest asked to start its investigation by itself: the rolling
+        // 24-hour cap of auto-started investigations counts these.
+        "ALTER TABLE pipeline_digests ADD COLUMN auto_requested_at TEXT",
         // Periodic schedules (ADR 044): when Run now was asked, and a revision
         // the runner claims runs against.
         "ALTER TABLE periodic_schedules ADD COLUMN run_requested_at INTEGER",

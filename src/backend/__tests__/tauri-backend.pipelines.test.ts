@@ -39,4 +39,16 @@ describe("TauriBackend pipelines", () => {
       ["set_inbox_mute", { muted: false, until: null }],
     ]);
   });
+
+  it("sets auto-investigate, runs the asked-for investigations and reads follow-ups natively", async () => {
+    invoke.mockResolvedValue(0);
+    await backend.setPipelineAutoInvestigate("p1", "digest");
+    await backend.runAutoInvestigations();
+    await backend.pendingInvestigationFollowups();
+    expect(invoke.mock.calls).toEqual([
+      ["set_pipeline_auto_investigate", { id: "p1", value: "digest" }],
+      ["run_auto_investigations"],
+      ["pipeline_investigation_followups"],
+    ]);
+  });
 });

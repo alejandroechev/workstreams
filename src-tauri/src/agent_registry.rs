@@ -622,6 +622,14 @@ pub const COMMANDS: &[Command] = &[
         handler: inbox_mute_all_off,
     },
     Command {
+        id: "inbox.pipeline_auto_investigate",
+        log_params: &["pipeline", "value"],
+        summary: "Whether a Daily-failures pipeline's daily digest also starts its batch investigation (params: pipeline = its id, value=off|digest); refused for a pipeline in any other mode. An existing investigation gets the new runs as a follow-up instead; at most 3 new ones start in any 24 hours",
+        requires_identity: true,
+        destructive: false,
+        handler: inbox_pipeline_auto_investigate,
+    },
+    Command {
         id: "inbox.digest_time",
         log_params: &["time"],
         summary: "Read or set the global time Daily-failures pipelines post their digest (params: time=HH:MM, 24-hour local; omit to read; default 09:00)",
@@ -1090,6 +1098,26 @@ fn inbox_investigate(
     Ok(CommandOutcome::changed(
         serde_json::json!(started),
         StateChange::new("pipeline_investigation", &started.workstream_id, "started"),
+    ))
+}
+
+fn inbox_pipeline_auto_investigate(
+    context: &CommandContext,
+    params: &serde_json::Value,
+) -> Result<CommandOutcome, AgentError> {
+    let id = required_str(params, "pipeline")?;
+    let value = crate::pipeline_digest::AutoInvestigate::parse(&required_str(params, "value")?)
+        .map_err(|e| AgentError::new("INVALID_PARAM", e, "Pass value=off or value=digest."))?;
+    crate::pipeline_digest::set_auto_investigate(context.db, &id, value).map_err(|e| {
+        AgentError::new(
+            "INBOX_ERROR",
+            e,
+            "Set the pipeline to Daily failures first: inbox.pipeline_mode id=<pipeline> mode=daily_failures.",
+        )
+    })?;
+    Ok(CommandOutcome::changed(
+        serde_json::json!({"id": id, "auto_investigate": value}),
+        StateChange::new("pr_inbox", id, "pipeline_auto_investigate"),
     ))
 }
 
@@ -6222,6 +6250,57 @@ mod tests {
             .as_array()
             .unwrap()
             .is_empty());
+    }
+
+    #[test]
+    fn auto_investigate_is_set_through_the_agent_channel_only_in_daily_failures() {
+        let db = memory_db();
+        let caller = agent("tile-1", "ws-own");
+        let daily = call(&db, &caller, "inbox.pipeline_add",
+            serde_json::json!({"url":"https://dev.azure.com/skype/SCC/_build?definitionId=1","mode":"daily_failures"})).unwrap();
+        let other = call(
+            &db,
+            &caller,
+            "inbox.pipeline_add",
+            serde_json::json!({"url":"https://dev.azure.com/skype/SCC/_build?definitionId=2"}),
+        )
+        .unwrap();
+        let set = call(
+            &db,
+            &caller,
+            "inbox.pipeline_auto_investigate",
+            serde_json::json!({"pipeline": daily.data["id"], "value": "digest"}),
+        )
+        .unwrap();
+        assert_eq!(set.data["auto_investigate"], "digest");
+        let refused = call(
+            &db,
+            &caller,
+            "inbox.pipeline_auto_investigate",
+            serde_json::json!({"pipeline": other.data["id"], "value": "digest"}),
+        )
+        .unwrap_err();
+        assert!(
+            refused.message.contains("Daily failures"),
+            "{}",
+            refused.message
+        );
+        let bad = call(
+            &db,
+            &caller,
+            "inbox.pipeline_auto_investigate",
+            serde_json::json!({"pipeline": daily.data["id"], "value": "first"}),
+        )
+        .unwrap_err();
+        assert_eq!(bad.code, "INVALID_PARAM");
+        let listed = call(&db, &caller, "inbox.pipelines", serde_json::Value::Null).unwrap();
+        let rows = listed.data.as_array().unwrap();
+        assert!(rows
+            .iter()
+            .any(|r| r["mode"] == "daily_failures" && r["auto_investigate"] == "digest"));
+        assert!(rows
+            .iter()
+            .any(|r| r["mode"] == "failures" && r["auto_investigate"] == "off"));
     }
 
     #[test]

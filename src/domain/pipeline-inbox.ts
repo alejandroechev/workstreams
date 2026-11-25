@@ -1,4 +1,5 @@
 import { countUnreadPrs, parseAdoRemote, type PrInboxItem } from "./pr-inbox";
+import type { AutoInvestigate } from "./pipeline-digest";
 
 /**
  * Which finished runs of a watched pipeline notify (ADR 038). Mirrors the
@@ -148,6 +149,8 @@ export interface PipelineStatus {
   repo_source: "auto" | "manual";
   /** The repo chip's text, or null for no repo. */
   repo_label: string | null;
+  /** Whether its daily digest also starts an investigation (ADR 045); only in Daily failures. */
+  auto_investigate?: AutoInvestigate;
 }
 
 /** One notification: a run that finished with a result its pipeline's mode watches. */

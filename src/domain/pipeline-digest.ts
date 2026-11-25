@@ -11,6 +11,13 @@ export const DEFAULT_DIGEST_TIME = "09:00";
 export const STEP_FETCHES_PER_DAY = 20;
 /** The longest gap one digest covers. */
 export const MAX_WINDOW_DAYS = 7;
+/** New auto-started investigations allowed in any rolling 24 hours. */
+export const AUTO_STARTS_PER_DAY = 3;
+
+/** Whether a Daily-failures pipeline's digest also starts its investigation. */
+export type AutoInvestigate = "off" | "digest";
+
+export const AUTO_INVESTIGATE_LABELS: Record<AutoInvestigate, string> = { off: "Off", digest: "With digest" };
 
 /** Whether the failing step of a failed run is known, coming, or won't be fetched. */
 export type StepState = "none" | "pending" | "fetched" | "not_fetched";

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { resumePhoneSession, resumeScheduledSession, type ResumeSessionDeps } from "../resume-session";
+import { resumeFollowUpSession, resumePhoneSession, resumeScheduledSession, type ResumeSessionDeps } from "../resume-session";
 import { linkRevision } from "../link-revision";
 import { MemoryBackend } from "../../backend/memory-backend";
 
@@ -391,5 +391,21 @@ describe("a scheduled resume names the session it launches (round 3, finding 2)"
     });
     expect(launched).toEqual({ sessionId: "session-s" });
     expect(revalidate.mock.calls).toEqual([["before-stop", "session-s"], ["before-spawn", "session-s"]]);
+  });
+});
+
+describe("resuming an investigation with a digest's follow-up (ADR 045)", () => {
+  it("stops the session and resumes it in its tile with the follow-up, recording nothing for the phone", async () => {
+    const { backend, ws, tile, deps, log } = await setup();
+    await resumeFollowUpSession(deps, { workstreamId: ws.id, tileId: tile.id, prompt: "A new daily digest of CI-Main\nNew failed runs", command: "copilot" });
+    expect(log).toEqual([
+      "mount:ws:marked",
+      "notice:Daily digest follow-up: A new daily digest of CI-Main",
+      "intentional",
+      "stop",
+      "clear:session-s",
+      "spawn:/repo/alpha/sub:copilot:session-s:A new daily digest of CI-Main\nNew failed runs",
+    ]);
+    expect(await backend.companionListSessions()).toEqual([]);
   });
 });

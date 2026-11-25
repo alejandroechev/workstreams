@@ -578,6 +578,8 @@ pub struct PipelineStatus {
     /// What the repo chip says: a repo name ("+N" for more), ADO's repo when
     /// none matches, or nothing.
     pub repo_label: Option<String>,
+    /// Whether its daily digest also starts an investigation (ADR 045).
+    pub auto_investigate: crate::pipeline_digest::AutoInvestigate,
 }
 
 /// One notification: a run that finished with a result the mode watches.
@@ -679,7 +681,8 @@ pub fn set_mode(db: &Connection, id: &str, mode: PipelineMode) -> Result<(), Str
         .execute(
             &format!(
                 "UPDATE pipeline_watches SET mode=?2, notify_after={NOW}, revision=revision+1, error=NULL,
-                digest_since=CASE WHEN ?2='daily_failures' THEN {NOW} END WHERE id=?1"
+                digest_since=CASE WHEN ?2='daily_failures' THEN {NOW} END,
+                auto_investigate=CASE WHEN ?2='daily_failures' THEN auto_investigate ELSE 'off' END WHERE id=?1"
             ),
             params![id, mode.as_str()],
         )
@@ -731,7 +734,7 @@ pub fn list(db: &Connection) -> Result<Vec<PipelineStatus>, String> {
     let mut stmt = db
         .prepare(
             "SELECT id,organization,project_name,definition_id,name,mode,last_result,last_run_number,
-            last_run_id,last_finished_at,last_checked,error,ado_repo,repo_override,branches,default_branch
+            last_run_id,last_finished_at,last_checked,error,ado_repo,repo_override,branches,default_branch,auto_investigate
             FROM pipeline_watches ORDER BY name COLLATE NOCASE, id",
         )
         .map_err(|e| e.to_string())?;
@@ -769,6 +772,10 @@ pub fn list(db: &Connection) -> Result<Vec<PipelineStatus>, String> {
                     auto_repos: Vec::new(),
                     repo_source: "auto".into(),
                     repo_label: None,
+                    auto_investigate: crate::pipeline_digest::AutoInvestigate::parse(
+                        &r.get::<_, String>(16)?,
+                    )
+                    .unwrap_or(crate::pipeline_digest::AutoInvestigate::Off),
                 },
             ))
         })

@@ -29,8 +29,11 @@ import {
   batchBranchName,
   batchPrompt,
   batchWorkstreamName,
+  followupPrompt,
 } from "../domain/pipeline-investigate";
 import {
+  AUTO_STARTS_PER_DAY,
+  type AutoInvestigate,
   DEFAULT_DIGEST_TIME,
   isDigestTime,
   lastSlot,
@@ -743,7 +746,7 @@ export class MemoryBackend implements Backend {
   }
   private digestTime = DEFAULT_DIGEST_TIME;
   private digests: Array<{ id: string; watch_id: string; window_start: string; window_end: string; total: number; failed: number;
-    newest_result: string; is_read: boolean; created_at: string; auto_pending: boolean }> = [];
+    newest_result: string; is_read: boolean; created_at: string; auto_pending: boolean; auto_requested_at?: number }> = [];
   /** Posts a digest to the store (E2E seam): `pipeline_digests` and the time setting come back on the snapshot. */
   async setPipelineDigestTime(time: string): Promise<string> {
     if (!isDigestTime(time)) throw new Error(`The digest time must be HH:MM (24-hour); got "${time}"`);
@@ -777,12 +780,59 @@ export class MemoryBackend implements Backend {
         this.digests.push({ id, watch_id: watch.status.id, window_start: start.toISOString(), window_end: now.toISOString(),
           total: runs.length, failed, newest_result: runs[runs.length - 1].result, is_read: false, created_at: now.toISOString(), auto_pending: false });
         for (const run of runs) run.digest_id = id;
+        this.afterDigest(watch.status.id, id, now);
         posted.push(id);
       }
       this.dropUndigested(watch.status.id);
       watch.digestSince = now.toISOString();
     }
     return posted;
+  }
+  /** As pipeline_digest::after_digest: follow up an existing investigation, or ask for a new one within the cap. */
+  private afterDigest(watchId: string, digestId: string, now: Date): void {
+    const watch = this.pipelineWatches.find((w) => w.status.id === watchId);
+    if (watch?.status.auto_investigate !== "digest") return;
+    const existing = [...this.investigationMeta.entries()]
+      .filter(([id, meta]) => meta.watch_id === watchId && !meta.followup && this.workstreams.has(this.investigations.get(id)?.workstream_id ?? ""))
+      .sort((a, b) => b[1].created_at - a[1].created_at)[0];
+    if (existing) {
+      const digest = this.digestSnapshot().find((d) => d.id === digestId)!;
+      const ws = this.investigations.get(existing[0])!;
+      this.investigations.set(digestId, { event_id: digestId, workstream_id: ws.workstream_id, directory: ws.directory, prompt: followupPrompt(digest), started: false });
+      this.investigationMeta.set(digestId, { watch_id: watchId, auto: false, followup: true, created_at: now.getTime() });
+      return;
+    }
+    const dayAgo = now.getTime() - 24 * 60 * 60 * 1000;
+    const started = this.digests.filter((d) => d.auto_requested_at !== undefined && d.auto_requested_at > dayAgo).length;
+    if (started >= AUTO_STARTS_PER_DAY) return;
+    const digest = this.digests.find((d) => d.id === digestId)!;
+    Object.assign(digest, { auto_pending: true, auto_requested_at: now.getTime() });
+  }
+  async setPipelineAutoInvestigate(id: string, value: AutoInvestigate): Promise<void> {
+    const watch = this.pipelineWatches.find((w) => w.status.id === id);
+    if (!watch) throw new Error("That pipeline isn't watched");
+    if (watch.status.mode !== "daily_failures") {
+      throw new Error("Auto-investigate can only be set for a pipeline in Daily failures mode; switch its mode to daily_failures first");
+    }
+    watch.status.auto_investigate = value;
+  }
+  /** As the native run_auto_investigations: starts each investigation a digest asked for, unless muted. */
+  async runAutoInvestigations(): Promise<number> {
+    const muted = this.isInboxMuted();
+    let made = 0;
+    for (const digest of this.digests.filter((d) => d.auto_pending)) {
+      if (!muted) {
+        const shown = this.digestSnapshot().find((d) => d.id === digest.id);
+        if (shown && (await this.makeBatchInvestigation(shown, true)).created) made += 1;
+      }
+      digest.auto_pending = false;
+    }
+    return made;
+  }
+  async pendingInvestigationFollowups(): Promise<PendingInvestigation[]> {
+    return [...this.investigations.values()]
+      .filter((i) => !i.started && this.investigationMeta.get(i.event_id)?.followup && this.workstreams.has(i.workstream_id))
+      .map(({ started: _started, ...rest }) => ({ ...rest }));
   }
   private digestSnapshot(): PipelineDigest[] {
     return [...this.digests].reverse().flatMap((d) => {
@@ -1018,7 +1068,7 @@ export class MemoryBackend implements Backend {
 
   async pendingInvestigationSessions(): Promise<PendingInvestigation[]> {
     return [...this.investigations.values()]
-      .filter((i) => !i.started && this.workstreams.has(i.workstream_id))
+      .filter((i) => !i.started && !this.investigationMeta.get(i.event_id)?.followup && this.workstreams.has(i.workstream_id))
       .map(({ started: _started, ...rest }) => ({ ...rest }));
   }
 
@@ -1086,7 +1136,7 @@ export class MemoryBackend implements Backend {
       last_finished_at: last?.finished_at ?? null,
       last_checked: new Date().toISOString(),
       error: null,
-      ado_repo: null, repos: [], auto_repos: [], repo_source: "auto", repo_label: null,
+      ado_repo: null, repos: [], auto_repos: [], repo_source: "auto", repo_label: null, auto_investigate: "off",
     };
     const at = this.digestClock().toISOString();
     const watch = { status, notifyAfter: at, adoRepo: definition.repository ?? null, override: null, digestSince: mode === "daily_failures" ? at : null };
@@ -1099,6 +1149,7 @@ export class MemoryBackend implements Backend {
     const watch = this.pipelineWatches.find((w) => w.status.id === id);
     if (!watch) throw new Error("That pipeline isn't watched");
     watch.status.mode = mode;
+    if (mode !== "daily_failures") watch.status.auto_investigate = "off";
     watch.notifyAfter = this.digestClock().toISOString();
     watch.digestSince = mode === "daily_failures" ? watch.notifyAfter : null;
     this.dropUndigested(id);

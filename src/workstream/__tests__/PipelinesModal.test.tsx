@@ -55,6 +55,17 @@ describe("Pipelines manager", () => {
     expect(props.onSetMode).toHaveBeenCalledWith("p1", "daily_failures");
   });
 
+  it("offers Auto-investigate only to Daily-failures pipelines", async () => {
+    const onSetAutoInvestigate = vi.fn().mockResolvedValue(undefined);
+    setup([pipeline({ id: "p1", mode: "daily_failures", auto_investigate: "off" }), pipeline({ id: "p2", mode: "failures" })], { onSetAutoInvestigate });
+    const daily = screen.getByTestId("pipeline-auto-p1");
+    expect([...daily.querySelectorAll("option")].map((o) => o.textContent)).toEqual(["Off", "With digest"]);
+    expect(daily).toBeEnabled();
+    expect(screen.getByTestId("pipeline-auto-p2")).toBeDisabled();
+    fireEvent.change(daily, { target: { value: "digest" } });
+    await waitFor(() => expect(onSetAutoInvestigate).toHaveBeenCalledWith("p1", "digest"));
+  });
+
   it("sets the one digest time in the header", async () => {
     const onSetDigestTime = vi.fn().mockResolvedValue(undefined);
     setup([pipeline({ mode: "daily_failures" })], { digestTime: "09:00", onSetDigestTime });

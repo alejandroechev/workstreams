@@ -222,6 +222,140 @@ pub fn last_slot(clock: &Clock, time: NaiveTime) -> DateTime<Utc> {
     clock.now - Duration::days(1)
 }
 
+// ── Auto-investigate ────────────────────────────────────────────────────
+
+/// New auto-started investigations allowed in any rolling 24 hours.
+pub const AUTO_STARTS_PER_DAY: i64 = 3;
+
+/// Whether a Daily-failures pipeline's digest also starts its investigation.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum AutoInvestigate {
+    Off,
+    Digest,
+}
+
+impl AutoInvestigate {
+    pub fn parse(value: &str) -> Result<Self, String> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "off" | "none" => Ok(Self::Off),
+            "digest" | "with_digest" | "on" => Ok(Self::Digest),
+            other => Err(format!(
+                "Unknown auto-investigate setting '{other}'; expected off or digest"
+            )),
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Digest => "digest",
+        }
+    }
+}
+
+/// Sets a pipeline's auto-investigate; only a Daily-failures pipeline has one.
+pub fn set_auto_investigate(
+    db: &Connection,
+    watch_id: &str,
+    value: AutoInvestigate,
+) -> Result<(), String> {
+    let mode: Option<String> = db
+        .query_row(
+            "SELECT mode FROM pipeline_watches WHERE id=?1",
+            [watch_id],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+    match mode.as_deref() {
+        None => Err("That pipeline isn't watched".into()),
+        Some("daily_failures") => db
+            .execute(
+                "UPDATE pipeline_watches SET auto_investigate=?2 WHERE id=?1",
+                params![watch_id, value.as_str()],
+            )
+            .map(|_| ())
+            .map_err(|e| e.to_string()),
+        Some(_) => Err(
+            "Auto-investigate can only be set for a pipeline in Daily failures mode; switch its mode to daily_failures first"
+                .into(),
+        ),
+    }
+}
+
+/// After a digest is posted, for a pipeline that auto-investigates: its
+/// existing investigation gets the new failed runs as a follow-up prompt;
+/// otherwise a new one is asked for, unless 3 were in the last 24 hours.
+fn after_digest(
+    db: &Connection,
+    watch_id: &str,
+    digest_id: &str,
+    clock: &Clock,
+) -> Result<(), String> {
+    let auto: String = db
+        .query_row(
+            "SELECT auto_investigate FROM pipeline_watches WHERE id=?1",
+            [watch_id],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    if AutoInvestigate::parse(&auto) != Ok(AutoInvestigate::Digest) {
+        return Ok(());
+    }
+    if let Some(workstream) = crate::pipeline_investigate::pipeline_investigation(db, watch_id)? {
+        let digest = digests(db)?
+            .into_iter()
+            .find(|d| d.id == digest_id)
+            .ok_or("The digest was not stored")?;
+        db.execute(
+            "INSERT OR REPLACE INTO pipeline_investigations (event_id, workstream_id, prompt, session_started, created_at, watch_id, followup)
+            VALUES (?1, ?2, ?3, 0, ?4, ?5, 1)",
+            params![digest_id, workstream, crate::pipeline_investigate::followup_prompt(&digest), clock.stamp(), watch_id],
+        )
+        .map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+    let started: i64 = db
+        .query_row(
+            "SELECT COUNT(*) FROM pipeline_digests WHERE auto_requested_at IS NOT NULL
+            AND julianday(auto_requested_at) > julianday(?1) - 1",
+            [clock.stamp()],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    if started < AUTO_STARTS_PER_DAY {
+        db.execute(
+            "UPDATE pipeline_digests SET auto_pending=1, auto_requested_at=?2 WHERE id=?1",
+            params![digest_id, clock.stamp()],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+/// Digests whose investigation auto-investigate asked for and the app hasn't
+/// started yet, oldest first.
+pub fn auto_pending(db: &Connection) -> Result<Vec<String>, String> {
+    let mut stmt = db
+        .prepare("SELECT id FROM pipeline_digests WHERE auto_pending=1 ORDER BY created_at, rowid")
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |r| r.get(0))
+        .map_err(|e| e.to_string())?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())
+}
+
+pub fn clear_auto_pending(db: &Connection, digest_id: &str) -> Result<(), String> {
+    db.execute(
+        "UPDATE pipeline_digests SET auto_pending=0 WHERE id=?1",
+        [digest_id],
+    )
+    .map(|_| ())
+    .map_err(|e| e.to_string())
+}
+
 // ── Posting digests ─────────────────────────────────────────────────────
 
 /// What a due digest pass did for one pipeline.
@@ -291,6 +425,7 @@ pub fn run_due(db: &Connection, clock: &Clock) -> Result<Vec<Posted>, String> {
                 .map_err(|e| e.to_string())?;
             }
             drop_undigested(&tx, &watch_id)?;
+            after_digest(&tx, &watch_id, &id, clock)?;
             posted.push(Posted {
                 digest_id: id,
                 watch_id: watch_id.clone(),
@@ -911,6 +1046,134 @@ pub(crate) mod tests {
         let step = failing_step(&timeline);
         println!("run {id}: failing step {step:?}");
         assert!(step.is_some());
+    }
+
+    // ── Auto-investigate ──
+
+    fn auto(db: &Connection, id: &str) {
+        set_auto_investigate(db, id, AutoInvestigate::Digest).unwrap();
+    }
+
+    #[test]
+    fn auto_investigate_is_only_for_daily_failures_and_resets_on_leaving_it() {
+        let db = db();
+        let daily = watch(&db, 1, "CI-Main", PipelineMode::DailyFailures);
+        let other = watch(&db, 2, "B", PipelineMode::Failures);
+        let refused = set_auto_investigate(&db, &other, AutoInvestigate::Digest).unwrap_err();
+        assert!(refused.contains("Daily failures"), "{refused}");
+        assert!(set_auto_investigate(&db, "nope", AutoInvestigate::Off).is_err());
+        auto(&db, &daily);
+        let listed = inbox::list(&db).unwrap();
+        let row = |id: &str| listed.iter().find(|p| p.id == id).unwrap().auto_investigate;
+        assert_eq!(
+            (row(&daily), row(&other)),
+            (AutoInvestigate::Digest, AutoInvestigate::Off)
+        );
+        inbox::set_mode(&db, &daily, PipelineMode::Both).unwrap();
+        assert_eq!(
+            inbox::list(&db)
+                .unwrap()
+                .iter()
+                .find(|p| p.id == daily)
+                .unwrap()
+                .auto_investigate,
+            AutoInvestigate::Off
+        );
+        assert_eq!(
+            AutoInvestigate::parse("digest").unwrap(),
+            AutoInvestigate::Digest
+        );
+        assert!(AutoInvestigate::parse("first").is_err());
+    }
+
+    /// AT-7/AT-8: an existing investigation gets a follow-up instead of a new
+    /// one; at most 3 new ones start in a rolling 24 h; nothing while muted.
+    #[test]
+    fn a_digest_starts_or_follows_up_investigations_within_the_daily_cap() {
+        let db = db();
+        let zone = TestZone::fixed(-3);
+        let ids: Vec<String> = (1..=5)
+            .map(|n| watch(&db, n, &format!("P{n}"), PipelineMode::DailyFailures))
+            .collect();
+        for (n, id) in ids.iter().enumerate() {
+            auto(&db, id);
+            since(&db, id, "2026-03-01T12:00:00.000Z");
+            finish(
+                &db,
+                id,
+                &[run(n as u64 * 10 + 1, "failed", "2026-03-01T15:00:00Z")],
+            );
+        }
+        // P1 already has an investigation workstream, from an earlier digest.
+        db.execute(
+            "INSERT INTO workstreams (id, name, created_at, updated_at) VALUES ('ws-p1', 'Investigate P1', 't', 't')",
+            [],
+        )
+        .unwrap();
+        db.execute(
+            "INSERT INTO pipeline_investigations (event_id, workstream_id, prompt, session_started, created_at, watch_id)
+            VALUES ('old-digest', 'ws-p1', 'p', 1, '2026-02-28T12:00:00Z', ?1)",
+            [&ids[0]],
+        )
+        .unwrap();
+        let posted = run_due(&db, &local_clock(&zone, "2026-03-02 09:00")).unwrap();
+        assert_eq!(posted.len(), 5);
+        let all = digests(&db).unwrap();
+        let of = |name: &str| all.iter().find(|d| d.pipeline_name == name).unwrap();
+        assert_eq!(
+            of("P1").investigation.as_deref(),
+            Some("ws-p1"),
+            "links to the existing one"
+        );
+        assert!(!of("P1").auto_pending);
+        let followups = crate::pipeline_investigate::pending_followups(&db).unwrap();
+        assert_eq!(followups.len(), 1);
+        assert_eq!(followups[0].workstream_id, "ws-p1");
+        assert!(
+            followups[0].prompt.contains("buildId=1"),
+            "{}",
+            followups[0].prompt
+        );
+        assert!(followups[0].prompt.contains("Change nothing until I ask"));
+        let pending: Vec<&str> = all
+            .iter()
+            .filter(|d| d.auto_pending)
+            .map(|d| d.pipeline_name.as_str())
+            .collect();
+        assert_eq!(pending.len(), 3, "{pending:?}");
+        assert_eq!(auto_pending(&db).unwrap().len(), 3);
+
+        // A day later the cap has room again; muted, nothing starts.
+        for id in &ids {
+            finish(
+                &db,
+                id,
+                &[run(900 + id.len() as u64, "failed", "2026-03-02T15:00:00Z")],
+            );
+        }
+        crate::inbox_mute::mute_at(&db, None, at("2026-03-02T16:00:00Z")).unwrap();
+        assert!(run_due(&db, &local_clock(&zone, "2026-03-03 09:00"))
+            .unwrap()
+            .is_empty());
+        crate::inbox_mute::unmute_at(&db, at("2026-03-03T13:00:00Z")).unwrap();
+        let left_out = all
+            .iter()
+            .find(|d| d.pipeline_name != "P1" && !d.auto_pending)
+            .unwrap()
+            .pipeline_id
+            .clone();
+        finish(
+            &db,
+            &left_out,
+            &[run(999, "failed", "2026-03-03T15:00:00Z")],
+        );
+        run_due(&db, &local_clock(&zone, "2026-03-04 09:00")).unwrap();
+        let newest = digests(&db)
+            .unwrap()
+            .into_iter()
+            .find(|d| d.pipeline_id == left_out)
+            .unwrap();
+        assert!(newest.auto_pending, "more than 24 h after the first three");
     }
 
     // ── The digest ──

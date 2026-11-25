@@ -630,6 +630,59 @@ Change nothing until I ask: don't edit code, commit, push or re-run anything; re
 /// How an investigation reports back (as ADR 044's notify-in-Inbox instruction).
 pub const CONCLUSION_INSTRUCTION: &str = "When you are done, use the ws-message skill to send me one message in the Workstreams Inbox with your conclusion: the groups, flaky or broken, and the fixes you propose.";
 
+/// What an existing investigation is sent when a later digest of its
+/// pipeline has new failed runs.
+pub fn followup_prompt(digest: &crate::pipeline_digest::PipelineDigest) -> String {
+    let state = if digest.state == "passed_since" {
+        "the newest run passed since"
+    } else {
+        "it is still failing"
+    };
+    format!(
+        "A new daily digest of {name} (project {project}): {failed} of {total} runs failed between {start} and {end}; {state}.
+
+New failed runs:
+{runs}
+
+Add them to your investigation: Group the runs by root cause, with the earlier ones; say whether each group looks flaky or broken, \
+and propose fixes. Change nothing until I ask: don't edit code, commit, push or re-run anything.
+
+{inbox}",
+        name = digest.pipeline_name,
+        project = digest.project,
+        failed = digest.failed,
+        total = digest.total,
+        start = digest.window_start,
+        end = digest.window_end,
+        runs = run_lines(&digest.runs),
+        inbox = CONCLUSION_INSTRUCTION,
+    )
+}
+
+/// Follow-up prompts waiting to be sent into an existing investigation's
+/// session (`event_id` is the digest). Marked started once sent or skipped.
+pub fn pending_followups(db: &Connection) -> Result<Vec<PendingSession>, String> {
+    let mut stmt = db
+        .prepare(
+            "SELECT i.event_id, i.workstream_id, COALESCE(w.directory, ''), i.prompt
+            FROM pipeline_investigations i JOIN workstreams w ON w.id = i.workstream_id
+            WHERE i.session_started = 0 AND i.followup = 1 ORDER BY i.created_at",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok(PendingSession {
+                event_id: r.get(0)?,
+                workstream_id: r.get(1)?,
+                directory: r.get(2)?,
+                prompt: r.get(3)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())
+}
+
 /// The investigation workstream of a pipeline's digests that still exists,
 /// newest first: later digests follow up in it.
 pub fn pipeline_investigation(db: &Connection, watch_id: &str) -> Result<Option<String>, String> {

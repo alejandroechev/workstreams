@@ -13,7 +13,7 @@ import { fileBufferRegistry } from "./files/FileBufferRegistry";
 import WorkstreamSidebar from "./workstream/WorkstreamSidebar";
 import { usePrInbox } from "./workstream/usePrInbox";
 import { PrInboxModal } from "./workstream/PrInboxModal";
-import { startPendingInvestigations } from "./workstream/investigate";
+import { deliverFollowUps, startPendingInvestigations } from "./workstream/investigate";
 import type { AgentMessage } from "./domain/agent-messages";
 import { revealTile } from "./tiling/reveal-tile";
 import { SyncPanel } from "./sync-monitor/SyncPanel";
@@ -77,7 +77,7 @@ import type { LoopSummary } from "./domain/loop";
 import { countUnreadInbox } from "./domain/pipeline-inbox";
 import { isCompanionEnabled, useCompanionService } from "./companion/useCompanionService";
 import { startPhoneSession } from "./companion/start-session";
-import { resumePhoneSession, resumeScheduledSession, type ResumeSessionDeps } from "./companion/resume-session";
+import { resumeFollowUpSession, resumePhoneSession, resumeScheduledSession, type ResumeSessionDeps } from "./companion/resume-session";
 import { useSchedules, type ScheduleDraft } from "./schedules/useSchedules";
 import { ScheduleEditor } from "./schedules/ScheduleEditor";
 import { SchedulesModal } from "./schedules/SchedulesModal";
@@ -2305,6 +2305,39 @@ export default function App() {
     }),
     [backend, mountWorkstream],
   );
+  // ── Daily digest auto-investigations (ADR 045) ─────────────────────────
+  // The poller posts digests natively; the app starts what they asked for:
+  // new investigations (in the background, as Investigate does) and
+  // follow-ups into existing ones, through the shared resume path.
+  const followUpsInFlight = useRef<Set<string>>(new Set());
+  const digestWork = useRef(false);
+  const digests = inbox.snapshot.pipeline_digests;
+  const refreshInbox = inbox.refresh;
+  useEffect(() => {
+    if (!digests?.length || digestWork.current) return;
+    digestWork.current = true;
+    void (async () => {
+      if (digests.some((d) => d.auto_pending) && (await backend.runAutoInvestigations()) > 0) {
+        const list = await backend.listWorkstreams();
+        workstreamsRef.current = list;
+        setWorkstreams(list);
+        await startInvestigationSessions();
+        refreshInbox();
+      }
+      await deliverFollowUps({
+        backend,
+        isBusy: isTileBusy,
+        turnOpen: async (sessionId) => !!(await backend.sessionTurnState(sessionId))?.open,
+        resume: async (workstreamId, tileId, prompt) => {
+          await resumeFollowUpSession(resumeDeps(), { workstreamId, tileId, prompt, command: commandForWsId(workstreamId) });
+        },
+        inFlight: followUpsInFlight.current,
+      });
+    })()
+      .catch((error) => console.error("Failed to start digest investigations:", error))
+      .finally(() => { digestWork.current = false; });
+  }, [digests, backend, startInvestigationSessions, resumeDeps, commandForWsId, refreshInbox]);
+
   const messageSessionForCompanion = useCallback(
     (
       target: { workstreamId: string; tileId: string; linkRevision: string; prompt: string; command: string },
@@ -2584,6 +2617,7 @@ export default function App() {
           onAdd={inbox.addPipeline} onSetMode={inbox.setPipelineMode} onSetBranches={inbox.setPipelineBranches} onRemove={inbox.removePipeline}
           onSetRepo={inbox.setPipelineRepo}
           digestTime={inbox.snapshot.digest_time} onSetDigestTime={inbox.setDigestTime}
+          onSetAutoInvestigate={inbox.setPipelineAutoInvestigate}
           repos={projects.filter((p) => !p.archived).map((p) => ({ id: p.id, name: p.name }))}
           onClose={() => setShowPipelines(false)} />
       )}

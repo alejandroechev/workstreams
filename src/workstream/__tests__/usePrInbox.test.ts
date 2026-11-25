@@ -115,4 +115,14 @@ describe("pipelines through the inbox hook", () => {
     await act(async () => { await result.current.setMute(false); });
     expect(result.current.snapshot.mute?.muted).toBe(false);
   });
+
+  it("sets a pipeline's auto-investigate and re-reads", async () => {
+    const backend = new MemoryBackend();
+    backend.seedPipelineDefinition({ organization: "o", project: "P", definition_id: 1, name: "CI" });
+    const p = await backend.addPipelineWatch("https://dev.azure.com/o/P/_build?definitionId=1", "daily_failures");
+    const { result } = renderHook(() => usePrInbox(backend));
+    await act(async () => {});
+    await act(async () => { await result.current.setPipelineAutoInvestigate(p.id, "digest"); });
+    expect(result.current.snapshot.pipelines![0].auto_investigate).toBe("digest");
+  });
 });

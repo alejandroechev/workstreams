@@ -15,7 +15,7 @@ import {
   type RepoRef,
 } from "../domain/pipeline-inbox";
 import { resultColor } from "./pipeline-result";
-import { DEFAULT_DIGEST_TIME, isDigestTime } from "../domain/pipeline-digest";
+import { AUTO_INVESTIGATE_LABELS, DEFAULT_DIGEST_TIME, isDigestTime, type AutoInvestigate } from "../domain/pipeline-digest";
 
 interface Props {
   pipelines: PipelineStatus[];
@@ -31,6 +31,8 @@ interface Props {
   /** The one time Daily-failures pipelines post their digest, HH:MM local (ADR 045). */
   digestTime?: string;
   onSetDigestTime?: (time: string) => Promise<void>;
+  /** Whether a Daily-failures pipeline's digest also starts its investigation. */
+  onSetAutoInvestigate?: (id: string, value: AutoInvestigate) => Promise<void>;
   onClose: () => void;
 }
 
@@ -137,7 +139,7 @@ function RepoChip({ pipeline, repos, disabled, onSet }: { pipeline: PipelineStat
  * runs to add it, pick what notifies, remove it. Chrome mirrors the Inbox and
  * the Repo manager.
  */
-export function PipelinesModal({ pipelines, onAdd, onSetMode, onSetBranches, onRemove, onSetRepo, repos, digestTime = DEFAULT_DIGEST_TIME, onSetDigestTime, onClose }: Props) {
+export function PipelinesModal({ pipelines, onAdd, onSetMode, onSetBranches, onRemove, onSetRepo, repos, digestTime = DEFAULT_DIGEST_TIME, onSetDigestTime, onSetAutoInvestigate, onClose }: Props) {
   const [url, setUrl] = useState("");
   const [time, setTime] = useState(digestTime);
   // A new stored time (from an agent, or the save) replaces the edit.
@@ -328,6 +330,26 @@ export function PipelinesModal({ pipelines, onAdd, onSetMode, onSetBranches, onR
                 <option value="default">{pipeline.default_branch ? `Default branch (${pipeline.default_branch})` : "Default branch"}</option>
                 <option value="all">All branches</option>
               </select>
+              {onSetAutoInvestigate && (
+                <select
+                  data-testid={`pipeline-auto-${pipeline.id}`}
+                  aria-label={`Auto-investigate for ${pipeline.name}`}
+                  title={pipeline.mode === "daily_failures"
+                    ? "Auto-investigate: start a Copilot investigation of the failed runs when the daily digest is posted (at most 3 new ones a day)"
+                    : "Auto-investigate needs Daily failures mode"}
+                  value={pipeline.mode === "daily_failures" ? pipeline.auto_investigate ?? "off" : "off"}
+                  disabled={busy || pipeline.mode !== "daily_failures"}
+                  onChange={(event) => {
+                    const next = event.target.value;
+                    if (next === "off" || next === "digest") void act(() => onSetAutoInvestigate(pipeline.id, next));
+                  }}
+                  style={{ ...inputStyle, flex: "none", width: "auto" }}
+                >
+                  {(["off", "digest"] as const).map((value) => (
+                    <option key={value} value={value}>{AUTO_INVESTIGATE_LABELS[value]}</option>
+                  ))}
+                </select>
+              )}
               <button
                 data-testid={`pipeline-remove-${pipeline.id}`}
                 aria-label={`Stop watching ${pipeline.name}`}
