@@ -236,19 +236,40 @@ fn base_of(item: &PipelineItem) -> Option<(String, String)> {
 /// Makes the worktree, or decides on a standalone workstream in `home` when
 /// there is no repo or git fails. Never fails itself.
 pub fn place(provisioner: Option<&dyn Provisioner>, target: &Target, home: &str) -> Placement {
+    place_from(
+        provisioner,
+        target.repo.as_ref(),
+        &branch_name(&target.item),
+        base_of(&target.item),
+        None,
+        home,
+    )
+}
+
+/// Makes a worktree of `repo` on the first free branch named like `wanted`,
+/// from `base` (fetched first), or from the repo's default branch on origin
+/// when there is none (`fallback_default` when git can't tell it).
+fn place_from(
+    provisioner: Option<&dyn Provisioner>,
+    repo: Option<&(String, String, String)>,
+    wanted: &str,
+    base: Option<(String, String)>,
+    fallback_default: Option<&str>,
+    home: &str,
+) -> Placement {
     let standalone = |failure: Option<String>| Placement::Standalone {
         directory: home.to_string(),
         failure,
     };
-    let (Some((project_id, repo_name, directory)), Some(provisioner)) = (&target.repo, provisioner)
-    else {
+    let (Some((project_id, repo_name, directory)), Some(provisioner)) = (repo, provisioner) else {
         return standalone(None);
     };
     // A run of a non-branch ref starts from the default branch, named
     // explicitly: no base would branch from whatever the checkout has out.
-    let Some((fetch, base)) = base_of(&target.item).or_else(|| {
+    let Some((fetch, base)) = base.or_else(|| {
         provisioner
             .default_branch(directory)
+            .or_else(|| fallback_default.map(str::to_owned))
             .map(|b| (b.clone(), format!("origin/{b}")))
     }) else {
         return standalone(Some(
@@ -256,7 +277,7 @@ pub fn place(provisioner: Option<&dyn Provisioner>, target: &Target, home: &str)
         ));
     };
     // Never check out an existing branch: it holds other work. The next free name is used.
-    let wanted = branch_name(&target.item);
+    let wanted = wanted.to_string();
     let free = |b: &str| {
         !provisioner.branch_exists(directory, b)
             && !provisioner
@@ -375,20 +396,7 @@ pub fn record(
             created: false,
         });
     }
-    let (directory, project_id, kind, worktree_branch) = match placement {
-        Placement::Worktree {
-            path,
-            project_id,
-            branch,
-            ..
-        } => (
-            path.clone(),
-            Some(project_id.clone()),
-            "worktree",
-            Some(branch.clone()),
-        ),
-        Placement::Standalone { directory, .. } => (directory.clone(), None, "standalone", None),
-    };
+    let (directory, project_id, kind, worktree_branch) = placement_columns(placement);
     let workstream = crate::insert_workstream(
         db,
         crate::NewWorkstream {
@@ -419,7 +427,7 @@ pub fn pending_sessions(db: &Connection) -> Result<Vec<PendingSession>, String> 
         .prepare(
             "SELECT i.event_id, i.workstream_id, COALESCE(w.directory, ''), i.prompt
             FROM pipeline_investigations i JOIN workstreams w ON w.id = i.workstream_id
-            WHERE i.session_started = 0 ORDER BY i.created_at",
+            WHERE i.session_started = 0 AND i.followup = 0 ORDER BY i.created_at",
         )
         .map_err(|e| e.to_string())?;
     let rows = stmt
@@ -445,6 +453,264 @@ pub fn mark_session_started(db: &Connection, event_id: &str) -> Result<(), Strin
     .map_err(|e| e.to_string())
 }
 
+// ── A daily digest, as one batch (ADR 045) ───────────────────────────────
+
+/// A daily digest to investigate as one batch, with where its code lives.
+#[derive(Clone, Debug)]
+pub struct BatchTarget {
+    pub digest: crate::pipeline_digest::PipelineDigest,
+    pub repo: Option<(String, String, String)>,
+    pub ado_repo: Option<AdoRepoRef>,
+    /// The repo's default branch as ADO says, when git can't tell.
+    pub default_branch: Option<String>,
+}
+
+/// What can be investigated: one failed run, or a digest's failed runs.
+#[derive(Clone, Debug)]
+pub enum Subject {
+    Run(Target),
+    Digest(BatchTarget),
+}
+
+/// Looks up a digest (by its id) or a failed run to investigate.
+pub fn subject(db: &Connection, id: &str) -> Result<Subject, String> {
+    let Some(digest) = crate::pipeline_digest::digests(db)?
+        .into_iter()
+        .find(|d| d.id == id)
+    else {
+        return target(db, id).map(Subject::Run);
+    };
+    let view = crate::pipeline_inbox::watch_view(db, &digest.pipeline_id)?
+        .ok_or("That pipeline isn't watched any more")?;
+    Ok(Subject::Digest(BatchTarget {
+        repo: first_repo(db, &view.repos)?,
+        ado_repo: view.ado_repo,
+        default_branch: view.default_branch,
+        digest,
+    }))
+}
+
+/// `investigate/<pipeline>-failures-<YYYYMMDD>`, as a valid git branch name.
+pub fn batch_branch_name(digest: &crate::pipeline_digest::PipelineDigest) -> String {
+    format!(
+        "investigate/{}-failures-{}",
+        slug(&digest.pipeline_name),
+        digest.created_at.get(..10).unwrap_or("").replace('-', "")
+    )
+}
+
+pub fn batch_workstream_name(digest: &crate::pipeline_digest::PipelineDigest) -> String {
+    format!(
+        "Investigate {} failures {}",
+        digest.pipeline_name,
+        digest.created_at.get(..10).unwrap_or("")
+    )
+}
+
+/// Makes the worktree (a digest's from `origin/<default branch>`), or decides on
+/// a standalone workstream. Never fails itself.
+pub fn place_subject(
+    provisioner: Option<&dyn Provisioner>,
+    subject: &Subject,
+    home: &str,
+) -> Placement {
+    match subject {
+        Subject::Run(target) => place(provisioner, target, home),
+        Subject::Digest(batch) => place_from(
+            provisioner,
+            batch.repo.as_ref(),
+            &batch_branch_name(&batch.digest),
+            None,
+            batch.default_branch.as_deref(),
+            home,
+        ),
+    }
+}
+
+fn repo_label(
+    repo: &Option<(String, String, String)>,
+    ado: &Option<AdoRepoRef>,
+    placement: &Placement,
+) -> String {
+    match placement {
+        Placement::Worktree { repo_name, .. } => repo_name.clone(),
+        Placement::Standalone { .. } => repo
+            .as_ref()
+            .map(|r| r.1.clone())
+            .or_else(|| ado.as_ref().map(|r| r.display()))
+            .unwrap_or_else(|| "none linked".into()),
+    }
+}
+
+fn run_lines(runs: &[crate::pipeline_digest::DigestRun]) -> String {
+    runs.iter()
+        .map(|r| {
+            let step = r
+                .step
+                .as_deref()
+                .map(|s| format!(", failing step \"{s}\""))
+                .unwrap_or_default();
+            format!(
+                "- #{} (id {}), branch {}, commit {}, finished {}{step}: {}",
+                r.run_number,
+                r.run_id,
+                r.branch,
+                if r.commit.is_empty() {
+                    "unknown"
+                } else {
+                    &r.commit
+                },
+                r.finished_at,
+                r.url
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// What a digest's investigation session is asked first.
+pub fn batch_prompt(batch: &BatchTarget, placement: &Placement) -> String {
+    let d = &batch.digest;
+    let repo = repo_label(&batch.repo, &batch.ado_repo, placement);
+    let location = match placement {
+        Placement::Worktree { branch, base, .. } => format!(
+            "You are in a worktree of {repo} on a new branch {branch}, created from {} (the default branch's tip); each run's commit is listed above.",
+            base.as_deref().unwrap_or("the default branch")
+        ),
+        Placement::Standalone { failure: None, .. } => {
+            "There is no local checkout of this pipeline's repo; work from Azure DevOps.".into()
+        }
+        Placement::Standalone {
+            failure: Some(error),
+            ..
+        } => format!(
+            "There is no local checkout: creating a worktree of {repo} failed ({}). Work from Azure DevOps.",
+            error.trim()
+        ),
+    };
+    let state = if d.state == "passed_since" {
+        "the newest run passed since"
+    } else {
+        "it is still failing"
+    };
+    let first = d.runs.first().map(|r| r.run_id).unwrap_or_default();
+    format!(
+        "Investigate the failed runs of an Azure DevOps pipeline, from its daily digest.
+
+- Pipeline: {name} (project {project})
+- {failed} of {total} runs failed between {start} and {end}; {state}.
+- Repo: {repo}
+
+Failed runs:
+{runs}
+
+{location}
+
+Get each run's failing steps and logs yourself with the Azure CLI (az), for example \
+`az pipelines runs show --id {first} --org https://dev.azure.com/{org} --project \"{project}\"`, \
+then the build timeline and logs through `az devops invoke --area build`.
+
+Goal: Group the runs by root cause. For each group, say whether it looks flaky (intermittent, \
+unrelated to the code that ran) or broken (fails every time from some commit on), and propose a fix. \
+Change nothing until I ask: don't edit code, commit, push or re-run anything; report your diagnosis first.
+
+{inbox}",
+        name = d.pipeline_name,
+        project = d.project,
+        failed = d.failed,
+        total = d.total,
+        start = d.window_start,
+        end = d.window_end,
+        runs = run_lines(&d.runs),
+        org = d.organization,
+        inbox = CONCLUSION_INSTRUCTION,
+    )
+}
+
+/// How an investigation reports back (as ADR 044's notify-in-Inbox instruction).
+pub const CONCLUSION_INSTRUCTION: &str = "When you are done, use the ws-message skill to send me one message in the Workstreams Inbox with your conclusion: the groups, flaky or broken, and the fixes you propose.";
+
+/// The investigation workstream of a pipeline's digests that still exists,
+/// newest first: later digests follow up in it.
+pub fn pipeline_investigation(db: &Connection, watch_id: &str) -> Result<Option<String>, String> {
+    db.query_row(
+        "SELECT w.id FROM pipeline_investigations i JOIN workstreams w ON w.id = i.workstream_id
+        WHERE i.watch_id = ?1 AND i.followup = 0 ORDER BY i.created_at DESC LIMIT 1",
+        [watch_id],
+        |r| r.get(0),
+    )
+    .optional()
+    .map_err(|e| e.to_string())
+}
+
+/// Creates the workstream for a run or a digest and records it (with `auto`
+/// when the digest started it by itself), unless one exists already.
+pub fn record_subject(
+    db: &Connection,
+    subject: &Subject,
+    placement: &Placement,
+    created_by_session: Option<String>,
+    auto: bool,
+) -> Result<Started, String> {
+    let batch = match subject {
+        Subject::Run(target) => return record(db, target, placement, created_by_session),
+        Subject::Digest(batch) => batch,
+    };
+    let d = &batch.digest;
+    if let Some(id) = existing(db, &d.id)? {
+        return Ok(Started {
+            workstream_id: id,
+            created: false,
+        });
+    }
+    let (directory, project_id, kind, worktree_branch) = placement_columns(placement);
+    let workstream = crate::insert_workstream(
+        db,
+        crate::NewWorkstream {
+            name: batch_workstream_name(d),
+            directory: Some(directory),
+            description: Some(format!(
+                "Investigating {}: {}",
+                d.pipeline_name,
+                crate::pipeline_digest::digest_summary(d)
+            )),
+            project_id,
+            workstream_type: Some(kind.into()),
+            worktree_branch,
+            created_by_session,
+        },
+    )?;
+    db.execute(
+        "INSERT OR REPLACE INTO pipeline_investigations (event_id, workstream_id, prompt, session_started, created_at, watch_id, auto)
+        VALUES (?1, ?2, ?3, 0, strftime('%Y-%m-%dT%H:%M:%fZ','now'), ?4, ?5)",
+        params![d.id, workstream.id, batch_prompt(batch, placement), d.pipeline_id, auto],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(Started {
+        workstream_id: workstream.id,
+        created: true,
+    })
+}
+
+fn placement_columns(
+    placement: &Placement,
+) -> (String, Option<String>, &'static str, Option<String>) {
+    match placement {
+        Placement::Worktree {
+            path,
+            project_id,
+            branch,
+            ..
+        } => (
+            path.clone(),
+            Some(project_id.clone()),
+            "worktree",
+            Some(branch.clone()),
+        ),
+        Placement::Standalone { directory, .. } => (directory.clone(), None, "standalone", None),
+    }
+}
+
 /// The folder a standalone investigation works in: the home directory.
 pub fn home_dir() -> String {
     dirs::home_dir()
@@ -453,7 +719,7 @@ pub fn home_dir() -> String {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::agent_registry::DerivedWorktree;
     use std::sync::Mutex;
@@ -859,6 +1125,147 @@ mod tests {
             shown.investigation, None,
             "a run's investigation isn't the digest's"
         );
+    }
+
+    fn link_repo(db: &Connection) {
+        db.execute(
+            "INSERT INTO projects (id, name, directory, git_remote, created_at, updated_at)
+            VALUES ('mc', 'media_components', '/code/mc', 'https://dev.azure.com/skype/SCC/_git/media_components', '2026-01-01', 'now')",
+            [],
+        )
+        .unwrap();
+        db.execute("UPDATE pipeline_watches SET repo_override='mc'", [])
+            .unwrap();
+    }
+
+    /// AT-6: one workstream for the whole digest, from origin/<default> (fetched
+    /// first), recorded on the digest; asking again returns it.
+    #[test]
+    fn a_digest_is_investigated_as_one_batch_from_the_default_branch_tip() {
+        let db = db();
+        let d = seed_digest(&db);
+        link_repo(&db);
+        let subject = subject(&db, &d.id).unwrap();
+        let git = FakeGit {
+            default_branch: Some("main".into()),
+            ..Default::default()
+        };
+        let placement = place_subject(Some(&git), &subject, "/h");
+        assert_eq!(
+            *git.calls.lock().unwrap(),
+            vec![
+                "fetch /code/mc main".to_string(),
+                "worktree /code/mc investigate/CI-Main-failures-20260302 origin/main".to_string(),
+            ]
+        );
+        let started = record_subject(&db, &subject, &placement, None, false).unwrap();
+        assert!(started.created);
+        let (name, kind, branch): (String, String, String) = db
+            .query_row(
+                "SELECT name, workstream_type, worktree_branch FROM workstreams WHERE id = ?1",
+                [&started.workstream_id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            (name.as_str(), kind.as_str(), branch.as_str()),
+            (
+                "Investigate CI-Main failures 2026-03-02",
+                "worktree",
+                "investigate/CI-Main-failures-20260302"
+            )
+        );
+        assert_eq!(
+            existing(&db, &d.id).unwrap(),
+            Some(started.workstream_id.clone())
+        );
+        let again = record_subject(&db, &subject, &placement, None, false).unwrap();
+        assert_eq!(
+            (again.workstream_id.as_str(), again.created),
+            (started.workstream_id.as_str(), false)
+        );
+        assert_eq!(
+            crate::pipeline_digest::digests(&db).unwrap()[0].investigation,
+            Some(started.workstream_id.clone())
+        );
+        assert_eq!(
+            pipeline_investigation(&db, &d.pipeline_id).unwrap(),
+            Some(started.workstream_id.clone()),
+            "the pipeline's investigation, for later digests"
+        );
+        let pending = pending_sessions(&db).unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].event_id, d.id);
+    }
+
+    #[test]
+    fn the_batch_prompt_lists_every_failed_run_and_asks_to_group_and_report() {
+        let db = db();
+        let d = seed_digest(&db);
+        let subject = subject(&db, &d.id).unwrap();
+        let placement = place_subject(None, &subject, "/h");
+        let Subject::Digest(batch) = &subject else {
+            panic!("a digest")
+        };
+        let text = batch_prompt(batch, &placement);
+        for needle in [
+            "CI-Main",
+            "2 of 3 runs failed",
+            "it is still failing",
+            "#2026.3 (id 3)",
+            "#2026.5 (id 5)",
+            "commit sha3",
+            "commit sha5",
+            "https://dev.azure.com/skype/SCC/_build/results?buildId=3",
+            "https://dev.azure.com/skype/SCC/_build/results?buildId=5",
+            "2026-03-01T13:00:00Z",
+            "branch main",
+            "Group the runs by root cause",
+            "flaky",
+            "broken",
+            "Change nothing until I ask",
+            "ws-message skill",
+            "Inbox",
+            "no local checkout",
+            "az pipelines runs show",
+        ] {
+            assert!(text.contains(needle), "missing {needle:?} in:\n{text}");
+        }
+    }
+
+    #[test]
+    fn a_digest_without_a_repo_or_default_branch_is_investigated_standalone() {
+        let db = db();
+        let d = seed_digest(&db);
+        link_repo(&db);
+        let subject = subject(&db, &d.id).unwrap();
+        // The watch's ADO default branch (main) is used when git can't tell.
+        let git = FakeGit::default();
+        assert!(matches!(
+            place_subject(Some(&git), &subject, "/h"),
+            Placement::Worktree { base: Some(b), .. } if b == "origin/main"
+        ));
+        let broken = FakeGit {
+            fail_fetch: Some("couldn't find remote ref".into()),
+            ..Default::default()
+        };
+        let placement = place_subject(Some(&broken), &subject, "/h");
+        assert!(matches!(
+            &placement,
+            Placement::Standalone {
+                failure: Some(_),
+                ..
+            }
+        ));
+        let started = record_subject(&db, &subject, &placement, None, false).unwrap();
+        let kind: String = db
+            .query_row(
+                "SELECT workstream_type FROM workstreams WHERE id = ?1",
+                [&started.workstream_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(kind, "standalone");
     }
 
     #[test]

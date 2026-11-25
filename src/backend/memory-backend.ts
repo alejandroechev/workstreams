@@ -26,6 +26,9 @@ import {
   type InvestigationPlacement,
   type InvestigationStarted,
   type PendingInvestigation,
+  batchBranchName,
+  batchPrompt,
+  batchWorkstreamName,
 } from "../domain/pipeline-investigate";
 import {
   DEFAULT_DIGEST_TIME,
@@ -910,7 +913,43 @@ export class MemoryBackend implements Backend {
       is_read: false, discovered_at: "" };
   }
 
+  /** A digest's failed runs as one investigation (mirror of pipeline_investigate::record_subject). */
+  private async makeBatchInvestigation(digest: PipelineDigest, auto: boolean): Promise<InvestigationStarted> {
+    const existing = this.investigations.get(digest.id);
+    if (existing && this.workstreams.has(existing.workstream_id)) return { workstream_id: existing.workstream_id, created: false };
+    const watch = this.pipelineWatches.find((w) => w.status.id === digest.pipeline_id);
+    const status = watch ? this.pipelineWithRepo(watch) : null;
+    const linked = status?.repos[0] ? this.projects.get(status.repos[0].id) : undefined;
+    const repoLabel = linked?.name ?? (status?.ado_repo ? `${status.ado_repo.project}/${status.ado_repo.name}` : "");
+    let placement: InvestigationPlacement = { kind: "standalone", repo: repoLabel, failure: null };
+    let directory = this.investigationHome;
+    if (linked) {
+      const wanted = batchBranchName(digest);
+      const taken = new Set(this.investigationWorktrees.filter((w) => w.directory === linked.directory).map((w) => w.branch));
+      const branch = [wanted, ...Array.from({ length: 19 }, (_, i) => `${wanted}-${i + 2}`)].find((b) => !taken.has(b)) ?? wanted;
+      const base = `origin/${status?.default_branch ?? "main"}`;
+      this.investigationWorktrees.push({ directory: linked.directory, branch, base });
+      if (this.investigationWorktreeFailure) placement = { kind: "standalone", repo: linked.name, failure: this.investigationWorktreeFailure };
+      else {
+        placement = { kind: "worktree", repo: linked.name, branch, base };
+        directory = `${linked.directory}-${branch.replace(/\//g, "-")}`;
+      }
+    }
+    const worktree = placement.kind === "worktree";
+    const ws = await this.createWorkstream(batchWorkstreamName(digest), directory, {
+      projectId: worktree ? linked!.id : undefined,
+      workstreamType: worktree ? "worktree" : "standalone",
+      worktreeBranch: placement.kind === "worktree" ? placement.branch : undefined,
+    });
+    this.investigations.set(digest.id, { event_id: digest.id, workstream_id: ws.id, directory, prompt: batchPrompt(digest, placement), started: false });
+    this.investigationMeta.set(digest.id, { watch_id: digest.pipeline_id, auto, followup: false, created_at: this.digestClock().getTime() });
+    return { workstream_id: ws.id, created: true };
+  }
+  private investigationMeta = new Map<string, { watch_id: string; auto: boolean; followup: boolean; created_at: number }>();
+
   private async makeInvestigation(itemId: string): Promise<InvestigationStarted> {
+    const digest = this.digestSnapshot().find((d) => d.id === itemId);
+    if (digest) return this.makeBatchInvestigation(digest, false);
     const item = this.pipelineItems.find((i) => i.id === itemId) ?? this.digestRunItem(itemId);
     if (!item) throw new Error(`No pipeline notification with id ${itemId}`);
     if (item.result !== "failed") throw new Error(`Only failed runs can be investigated; run #${item.run_number} ${item.result}`);

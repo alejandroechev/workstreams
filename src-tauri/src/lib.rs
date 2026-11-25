@@ -996,22 +996,33 @@ async fn start_pipeline_investigation(
     state: State<'_, AppState>,
     item: String,
 ) -> Result<pipeline_investigate::Started, String> {
+    start_investigation(app, Arc::clone(&state.db), item, false).await
+}
+
+/// Makes (or returns) the investigation of a run or a daily digest: the git
+/// work runs off the IPC thread and without the database lock.
+async fn start_investigation(
+    app: AppHandle,
+    db: Arc<Mutex<rusqlite::Connection>>,
+    item: String,
+    auto: bool,
+) -> Result<pipeline_investigate::Started, String> {
     // Claimed before looking, so nobody records one between the look and git.
     let _claim = pipeline_investigate::claim(&item)?;
-    let target = {
-        let db = state.db.lock().map_err(|e| e.to_string())?;
+    let subject = {
+        let db = db.lock().map_err(|e| e.to_string())?;
         if let Some(id) = pipeline_investigate::existing(&db, &item)? {
             return Ok(pipeline_investigate::Started {
                 workstream_id: id,
                 created: false,
             });
         }
-        pipeline_investigate::target(&db, &item)?
+        pipeline_investigate::subject(&db, &item)?
     };
-    let placed = target.clone();
+    let placed = subject.clone();
     let placement = tauri::async_runtime::spawn_blocking(move || {
         let provisioner = AppProvisioner { app };
-        pipeline_investigate::place(
+        pipeline_investigate::place_subject(
             Some(&provisioner),
             &placed,
             &pipeline_investigate::home_dir(),
@@ -1019,8 +1030,8 @@ async fn start_pipeline_investigation(
     })
     .await
     .map_err(|e| e.to_string())?;
-    let db = state.db.lock().map_err(|e| e.to_string())?;
-    pipeline_investigate::record(&db, &target, &placement, None)
+    let db = db.lock().map_err(|e| e.to_string())?;
+    pipeline_investigate::record_subject(&db, &subject, &placement, None, auto)
 }
 
 /// Investigations whose Copilot session hasn't been started yet.

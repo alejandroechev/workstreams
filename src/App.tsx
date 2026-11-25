@@ -2544,6 +2544,7 @@ export default function App() {
           syncEvents={syncMonitor.state?.events ?? []}
           onSyncRead={syncMonitor.setRead}
           onInvestigate={investigatePipelineRun}
+          onInvestigateDigest={investigatePipelineRun}
           onOpenWorkstream={(id) => { setShowInbox(false); selectWorkstream(id); }}
           onOpenAgentMessage={openAgentMessage}
           onClose={() => setShowInbox(false)} />

@@ -4,6 +4,7 @@
  * mirror lets the in-memory backend behave the same in tests and E2E.
  */
 import type { PipelineItem } from "./pipeline-inbox";
+import type { DigestRun, PipelineDigest } from "./pipeline-digest";
 
 /** What Investigate started: the workstream, and whether it is new. */
 export interface InvestigationStarted {
@@ -73,4 +74,49 @@ ${location}
 Get the run's failing steps and logs yourself with the Azure CLI (az), for example \`az pipelines runs show --id ${item.run_id} --org https://dev.azure.com/${org} --project "${item.project}"\`, then the build timeline and logs through \`az devops invoke --area build\`.
 
 Goal: find the root cause and classify it as code, pipeline, infrastructure or flakiness, and propose a fix. Don't change any code, commit, push or re-run anything until I ask: report your diagnosis first.`;
+}
+
+// ── A daily digest, as one batch (ADR 045) ──
+
+/** How an investigation reports back (as ADR 044's notify-in-Inbox instruction). */
+export const CONCLUSION_INSTRUCTION =
+  "When you are done, use the ws-message skill to send me one message in the Workstreams Inbox with your conclusion: the groups, flaky or broken, and the fixes you propose.";
+
+export function batchBranchName(digest: PipelineDigest): string {
+  return `investigate/${slug(digest.pipeline_name)}-failures-${digest.created_at.slice(0, 10).replace(/-/g, "")}`;
+}
+
+export function batchWorkstreamName(digest: PipelineDigest): string {
+  return `Investigate ${digest.pipeline_name} failures ${digest.created_at.slice(0, 10)}`;
+}
+
+function runLines(runs: DigestRun[]): string {
+  return runs.map((r) => `- #${r.run_number} (id ${r.run_id}), branch ${r.branch}, commit ${r.commit || "unknown"}, finished ${r.finished_at}${r.step ? `, failing step "${r.step}"` : ""}: ${r.url}`).join("\n");
+}
+
+/** What a digest's investigation session is asked first (mirror of pipeline_investigate::batch_prompt). */
+export function batchPrompt(digest: PipelineDigest, placement: InvestigationPlacement): string {
+  const repo = placement.repo || "none linked";
+  const location = placement.kind === "worktree"
+    ? `You are in a worktree of ${repo} on a new branch ${placement.branch}, created from ${placement.base} (the default branch's tip); each run's commit is listed above.`
+    : placement.failure
+      ? `There is no local checkout: creating a worktree of ${repo} failed (${placement.failure.trim()}). Work from Azure DevOps.`
+      : "There is no local checkout of this pipeline's repo; work from Azure DevOps.";
+  const state = digest.state === "passed_since" ? "the newest run passed since" : "it is still failing";
+  return `Investigate the failed runs of an Azure DevOps pipeline, from its daily digest.
+
+- Pipeline: ${digest.pipeline_name} (project ${digest.project})
+- ${digest.failed} of ${digest.total} runs failed between ${digest.window_start} and ${digest.window_end}; ${state}.
+- Repo: ${repo}
+
+Failed runs:
+${runLines(digest.runs)}
+
+${location}
+
+Get each run's failing steps and logs yourself with the Azure CLI (az), for example \`az pipelines runs show --id ${digest.runs[0]?.run_id ?? 0} --org https://dev.azure.com/${digest.organization} --project "${digest.project}"\`, then the build timeline and logs through \`az devops invoke --area build\`.
+
+Goal: Group the runs by root cause. For each group, say whether it looks flaky (intermittent, unrelated to the code that ran) or broken (fails every time from some commit on), and propose a fix. Change nothing until I ask: don't edit code, commit, push or re-run anything; report your diagnosis first.
+
+${CONCLUSION_INSTRUCTION}`;
 }

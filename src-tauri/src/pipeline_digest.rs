@@ -350,6 +350,11 @@ pub struct PipelineDigest {
     pub auto_pending: bool,
 }
 
+/// "5 of 12 runs failed".
+pub fn digest_summary(digest: &PipelineDigest) -> String {
+    format!("{} of {} runs failed", digest.failed, digest.total)
+}
+
 /// The id of a digest's run as an investigatable item (`drun:<digest>:<run>`).
 pub fn run_item_id(digest_id: &str, run_id: u64) -> String {
     format!("drun:{digest_id}:{run_id}")

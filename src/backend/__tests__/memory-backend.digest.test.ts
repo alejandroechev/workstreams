@@ -90,4 +90,31 @@ describe("MemoryBackend daily digest", () => {
     expect(again.investigation).toBeNull();
     expect((await b.pendingInvestigationSessions())[0].prompt).toContain("#12 (id 12)");
   });
+
+  it("investigates a whole digest as one batch from the default branch tip (AT-6)", async () => {
+    const { b, setNow } = await setup();
+    const repo = await b.createProject("media_components", "/code/mc");
+    b.setProjectRemote(repo.id, "https://dev.azure.com/skype/SCC/_git/media_components");
+    const ci = (await b.getPrInbox()).pipelines!.find((p) => p.name === "CI-Main")!;
+    await b.setPipelineWatchRepo(ci.id, repo.id);
+    setNow(local(2, 9, 0));
+    b.runDigestPass();
+    const digest = (await b.getPrInbox()).pipeline_digests!.find((d) => d.pipeline_name === "CI-Main")!;
+    const started = await b.startPipelineInvestigation(digest.id);
+    expect(started.created).toBe(true);
+    expect(b.investigationWorktreeRequests()).toEqual([{ directory: "/code/mc", branch: "investigate/CI-Main-failures-21000302", base: "origin/main" }]);
+    expect((await b.startPipelineInvestigation(digest.id)).created).toBe(false);
+    const shown = (await b.getPrInbox()).pipeline_digests!.find((d) => d.id === digest.id)!;
+    expect([shown.investigation, shown.is_read]).toEqual([started.workstream_id, false]);
+    const ws = (await b.listWorkstreams()).find((w) => w.id === started.workstream_id)!;
+    expect([ws.name, ws.workstream_type]).toEqual(["Investigate CI-Main failures 2100-03-02", "worktree"]);
+    const prompt = (await b.pendingInvestigationSessions())[0].prompt;
+    for (const id of [3, 5, 8, 10, 12]) {
+      expect(prompt).toContain(`https://dev.azure.com/skype/SCC/_build/results?buildId=${id}`);
+      expect(prompt).toContain(`commit sha${id}`);
+    }
+    for (const text of ["5 of 12 runs failed", "Group the runs by root cause", "flaky", "broken", "Change nothing until I ask", "ws-message skill"]) {
+      expect(prompt).toContain(text);
+    }
+  });
 });

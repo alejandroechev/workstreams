@@ -600,7 +600,7 @@ pub const COMMANDS: &[Command] = &[
     Command {
         id: "inbox.investigate",
         log_params: &["item"],
-        summary: "Investigate a failed pipeline run (params: item = its notification id): makes a workstream for it (a worktree of its repo from the run's branch, else standalone) whose Copilot session the app starts with the run's context; returns {workstream_id, created}, or the existing investigation",
+        summary: "Investigate a failed pipeline run or a daily digest (params: item = a run notification id, a digest id, or drun:<digest>:<run> for one run of a digest): makes a workstream for it (a worktree of its repo from the run's branch, or for a digest one worktree from the default branch's tip; else standalone) whose Copilot session the app starts with the context; returns {workstream_id, created}, or the existing investigation",
         requires_identity: true,
         destructive: false,
         handler: inbox_investigate,
@@ -1052,7 +1052,7 @@ fn inbox_investigate(
 ) -> Result<CommandOutcome, AgentError> {
     use crate::pipeline_investigate as investigate;
     let item = required_str(params, "item")?;
-    let target = investigate::target(context.db, &item).map_err(inbox_error)?;
+    let subject = investigate::subject(context.db, &item).map_err(inbox_error)?;
     let _claim = investigate::claim(&item).map_err(inbox_error)?;
     let started = match investigate::existing(context.db, &item).map_err(inbox_error)? {
         Some(id) => investigate::Started {
@@ -1062,12 +1062,13 @@ fn inbox_investigate(
         None => {
             // Holds the lock while git runs, like ws.create's worktrees.
             let placement =
-                investigate::place(context.provisioner, &target, &investigate::home_dir());
+                investigate::place_subject(context.provisioner, &subject, &investigate::home_dir());
             let created_by = match context.caller {
                 Some(Caller::Agent { tile_id, .. }) => Some(tile_id.clone()),
                 _ => None,
             };
-            investigate::record(context.db, &target, &placement, created_by).map_err(inbox_error)?
+            investigate::record_subject(context.db, &subject, &placement, created_by, false)
+                .map_err(inbox_error)?
         }
     };
     Ok(CommandOutcome::changed(
@@ -5448,6 +5449,38 @@ mod tests {
             "{}",
             err.message
         );
+    }
+
+    #[test]
+    fn inbox_investigate_takes_a_digest_as_one_batch() {
+        let db = memory_db();
+        let caller = agent("tile-1", "ws-own");
+        let digest = crate::pipeline_investigate::tests::seed_digest(&db);
+        let git = FakeProvisioner::default();
+        let first = call_with(
+            &db,
+            &caller,
+            "inbox.investigate",
+            serde_json::json!({"item": digest.id}),
+            &git,
+        )
+        .unwrap();
+        assert_eq!(first.data["created"], true);
+        let again = call(
+            &db,
+            &caller,
+            "inbox.investigate",
+            serde_json::json!({"item": digest.id}),
+        )
+        .unwrap();
+        assert_eq!(again.data["created"], false);
+        let listed = call(&db, &caller, "inbox.list", serde_json::Value::Null).unwrap();
+        assert_eq!(
+            listed.data["pipeline_digests"][0]["investigation"],
+            first.data["workstream_id"]
+        );
+        let pending = crate::pipeline_investigate::pending_sessions(&db).unwrap();
+        assert!(pending[0].prompt.contains("Group the runs by root cause"));
     }
 
     #[test]
