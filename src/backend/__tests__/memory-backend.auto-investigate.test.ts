@@ -137,4 +137,40 @@ describe("MemoryBackend auto-investigate", () => {
     expect(await b.pendingInvestigationSessions()).toEqual([]);
     expect(await b.pendingInvestigationFollowups()).toEqual([]);
   });
+
+  it("a mute while git runs cancels the start and rolls its worktree back (r2-f3)", async () => {
+    const { b, ids, fail, setNow } = await setup(1);
+    const repo = await b.createProject("mc", "/code/mc");
+    await b.setPipelineWatchRepo(ids[0], repo.id);
+    await b.setPipelineAutoInvestigate(ids[0], "digest");
+    fail(1, 1);
+    setNow(local(2, 9, 0));
+    b.runDigestPass();
+    b.beforeAutoCommitForTests(async () => { await b.setInboxMute(true); await b.setInboxMute(false); });
+    expect(await b.runAutoInvestigations()).toBe(0);
+    expect(b.investigationWorktreeRequests()).toEqual([]);
+    expect(await b.listWorkstreams()).toEqual([]);
+  });
+
+  it("another investigation won while git ran: a follow-up, rolled back (r2-f4)", async () => {
+    const { b, ids, fail, setNow } = await setup(1);
+    const repo = await b.createProject("mc", "/code/mc");
+    await b.setPipelineWatchRepo(ids[0], repo.id);
+    fail(1, 1);
+    setNow(local(2, 9, 0));
+    b.runDigestPass();
+    const [earlier] = (await b.getPrInbox()).pipeline_digests!;
+    await b.setPipelineAutoInvestigate(ids[0], "digest");
+    fail(10, 2);
+    setNow(local(3, 9, 0));
+    b.runDigestPass();
+    b.beforeAutoCommitForTests(async () => {
+      const manual = await b.startPipelineInvestigation(earlier.id);
+      await b.createTile(manual.workstream_id, "copilot_session", "I", JSON.stringify({ investigation: true, copilot_session_id: "s" }));
+    });
+    expect(await b.runAutoInvestigations()).toBe(0);
+    expect((await b.listWorkstreams()).filter((w) => w.name.startsWith("Investigate "))).toHaveLength(1);
+    expect(b.investigationWorktreeRequests()).toHaveLength(1);
+    expect(await b.pendingInvestigationFollowups()).toHaveLength(1);
+  });
 });

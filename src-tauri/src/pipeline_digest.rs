@@ -349,7 +349,7 @@ fn investigation_tile(
 
 /// Records a digest's new failed runs as a follow-up for the session the
 /// investigation's tile runs now.
-fn enqueue_followup(
+pub(crate) fn enqueue_followup(
     db: &Connection,
     watch_id: &str,
     digest_id: &str,
@@ -434,7 +434,8 @@ fn claim_inside(db: &Connection, digest_id: &str, clock: &Clock) -> Result<AutoC
     }
     let started: i64 = db
         .query_row(
-            "SELECT COUNT(*) FROM pipeline_auto_starts WHERE julianday(at) > julianday(?1) - 1",
+            "SELECT COUNT(*) FROM pipeline_auto_starts WHERE julianday(at) > julianday(?1) - 1
+            AND state IN ('claimed', 'recorded', 'spawned')",
             [clock.stamp()],
             |r| r.get(0),
         )

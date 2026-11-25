@@ -833,7 +833,10 @@ export class MemoryBackend implements Backend {
     Object.assign(this.digests.find((d) => d.id === digestId)!, { auto_pending: true });
   }
   /** As pipeline_auto_starts: the cap's ledger, independent of watches and digests. */
-  private autoStarts: Array<{ id: string; at: number }> = [];
+  private autoStarts: Array<{ id: string; at: number; state: "claimed" | "recorded" | "cancelled" }> = [];
+  private beforeAutoCommit: (() => Promise<void>) | null = null;
+  /** E2E/test seam: runs while an auto-start's git work is in flight, before it is committed. */
+  beforeAutoCommitForTests(hook: (() => Promise<void>) | null): void { this.beforeAutoCommit = hook; }
   /** As pipeline_digest::claim_auto. */
   private claimAuto(digestId: string): { kind: "start"; reservation: string } | { kind: "follow-up" | "cap" | "skipped" } {
     const digest = this.digests.find((d) => d.id === digestId && d.auto_pending);
@@ -848,9 +851,9 @@ export class MemoryBackend implements Backend {
       return { kind: "follow-up" };
     }
     const dayAgo = now.getTime() - 24 * 60 * 60 * 1000;
-    if (this.autoStarts.filter((s) => s.at > dayAgo).length >= AUTO_STARTS_PER_DAY) return { kind: "cap" };
+    if (this.autoStarts.filter((s) => s.at > dayAgo && s.state !== "cancelled").length >= AUTO_STARTS_PER_DAY) return { kind: "cap" };
     const reservation = crypto.randomUUID();
-    this.autoStarts.push({ id: reservation, at: now.getTime() });
+    this.autoStarts.push({ id: reservation, at: now.getTime(), state: "claimed" });
     return { kind: "start", reservation };
   }
   async setPipelineAutoInvestigate(id: string, value: AutoInvestigate): Promise<void> {
@@ -870,7 +873,7 @@ export class MemoryBackend implements Backend {
       try {
         const shown = this.digestSnapshot().find((d) => d.id === digest.id);
         if (!shown) throw new Error("gone");
-        if ((await this.makeBatchInvestigation(shown, true)).created) made += 1;
+        if ((await this.makeBatchInvestigation(shown, true, claim.reservation)).created) made += 1;
       } catch {
         this.autoStarts = this.autoStarts.filter((s) => s.id !== claim.reservation);
       }
@@ -933,6 +936,7 @@ export class MemoryBackend implements Backend {
     this.persistInboxSettings();
     // As inbox_mute::mute_at: undelivered auto work is dropped, never replayed.
     for (const d of this.digests) d.auto_pending = false;
+    for (const start of this.autoStarts) if (start.state === "claimed") start.state = "cancelled";
     for (const [id, i] of this.investigations) {
       const meta = this.investigationMeta.get(id);
       if (!i.started && (meta?.followup || meta?.auto)) i.started = true;
@@ -1081,7 +1085,7 @@ export class MemoryBackend implements Backend {
   }
 
   /** A digest's failed runs as one investigation (mirror of pipeline_investigate::record_subject). */
-  private async makeBatchInvestigation(digest: PipelineDigest, auto: boolean): Promise<InvestigationStarted> {
+  private async makeBatchInvestigation(digest: PipelineDigest, auto: boolean, reservation?: string): Promise<InvestigationStarted> {
     const existing = this.investigations.get(digest.id);
     if (existing && this.workstreams.has(existing.workstream_id)) return { workstream_id: existing.workstream_id, created: false };
     // As record_subject: an auto-start is rechecked against the mute.
@@ -1103,6 +1107,24 @@ export class MemoryBackend implements Backend {
         placement = { kind: "worktree", repo: linked.name, branch, base };
         directory = `${linked.directory}-${branch.replace(/\//g, "-")}`;
       }
+    }
+    if (reservation) {
+      // As commit_auto_start: rechecked after git; muted or beaten meanwhile, git is rolled back.
+      await this.beforeAutoCommit?.();
+      const rollback = () => { if (linked) this.investigationWorktrees.pop(); };
+      const held = this.autoStarts.find((s) => s.id === reservation);
+      if (held?.state !== "claimed" || this.isInboxMuted()) {
+        rollback();
+        throw new Error("The Inbox was muted, so the auto-investigation was not started");
+      }
+      const won = this.pipelineInvestigationOf(digest.pipeline_id);
+      if (won) {
+        rollback();
+        this.autoStarts = this.autoStarts.filter((s) => s.id !== reservation);
+        this.enqueueFollowUp(digest.pipeline_id, digest.id, won, this.digestClock());
+        return { workstream_id: won.workstream_id, created: false };
+      }
+      held.state = "recorded";
     }
     const worktree = placement.kind === "worktree";
     const ws = await this.createWorkstream(batchWorkstreamName(digest), directory, {

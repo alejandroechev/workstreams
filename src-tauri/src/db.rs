@@ -746,6 +746,10 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
         "ALTER TABLE pipeline_investigations ADD COLUMN expected_tile TEXT",
         // Why the investigation's session couldn't start, shown in the Inbox.
         "ALTER TABLE pipeline_investigations ADD COLUMN error TEXT",
+        // An auto-start's reservation through git and its first spawn:
+        // claimed, recorded, spawned, or cancelled (by a mute).
+        "ALTER TABLE pipeline_auto_starts ADD COLUMN state TEXT NOT NULL DEFAULT 'claimed'",
+        "ALTER TABLE pipeline_investigations ADD COLUMN reservation TEXT",
         // When a digest asked to start its investigation by itself: the rolling
         // 24-hour cap of auto-started investigations counts these.
         "ALTER TABLE pipeline_digests ADD COLUMN auto_requested_at TEXT",

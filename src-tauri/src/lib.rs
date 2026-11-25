@@ -996,7 +996,7 @@ async fn start_pipeline_investigation(
     state: State<'_, AppState>,
     item: String,
 ) -> Result<pipeline_investigate::Started, String> {
-    start_investigation(app, Arc::clone(&state.db), item, false).await
+    start_investigation(app, Arc::clone(&state.db), item, None).await
 }
 
 /// Makes (or returns) the investigation of a run or a daily digest: the git
@@ -1005,7 +1005,7 @@ async fn start_investigation(
     app: AppHandle,
     db: Arc<Mutex<rusqlite::Connection>>,
     item: String,
-    auto: bool,
+    reservation: Option<String>,
 ) -> Result<pipeline_investigate::Started, String> {
     // Claimed before looking, so nobody records one between the look and git.
     let _claim = pipeline_investigate::claim(&item)?;
@@ -1017,15 +1017,21 @@ async fn start_investigation(
                 created: false,
             });
         }
-        // An auto-start is rechecked before git runs (and again before it is recorded).
-        if auto && inbox_mute::is_muted(&db)? {
-            return Err("The Inbox is muted, so the auto-investigation was not started".into());
+        // An auto-start is rechecked before git runs (and again when committed).
+        if let Some(reservation) = &reservation {
+            if !pipeline_investigate::reservation_live(&db, reservation)? {
+                pipeline_digest::release_auto_start(&db, reservation)?;
+                return Err(
+                    "The Inbox was muted, so the auto-investigation was not started".into(),
+                );
+            }
         }
         pipeline_investigate::subject(&db, &item)?
     };
     let placed = subject.clone();
+    let git = app.clone();
     let placement = tauri::async_runtime::spawn_blocking(move || {
-        let provisioner = AppProvisioner { app };
+        let provisioner = AppProvisioner { app: git };
         pipeline_investigate::place_subject(
             Some(&provisioner),
             &placed,
@@ -1034,26 +1040,68 @@ async fn start_investigation(
     })
     .await
     .map_err(|e| e.to_string())?;
-    let db = db.lock().map_err(|e| e.to_string())?;
-    pipeline_investigate::record_subject(&db, &subject, &placement, None, auto)
+    let Some(reservation) = reservation else {
+        let db = db.lock().map_err(|e| e.to_string())?;
+        return pipeline_investigate::record_subject(&db, &subject, &placement, None, false);
+    };
+    let committed = {
+        let db = db.lock().map_err(|e| e.to_string())?;
+        pipeline_investigate::commit_auto_start(&db, &reservation, &subject, &placement)?
+    };
+    match committed {
+        pipeline_investigate::AutoCommit::Recorded(started) => Ok(started),
+        other => {
+            // Muted, or another investigation won, while git ran: undo the worktree.
+            tauri::async_runtime::spawn_blocking(move || {
+                let provisioner = AppProvisioner { app };
+                pipeline_investigate::rollback(Some(&provisioner), &subject, &placement);
+            })
+            .await
+            .map_err(|e| e.to_string())?;
+            match other {
+                pipeline_investigate::AutoCommit::FollowUp => Ok(pipeline_investigate::Started {
+                    workstream_id: String::new(),
+                    created: false,
+                }),
+                _ => Err("The Inbox was muted, so the auto-investigation was not started".into()),
+            }
+        }
+    }
 }
 
 /// Starts the investigations auto-investigate asked for when it posted a
 /// digest (ADR 045). Each request is claimed right before its start, in one
 /// transaction (mute, an investigation that appeared meanwhile, and the
-/// rolling cap are checked there, the cap in a ledger); the mute is checked
-/// again before git runs and before the start is recorded. A start that
-/// doesn't happen gives its place in the cap back. Returns how many
-/// workstreams it made.
+/// rolling cap are checked there, the cap in a ledger). The claim is a
+/// reservation that a mute cancels: it is rechecked before git runs, when the
+/// start is committed (another investigation that won meanwhile turns it into
+/// a follow-up), and at the native spawn. A start that doesn't happen gives its
+/// place back and has its worktree rolled back; so are recorded starts a mute
+/// cancelled before their first spawn. Returns how many workstreams it made.
 #[tauri::command]
 async fn run_auto_investigations(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<usize, String> {
-    let pending = {
+    let (pending, cancelled) = {
         let db = state.db.lock().map_err(|e| e.to_string())?;
-        pipeline_digest::auto_pending(&db)?
+        (
+            pipeline_digest::auto_pending(&db)?,
+            pipeline_investigate::cancelled_starts(&db)?,
+        )
     };
+    for start in cancelled {
+        let git = app.clone();
+        let rolled = start.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            let provisioner = AppProvisioner { app: git };
+            pipeline_investigate::rollback_cancelled(Some(&provisioner), &rolled);
+        })
+        .await
+        .map_err(|e| e.to_string())?;
+        let db = state.db.lock().map_err(|e| e.to_string())?;
+        pipeline_investigate::forget_cancelled(&db, &start)?;
+    }
     let mut made = 0;
     for digest in pending {
         let claimed = {
@@ -1063,12 +1111,20 @@ async fn run_auto_investigations(
         let pipeline_digest::AutoClaim::Start { reservation } = claimed else {
             continue;
         };
-        match start_investigation(app.clone(), Arc::clone(&state.db), digest, true).await {
+        let held = reservation.clone();
+        match start_investigation(
+            app.clone(),
+            Arc::clone(&state.db),
+            digest,
+            Some(reservation),
+        )
+        .await
+        {
             Ok(started) => made += usize::from(started.created),
             Err(error) => {
                 eprintln!("[pipeline-digest] Could not auto-investigate a digest: {error}");
                 let db = state.db.lock().map_err(|e| e.to_string())?;
-                pipeline_digest::release_auto_start(&db, &reservation)?;
+                pipeline_digest::release_auto_start(&db, &held)?;
             }
         }
     }
@@ -2146,23 +2202,65 @@ impl agent_registry::Provisioner for AppProvisioner {
             .or_else(|| detect_local_default_branch(project_directory))
     }
 
+    fn rollback_worktree(
+        &self,
+        project_directory: &str,
+        path: &str,
+        branch: &str,
+    ) -> Result<(), String> {
+        rollback_worktree_inner(project_directory, path, branch)
+    }
+
     fn fetch_branch(&self, project_directory: &str, branch: &str) -> Result<(), String> {
-        // An explicit refspec: a single-branch clone's fetch mapping would
-        // otherwise update only FETCH_HEAD, leaving origin/<branch> stale.
-        let refspec = format!("+refs/heads/{branch}:refs/remotes/origin/{branch}");
-        let out = git_cmd()
-            .args(["fetch", "origin", &refspec])
+        fetch_branch_inner(project_directory, branch)
+    }
+}
+
+/// Removes a worktree an investigation made but won't use, and its branch
+/// only when the branch has no commits that aren't on a remote (ADR 045).
+fn rollback_worktree_inner(
+    project_directory: &str,
+    path: &str,
+    branch: &str,
+) -> Result<(), String> {
+    let git = |args: &[&str]| {
+        git_cmd()
+            .args(args)
             .current_dir(project_directory)
             .output()
-            .map_err(|e| format!("git fetch failed: {e}"))?;
-        if out.status.success() {
-            Ok(())
-        } else {
-            Err(format!(
-                "git fetch origin {branch} failed: {}",
-                String::from_utf8_lossy(&out.stderr).trim()
-            ))
-        }
+            .map_err(|e| format!("git {} failed: {e}", args[0]))
+    };
+    let removed = git(&["worktree", "remove", "--force", path])?;
+    if !removed.status.success() {
+        return Err(format!(
+            "git worktree remove failed: {}",
+            String::from_utf8_lossy(&removed.stderr).trim()
+        ));
+    }
+    // Only a branch we made that has no commits of its own goes.
+    let own = git(&["rev-list", "--count", branch, "--not", "--remotes"])?;
+    if own.status.success() && String::from_utf8_lossy(&own.stdout).trim() == "0" {
+        git(&["branch", "-D", branch])?;
+    }
+    Ok(())
+}
+
+fn fetch_branch_inner(project_directory: &str, branch: &str) -> Result<(), String> {
+    // An explicit refspec: a single-branch clone's fetch mapping would
+    // otherwise update only FETCH_HEAD, leaving origin/<branch> stale.
+    let refspec = format!("+refs/heads/{branch}:refs/remotes/origin/{branch}");
+    let out = git_cmd()
+        .args(["fetch", "origin", &refspec])
+        .current_dir(project_directory)
+        .output()
+        .map_err(|e| format!("git fetch failed: {e}"))?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "git fetch origin {branch} failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ))
     }
 }
 
@@ -2507,6 +2605,10 @@ fn spawn_copilot_session(
         let restricted = investigation_launch(&config, &template);
         if let Err(error) = &restricted {
             pipeline_investigate::record_start_error(&db, &tile_id, error)?;
+        }
+        if matches!(restricted, Ok(Some(_))) {
+            // An auto-start a mute cancelled never starts, however it got here.
+            pipeline_investigate::spawn_gate(&db, &tile_id)?;
         }
         let mut env = workstream_env_from_db(&db, &tile_id, &state.agent_identities);
         if matches!(restricted, Ok(Some(_))) {
@@ -7901,6 +8003,70 @@ mod tests {
             hooks.iter().map(|h| &h.name).collect::<Vec<_>>()
         );
 
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    /// r2-f3: a rolled-back investigation worktree goes, and its branch too
+    /// unless it has commits of its own.
+    #[test]
+    fn rolling_back_an_investigation_worktree_keeps_a_branch_with_new_commits() {
+        let base = std::env::temp_dir().join(format!("ws_rollback_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let origin = base.join("origin.git");
+        let main = base.join("main");
+        std::fs::create_dir_all(&base).unwrap();
+        let run = |args: &[&str], cwd: &std::path::Path| {
+            git_cmd()
+                .args(args)
+                .current_dir(cwd)
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false)
+        };
+        if !run(
+            &["init", "--bare", "-b", "main", origin.to_str().unwrap()],
+            &base,
+        ) || !run(
+            &["clone", origin.to_str().unwrap(), main.to_str().unwrap()],
+            &base,
+        ) {
+            std::fs::remove_dir_all(&base).ok();
+            return; // git unavailable — skip
+        }
+        run(&["config", "user.email", "t@t.t"], &main);
+        run(&["config", "user.name", "t"], &main);
+        std::fs::write(main.join("README.md"), b"x").unwrap();
+        run(&["add", "."], &main);
+        run(&["commit", "-m", "init"], &main);
+        assert!(run(&["push", "origin", "HEAD:main"], &main));
+        run(&["fetch", "origin"], &main);
+        let branch_exists = |b: &str| run(&["rev-parse", "--verify", "--quiet", b], &main);
+        for (name, commit) in [("investigate/clean", false), ("investigate/worked", true)] {
+            let wt = base.join(name.replace('/', "-"));
+            assert!(run(
+                &[
+                    "worktree",
+                    "add",
+                    "-b",
+                    name,
+                    wt.to_str().unwrap(),
+                    "origin/main"
+                ],
+                &main
+            ));
+            if commit {
+                std::fs::write(wt.join("note.md"), b"y").unwrap();
+                run(&["add", "."], &wt);
+                run(&["commit", "-m", "work"], &wt);
+            }
+            rollback_worktree_inner(main.to_str().unwrap(), wt.to_str().unwrap(), name).unwrap();
+            assert!(!wt.exists(), "{name}: worktree removed");
+            assert_eq!(
+                branch_exists(name),
+                commit,
+                "{name}: branch kept only with its own commits"
+            );
+        }
         std::fs::remove_dir_all(&base).ok();
     }
 

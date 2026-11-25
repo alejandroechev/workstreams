@@ -548,6 +548,23 @@ pub enum Subject {
     Digest(BatchTarget),
 }
 
+impl Subject {
+    #[cfg(test)]
+    pub fn id(&self) -> &str {
+        match self {
+            Subject::Run(t) => &t.item.id,
+            Subject::Digest(b) => &b.digest.id,
+        }
+    }
+
+    fn repo_dir(&self) -> Option<&str> {
+        match self {
+            Subject::Run(t) => t.repo.as_ref().map(|r| r.2.as_str()),
+            Subject::Digest(b) => b.repo.as_ref().map(|r| r.2.as_str()),
+        }
+    }
+}
+
 /// Looks up a digest (by its id) or a failed run to investigate.
 pub fn subject(db: &Connection, id: &str) -> Result<Subject, String> {
     let Some(digest) = crate::pipeline_digest::digests(db)?
@@ -860,6 +877,217 @@ pub fn record_start_error(db: &Connection, tile_id: &str, error: &str) -> Result
     .map_err(|e| e.to_string())
 }
 
+// ── An auto-start's reservation, through git and its first spawn ─────────
+
+/// Whether a claimed auto-start may still go ahead (not cancelled, not muted).
+pub fn reservation_live(db: &Connection, reservation: &str) -> Result<bool, String> {
+    let claimed: bool = db
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM pipeline_auto_starts WHERE id=?1 AND state='claimed')",
+            [reservation],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    Ok(claimed && !crate::inbox_mute::is_muted(db)?)
+}
+
+/// What committing an auto-start decided, after git ran.
+#[derive(Debug, Clone, PartialEq)]
+pub enum AutoCommit {
+    Recorded(Started),
+    /// Muted (or cancelled) meanwhile: nothing recorded; roll the placement back.
+    Cancelled,
+    /// Another investigation of the pipeline won meanwhile: the runs went to
+    /// it as a follow-up; roll the placement back.
+    FollowUp,
+}
+
+/// Commits an auto-start in one transaction, rechecking under the lock that
+/// its reservation still stands and the Inbox isn't muted, and that no
+/// investigation of the pipeline (or of this digest) appeared while git ran.
+/// Unless it records, the reservation is given back.
+pub fn commit_auto_start(
+    db: &Connection,
+    reservation: &str,
+    subject: &Subject,
+    placement: &Placement,
+) -> Result<AutoCommit, String> {
+    let tx = db.unchecked_transaction().map_err(|e| e.to_string())?;
+    let outcome = commit_inside(&tx, reservation, subject, placement)?;
+    if !matches!(outcome, AutoCommit::Recorded(_)) {
+        tx.execute(
+            "DELETE FROM pipeline_auto_starts WHERE id=?1",
+            [reservation],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(outcome)
+}
+
+fn commit_inside(
+    db: &Connection,
+    reservation: &str,
+    subject: &Subject,
+    placement: &Placement,
+) -> Result<AutoCommit, String> {
+    let Subject::Digest(batch) = subject else {
+        return Err("Only a digest is auto-investigated".into());
+    };
+    if !reservation_live(db, reservation)? {
+        return Ok(AutoCommit::Cancelled);
+    }
+    let watch = &batch.digest.pipeline_id;
+    if let Some(workstream) = existing(db, &batch.digest.id)?.or(pipeline_investigation(db, watch)?)
+    {
+        if existing(db, &batch.digest.id)?.is_none() {
+            crate::pipeline_digest::enqueue_followup(
+                db,
+                watch,
+                &batch.digest.id,
+                &workstream,
+                &crate::pipeline_digest::Clock::system(),
+            )?;
+        }
+        return Ok(AutoCommit::FollowUp);
+    }
+    let started = record_subject(db, subject, placement, None, true)?;
+    db.execute(
+        "UPDATE pipeline_investigations SET reservation=?2 WHERE event_id=?1",
+        params![batch.digest.id, reservation],
+    )
+    .map_err(|e| e.to_string())?;
+    db.execute(
+        "UPDATE pipeline_auto_starts SET state='recorded' WHERE id=?1",
+        [reservation],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(AutoCommit::Recorded(started))
+}
+
+/// Removes the worktree and branch a placement made, when it made one.
+pub fn rollback(provisioner: Option<&dyn Provisioner>, subject: &Subject, placement: &Placement) {
+    if let (Some(git), Some(dir), Placement::Worktree { path, branch, .. }) =
+        (provisioner, subject.repo_dir(), placement)
+    {
+        if let Err(error) = git.rollback_worktree(dir, path, branch) {
+            eprintln!("[investigate] Could not roll back a worktree: {error}");
+        }
+    }
+}
+
+/// The native spawn boundary for an investigation tile: an auto-start a mute
+/// cancelled (or that is muted now, before its first start) doesn't start;
+/// once started, it starts freely.
+pub fn spawn_gate(db: &Connection, tile_id: &str) -> Result<(), String> {
+    let row: Option<(String, String)> = db
+        .query_row(
+            "SELECT r.id, r.state FROM pipeline_investigations i
+            JOIN pipeline_auto_starts r ON r.id = i.reservation
+            WHERE i.followup = 0 AND i.workstream_id = (SELECT workstream_id FROM tiles WHERE id=?1)",
+            [tile_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+    let Some((reservation, state)) = row else {
+        return Ok(());
+    };
+    let cancelled =
+        "The Inbox was muted, so this auto-investigation was cancelled and won't start.";
+    match state.as_str() {
+        "cancelled" => Err(cancelled.into()),
+        "recorded" if crate::inbox_mute::is_muted(db)? => {
+            db.execute(
+                "UPDATE pipeline_auto_starts SET state='cancelled' WHERE id=?1",
+                [&reservation],
+            )
+            .map_err(|e| e.to_string())?;
+            Err(cancelled.into())
+        }
+        "recorded" => db
+            .execute(
+                "UPDATE pipeline_auto_starts SET state='spawned' WHERE id=?1",
+                [&reservation],
+            )
+            .map(|_| ())
+            .map_err(|e| e.to_string()),
+        _ => Ok(()),
+    }
+}
+
+/// An auto-start recorded but cancelled before its first spawn: its
+/// workstream, worktree and branch are rolled back.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CancelledStart {
+    pub reservation: String,
+    pub event_id: String,
+    pub workstream_id: String,
+    pub repo_dir: Option<String>,
+    pub path: String,
+    pub branch: String,
+}
+
+pub fn cancelled_starts(db: &Connection) -> Result<Vec<CancelledStart>, String> {
+    let mut stmt = db
+        .prepare(
+            "SELECT r.id, i.event_id, w.id, p.directory, COALESCE(w.directory, ''), COALESCE(w.worktree_branch, '')
+            FROM pipeline_auto_starts r
+            JOIN pipeline_investigations i ON i.reservation = r.id AND i.followup = 0
+            JOIN workstreams w ON w.id = i.workstream_id
+            LEFT JOIN projects p ON p.id = w.project_id
+            WHERE r.state = 'cancelled'",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok(CancelledStart {
+                reservation: r.get(0)?,
+                event_id: r.get(1)?,
+                workstream_id: r.get(2)?,
+                repo_dir: r.get(3)?,
+                path: r.get(4)?,
+                branch: r.get(5)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())
+}
+
+pub fn rollback_cancelled(provisioner: Option<&dyn Provisioner>, start: &CancelledStart) {
+    if let (Some(git), Some(dir)) = (provisioner, start.repo_dir.as_deref()) {
+        if !start.branch.is_empty() {
+            if let Err(error) = git.rollback_worktree(dir, &start.path, &start.branch) {
+                eprintln!("[investigate] Could not roll back a worktree: {error}");
+            }
+        }
+    }
+}
+
+/// Forgets a rolled-back auto-start: its investigation and workstream go.
+pub fn forget_cancelled(db: &Connection, start: &CancelledStart) -> Result<(), String> {
+    let tx = db.unchecked_transaction().map_err(|e| e.to_string())?;
+    for (sql, key) in [
+        (
+            "DELETE FROM pipeline_investigations WHERE event_id=?1",
+            &start.event_id,
+        ),
+        (
+            "DELETE FROM tiles WHERE workstream_id=?1",
+            &start.workstream_id,
+        ),
+        ("DELETE FROM workstreams WHERE id=?1", &start.workstream_id),
+        (
+            "DELETE FROM pipeline_auto_starts WHERE id=?1",
+            &start.reservation,
+        ),
+    ] {
+        tx.execute(sql, [key]).map_err(|e| e.to_string())?;
+    }
+    tx.commit().map_err(|e| e.to_string())
+}
+
 /// The folder a standalone investigation works in: the home directory.
 pub fn home_dir() -> String {
     dirs::home_dir()
@@ -916,6 +1144,13 @@ pub(crate) mod tests {
                 Some(e) => Err(e.clone()),
                 None => Ok(format!("/wt/{branch}")),
             }
+        }
+        fn rollback_worktree(&self, dir: &str, path: &str, branch: &str) -> Result<(), String> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(format!("rollback {dir} {path} {branch}"));
+            Ok(())
         }
         fn fetch_branch(&self, dir: &str, branch: &str) -> Result<(), String> {
             self.calls
@@ -1597,6 +1832,177 @@ pub(crate) mod tests {
             crate::pipeline_digest::digests(&db).unwrap()[0].investigation_error,
             None
         );
+    }
+
+    /// A claimed auto-start of `seed_digest`'s digest, placed in a worktree.
+    fn claimed_auto_start(db: &Connection, git: &FakeGit) -> (String, Subject, Placement) {
+        let d = seed_digest(db);
+        link_repo(db);
+        db.execute("UPDATE pipeline_digests SET auto_pending=1", [])
+            .unwrap();
+        let clock = crate::pipeline_digest::Clock::system();
+        let crate::pipeline_digest::AutoClaim::Start { reservation } =
+            crate::pipeline_digest::claim_auto(db, &d.id, &clock).unwrap()
+        else {
+            panic!("a start")
+        };
+        let subject = subject(db, &d.id).unwrap();
+        let placement = place_subject(Some(git), &subject, "/h");
+        assert!(matches!(placement, Placement::Worktree { .. }));
+        (reservation, subject, placement)
+    }
+
+    fn reservations(db: &Connection) -> Vec<String> {
+        db.prepare("SELECT state FROM pipeline_auto_starts ORDER BY at")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect()
+    }
+
+    /// r2-f3: muted while git ran, the start is not recorded, its place in
+    /// the cap is given back, and its worktree and branch are rolled back.
+    #[test]
+    fn an_auto_start_cancelled_by_a_mute_during_git_is_rolled_back() {
+        let db = db();
+        let git = FakeGit {
+            default_branch: Some("main".into()),
+            ..Default::default()
+        };
+        let (reservation, subject, placement) = claimed_auto_start(&db, &git);
+        crate::inbox_mute::mute(&db, None).unwrap();
+        crate::inbox_mute::unmute(&db).unwrap();
+        assert_eq!(
+            commit_auto_start(&db, &reservation, &subject, &placement).unwrap(),
+            AutoCommit::Cancelled
+        );
+        rollback(Some(&git), &subject, &placement);
+        assert!(git
+            .calls
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|c| c.starts_with("rollback /code/mc /wt/investigate/CI-Main-failures")));
+        assert_eq!(existing(&db, subject.id()).unwrap(), None);
+        assert!(reservations(&db).is_empty(), "the cap place is given back");
+    }
+
+    /// r2-f4: another investigation of the pipeline recorded while git ran
+    /// wins: this start becomes a follow-up and its placement is rolled back.
+    #[test]
+    fn an_auto_start_becomes_a_follow_up_when_another_investigation_won_meanwhile() {
+        let db = db();
+        let git = FakeGit {
+            default_branch: Some("main".into()),
+            ..Default::default()
+        };
+        let (reservation, subject, placement) = claimed_auto_start(&db, &git);
+        let watch: String = db
+            .query_row("SELECT id FROM pipeline_watches", [], |r| r.get(0))
+            .unwrap();
+        db.execute_batch(&format!(
+            "INSERT INTO workstreams (id, name, created_at, updated_at) VALUES ('ws-manual','M','t','t');
+            INSERT INTO tiles (id, workstream_id, tile_type, title, config_json, created_at, updated_at)
+            VALUES ('t-manual','ws-manual','copilot_session','I','{{\"investigation\":true,\"copilot_session_id\":\"s-m\"}}','t','t');
+            INSERT INTO pipeline_investigations (event_id, workstream_id, prompt, session_started, created_at, watch_id)
+            VALUES ('earlier','ws-manual','p',1,'2026-01-01T00:00:00Z','{watch}');"
+        ))
+        .unwrap();
+        assert_eq!(
+            commit_auto_start(&db, &reservation, &subject, &placement).unwrap(),
+            AutoCommit::FollowUp
+        );
+        rollback(Some(&git), &subject, &placement);
+        assert!(git
+            .calls
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|c| c.starts_with("rollback ")));
+        assert_eq!(
+            existing(&db, subject.id()).unwrap().as_deref(),
+            Some("ws-manual")
+        );
+        assert_eq!(
+            pending_followups(&db).unwrap()[0]
+                .expected_tile_id
+                .as_deref(),
+            Some("t-manual")
+        );
+        assert!(reservations(&db).is_empty());
+    }
+
+    /// r2-f3: the native spawn refuses an auto-start a mute cancelled after it
+    /// was recorded, which is then rolled back; a started one runs again freely.
+    #[test]
+    fn the_spawn_boundary_refuses_a_cancelled_auto_start_which_is_then_rolled_back() {
+        let db = db();
+        let git = FakeGit {
+            default_branch: Some("main".into()),
+            ..Default::default()
+        };
+        let (reservation, subject, placement) = claimed_auto_start(&db, &git);
+        let AutoCommit::Recorded(started) =
+            commit_auto_start(&db, &reservation, &subject, &placement).unwrap()
+        else {
+            panic!("recorded")
+        };
+        assert_eq!(reservations(&db), vec!["recorded".to_string()]);
+        db.execute(
+            "INSERT INTO tiles (id, workstream_id, tile_type, title, config_json, created_at, updated_at)
+            VALUES ('t', ?1, 'copilot_session', 'I', '{\"investigation\":true}', 't', 't')",
+            [&started.workstream_id],
+        )
+        .unwrap();
+        crate::inbox_mute::mute(&db, None).unwrap();
+        assert!(spawn_gate(&db, "t").unwrap_err().contains("muted"));
+        let cancelled = cancelled_starts(&db).unwrap();
+        assert_eq!(cancelled.len(), 1);
+        assert_eq!(cancelled[0].branch, "investigate/CI-Main-failures-20260302");
+        rollback_cancelled(Some(&git), &cancelled[0]);
+        forget_cancelled(&db, &cancelled[0]).unwrap();
+        assert!(git
+            .calls
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|c| c.starts_with("rollback /code/mc")));
+        let left: i64 = db
+            .query_row(
+                "SELECT COUNT(*) FROM workstreams WHERE id=?1",
+                [&started.workstream_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(left, 0);
+        assert!(cancelled_starts(&db).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_spawned_auto_start_restarts_freely_even_when_muted_later() {
+        let db = db();
+        let git = FakeGit {
+            default_branch: Some("main".into()),
+            ..Default::default()
+        };
+        let (reservation, subject, placement) = claimed_auto_start(&db, &git);
+        let AutoCommit::Recorded(started) =
+            commit_auto_start(&db, &reservation, &subject, &placement).unwrap()
+        else {
+            panic!("recorded")
+        };
+        db.execute(
+            "INSERT INTO tiles (id, workstream_id, tile_type, title, config_json, created_at, updated_at)
+            VALUES ('t', ?1, 'copilot_session', 'I', '{\"investigation\":true}', 't', 't')",
+            [&started.workstream_id],
+        )
+        .unwrap();
+        spawn_gate(&db, "t").unwrap();
+        assert_eq!(reservations(&db), vec!["spawned".to_string()]);
+        crate::inbox_mute::mute(&db, None).unwrap();
+        spawn_gate(&db, "t").unwrap();
+        assert!(cancelled_starts(&db).unwrap().is_empty());
     }
 
     #[test]

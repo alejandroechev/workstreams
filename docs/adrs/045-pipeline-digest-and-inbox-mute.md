@@ -195,6 +195,19 @@ round 1, f4, f5, f7):
   reserved in `pipeline_auto_starts` while fewer than 3 were in the rolling 24
   hours. That ledger survives removing watches and expiring digests; a start
   that then doesn't happen gives its place back.
+- **The claim is a reservation that a mute cancels, through git and the
+  first spawn** (review round 2, f3, f4). Its `pipeline_auto_starts` row moves
+  claimed → recorded → spawned; turning Mute all on marks claimed and
+  recorded ones cancelled. It is checked before git runs; when the start is
+  committed, under the database lock, it must still be claimed and unmuted,
+  and the pipeline must still have no investigation (one that won meanwhile,
+  say Investigate on an earlier digest, gets the runs as a follow-up instead);
+  otherwise nothing is recorded, the place in the cap is given back, and the
+  worktree git just made is removed, with its branch when the branch has no
+  commits beyond the remote. The native spawn command checks it once more for
+  an investigation tile: a cancelled (or, before its first start, muted)
+  auto-start doesn't start, and the app's next auto pass rolls its worktree,
+  branch and workstream back. Once spawned, the tile starts freely.
 - **Mute is rechecked** before git runs and before the start is recorded, and
   the app rechecks a session is still due right before spawning it. Turning
   Mute all on drops every undelivered piece of auto work for good (requests,

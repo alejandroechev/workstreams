@@ -235,6 +235,17 @@ pub trait Provisioner: Send + Sync {
     fn default_branch(&self, _project_directory: &str) -> Option<String> {
         None
     }
+
+    /// Removes a worktree an investigation made but won't use, and its branch
+    /// when the branch has no commits of its own. Fakes need not.
+    fn rollback_worktree(
+        &self,
+        _project_directory: &str,
+        _path: &str,
+        _branch: &str,
+    ) -> Result<(), String> {
+        Ok(())
+    }
 }
 
 /// Where a worktree would go, and whether something is already there.
