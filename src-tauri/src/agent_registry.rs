@@ -576,7 +576,7 @@ pub const COMMANDS: &[Command] = &[
     Command {
         id: "inbox.pipeline_add",
         log_params: &["mode"],
-        summary: "Watch the ADO pipeline a link points at (params: url = a pipeline or run link, mode=off|failures|successes|both, default failures)",
+        summary: "Watch the ADO pipeline a link points at (params: url = a pipeline or run link, mode=off|failures|successes|both|daily_failures, default failures)",
         requires_identity: true,
         destructive: false,
         handler: inbox_pipeline_add,
@@ -584,7 +584,7 @@ pub const COMMANDS: &[Command] = &[
     Command {
         id: "inbox.pipeline_mode",
         log_params: &["id", "mode"],
-        summary: "Change what a watched pipeline notifies (params: id, mode=off|failures|successes|both)",
+        summary: "Change what a watched pipeline notifies (params: id, mode=off|failures|successes|both|daily_failures; daily_failures posts one digest entry per day instead of one per failed run)",
         requires_identity: true,
         destructive: false,
         handler: inbox_pipeline_mode,
@@ -966,7 +966,7 @@ fn pipeline_mode_param(
                 AgentError::new(
                     "INVALID_PARAM",
                     e,
-                    "Pass mode=off, mode=failures, mode=successes or mode=both.",
+                    "Pass mode=off, mode=failures, mode=successes, mode=both or mode=daily_failures.",
                 )
             })
         })
@@ -1012,7 +1012,7 @@ fn inbox_pipeline_mode(
         AgentError::new(
             "INVALID_PARAM",
             "mode is required",
-            "Pass mode=off, mode=failures, mode=successes or mode=both.",
+            "Pass mode=off, mode=failures, mode=successes, mode=both or mode=daily_failures.",
         )
     })?;
     crate::pipeline_inbox::set_mode(context.db, &id, mode).map_err(inbox_error)?;
@@ -5537,13 +5537,22 @@ mod tests {
             serde_json::json!({"id":id,"mode":"successes"}),
         )
         .unwrap();
-        assert!(call(
+        let daily = call(
             &db,
             &caller,
             "inbox.pipeline_mode",
-            serde_json::json!({"id":id,"mode":"sometimes"})
+            serde_json::json!({"id":with_mode.data["id"],"mode":"daily_failures"}),
         )
-        .is_err());
+        .unwrap();
+        assert_eq!(daily.data["mode"], "daily_failures");
+        let wrong = call(
+            &db,
+            &caller,
+            "inbox.pipeline_mode",
+            serde_json::json!({"id":id,"mode":"sometimes"}),
+        )
+        .unwrap_err();
+        assert!(wrong.hint.contains("daily_failures"), "{}", wrong.hint);
         let scoped = call(
             &db,
             &caller,

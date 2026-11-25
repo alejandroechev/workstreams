@@ -47,6 +47,14 @@ describe("Pipelines manager", () => {
     expect(screen.queryByTestId("pipeline-error-p1")).toBeNull();
   });
 
+  it("offers exactly Off, Failures, Successes, Both and Daily failures", () => {
+    const props = setup();
+    const options = [...screen.getByTestId("pipeline-mode-p1").querySelectorAll("option")].map((o) => o.textContent);
+    expect(options).toEqual(["Off", "Failures", "Successes", "Both", "Daily failures"]);
+    fireEvent.change(screen.getByTestId("pipeline-mode-p1"), { target: { value: "daily_failures" } });
+    expect(props.onSetMode).toHaveBeenCalledWith("p1", "daily_failures");
+  });
+
   it("adds a pasted link, clears the field, and shows a refusal without clearing it", async () => {
     const props = setup();
     const input = screen.getByTestId("pipeline-url-input");

@@ -55,6 +55,17 @@ describe("MemoryBackend pipelines", () => {
     await expect(b.setPipelineWatchMode(p.id, "both")).rejects.toThrow();
   });
 
+  it("Daily failures notifies no run, and runs before the switch never count", async () => {
+    const b = backend();
+    const p = await b.addPipelineWatch(PAGE, "failures");
+    await b.setPipelineWatchMode(p.id, "daily_failures");
+    b.finishPipelineRun(p.id, { id: 1, number: "1", result: "failed", branch: "main", finished_at: "2100-10-27T08:00:00Z" });
+    b.finishPipelineRun(p.id, { id: 2, number: "2", result: "succeeded", branch: "main", finished_at: "2100-10-27T09:00:00Z" });
+    const inbox = await b.getPrInbox();
+    expect(inbox.pipeline_items).toEqual([]);
+    expect(inbox.pipelines![0]).toMatchObject({ mode: "daily_failures", last_result: "succeeded" });
+  });
+
   it("notifies only the default branch until switched to all branches", async () => {
     const b = new MemoryBackend();
     b.seedPipelineDefinition({ organization: "skype", project: "SCC", definition_id: 9, name: "engAIne", default_branch: "develop" });

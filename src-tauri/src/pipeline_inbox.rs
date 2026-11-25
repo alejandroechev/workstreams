@@ -12,12 +12,15 @@ use serde::{Deserialize, Serialize};
 
 /// Which finished runs of a pipeline notify.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "snake_case")]
 pub enum PipelineMode {
     Off,
     Failures,
     Successes,
     Both,
+    /// No per-run notification: failed runs are kept for one daily digest
+    /// entry per pipeline (ADR 045).
+    DailyFailures,
 }
 
 impl PipelineMode {
@@ -27,8 +30,9 @@ impl PipelineMode {
             "failures" | "failure" | "failed" => Ok(Self::Failures),
             "successes" | "success" | "succeeded" => Ok(Self::Successes),
             "both" | "all" => Ok(Self::Both),
+            "daily_failures" | "daily-failures" | "daily" => Ok(Self::DailyFailures),
             other => Err(format!(
-                "Unknown pipeline mode '{other}'; expected off, failures, successes or both"
+                "Unknown pipeline mode '{other}'; expected off, failures, successes, both or daily_failures"
             )),
         }
     }
@@ -39,6 +43,7 @@ impl PipelineMode {
             Self::Failures => "failures",
             Self::Successes => "successes",
             Self::Both => "both",
+            Self::DailyFailures => "daily_failures",
         }
     }
 
@@ -1813,6 +1818,38 @@ mod tests {
             .unwrap()
             .iter()
             .all(|p| p.last_result.as_deref() == Some("canceled")));
+    }
+
+    #[test]
+    fn daily_failures_mode_notifies_no_run_and_parses_from_its_name() {
+        assert_eq!(
+            PipelineMode::parse("daily_failures").unwrap(),
+            PipelineMode::DailyFailures
+        );
+        assert_eq!(
+            serde_json::to_value(PipelineMode::DailyFailures).unwrap(),
+            json!("daily_failures")
+        );
+        assert!(PipelineMode::parse("weekly")
+            .unwrap_err()
+            .contains("daily_failures"));
+        let db = db();
+        let p = add(&db, &resolved(1, "daily"), None).unwrap();
+        set_mode(&db, &p.id, PipelineMode::DailyFailures).unwrap();
+        assert_eq!(list(&db).unwrap()[0].mode, PipelineMode::DailyFailures);
+        make_old(&db);
+        let target = targets(&db).unwrap().remove(0);
+        apply_runs(
+            &db,
+            &target,
+            &[run(2, "succeeded", NEW), run(1, "failed", NEW)],
+        )
+        .unwrap();
+        assert!(items(&db).unwrap().is_empty(), "no per-run notification");
+        assert_eq!(
+            list(&db).unwrap()[0].last_result.as_deref(),
+            Some("succeeded")
+        );
     }
 
     #[test]

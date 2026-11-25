@@ -7,6 +7,8 @@ import {
   groupPipelineItems,
   isPipelineMode,
   parsePipelineLink,
+  PIPELINE_MODES,
+  PIPELINE_MODE_LABELS,
   pipelineModeWatches,
   pipelineRepoView,
   remoteKey,
@@ -36,6 +38,12 @@ describe("pipeline modes", () => {
     ]);
     expect(isPipelineMode("both")).toBe(true);
     expect(isPipelineMode("sometimes")).toBe(false);
+  });
+
+  it("offers Daily failures, which notifies no single run", () => {
+    expect(PIPELINE_MODES.map((m) => PIPELINE_MODE_LABELS[m])).toEqual(["Off", "Failures", "Successes", "Both", "Daily failures"]);
+    expect(isPipelineMode("daily_failures")).toBe(true);
+    expect(["failed", "succeeded"].map((r) => pipelineModeWatches("daily_failures", r))).toEqual([false, false]);
   });
 
   it("names results the way the inbox shows them", () => {

@@ -1,15 +1,20 @@
 import { countUnreadPrs, parseAdoRemote, type PrInboxItem } from "./pr-inbox";
 
-/** Which finished runs of a watched pipeline notify (ADR 038). Mirrors the native `PipelineMode`. */
-export type PipelineMode = "off" | "failures" | "successes" | "both";
+/**
+ * Which finished runs of a watched pipeline notify (ADR 038). Mirrors the
+ * native `PipelineMode`. Daily failures notifies no single run: failed runs
+ * are kept for one daily digest entry per pipeline (ADR 045).
+ */
+export type PipelineMode = "off" | "failures" | "successes" | "both" | "daily_failures";
 
-export const PIPELINE_MODES: PipelineMode[] = ["off", "failures", "successes", "both"];
+export const PIPELINE_MODES: PipelineMode[] = ["off", "failures", "successes", "both", "daily_failures"];
 
 export const PIPELINE_MODE_LABELS: Record<PipelineMode, string> = {
   off: "Off",
   failures: "Failures",
   successes: "Successes",
   both: "Both",
+  daily_failures: "Daily failures",
 };
 
 export function isPipelineMode(value: string): value is PipelineMode {
