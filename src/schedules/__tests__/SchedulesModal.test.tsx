@@ -9,7 +9,8 @@ const now = new Date(2026, 10, 23, 16, 0).getTime();
 const schedule = (over: Partial<PeriodicSchedule>): PeriodicSchedule => ({
   id: "a", tile_id: "t1", workstream_id: "w1", prompt: "Check for new videos\nand summarise", frequency: { kind: "daily", time: "09:00" },
   notify_inbox: false, notify_phone: false, paused: false, next_run_at: new Date(2026, 10, 24, 9, 0).getTime(), last_run_at: null,
-  last_result: "ok", last_error: null, failures: 0, run_requested: false, run_requested_at: null, created_at: 0, revision: 0, ...over,
+  last_result: "ok", last_error: null, failures: 0, run_requested: false, run_requested_at: null, created_at: 0, revision: 0,
+  session_id: "S", session_started: true, interactive_tile_id: null, ...over,
 });
 
 function setup(schedules: PeriodicSchedule[]) {
@@ -24,7 +25,7 @@ function setup(schedules: PeriodicSchedule[]) {
 
 describe("SchedulesModal", () => {
   it("lists each schedule's workstream, prompt first line, next run and last result", () => {
-    setup([schedule({}), schedule({ id: "b", tile_id: "t2", workstream_id: "w2", paused: true, last_result: "could not start", last_error: "tile gone", failures: 2 })]);
+    setup([schedule({}), schedule({ id: "b", tile_id: "t2", workstream_id: "w2", paused: true, last_result: "failed", last_error: "exit code 1", failures: 2 })]);
     const first = screen.getByTestId("schedule-row-a");
     expect(first.textContent).toContain("Courses");
     expect(first.textContent).toContain("Videos");
@@ -34,7 +35,7 @@ describe("SchedulesModal", () => {
     const second = screen.getByTestId("schedule-row-b");
     expect(second.getAttribute("data-paused")).toBe("true");
     expect(second.textContent).toContain("paused");
-    expect(second.textContent).toContain("could not start: tile gone");
+    expect(second.textContent).toContain("failed: exit code 1");
     expect(second.textContent).toContain("2 failures in a row");
   });
 
@@ -59,6 +60,6 @@ describe("SchedulesModal", () => {
 
   it("explains how to add one when there are none", () => {
     setup([]);
-    expect(screen.getByTestId("schedules-empty").textContent).toContain("Run periodically");
+    expect(screen.getByTestId("schedules-empty").textContent).toContain("Periodic session");
   });
 });

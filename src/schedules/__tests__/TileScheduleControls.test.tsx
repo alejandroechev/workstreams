@@ -11,6 +11,7 @@ const schedule: PeriodicSchedule = {
   id: "a", tile_id: "t1", workstream_id: "w1", prompt: "P", frequency: { kind: "daily", time: "09:00" },
   notify_inbox: false, notify_phone: false, paused: false, next_run_at: new Date(2026, 10, 24, 9, 0).getTime(), last_run_at: null,
   last_result: null, last_error: null, failures: 0, run_requested: false, run_requested_at: null, created_at: 0, revision: 0,
+  session_id: "S", session_started: false, interactive_tile_id: null,
 };
 
 function renderWith(byTile: Map<string, PeriodicSchedule>, tileId = "t1") {
@@ -45,7 +46,7 @@ describe("TileScheduleControls", () => {
   });
 
   it("says paused", () => {
-    renderWith(new Map([["t1", { ...schedule, paused: true, last_result: "timed out", last_error: "60 minutes" }]]));
+    renderWith(new Map([["t1", { ...schedule, paused: true, last_result: "timed_out", last_error: "60 minutes" }]]));
     expect(screen.getByTestId("tile-schedule-badge-t1").textContent).toBe("paused · last: timed out: 60 minutes");
   });
 

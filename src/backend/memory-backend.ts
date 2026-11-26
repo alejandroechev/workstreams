@@ -96,7 +96,7 @@ import type { SessionFileComment } from "../domain/file-comments";
 import type { Review, ReviewComment, ChangedFile, DiffSides } from "../domain/code-review";
 import { CONTENT_SEARCH_MAX_PER_FILE } from "../domain/content-search";
 import { compareByCreatedAt } from "../domain/comment-order";
-import { validateFrequency, type PeriodicSchedule } from "../domain/periodic-schedules";
+import { headlessArgv, composeRunPrompt, needsInputQuestion, validateFrequency, type PeriodicRun, type PeriodicRunKind, type PeriodicSchedule, type PeriodicToolCall } from "../domain/periodic-schedules";
 import type {
   Backend,
   CodeTrace,
@@ -106,6 +106,7 @@ import type {
   DevlogExportResult,
   NewPeriodicSchedule,
   PeriodicSchedulePatch,
+  StartPeriodicRun,
 } from "./types";
 import type {
   Task,
@@ -245,11 +246,27 @@ export class MemoryBackend implements Backend {
     });
   }
 
-  // ── Periodic schedules (mirror of src-tauri/src/periodic_schedules.rs, ADR 044) ──
+  // ── Periodic schedules (mirror of src-tauri/src/periodic_schedules.rs, ADR 044/046) ──
   private schedules = new Map<string, PeriodicSchedule>();
 
+  /** As INTERACTIVE in periodic_schedules.rs: the first Copilot tile on the session, outside archived workstreams. */
+  private interactiveTile(sessionId: string | null): string | null {
+    if (!sessionId) return null;
+    for (const tile of this.tiles.values()) {
+      if (tile.tile_type !== "copilot_session" || linkedSessionId(tile.config_json) !== sessionId) continue;
+      const status = this.workstreams.get(tile.workstream_id)?.status;
+      if (status === "archived" || status === "archiving") continue;
+      return tile.id;
+    }
+    return null;
+  }
+
+  private viewSchedule(schedule: PeriodicSchedule): PeriodicSchedule {
+    return { ...structuredClone(schedule), interactive_tile_id: this.interactiveTile(schedule.session_id) };
+  }
+
   async listSchedules(): Promise<PeriodicSchedule[]> {
-    return [...this.schedules.values()].sort((a, b) => a.created_at - b.created_at).map((s) => structuredClone(s));
+    return [...this.schedules.values()].sort((a, b) => a.created_at - b.created_at).map((s) => this.viewSchedule(s));
   }
 
   private checkSchedulePrompt(prompt: string): void {
@@ -263,7 +280,7 @@ export class MemoryBackend implements Backend {
     if (problem) throw new Error(problem);
     const tile = this.tiles.get(input.tileId);
     if (!tile) throw new Error(`No tile ${input.tileId}`);
-    if (tile.tile_type !== "copilot_session") throw new Error("Only a Copilot session tile can run periodically.");
+    if (tile.tile_type !== "periodic_session") throw new Error("Only a Periodic session tile can have a schedule.");
     if (tile.workstream_id !== input.workstreamId) throw new Error(`Tile ${input.tileId} is not in workstream ${input.workstreamId}`);
     if ([...this.schedules.values()].some((s) => s.tile_id === input.tileId)) throw new Error("This tile already has a schedule; edit it instead.");
     const schedule: PeriodicSchedule = {
@@ -271,9 +288,10 @@ export class MemoryBackend implements Backend {
       frequency: structuredClone(input.frequency), notify_inbox: input.notifyInbox, notify_phone: input.notifyPhone,
       paused: false, next_run_at: input.nextRunAt, last_run_at: null, last_result: null, last_error: null,
       failures: 0, run_requested: false, run_requested_at: null, created_at: input.createdAt, revision: 0,
+      session_id: input.sessionId ?? generateId(), session_started: false, interactive_tile_id: null,
     };
     this.schedules.set(schedule.id, schedule);
-    return structuredClone(schedule);
+    return this.viewSchedule(schedule);
   }
 
   async updateSchedule(id: string, patch: PeriodicSchedulePatch, expectedRevision?: number, alert?: { title: string; body: string }): Promise<PeriodicSchedule> {
@@ -288,13 +306,145 @@ export class MemoryBackend implements Backend {
       const problem = validateFrequency(patch.frequency);
       if (problem) throw new Error(problem);
     }
-    Object.assign(schedule, structuredClone(patch), { revision: schedule.revision + 1 });
+    const { interactive_tile_id: _computed, session_id: _session, session_started: _started, ...stored } = structuredClone(patch);
+    Object.assign(schedule, stored, { revision: schedule.revision + 1 });
     if (alert) await this.postAppInboxMessage(schedule.workstream_id, schedule.tile_id, "error", alert.title, alert.body);
-    return structuredClone(schedule);
+    return this.viewSchedule(schedule);
   }
 
+  /** As periodic_schedules::delete: the schedule goes, and its tile with it. */
   async deleteSchedule(id: string): Promise<void> {
+    const schedule = this.schedules.get(id);
     this.schedules.delete(id);
+    if (schedule) await this.deleteTile(schedule.tile_id);
+  }
+
+  // ── Headless periodic runs (mirror of periodic_runner.rs / periodic_runs.rs, ADR 046) ──
+  private periodicRuns: PeriodicRun[] = [];
+
+  private emitPeriodicRun(run: PeriodicRun, finished: boolean): void {
+    if (typeof window === "undefined") return;
+    (window as unknown as { __WS_EMIT__?: (e: string, p?: unknown) => void }).__WS_EMIT__?.("periodic-run", { run: structuredClone(run), finished });
+  }
+
+  private storePeriodicRun(run: PeriodicRun): PeriodicRun {
+    this.periodicRuns.push(run);
+    // The newest 50 per tile.
+    const mine = this.periodicRuns.filter((r) => r.tile_id === run.tile_id).sort((a, b) => b.started_at - a.started_at);
+    const drop = new Set(mine.slice(50).map((r) => r.id));
+    this.periodicRuns = this.periodicRuns.filter((r) => !drop.has(r.id));
+    return structuredClone(run);
+  }
+
+  async startPeriodicRun(input: StartPeriodicRun): Promise<PeriodicRun> {
+    const schedule = [...this.schedules.values()].find((s) => s.tile_id === input.tileId);
+    if (!schedule || !schedule.session_id) throw new Error(`No schedule for tile ${input.tileId}`);
+    if (this.interactiveTile(schedule.session_id)) throw new Error("Paused while open interactively.");
+    if (this.periodicRuns.some((r) => r.tile_id === input.tileId && r.status === "running")) throw new Error("A run is already going in this tile.");
+    const { program, args } = headlessArgv(input.command, composeRunPrompt(input.prompt), schedule.session_id, !schedule.session_started);
+    if (typeof window !== "undefined") {
+      const w = window as unknown as { __WS_INVOKE_LOG__?: Array<{ cmd: string; args: Record<string, unknown> }> };
+      if (!w.__WS_INVOKE_LOG__) w.__WS_INVOKE_LOG__ = [];
+      w.__WS_INVOKE_LOG__.push({ cmd: "periodic_run_start", args: { tileId: input.tileId, kind: input.kind, prompt: input.prompt, program, args, cwd: input.cwd } });
+    }
+    const run: PeriodicRun = {
+      id: generateId(), schedule_id: schedule.id, tile_id: input.tileId, kind: input.kind, status: "running",
+      started_at: input.startedAt, ended_at: null, exit_code: null, prompt: input.prompt, answer: null, question: null,
+      error: null, tools: [], events_path: null,
+    };
+    const stored = this.storePeriodicRun(run);
+    this.emitPeriodicRun(run, false);
+    return stored;
+  }
+
+  async listPeriodicRuns(tileId: string): Promise<PeriodicRun[]> {
+    return this.periodicRuns.filter((r) => r.tile_id === tileId)
+      .sort((a, b) => b.started_at - a.started_at || this.periodicRuns.indexOf(b) - this.periodicRuns.indexOf(a))
+      .map((r) => structuredClone(r));
+  }
+
+  async getPeriodicRun(id: string): Promise<PeriodicRun | null> {
+    const run = this.periodicRuns.find((r) => r.id === id);
+    return run ? structuredClone(run) : null;
+  }
+
+  async recordPeriodicSkip(tileId: string, kind: PeriodicRunKind, prompt: string, at: number): Promise<PeriodicRun> {
+    const schedule = [...this.schedules.values()].find((s) => s.tile_id === tileId);
+    if (!schedule) throw new Error(`No schedule for tile ${tileId}`);
+    return this.storePeriodicRun({
+      id: generateId(), schedule_id: schedule.id, tile_id: tileId, kind, status: "skipped", started_at: at, ended_at: at,
+      exit_code: null, prompt, answer: null, question: null, error: null, tools: [], events_path: null,
+    });
+  }
+
+  private runningRun(tileId: string): PeriodicRun {
+    const run = this.periodicRuns.find((r) => r.tile_id === tileId && r.status === "running");
+    if (!run) throw new Error(`No run going in tile ${tileId}`);
+    return run;
+  }
+
+  /** E2E seam: the running run's CLI printed a tool call or an answer (`periodic-run` streams it). */
+  periodicRunEventForTests(tileId: string, event: { tool?: PeriodicToolCall; answer?: string }): void {
+    const run = this.runningRun(tileId);
+    if (event.tool) {
+      const known = run.tools.find((t) => t.id === event.tool!.id);
+      if (known) known.status = event.tool.status;
+      else run.tools.push({ ...event.tool });
+    }
+    if (event.answer !== undefined) run.answer = event.answer;
+    this.emitPeriodicRun(run, false);
+  }
+
+  /** E2E seam: the running run ended, classified as `classify` in periodic_runner.rs does. */
+  finishPeriodicRunForTests(tileId: string, end: { exitCode?: number; answer?: string; timedOut?: boolean; spawnError?: string; at?: number }): PeriodicRun {
+    const run = this.runningRun(tileId);
+    if (end.answer !== undefined) run.answer = end.answer;
+    run.ended_at = end.at ?? run.started_at + 1000;
+    if (end.timedOut) {
+      Object.assign(run, { status: "timed_out", error: "The run was still going after 60 minutes, so it was stopped." });
+    } else if (end.spawnError) {
+      Object.assign(run, { status: "failed", error: `The Copilot command could not start: ${end.spawnError}` });
+    } else if ((end.exitCode ?? 0) !== 0) {
+      Object.assign(run, { status: "failed", exit_code: end.exitCode, error: `The run ended with exit code ${end.exitCode}` });
+    } else {
+      const question = run.answer ? needsInputQuestion(run.answer) : null;
+      Object.assign(run, { status: question === null ? "ok" : "needs_input", exit_code: 0, question });
+    }
+    run.tools = run.tools.map((t) => (t.status === "running" ? { ...t, status: "failed" as const } : t));
+    const schedule = this.schedules.get(run.schedule_id);
+    // As the native runner: once a run started the session, later ones resume it.
+    if (schedule && !end.spawnError) Object.assign(schedule, { session_started: true, revision: schedule.revision + 1 });
+    this.emitPeriodicRun(run, true);
+    return structuredClone(run);
+  }
+
+  /** E2E seam: a tile's run log, as an app restart reads it back. */
+  seedPeriodicRunsForTests(tileId: string, count: number, startAt: number): void {
+    const schedule = [...this.schedules.values()].find((s) => s.tile_id === tileId);
+    if (!schedule) throw new Error(`No schedule for tile ${tileId}`);
+    for (let i = 0; i < count; i++) {
+      this.storePeriodicRun({
+        id: generateId(), schedule_id: schedule.id, tile_id: tileId, kind: "scheduled", status: "ok", started_at: startAt + i * 60_000,
+        ended_at: startAt + i * 60_000 + 30_000, exit_code: 0, prompt: `Run ${i + 1}`, answer: `Answer ${i + 1}`, question: null,
+        error: null, tools: [], events_path: null,
+      });
+    }
+  }
+
+  async companionPostAppMessage(tileId: string, workstreamId: string, kind: "prompt" | "result", text: string, at: number): Promise<void> {
+    // As companion_messages::post_app_message: the thread is opened, named after the tile, if it has none.
+    if (!text.trim()) throw new Error("The message is empty.");
+    if (this.companionRevoked.has(tileId)) {
+      this.companionRevoked.delete(tileId);
+      this.companionSessions.delete(tileId);
+    }
+    if (!this.companionSessions.has(tileId)) {
+      const title = this.tiles.get(tileId)?.title?.trim() || "Copilot session";
+      this.companionSessions.set(tileId, { tileId, workstreamId, requestId: `laptop-${tileId}-${at}`, prompt: title, createdAt: at, canSend: true, messages: [] });
+    }
+    const session = this.companionSessions.get(tileId)!;
+    session.messages.push({ id: generateId(), kind, text, at });
+    if (session.messages.length > MAX_MESSAGES_PER_SESSION) session.messages.splice(0, session.messages.length - MAX_MESSAGES_PER_SESSION);
   }
 
   /**
@@ -1786,8 +1936,9 @@ export class MemoryBackend implements Backend {
     const tile = this.tiles.get(id);
     this.tiles.delete(id);
     this.terminals.delete(id);
-    // Schedules (ADR 044), boards and their additions go with their tile, as ON DELETE CASCADE does.
+    // Schedules (ADR 044), runs, boards and their additions go with their tile, as ON DELETE CASCADE does.
     for (const s of [...this.schedules.values()]) if (s.tile_id === id) this.schedules.delete(s.id);
+    this.periodicRuns = this.periodicRuns.filter((r) => r.tile_id !== id);
     for (const board of [...this.diagramBoards.values()]) if (board.tile_id === id) this.dropDiagramBoard(board.id);
     // As delete_tile in lib.rs: the tile also leaves its layout order.
     if (tile) {

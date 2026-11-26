@@ -1,6 +1,6 @@
 // @test-skip: Type-only interface; behaviour covered by MemoryBackend + TauriBackend tests.
 import type { DiffOrderView } from "../domain/diff-reading-order";
-import type { PeriodicSchedule, ScheduleFrequency } from "../domain/periodic-schedules";
+import type { PeriodicRun, PeriodicRunKind, PeriodicSchedule, ScheduleFrequency } from "../domain/periodic-schedules";
 import type { DiagramAddition, DiagramBoard } from "../diagram/types";
 import type { WorkLane } from "../domain/work-lanes";
 import type { PrInboxMute, PrInboxSnapshot, PrWatchMode } from "../domain/pr-inbox";
@@ -80,6 +80,20 @@ export interface NewPeriodicSchedule {
   /** Null: planned by the runner at its first scheduled time. */
   nextRunAt: number | null;
   createdAt: number;
+  /** The tile's Copilot session; omitted: a fresh one. */
+  sessionId?: string | null;
+}
+
+/** What starting a headless periodic run takes (ADR 046). */
+export interface StartPeriodicRun {
+  tileId: string;
+  kind: PeriodicRunKind;
+  /** What was asked; the needs-input instruction is appended natively. */
+  prompt: string;
+  /** The workspace's configured Copilot command, used as it is. */
+  command: string | null;
+  cwd: string;
+  startedAt: number;
 }
 
 /** Fields of a schedule that can change after it is created. */
@@ -294,15 +308,32 @@ export interface Backend {
   /** Links a tile to another session: config, thread revocation and barring the old processes, atomically. */
   relinkTileSession(tileId: string, configJson: string, title?: string): Promise<void>;
   listSchedules(): Promise<PeriodicSchedule[]>;
-  /** Refuses a second schedule on a tile, a non-session tile, and runs under 5 minutes apart. */
+  /** Refuses a second schedule on a tile, a tile that isn't a Periodic session, and runs under 5 minutes apart. */
   createSchedule(input: NewPeriodicSchedule): Promise<PeriodicSchedule>;
   /**
    * With `expectedRevision`, refuses ("changed") unless the stored row is still that revision.
    * With `alert`, stores it as the schedule tile's Inbox entry in the same transaction (an auto-pause).
    */
   updateSchedule(id: string, patch: PeriodicSchedulePatch, expectedRevision?: number, alert?: { title: string; body: string }): Promise<PeriodicSchedule>;
-  /** Removes the schedule; the tile stays. */
+  /** Removes the schedule and its Periodic session tile. */
   deleteSchedule(id: string): Promise<void>;
+  // Headless periodic runs (ADR 046)
+  /**
+   * Starts one non-interactive Copilot call on the tile's session. Refused
+   * while a run is going in the tile, or a tile is open interactively on the
+   * session. Resolves to the run, `running`; `periodic-run` events follow it.
+   */
+  startPeriodicRun(input: StartPeriodicRun): Promise<PeriodicRun>;
+  /** A tile's runs, newest first (the newest 50). */
+  listPeriodicRuns(tileId: string): Promise<PeriodicRun[]>;
+  getPeriodicRun(id: string): Promise<PeriodicRun | null>;
+  /** Records a slot, Run now or reply skipped because a run was going. */
+  recordPeriodicSkip(tileId: string, kind: PeriodicRunKind, prompt: string, at: number): Promise<PeriodicRun>;
+  /**
+   * Posts to a tile's phone thread as the app (a periodic run's prompt or
+   * answer), opening the thread, named after the tile, if it has none.
+   */
+  companionPostAppMessage(tileId: string, workstreamId: string, kind: "prompt" | "result", text: string, at: number): Promise<void>;
   /** An Inbox entry the app raises itself about a tile (not rate limited). */
   postAppInboxMessage(workstreamId: string, tileId: string, level: string, title: string, body: string): Promise<void>;
   /** The saved reading order for a diff and its freshness, or null (ADR 032). */

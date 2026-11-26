@@ -367,6 +367,28 @@ fn check_text(text: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// A message the app itself posts to a tile's thread (ADR 046: a periodic
+/// run's prompt or answer), opening the thread, named after the tile, if it
+/// has none. Not an agent's send: no hourly cap.
+pub fn post_app_message(
+    conn: &Connection,
+    tile_id: &str,
+    workstream_id: &str,
+    kind: &str,
+    text: &str,
+    at: i64,
+) -> Result<(), String> {
+    if kind != "prompt" && kind != "result" {
+        return Err("The kind must be \"prompt\" or \"result\".".into());
+    }
+    check_text(text)?;
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    open_laptop_thread(&tx, tile_id, workstream_id, at)?;
+    let id = uuid::Uuid::new_v4().to_string();
+    insert_message_in(&tx, tile_id, &id, kind, text, at)?;
+    tx.commit().map_err(|e| e.to_string())
+}
+
 /// Stores a message for a phone session and keeps only its latest messages.
 pub fn add_message(
     conn: &Connection,
@@ -529,6 +551,34 @@ mod tests {
             params![id, format!(r#"{{"copilot_session_id":"{session}"}}"#)],
         )
         .unwrap();
+    }
+
+    /// ADR 046: the app posts a periodic run's prompt and answer itself,
+    /// opening the tile's thread (named after it) on first use; not counted
+    /// against the agent's hourly cap.
+    #[test]
+    fn the_app_posts_to_a_tiles_thread_opening_it_once() {
+        let conn = db();
+        conn.execute(
+            "INSERT INTO tiles (id, workstream_id, tile_type, title, config_json, created_at, updated_at)
+             VALUES ('p', 'w', 'periodic_session', 'Check CI', '{}', 'x', 'x')",
+            [],
+        )
+        .unwrap();
+        post_app_message(&conn, "p", "w", "prompt", "Check CI", 10).unwrap();
+        post_app_message(&conn, "p", "w", "result", "All green", 20).unwrap();
+        let sessions = list(&conn).unwrap();
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].prompt, "Check CI");
+        let texts: Vec<_> = sessions[0]
+            .messages
+            .iter()
+            .map(|m| (m.kind.as_str(), m.text.as_str()))
+            .collect();
+        assert_eq!(texts, vec![("prompt", "Check CI"), ("result", "All green")]);
+        assert_eq!(sent_last_hour(&conn, "p", 30).unwrap(), 0);
+        assert!(post_app_message(&conn, "p", "w", "progress", "x", 30).is_err());
+        assert!(post_app_message(&conn, "p", "w", "result", "  ", 30).is_err());
     }
 
     #[test]

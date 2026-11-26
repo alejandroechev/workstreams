@@ -1,6 +1,6 @@
 import type { DiffOrderView } from "../domain/diff-reading-order";
 import { bumpTileGeneration } from "../domain/tile-activity";
-import type { PeriodicSchedule } from "../domain/periodic-schedules";
+import type { PeriodicRun, PeriodicRunKind, PeriodicSchedule } from "../domain/periodic-schedules";
 import type { DiagramAddition, DiagramBoard } from "../diagram/types";
 import { invoke } from "@tauri-apps/api/core";
 import type { WorkLane } from "../domain/work-lanes";
@@ -24,6 +24,7 @@ import type {
   DevlogExportResult,
   NewPeriodicSchedule,
   PeriodicSchedulePatch,
+  StartPeriodicRun,
 } from "./types";
 import type {
   Task,
@@ -626,6 +627,26 @@ export class TauriBackend implements Backend {
 
   async deleteSchedule(id: string): Promise<void> {
     await invoke("schedule_delete", { id });
+  }
+
+  async startPeriodicRun(input: StartPeriodicRun): Promise<PeriodicRun> {
+    return invoke<PeriodicRun>("periodic_run_start", { ...input });
+  }
+
+  async listPeriodicRuns(tileId: string): Promise<PeriodicRun[]> {
+    return invoke<PeriodicRun[]>("periodic_run_list", { tileId });
+  }
+
+  async getPeriodicRun(id: string): Promise<PeriodicRun | null> {
+    return invoke<PeriodicRun | null>("periodic_run_get", { id });
+  }
+
+  async recordPeriodicSkip(tileId: string, kind: PeriodicRunKind, prompt: string, at: number): Promise<PeriodicRun> {
+    return invoke<PeriodicRun>("periodic_run_skip", { tileId, kind, prompt, at });
+  }
+
+  async companionPostAppMessage(tileId: string, workstreamId: string, kind: "prompt" | "result", text: string, at: number): Promise<void> {
+    await invoke("companion_post_app_message", { tileId, workstreamId, kind, text, at });
   }
 
   async postAppInboxMessage(workstreamId: string, tileId: string, level: string, title: string, body: string): Promise<void> {

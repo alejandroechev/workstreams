@@ -504,6 +504,13 @@ impl RunManager {
         self.active.lock().unwrap().contains_key(tile_id)
     }
 
+    /// Kills the run going in a tile (it was closed or its schedule deleted).
+    pub fn kill_tile(&self, tile_id: &str) {
+        if let Some((_, Some(pid))) = self.active.lock().unwrap().get(tile_id) {
+            kill_tree(*pid);
+        }
+    }
+
     pub fn kill_all(&self) {
         for (_, pid) in self.active.lock().unwrap().values() {
             if let Some(pid) = pid {
@@ -699,6 +706,9 @@ mod tests {
         manager.release("t", "r1");
         assert!(!manager.is_running("t"));
         manager.reserve("t", "r2").unwrap();
+        // A tile without a process yet, or without a run, has nothing to kill.
+        manager.kill_tile("t");
+        manager.kill_tile("none");
     }
 
     #[cfg(unix)]

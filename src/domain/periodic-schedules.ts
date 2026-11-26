@@ -1,11 +1,12 @@
 /**
- * Periodic Copilot sessions (ADR 044): the pure model.
+ * Periodic sessions (ADR 044, ADR 046): the pure model.
  *
- * A schedule belongs to one Copilot session tile. At each due time the app
- * resumes that tile's session with the schedule's prompt. Everything here is
- * free of I/O so the runner (`schedule-runner.ts`) and the UI share one set
- * of rules. Times are ms epoch; calendar presets are in the laptop's local
- * time, so `Date`'s local constructors keep them DST-correct.
+ * A schedule belongs to one Periodic session tile and its Copilot session. At
+ * each due time the app starts one headless, non-interactive Copilot call on
+ * that session (`periodic_runner.rs`). Everything here is free of I/O so the
+ * runner (`schedule-runner.ts`) and the UI share one set of rules. Times are
+ * ms epoch; calendar presets are in the laptop's local time, so `Date`'s local
+ * constructors keep them DST-correct.
  */
 
 export type ScheduleFrequency =
@@ -14,10 +15,39 @@ export type ScheduleFrequency =
   | { kind: "weekly"; day: number; time: string };
 
 /**
- * "interrupted": the run was cut short by something else (the app quit, or
- * the tile was restarted by a phone message or by hand). Not a failure.
+ * "interrupted": the app quit while the run was going. Not a failure.
+ * "needs_input": the agent ended its reply with a question for the user.
  */
-export type ScheduleResult = "ok" | "running" | "skipped" | "interrupted" | "could not start" | "timed out";
+export type ScheduleResult = "ok" | "running" | "skipped" | "interrupted" | "failed" | "timed_out" | "needs_input";
+
+/** What started a run: its schedule, Run now, the tile's reply box, or a phone reply. */
+export type PeriodicRunKind = "scheduled" | "manual" | "reply" | "phone";
+export type PeriodicRunStatus = "running" | "ok" | "failed" | "timed_out" | "needs_input" | "skipped" | "interrupted";
+
+export interface PeriodicToolCall {
+  id: string;
+  name: string;
+  status: "running" | "ok" | "failed";
+}
+
+/** One headless run (or skipped slot) in a Periodic session tile's run log (`periodic_runs.rs`). */
+export interface PeriodicRun {
+  id: string;
+  schedule_id: string;
+  tile_id: string;
+  kind: PeriodicRunKind;
+  status: PeriodicRunStatus;
+  started_at: number;
+  ended_at: number | null;
+  exit_code: number | null;
+  /** What was asked, without the app's needs-input instruction. */
+  prompt: string;
+  answer: string | null;
+  question: string | null;
+  error: string | null;
+  tools: PeriodicToolCall[];
+  events_path: string | null;
+}
 
 export interface PeriodicSchedule {
   id: string;
@@ -42,6 +72,12 @@ export interface PeriodicSchedule {
   created_at: number;
   /** Bumped on every stored change; the runner claims a run against the revision it read. */
   revision: number;
+  /** The tile's Copilot session, assigned when the schedule was made. */
+  session_id: string | null;
+  /** A run created the session: later runs resume it. */
+  session_started: boolean;
+  /** An ordinary Copilot tile open on the same session: the schedule is paused while it is. */
+  interactive_tile_id: string | null;
 }
 
 export const MIN_INTERVAL_MINUTES = 5;
@@ -54,10 +90,11 @@ export const RUN_REQUEST_TTL_MS = 5 * 60 * 1000;
 
 export const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"] as const;
 
-export const INBOX_INSTRUCTION =
-  "When you are done, use the ws-message skill to send me one message in the Workstreams Inbox with the result.";
-export const PHONE_INSTRUCTION =
-  "When you are done, use the companion-reply skill to send the result to my phone.";
+/** Appended to every run's prompt; the same text as `NEEDS_INPUT_INSTRUCTION` in `periodic_runner.rs`. */
+export const NEEDS_INPUT_INSTRUCTION =
+  "(From Workstreams: this run is unattended and nobody can answer you during it. If you need a decision or information from the user before you can go on, do not guess: stop, and begin your final reply with NEEDS INPUT: followed by your question.)";
+export const NEEDS_INPUT_MARKER = "NEEDS INPUT:";
+export const PAUSED_INTERACTIVE = "Paused while open interactively";
 
 const TIME = /^([01]\d|2[0-3]):([0-5]\d)$/;
 
@@ -119,8 +156,10 @@ export type DueDecision =
 
 export interface DueContext {
   now: number;
-  /** The tile's agent is mid-turn; typing in the tile doesn't count. */
+  /** A run is going in the tile. */
   busy: boolean;
+  /** An ordinary tile is open on the session: nothing starts, and due slots pass. */
+  interactive: boolean;
   /** The workstream is archived: nothing runs. */
   archived: boolean;
   /**
@@ -138,23 +177,24 @@ export function decideDue(schedule: PeriodicSchedule, context: DueContext): DueD
   if (schedule.run_requested) {
     const at = schedule.run_requested_at;
     const fresh = at !== null && at >= context.startedAt && context.now - at <= RUN_REQUEST_TTL_MS;
-    if (!fresh || context.archived) return { action: "expire" };
+    if (!fresh || context.archived || context.interactive) return { action: "expire" };
     // Run now is explicit, so it runs even a paused schedule; a paused one never runs by itself.
     return context.busy ? { action: "skip", manual: true } : { action: "run", manual: true };
   }
   if (schedule.paused || context.archived) return { action: "wait" };
   if (schedule.next_run_at === null) return { action: "plan" };
   if (context.now < schedule.next_run_at) return { action: "wait" };
-  if (context.activeSince === null || schedule.next_run_at <= context.activeSince) return { action: "missed" };
+  if (context.interactive || context.activeSince === null || schedule.next_run_at <= context.activeSince) return { action: "missed" };
   return context.busy ? { action: "skip" } : { action: "run", manual: false };
 }
 
 export type RunOutcome =
   | { result: "ok" }
+  | { result: "needs_input" }
   | { result: "skipped" }
   | { result: "interrupted" }
-  | { result: "could not start"; error: string }
-  | { result: "timed out" };
+  | { result: "failed"; error: string }
+  | { result: "timed_out" };
 
 /** The state change a run's outcome causes, and whether it paused the schedule. */
 export function applyRunResult(
@@ -166,11 +206,11 @@ export function applyRunResult(
     return { patch: { last_result: "skipped", last_run_at: now }, autoPaused: false };
   }
   if (outcome.result === "interrupted") return { patch: { last_result: "interrupted" }, autoPaused: false };
-  if (outcome.result === "ok") {
-    return { patch: { last_result: "ok", last_error: null, failures: 0 }, autoPaused: false };
+  if (outcome.result === "ok" || outcome.result === "needs_input") {
+    return { patch: { last_result: outcome.result, last_error: null, failures: 0 }, autoPaused: false };
   }
   const failures = schedule.failures + 1;
-  const error = outcome.result === "could not start" ? outcome.error : "The run was still going after 60 minutes, so it was interrupted.";
+  const error = outcome.result === "failed" ? outcome.error : "The run was still going after 60 minutes, so it was stopped.";
   const pause = failures >= MAX_CONSECUTIVE_FAILURES && !schedule.paused;
   return {
     patch: { last_result: outcome.result, last_error: error, failures, ...(pause ? { paused: true } : {}) },
@@ -178,27 +218,39 @@ export function applyRunResult(
   };
 }
 
-/** The prompt a run sends: verbatim, plus one instruction per toggle that is on. */
-export function composeRunPrompt(schedule: Pick<PeriodicSchedule, "prompt" | "notify_inbox" | "notify_phone">): string {
-  const extra = [schedule.notify_inbox ? INBOX_INSTRUCTION : null, schedule.notify_phone ? PHONE_INSTRUCTION : null]
-    .filter((line): line is string => line !== null);
-  return extra.length === 0 ? schedule.prompt : `${schedule.prompt}\n\n${extra.join("\n")}`;
+/** What a finished run means for its schedule; null while it is still going. */
+export function outcomeOfRun(run: Pick<PeriodicRun, "status" | "error">): RunOutcome | null {
+  switch (run.status) {
+    case "running":
+      return null;
+    case "failed":
+      return { result: "failed", error: run.error ?? "The run failed." };
+    default:
+      return { result: run.status };
+  }
 }
 
-/**
- * The first prompt of a new periodic session tile. Copilot only assigns a
- * session id once a prompt is sent, and scheduled runs resume by that id, so
- * the tile starts on this instead of sitting empty.
- */
-export function setupPrompt(draft: { prompt: string; frequency: ScheduleFrequency }): string {
-  const quoted = draft.prompt.split("\n").map((line) => `> ${line}`).join("\n");
-  return [
-    `This is a periodic session created by Workstreams. ${describeFrequency(draft.frequency)}, it will be resumed and sent this prompt:`,
-    "",
-    quoted,
-    "",
-    "Do not start on it now. Just reply that you are ready and wait for the first scheduled run.",
-  ].join("\n");
+/** The prompt a run sends: verbatim, plus the needs-input instruction. */
+export function composeRunPrompt(prompt: string): string {
+  return `${prompt}\n\n${NEEDS_INPUT_INSTRUCTION}`;
+}
+
+/** Program and argv of a headless run, as `headless_argv` in `periodic_runner.rs` builds them. */
+export function headlessArgv(command: string | null | undefined, prompt: string, sessionId: string, firstRun: boolean): { program: string; args: string[] } {
+  const template = command?.trim() || "agency copilot --yolo";
+  const [program, ...args] = template.split(/\s+/);
+  return {
+    program,
+    args: [...args, "-p", prompt, firstRun ? `--session-id=${sessionId}` : `--resume=${sessionId}`, "--no-ask-user", "--output-format", "json"],
+  };
+}
+
+/** The question of a needs-input answer, or null (as `needs_input_question` in Rust). */
+export function needsInputQuestion(answer: string): string | null {
+  const strip = (text: string) => text.replace(/^[\s*_]+/, "");
+  const rest = strip(answer);
+  if (!rest.startsWith(NEEDS_INPUT_MARKER)) return null;
+  return strip(rest.slice(NEEDS_INPUT_MARKER.length)).trimEnd();
 }
 
 export function describeFrequency(frequency: ScheduleFrequency): string {
@@ -230,9 +282,16 @@ export function formatNextRun(nextRunAt: number | null, now: number): string {
   return `${DAY_NAMES[when.getDay()].slice(0, 3)} ${when.getDate()} ${MONTHS[when.getMonth()]} ${clock}`;
 }
 
+/** "timed out", "needs input": a result as people read it. */
+export function resultLabel(result: string): string {
+  return result.replace(/_/g, " ");
+}
+
 export function describeLastResult(schedule: Pick<PeriodicSchedule, "last_result" | "last_error">): string {
   if (!schedule.last_result) return "never run";
-  return schedule.last_error && schedule.last_result !== "ok" ? `${schedule.last_result}: ${schedule.last_error}` : schedule.last_result;
+  const label = resultLabel(schedule.last_result);
+  const failed = schedule.last_result === "failed" || schedule.last_result === "timed_out";
+  return schedule.last_error && failed ? `${label}: ${schedule.last_error}` : label;
 }
 
 export function promptFirstLine(prompt: string): string {

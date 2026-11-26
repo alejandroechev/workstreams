@@ -57,7 +57,7 @@ export function SchedulesModal({ schedules, now, workstreamName, tileTitle, onCl
         <div style={{ overflowY: "auto", padding: "6px 0" }}>
           {schedules.length === 0 && (
             <div data-testid="schedules-empty" style={{ color: "#6c7086", fontSize: 12, padding: "14px" }}>
-              No schedules yet. Use "Run periodically…" in a Copilot session tile's menu, or add a Periodic Copilot session tile.
+              No schedules yet. Use Add tile → Periodic session to make one.
             </div>
           )}
           {schedules.map((schedule) => (

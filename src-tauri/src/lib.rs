@@ -170,6 +170,8 @@ struct AppState {
     /// Tokens this instance has issued to sessions it spawned. A request proves
     /// who it is by presenting one; it can never simply name an identity.
     agent_identities: Arc<agent_registry::IdentityRegistry>,
+    /// Headless periodic runs going now, one per tile (ADR 046).
+    periodic_runs: Arc<periodic_runner::RunManager>,
 }
 
 struct FeaturesWatcherHandle {
@@ -501,10 +503,206 @@ fn relink_tile_session(
     companion_messages::relink_tile(&db, &tile_id, &config_json, title.as_deref(), &running)
 }
 
+/// Deletes a schedule and its Periodic session tile, stopping a run going there.
 #[tauri::command]
 fn schedule_delete(state: State<'_, AppState>, id: String) -> Result<(), String> {
     let db = state.db.lock().map_err(|e| e.to_string())?;
+    if let Some(schedule) = periodic_schedules::get(&db, &id)? {
+        state.periodic_runs.kill_tile(&schedule.tile_id);
+        state.agent_identities.forget_tile(&schedule.tile_id);
+    }
     periodic_schedules::delete(&db, &id).map(|_| ())
+}
+
+/// Where a periodic run's JSONL events are kept, next to the database.
+fn periodic_events_path(run_id: &str) -> std::path::PathBuf {
+    db::resolve_db_path()
+        .parent()
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join("periodic-runs")
+        .join(format!("{run_id}.jsonl"))
+}
+
+/// The `periodic-run` event: a run's state as it changes, and once it ended.
+#[derive(Clone, Serialize)]
+struct PeriodicRunEvent {
+    run: periodic_runs::Run,
+    finished: bool,
+}
+
+/// Starts one headless run of a Periodic session tile (ADR 046): the
+/// configured Copilot command with `-p`, on the tile's session, as a plain
+/// child process in `cwd`. Refused while a run is going in the tile or a tile
+/// is open interactively on the session. Returns at once; the run streams as
+/// `periodic-run` events and stores its end itself.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+fn periodic_run_start(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    tile_id: String,
+    kind: String,
+    prompt: String,
+    command: Option<String>,
+    cwd: String,
+    started_at: i64,
+) -> Result<periodic_runs::Run, String> {
+    let run_id = uuid::Uuid::new_v4().to_string();
+    let events = periodic_events_path(&run_id);
+    let (schedule, run, env) = {
+        let db = state.db.lock().map_err(|e| e.to_string())?;
+        let schedule = periodic_schedules::for_tile(&db, &tile_id)?
+            .ok_or_else(|| format!("No schedule for tile {tile_id}"))?;
+        if schedule.interactive_tile_id.is_some() {
+            return Err("Paused while open interactively.".into());
+        }
+        state.periodic_runs.reserve(&tile_id, &run_id)?;
+        let run = periodic_runs::insert_running(
+            &db,
+            &periodic_runs::NewRun {
+                id: &run_id,
+                schedule_id: &schedule.id,
+                tile_id: &tile_id,
+                kind: &kind,
+                prompt: &prompt,
+                started_at,
+                events_path: events.to_str(),
+            },
+        );
+        let run = match run {
+            Ok(run) => run,
+            Err(error) => {
+                state.periodic_runs.release(&tile_id, &run_id);
+                return Err(error);
+            }
+        };
+        let env = workstream_env_from_db(&db, &tile_id, &state.agent_identities);
+        (schedule, run, env)
+    };
+    let session_id = schedule
+        .session_id
+        .clone()
+        .ok_or("This schedule has no Copilot session.")?;
+    let (program, args) = periodic_runner::headless_argv(
+        command.as_deref(),
+        &periodic_runner::compose_prompt(&prompt),
+        &session_id,
+        !schedule.session_started,
+    )?;
+    let spec = periodic_runner::LaunchSpec {
+        program,
+        args,
+        cwd,
+        env: env.unwrap_or_default().into_iter().collect(),
+    };
+    let db = Arc::clone(&state.db);
+    let manager = Arc::clone(&state.periodic_runs);
+    let started = run.clone();
+    std::thread::spawn(move || {
+        let mut live = started.clone();
+        let outcome = periodic_runner::execute(
+            &periodic_runner::SystemLauncher,
+            &periodic_runner::SystemClock,
+            &spec,
+            periodic_runner::RUN_TIMEOUT_MS,
+            Some(&events),
+            &mut |progress| match progress {
+                periodic_runner::Progress::Spawned(pid) => manager.set_pid(&live.tile_id, pid),
+                periodic_runner::Progress::Changed { tools, answer } => {
+                    live.tools = tools;
+                    live.answer = answer;
+                    let _ = app.emit(
+                        "periodic-run",
+                        PeriodicRunEvent {
+                            run: live.clone(),
+                            finished: false,
+                        },
+                    );
+                }
+            },
+        );
+        let finished = {
+            let db = db.lock().unwrap();
+            if outcome.session_started {
+                let _ = periodic_schedules::mark_session_started(&db, &schedule.id);
+            }
+            periodic_runs::finish(&db, &started.id, &outcome, now_ms())
+        };
+        manager.release(&started.tile_id, &started.id);
+        match finished {
+            Ok(run) => {
+                let _ = app.emit(
+                    "periodic-run",
+                    PeriodicRunEvent {
+                        run,
+                        finished: true,
+                    },
+                );
+            }
+            Err(error) => eprintln!("[periodic] couldn't store run {}: {error}", started.id),
+        }
+    });
+    Ok(run)
+}
+
+#[tauri::command]
+fn periodic_run_list(
+    state: State<'_, AppState>,
+    tile_id: String,
+) -> Result<Vec<periodic_runs::Run>, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    periodic_runs::list_for_tile(&db, &tile_id)
+}
+
+#[tauri::command]
+fn periodic_run_get(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<Option<periodic_runs::Run>, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    periodic_runs::get(&db, &id)
+}
+
+/// Records a slot, Run now or reply skipped because a run was going.
+#[tauri::command]
+fn periodic_run_skip(
+    state: State<'_, AppState>,
+    tile_id: String,
+    kind: String,
+    prompt: String,
+    at: i64,
+) -> Result<periodic_runs::Run, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    let schedule = periodic_schedules::for_tile(&db, &tile_id)?
+        .ok_or_else(|| format!("No schedule for tile {tile_id}"))?;
+    let id = uuid::Uuid::new_v4().to_string();
+    periodic_runs::insert_skipped(
+        &db,
+        &periodic_runs::NewRun {
+            id: &id,
+            schedule_id: &schedule.id,
+            tile_id: &tile_id,
+            kind: &kind,
+            prompt: &prompt,
+            started_at: at,
+            events_path: None,
+        },
+    )
+}
+
+/// The app posts a periodic run's prompt or answer to the tile's phone thread.
+#[tauri::command]
+fn companion_post_app_message(
+    state: State<'_, AppState>,
+    tile_id: String,
+    workstream_id: String,
+    kind: String,
+    text: String,
+    at: i64,
+) -> Result<(), String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    companion_messages::post_app_message(&db, &tile_id, &workstream_id, &kind, &text, at)
 }
 
 /// An Inbox entry the app raises itself (a schedule pausing after failures).
@@ -2005,6 +2203,7 @@ fn list_tiles(state: State<'_, AppState>, workstream_id: String) -> Result<Vec<T
 #[tauri::command]
 fn delete_tile(state: State<'_, AppState>, tile_id: String) -> Result<(), String> {
     state.pty.close(&tile_id)?;
+    state.periodic_runs.kill_tile(&tile_id);
     // Revoke the tile's identity as it goes. A token copied out of the
     // environment would otherwise keep working until the app exits, letting a
     // leftover process act as a tile that no longer exists.
@@ -7024,6 +7223,7 @@ pub fn run() {
         #[cfg(unix)]
         agent_socket: Mutex::new(None),
         agent_identities: Arc::new(agent_registry::IdentityRegistry::new()),
+        periodic_runs: Arc::new(periodic_runner::RunManager::new()),
     };
 
     tauri::Builder::default()
@@ -7039,6 +7239,10 @@ pub fn run() {
                 let conn = state.db.lock().unwrap();
                 if let Err(error) = loops::reconcile_interrupted_runs(&conn) {
                     eprintln!("[loop] Startup reconciliation failed: {error}");
+                }
+                // Headless periodic runs die with the app (ADR 046).
+                if let Err(error) = periodic_runs::interrupt_stale(&conn, now_ms()) {
+                    eprintln!("[periodic] Startup reconciliation failed: {error}");
                 }
             }
             // Open the agent channel. A failure here must not stop the app:
@@ -7227,6 +7431,11 @@ pub fn run() {
             schedule_create,
             schedule_update,
             schedule_delete,
+            periodic_run_start,
+            periodic_run_list,
+            periodic_run_get,
+            periodic_run_skip,
+            companion_post_app_message,
             inbox_post_app_message,
             // Copilot config
             discover_copilot_config,
@@ -7319,6 +7528,7 @@ pub fn run() {
                     eprintln!("[loop] Failed to stop every active loop: {error}");
                 }
                 state.pty.close_all();
+                state.periodic_runs.kill_all();
             }
         });
 }

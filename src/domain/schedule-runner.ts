@@ -1,46 +1,36 @@
 /**
- * Runs periodic schedules (ADR 044). The app calls `tick(now)` on a timer;
- * each tick reads the stored schedules, follows runs in flight (ok once their
- * turn started and ended, interrupted after 60 minutes), and starts, skips or
- * re-plans due ones with the rules in `periodic-schedules.ts`.
+ * Runs periodic schedules (ADR 044, ADR 046). The app calls `tick(now)` on a
+ * timer; each tick reads the stored schedules, settles runs that ended, and
+ * starts, skips or re-plans due ones with the rules in `periodic-schedules.ts`.
  *
- * Every decision is written back against the revision it was made on, so a
- * pause, edit, delete or archive in between wins; a run is re-checked before
- * the tile is stopped and before the session is spawned. Ticks never overlap,
- * so a due run starts at most once. Everything outside — the store, the tile's
- * activity, resuming the session — comes in through `deps`, so the runner is
- * driven with a fake clock in tests.
+ * A run is one headless Copilot call the native runner makes and finishes on
+ * its own (ok, failed, timed out or needs input); the runner here only starts
+ * it and applies its result. Every decision is written back against the
+ * revision it was made on, so a pause, edit, delete or archive in between
+ * wins. Ticks never overlap, so a due run starts at most once. Everything
+ * outside — the store, starting a run, notifications — comes in through
+ * `deps`, so the runner is driven with a fake clock in tests.
  */
 import type { PeriodicSchedulePatch } from "../backend/types";
 import {
   applyRunResult,
-  composeRunPrompt,
   decideDue,
   MAX_TICK_GAP_MS,
   nextRunAfter,
+  outcomeOfRun,
+  PAUSED_INTERACTIVE,
   promptFirstLine,
-  RUN_TIMEOUT_MS,
+  type PeriodicRun,
+  type PeriodicRunKind,
   type PeriodicSchedule,
   type RunOutcome,
 } from "./periodic-schedules";
-
-/** A run whose turn hasn't been seen to start within this long did not start. */
-export const OBSERVE_MS = 5 * 60 * 1000;
-
-/** Turns a session's events file has started and ended, and whether the latest is still open. */
-export interface TurnCursor {
-  starts: number;
-  ends: number;
-  open: boolean;
-}
 
 /** The Inbox entry stored with an auto-pause, in the same transaction. */
 export interface PauseAlert {
   title: string;
   body: string;
 }
-
-export type ResumePhase = "before-stop" | "before-spawn";
 
 export interface ScheduleRunnerDeps {
   list(): Promise<PeriodicSchedule[]>;
@@ -51,25 +41,15 @@ export interface ScheduleRunnerDeps {
   update(id: string, patch: PeriodicSchedulePatch, expectedRevision?: number, alert?: PauseAlert): Promise<PeriodicSchedule>;
   workstreamName(workstreamId: string): string | undefined;
   isArchived(workstreamId: string): boolean;
-  /** The tile's agent is mid-turn (its session's activity), not merely typed into. */
-  isBusy(tileId: string): boolean;
-  /** A session's turn cursor (its events file), read live; null when it can't be read. */
-  turnState(sessionId: string): Promise<TurnCursor | null>;
-  /** Changes whenever the tile's process is replaced or closed. */
-  generation(tileId: string): number;
-  /**
-   * Resumes the tile's session with `prompt`, one resume per tile at a time;
-   * calls `revalidate` with the session it resumes under the tile's lock
-   * before the stop, and right before the spawn. Resolves to that session;
-   * rejects when the run could not start.
-   */
-  resume(
-    schedule: PeriodicSchedule,
-    prompt: string,
-    revalidate: (phase: ResumePhase, sessionId: string) => Promise<void>,
-  ): Promise<{ sessionId: string }>;
-  /** Interrupts the tile's current turn (Ctrl+C), leaving the session idle. */
-  interrupt(tileId: string): Promise<void>;
+  /** Starts a headless run on the tile's session; rejects when it can't (already going, open interactively, spawn refused). */
+  start(schedule: PeriodicSchedule, prompt: string, kind: PeriodicRunKind, now: number): Promise<PeriodicRun>;
+  getRun(id: string): Promise<PeriodicRun | null>;
+  /** The tile's newest run, or null. */
+  latestRun(tileId: string): Promise<PeriodicRun | null>;
+  /** Records a slot, Run now or reply skipped because a run was going. */
+  recordSkip(schedule: PeriodicSchedule, kind: PeriodicRunKind, prompt: string, now: number): Promise<void>;
+  /** Delivers a finished run (Inbox, phone); `autoPaused`: its failure paused the schedule and the alert says so. */
+  notify(schedule: PeriodicSchedule, run: PeriodicRun, autoPaused: boolean): Promise<void>;
   /** Stored schedules changed. */
   onChange(): void;
 }
@@ -82,30 +62,31 @@ export interface ScheduleRunnerOptions {
 }
 
 interface InFlight {
-  tileId: string;
-  /** The session this run resumed; followed even if the tile is re-linked. */
-  sessionId: string;
-  startedAt: number;
-  /** The tile's process the run launched; another means something else took the tile. */
-  generation: number;
-  /** The session's turns right before the spawn: the next one to start is this run's. */
-  before: TurnCursor | null;
-  /** Decided but not stored yet; retried every tick, its side effects done once. */
+  runId: string;
+  /** Decided but not stored yet; retried every settle, notified once. */
   outcome?: RunOutcome;
+  run?: PeriodicRun;
 }
 
 export interface ScheduleRunner {
   tick(now: number): Promise<void>;
-  /** Asks for a run now and ticks; a run that's mid-turn is skipped. */
+  /** Applies the result of runs that ended (a `periodic-run` event said so), without deciding due slots. */
+  settle(now: number): Promise<void>;
+  /** Asks for a run now and ticks; skipped while a run is going. */
   runNow(id: string, now: number): Promise<void>;
+  /**
+   * Runs `text` as the session's next turn at once (the tile's reply box, or
+   * a phone reply). Rejects, starting nothing, while the tile is open
+   * interactively or its workstream is archived; a run going makes it a
+   * recorded skip, and rejects.
+   */
+  reply(id: string, text: string, kind: "reply" | "phone", now: number): Promise<PeriodicRun>;
 }
 
-/** The schedule changed while its run was starting: not a failure. */
-class RunCancelled extends Error {}
-/** Something else took the tile while the run waited for it: this slot is skipped. */
-class RunSkipped extends Error {}
-
+const ARCHIVED = "This schedule's workstream is archived; unarchive it first.";
 const clip = (text: string, max: number) => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
+const isBusyError = (error: unknown) => /already going/i.test(error instanceof Error ? error.message : String(error));
+const isInteractiveError = (error: unknown) => /open interactively/i.test(error instanceof Error ? error.message : String(error));
 
 export function createScheduleRunner(deps: ScheduleRunnerDeps, options: ScheduleRunnerOptions = {}): ScheduleRunner {
   const maxGapMs = options.maxGapMs ?? MAX_TICK_GAP_MS;
@@ -123,137 +104,117 @@ export function createScheduleRunner(deps: ScheduleRunnerDeps, options: Schedule
     lastBeat = now;
   }
 
-  async function finish(schedule: PeriodicSchedule, outcome: RunOutcome, now: number, extra: PeriodicSchedulePatch = {}): Promise<void> {
+  /** Stores a run's outcome; an auto-pause and its Inbox entry are stored together. */
+  async function store(schedule: PeriodicSchedule, outcome: RunOutcome, now: number): Promise<boolean> {
     const { patch, autoPaused } = applyRunResult(schedule, outcome, now);
     if (!autoPaused) {
-      await deps.update(schedule.id, { ...patch, ...extra });
-      return;
+      await deps.update(schedule.id, patch);
+      return false;
     }
     const name = clip(promptFirstLine(schedule.prompt), 120);
     const where = clip(deps.workstreamName(schedule.workstream_id) ?? "its workstream", 120);
     const title = clip(`Schedule paused: ${name}`, 120);
     const body =
       `The periodic run **${name}** in ${where} failed ${patch.failures} times in a row, so it was paused.\n\n` +
-      `Last failure: ${patch.last_result}: ${clip(patch.last_error ?? "", 500)}\n\nResume it from **Schedules** once the tile is ready.`;
-    // The pause and its Inbox entry are stored together, or neither is (and it is retried).
-    await deps.update(schedule.id, { ...patch, ...extra }, undefined, { title, body });
+      `Last failure: ${(patch.last_result ?? "").replace(/_/g, " ")}: ${clip(patch.last_error ?? "", 500)}\n\nResume it from the tile or **Schedules** once it's fixed.`;
+    await deps.update(schedule.id, patch, undefined, { title, body });
+    return true;
   }
 
-  interface Claim {
-    before: PeriodicSchedule;
-    claimed: PeriodicSchedule;
-    generation: number;
-  }
-
-  /** Marks the run as started against the row it was decided on; null if that row changed. */
-  async function claim(schedule: PeriodicSchedule, manual: boolean, now: number): Promise<Claim | null> {
-    const generation = deps.generation(schedule.tile_id);
-    const nextRun = manual
-      ? (schedule.next_run_at ?? nextRunAfter(schedule.frequency, now, now))
-      : nextRunAfter(schedule.frequency, schedule.next_run_at ?? now, now);
+  /** Applies an ended run to its schedule, then notifies once; kept to retry when the store fails. */
+  async function conclude(schedule: PeriodicSchedule, flight: InFlight, now: number): Promise<boolean> {
+    if (!flight.outcome) return false;
     try {
-      const claimed = await deps.update(schedule.id, {
-        last_result: "running", last_run_at: now, next_run_at: nextRun, run_requested: false, run_requested_at: null,
-      }, schedule.revision);
-      return { before: schedule, claimed, generation };
-    } catch {
-      return null; // Changed (or deleted) since it was read: the next tick decides afresh.
-    }
-  }
-
-  async function launch({ before: schedule, claimed, generation }: Claim, now: number): Promise<void> {
-    let before: TurnCursor | null = null;
-    const revalidate = async (phase: ResumePhase, sessionId: string) => {
-      const fresh = (await deps.list()).find((s) => s.id === schedule.id);
-      if (!fresh) throw new RunCancelled("The schedule was deleted.");
-      if (fresh.revision !== claimed.revision) throw new RunCancelled("The schedule changed.");
-      if (deps.isArchived(fresh.workstream_id)) throw new RunCancelled("The workstream was archived.");
-      // Under the tile's lock, before stopping it: a phone message may have
-      // just launched its own turn there while this run waited.
-      // The poller's activity can be seconds old: the session's events say whether a turn is open now.
-      if (phase === "before-stop") {
-        const taken = deps.generation(schedule.tile_id) !== generation || deps.isBusy(schedule.tile_id);
-        if (taken || (await deps.turnState(sessionId).catch(() => null))?.open) {
-          throw new RunSkipped("The tile was busy when the run got to it.");
-        }
-      } else {
-        before = await deps.turnState(sessionId).catch(() => null);
-      }
-    };
-    try {
-      const { sessionId } = await deps.resume(claimed, composeRunPrompt(claimed), revalidate);
-      inFlight.set(schedule.id, {
-        tileId: schedule.tile_id, sessionId, startedAt: now, generation: deps.generation(schedule.tile_id), before,
-      });
+      const autoPaused = await store(schedule, flight.outcome, now);
+      inFlight.delete(schedule.id);
+      if (flight.run) await deps.notify(schedule, flight.run, autoPaused).catch((error) => console.error("Failed to deliver a periodic run's result:", error));
+      return true;
     } catch (error) {
-      if (error instanceof RunSkipped) {
-        await deps.update(schedule.id, applyRunResult(claimed, { result: "skipped" }, now).patch).catch(() => {});
-        return;
-      }
-      if (error instanceof RunCancelled) {
-        // Put back what the claim changed, other than the plan; a deleted schedule has nothing to put back.
-        await deps.update(schedule.id, { last_result: schedule.last_result, last_error: schedule.last_error, last_run_at: schedule.last_run_at })
-          .catch(() => {});
-        return;
-      }
-      const outcome: RunOutcome = { result: "could not start", error: error instanceof Error ? error.message : String(error) };
-      try {
-        await finish(claimed, outcome, now);
-      } catch (failure) {
-        // Kept until stored: the monitor retries it every tick.
-        console.error("Failed to store a periodic run's result; will retry:", failure);
-        inFlight.set(schedule.id, { tileId: schedule.tile_id, sessionId: "", startedAt: now, generation, before: null, outcome });
-      }
+      console.error("Failed to store a periodic run's result; will retry:", error);
+      return false;
     }
-  }
-
-  /** What a run in flight has come to, or null while it is still going. */
-  async function judge(schedule: PeriodicSchedule, run: InFlight, now: number): Promise<RunOutcome | null> {
-    // Something else restarted the tile (a phone message, by hand) before the
-    // run's turn was seen ending: whatever ended since isn't this run's.
-    if (deps.generation(run.tileId) !== run.generation) return { result: "interrupted" };
-    const state = await deps.turnState(run.sessionId).catch(() => null);
-    const { before } = run;
-    // The first turn to start in the launched session after the spawn is this run's; the first end closes it.
-    if (before && state && state.ends > before.ends) return { result: "ok" };
-    const started = !!before && !!state && state.starts > before.starts;
-    if (started && now - run.startedAt >= RUN_TIMEOUT_MS) {
-      await deps.interrupt(run.tileId).catch((error) => console.error("Failed to interrupt a timed-out run:", error));
-      return { result: "timed out" };
-    }
-    if (!started && now - run.startedAt >= OBSERVE_MS) {
-      return { result: "could not start", error: "The session was resumed, but its turn never started." };
-    }
-    return null;
   }
 
   async function monitor(schedules: Map<string, PeriodicSchedule>, now: number): Promise<void> {
-    for (const [id, run] of [...inFlight]) {
+    for (const [id, flight] of [...inFlight]) {
       const schedule = schedules.get(id);
       if (!schedule) {
         inFlight.delete(id);
         continue;
       }
-      run.outcome ??= (await judge(schedule, run, now)) ?? undefined;
-      if (!run.outcome) continue;
-      try {
-        await finish(schedule, run.outcome, now);
-        inFlight.delete(id);
-      } catch (error) {
-        console.error("Failed to store a periodic run's result; will retry:", error);
+      if (!flight.outcome) {
+        const run = await deps.getRun(flight.runId).catch(() => undefined);
+        if (run === undefined) continue;
+        if (run === null) flight.outcome = { result: "interrupted" };
+        else {
+          const outcome = outcomeOfRun(run);
+          if (!outcome) continue;
+          flight.outcome = outcome;
+          flight.run = run;
+        }
       }
+      await conclude(schedule, flight, now);
     }
   }
 
-  /** Decides one schedule; a due run is claimed and returned, to be launched with the others. */
-  async function step(schedule: PeriodicSchedule, now: number, activeSince: number | null): Promise<Claim | null> {
-    const flying = inFlight.has(schedule.id);
-    if (!flying && schedule.last_result === "running") {
-      // Left by a previous app instance: nothing watches that run any more. Not a failure.
-      schedule = await deps.update(schedule.id, applyRunResult(schedule, { result: "interrupted" }, now).patch, schedule.revision);
+  /** Marks the run as started against the row it was decided on; null if that row changed. */
+  async function claim(schedule: PeriodicSchedule, plan: PeriodicSchedulePatch, now: number): Promise<PeriodicSchedule | null> {
+    try {
+      return await deps.update(schedule.id, {
+        last_result: "running", last_run_at: now, run_requested: false, run_requested_at: null, ...plan,
+      }, schedule.revision);
+    } catch {
+      return null; // Changed (or deleted) since it was read: decided afresh.
     }
+  }
+
+  /** Starts a claimed run; a refusal is a skip, a cancel or a failure, never left "running". */
+  async function launch(before: PeriodicSchedule, claimed: PeriodicSchedule, prompt: string, kind: PeriodicRunKind, now: number): Promise<PeriodicRun> {
+    try {
+      const run = await deps.start(claimed, prompt, kind, now);
+      inFlight.set(claimed.id, { runId: run.id });
+      return run;
+    } catch (error) {
+      if (isBusyError(error)) {
+        await deps.recordSkip(claimed, kind, prompt, now).catch(() => {});
+        await deps.update(claimed.id, applyRunResult(claimed, { result: "skipped" }, now).patch).catch(() => {});
+      } else if (isInteractiveError(error)) {
+        // Not a run at all: put back what the claim changed, other than the plan.
+        await deps.update(claimed.id, { last_result: before.last_result, last_error: before.last_error, last_run_at: before.last_run_at })
+          .catch(() => {});
+      } else {
+        const outcome: RunOutcome = { result: "failed", error: error instanceof Error ? error.message : String(error) };
+        const flight: InFlight = { runId: "", outcome };
+        inFlight.set(claimed.id, flight);
+        await conclude(claimed, flight, now);
+      }
+      throw error;
+    }
+  }
+
+  /** A schedule left "running" with no run followed here: adopt the native run, apply its end, or call it interrupted. */
+  async function adopt(schedule: PeriodicSchedule, now: number): Promise<PeriodicSchedule> {
+    const latest = await deps.latestRun(schedule.tile_id).catch(() => null);
+    const mine = latest && latest.status !== "skipped" && latest.started_at >= (schedule.last_run_at ?? 0) ? latest : null;
+    if (mine?.status === "running") {
+      inFlight.set(schedule.id, { runId: mine.id });
+      return schedule;
+    }
+    const outcome = (mine && outcomeOfRun(mine)) ?? { result: "interrupted" as const };
+    const flight: InFlight = { runId: mine?.id ?? "", outcome, run: mine ?? undefined };
+    inFlight.set(schedule.id, flight);
+    await conclude(schedule, flight, now);
+    return (await deps.list()).find((s) => s.id === schedule.id) ?? schedule;
+  }
+
+  interface Due { before: PeriodicSchedule; claimed: PeriodicSchedule; kind: PeriodicRunKind }
+
+  /** Decides one schedule; a due run is claimed and returned, to be launched with the others. */
+  async function step(schedule: PeriodicSchedule, now: number, activeSince: number | null): Promise<Due | null> {
+    if (!inFlight.has(schedule.id) && schedule.last_result === "running") schedule = await adopt(schedule, now);
+    const flying = inFlight.has(schedule.id);
     const decision = decideDue(schedule, {
-      now, busy: flying || deps.isBusy(schedule.tile_id), archived: deps.isArchived(schedule.workstream_id), activeSince, startedAt,
+      now, busy: flying, interactive: !!schedule.interactive_tile_id, archived: deps.isArchived(schedule.workstream_id), activeSince, startedAt,
     });
     const write = (patch: PeriodicSchedulePatch) => deps.update(schedule.id, patch, schedule.revision);
     switch (decision.action) {
@@ -270,14 +231,18 @@ export function createScheduleRunner(deps: ScheduleRunnerDeps, options: Schedule
         return null;
       case "skip": {
         const next = decision.manual ? {} : { next_run_at: nextRunAfter(schedule.frequency, schedule.next_run_at ?? now, now) };
-        const cleared = { ...next, run_requested: false, run_requested_at: null };
-        // A run in flight keeps showing as running; the skip only moves the plan on.
-        if (flying) await write(cleared);
-        else await write({ ...applyRunResult(schedule, { result: "skipped" }, now).patch, ...cleared });
+        await deps.recordSkip(schedule, decision.manual ? "manual" : "scheduled", schedule.prompt, now);
+        // The run going keeps showing as running; the skip is in its run log.
+        await write({ ...next, run_requested: false, run_requested_at: null });
         return null;
       }
-      case "run":
-        return claim(schedule, decision.manual, now);
+      case "run": {
+        const plan = decision.manual
+          ? { next_run_at: schedule.next_run_at ?? nextRunAfter(schedule.frequency, now, now) }
+          : { next_run_at: nextRunAfter(schedule.frequency, schedule.next_run_at ?? now, now) };
+        const claimed = await claim(schedule, plan, now);
+        return claimed ? { before: schedule, claimed, kind: decision.manual ? "manual" : "scheduled" } : null;
+      }
     }
   }
 
@@ -286,30 +251,37 @@ export function createScheduleRunner(deps: ScheduleRunnerDeps, options: Schedule
     beat(now);
     // Joining the tick in progress rather than starting another: a due run starts once.
     if (current) return current;
-    current = runTick(now).finally(() => { current = null; });
+    current = runTick(now, true).finally(() => { current = null; });
     return current;
   }
 
-  async function runTick(now: number): Promise<void> {
+  function settle(now: number): Promise<void> {
+    if (current) return current.then(() => settle(now));
+    current = runTick(now, false).finally(() => { current = null; });
+    return current;
+  }
+
+  async function runTick(now: number, decide: boolean): Promise<void> {
     // Slots after the last decisions run, unless they fell before the scheduler woke up.
     const activeSince = lastEvaluatedAt === null ? null : Math.max(lastEvaluatedAt, awakeSince);
-    lastEvaluatedAt = now;
+    if (decide) lastEvaluatedAt = now;
     let changed = false;
     try {
       const schedules = await deps.list();
       const before = JSON.stringify(schedules);
       await monitor(new Map(schedules.map((s) => [s.id, s])), now);
-      // Every due slot is claimed first, then all launch together: one tile's
-      // queue (a phone message holding it) doesn't hold back the others.
-      const claims: Claim[] = [];
-      for (const schedule of await deps.list()) {
-        const claimed = await step(schedule, now, activeSince).catch((error) => {
-          console.error(`Schedule ${schedule.id} failed to run:`, error);
-          return null;
-        });
-        if (claimed) claims.push(claimed);
+      if (decide) {
+        const due: Due[] = [];
+        for (const schedule of await deps.list()) {
+          const claimed = await step(schedule, now, activeSince).catch((error) => {
+            console.error(`Schedule ${schedule.id} failed to run:`, error);
+            return null;
+          });
+          if (claimed) due.push(claimed);
+        }
+        await Promise.all(due.map((d) => launch(d.before, d.claimed, d.claimed.prompt, d.kind, now)
+          .catch((error) => console.error(`Schedule ${d.claimed.id} failed to start:`, error))));
       }
-      await Promise.all(claims.map((c) => launch(c, now).catch((error) => console.error(`Schedule ${c.claimed.id} failed to start:`, error))));
       changed = JSON.stringify(await deps.list()) !== before;
     } catch (error) {
       console.error("Failed to run schedules:", error);
@@ -317,16 +289,38 @@ export function createScheduleRunner(deps: ScheduleRunnerDeps, options: Schedule
     if (changed) deps.onChange();
   }
 
+  async function find(id: string): Promise<PeriodicSchedule> {
+    const schedule = (await deps.list()).find((s) => s.id === id);
+    if (!schedule) throw new Error(`No schedule ${id}`);
+    if (deps.isArchived(schedule.workstream_id)) throw new Error(ARCHIVED);
+    return schedule;
+  }
+
   return {
     tick,
+    settle,
     async runNow(id, now) {
-      const schedule = (await deps.list()).find((s) => s.id === id);
-      if (!schedule) throw new Error(`No schedule ${id}`);
-      if (deps.isArchived(schedule.workstream_id)) throw new Error("This schedule's workstream is archived; unarchive it first.");
+      await find(id);
       await deps.update(id, { run_requested: true, run_requested_at: now });
       // A tick already under way may have read the schedules before the request.
       if (current) await current;
       await tick(now);
+    },
+    async reply(id, text, kind, now) {
+      if (current) await current.catch(() => {});
+      const schedule = await find(id);
+      if (schedule.interactive_tile_id) throw new Error(`${PAUSED_INTERACTIVE}: close the interactive tile first.`);
+      if (inFlight.has(id)) {
+        await deps.recordSkip(schedule, kind, text, now);
+        throw new Error("A run is already going in this tile, so this one was skipped. Send it again when it ends.");
+      }
+      const claimed = await claim(schedule, {}, now);
+      if (!claimed) throw new Error("The schedule changed; try again.");
+      try {
+        return await launch(schedule, claimed, text, kind, now);
+      } finally {
+        deps.onChange();
+      }
     },
   };
 }

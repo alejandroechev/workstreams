@@ -77,14 +77,14 @@ import type { LoopSummary } from "./domain/loop";
 import { countUnreadInbox } from "./domain/pipeline-inbox";
 import { isCompanionEnabled, useCompanionService } from "./companion/useCompanionService";
 import { startPhoneSession } from "./companion/start-session";
-import { resumeFollowUpSession, resumePhoneSession, resumeScheduledSession, type ResumeSessionDeps } from "./companion/resume-session";
+import { resumeFollowUpSession, resumePhoneSession, type ResumeSessionDeps } from "./companion/resume-session";
 import { useSchedules, type ScheduleDraft } from "./schedules/useSchedules";
 import { ScheduleEditor } from "./schedules/ScheduleEditor";
 import { SchedulesModal } from "./schedules/SchedulesModal";
 import { TileSchedulesContext, type TileSchedules } from "./schedules/context";
 import { isTileBusy, tileChangedRecently, tileGeneration } from "./domain/tile-activity";
 import type { PeriodicSchedule } from "./domain/periodic-schedules";
-import { setupPrompt } from "./domain/periodic-schedules";
+import { promptFirstLine } from "./domain/periodic-schedules";
 import { stopSession } from "./companion/stop-session";
 import { postTileNotice } from "./domain/tile-notices";
 import { relinkTile } from "./companion/relink";
@@ -1842,7 +1842,7 @@ export default function App() {
   );
 
   const addTile = useCallback(
-    async (tileType: TileType, extraConfig?: Record<string, string>, opts?: { initialPrompt?: string }) => {
+    async (tileType: TileType, extraConfig?: Record<string, string>, opts?: { initialPrompt?: string; title?: string }) => {
       if (!activeWsId) return;
       // Hidden features (sunset flags) cannot be created from any path:
       // menu, shortcut or programmatic.
@@ -1866,6 +1866,7 @@ export default function App() {
         debug_walkthrough: "Walkthrough",
         loop_control: "Goal Loop",
         diagram: "Diagram",
+        periodic_session: "Periodic",
       };
       // Count by sub-shell (PowerShell vs WSL) so each gets its own
       // numbered sequence.
@@ -1914,6 +1915,7 @@ export default function App() {
         config = "{}";
         title = `${typeLabels[tileType]} ${tileCount + 1}`;
       }
+      if (opts?.title) title = opts.title;
 
       const tile = await backend.createTile(
         activeWsId,
@@ -2362,17 +2364,9 @@ export default function App() {
       const status = workstreamsRef.current.find((w) => w.id === id)?.status;
       return status === "archived" || status === "archiving";
     },
-    isBusy: isTileBusy,
-    turnState: (sessionId) => backend.sessionTurnState(sessionId),
-    resume: (schedule, prompt, revalidate) =>
-      resumeScheduledSession(
-        { ...resumeDeps(), companionOn: isCompanionEnabled },
-        {
-          workstreamId: schedule.workstream_id, tileId: schedule.tile_id, prompt,
-          command: commandForWsId(schedule.workstream_id), scheduleId: schedule.id, now: Date.now(), revalidate,
-        },
-      ),
-    interrupt: (tileId) => backend.writeToTerminal(tileId, "\u0003"),
+    command: (id) => commandForWsId(id),
+    cwd: (id) => workstreamsRef.current.find((w) => w.id === id)?.directory || defaultRootDir(),
+    companionOn: isCompanionEnabled,
   });
   const [showSchedules, setShowSchedules] = useState(false);
   /** The schedule form: for a tile, an existing schedule, or a new periodic tile. */
@@ -2407,12 +2401,17 @@ export default function App() {
     if (target.kind === "edit") await schedules.edit(target.schedule.id, draft);
     else if (target.kind === "tile") await schedules.create(target.tileId, target.workstreamId, draft);
     else {
-      // Started on a setup prompt: a session that never got one has no id to resume.
-      const tile = await addTile("copilot_session", undefined, { initialPrompt: setupPrompt(draft) });
+      // A Periodic session tile: no terminal, nothing started; its session id
+      // is assigned now and the first run creates the session (ADR 046).
+      const tile = await addTile("periodic_session", undefined, { title: promptFirstLine(draft.prompt).slice(0, 60) || "Periodic session" });
       if (!tile) throw new Error("Select a workstream to add the tile to.");
-      await backend.updateTileConfig(tile.id, JSON.stringify({ ...JSON.parse(tile.config_json || "{}"), icon: "clock" }));
-      upsertTileLocally({ ...tile, config_json: JSON.stringify({ ...JSON.parse(tile.config_json || "{}"), icon: "clock" }) });
-      await schedules.create(tile.id, target.workstreamId, draft);
+      try {
+        await schedules.create(tile.id, target.workstreamId, draft, crypto.randomUUID());
+      } catch (error) {
+        await backend.deleteTile(tile.id).catch(() => {});
+        removeTileLocally(tile.id);
+        throw error;
+      }
     }
     setScheduleEditor(null);
   };

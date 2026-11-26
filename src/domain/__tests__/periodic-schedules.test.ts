@@ -7,14 +7,16 @@ import {
   describeLastResult,
   formatNextRun,
   frequencyMinutes,
-  INBOX_INSTRUCTION,
+  headlessArgv,
   MAX_CONSECUTIVE_FAILURES,
+  NEEDS_INPUT_INSTRUCTION,
+  needsInputQuestion,
   RUN_REQUEST_TTL_MS,
   nextRunAfter,
-  PHONE_INSTRUCTION,
+  outcomeOfRun,
   promptFirstLine,
-  setupPrompt,
   validateFrequency,
+  type PeriodicRun,
   type PeriodicSchedule,
 } from "../periodic-schedules";
 
@@ -47,6 +49,9 @@ function schedule(overrides: Partial<PeriodicSchedule> = {}): PeriodicSchedule {
     run_requested_at: null,
     created_at: 0,
     revision: 0,
+    session_id: "S",
+    session_started: false,
+    interactive_tile_id: null,
     ...overrides,
   };
 }
@@ -121,8 +126,8 @@ describe("nextRunAfter", () => {
 describe("decideDue", () => {
   const due = at(2026, 11, 23, 9, 0);
   // The scheduler ticked 15 s before the due time: it was awake when the slot fell.
-  const awake = (now: number, over: Partial<{ busy: boolean; archived: boolean; activeSince: number | null; startedAt: number }> = {}) =>
-    ({ now, busy: false, archived: false, activeSince: due - 15_000, startedAt: 0, ...over });
+  const awake = (now: number, over: Partial<{ busy: boolean; archived: boolean; interactive: boolean; activeSince: number | null; startedAt: number }> = {}) =>
+    ({ now, busy: false, archived: false, interactive: false, activeSince: due - 15_000, startedAt: 0, ...over });
 
   it("waits until the due time", () => {
     expect(decideDue(schedule({ next_run_at: due }), awake(due - 1))).toEqual({ action: "wait" });
@@ -136,7 +141,13 @@ describe("decideDue", () => {
     expect(decideDue(schedule({ next_run_at: due }), awake(due + 1000))).toEqual({ action: "run", manual: false });
   });
 
-  it("skips a run due while the agent is mid-turn", () => {
+  it("while a tile is open interactively on the session, a due slot is passed over (no catch-up) and Run now is dropped", () => {
+    expect(decideDue(schedule({ next_run_at: due }), awake(due + 1000, { interactive: true }))).toEqual({ action: "missed" });
+    expect(decideDue(schedule({ next_run_at: due + 5000 }), awake(due + 1000, { interactive: true }))).toEqual({ action: "wait" });
+    expect(decideDue(schedule({ run_requested: true, run_requested_at: due }), awake(due, { interactive: true }))).toEqual({ action: "expire" });
+  });
+
+  it("skips a run due while another run is going", () => {
     expect(decideDue(schedule({ next_run_at: due }), awake(due + 1000, { busy: true }))).toEqual({ action: "skip" });
   });
 
@@ -171,10 +182,12 @@ describe("decideDue", () => {
 describe("applyRunResult", () => {
   const now = at(2026, 11, 23, 9, 0);
 
-  it("resets failures on success", () => {
-    const { patch, autoPaused } = applyRunResult(schedule({ failures: 2 }), { result: "ok" }, now);
-    expect(patch).toMatchObject({ last_result: "ok", failures: 0, last_error: null });
-    expect(autoPaused).toBe(false);
+  it("resets failures on ok and on needs input", () => {
+    const ok = applyRunResult(schedule({ failures: 2 }), { result: "ok" }, now);
+    expect(ok.patch).toMatchObject({ last_result: "ok", failures: 0, last_error: null });
+    expect(ok.autoPaused).toBe(false);
+    const ask = applyRunResult(schedule({ failures: 2 }), { result: "needs_input" }, now);
+    expect(ask.patch).toMatchObject({ last_result: "needs_input", failures: 0, last_error: null });
   });
 
   it("records a skip without counting it as a failure", () => {
@@ -184,15 +197,17 @@ describe("applyRunResult", () => {
     expect(patch.paused).toBeUndefined();
   });
 
-  it("counts could-not-start and timed-out, and pauses after 3 in a row", () => {
+  it("counts failed and timed out runs, and pauses after 3 in a row", () => {
     let s = schedule();
-    const first = applyRunResult(s, { result: "could not start", error: "not linked" }, now);
-    expect(first.patch).toMatchObject({ failures: 1, last_error: "not linked" });
+    const first = applyRunResult(s, { result: "failed", error: "exit code 1" }, now);
+    expect(first.patch).toMatchObject({ last_result: "failed", failures: 1, last_error: "exit code 1" });
     s = { ...s, ...first.patch };
-    const second = applyRunResult(s, { result: "timed out" }, now);
+    const second = applyRunResult(s, { result: "timed_out" }, now);
+    expect(second.patch).toMatchObject({ last_result: "timed_out" });
+    expect(second.patch.last_error).toMatch(/60 minutes/);
     s = { ...s, ...second.patch };
     expect(second.autoPaused).toBe(false);
-    const third = applyRunResult(s, { result: "could not start", error: "tile gone" }, now);
+    const third = applyRunResult(s, { result: "failed", error: "could not start" }, now);
     expect(third.patch).toMatchObject({ failures: MAX_CONSECUTIVE_FAILURES, paused: true });
     expect(third.autoPaused).toBe(true);
   });
@@ -204,51 +219,52 @@ describe("applyRunResult", () => {
   });
 
   it("does not re-announce a pause on a schedule already paused", () => {
-    const { autoPaused } = applyRunResult(schedule({ failures: 5, paused: true }), { result: "timed out" }, now);
+    const { autoPaused } = applyRunResult(schedule({ failures: 5, paused: true }), { result: "timed_out" }, now);
     expect(autoPaused).toBe(false);
   });
 });
 
-describe("setupPrompt", () => {
-  const text = setupPrompt({ prompt: "Summarize new CI failures", frequency: { kind: "daily", time: "09:00" } });
-
-  it("tells the session it is periodic and when the prompt will arrive", () => {
-    expect(text).toContain("periodic session");
-    expect(text).toContain("Daily at 09:00");
+describe("outcomeOfRun", () => {
+  const run = (over: Partial<PeriodicRun>): PeriodicRun => ({
+    id: "r", schedule_id: "s1", tile_id: "t1", kind: "scheduled", status: "ok", started_at: 1, ended_at: 2, exit_code: 0,
+    prompt: "P", answer: null, question: null, error: null, tools: [], events_path: null, ...over,
   });
 
-  it("quotes the scheduled prompt as context only", () => {
-    expect(text).toContain("> Summarize new CI failures");
-    expect(text).toMatch(/do not start on it now/i);
-  });
-
-  it("quotes every line of a multi-line prompt", () => {
-    expect(setupPrompt({ prompt: "a\nb", frequency: { kind: "interval", minutes: 60 } })).toContain("> a\n> b");
+  it("maps a finished run to its outcome, and a running one to null", () => {
+    expect(outcomeOfRun(run({ status: "ok" }))).toEqual({ result: "ok" });
+    expect(outcomeOfRun(run({ status: "needs_input" }))).toEqual({ result: "needs_input" });
+    expect(outcomeOfRun(run({ status: "failed", error: "exit code 1" }))).toEqual({ result: "failed", error: "exit code 1" });
+    expect(outcomeOfRun(run({ status: "failed" }))).toEqual({ result: "failed", error: "The run failed." });
+    expect(outcomeOfRun(run({ status: "timed_out" }))).toEqual({ result: "timed_out" });
+    expect(outcomeOfRun(run({ status: "interrupted" }))).toEqual({ result: "interrupted" });
+    expect(outcomeOfRun(run({ status: "skipped" }))).toEqual({ result: "skipped" });
+    expect(outcomeOfRun(run({ status: "running" }))).toBeNull();
   });
 });
 
-describe("composeRunPrompt", () => {
-  it("sends the prompt verbatim with both toggles off", () => {
+describe("the headless run (mirror of periodic_runner.rs)", () => {
+  it("sends the prompt verbatim plus the needs-input instruction, and no notify instructions", () => {
     const prompt = "  Check  the course\n\tfor new videos  ";
-    expect(composeRunPrompt({ prompt, notify_inbox: false, notify_phone: false })).toBe(prompt);
+    const out = composeRunPrompt(prompt);
+    expect(out).toBe(`${prompt}\n\n${NEEDS_INPUT_INSTRUCTION}`);
+    expect(NEEDS_INPUT_INSTRUCTION).toContain("NEEDS INPUT:");
+    expect(out).not.toMatch(/ws-message|companion-reply/);
   });
 
-  it("appends the ws-message instruction for the Inbox", () => {
-    const out = composeRunPrompt({ prompt: "P", notify_inbox: true, notify_phone: false });
-    expect(out.startsWith("P\n\n")).toBe(true);
-    expect(out).toContain(INBOX_INSTRUCTION);
-    expect(INBOX_INSTRUCTION).toContain("ws-message");
-    expect(out).not.toContain("companion-reply");
+  it("creates the session on the first run and resumes it after", () => {
+    expect(headlessArgv("my-copilot --yolo --model x", "P", "S", true)).toEqual({
+      program: "my-copilot",
+      args: ["--yolo", "--model", "x", "-p", "P", "--session-id=S", "--no-ask-user", "--output-format", "json"],
+    });
+    expect(headlessArgv("my-copilot", "P", "S", false).args).toContain("--resume=S");
+    expect(headlessArgv("  ", "P", "S", false).program).toBe("agency");
   });
 
-  it("appends the companion-reply instruction for the phone", () => {
-    const out = composeRunPrompt({ prompt: "P", notify_inbox: false, notify_phone: true });
-    expect(out).toBe(`P\n\n${PHONE_INSTRUCTION}`);
-    expect(PHONE_INSTRUCTION).toContain("companion-reply");
-  });
-
-  it("appends both when both are on", () => {
-    expect(composeRunPrompt({ prompt: "P", notify_inbox: true, notify_phone: true })).toBe(`P\n\n${INBOX_INSTRUCTION}\n${PHONE_INSTRUCTION}`);
+  it("reads the needs-input question from an explicit prefix only", () => {
+    expect(needsInputQuestion("  \nNEEDS INPUT: Skip it or report it?")).toBe("Skip it or report it?");
+    expect(needsInputQuestion("**NEEDS INPUT:** Which?")).toBe("Which?");
+    expect(needsInputQuestion("All green. NEEDS INPUT: no")).toBeNull();
+    expect(needsInputQuestion("needs input: x")).toBeNull();
   });
 });
 
@@ -278,7 +294,9 @@ describe("descriptions", () => {
   it("describes the last result", () => {
     expect(describeLastResult(schedule())).toBe("never run");
     expect(describeLastResult(schedule({ last_result: "ok" }))).toBe("ok");
-    expect(describeLastResult(schedule({ last_result: "could not start", last_error: "tile gone" }))).toBe("could not start: tile gone");
+    expect(describeLastResult(schedule({ last_result: "failed", last_error: "exit code 1" }))).toBe("failed: exit code 1");
+    expect(describeLastResult(schedule({ last_result: "timed_out", last_error: "late" }))).toBe("timed out: late");
+    expect(describeLastResult(schedule({ last_result: "needs_input" }))).toBe("needs input");
   });
 
   it("takes the prompt's first non-empty line", () => {

@@ -56,7 +56,7 @@ interface ResumeTileRequest {
   guard: RequestGuard;
   /** The line written in the terminal before the session restarts. */
   noticeText: string;
-  /** Re-checks what asked for the resume (a schedule) right before the stop and the spawn; throws to cancel. */
+  /** Re-checks what asked for the resume (a follow-up) right before the stop and the spawn; throws to cancel. */
   revalidate?: (phase: ResumePhase, sessionId: string) => Promise<void>;
   /** Why an unlinked tile can't be resumed. */
   unlinkedError: string;
@@ -67,14 +67,15 @@ interface ResumeTileRequest {
 /**
  * Stops a tile's process and resumes the same Copilot session in the same
  * tile with `prompt` as its new interactive prompt. Shared by phone messages
- * and scheduled runs (ADR 044).
+ * and digest follow-ups (ADR 044, ADR 045). Periodic sessions run headless
+ * instead (ADR 046).
  *
  * Nothing is touched until the tile is known to still run the session it was
  * read with, and that is checked again after every wait: the user may re-link
  * the tile meanwhile. A tile in a workstream that isn't mounted is marked as
  * ours before mounting, so the mount doesn't start it only for us to stop it.
  */
-/** The resume holding each tile; phone messages and scheduled runs queue behind it. */
+/** The resume holding each tile; phone messages and follow-ups queue behind it. */
 const tileLocks = new Map<string, Promise<void>>();
 
 /** Runs `work` once no other resume holds `tileId`; everything it reads is read after that. */
@@ -228,69 +229,8 @@ export async function resumePhoneSession(deps: ResumeSessionDeps, request: Resum
   );
 }
 
-/** When a scheduled resume re-checks its schedule: under the tile lock before stopping, and before spawning. */
+/** When a resume re-checks what asked for it: under the tile lock before stopping, and before spawning. */
 export type ResumePhase = "before-stop" | "before-spawn";
-
-export interface ScheduledResumeRequest {
-  workstreamId: string;
-  tileId: string;
-  /** What the run sends: the schedule's prompt plus any notify instructions. */
-  prompt: string;
-  command: string;
-  scheduleId: string;
-  now: number;
-  /** Throws when the schedule was paused, edited, deleted or archived since the run was claimed. */
-  revalidate?: (phase: ResumePhase, sessionId: string) => Promise<void>;
-}
-
-/**
- * Starts a periodic schedule's run (ADR 044): resumes the session the tile is
- * linked to *now* (a re-linked tile runs its new session) with the prompt.
- * With the phone companion on, the prompt is also recorded in the tile's phone
- * thread (created, named after the tile, on first use) so the thread reads
- * run by run; that record never stops the run.
- */
-export async function resumeScheduledSession(
-  deps: ResumeSessionDeps & { companionOn(): Promise<boolean> },
-  request: ScheduledResumeRequest,
-): Promise<{ sessionId: string }> {
-  const { backend } = deps;
-  let claimed = false;
-  const claimId = `schedule-${request.scheduleId}-${request.now}`;
-  const sessionId = await resumeTileSession(
-    deps,
-    {
-      workstreamId: request.workstreamId,
-      tileId: request.tileId,
-      prompt: request.prompt,
-      command: request.command,
-      guard: () => {},
-      revalidate: request.revalidate,
-      noticeText: `Scheduled run: ${firstLine(request.prompt)}`,
-      unlinkedError: "This tile isn't linked to a Copilot session yet, so there is nothing to resume.",
-    },
-    {
-      async record(tile, sessionId) {
-        try {
-          if (!(await deps.companionOn())) return;
-          const id = claimId;
-          await backend.companionClaimSession({
-            tileId: tile.id, workstreamId: request.workstreamId, requestId: id, prompt: tile.title || "Copilot session", createdAt: request.now,
-          }, sessionId);
-          claimed = true;
-          await backend.companionAddPrompt(tile.id, id, request.prompt, request.now);
-          deps.onRecorded();
-        } catch (error) {
-          console.warn("Could not record the scheduled prompt in the phone thread:", error);
-        }
-      },
-      async undoRecord(tileId) {
-        if (claimed) await backend.companionRevokeSession(tileId, claimId);
-      },
-    },
-  );
-  return { sessionId };
-}
 
 export interface FollowUpResumeRequest {
   workstreamId: string;
@@ -304,8 +244,7 @@ export interface FollowUpResumeRequest {
 /**
  * Sends a later digest's new failed runs into an existing investigation
  * (ADR 045): resumes the session its tile runs with the follow-up as the
- * prompt, through the same per-tile serialized path as phone messages and
- * scheduled runs, and only when the tile has no live process: a running
+ * prompt, through the same per-tile serialized path as phone messages, and only when the tile has no live process: a running
  * session is never stopped or interrupted for a follow-up.
  */
 export async function resumeFollowUpSession(deps: ResumeSessionDeps, request: FollowUpResumeRequest): Promise<{ sessionId: string }> {
