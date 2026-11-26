@@ -32,6 +32,7 @@ mod loop_definition;
 mod loop_verifier;
 mod loops;
 mod orphan_prs;
+pub mod periodic_runner;
 pub mod periodic_schedules;
 pub mod pipeline_digest;
 mod pipeline_inbox;
