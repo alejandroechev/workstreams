@@ -866,8 +866,8 @@ pub const COMMANDS: &[Command] = &[
     Command {
         id: "schedule.create",
         // Never the prompt: it is the user's business.
-        log_params: &["tile", "frequency", "notify_inbox", "notify_phone"],
-        summary: "Run a Copilot session tile periodically: at each due time the app resumes its session with the prompt, verbatim (params: prompt (prompt=@- reads stdin), frequency=hourly|every:<N>h|every:<N>m|daily:HH:MM|weekly:<day>:HH:MM (laptop time, at least every 5 minutes), tile = a session tile in your workstream (default: yours), notify_inbox=true|false, notify_phone=true|false). One schedule per tile; the first run is at the first scheduled time (ADR 044)",
+        log_params: &["frequency", "notify_inbox", "notify_phone"],
+        summary: "Create a Periodic session tile in your workstream, on a fresh Copilot session: at each due time the app runs the prompt headless on that session (copilot -p, no terminal; a run can't wait for input and ends ok, failed, timed out or needs input) (params: prompt (prompt=@- reads stdin), frequency=hourly|every:<N>h|every:<N>m|daily:HH:MM|weekly:<day>:HH:MM (laptop time, at least every 5 minutes), notify_inbox=true|false, notify_phone=true|false). Your own tile is untouched; the first run is at the first scheduled time (ADR 046)",
         requires_identity: true,
         destructive: false,
         handler: schedule_create,
@@ -875,7 +875,7 @@ pub const COMMANDS: &[Command] = &[
     Command {
         id: "schedule.list",
         log_params: &[],
-        summary: "Every periodic schedule: tile, workstream, prompt, frequency, paused, next and last run, last result, consecutive failures",
+        summary: "Every periodic schedule: tile, workstream, session, prompt, frequency, paused, next and last run, last result (ok, failed, timed_out, needs_input, skipped, interrupted, running), consecutive failures",
         requires_identity: true,
         destructive: false,
         handler: schedule_list,
@@ -883,7 +883,7 @@ pub const COMMANDS: &[Command] = &[
     Command {
         id: "schedule.run",
         log_params: &["id", "tile"],
-        summary: "Run a schedule now (params: id, or tile); skipped if its agent is mid-turn",
+        summary: "Run a schedule now (params: id, or tile); skipped if a run is going, refused while its session is open interactively",
         requires_identity: true,
         destructive: false,
         handler: schedule_run,
@@ -907,7 +907,7 @@ pub const COMMANDS: &[Command] = &[
     Command {
         id: "schedule.delete",
         log_params: &["id", "tile"],
-        summary: "Delete a schedule; the tile and its session stay (params: id, or tile)",
+        summary: "Delete a schedule and its Periodic session tile; the Copilot session stays on disk (params: id, or tile)",
         requires_identity: true,
         destructive: true,
         handler: schedule_delete,
