@@ -2404,9 +2404,34 @@ export default function App() {
   );
   const schedulesRef = useRef(schedules);
   useLayoutEffect(() => { schedulesRef.current = schedules; });
-  const openInteractivelyRef = useRef<(schedule: PeriodicSchedule) => Promise<void>>(async () => {
-    throw new Error("Open interactively isn't available yet.");
-  });
+  /**
+   * Open interactively (ADR 046, US-5): an ordinary Copilot tile in the same
+   * workstream resuming the periodic tile's session. While it is open the
+   * schedule is paused (`interactive_tile_id`); closing it lets it run again.
+   */
+  const openInteractively = async (schedule: PeriodicSchedule) => {
+    const sessionId = schedule.session_id;
+    if (!sessionId || !schedule.session_started) throw new Error("The session starts with the first run; run it once first.");
+    if (schedule.last_result === "running") throw new Error("A run is going; open it interactively once it ends.");
+    const wsId = schedule.workstream_id;
+    const ws = workstreamsRef.current.find((w) => w.id === wsId);
+    const cwd = ws?.directory || defaultRootDir();
+    const periodicTitle = wsStatesRef.current.get(wsId)?.tiles.find((t) => t.id === schedule.tile_id)?.title;
+    const name = `${periodicTitle || promptFirstLine(schedule.prompt) || "Periodic session"} (interactive)`;
+    const config = JSON.stringify({
+      session_name: name, copilot_session_id: sessionId, cwd, is_resumed: true, resume_by_id: sessionId,
+      created_at: new Date().toISOString(),
+    });
+    const tile = await backend.createTile(wsId, "copilot_session", name, config);
+    const order = wsStatesRef.current.get(wsId)?.tileOrder ?? [];
+    upsertTileLocally(tile);
+    await backend.updateLayout(wsId, { tile_order_json: JSON.stringify([...order.filter((id) => id !== tile.id), tile.id]) });
+    spawnedPtys.current.add(tile.id);
+    await backend.spawnCopilotSession(tile.id, cwd, sessionId, 30, 120, commandForWsId(wsId));
+    await schedules.refresh();
+  };
+  const openInteractivelyRef = useRef(openInteractively);
+  useLayoutEffect(() => { openInteractivelyRef.current = openInteractively; });
   const tileSchedules = useMemo<TileSchedules>(
     () => ({
       byTile: schedulesByTile,

@@ -83,6 +83,8 @@ describe("PeriodicSessionTile (ADR 046)", () => {
   it("updates a running run live as its events arrive (AT-5)", async () => {
     setup(schedule({ last_result: "running" }), [run({ id: "live", status: "running", ended_at: null, answer: null, exit_code: null })]);
     await screen.findByTestId("periodic-run-row-live");
+    // Two processes never share the session: no taking over while a run goes.
+    expect((screen.getByTestId("periodic-open-interactive") as HTMLButtonElement).disabled).toBe(true);
     await act(async () => {
       window.__WS_EMIT__?.("periodic-run", { run: run({ id: "live", status: "running", ended_at: null, answer: null, tools: [{ id: "c1", name: "bash", status: "running" }] }), finished: false });
     });

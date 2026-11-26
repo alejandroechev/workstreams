@@ -156,6 +156,20 @@ describe("schedule runner (headless, ADR 046)", () => {
     expect(env.started()).toHaveLength(1);
   });
 
+  it("a slot that fell while the tile was open interactively is passed over once it closes, never caught up (AT-6)", async () => {
+    const env = await setup({ frequency: { kind: "interval", minutes: 60 } });
+    await env.backend.updateSchedule(env.schedule.id, { next_run_at: NINE });
+    const open = await env.backend.createTile(env.ws.id, "copilot_session", "Interactive", JSON.stringify({ copilot_session_id: "S" }));
+    await env.runner.tick(NINE - 30_000);
+    // Closed after the slot fell, before any tick saw it due.
+    await env.backend.deleteTile(open.id);
+    await env.runner.tick(NINE + 10_000);
+    expect(env.started()).toEqual([]);
+    expect((await env.read()).next_run_at).toBe(NINE + 60 * MIN);
+    await env.through(NINE + 60 * MIN);
+    expect(env.started()).toHaveLength(1);
+  });
+
   it("a reply runs the next turn at once, as a run with the same rules, and is skipped while one is going (AT-4)", async () => {
     const env = await setup();
     await env.backend.updateSchedule(env.schedule.id, { paused: true, next_run_at: NINE + 99 * MIN });

@@ -92,6 +92,8 @@ export function createScheduleRunner(deps: ScheduleRunnerDeps, options: Schedule
   const maxGapMs = options.maxGapMs ?? MAX_TICK_GAP_MS;
   const startedAt = options.startedAt ?? 0;
   const inFlight = new Map<string, InFlight>();
+  /** Schedules last seen with a tile open interactively on their session: a slot due when it closes passes. */
+  const wasInteractive = new Set<string>();
   let current: Promise<void> | null = null;
   /** The last timer callback, and since when they have come without a gap (awake). */
   let lastBeat: number | null = null;
@@ -213,8 +215,11 @@ export function createScheduleRunner(deps: ScheduleRunnerDeps, options: Schedule
   async function step(schedule: PeriodicSchedule, now: number, activeSince: number | null): Promise<Due | null> {
     if (!inFlight.has(schedule.id) && schedule.last_result === "running") schedule = await adopt(schedule, now);
     const flying = inFlight.has(schedule.id);
+    const justClosed = !schedule.interactive_tile_id && wasInteractive.delete(schedule.id);
+    if (schedule.interactive_tile_id) wasInteractive.add(schedule.id);
     const decision = decideDue(schedule, {
-      now, busy: flying, interactive: !!schedule.interactive_tile_id, archived: deps.isArchived(schedule.workstream_id), activeSince, startedAt,
+      now, busy: flying, interactive: !!schedule.interactive_tile_id || (justClosed && !schedule.run_requested),
+      archived: deps.isArchived(schedule.workstream_id), activeSince, startedAt,
     });
     const write = (patch: PeriodicSchedulePatch) => deps.update(schedule.id, patch, schedule.revision);
     switch (decision.action) {
@@ -237,8 +242,9 @@ export function createScheduleRunner(deps: ScheduleRunnerDeps, options: Schedule
         return null;
       }
       case "run": {
+        // Run now never leaves a slot behind it already due: that would be a catch-up.
         const plan = decision.manual
-          ? { next_run_at: schedule.next_run_at ?? nextRunAfter(schedule.frequency, now, now) }
+          ? { next_run_at: schedule.next_run_at !== null && schedule.next_run_at > now ? schedule.next_run_at : nextRunAfter(schedule.frequency, schedule.next_run_at ?? now, now) }
           : { next_run_at: nextRunAfter(schedule.frequency, schedule.next_run_at ?? now, now) };
         const claimed = await claim(schedule, plan, now);
         return claimed ? { before: schedule, claimed, kind: decision.manual ? "manual" : "scheduled" } : null;

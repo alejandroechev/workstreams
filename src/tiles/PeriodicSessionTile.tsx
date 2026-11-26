@@ -144,7 +144,7 @@ export default function PeriodicSessionTile({ tileId, workstreamId }: { tileId: 
         <button
           data-testid="periodic-open-interactive"
           style={button}
-          disabled={interactive || !schedule.session_started}
+          disabled={interactive || !schedule.session_started || running}
           title={schedule.session_started ? "Open this session in an ordinary Copilot tile; the schedule pauses while it is open." : "Available after the first run creates the session."}
           onClick={() => act(() => context.openInteractively(schedule))}
         >
