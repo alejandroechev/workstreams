@@ -1,16 +1,18 @@
 /**
- * Phone messages from any agent, and scheduled runs in the phone thread
- * (ADR 044), in the real app: the spec plays the paired phone through the
- * in-memory hub (the VITE_E2E seam in main.tsx), reads what the laptop
- * publishes and verifies it as the phone would. Covers AT-7 (publishing half;
- * the 20/hour cap and the companion-off refusal through the real CLI are in
- * agent_cli_scenario.rs) and AT-8 of files/features/periodic-sessions/acceptance.md.
+ * Phone messages from any agent (ADR 044), and headless periodic runs
+ * delivered to the Inbox and the phone thread by Workstreams itself (ADR 046),
+ * in the real app: the spec plays the paired phone through the in-memory hub
+ * (the VITE_E2E seam in main.tsx), reads what the laptop publishes and
+ * verifies it as the phone would. Covers AT-7 of
+ * files/features/headless-periodic-sessions/acceptance.md, and the laptop
+ * thread of ADR 044's phone messages (its 20/hour cap and companion-off
+ * refusal through the real CLI are in agent_cli_scenario.rs).
  */
 import { test, expect, type Page } from "@playwright/test";
 import { readFileSync } from "node:fs";
 import { readSessions, verifySessions, type CompanionDocument } from "../../src/companion/protocol";
 import type { MemoryBackend } from "../../src/backend/memory-backend";
-import type { PeriodicSchedule } from "../../src/domain/periodic-schedules";
+import { NEEDS_INPUT_INSTRUCTION, type PeriodicSchedule } from "../../src/domain/periodic-schedules";
 
 const SECRET: string = JSON.parse(
   readFileSync(new URL("../../src/companion/protocol/fixtures.json", import.meta.url), "utf8"),
@@ -74,12 +76,15 @@ const agentReplies = (page: Page, tileId: string, text: string) =>
     w.__WS_EMIT__("state-changed", { entity: "companion_message", id: tileId, action: "added" });
   }, { tileId, text });
 
-const spawns = (page: Page, tileId: string) =>
+const runs = (page: Page, tileId: string) =>
   page.evaluate((id) => ((window as unknown as PhoneWindow).__WS_INVOKE_LOG__ ?? [])
-    .filter((e) => e.cmd === "spawn_copilot_session" && e.args.tileId === id && e.args.initialPrompt !== null)
-    .map((e) => `${e.args.resumeSessionId}:${e.args.initialPrompt}`), tileId);
+    .filter((e) => e.cmd === "periodic_run_start" && e.args.tileId === id)
+    .map((e) => ({ kind: e.args.kind as string, prompt: e.args.prompt as string, args: e.args.args as string[] })), tileId);
+const finish = (page: Page, tileId: string, answer: string) =>
+  page.evaluate(({ tileId, answer }) => { (window as unknown as PhoneWindow).__WS_BACKEND__.finishPeriodicRunForTests(tileId, { exitCode: 0, answer }); }, { tileId, answer });
+const inbox = (page: Page) => page.evaluate(async () => ((await (window as unknown as PhoneWindow).__WS_BACKEND__.getPrInbox()).agent_messages ?? []).map((m) => [m.title, m.body, m.tile_id]));
 
-test("AT-7: a laptop tile's first phone message opens a verified thread named after the tile", async ({ page }) => {
+test("a laptop tile's first phone message opens a verified thread named after the tile (ADR 044)", async ({ page }) => {
   const { tiles: all } = await tiles(page);
   const notes = all.find((t) => t.title === "Notes")!;
   await agentReplies(page, notes.id, "## Summary\n3 new videos");
@@ -87,53 +92,63 @@ test("AT-7: a laptop tile's first phone message opens a verified thread named af
   const [session] = await verified(page);
   expect(session.messages.map((m) => [m.kind, m.text])).toEqual([["result", "## Summary\n3 new videos"]]);
   // The Inbox is unchanged by companion-reply.
-  expect((await page.evaluate(() => (window as unknown as PhoneWindow).__WS_BACKEND__.getPrInbox())).agent_messages ?? []).toEqual([]);
+  expect(await inbox(page)).toEqual([]);
 });
 
-test("AT-8: a scheduled tile's thread reads prompt, reply, prompt, reply, and the phone's message resumes it", async ({ page }) => {
-  const { ws, tiles: all } = await tiles(page);
-  const videos = all.find((t) => t.title === "Videos")!;
-  const due = Date.now() + 3_600_000;
-  const schedule = await page.evaluate(({ tileId, wsId, due }) => (window as unknown as PhoneWindow).__WS_BACKEND__.createSchedule({
-    tileId, workstreamId: wsId, prompt: "Check for new videos", frequency: { kind: "interval", minutes: 60 },
-    notifyInbox: false, notifyPhone: true, nextRunAt: due, createdAt: due - 3_600_000,
-  }), { tileId: videos.id, wsId: ws.id, due }) as PeriodicSchedule;
-  const tick = (now: number) => page.evaluate((at) => (window as unknown as PhoneWindow).__WS_SCHEDULER__.tick(at), now);
+test("AT-7: Workstreams posts a run's answer to the Inbox and the phone thread; a phone reply runs a headless turn", async ({ page }) => {
+  const { ws } = await tiles(page);
+  const made = await page.evaluate(async ({ wsId }) => {
+    const b = (window as unknown as PhoneWindow).__WS_BACKEND__;
+    const tile = await b.createTile(wsId, "periodic_session", "CI health", "{}");
+    const schedule = await b.createSchedule({
+      tileId: tile.id, workstreamId: wsId, prompt: "Check CI health", frequency: { kind: "interval", minutes: 60 },
+      notifyInbox: true, notifyPhone: true, nextRunAt: Date.now() + 3_600_000, createdAt: Date.now(), sessionId: "S",
+    });
+    (window as unknown as PhoneWindow).__WS_EMIT__("tile-created", tile);
+    return { tile, schedule };
+  }, { wsId: ws.id }) as { tile: { id: string }; schedule: PeriodicSchedule };
+  const view = page.locator(`[data-tile-id="${made.tile.id}"]`);
+  await page.locator(`[data-testid="workstream-item"][data-workstream-id="${ws.id}"]`).click();
+  await view.getByTestId("periodic-run-now").click();
+  await expect.poll(async () => (await runs(page, made.tile.id)).length).toBe(1);
+  const [run] = await runs(page, made.tile.id);
+  // The prompt carries only the needs-input instruction: no "post to Inbox/phone" ones.
+  expect(run.args[run.args.indexOf("-p") + 1]).toBe(`Check CI health\n\n${NEEDS_INPUT_INSTRUCTION}`);
+  expect(run.args.join(" ")).not.toMatch(/ws-message|companion-reply/);
+  await finish(page, made.tile.id, "All green");
 
-  // The CLI writing each run's turn into the session's events file.
-  const turns = (n: number) => page.evaluate((n) => (window as unknown as PhoneWindow).__WS_BACKEND__.setSessionTurnsForTests("s-videos", n, n), n);
-  // Awake before each slot (missed slots never run), and each run's turn seen to end.
-  await tick(due - 1_000);
-  await tick(due + 1_000);
-  await expect.poll(() => spawns(page, videos.id)).toHaveLength(1);
-  await agentReplies(page, videos.id, "Run 1: 2 new videos");
-  await turns(1);
-  await tick(due + 2 * 60_000);
-  await tick(due + 3_600_000 - 1_000);
-  await tick(due + 3_600_000 + 1_000);
-  await expect.poll(() => spawns(page, videos.id)).toHaveLength(2);
-  await agentReplies(page, videos.id, "Run 2: nothing new");
-  await turns(2);
+  await expect.poll(() => inbox(page)).toEqual([["Check CI health", "All green", made.tile.id]]);
+  await expect.poll(async () => (await verified(page)).find((s) => s.title === "CI health")?.messages.map((m) => [m.kind, m.text]))
+    .toEqual([["prompt", "Check CI health"], ["result", "All green"]]);
 
-  await expect.poll(async () => (await verified(page)).find((s) => s.title === "Videos")?.messages.map((m) => m.kind))
-    .toEqual(["prompt", "result", "prompt", "result"]);
-  const thread = (await verified(page)).find((s) => s.title === "Videos")!;
-  expect(thread.messages[0].text).toContain("Check for new videos");
-  expect(thread.messages[0].text).toContain("companion-reply");
-  expect(thread.messages.map((m) => m.text).filter((_, i) => i % 2 === 1)).toEqual(["Run 1: 2 new videos", "Run 2: nothing new"]);
-  expect(schedule.notify_phone).toBe(true);
-
-  // The phone messages the session: it resumes the same session in the same tile.
-  await expect.poll(async () => (await phone(page)).laptop.tiles?.find((t) => t.tileId === videos.id)?.linkRevision ?? null).not.toBeNull();
-  const linkRevision = (await phone(page)).laptop.tiles!.find((t) => t.tileId === videos.id)!.linkRevision!;
+  // The phone replies in the tile's thread: one headless turn, its answer appended.
+  await expect.poll(async () => (await phone(page)).laptop.tiles?.find((t) => t.tileId === made.tile.id)?.linkRevision ?? null).not.toBeNull();
+  const linkRevision = (await phone(page)).laptop.tiles!.find((t) => t.tileId === made.tile.id)!.linkRevision!;
   await page.evaluate(async ({ secret, request }) => {
     const w = window as unknown as PhoneWindow;
     const full = { ...request, createdAt: Date.now() };
     const signature = await w.__WS_COMPANION_SIGN__(secret, full);
     w.__WS_COMPANION_PHONE__.change((d) => { d.requests[full.id] = { ...full, signature }; });
-  }, { secret: SECRET, request: { id: "m1", kind: "message", args: { workstreamId: ws.id, tileId: videos.id, linkRevision, prompt: "Summarise the second one" } } });
+  }, { secret: SECRET, request: { id: "m1", kind: "message", args: { workstreamId: ws.id, tileId: made.tile.id, linkRevision, prompt: "Check again" } } });
   await expect.poll(async () => (await phone(page)).requests.m1?.outcome?.status ?? "pending", { timeout: 15_000 }).toBe("done");
-  const runs = await spawns(page, videos.id);
-  expect(runs).toHaveLength(3);
-  expect(runs[2]).toBe("s-videos:Summarise the second one");
+  const phoneRun = (await runs(page, made.tile.id))[1];
+  expect(phoneRun.kind).toBe("phone");
+  expect(phoneRun.prompt).toBe("Check again");
+  expect(phoneRun.args).toContain("--resume=S");
+  await finish(page, made.tile.id, "Checked again: still green");
+  await expect.poll(async () => (await verified(page)).find((s) => s.title === "CI health")?.messages.map((m) => m.text))
+    .toEqual(["Check CI health", "All green", "Check again", "Checked again: still green"]);
+  expect(await runs(page, made.tile.id)).toHaveLength(2);
+
+  // With both toggles off, an ok run posts nothing.
+  await page.evaluate((id) => (window as unknown as PhoneWindow).__WS_BACKEND__.updateSchedule(id, { notify_inbox: false, notify_phone: false }), made.schedule.id);
+  await page.evaluate(() => (window as unknown as PhoneWindow).__WS_SCHEDULER__.tick(Date.now()));
+  const before = (await inbox(page)).length;
+  const thread = (await verified(page)).find((s) => s.title === "CI health")!.messages.length;
+  await view.getByTestId("periodic-run-now").click();
+  await expect.poll(async () => (await runs(page, made.tile.id)).length).toBe(3);
+  await finish(page, made.tile.id, "Quiet");
+  await expect(view.locator('[data-testid^="periodic-run-row-"]').first()).toHaveAttribute("data-status", "ok");
+  expect((await inbox(page)).length).toBe(before);
+  expect((await verified(page)).find((s) => s.title === "CI health")!.messages.length).toBe(thread);
 });

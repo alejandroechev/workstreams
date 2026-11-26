@@ -769,44 +769,57 @@ browser; Messages stays open in the companion.
 - The window keeps running while minimised (`backgroundThrottling` is
   disabled), so requests are answered with the window in the background.
 
-## Periodic Copilot sessions
+## Periodic sessions
 
-A Copilot session can run a prompt on a schedule while Workstreams is open
-([ADR 044](adrs/044-periodic-sessions.md)). Each run resumes the **same**
-session in its own tile with the prompt — `--resume=<session> -i <prompt>`,
-with the tile's configured Copilot command unchanged — so the agent remembers
-earlier runs.
+Scheduled Copilot work runs headless in a **Periodic session** tile while
+Workstreams is open ([ADR 046](adrs/046-headless-periodic-sessions.md), building
+on [ADR 044](adrs/044-periodic-sessions.md)). Each tile has its own Copilot
+session; each run is the workspace's configured Copilot command, unchanged, plus
+`-p <prompt> --session-id=<S>` (first run) or `--resume=<S>` (later runs)
+`--no-ask-user --output-format json`, as a plain process in the workstream's
+folder. The agent remembers earlier runs, and no run can wait for input.
 
 | Do | What happens |
 |---|---|
-| Tile menu (⋮) → **Run periodically…** | Opens the form: the prompt (sent verbatim), a frequency, and **Notify in Inbox** / **Notify my phone** (both off). Saving plans the first run at its first scheduled time; nothing runs now. |
-| Add tile → **Periodic Copilot Session** | Adds a new session tile (clock icon) and its schedule in one step. The session starts on a short setup prompt so it has a session id to resume; it is told to wait for the first scheduled run. |
-| Click the tile's badge, or ⋮ → **Edit schedule…** | Edits the prompt, frequency and toggles; the next run is re-planned. |
-| Sidebar → **Schedules** | Every schedule: workstream, tile, the prompt's first line, frequency, next run, last result; **Run now**, **Pause/Resume**, **Edit**, **Delete** (the tile stays). |
-| `workstreams agent call schedule.create prompt=@- frequency=daily:09:00` | The same from an agent (also `schedule.list/run/pause/resume/delete`). |
+| Add tile → **Periodic session** | The form: the prompt, a frequency, and **Notify in Inbox** / **Notify my phone** (both off). Saving adds a terminal-less tile; its first run is at the first scheduled time; nothing starts now. |
+| **Run now** (tile header) | Runs the prompt at once (skipped, and recorded, while a run is going). |
+| **Edit schedule** (tile header) | Edits the prompt, frequency and toggles; the next run is re-planned. |
+| Reply box (tile footer) | Runs your text as the session's next turn now, like a run. |
+| **Open interactively** (tile header) | Opens an ordinary Copilot tile in the same workstream resuming the session. While any open Copilot tile is on that session the schedule shows **Paused while open interactively**: due runs pass, Run now and replies start nothing. Close it to resume (no catch-up). Offered after the first run. |
+| Sidebar → **Schedules** | Every schedule: workstream, tile, the prompt's first line, frequency, next run, last result; **Run now**, **Pause/Resume**, **Edit**, **Delete** (which removes the tile). |
+| `workstreams agent call schedule.create prompt=@- frequency=daily:09:00` | An agent makes a new Periodic session tile on a fresh session in its workstream (also `schedule.list/run/pause/resume/delete`). |
 
+- **Results:** every run ends with one result: **ok** (exit 0), **failed**
+  (non-zero exit or the command couldn't start), **timed out** (still going
+  after 60 minutes; its process is killed), or **needs input** (the agent began
+  its final reply with `NEEDS INPUT:`, which every run prompt asks it to do
+  when it needs a decision; shown in amber with the question).
+- **Run log:** newest first, each run's result, start time and duration;
+  selecting one shows its prompt, tool calls (name and ok/failed), the final
+  answer and any question. A running run updates live. The last 50 runs per
+  tile are kept across restarts, each with its JSONL events file.
+- **Notifications (by Workstreams, not the agent):** **Notify in Inbox** posts
+  each ok run's answer to the Inbox; failed, timed-out and needs-input runs
+  always do. **Notify my phone** (with the companion on) posts each run's
+  prompt and answer to the tile's phone thread; a reply from the phone runs
+  the next turn and its answer comes back there. Mute all silences the Inbox
+  posts as it does every other source.
 - **Frequencies:** hourly, every N hours, every N minutes, daily at HH:MM,
   weekly on a day at HH:MM, in the laptop's local time (DST-correct). Anything
   more often than every 5 minutes is refused.
-- **Toggles:** **Notify in Inbox** appends an instruction to use `ws-message`;
-  **Notify my phone** one to use `companion-reply`. With the companion on, each
-  run's prompt also shows in the tile's phone thread, before its replies.
-- **Busy and missed runs:** a run due while the agent is mid-turn is skipped
-  (last result *skipped*); typing in the tile doesn't stop a run. Runs missed
-  while the app was closed or the laptop slept are skipped, never caught up,
-  even if the app comes back a few seconds late. A
-  workstream that isn't loaded is loaded in the background and stays loaded.
-- **Failures:** a run still busy after 60 minutes gets Ctrl+C (*timed out*); a
-  run that can't start — tile gone, not linked to a session, spawn error, or
-  no turn seen within 5 minutes — is *could not start*. A run cut short by a
-  phone message, a restart of the tile or the app closing is *interrupted*,
-  which doesn't count. Three in a row pause the schedule and post one Inbox
-  entry. Resume clears the count.
-- **Lifecycle:** closing the tile deletes its schedule; archiving the workstream
-  pauses its schedules (unarchiving leaves them paused); re-linking the tile to
-  another session keeps the schedule, which then resumes the new session.
-  Schedules and their state survive restarts. Workstreams with schedules show a
-  clock in the sidebar.
+- **Busy and missed runs:** one run per tile; a run due while another is going
+  is skipped and listed as *skipped*. Runs missed while the app was closed or
+  the laptop slept are never caught up.
+- **Failures:** three failed or timed-out runs in a row pause the schedule
+  with one Inbox entry; an ok or needs-input run resets the count. Resume
+  clears it.
+- **Lifecycle:** closing the tile deletes its schedule; deleting the schedule
+  removes the tile; archiving the workstream pauses its schedules (unarchiving
+  leaves them paused). Workstreams with schedules show a clock in the sidebar.
+- **Upgrading:** a schedule made on an ordinary Copilot tile before this moves,
+  once, to a new Periodic session tile on the same session, with its prompt,
+  frequency, toggles and pause; the old tile shows a one-time notice and,
+  while it stays open on that session, keeps the new tile paused.
 
 ## Session persistence
 

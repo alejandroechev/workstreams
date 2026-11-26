@@ -268,4 +268,51 @@ describe("schedule runner (headless, ADR 046)", () => {
     await a;
     await expect(env.runner.runNow("nope", NINE)).rejects.toThrow(/No schedule/);
   });
+
+  it("a run that disappeared from the store is interrupted, not a failure", async () => {
+    const env = await setup();
+    await env.runner.runNow(env.schedule.id, NINE);
+    env.deps.getRun = async () => null;
+    await env.runner.settle(NINE + MIN);
+    expect(await env.read()).toMatchObject({ last_result: "interrupted", failures: 0 });
+    expect(env.notified).toEqual([]);
+  });
+
+  it("a native refusal because the session opened interactively puts the schedule back, counting nothing", async () => {
+    const env = await setup();
+    await env.backend.updateSchedule(env.schedule.id, { last_result: "ok" });
+    env.failWith("Paused while open interactively.");
+    await expect(env.runner.reply(env.schedule.id, "x", "reply", NINE)).rejects.toThrow(/open interactively/);
+    expect(await env.read()).toMatchObject({ last_result: "ok", failures: 0 });
+    // Whatever a failed start throws is the run's error.
+    env.failWith(null);
+    (env.deps.start as ReturnType<typeof vi.fn>).mockImplementationOnce(async () => { throw "boom"; });
+    await env.runner.runNow(env.schedule.id, NINE + MIN);
+    expect(await env.read()).toMatchObject({ last_result: "failed", last_error: "boom" });
+  });
+
+  it("bounds the auto-pause alert whatever the prompt, even without a workstream name", async () => {
+    const env = await setup({ prompt: "x".repeat(300) });
+    env.deps.workstreamName = () => undefined;
+    await env.backend.updateSchedule(env.schedule.id, { failures: 2 });
+    await env.runner.runNow(env.schedule.id, NINE);
+    env.finish({ exitCode: 1 });
+    await env.runner.settle(NINE + MIN);
+    const [alert] = (await env.backend.getPrInbox()).agent_messages!;
+    expect([...alert.title].length).toBeLessThanOrEqual(120);
+    expect(alert.body).toContain("its workstream");
+  });
+
+  it("a settle asked during a tick waits for it; a reply whose claim lost the race starts nothing", async () => {
+    const env = await setup();
+    const tick = env.runner.tick(NINE);
+    const settled = env.runner.settle(NINE);
+    await Promise.all([tick, settled]);
+    const update = env.deps.update as ReturnType<typeof vi.fn>;
+    const real = update.getMockImplementation()!;
+    update.mockImplementationOnce(async () => { throw new Error("The schedule changed since it was read."); });
+    await expect(env.runner.reply(env.schedule.id, "x", "reply", NINE)).rejects.toThrow(/changed/);
+    update.mockImplementation(real);
+    expect(env.started()).toEqual([]);
+  });
 });

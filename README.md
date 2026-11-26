@@ -100,19 +100,23 @@ instead of buried behind tabs.
   unread pill in the sidebar footer flags new assignments without opening it.
   Mute a kind of event you don't care about ("Comment requirements passed") and
   it stops being tracked in every repo.
-- **Periodic Copilot sessions** — put a Copilot session on a schedule (hourly,
-  every N hours, daily or weekly at a time, never more often than every 5
-  minutes): from a session tile's menu (**Run periodically…**), the add-tile
-  menu (**Periodic Copilot Session**), or an agent's `schedule.create`. At each
-  due time Workstreams resumes that same session with your prompt, in its own
-  tile, loading its workstream in the background if needed. A run due while the
-  agent is busy is skipped, runs missed while the app was closed are never
-  caught up, a run still going after an hour is interrupted, and three failures
-  in a row pause the schedule with an Inbox entry. Optional **Notify in Inbox**
-  and **Notify my phone** toggles ask the agent to report with `ws-message` or
-  `companion-reply`. The tile shows the next run and last result; the sidebar's
-  **Schedules** lists them all with Run now, Pause, Edit and Delete
-  ([ADR 044](docs/adrs/044-periodic-sessions.md)).
+- **Periodic sessions** — schedule Copilot work (hourly, every N hours, daily
+  or weekly at a time, never more often than every 5 minutes) in a
+  **Periodic session** tile: Add tile → **Periodic session**, or an agent's
+  `schedule.create`. Each run is a headless, non-interactive Copilot call
+  (`-p`) on the tile's own session, so the agent remembers earlier runs and a
+  run can never wait for input: it ends **ok**, **failed**, **timed out** (after
+  an hour) or **needs input** — the agent's question, shown in amber, which you
+  answer from the tile's reply box or your phone. The tile shows its run log
+  (tool calls, final answer, live while running), Run now, Edit schedule, and
+  **Open interactively**, which resumes the session in an ordinary tile and
+  pauses the schedule while it is open. A run due while another is going is
+  skipped, missed runs are never caught up, and three failures in a row pause
+  the schedule. Workstreams posts results itself: to the Inbox and the phone
+  when you turn those on, and always to the Inbox when a run fails or needs
+  input. The sidebar's **Schedules** lists them all
+  ([ADR 046](docs/adrs/046-headless-periodic-sessions.md), building on
+  [ADR 044](docs/adrs/044-periodic-sessions.md)).
 - **Phone companion** *(opt-in)* — pair the
   [Android companion](https://github.com/alejandroechev/workstreams-companion)
   by QR code to see your workstreams from your phone, load one in the

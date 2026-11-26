@@ -7,7 +7,7 @@ afterEach(cleanup);
 describe("ScheduleEditor", () => {
   it("defaults to daily at 09:00 with both notify toggles off, and saves the prompt verbatim", async () => {
     const onSave = vi.fn(async () => {});
-    render(<ScheduleEditor title="Run periodically" onSave={onSave} onCancel={() => {}} />);
+    render(<ScheduleEditor title="Periodic session" onSave={onSave} onCancel={() => {}} />);
     expect((screen.getByTestId("schedule-notify-inbox") as HTMLInputElement).checked).toBe(false);
     expect((screen.getByTestId("schedule-notify-phone") as HTMLInputElement).checked).toBe(false);
     fireEvent.change(screen.getByTestId("schedule-prompt"), { target: { value: "  Check videos\n" } });
@@ -72,5 +72,12 @@ describe("ScheduleEditor", () => {
     render(<ScheduleEditor title="e" initial={{ prompt: "P", frequency: { kind: "weekly", day: 2, time: "07:15" }, notifyInbox: false, notifyPhone: false }} onSave={vi.fn()} onCancel={() => {}} />);
     expect((screen.getByTestId("schedule-day") as HTMLSelectElement).value).toBe("2");
     expect((screen.getByTestId("schedule-time") as HTMLInputElement).value).toBe("07:15");
+  });
+
+  it("says Workstreams posts the results itself (ADR 046)", () => {
+    render(<ScheduleEditor title="Periodic session" onSave={vi.fn(async () => {})} onCancel={() => {}} />);
+    const text = document.body.textContent ?? "";
+    expect(text).toContain("posts each run's answer to the Inbox");
+    expect(text).not.toMatch(/ws-message|companion-reply/);
   });
 });

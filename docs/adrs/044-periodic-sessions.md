@@ -11,6 +11,15 @@ date: 2026-11-23
 Accepted (2026-11-23). Amends [ADR 033](033-phone-companion.md): any Copilot
 session may now message the phone.
 
+**Partly superseded by [ADR 046](046-headless-periodic-sessions.md)
+(2026-11-26):** schedules now live on a dedicated Periodic session tile and each
+run is a headless `copilot -p` call that always ends (ok, failed, timed out or
+needs input) instead of a resumed terminal session; the turn cursor, Ctrl+C,
+setup prompt, "Run periodically…" menu and the notify instructions below are
+gone, and Workstreams posts results itself. The scheduling rules (presets,
+5-minute minimum, skip, no catch-up, auto-pause, revisions, lifecycle) and the
+phone messages from any session still hold.
+
 ## Context
 
 Recurring agent chores ("check the course for new videos and update the

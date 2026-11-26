@@ -25,7 +25,7 @@ graph TB
             QuickNote["WorkstreamQuickNote (still shipped)<br/>log a note to this workstream's task<br/>the part that survived; seeds the future per-workstream log"]
             DevlogRender["devlog-render.ts<br/>renders the daily page (pure)"]
             StatusBar["StatusBar<br/>Shortcuts + metadata"]
-            Schedules["Periodic sessions (ADR 044)<br/>src/domain/periodic-schedules: presets, nextRunAfter (DST-safe), due rules<br/>schedule-runner: 15s tick, skip mid-turn, no catch-up<br/>60-min timeout = Ctrl+C, auto-pause after 3 failures<br/>Schedules modal, tile badge + menu, sidebar clock"]
+            Schedules["Periodic sessions (ADR 044/046)<br/>src/domain/periodic-schedules: presets, nextRunAfter (DST-safe), due rules<br/>schedule-runner: 15s tick, skip while a run goes, no catch-up<br/>auto-pause after 3 failed/timed-out runs; paused while open interactively<br/>PeriodicSessionTile (run log, reply box), Schedules modal, sidebar clock<br/>notify.ts: Inbox + phone thread posts"]
             Companion["Phone companion (ADR 033)<br/>src/companion: publisher + executor + runtime<br/>HMAC-checked requests, run at most once<br/>publishes phone sessions + their messages<br/>publishes session tiles; message = stop + --resume -i<br/>off by default; never in dev builds"]
             subgraph Files["Files"]
                 FileBuffers["FileBufferRegistry<br/>Editable file buffers + dirty state"]
@@ -48,7 +48,8 @@ graph TB
             AgentRegistryRS["agent_registry.rs<br/>named commands + app-issued tokens<br/>scope via created_by_session<br/>command_log (actor = what app can prove)"]
             LearningRS["learning_jobs.rs + learning_runner.rs (ADR 042)<br/>Rust Pocket job ledger, one lock-free worker<br/>fixed rustc / cargo test --offline per job dir<br/>harness + content version travel with each request<br/>learning_ai.rs: tutor via tool-less copilot -p"]
             CompanionMsgRS["companion_messages.rs (ADR 033, 044)<br/>phone sessions + prompts + agent messages<br/>any session opens a thread on first send, 20/hour per tile<br/>200 per session, pruned after 3 days"]
-            SchedulesRS["periodic_schedules.rs (ADR 044)<br/>periodic_schedules: one per tile, CASCADE with it<br/>validates presets (at least 5 min); archive pauses"]
+            SchedulesRS["periodic_schedules.rs (ADR 044/046)<br/>periodic_schedules: one per Periodic session tile + its session id<br/>validates presets (at least 5 min); archive pauses; one-time migration"]
+            RunnerRS["periodic_runner.rs + periodic_runs.rs (ADR 046)<br/>headless copilot -p child process, JSONL parser<br/>ok / failed / timed_out (60 min, kill process group) / needs_input<br/>run log: newest 50 per tile + events files"]
             DiffOrderRS["diff_order.rs (ADR 032)<br/>exact-file-set check<br/>file-set + content fingerprints<br/>freshness: current / content / files"]
             WorkLanesRS["work_lanes + lane_id<br/>named folders for related workstreams<br/>unique names, ON DELETE SET NULL"]
             PullRequestsRS["pull_requests.rs<br/>ADO PR URL parsing<br/>canonical identity for dedup<br/>link storage only, no network"]
@@ -60,7 +61,7 @@ graph TB
     end
 
     subgraph Storage["Persistence"]
-        AppDB["workstreams.db<br/>(SQLite — workstreams, tiles, layouts, scrollback<br/>+ command_log audit/telemetry<br/>+ workstream_pull_requests N:M links<br/>+ work_lanes<br/>+ diff_orders<br/>+ diagram_boards / diagram_additions<br/>+ periodic_schedules (ADR 044))"]
+        AppDB["workstreams.db<br/>(SQLite — workstreams, tiles, layouts, scrollback<br/>+ command_log audit/telemetry<br/>+ workstream_pull_requests N:M links<br/>+ work_lanes<br/>+ diff_orders<br/>+ diagram_boards / diagram_additions<br/>+ periodic_schedules (ADR 044) / periodic_runs (ADR 046))"]
         PrInboxDB["workstreams.db inbox state<br/>pr_inbox_config / baselines / seen / events<br/>pipeline_watches / pipeline_events<br/>pipeline_digests / pipeline_digest_runs (ADR 045)<br/>agent_messages / inbox_tombstones (ADR 041)<br/>read entries expire after 5 days, startup + hourly<br/>role-scoped baselines + per-PR sub-state<br/>account-scoped dedup + durable read state"]
         LoopDB["workstreams.db loop ledger<br/>specs / runs / tasks / verifications<br/>evaluations / human approvals / events"]
         LoopYAML["bound session-state/files/loops/*.loop.yaml<br/>loop definition authority"]
@@ -131,7 +132,9 @@ graph TB
     AgentRegistryRS -- "diff.order.set / get" --> DiffOrderRS
     AgentRegistryRS -- "companion.send (any session, 20/hour)" --> CompanionMsgRS
     App --> Schedules
-    Schedules -- "resume: mount, Ctrl+C, respawn --resume=id -i prompt<br/>(shared with phone messages)" --> LibRS
+    Schedules -- "Tauri: periodic_run_start / list / get / skip<br/>events: periodic-run" --> RunnerRS
+    RunnerRS -- "copilot -p ... --session-id|--resume<br/>--no-ask-user --output-format json" --> CopilotCLI["Copilot CLI (non-interactive)"]
+    RunnerRS -- "periodic_runs" --> AppDB
     Schedules -- "Tauri: schedule_list / create / update / delete<br/>inbox_post_app_message on auto-pause" --> SchedulesRS
     AgentRegistryRS -- "schedule.create / list / run / pause / resume / delete<br/>state-changed: schedule" --> SchedulesRS
     SchedulesRS -- "periodic_schedules" --> AppDB

@@ -74,8 +74,9 @@ test("AT-9: Mute all drops every source, keeps the old entries, and nothing repl
   const ci = (await call<{ id: string }>(page, "addPipelineWatch", "https://dev.azure.com/skype/SCC/_build?definitionId=1", "failures")).id;
   const daily = (await call<{ id: string }>(page, "addPipelineWatch", "https://dev.azure.com/skype/SCC/_build?definitionId=2", "daily_failures")).id;
   await call(page, "setPipelineAutoInvestigate", daily, "digest");
+  const periodicTile = await call<{ id: string }>(page, "createTile", ws.id, "periodic_session", "Check", "{}");
   const schedule = await call<{ id: string; revision: number }>(page, "createSchedule", {
-    tileId: tile.id, workstreamId: ws.id, prompt: "Check", frequency: { kind: "interval", minutes: 30 }, notifyInbox: true, notifyPhone: false, nextRunAt: null, createdAt: 1,
+    tileId: periodicTile.id, workstreamId: ws.id, prompt: "Check", frequency: { kind: "interval", minutes: 30 }, notifyInbox: true, notifyPhone: false, nextRunAt: null, createdAt: 1,
   });
 
   // Mute all from the Inbox header.
@@ -94,6 +95,8 @@ test("AT-9: Mute all drops every source, keeps the old entries, and nothing repl
   expect(await call<string[]>(page, "runDigestPass")).toEqual([]);
   expect(await call(page, "postAgentMessage", ws.id, tile.id, "done", "ws-message while muted", "")).toBeNull();
   await call(page, "updateSchedule", schedule.id, { paused: true }, schedule.revision, { title: "Schedule paused: Check", body: "3 failures" });
+  // A periodic run's own Inbox post (ADR 046) goes through the same gate.
+  await call(page, "postAppInboxMessage", ws.id, periodicTile.id, "done", "Check", "All green");
   await call(page, "syncMonitorApply", [], [{ id: "cpu-1", kind: "cpu", event: "started", at: 1, message: "CPU high", hint: "h", is_read: false }], []);
   await call(page, "companionSendForTests", tile.id, "result", "Done, sent to the phone");
 

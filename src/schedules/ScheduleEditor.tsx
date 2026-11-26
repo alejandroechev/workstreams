@@ -34,8 +34,8 @@ function frequencyFrom(preset: Preset, every: number, time: string, day: number)
 }
 
 /**
- * "Run periodically…": the prompt sent verbatim at each run, a preset
- * frequency, and the two notify toggles (off by default) (ADR 044).
+ * A Periodic session's schedule: the prompt sent at each run, a preset
+ * frequency, and the two notify toggles (off by default) (ADR 044, ADR 046).
  */
 export function ScheduleEditor({ title, initial, onSave, onCancel }: Props) {
   const start = presetOf(initial?.frequency);
@@ -120,11 +120,11 @@ export function ScheduleEditor({ title, initial, onSave, onCancel }: Props) {
           </div>
           <label style={{ display: "flex", gap: 6, fontSize: 12, alignItems: "center" }}>
             <input data-testid="schedule-notify-inbox" type="checkbox" checked={notifyInbox} onChange={(e) => setNotifyInbox(e.target.checked)} />
-            Notify in Inbox <span style={{ color: "#6c7086" }}>— asks the agent to report with ws-message</span>
+            Notify in Inbox <span style={{ color: "#6c7086" }}>— posts each run's answer to the Inbox</span>
           </label>
           <label style={{ display: "flex", gap: 6, fontSize: 12, alignItems: "center" }}>
             <input data-testid="schedule-notify-phone" type="checkbox" checked={notifyPhone} onChange={(e) => setNotifyPhone(e.target.checked)} />
-            Notify my phone <span style={{ color: "#6c7086" }}>— asks the agent to report with companion-reply</span>
+            Notify my phone <span style={{ color: "#6c7086" }}>— posts each run's prompt and answer to the phone thread</span>
           </label>
           <div style={{ fontSize: 11, color: "#6c7086" }}>
             The first run is at the first scheduled time. Runs happen while Workstreams is open; a run due while the agent
