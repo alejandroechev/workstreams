@@ -87,7 +87,7 @@ import { isTileBusy, tileChangedRecently, tileGeneration } from "./domain/tile-a
 import type { PeriodicSchedule } from "./domain/periodic-schedules";
 import { promptFirstLine } from "./domain/periodic-schedules";
 import { stopSession } from "./companion/stop-session";
-import { postTileNotice } from "./domain/tile-notices";
+import { postTileNotice, takePendingNotice } from "./domain/tile-notices";
 import { relinkTile } from "./companion/relink";
 import { homeDir } from "@tauri-apps/api/path";
 import { createStandaloneFolder } from "./companion/folders";
@@ -829,6 +829,22 @@ export default function App() {
   // stay mounted (just hidden via CSS) so xterm/PTY state stays coherent.
   const wsStatesRef = useRef(wsStates);
   useEffect(() => { wsStatesRef.current = wsStates; }, [wsStates]);
+  // A tile whose schedule moved to a Periodic session tile shows that once (ADR 046).
+  const shownNotices = useRef(new Set<string>());
+  useEffect(() => {
+    for (const state of wsStates.values()) {
+      for (const tile of state.tiles) {
+        if (shownNotices.current.has(tile.id)) continue;
+        const taken = takePendingNotice(tile.config_json);
+        if (!taken) continue;
+        shownNotices.current.add(tile.id);
+        postTileNotice(tile.id, taken.text);
+        void backend.updateTileConfig(tile.id, taken.configJson)
+          .then(() => upsertTileLocally({ ...tile, config_json: taken.configJson }))
+          .catch((error) => console.error("Failed to clear a shown notice:", error));
+      }
+    }
+  }, [wsStates, backend, upsertTileLocally]);
   // An agent added or removed a Periodic session tile: bring loaded workstreams in line with the store.
   useEffect(() => {
     if (periodicTileSync === 0) return;

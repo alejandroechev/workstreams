@@ -34,3 +34,14 @@ describe("terminalSafe", () => {
     expect(terminalSafe("Use the Catppuccin palette — ñ ✓")).toBe("Use the Catppuccin palette — ñ ✓");
   });
 });
+
+describe("a stored one-time notice (ADR 046: a schedule moved)", () => {
+  it("is read from the tile's config and the config comes back without it", async () => {
+    const { takePendingNotice } = await import("../tile-notices");
+    const taken = takePendingNotice(JSON.stringify({ cwd: "/c", pending_notice: "Moved" }));
+    expect(taken).toEqual({ text: "Moved", configJson: JSON.stringify({ cwd: "/c" }) });
+    expect(takePendingNotice(JSON.stringify({ cwd: "/c" }))).toBeNull();
+    expect(takePendingNotice("not json")).toBeNull();
+    expect(takePendingNotice(JSON.stringify({ pending_notice: 3 }))).toBeNull();
+  });
+});

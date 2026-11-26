@@ -1,4 +1,5 @@
 import type { TileType } from "../domain/types";
+import type { ScheduleFrequency } from "../domain/periodic-schedules";
 import { MemoryBackend } from "./memory-backend";
 
 export interface DemoMemorySeed {
@@ -23,6 +24,11 @@ export interface DemoMemorySeed {
       config?: Record<string, unknown>;
       /** Diagram tile boards, in order; `scene` is `{elements, files}`. */
       boards?: Array<{ name: string; scene?: unknown }>;
+      /**
+       * A schedule this Copilot tile had before ADR 046, migrated as the
+       * native start migrates it (a Periodic session tile on the same session).
+       */
+      legacySchedule?: { prompt: string; frequency: ScheduleFrequency; notifyInbox?: boolean; notifyPhone?: boolean; paused?: boolean };
     }>;
   }>;
   files?: Array<{ path: string; content: string }>;
@@ -71,6 +77,9 @@ export async function applyDemoSeed(
     await backend.updateLayout(workstream.id, {
       tile_order_json: JSON.stringify(tileIds),
     });
+    for (const [index, tile] of (item.tiles ?? []).entries()) {
+      if (tile.legacySchedule) await backend.migrateLegacySchedule(tileIds[index], tile.legacySchedule);
+    }
     if (item.loaded) {
       await backend.setWorkstreamLoaded(workstream.id, true);
     }

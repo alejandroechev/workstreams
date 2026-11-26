@@ -465,6 +465,75 @@ pub fn pause_workstream(conn: &Connection, workstream_id: &str) -> Result<usize,
     .map_err(|e| e.to_string())
 }
 
+/// The one-time notice an old tile shows once its schedule moved (ADR 046).
+pub fn moved_notice(title: &str) -> String {
+    format!(
+        "This tile's schedule moved to the Periodic session tile \"{title}\", which runs it on this same session. \
+         It stays paused while this tile is open on the session; close this tile to let it run."
+    )
+}
+
+/// One-time upgrade to ADR 046: each schedule still on an ordinary Copilot
+/// tile becomes a new Periodic session tile in the same workstream, on the
+/// same Copilot session (a fresh one when the old tile had none yet), keeping
+/// its prompt, frequency, toggles, pause and history. The old tile stays an
+/// ordinary Copilot tile and gets a `pending_notice` the app shows once.
+/// Idempotent: a migrated schedule is on a Periodic session tile.
+pub fn migrate_to_periodic_tiles(conn: &Connection) -> Result<usize, String> {
+    let legacy: Vec<(String, String, String, String, String)> = conn
+        .prepare(
+            "SELECT s.id, s.tile_id, s.workstream_id, s.prompt, t.config_json FROM periodic_schedules s
+             JOIN tiles t ON t.id = s.tile_id WHERE t.tile_type <> 'periodic_session'
+             ORDER BY s.created_at, s.rowid",
+        )
+        .and_then(|mut statement| {
+            statement
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?
+                .collect()
+        })
+        .map_err(|e| e.to_string())?;
+    for (id, old_tile, workstream, prompt, config) in &legacy {
+        let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+        let mut config: Value =
+            serde_json::from_str(config).unwrap_or_else(|_| serde_json::json!({}));
+        let linked = ["copilot_session_id", "resume_by_id"]
+            .iter()
+            .filter_map(|key| config.get(*key).and_then(Value::as_str))
+            .find(|v| !v.is_empty())
+            .map(str::to_string);
+        let session_started = linked.is_some();
+        let session_id = linked.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        let title = tile_title(prompt);
+        let tile = crate::insert_tile(
+            &tx,
+            workstream,
+            "periodic_session",
+            Some(title.clone()),
+            None,
+        )?;
+        tx.execute(
+            "UPDATE periodic_schedules SET tile_id = ?2, session_id = ?3, session_started = ?4,
+               last_result = CASE last_result WHEN 'could not start' THEN 'failed'
+                 WHEN 'timed out' THEN 'timed_out' WHEN 'running' THEN 'interrupted' ELSE last_result END,
+               run_requested = 0, run_requested_at = NULL, revision = revision + 1
+             WHERE id = ?1",
+            params![id, tile.id, session_id, session_started],
+        )
+        .map_err(|e| e.to_string())?;
+        if let Some(object) = config.as_object_mut() {
+            object.insert("pending_notice".into(), Value::from(moved_notice(&title)));
+            object.remove("icon");
+        }
+        tx.execute(
+            "UPDATE tiles SET config_json = ?2 WHERE id = ?1",
+            params![old_tile, config.to_string()],
+        )
+        .map_err(|e| e.to_string())?;
+        tx.commit().map_err(|e| e.to_string())?;
+    }
+    Ok(legacy.len())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -843,6 +912,139 @@ mod tests {
             .unwrap();
         assert_eq!(order, r#"["c1","term"]"#);
         assert!(delete(&conn, &other.id).unwrap());
+    }
+
+    /// AT-8 (US-7): a database from before ADR 046 — two schedules on
+    /// ordinary Copilot tiles, one paused, on sessions S1 and S2, plus one on
+    /// a tile with no session yet — migrates once, keeping each session.
+    #[test]
+    fn existing_schedules_move_to_periodic_tiles_once_on_the_same_session() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+        crate::db::init_db(&conn).unwrap();
+        // The schema before this change.
+        conn.execute_batch(
+            "ALTER TABLE periodic_schedules DROP COLUMN session_id;
+             ALTER TABLE periodic_schedules DROP COLUMN session_started;
+             INSERT INTO workstreams (id, name, created_at, updated_at) VALUES ('w1', 'Courses', 'x', 'x'), ('w2', 'Infra', 'x', 'x');
+             INSERT INTO workstream_layouts (workstream_id, layout_mode, tile_order_json, updated_at)
+               VALUES ('w1', 'grid', '[\"old1\",\"fresh\"]', 'x'), ('w2', 'grid', '[\"old2\"]', 'x');
+             INSERT INTO tiles (id, workstream_id, tile_type, title, config_json, created_at, updated_at) VALUES
+               ('old1', 'w1', 'copilot_session', 'Videos', '{\"copilot_session_id\":\"S1\",\"cwd\":\"/c\"}', 'x', 'x'),
+               ('old2', 'w2', 'copilot_session', 'CI', '{\"resume_by_id\":\"S2\"}', 'x', 'x'),
+               ('fresh', 'w1', 'copilot_session', 'New', '{}', 'x', 'x');
+             INSERT INTO periodic_schedules (id, tile_id, workstream_id, prompt, frequency, notify_inbox, notify_phone,
+               paused, next_run_at, last_result, failures, created_at) VALUES
+               ('a', 'old1', 'w1', 'Check videos', '{\"kind\":\"daily\",\"time\":\"09:00\"}', 1, 0, 0, 5, 'ok', 0, 1),
+               ('b', 'old2', 'w2', 'Check CI', '{\"kind\":\"interval\",\"minutes\":120}', 0, 1, 1, NULL, 'timed out', 2, 2),
+               ('c', 'fresh', 'w1', 'Fresh one', '{\"kind\":\"interval\",\"minutes\":60}', 0, 0, 0, NULL, 'could not start', 1, 3);",
+        )
+        .unwrap();
+        crate::db::init_db(&conn).unwrap();
+        let first = list(&conn).unwrap();
+        let tile_of = |id: &str| -> (String, String, Option<String>, String) {
+            conn.query_row(
+                "SELECT tile_type, workstream_id, title, config_json FROM tiles WHERE id = ?1",
+                [id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .unwrap()
+        };
+        assert_eq!(first.len(), 3);
+        let a = &first[0];
+        let (kind, ws, title, _) = tile_of(&a.tile_id);
+        assert_eq!(
+            (kind.as_str(), ws.as_str(), title.as_deref()),
+            ("periodic_session", "w1", Some("Check videos"))
+        );
+        assert_eq!(
+            (a.session_id.as_deref(), a.session_started),
+            (Some("S1"), true)
+        );
+        assert_eq!(
+            (
+                a.prompt.as_str(),
+                a.notify_inbox,
+                a.notify_phone,
+                a.paused,
+                a.next_run_at
+            ),
+            ("Check videos", true, false, false, Some(5))
+        );
+        assert_eq!(
+            a.frequency,
+            serde_json::json!({"kind":"daily","time":"09:00"})
+        );
+        // The old tile is open on S1: the new one is paused while it is.
+        assert_eq!(a.interactive_tile_id.as_deref(), Some("old1"));
+        let b = &first[1];
+        assert_eq!(
+            (
+                b.session_id.as_deref(),
+                b.paused,
+                b.notify_phone,
+                b.failures
+            ),
+            (Some("S2"), true, true, 2)
+        );
+        assert_eq!(b.last_result.as_deref(), Some("timed_out"));
+        assert_eq!(tile_of(&b.tile_id).1, "w2");
+        // No session yet: a fresh one, created by the first run.
+        let c = &first[2];
+        assert!(uuid::Uuid::parse_str(c.session_id.as_deref().unwrap()).is_ok());
+        assert!(!c.session_started);
+        assert_eq!(c.last_result.as_deref(), Some("failed"));
+        // The old tiles stay ordinary Copilot tiles, each with one notice to show.
+        for old in ["old1", "old2", "fresh"] {
+            let (kind, _, _, config) = tile_of(old);
+            assert_eq!(kind, "copilot_session");
+            let config: Value = serde_json::from_str(&config).unwrap();
+            assert!(
+                config["pending_notice"].as_str().unwrap().contains("moved"),
+                "{config}"
+            );
+        }
+        assert_eq!(
+            serde_json::from_str::<Value>(&tile_of("old1").3).unwrap()["cwd"],
+            "/c"
+        );
+        let order: String = conn
+            .query_row(
+                "SELECT tile_order_json FROM workstream_layouts WHERE workstream_id = 'w1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(order.contains(&a.tile_id) && order.contains(&c.tile_id));
+        // A second start changes nothing: no new tiles, no notice again once shown.
+        conn.execute(
+            "UPDATE tiles SET config_json = '{\"copilot_session_id\":\"S1\"}' WHERE id = 'old1'",
+            [],
+        )
+        .unwrap();
+        crate::db::init_db(&conn).unwrap();
+        let second = list(&conn).unwrap();
+        assert_eq!(
+            second
+                .iter()
+                .map(|s| (&s.tile_id, &s.session_id))
+                .collect::<Vec<_>>(),
+            first
+                .iter()
+                .map(|s| (&s.tile_id, &s.session_id))
+                .collect::<Vec<_>>()
+        );
+        let periodic: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM tiles WHERE tile_type = 'periodic_session'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(periodic, 3);
+        assert!(
+            serde_json::from_str::<Value>(&tile_of("old1").3).unwrap()["pending_notice"].is_null()
+        );
     }
 
     #[test]

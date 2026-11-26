@@ -788,6 +788,14 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
     }
 
     migrate_pr_inbox_events(conn)?;
+    // Schedules on ordinary Copilot tiles move to Periodic session tiles (ADR 046).
+    match crate::periodic_schedules::migrate_to_periodic_tiles(conn) {
+        Ok(0) => {}
+        Ok(n) => eprintln!("[periodic] moved {n} schedule(s) to Periodic session tiles"),
+        Err(error) => {
+            eprintln!("[periodic] couldn't move schedules to Periodic session tiles: {error}")
+        }
+    }
     crate::learning_jobs::init_schema(conn)?;
     crate::pr_inbox::backfill_mute_keys(conn)?;
 

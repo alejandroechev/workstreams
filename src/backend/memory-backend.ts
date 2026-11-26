@@ -96,7 +96,7 @@ import type { SessionFileComment } from "../domain/file-comments";
 import type { Review, ReviewComment, ChangedFile, DiffSides } from "../domain/code-review";
 import { CONTENT_SEARCH_MAX_PER_FILE } from "../domain/content-search";
 import { compareByCreatedAt } from "../domain/comment-order";
-import { headlessArgv, composeRunPrompt, needsInputQuestion, validateFrequency, type PeriodicRun, type PeriodicRunKind, type PeriodicSchedule, type PeriodicToolCall } from "../domain/periodic-schedules";
+import { headlessArgv, composeRunPrompt, movedNotice, needsInputQuestion, promptFirstLine, validateFrequency, type PeriodicRun, type PeriodicRunKind, type PeriodicSchedule, type PeriodicToolCall } from "../domain/periodic-schedules";
 import type {
   Backend,
   CodeTrace,
@@ -317,6 +317,30 @@ export class MemoryBackend implements Backend {
     const schedule = this.schedules.get(id);
     this.schedules.delete(id);
     if (schedule) await this.deleteTile(schedule.tile_id);
+  }
+
+  /**
+   * Mirror of periodic_schedules::migrate_to_periodic_tiles for one schedule an
+   * ordinary Copilot tile had before ADR 046 (seeded): a new Periodic session
+   * tile on the same session, and a notice for the old tile to show once.
+   */
+  async migrateLegacySchedule(
+    oldTileId: string,
+    legacy: { prompt: string; frequency: PeriodicSchedule["frequency"]; notifyInbox?: boolean; notifyPhone?: boolean; paused?: boolean },
+  ): Promise<PeriodicSchedule> {
+    const old = this.tiles.get(oldTileId);
+    if (!old) throw new Error(`No tile ${oldTileId}`);
+    const linked = linkedSessionId(old.config_json);
+    const title = promptFirstLine(legacy.prompt).slice(0, 60) || "Periodic session";
+    const tile = await this.createTile(old.workstream_id, "periodic_session", title, "{}");
+    const schedule = await this.createSchedule({
+      tileId: tile.id, workstreamId: old.workstream_id, prompt: legacy.prompt, frequency: legacy.frequency,
+      notifyInbox: !!legacy.notifyInbox, notifyPhone: !!legacy.notifyPhone, nextRunAt: null, createdAt: Date.now(), sessionId: linked,
+    });
+    Object.assign(this.schedules.get(schedule.id)!, { paused: !!legacy.paused, session_started: !!linked });
+    const config = JSON.parse(old.config_json || "{}") as Record<string, unknown>;
+    old.config_json = JSON.stringify({ ...config, pending_notice: movedNotice(title) });
+    return this.viewSchedule(this.schedules.get(schedule.id)!);
   }
 
   // ── Headless periodic runs (mirror of periodic_runner.rs / periodic_runs.rs, ADR 046) ──

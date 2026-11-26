@@ -9,6 +9,25 @@ describe("applyDemoSeed", () => {
     await applyDemoSeed(backend, { projects: [{ name: "ADO", directory: "/ado", git_remote: "https://dev.azure.com/o/p/_git/r" }] });
     expect((await backend.listProjects())[0].git_remote).toBe("https://dev.azure.com/o/p/_git/r");
   });
+  it("can seed a schedule from before ADR 046, migrated as the native start migrates it", async () => {
+    const backend = new MemoryBackend();
+    await applyDemoSeed(backend, {
+      workstreams: [{
+        name: "W", directory: "/w",
+        tiles: [{ type: "copilot_session", title: "Videos", config: { copilot_session_id: "S1" },
+          legacySchedule: { prompt: "Check videos", frequency: { kind: "interval", minutes: 60 }, paused: true, notifyInbox: true } }],
+      }],
+    });
+    const [schedule] = await backend.listSchedules();
+    expect(schedule).toMatchObject({ session_id: "S1", session_started: true, paused: true, notify_inbox: true, prompt: "Check videos" });
+    const tiles = await backend.listTiles(schedule.workstream_id);
+    expect(tiles.map((t) => t.tile_type).sort()).toEqual(["copilot_session", "periodic_session"]);
+    const old = tiles.find((t) => t.tile_type === "copilot_session")!;
+    expect(JSON.parse(old.config_json).pending_notice).toContain("moved");
+    expect(schedule.interactive_tile_id).toBe(old.id);
+    expect(JSON.parse((await backend.getLayout(schedule.workstream_id))!.tile_order_json)).toEqual([old.id, schedule.tile_id]);
+  });
+
   it("can seed a repo's own Copilot command", async () => {
     const backend = new MemoryBackend();
     await applyDemoSeed(backend, { projects: [{ name: "R", directory: "/r", copilot_command: "copilot --yolo" }] });

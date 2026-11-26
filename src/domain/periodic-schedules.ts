@@ -294,6 +294,12 @@ export function describeLastResult(schedule: Pick<PeriodicSchedule, "last_result
   return schedule.last_error && failed ? `${label}: ${schedule.last_error}` : label;
 }
 
+/** The notice an old tile shows once its schedule moved (the same text as `moved_notice` in Rust). */
+export function movedNotice(title: string): string {
+  return `This tile's schedule moved to the Periodic session tile "${title}", which runs it on this same session. ` +
+    "It stays paused while this tile is open on the session; close this tile to let it run.";
+}
+
 export function promptFirstLine(prompt: string): string {
   return prompt.split("\n").map((line) => line.trim()).find((line) => line !== "") ?? "";
 }

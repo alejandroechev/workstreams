@@ -42,3 +42,19 @@ export function terminalSafe(text: string): string {
     return code < 0x20 || (code >= 0x7f && code <= 0x9f) ? " " : c;
   }).join("");
 }
+
+/**
+ * A notice stored in a tile's config to show once (`pending_notice`, written
+ * natively when a schedule moved to a Periodic session tile, ADR 046), and the
+ * config without it; null when there is none.
+ */
+export function takePendingNotice(configJson: string | undefined): { text: string; configJson: string } | null {
+  try {
+    const config = JSON.parse(configJson || "{}") as Record<string, unknown>;
+    if (typeof config.pending_notice !== "string") return null;
+    const { pending_notice: text, ...rest } = config;
+    return { text: text as string, configJson: JSON.stringify(rest) };
+  } catch {
+    return null;
+  }
+}
