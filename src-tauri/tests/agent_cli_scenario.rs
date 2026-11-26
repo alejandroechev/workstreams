@@ -553,10 +553,12 @@ fn inbox_configuration_and_read_state_survive_cli_connections() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
-/// Periodic schedules (ADR 044, AT-2): an agent schedules another session tile
-/// of its workstream through the real binary, an interval under 5 minutes is
-/// refused with the minimum named and nothing stored, and the controls change
-/// what the app's runner reads.
+/// Periodic sessions (ADR 046, AT-9): through the real binary, an agent in
+/// tile T creates a new Periodic session tile on a fresh session in its own
+/// workstream (T unchanged); an interval under 5 minutes is refused with the
+/// minimum named and nothing stored; list shows the last result; run, pause
+/// and resume change what the app's runner reads; delete removes the schedule
+/// and its tile.
 #[test]
 fn schedules_are_created_validated_and_controlled_through_the_cli() {
     use std::io::Write;
@@ -566,9 +568,10 @@ fn schedules_are_created_validated_and_controlled_through_the_cli() {
     let db = workstreams_lib::db::open_db(&db_path).unwrap();
     db.execute_batch(
         "INSERT INTO workstreams (id, name, created_at, updated_at) VALUES ('ws', 'Courses', 't', 't');
+         INSERT INTO workstream_layouts (workstream_id, layout_mode, tile_order_json, updated_at)
+           VALUES ('ws', 'grid', '[\"tile\"]', 't');
          INSERT INTO tiles (id, workstream_id, tile_type, title, config_json, created_at, updated_at) VALUES
-           ('tile', 'ws', 'copilot_session', 'Agent', '{}', 't', 't'),
-           ('videos', 'ws', 'copilot_session', 'Videos', '{}', 't', 't');",
+           ('tile', 'ws', 'copilot_session', 'Agent', '{\"copilot_session_id\":\"ST\"}', 't', 't');",
     )
     .unwrap();
     let identities = std::sync::Arc::new(IdentityRegistry::new());
@@ -600,7 +603,6 @@ fn schedules_are_created_validated_and_controlled_through_the_cli() {
             "agent",
             "call",
             "schedule.create",
-            "tile=videos",
             "frequency=every:2h",
             "notify_inbox=true",
             "prompt=@-",
@@ -609,11 +611,25 @@ fn schedules_are_created_validated_and_controlled_through_the_cli() {
     );
     assert!(ok, "{created}");
     let id = created["data"]["id"].as_str().unwrap().to_string();
+    let tile = created["data"]["tile_id"].as_str().unwrap().to_string();
+    let session = created["data"]["session_id"].as_str().unwrap().to_string();
+    assert_ne!(tile, "tile");
+    assert_ne!(session, "ST");
+    assert_eq!(created["data"]["workstream_id"], "ws");
     assert_eq!(created["data"]["frequency"]["minutes"], 120);
     assert_eq!(
         created["data"]["prompt"],
         "Check the course for new videos\nand update the summary"
     );
+    let (kind, own): (String, String) = db
+        .query_row(
+            "SELECT (SELECT tile_type FROM tiles WHERE id = ?1), (SELECT config_json FROM tiles WHERE id = 'tile')",
+            [&tile],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(kind, "periodic_session");
+    assert_eq!(own, r#"{"copilot_session_id":"ST"}"#, "T is unchanged");
 
     let (ok, refused) = run(
         &[
@@ -632,15 +648,23 @@ fn schedules_are_created_validated_and_controlled_through_the_cli() {
         "{refused}"
     );
 
+    workstreams_lib::periodic_schedules::update(
+        &db,
+        &id,
+        &serde_json::json!({"last_result":"needs_input"}),
+    )
+    .unwrap();
     let (_, listed) = run(&["agent", "call", "schedule.list"], None);
     let rows = listed["data"]["schedules"].as_array().unwrap();
     assert_eq!(rows.len(), 1, "the refused one stored nothing");
-    assert_eq!(rows[0]["tile_title"], "Videos");
+    assert_eq!(rows[0]["tile_title"], "Check the course for new videos");
     assert_eq!(rows[0]["workstream_name"], "Courses");
+    assert_eq!(rows[0]["last_result"], "needs_input");
 
     let target = format!("id={id}");
+    let by_tile = format!("tile={tile}");
     assert!(run(&["agent", "call", "schedule.run", &target], None).0);
-    assert!(run(&["agent", "call", "schedule.pause", "tile=videos"], None).0);
+    assert!(run(&["agent", "call", "schedule.pause", &by_tile], None).0);
     let stored = workstreams_lib::periodic_schedules::get(&db, &id)
         .unwrap()
         .unwrap();
@@ -651,6 +675,12 @@ fn schedules_are_created_validated_and_controlled_through_the_cli() {
     assert!(workstreams_lib::periodic_schedules::list(&db)
         .unwrap()
         .is_empty());
+    let left: i64 = db
+        .query_row("SELECT COUNT(*) FROM tiles WHERE id = ?1", [&tile], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(left, 0, "delete removes the tile");
     drop(db);
     drop(server);
     std::fs::remove_dir_all(&dir).ok();

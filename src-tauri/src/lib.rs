@@ -33,6 +33,7 @@ mod loop_verifier;
 mod loops;
 mod orphan_prs;
 pub mod periodic_runner;
+pub mod periodic_runs;
 pub mod periodic_schedules;
 pub mod pipeline_digest;
 mod pipeline_inbox;
@@ -455,6 +456,7 @@ fn schedule_create(
     notify_phone: bool,
     next_run_at: Option<i64>,
     created_at: i64,
+    session_id: Option<String>,
 ) -> Result<periodic_schedules::Schedule, String> {
     let db = state.db.lock().map_err(|e| e.to_string())?;
     periodic_schedules::create(
@@ -468,6 +470,7 @@ fn schedule_create(
             notify_phone,
             next_run_at,
             created_at,
+            session_id: session_id.as_deref(),
         },
     )
 }
@@ -2007,8 +2010,13 @@ fn delete_tile(state: State<'_, AppState>, tile_id: String) -> Result<(), String
     // leftover process act as a tile that no longer exists.
     state.agent_identities.forget_tile(&tile_id);
     let db = state.db.lock().unwrap();
+    remove_tile_row(&db, &tile_id)
+}
 
-    // Remove from layout order
+/// Deletes a tile's row (its schedule and runs go with it) and takes it out
+/// of its workstream's layout order.
+pub fn remove_tile_row(db: &Connection, tile_id: &str) -> Result<(), String> {
+    let tile_id = tile_id.to_string();
     let ws_id: Option<String> = db
         .query_row(
             "SELECT workstream_id FROM tiles WHERE id = ?1",

@@ -3102,60 +3102,65 @@ fn refuse_archived(
     Ok(())
 }
 
+/// A new Periodic session tile in the caller's workstream, on a fresh
+/// Copilot session, with its schedule (ADR 046). The caller's own tile is
+/// never touched.
 fn schedule_create(
     context: &CommandContext,
     params: &serde_json::Value,
 ) -> Result<CommandOutcome, AgentError> {
     let caller = context.caller()?;
-    let Caller::Agent { tile_id: own, .. } = caller else {
+    let Caller::Agent {
+        workstream_id: workstream,
+        ..
+    } = caller
+    else {
         return Err(AgentError::new(
             "NOT_A_SESSION",
             "Only a Copilot session in Workstreams can create a schedule here",
-            "Use \"Run periodically…\" in the tile's menu.",
+            "Use Add tile → Periodic session in the app.",
         ));
     };
+    if params.get("tile").is_some() {
+        return Err(schedule_error(
+            "schedule.create makes a new Periodic session tile in your workstream; leave tile out."
+                .into(),
+        ));
+    }
     let prompt = required_str(params, "prompt")?;
     let frequency_text = required_str(params, "frequency")?;
     let notify_inbox = optional_bool(params, "notify_inbox")?;
     let notify_phone = optional_bool(params, "notify_phone")?;
-    let tile = optional_str(params, "tile").unwrap_or_else(|| own.clone());
-    let workstream: Option<String> = context
-        .db
-        .query_row(
-            "SELECT workstream_id FROM tiles WHERE id = ?1",
-            [&tile],
-            |row| row.get(0),
-        )
-        .optional()
-        .map_err(|e| schedule_store_error(e.to_string()))?;
-    let workstream = workstream.ok_or_else(|| {
-        AgentError::new(
-            "NO_SUCH_TILE",
-            format!("No tile {tile}"),
-            "Leave tile out to schedule your own session, or name a session tile in your workstream.",
-        )
-    })?;
-    may_act_on(context.db, caller, &workstream)?;
+    may_act_on(context.db, caller, workstream)?;
     let frequency =
         crate::periodic_schedules::parse_frequency(&frequency_text).map_err(schedule_error)?;
-    let created_at = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or_default();
+    crate::periodic_schedules::validate_prompt(&prompt).map_err(schedule_error)?;
+    let title: String = crate::periodic_schedules::tile_title(&prompt);
+    let created_at = now_ms();
+    // The tile and its schedule are stored together, or neither is.
+    let tx = context
+        .db
+        .unchecked_transaction()
+        .map_err(|e| schedule_store_error(e.to_string()))?;
+    let tile = crate::insert_tile(&tx, workstream, "periodic_session", Some(title), None)
+        .map_err(schedule_store_error)?;
     let schedule = crate::periodic_schedules::create(
-        context.db,
+        &tx,
         &crate::periodic_schedules::NewSchedule {
-            tile_id: &tile,
-            workstream_id: &workstream,
+            tile_id: &tile.id,
+            workstream_id: workstream,
             prompt: &prompt,
             frequency: &frequency,
             notify_inbox,
             notify_phone,
             next_run_at: None,
             created_at,
+            session_id: None,
         },
     )
     .map_err(schedule_error)?;
+    tx.commit()
+        .map_err(|e| schedule_store_error(e.to_string()))?;
     let id = schedule.id.clone();
     Ok(CommandOutcome::changed(
         schedule_view(context.db, &schedule),
@@ -3932,24 +3937,41 @@ mod tests {
                ('me', 'w1', 'copilot_session', 'Videos', '{}', 'x', 'x'),
                ('other', 'w1', 'copilot_session', 'Digest', '{}', 'x', 'x'),
                ('term', 'w1', 'terminal', 'Shell', '{}', 'x', 'x'),
-               ('far', 'w2', 'copilot_session', 'CI', '{}', 'x', 'x');",
+               ('far', 'w2', 'copilot_session', 'CI', '{}', 'x', 'x');
+             INSERT INTO workstream_layouts (workstream_id, layout_mode, tile_order_json, updated_at)
+               VALUES ('w1', 'grid', '[]', 'x'), ('w2', 'grid', '[]', 'x');",
         )
         .unwrap();
         db
     }
 
+    fn tile_type(db: &Connection, id: &str) -> Option<String> {
+        db.query_row("SELECT tile_type FROM tiles WHERE id = ?1", [id], |r| {
+            r.get(0)
+        })
+        .optional()
+        .unwrap()
+    }
+
     #[test]
-    fn schedule_create_stores_a_schedule_for_the_callers_tile_or_another_in_its_workstream() {
+    fn schedule_create_makes_a_new_periodic_tile_on_a_fresh_session_in_the_callers_workstream() {
         let db = schedule_db();
         let me = agent("me", "w1");
         let created = call(
             &db,
             &me,
             "schedule.create",
-            serde_json::json!({"prompt":"Check videos","frequency":"daily:09:00"}),
+            serde_json::json!({"prompt":"Check videos\nand more","frequency":"daily:09:00"}),
         )
         .unwrap();
-        assert_eq!(created.data["tile_id"], "me");
+        let tile = created.data["tile_id"].as_str().unwrap().to_string();
+        assert_ne!(tile, "me");
+        assert_eq!(tile_type(&db, &tile).as_deref(), Some("periodic_session"));
+        assert_eq!(created.data["workstream_id"], "w1");
+        assert_eq!(created.data["tile_title"], "Check videos");
+        let session = created.data["session_id"].as_str().unwrap();
+        assert!(uuid::Uuid::parse_str(session).is_ok());
+        assert_eq!(created.data["session_started"], false);
         assert_eq!(created.data["frequency"]["kind"], "daily");
         assert_eq!(created.data["notify_inbox"], false);
         assert!(
@@ -3957,29 +3979,61 @@ mod tests {
             "the app plans the first run"
         );
         assert_eq!(created.change.as_ref().unwrap().entity, "schedule");
+        // The caller's own tile is untouched.
+        assert_eq!(tile_type(&db, "me").as_deref(), Some("copilot_session"));
+        let order: String = db
+            .query_row(
+                "SELECT tile_order_json FROM workstream_layouts WHERE workstream_id = 'w1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(order.contains(&tile), "the new tile is in the layout");
         let other = call(
             &db,
             &me,
             "schedule.create",
-            serde_json::json!({"tile":"other","prompt":"Digest","frequency":"every:2h","notify_phone":"true"}),
+            serde_json::json!({"prompt":"Digest","frequency":"every:2h","notify_phone":"true"}),
         )
         .unwrap();
+        assert_ne!(other.data["tile_id"], created.data["tile_id"]);
+        assert_ne!(other.data["session_id"], created.data["session_id"]);
         assert_eq!(other.data["frequency"]["minutes"], 120);
         assert_eq!(other.data["notify_phone"], true);
         let listed = call(&db, &me, "schedule.list", serde_json::json!({})).unwrap();
         let rows = listed.data["schedules"].as_array().unwrap();
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0]["workstream_name"], "Courses");
-        assert_eq!(rows[0]["tile_title"], "Videos");
-        let again = call(
+        assert_eq!(rows[0]["tile_title"], "Check videos");
+        assert!(rows[0]["last_result"].is_null());
+        // The last result, needs input included.
+        let id = created.data["id"].as_str().unwrap();
+        crate::periodic_schedules::update(
+            &db,
+            id,
+            &serde_json::json!({"last_result":"needs_input"}),
+        )
+        .unwrap();
+        let listed = call(&db, &me, "schedule.list", serde_json::json!({})).unwrap();
+        assert_eq!(listed.data["schedules"][0]["last_result"], "needs_input");
+        // A tile can no longer be named: every schedule has its own tile.
+        let named = call(
             &db,
             &me,
+            "schedule.create",
+            serde_json::json!({"tile":"other","prompt":"x","frequency":"hourly"}),
+        )
+        .unwrap_err();
+        assert_eq!(named.code, "BAD_SCHEDULE");
+        // A terminal (not a session) can't create one.
+        let terminal = call(
+            &db,
+            &Caller::Human,
             "schedule.create",
             serde_json::json!({"prompt":"x","frequency":"hourly"}),
         )
         .unwrap_err();
-        assert_eq!(again.code, "BAD_SCHEDULE");
-        assert!(again.message.contains("already has a schedule"));
+        assert_eq!(terminal.code, "NOT_A_SESSION");
     }
 
     #[test]
@@ -4013,19 +4067,19 @@ mod tests {
             "MISSING_PARAM"
         );
         assert!(crate::periodic_schedules::list(&db).unwrap().is_empty());
+        let periodic: i64 = db
+            .query_row(
+                "SELECT COUNT(*) FROM tiles WHERE tile_type = 'periodic_session'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(periodic, 0, "a refused schedule leaves no tile");
     }
 
     #[test]
     fn schedule_commands_stay_in_the_callers_workstreams() {
         let db = schedule_db();
-        let error = call(
-            &db,
-            &agent("me", "w1"),
-            "schedule.create",
-            serde_json::json!({"tile":"far","prompt":"x","frequency":"hourly"}),
-        )
-        .unwrap_err();
-        assert_eq!(error.code, "OUT_OF_SCOPE");
         let theirs = call(
             &db,
             &agent("far", "w2"),
@@ -4058,17 +4112,6 @@ mod tests {
             .unwrap_err()
             .code,
             "NO_SUCH_SCHEDULE"
-        );
-        assert_eq!(
-            call(
-                &db,
-                &agent("me", "w1"),
-                "schedule.create",
-                serde_json::json!({"tile":"nope","prompt":"x","frequency":"hourly"})
-            )
-            .unwrap_err()
-            .code,
-            "NO_SUCH_TILE"
         );
     }
 
@@ -4164,11 +4207,12 @@ mod tests {
         let paused = call(&db, &me, "schedule.pause", serde_json::json!({"id": id})).unwrap();
         assert_eq!(paused.data["paused"], true);
         // By tile too.
+        let tile = created.data["tile_id"].as_str().unwrap().to_string();
         let resumed = call(
             &db,
             &me,
             "schedule.resume",
-            serde_json::json!({"tile":"me"}),
+            serde_json::json!({"tile": tile}),
         )
         .unwrap();
         assert_eq!(resumed.data["paused"], false);
@@ -4179,12 +4223,8 @@ mod tests {
         );
         call(&db, &me, "schedule.delete", serde_json::json!({"id": id})).unwrap();
         assert!(crate::periodic_schedules::list(&db).unwrap().is_empty());
-        let tiles: i64 = db
-            .query_row("SELECT COUNT(*) FROM tiles WHERE id = 'me'", [], |r| {
-                r.get(0)
-            })
-            .unwrap();
-        assert_eq!(tiles, 1, "the tile stays");
+        assert_eq!(tile_type(&db, &tile), None, "its tile goes with it");
+        assert!(tile_type(&db, "me").is_some());
         assert_eq!(
             call(&db, &me, "schedule.pause", serde_json::json!({}))
                 .unwrap_err()

@@ -412,6 +412,27 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
             revision INTEGER NOT NULL DEFAULT 0
         );
 
+        -- Headless periodic runs (ADR 046): a periodic session tile's run log,
+        -- newest 50 per tile, gone with the tile. status: running, ok, failed,
+        -- timed_out, needs_input, skipped or interrupted. Times are ms epoch.
+        CREATE TABLE IF NOT EXISTS periodic_runs (
+            id TEXT PRIMARY KEY,
+            schedule_id TEXT NOT NULL,
+            tile_id TEXT NOT NULL REFERENCES tiles(id) ON DELETE CASCADE,
+            kind TEXT NOT NULL,
+            status TEXT NOT NULL,
+            started_at INTEGER NOT NULL,
+            ended_at INTEGER,
+            exit_code INTEGER,
+            prompt TEXT NOT NULL,
+            answer TEXT,
+            question TEXT,
+            error TEXT,
+            tools_json TEXT NOT NULL DEFAULT '[]',
+            events_path TEXT
+        );
+        CREATE INDEX IF NOT EXISTS periodic_runs_tile_idx ON periodic_runs (tile_id, started_at);
+
         CREATE TABLE IF NOT EXISTS pr_inbox_config (
             project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
             enabled INTEGER NOT NULL DEFAULT 0,
@@ -755,6 +776,11 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
         // the runner claims runs against.
         "ALTER TABLE periodic_schedules ADD COLUMN run_requested_at INTEGER",
         "ALTER TABLE periodic_schedules ADD COLUMN revision INTEGER NOT NULL DEFAULT 0",
+        // Headless periodic sessions (ADR 046): the tile's Copilot session,
+        // assigned when the schedule is made, and whether a run created it yet
+        // (the first run passes --session-id, later ones --resume).
+        "ALTER TABLE periodic_schedules ADD COLUMN session_id TEXT",
+        "ALTER TABLE periodic_schedules ADD COLUMN session_started INTEGER NOT NULL DEFAULT 0",
     ];
     for sql in &migrations {
         // SQLite errors if column already exists — ignore that error
@@ -955,6 +981,7 @@ mod tests {
             "companion_sessions",
             "companion_messages",
             "periodic_schedules",
+            "periodic_runs",
             "sync_checks",
             "sync_problems",
             "sync_events",

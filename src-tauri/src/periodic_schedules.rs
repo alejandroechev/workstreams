@@ -1,9 +1,11 @@
-//! Periodic Copilot sessions (ADR 044): the stored schedules.
+//! Periodic sessions (ADR 044, ADR 046): the stored schedules.
 //!
 //! The rules (next runs, skips, failure counting) live in the frontend's pure
 //! model, `src/domain/periodic-schedules.ts`; this module stores schedules,
 //! validates what an agent or the UI writes, and follows the lifecycle of
-//! tiles and workstreams. A schedule goes with its tile (`ON DELETE CASCADE`).
+//! tiles and workstreams. A schedule belongs to one Periodic session tile and
+//! its Copilot session (`session_id`, assigned when it is made). The schedule
+//! goes with its tile (`ON DELETE CASCADE`), and deleting it removes the tile.
 
 use rusqlite::{params, Connection, OptionalExtension, Row};
 use serde::Serialize;
@@ -33,6 +35,13 @@ pub struct Schedule {
     pub created_at: i64,
     /// Bumped on every change, so the runner can claim a run against the row it read.
     pub revision: i64,
+    /// The tile's Copilot session: every run creates or resumes it.
+    pub session_id: Option<String>,
+    /// A run has created the session: later runs pass `--resume`, not `--session-id`.
+    pub session_started: bool,
+    /// An ordinary Copilot tile open on the same session: the schedule is
+    /// paused while it is (ADR 046, "open interactively").
+    pub interactive_tile_id: Option<String>,
 }
 
 /// What creating a schedule needs; the rest starts empty.
@@ -46,6 +55,8 @@ pub struct NewSchedule<'a> {
     /// `None`: the app plans the first run (at its first scheduled time).
     pub next_run_at: Option<i64>,
     pub created_at: i64,
+    /// `None`: a fresh session id.
+    pub session_id: Option<&'a str>,
 }
 
 fn is_time(text: &str) -> bool {
@@ -143,6 +154,25 @@ pub fn parse_frequency(text: &str) -> Result<Value, String> {
     Ok(value)
 }
 
+/// Why a schedule's prompt is refused, or Ok.
+pub fn validate_prompt(prompt: &str) -> Result<(), String> {
+    check_prompt(prompt)
+}
+
+/// A Periodic session tile's title: the prompt's first line, clipped.
+pub fn tile_title(prompt: &str) -> String {
+    let line = prompt
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .unwrap_or("Periodic session");
+    if line.chars().count() > 60 {
+        format!("{}…", line.chars().take(59).collect::<String>())
+    } else {
+        line.to_string()
+    }
+}
+
 fn check_prompt(prompt: &str) -> Result<(), String> {
     if prompt.trim().is_empty() {
         return Err("The prompt is empty.".into());
@@ -155,10 +185,23 @@ fn check_prompt(prompt: &str) -> Result<(), String> {
     Ok(())
 }
 
-const COLUMNS: &str =
-    "id, tile_id, workstream_id, prompt, frequency, notify_inbox, notify_phone, paused,
-    next_run_at, last_run_at, last_result, last_error, failures, run_requested, created_at,
-    run_requested_at, revision";
+/// The first ordinary Copilot tile linked to the schedule's session, in a
+/// workstream that isn't archived. A tile whose config isn't JSON links nothing.
+const INTERACTIVE: &str = "(SELECT t.id FROM tiles t JOIN workstreams w ON w.id = t.workstream_id
+      WHERE t.tile_type = 'copilot_session' AND s.session_id IS NOT NULL
+        AND w.status NOT IN ('archived', 'archiving')
+        AND json_valid(t.config_json)
+        AND s.session_id IN (json_extract(t.config_json, '$.copilot_session_id'),
+                             json_extract(t.config_json, '$.resume_by_id'))
+      ORDER BY t.created_at, t.rowid LIMIT 1)";
+
+fn columns() -> String {
+    format!(
+        "s.id, s.tile_id, s.workstream_id, s.prompt, s.frequency, s.notify_inbox, s.notify_phone, s.paused,
+        s.next_run_at, s.last_run_at, s.last_result, s.last_error, s.failures, s.run_requested, s.created_at,
+        s.run_requested_at, s.revision, s.session_id, s.session_started, {INTERACTIVE}"
+    )
+}
 
 fn from_row(row: &Row) -> rusqlite::Result<Schedule> {
     let frequency: String = row.get(4)?;
@@ -180,10 +223,13 @@ fn from_row(row: &Row) -> rusqlite::Result<Schedule> {
         created_at: row.get(14)?,
         run_requested_at: row.get(15)?,
         revision: row.get(16)?,
+        session_id: row.get(17)?,
+        session_started: row.get(18)?,
+        interactive_tile_id: row.get(19)?,
     })
 }
 
-/// Stores a schedule for a Copilot session tile; one per tile.
+/// Stores the schedule of a Periodic session tile; one per tile.
 pub fn create(conn: &Connection, new: &NewSchedule) -> Result<Schedule, String> {
     check_prompt(new.prompt)?;
     validate_frequency(new.frequency)?;
@@ -197,8 +243,8 @@ pub fn create(conn: &Connection, new: &NewSchedule) -> Result<Schedule, String> 
         .map_err(|e| e.to_string())?;
     match tile {
         None => return Err(format!("No tile {}", new.tile_id)),
-        Some((_, kind)) if kind != "copilot_session" => {
-            return Err("Only a Copilot session tile can run periodically.".into())
+        Some((_, kind)) if kind != "periodic_session" => {
+            return Err("Only a Periodic session tile can have a schedule.".into())
         }
         Some((ws, _)) if ws != new.workstream_id => {
             return Err(format!(
@@ -212,10 +258,14 @@ pub fn create(conn: &Connection, new: &NewSchedule) -> Result<Schedule, String> 
         return Err("This tile already has a schedule; edit it instead.".into());
     }
     let id = uuid::Uuid::new_v4().to_string();
+    let session_id = new
+        .session_id
+        .map(str::to_string)
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     conn.execute(
         "INSERT INTO periodic_schedules (id, tile_id, workstream_id, prompt, frequency, notify_inbox,
-           notify_phone, next_run_at, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+           notify_phone, next_run_at, created_at, session_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
         params![
             id,
             new.tile_id,
@@ -225,7 +275,8 @@ pub fn create(conn: &Connection, new: &NewSchedule) -> Result<Schedule, String> 
             new.notify_inbox,
             new.notify_phone,
             new.next_run_at,
-            new.created_at
+            new.created_at,
+            session_id
         ],
     )
     .map_err(|e| e.to_string())?;
@@ -236,7 +287,8 @@ pub fn create(conn: &Connection, new: &NewSchedule) -> Result<Schedule, String> 
 pub fn list(conn: &Connection) -> Result<Vec<Schedule>, String> {
     let mut statement = conn
         .prepare(&format!(
-            "SELECT {COLUMNS} FROM periodic_schedules ORDER BY created_at, rowid"
+            "SELECT {} FROM periodic_schedules s ORDER BY s.created_at, s.rowid",
+            columns()
         ))
         .map_err(|e| e.to_string())?;
     let rows = statement
@@ -248,7 +300,10 @@ pub fn list(conn: &Connection) -> Result<Vec<Schedule>, String> {
 
 pub fn get(conn: &Connection, id: &str) -> Result<Option<Schedule>, String> {
     conn.query_row(
-        &format!("SELECT {COLUMNS} FROM periodic_schedules WHERE id = ?1"),
+        &format!(
+            "SELECT {} FROM periodic_schedules s WHERE s.id = ?1",
+            columns()
+        ),
         [id],
         from_row,
     )
@@ -258,7 +313,10 @@ pub fn get(conn: &Connection, id: &str) -> Result<Option<Schedule>, String> {
 
 pub fn for_tile(conn: &Connection, tile_id: &str) -> Result<Option<Schedule>, String> {
     conn.query_row(
-        &format!("SELECT {COLUMNS} FROM periodic_schedules WHERE tile_id = ?1"),
+        &format!(
+            "SELECT {} FROM periodic_schedules s WHERE s.tile_id = ?1",
+            columns()
+        ),
         [tile_id],
         from_row,
     )
@@ -376,11 +434,26 @@ pub fn update_with_alert(
     Ok(updated)
 }
 
-/// Removes a schedule; the tile stays. False when there was none.
+/// A run created the schedule's session: later runs resume it.
+pub fn mark_session_started(conn: &Connection, id: &str) -> Result<Schedule, String> {
+    conn.execute(
+        "UPDATE periodic_schedules SET session_started = 1, revision = revision + 1 WHERE id = ?1",
+        [id],
+    )
+    .map_err(|e| e.to_string())?;
+    get(conn, id)?.ok_or_else(|| format!("No schedule {id}"))
+}
+
+/// Removes a schedule with its Periodic session tile (and so its runs).
+/// False when there was none.
 pub fn delete(conn: &Connection, id: &str) -> Result<bool, String> {
+    let Some(schedule) = get(conn, id)? else {
+        return Ok(false);
+    };
+    crate::remove_tile_row(conn, &schedule.tile_id)?;
     conn.execute("DELETE FROM periodic_schedules WHERE id = ?1", [id])
-        .map(|n| n > 0)
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    Ok(true)
 }
 
 /// Archiving a workstream pauses its schedules; unarchiving leaves them paused.
@@ -404,9 +477,12 @@ mod tests {
         conn.execute_batch(
             "INSERT INTO workstreams (id, name, created_at, updated_at) VALUES ('w1', 'Courses', 'x', 'x'), ('w2', 'Infra', 'x', 'x');
              INSERT INTO tiles (id, workstream_id, tile_type, title, config_json, created_at, updated_at) VALUES
-               ('t1', 'w1', 'copilot_session', 'Videos', '{\"copilot_session_id\":\"s1\"}', 'x', 'x'),
-               ('t2', 'w2', 'copilot_session', 'CI', '{}', 'x', 'x'),
-               ('term', 'w1', 'terminal', 'Shell', '{}', 'x', 'x');",
+               ('t1', 'w1', 'periodic_session', 'Videos', '{}', 'x', 'x'),
+               ('t2', 'w2', 'periodic_session', 'CI', '{}', 'x', 'x'),
+               ('c1', 'w1', 'copilot_session', 'Chat', '{\"copilot_session_id\":\"s1\"}', 'x', 'x'),
+               ('term', 'w1', 'terminal', 'Shell', '{}', 'x', 'x');
+             INSERT INTO workstream_layouts (workstream_id, layout_mode, tile_order_json, updated_at)
+               VALUES ('w1', 'grid', '[\"t1\",\"c1\",\"term\"]', 'x');",
         )
         .unwrap();
         conn
@@ -422,6 +498,7 @@ mod tests {
             notify_phone: false,
             next_run_at: None,
             created_at: 1,
+            session_id: None,
         }
     }
 
@@ -489,6 +566,75 @@ mod tests {
     }
 
     #[test]
+    fn a_schedule_gets_its_session_id_when_it_is_made() {
+        let conn = db();
+        let freq = json!({"kind":"daily","time":"09:00"});
+        let fresh = create(&conn, &new("t1", "w1", &freq)).unwrap();
+        let id = fresh.session_id.clone().unwrap();
+        assert_eq!(uuid::Uuid::parse_str(&id).unwrap().to_string(), id);
+        assert!(!fresh.session_started);
+        let mut given = new("t2", "w2", &freq);
+        given.session_id = Some("s-given");
+        assert_eq!(
+            create(&conn, &given).unwrap().session_id.as_deref(),
+            Some("s-given")
+        );
+        let started = mark_session_started(&conn, &fresh.id).unwrap();
+        assert!(started.session_started);
+        assert_eq!(started.revision, fresh.revision + 1);
+    }
+
+    #[test]
+    fn an_open_copilot_tile_on_the_session_makes_it_interactive() {
+        let conn = db();
+        let freq = json!({"kind":"daily","time":"09:00"});
+        let mut on_s1 = new("t1", "w1", &freq);
+        on_s1.session_id = Some("s1");
+        let s = create(&conn, &on_s1).unwrap();
+        assert_eq!(s.interactive_tile_id.as_deref(), Some("c1"));
+        assert_eq!(
+            list(&conn).unwrap()[0].interactive_tile_id.as_deref(),
+            Some("c1")
+        );
+        // resume_by_id is a link too; a broken config is not.
+        conn.execute_batch(
+            "UPDATE tiles SET config_json = '{\"resume_by_id\":\"s1\"}' WHERE id = 'c1';
+             INSERT INTO tiles (id, workstream_id, tile_type, config_json, created_at, updated_at)
+               VALUES ('bad', 'w1', 'copilot_session', 'not json', 'x', 'x');",
+        )
+        .unwrap();
+        assert_eq!(
+            get(&conn, &s.id)
+                .unwrap()
+                .unwrap()
+                .interactive_tile_id
+                .as_deref(),
+            Some("c1")
+        );
+        // In an archived workstream it doesn't count, nor once closed.
+        conn.execute(
+            "UPDATE workstreams SET status = 'archived' WHERE id = 'w1'",
+            [],
+        )
+        .unwrap();
+        assert_eq!(
+            get(&conn, &s.id).unwrap().unwrap().interactive_tile_id,
+            None
+        );
+        conn.execute(
+            "UPDATE workstreams SET status = 'active' WHERE id = 'w1'",
+            [],
+        )
+        .unwrap();
+        conn.execute("DELETE FROM tiles WHERE id = 'c1'", [])
+            .unwrap();
+        assert_eq!(
+            get(&conn, &s.id).unwrap().unwrap().interactive_tile_id,
+            None
+        );
+    }
+
+    #[test]
     fn creates_one_schedule_per_copilot_tile() {
         let conn = db();
         let freq = json!({"kind":"daily","time":"09:00"});
@@ -504,7 +650,10 @@ mod tests {
             .contains("already has a schedule"));
         assert!(create(&conn, &new("term", "w1", &freq))
             .unwrap_err()
-            .contains("Copilot session"));
+            .contains("Periodic session"));
+        assert!(create(&conn, &new("c1", "w1", &freq))
+            .unwrap_err()
+            .contains("Periodic session"));
         assert!(create(&conn, &new("t2", "w1", &freq))
             .unwrap_err()
             .contains("not in workstream"));
@@ -669,15 +818,31 @@ mod tests {
             .map(|s| s.tile_id)
             .collect();
         assert_eq!(left, vec!["t2"]);
-        // Deleting a schedule keeps the tile.
-        assert!(delete(&conn, &other.id).unwrap());
-        assert!(!delete(&conn, &other.id).unwrap());
+        // Deleting a schedule removes its tile, from the layout too.
+        conn.execute_batch(
+            "INSERT INTO tiles (id, workstream_id, tile_type, config_json, created_at, updated_at)
+               VALUES ('t3', 'w1', 'periodic_session', '{}', 'x', 'x');
+             UPDATE workstream_layouts SET tile_order_json = '[\"c1\",\"t3\",\"term\"]';",
+        )
+        .unwrap();
+        let mine = create(&conn, &new("t3", "w1", &freq)).unwrap();
+        assert!(delete(&conn, &mine.id).unwrap());
+        assert!(!delete(&conn, &mine.id).unwrap());
         let tiles: i64 = conn
-            .query_row("SELECT COUNT(*) FROM tiles WHERE id = 't2'", [], |r| {
+            .query_row("SELECT COUNT(*) FROM tiles WHERE id = 't3'", [], |r| {
                 r.get(0)
             })
             .unwrap();
-        assert_eq!(tiles, 1);
+        assert_eq!(tiles, 0);
+        let order: String = conn
+            .query_row(
+                "SELECT tile_order_json FROM workstream_layouts WHERE workstream_id = 'w1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(order, r#"["c1","term"]"#);
+        assert!(delete(&conn, &other.id).unwrap());
     }
 
     #[test]
@@ -692,7 +857,7 @@ mod tests {
             conn.execute_batch(
                 "INSERT INTO workstreams (id, name, created_at, updated_at) VALUES ('w1', 'W', 'x', 'x');
                  INSERT INTO tiles (id, workstream_id, tile_type, config_json, created_at, updated_at)
-                   VALUES ('t1', 'w1', 'copilot_session', '{}', 'x', 'x');",
+                   VALUES ('t1', 'w1', 'periodic_session', '{}', 'x', 'x');",
             )
             .unwrap();
             let s = create(&conn, &new("t1", "w1", &freq)).unwrap();
