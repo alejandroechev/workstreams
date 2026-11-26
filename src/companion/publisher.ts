@@ -198,8 +198,12 @@ export function publishSessions(doc: CompanionDoc, sessions: Record<string, Phon
   return true;
 }
 
+/** What a Periodic session tile's link revision is made from: it runs one session for life (ADR 046). */
+export const periodicLink = (tileId: string) => `periodic:${tileId}`;
+
 /**
  * Every Copilot session tile the phone may message (companion conversations),
+ * and every Periodic session tile (a phone reply runs its next headless turn),
  * in the sidebar's workstream order. Only what identifies a session and says
  * whether it can be resumed: no transcript, and no Copilot session id — the
  * phone gets an opaque link revision instead.
@@ -214,11 +218,13 @@ export async function buildSessionTiles(input: {
   for (const workstream of input.workstreams) {
     if (workstream.status === "archived") continue;
     for (const tile of input.tilesByWorkstream.get(workstream.id) ?? []) {
-      if (tile.tile_type !== "copilot_session") continue;
+      if (tile.tile_type !== "copilot_session" && tile.tile_type !== "periodic_session") continue;
       const config = (() => {
         try { return JSON.parse(tile.config_json || "{}") as Record<string, unknown>; } catch { return {}; }
       })();
-      const sessionId = (config.copilot_session_id || config.resume_by_id || null) as string | null;
+      const sessionId = tile.tile_type === "periodic_session"
+        ? periodicLink(tile.id)
+        : (config.copilot_session_id || config.resume_by_id || null) as string | null;
       const summary = typeof config.session_name === "string" && config.session_name.trim() ? config.session_name : null;
       const stored = byTile.get(tile.id);
       const updated = Date.parse(tile.updated_at);

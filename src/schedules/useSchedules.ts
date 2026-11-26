@@ -26,6 +26,8 @@ export interface UseSchedulesOptions {
   cwd(workstreamId: string): string;
   /** Whether the phone companion is on: runs post to the phone only then. */
   companionOn(): Promise<boolean>;
+  /** A run posted to a phone thread: republish the threads. */
+  onPhonePosted?(): void;
   /** Changes when tiles or workstreams may have changed (closed, archived): re-read. */
   refreshKey?: unknown;
   tickMs?: number;
@@ -62,7 +64,10 @@ type OptionsRef = { readonly current: UseSchedulesOptions };
 function notifyDeps(ref: OptionsRef): NotifyDeps {
   return {
     postInbox: (ws, tile, level, title, body) => ref.current.backend.postAppInboxMessage(ws, tile, level, title, body),
-    postPhone: (tile, ws, kind, text, at) => ref.current.backend.companionPostAppMessage(tile, ws, kind, text, at),
+    postPhone: async (tile, ws, kind, text, at) => {
+      await ref.current.backend.companionPostAppMessage(tile, ws, kind, text, at);
+      ref.current.onPhonePosted?.();
+    },
     companionOn: () => ref.current.companionOn(),
   };
 }

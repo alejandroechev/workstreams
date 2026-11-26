@@ -69,6 +69,19 @@ describe("useSchedules", () => {
     expect(postApp).toHaveBeenCalledWith(ws.id, tile.id, "needs-you", "Needs input: Check videos", "Which file?");
   });
 
+  it("posts a run's prompt and answer to the phone thread with Notify my phone on, and says so (US-6)", async () => {
+    const onPhonePosted = vi.fn();
+    const { hook, tile, ws, backend } = await setup({ companionOn: async () => true, onPhonePosted });
+    await act(() => hook.result.current.create(tile.id, ws.id, { ...draft, notifyPhone: true }));
+    await act(() => hook.result.current.runNow(hook.result.current.schedules[0].id));
+    await act(async () => { backend.finishPeriodicRunForTests(tile.id, { exitCode: 0, answer: "All green" }); });
+    await waitFor(async () => {
+      const [thread] = await backend.companionListSessions();
+      expect(thread?.messages.map((m) => [m.kind, m.text])).toEqual([["prompt", "Check videos"], ["result", "All green"]]);
+    });
+    expect(onPhonePosted).toHaveBeenCalledTimes(2);
+  });
+
   it("re-reads and ticks when an agent changes a schedule", async () => {
     const { hook, tile, ws, backend, start } = await setup();
     await act(() => hook.result.current.create(tile.id, ws.id, draft));

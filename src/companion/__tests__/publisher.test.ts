@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { buildLaptopState, publishLaptopState, startPresence, LAST_SEEN_WRITE_MS, buildSessions, publishSessions, buildSessionTiles, publishSessionTiles } from "../publisher";
+import { buildLaptopState, publishLaptopState, startPresence, LAST_SEEN_WRITE_MS, buildSessions, publishSessions, buildSessionTiles, periodicLink, publishSessionTiles } from "../publisher";
 import { linkRevision } from "../link-revision";
 import type { Tile } from "../../domain/types";
 import type { CompanionStoredSession } from "../../backend/types";
@@ -237,6 +237,14 @@ describe("publishing the laptop's session tiles", () => {
     ]);
     // No transcript or session id leaves the laptop.
     expect(JSON.stringify(published)).not.toContain("s1");
+  });
+
+  it("lists a Periodic session tile as a linked tile the phone can reply to (ADR 046)", async () => {
+    const tiles = new Map<string, Tile[]>([["a", [{ ...tile("p1", "a", {}), tile_type: "periodic_session", title: "Check CI" }]]]);
+    const published = await buildSessionTiles({ workstreams: [ws("a", "A")], tilesByWorkstream: tiles, stored: [] });
+    expect(published).toEqual([
+      { tileId: "p1", workstreamId: "a", title: "Check CI", summary: null, linked: true, linkRevision: await linkRevision("p1", periodicLink("p1")), lastActivity: Date.parse("2026-10-20T11:00:00Z"), origin: "laptop" },
+    ]);
   });
 
   it("writes them only when they changed, and never into a newer document", () => {

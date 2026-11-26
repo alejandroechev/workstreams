@@ -78,6 +78,7 @@ import { countUnreadInbox } from "./domain/pipeline-inbox";
 import { isCompanionEnabled, useCompanionService } from "./companion/useCompanionService";
 import { startPhoneSession } from "./companion/start-session";
 import { resumeFollowUpSession, resumePhoneSession, type ResumeSessionDeps } from "./companion/resume-session";
+import { replyToPeriodicSession } from "./companion/periodic-reply";
 import { useSchedules, type ScheduleDraft } from "./schedules/useSchedules";
 import { ScheduleEditor } from "./schedules/ScheduleEditor";
 import { SchedulesModal } from "./schedules/SchedulesModal";
@@ -2362,12 +2363,15 @@ export default function App() {
       .finally(() => { digestWork.current = false; });
   }, [digests, backend, startInvestigationSessions, resumeDeps, commandForWsId, refreshInbox]);
 
+  /** A phone message to a Periodic session tile runs its next headless turn (ADR 046); set below. */
+  const periodicPhoneReply = useRef<((target: { workstreamId: string; tileId: string; linkRevision: string; prompt: string }, guard: () => void) => Promise<void> | null)>(() => null);
   const messageSessionForCompanion = useCallback(
     (
       target: { workstreamId: string; tileId: string; linkRevision: string; prompt: string; command: string },
       guard: () => void,
       requestId: string,
-    ): Promise<void> => resumePhoneSession(resumeDeps(), { ...target, guard, requestId, now: Date.now() }),
+    ): Promise<void> =>
+      periodicPhoneReply.current(target, guard) ?? resumePhoneSession(resumeDeps(), { ...target, guard, requestId, now: Date.now() }),
     [resumeDeps],
   );
 
@@ -2386,6 +2390,7 @@ export default function App() {
     command: (id) => commandForWsId(id),
     cwd: (id) => workstreamsRef.current.find((w) => w.id === id)?.directory || defaultRootDir(),
     companionOn: isCompanionEnabled,
+    onPhonePosted: () => setCompanionSessionsVersion((v) => v + 1),
   });
   const [showSchedules, setShowSchedules] = useState(false);
   /** The schedule form: an existing schedule, or a new Periodic session tile. */
@@ -2403,7 +2408,18 @@ export default function App() {
     [schedules.schedules],
   );
   const schedulesRef = useRef(schedules);
-  useLayoutEffect(() => { schedulesRef.current = schedules; });
+  useLayoutEffect(() => {
+    schedulesRef.current = schedules;
+    periodicPhoneReply.current = (target, guard) => {
+      const schedule = schedulesRef.current.schedules.find((s) => s.tile_id === target.tileId);
+      if (!schedule) return null;
+      return replyToPeriodicSession({
+        postApp: (tile, ws, kind, text, at) => backend.companionPostAppMessage(tile, ws, kind, text, at),
+        reply: (id, text) => schedulesRef.current.reply(id, text, "phone"),
+        onRecorded: () => setCompanionSessionsVersion((v) => v + 1),
+      }, schedule, target, guard, Date.now());
+    };
+  });
   /**
    * Open interactively (ADR 046, US-5): an ordinary Copilot tile in the same
    * workstream resuming the periodic tile's session. While it is open the
