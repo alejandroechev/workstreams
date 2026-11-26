@@ -109,6 +109,8 @@ export function defaultIconForType(tileType: TileType): TileIconKey {
       return "loop";
     case "diagram":
       return "diagram";
+    case "periodic_session":
+      return "clock";
     default:
       return "puzzle";
   }

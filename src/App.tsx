@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo, useLayoutEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
   hydrateAppSettings,
@@ -344,6 +344,8 @@ export default function App() {
   // Idempotently insert/replace a tile in its workstream's state, deduped by id.
   // Used by addTile and the tile-created event listener — single source of truth
   // so all entry points converge on the same state shape.
+  /** Bumped when an agent's schedule.* command added or removed a Periodic session tile. */
+  const [periodicTileSync, setPeriodicTileSync] = useState(0);
   const upsertTileLocally = useCallback((tile: Tile) => {
     setWsStates((prev) => {
       const wsId = tile.workstream_id;
@@ -511,6 +513,12 @@ export default function App() {
       // An agent's inbox.message: show it in the Inbox right away (ADR 041).
       if (entity === "agent_message") {
         refreshInboxRef.current();
+        return;
+      }
+      // An agent's schedule.create / schedule.delete adds or removes a Periodic session tile (ADR 046).
+      if (entity === "schedule") {
+        const action = (event.payload as { action?: string }).action;
+        if (action === "created" || action === "deleted") setPeriodicTileSync((n) => n + 1);
         return;
       }
       if (entity !== "workstream" && entity !== "pipeline_investigation") return;
@@ -820,6 +828,17 @@ export default function App() {
   // stay mounted (just hidden via CSS) so xterm/PTY state stays coherent.
   const wsStatesRef = useRef(wsStates);
   useEffect(() => { wsStatesRef.current = wsStates; }, [wsStates]);
+  // An agent added or removed a Periodic session tile: bring loaded workstreams in line with the store.
+  useEffect(() => {
+    if (periodicTileSync === 0) return;
+    for (const [wsId, state] of wsStatesRef.current) {
+      void backend.listTiles(wsId).then((stored) => {
+        const ids = new Set(stored.map((t) => t.id));
+        for (const tile of stored) if (tile.tile_type === "periodic_session" && !state.tiles.some((t) => t.id === tile.id)) upsertTileLocally(tile);
+        for (const tile of state.tiles) if (tile.tile_type === "periodic_session" && !ids.has(tile.id)) removeTileLocally(tile.id);
+      }).catch((error) => console.error("Failed to reload periodic tiles:", error));
+    }
+  }, [periodicTileSync, backend, upsertTileLocally, removeTileLocally]);
   const mountingRef = useRef(new Map<string, Promise<void>>());
 
   /**
@@ -2369,9 +2388,8 @@ export default function App() {
     companionOn: isCompanionEnabled,
   });
   const [showSchedules, setShowSchedules] = useState(false);
-  /** The schedule form: for a tile, an existing schedule, or a new periodic tile. */
+  /** The schedule form: an existing schedule, or a new Periodic session tile. */
   const [scheduleEditor, setScheduleEditor] = useState<
-    | { kind: "tile"; tileId: string; workstreamId: string }
     | { kind: "edit"; schedule: PeriodicSchedule }
     | { kind: "new-tile"; workstreamId: string }
     | null
@@ -2384,22 +2402,30 @@ export default function App() {
     () => new Set(schedules.schedules.map((s) => s.workstream_id)) as ReadonlySet<string>,
     [schedules.schedules],
   );
+  const schedulesRef = useRef(schedules);
+  useLayoutEffect(() => { schedulesRef.current = schedules; });
+  const openInteractivelyRef = useRef<(schedule: PeriodicSchedule) => Promise<void>>(async () => {
+    throw new Error("Open interactively isn't available yet.");
+  });
   const tileSchedules = useMemo<TileSchedules>(
     () => ({
       byTile: schedulesByTile,
       now: schedules.now,
-      openEditor: (tileId, workstreamId) => {
+      openEditor: (tileId) => {
         const existing = schedulesByTile.get(tileId);
-        setScheduleEditor(existing ? { kind: "edit", schedule: existing } : { kind: "tile", tileId, workstreamId });
+        if (existing) setScheduleEditor({ kind: "edit", schedule: existing });
       },
+      runNow: (id) => schedulesRef.current.runNow(id),
+      reply: (id, text) => schedulesRef.current.reply(id, text),
+      openInteractively: (schedule) => openInteractivelyRef.current(schedule),
+      listRuns: (tileId) => backend.listPeriodicRuns(tileId),
     }),
-    [schedulesByTile, schedules.now],
+    [schedulesByTile, schedules.now, backend],
   );
   const saveSchedule = async (draft: ScheduleDraft) => {
     const target = scheduleEditor;
     if (!target) return;
     if (target.kind === "edit") await schedules.edit(target.schedule.id, draft);
-    else if (target.kind === "tile") await schedules.create(target.tileId, target.workstreamId, draft);
     else {
       // A Periodic session tile: no terminal, nothing started; its session id
       // is assigned now and the first run creates the session (ADR 046).
@@ -2594,14 +2620,19 @@ export default function App() {
           runNow={schedules.runNow}
           pause={schedules.pause}
           resume={schedules.resume}
-          remove={schedules.remove}
+          remove={async (id) => {
+            // Deleting a schedule removes its Periodic session tile too (ADR 046).
+            const tileId = schedules.schedules.find((s) => s.id === id)?.tile_id;
+            await schedules.remove(id);
+            if (tileId) removeTileLocally(tileId);
+          }}
           edit={(schedule) => setScheduleEditor({ kind: "edit", schedule })}
           onClose={() => setShowSchedules(false)}
         />
       )}
       {scheduleEditor && (
         <ScheduleEditor
-          title={scheduleEditor.kind === "new-tile" ? "Periodic Copilot session" : scheduleEditor.kind === "edit" ? "Edit schedule" : "Run periodically"}
+          title={scheduleEditor.kind === "new-tile" ? "Periodic session" : "Edit schedule"}
           initial={scheduleEditor.kind === "edit" ? {
             prompt: scheduleEditor.schedule.prompt,
             frequency: scheduleEditor.schedule.frequency,

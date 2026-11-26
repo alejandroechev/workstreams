@@ -11,6 +11,7 @@ import CodeReviewTile from "../tiles/CodeReviewTile";
 import DebugWalkthroughTile from "../tiles/DebugWalkthroughTile";
 import LoopControlTile from "../tiles/LoopControlTile";
 import DiagramTile from "../tiles/DiagramTile";
+import PeriodicSessionTile from "../tiles/PeriodicSessionTile";
 import { featureDescriptor, isTileTypeEnabled, tileTypeFeature } from "../domain/feature-flags";
 import { shortcutLabel, defaultRootDir } from "../domain/platform";
 
@@ -37,7 +38,6 @@ import type { CopilotSessionStats } from "../domain/types";
 import { invoke } from "@tauri-apps/api/core";
 import { computeTileBorder } from "./tile-border";
 import { resolveTileIcon } from "./tile-icons";
-import { TileScheduleControls } from "../schedules/TileScheduleControls";
 
 interface TileProps {
   tile: Tile;
@@ -366,6 +366,11 @@ function TileWrapperImpl({
         />
       );
       break;
+    case "periodic_session":
+      content = workstreamId
+        ? <PeriodicSessionTile tileId={tile.id} workstreamId={workstreamId} />
+        : <div style={{ padding: 16, color: "#f38ba8" }}>Periodic session tile requires a workstream.</div>;
+      break;
     default:
       content = <div>Unknown tile type: {tile.tile_type}</div>;
   }
@@ -518,7 +523,6 @@ function TileWrapperImpl({
           </span>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 4 }} onDoubleClick={(e) => e.stopPropagation()}>
-          {isSessionTile && <TileScheduleControls tileId={tile.id} workstreamId={workstreamId} />}
           {isTermLike && (
             <>
               <button

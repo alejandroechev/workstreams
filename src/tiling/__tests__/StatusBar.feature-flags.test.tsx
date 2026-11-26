@@ -51,11 +51,12 @@ describe("StatusBar feature-flag gating", () => {
     expect(screen.queryByTestId("add-tile-item-loop")).toBeNull();
   });
 
-  it("offers a Periodic Copilot Session (ADR 044), no flag needed", () => {
+  it("offers a Periodic session (ADR 046), no flag needed", () => {
     _setFeatureFlagOverrideForTests(false);
     const onAddPeriodicSession = vi.fn();
     render(<StatusBar {...commonProps()} onAddPeriodicSession={onAddPeriodicSession} />);
     openAddTileMenu();
+    expect(screen.getByTestId("add-tile-item-periodic-session").textContent).toContain("Periodic session");
     fireEvent.click(screen.getByTestId("add-tile-item-periodic-session"));
     expect(onAddPeriodicSession).toHaveBeenCalledTimes(1);
   });
